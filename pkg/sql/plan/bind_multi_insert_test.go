@@ -152,47 +152,58 @@ func TestMultiInsertFirstMasksLaterConditions(t *testing.T) {
 	require.NoError(t, err)
 	qry := logicPlan.GetQuery()
 
-	// Every WHEN produces one claim -- if(cond, i, noRoute) -- and every WHEN
-	// after the first is nested inside a mask whose condition is the carried
-	// route column, a single comparison rather than a chain rebuilt from every
-	// earlier selector. That is what keeps the bookkeeping linear.
-	var claims, masks int
-	var walk func(*plan.Expr)
-	walk = func(expr *plan.Expr) {
-		if expr == nil {
-			return
-		}
-		fn := expr.GetF()
-		if fn == nil {
-			return
-		}
-		if fn.Func.ObjName == "if" || fn.Func.ObjName == "iff" {
-			require.Len(t, fn.Args, 3)
-			if cond := fn.Args[0].GetF(); cond != nil && cond.Func.ObjName == ">=" {
-				require.NotNil(t, cond.Args[0].GetCol(),
-					"the mask must read the carried route column")
-				require.NotNil(t, fn.Args[1].GetCol(),
-					"a claimed row keeps the route it already has")
-				masks++
-			} else {
-				require.NotNil(t, fn.Args[1].GetLit(), "a claim yields the WHEN index")
-				require.NotNil(t, fn.Args[2].GetLit(), "or the no-route value")
-				claims++
+	// The route is one nested chain, outermost WHEN first:
+	//
+	//   if(cond_0, 0, if(cond_1, 1, if(cond_2, 2, -1)))
+	//
+	// Each level's false branch is the rest of the chain, which EvalIff runs
+	// only on the rows the level did not claim -- that is the laziness. The
+	// nesting order is the first-match order, and nothing rebuilds a prefix
+	// from the earlier conditions.
+	var routes []*plan.Expr
+	for _, node := range qry.Nodes {
+		for _, expr := range node.ProjectList {
+			if fn := expr.GetF(); fn != nil && (fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
+				routes = append(routes, expr)
 			}
 		}
-		require.NotEqual(t, "or", fn.Func.ObjName,
-			"routing must not rebuild an OR chain over the earlier selectors")
-		for _, arg := range fn.Args {
-			walk(arg)
+	}
+	require.Len(t, routes, 1, "the whole route is a single projected expression")
+
+	expr := routes[0]
+	for i := 0; i < 3; i++ {
+		fn := expr.GetF()
+		require.NotNil(t, fn, "level %d", i)
+		require.Contains(t, []string{"if", "iff"}, fn.Func.ObjName, "level %d", i)
+		require.Len(t, fn.Args, 3)
+		require.NotNil(t, fn.Args[0].GetF(), "level %d: the condition itself is the test", i)
+		lit := fn.Args[1].GetLit()
+		require.NotNil(t, lit, "level %d: a claimed row takes the WHEN index", i)
+		require.Equal(t, int32(i), lit.GetI32Val(), "the chain is in first-match order")
+		expr = fn.Args[2]
+	}
+	last := expr.GetLit()
+	require.NotNil(t, last, "the innermost false branch is the no-route value")
+	require.Equal(t, noMultiInsertRoute, last.GetI32Val())
+
+	// Nothing rebuilds an OR chain over the earlier conditions.
+	var walk func(*plan.Expr)
+	walk = func(e *plan.Expr) {
+		if e == nil {
+			return
+		}
+		if fn := e.GetF(); fn != nil {
+			require.NotEqual(t, "or", fn.Func.ObjName, "routing must not rebuild an OR chain")
+			for _, arg := range fn.Args {
+				walk(arg)
+			}
 		}
 	}
 	for _, node := range qry.Nodes {
-		for _, expr := range node.ProjectList {
-			walk(expr)
+		for _, e := range node.ProjectList {
+			walk(e)
 		}
 	}
-	require.Equal(t, 3, claims, "one claim per WHEN")
-	require.Equal(t, 2, masks, "WHENs 2 and 3 must be masked by the route so far")
 
 	// Each condition still appears exactly once: masking must not duplicate it.
 	var lessThan int
@@ -577,20 +588,34 @@ func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
 // node in every ProjectList and FilterList, which is what Projection.Prepare
 // turns into executors and Projection.Call runs for every batch.
 //
-// Carrying one boolean selector per WHEN made each level re-project all the
-// earlier ones, so total work grew as W^2 (measured: 129 expressions at 8
-// WHENs, 16885 at 126). One route column per level makes it linear.
+// Each added WHEN also widens the source and reads a NEW source column, which
+// is the shape that exposes per-level re-emission: a chain that re-projects
+// every source column and every condition carrier at each of the W levels is
+// O(W * (M + C)), and with M and C growing with W that is quadratic even when
+// the decision itself is one column. A single projection holding one nested
+// route expression is O(M + W).
 func TestMultiInsertFirstRoutingWorkIsLinear(t *testing.T) {
-	planWork := func(whens int) (exprs int, projects int) {
+	planWork := func(whens int) (exprs int, projects int, widest int) {
 		mock := NewMockOptimizer(true)
 		var sb strings.Builder
 		sb.WriteString("insert first")
 		for i := 0; i < whens; i++ {
-			sb.WriteString(" when deptno = ")
+			sb.WriteString(" when c")
 			sb.WriteString(strconv.Itoa(i))
-			sb.WriteString(" then into t3 (a) values (deptno)")
+			sb.WriteString(" = 0 then into t3 (a) values (c")
+			sb.WriteString(strconv.Itoa(i))
+			sb.WriteString(")")
 		}
-		sb.WriteString(" else into t3 (a) values (deptno + 1000) select deptno from dept")
+		sb.WriteString(" else into t3 (a) values (c0 + 1000) select ")
+		for i := 0; i < whens; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(strconv.Itoa(i))
+			sb.WriteString(" as c")
+			sb.WriteString(strconv.Itoa(i))
+		}
+		sb.WriteString(" from dept")
 		logicPlan, err := runOneStmt(mock, t, sb.String())
 		require.NoError(t, err)
 
@@ -609,6 +634,7 @@ func TestMultiInsertFirstRoutingWorkIsLinear(t *testing.T) {
 		for _, node := range logicPlan.GetQuery().Nodes {
 			if node.NodeType == plan.Node_PROJECT {
 				projects++
+				widest = max(widest, len(node.ProjectList))
 			}
 			for _, expr := range node.ProjectList {
 				walk(expr)
@@ -617,27 +643,32 @@ func TestMultiInsertFirstRoutingWorkIsLinear(t *testing.T) {
 				walk(expr)
 			}
 		}
-		return exprs, projects
+		return exprs, projects, widest
 	}
 
 	const small, large = 8, 32
-	smallExprs, smallProjects := planWork(small)
-	largeExprs, largeProjects := planWork(large)
+	smallExprs, smallProjects, smallWidest := planWork(small)
+	largeExprs, largeProjects, largeWidest := planWork(large)
 	require.Positive(t, smallExprs)
 
 	// Quadrupling the WHENs quadruples linear work and multiplies quadratic
-	// work by ~16. The slack covers the per-target write pipelines, which are
-	// linear in the target count by construction.
+	// work by ~16. The slack covers the per-target write pipelines and the
+	// widening source, both linear in the WHEN count by construction.
 	require.Less(t, largeExprs, smallExprs*6,
 		"total plan expression work grew faster than linearly: %d for %d WHENs, %d for %d WHENs",
 		smallExprs, small, largeExprs, large)
 
 	// Stated as the per-WHEN contract: each added WHEN costs a bounded amount
-	// of expression and projection work, independent of how many came before.
+	// of expression, projection and projection-width work, independent of how
+	// many came before.
 	require.Less(t, (largeExprs-smallExprs)/(large-small), 40,
 		"each added WHEN must cost a bounded number of expressions (%d -> %d)", smallExprs, largeExprs)
 	require.LessOrEqual(t, (largeProjects-smallProjects)/(large-small), 3,
 		"each added WHEN must cost a bounded number of projections (%d -> %d)", smallProjects, largeProjects)
+	// The routing chain lives in ONE projection, so no projection grows a
+	// column per WHEN beyond the source's own width.
+	require.LessOrEqual(t, (largeWidest-smallWidest)/(large-small), 2,
+		"a projection must not gain more than the source column per WHEN (%d -> %d)", smallWidest, largeWidest)
 }
 
 // runOneStmtWithRewriteHints parses like runOneStmt but also applies the

@@ -393,158 +393,42 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		return out, nil
 	}
 
-	// INSERT FIRST: one projection per WHEN, each carrying O(1) new work.
+	// INSERT FIRST: one projection, one route column, one expression.
 	//
-	//   level i:  route_i = if(route_{i-1} >= 0, route_{i-1},
-	//                          if(cond_i, i, noRoute))
+	//   route = if(cond_0, 0, if(cond_1, 1, ... if(cond_{W-1}, W-1, -1)))
 	//
-	// A single integer says which WHEN claimed the row (noRoute = -1 for none),
-	// so the level below hands up one decision column rather than one boolean
-	// per WHEN. That is what keeps the projection bookkeeping linear: carrying
-	// W separate selectors would make every level re-project all the earlier
-	// ones, W^2 expressions and W^2 executors evaluated per batch.
+	// EvalIff evaluates a false branch only on the rows whose condition was
+	// false, and passes that selection down to the child executor, which the
+	// next nested if propagates further. So cond_i runs exactly once and only
+	// on rows no earlier WHEN claimed: an unreachable later predicate never
+	// runs, and never errors, for a row an earlier WHEN already took. A NULL
+	// condition takes the false branch, leaving the row for later WHENs and
+	// ELSE, as IS TRUE would.
 	//
-	// The nesting is what makes a later WHEN lazy. EvalIff evaluates its false
-	// branch only on the rows whose condition was false, passing that selection
-	// down, and a nested if propagates it further -- so cond_i runs only on
-	// rows still unclaimed, and an unreachable later predicate never runs, and
-	// never errors, for a row an earlier WHEN already took.
-	//
-	// Column layout, stable at every level:
-	//   [0, M)            source columns
-	//   [M, M+C)          carriers: every column a condition reads, because a
-	//                     condition is bound against the node below level 0
-	//                     whose tags are not visible higher up (this also
-	//                     covers a flattened subquery's output column)
-	//   base = M+C        route
-	carrierRefs, carrierIdx := collectMultiInsertCarriers(conds)
-	base := len(srcCols) + len(carrierRefs)
-	prevTag := srcTag
-
-	// carriedPrefix rebuilds the stable prefix (source columns, carriers) from
-	// the level below.
-	carriedPrefix := func(level int) []*plan.Expr {
-		list := passthrough(prevTag, srcCols)
-		for k, ref := range carrierRefs {
-			if level == 0 {
-				list = append(list, ref)
-				continue
-			}
-			list = append(list, &plan.Expr{
-				Typ:  ref.Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(len(srcCols) + k)}},
-			})
-		}
-		return list
-	}
-	routeType := makePlan2Int32ConstExprWithType(0).Typ
-	routeRef := func() *plan.Expr {
-		return &plan.Expr{
-			Typ:  routeType,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(base)}},
-		}
-	}
-
-	for i, cond := range conds {
-		projList := carriedPrefix(i)
-		if i > 0 {
-			rewriteMultiInsertColRefs(cond, carrierIdx, prevTag, len(srcCols))
-		}
-		// if(cond_i, i, noRoute): a NULL condition takes the false branch, so a
-		// row a WHEN cannot decide on stays unclaimed, as IS TRUE would leave it.
-		claim, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
-			[]*plan.Expr{cond, makePlan2Int32ConstExprWithType(int32(i)), makePlan2Int32ConstExprWithType(noMultiInsertRoute)})
+	// Everything lives in one projection above the conditions' own node, so the
+	// plan carries M + 1 expressions plus the W conditions -- O(M + W), not the
+	// O(W * M) of a per-WHEN chain that re-emits every source column at every
+	// level. That matters because Projection.Prepare builds one executor per
+	// ProjectList entry and Projection.Call runs them for every batch.
+	route := makePlan2Int32ConstExprWithType(noMultiInsertRoute)
+	for i := len(conds) - 1; i >= 0; i-- {
+		claimed, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
+			[]*plan.Expr{conds[i], makePlan2Int32ConstExprWithType(int32(i)), route})
 		if err != nil {
 			return out, err
 		}
-		route := claim
-		if i > 0 {
-			claimed, err := BindFuncExprImplByPlanExpr(builder.GetContext(), ">=",
-				[]*plan.Expr{routeRef(), makePlan2Int32ConstExprWithType(0)})
-			if err != nil {
-				return out, err
-			}
-			if route, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
-				[]*plan.Expr{claimed, routeRef(), claim}); err != nil {
-				return out, err
-			}
-		}
-		projList = append(projList, route)
-
-		tag := builder.genNewBindTag()
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeID},
-			ProjectList: projList,
-			BindingTags: []int32{tag},
-		}, condCtx)
-		prevTag = tag
+		route = claimed
 	}
-
-	out.nodeID = lastNodeID
+	projList := append(passthrough(srcTag, srcCols), route)
+	out.nodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: projList,
+		BindingTags: []int32{builder.genNewBindTag()},
+	}, condCtx)
 	out.selectorBase = -1
-	out.routePos = base
+	out.routePos = len(srcCols)
 	return out, nil
-}
-
-// collectMultiInsertCarriers returns, in stable order, every distinct column a
-// WHEN condition reads, plus an index from (RelPos,ColPos) to its position.
-func collectMultiInsertCarriers(conds []*plan.Expr) ([]*plan.Expr, map[[2]int32]int) {
-	idx := make(map[[2]int32]int)
-	var refs []*plan.Expr
-	var walk func(*plan.Expr)
-	walk = func(expr *plan.Expr) {
-		if expr == nil {
-			return
-		}
-		switch e := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			key := [2]int32{e.Col.RelPos, e.Col.ColPos}
-			if _, ok := idx[key]; ok {
-				return
-			}
-			idx[key] = len(refs)
-			refs = append(refs, &plan.Expr{
-				Typ:  expr.Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: e.Col.RelPos, ColPos: e.Col.ColPos, Name: e.Col.Name}},
-			})
-		case *plan.Expr_F:
-			for _, arg := range e.F.Args {
-				walk(arg)
-			}
-		case *plan.Expr_List:
-			for _, item := range e.List.List {
-				walk(item)
-			}
-		}
-	}
-	for _, cond := range conds {
-		walk(cond)
-	}
-	return refs, idx
-}
-
-// rewriteMultiInsertColRefs repoints a condition at the carrier columns of the
-// level below it. Positions are stable: carriers follow the source columns.
-func rewriteMultiInsertColRefs(expr *plan.Expr, idx map[[2]int32]int, tag int32, carrierBase int) {
-	if expr == nil {
-		return
-	}
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if pos, ok := idx[[2]int32{e.Col.RelPos, e.Col.ColPos}]; ok {
-			e.Col.RelPos = tag
-			e.Col.ColPos = int32(carrierBase + pos)
-		}
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			rewriteMultiInsertColRefs(arg, idx, tag, carrierBase)
-		}
-	case *plan.Expr_List:
-		for _, item := range e.List.List {
-			rewriteMultiInsertColRefs(item, idx, tag, carrierBase)
-		}
-	}
 }
 
 // bindMultiInsertConditionExpr binds one WHEN condition against the source

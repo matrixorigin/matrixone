@@ -169,30 +169,53 @@ claimed the row, or `-1` (`noMultiInsertRoute`) for none.
 | `INSERT FIRST WHEN`           | `route = i`                                            |
 | `ELSE` under `INSERT FIRST`   | `route = -1`                                           |
 
-It is built as one projection per WHEN:
+It is built as **one projection holding one nested expression**:
 
 ```
-level i:  route_i = if(route_{i-1} >= 0, route_{i-1}, if(cond_i, i, -1))
+route = if(cond_0, 0, if(cond_1, 1, ... if(cond_{W-1}, W-1, -1)))
 ```
 
 Two properties come out of this shape.
 
 **Laziness.** `EvalIff` evaluates a false branch only on the rows whose
-condition was false, passing that selection down to the child executor, and a
-nested `if` propagates it further. So `cond_i` runs only on rows still
-unclaimed: an unreachable later predicate never runs — and never errors — for
-a row an earlier `WHEN` already took. A `WHEN` whose condition is NULL takes
-the false branch, leaving the row unclaimed, exactly as `IS TRUE` would.
+condition was false, passing that selection down to the child executor, and the
+next nested `if` propagates it further. So `cond_i` runs exactly once and only
+on rows no earlier `WHEN` claimed: an unreachable later predicate never runs —
+and never errors — for a row an earlier `WHEN` already took. A `WHEN` whose
+condition is NULL takes the false branch, leaving the row for later `WHEN`s and
+`ELSE`, exactly as `IS TRUE` would.
 
-**Linear bookkeeping.** One decision column per level, not one per WHEN, is
-what keeps total plan work linear. Carrying W separate selectors makes every
-level re-project all the earlier ones: W² expressions, and W² executors that
-`Projection.Prepare` builds and `Projection.Call` runs for every batch —
-measured at 129 expressions for 8 WHENs and 16885 for 126, against the
-127-clause cap. With the route column the cost is a bounded amount per WHEN
-(measured: 215 expressions for 8 WHENs, 815 for 32 — 25 per added WHEN).
-`TestMultiInsertFirstRoutingWorkIsLinear` asserts this over *total* plan
-expression and projection work rather than a chosen subset of function names.
+**Linear work.** The whole decision is one expression above the conditions' own
+node, so the plan carries the source's M columns plus one route expression
+containing the W conditions: O(M + W).
+
+Getting there took two corrections, both from review, and both worth recording
+because the first looked linear and was not:
+
+1. One boolean selector per `WHEN`, chained through a carried `matched` flag.
+   Each level re-projected every earlier selector, so the plan held W²
+   expressions — and W² executors, since `Projection.Prepare` builds one per
+   `ProjectList` entry and `Projection.Call` runs them for every batch.
+2. One `int32` route column, still chained one projection per `WHEN`. The
+   decision was now a single column, but each level still re-emitted the M
+   source columns and the C columns the conditions read, so the cost was
+   O(W × (M + C)). For the ordinary shape where W conditions read W different
+   source columns, M and C grow with W and that is quadratic again — it only
+   looked linear because the first measurement used a single source column.
+
+Measured with a generator where each added `WHEN` also adds a source column it
+reads (total expression nodes across every `ProjectList` and `FilterList`):
+
+| WHENs | chained | one projection |
+|---|---|---|
+| 8   | 272  | 146  |
+| 32  | 2204 | 530  |
+| 126 | —    | 2034 |
+
+16 expressions per added `WHEN`, flat. `TestMultiInsertFirstRoutingWorkIsLinear`
+asserts this over *total* plan work — every expression node, the projection
+count, and the widest projection — using that widening generator, rather than a
+chosen subset of function names over a fixed-width source.
 
 Materializing the decision is not an optimization, it is required for
 correctness. An earlier version copied the `WHEN` AST into every branch and
