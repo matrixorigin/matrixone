@@ -86,6 +86,7 @@ func (exec *maxByExec) BulkFill(groupIndex int, vectors []*vector.Vector) error 
 }
 
 func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	if len(vectors) != 3 {
 		return moerr.NewInternalErrorNoCtx("max_by requires three input vectors")
 	}
@@ -136,6 +137,7 @@ func (exec *maxByExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 }
 
 func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	other, ok := next.(*maxByExec)
 	if !ok || other.nonNullValue != exec.nonNullValue || !slices.Equal(other.argTypes, exec.argTypes) {
 		return moerr.NewInternalErrorNoCtx("cannot merge incompatible max_by states")

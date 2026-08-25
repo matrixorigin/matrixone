@@ -90,6 +90,7 @@ func (exec *minMaxExecFixed[T]) BulkFill(groupIndex int, vectors []*vector.Vecto
 }
 
 func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	vec := vectors[0]
 	// Reserve every potentially touched source sidecar before changing winner
 	// values. This preserves the aggregate's no-partial-publication contract on
@@ -266,6 +267,7 @@ func (exec *minMaxExecFixed[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int
 }
 
 func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	other := next.(*minMaxExecFixed[T])
 	hasSourceMetadata := false
 	for chunk := range exec.state {
@@ -434,6 +436,7 @@ func (exec *minMaxExecBytes) BulkFill(groupIndex int, vectors []*vector.Vector) 
 }
 
 func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -485,6 +488,7 @@ func (exec *minMaxExecBytes) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 }
 
 func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	other := next.(*minMaxExecBytes)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {

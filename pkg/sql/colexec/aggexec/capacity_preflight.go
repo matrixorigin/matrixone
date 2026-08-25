@@ -686,6 +686,9 @@ func (ae *aggExec) applyStringSourceEvents(
 			event.row, max(int(state.length), event.row+1), event.source, ae.mp); err != nil {
 			return err
 		}
+		// Runtime may publish several same/mixed updates to this vector. Keep
+		// its admitted sidecar alive until the enclosing batch completes.
+		state.vecs[event.column].RetainStringSourcePreflight()
 	}
 	return nil
 }

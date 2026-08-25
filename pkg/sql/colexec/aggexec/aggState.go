@@ -1211,6 +1211,27 @@ type aggExec struct {
 	allocation *AllocationAccount
 }
 
+func (ae *aggExec) finalizeStringSourcePreflights(groups []uint64) {
+	if ae == nil {
+		return
+	}
+	// Only vectors touched by this work unit can carry a retained preflight.
+	// Finalize is idempotent after the first group in a chunk, so duplicate
+	// groups remain O(1) without scanning all historical aggregate state.
+	for _, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, _ := ae.getXY(group - 1)
+		if x < 0 || x >= len(ae.state) {
+			continue
+		}
+		for _, vec := range ae.state[x].vecs {
+			vec.FinalizeStringSourcePreflight()
+		}
+	}
+}
+
 func (ae *aggExec) SetAllocationAccount(allocation *AllocationAccount) error {
 	if ae == nil || allocation == nil || allocation.account == nil {
 		return mpool.ErrAllocationAccountInvalid

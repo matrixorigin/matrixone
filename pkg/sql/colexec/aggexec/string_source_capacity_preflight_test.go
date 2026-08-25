@@ -69,6 +69,7 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 				var candidate []*vector.Vector
 				groups := []uint64{1, 2}
 				wantFirst := types.StringSourceExpression
+				wantSecond := types.StringSourceLiteral
 				switch kind {
 				case "any":
 					left = makeExec(AggIdOfAny, types.T_text.ToType())
@@ -76,8 +77,9 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 						types.StringSourceLiteral)
 					candidate = []*vector.Vector{makeText(
 						[]string{"winner", "winner"},
-						[]types.StringSource{types.StringSourceCOMStmt, types.StringSourceLiteral})}
-					wantFirst = types.StringSourceCOMStmt
+						[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt})}
+					wantFirst = types.StringSourceLiteral
+					wantSecond = types.StringSourceCOMStmt
 				case "fixed-min", "fixed-min-loser", "fixed-min-transient":
 					left = makeExec(AggIdOfMin, types.T_int64.ToType())
 					seed := makeInt([]int64{5, 5})
@@ -168,7 +170,7 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 				require.LessOrEqual(t, mp.CurrNB(), admitted,
 					"runtime may normalize and release a now-uniform sidecar")
 				require.Equal(t, wantFirst, state.GetStringSourceAt(0))
-				require.Equal(t, types.StringSourceLiteral, state.GetStringSourceAt(1))
+				require.Equal(t, wantSecond, state.GetStringSourceAt(1))
 
 				for _, vec := range candidate {
 					vec.Free(mp)

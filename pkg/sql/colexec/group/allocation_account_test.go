@@ -2221,7 +2221,7 @@ func TestAccountedGroupRetriesAnyValueSourcePreflight(t *testing.T) {
 	first := makeInput([]string{"a"}, []string{""}, []uint64{0},
 		[]types.StringSource{types.StringSourceLiteral})
 	second := makeInput([]string{"a", "b"}, []string{"winner-a", "winner-b"}, nil,
-		[]types.StringSource{types.StringSourceCOMStmt, types.StringSourceLiteral})
+		[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt})
 	anyValue := aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfAny, false, []*plan.Expr{colExpr(1, types.T_varchar)}, nil)
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)},
@@ -2258,7 +2258,7 @@ func TestAccountedGroupRetriesAnyValueSourcePreflight(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[string]types.StringSource{
-		"a": types.StringSourceCOMStmt, "b": types.StringSourceLiteral,
+		"a": types.StringSourceLiteral, "b": types.StringSourceCOMStmt,
 	}, seen)
 	_, rejected := controller.snapshot()
 	require.True(t, rejected)
@@ -2571,7 +2571,7 @@ func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 	first := makePartial([]string{"a"}, []string{"5"},
 		[]types.StringSource{types.StringSourceLiteral})
 	second := makePartial([]string{"a", "b"}, []string{"5", "5"},
-		[]types.StringSource{types.StringSourceCOMStmt, types.StringSourceLiteral})
+		[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt})
 	minValue := aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_varchar)}, nil)
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minValue})
@@ -2607,7 +2607,7 @@ func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[string]types.StringSource{
-		"a": types.StringSourceExpression, "b": types.StringSourceLiteral,
+		"a": types.StringSourceLiteral, "b": types.StringSourceCOMStmt,
 	}, seen)
 	_, rejected := controller.snapshot()
 	require.True(t, rejected)

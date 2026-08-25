@@ -805,7 +805,9 @@ func (v *Vector) SetStringSourceAtWithMP(row int, source types.StringSource, mp 
 		v.stringSourcesMP = owner
 	}
 	v.stringSources[row] = source
-	v.normalizeStringSources()
+	if !v.preflightStringSourceReady {
+		v.normalizeStringSources()
+	}
 	return nil
 }
 
@@ -5292,10 +5294,18 @@ func (v *Vector) unionBatchPreflightedWithStringSources(
 	return err
 }
 
+// RetainStringSourcePreflight keeps reserved row metadata alive across a
+// correlated publication sequence. FinalizeStringSourcePreflight must close it.
+func (v *Vector) RetainStringSourcePreflight() {
+	if v != nil && v.stringSources != nil {
+		v.preflightStringSourceReady = true
+	}
+}
+
 // FinalizeStringSourcePreflight ends a deferred source publication. Capacity
 // normalization cannot allocate or fail.
 func (v *Vector) FinalizeStringSourcePreflight() {
-	if v == nil {
+	if v == nil || !v.preflightStringSourceReady {
 		return
 	}
 	v.preflightStringSourceReady = false
