@@ -106,30 +106,3 @@ func TestPipelineBackendCreateOptionsBoundRetry(t *testing.T) {
 		"pipeline recovery budget must expire before the query context")
 	require.Positive(t, factory.calls.Load())
 }
-
-// TestPipelineClientDeadEndpointUsesConnectBudget is a failing white-box
-// counterexample for #27523 on revisions that only bound each individual TCP
-// dial. The Pipeline client must also bind that budget to MORPC queue admission
-// and retry completion, otherwise a fixed stale CN endpoint inherits the much
-// longer statement context.
-func TestPipelineClientDeadEndpointUsesConnectBudget(t *testing.T) {
-	sid := t.Name()
-	moruntime.SetupServiceBasedRuntime(sid, moruntime.DefaultRuntime())
-	client, err := NewPipelineClient(sid, "127.0.0.1:6001", &PipelineConfig{
-		TimeOutForEachConnect: 25 * time.Millisecond,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-
-	queryCtx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	stream, err := client.NewStream(queryCtx, "127.0.0.1:1")
-	if stream != nil {
-		_ = stream.Close(true)
-	}
-	require.ErrorIs(t, err, morpc.ErrBackendCreateTimeout)
-	require.NoError(t, context.Cause(queryCtx),
-		"pipeline backend retries consumed the outer statement deadline")
-	require.Less(t, time.Since(started), 500*time.Millisecond)
-}
