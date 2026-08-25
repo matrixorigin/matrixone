@@ -17,7 +17,6 @@
 #include "helper.h"
 #include "device_memory.hpp"
 #include "index_cost.hpp"
-#include "index_base.hpp"
 #include <unordered_map>
 #include <stdexcept>
 #include <cuda_runtime.h>

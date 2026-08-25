@@ -198,6 +198,35 @@ int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_
 int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who,
                             size_t budget_percent = 0);
 
+// kDefaultQuantizerTrainLimit / quantizer_staging_rows own the int8/uint8
+// staging sample size. Both the index (staging_row_limit) and the Go planner
+// (gpu_quantizer_staging_rows -> cuvs.QuantizerStagingRows) go through this, so
+// the rule has ONE definition.
+//
+// Go needs it because the sample is HOST memory live at the same time as the
+// capacity allocation, so the host budget must charge it before deriving
+// capacity. Go computing min(limit, device_cap) itself would be a second
+// implementation of this function -- which is how this subsystem has gone wrong
+// before -- so it asks instead.
+//
+// 100k rows give a fine 0.99-quantile estimate at a few hundred MB of f32 even at
+// high dim; 1M would be ~3-4 GB and get capped by the device bound anyway.
+inline constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
+
+// per_train_row is dim * sizeof(BASE element): the sample retains RAW base rows,
+// not the storage type. train_limit 0 means the default. Requires a current
+// device, since cap_rows_to_gpu_mem reads cudaMemGetInfo.
+inline uint64_t quantizer_staging_rows(size_t per_train_row, uint64_t train_limit,
+                                       size_t budget_percent) {
+    if (train_limit == 0) train_limit = kDefaultQuantizerTrainLimit;
+    constexpr uint64_t kMaxRequestable =
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+    const uint64_t want = std::min<uint64_t>(train_limit, kMaxRequestable);
+    const int64_t rows = cap_rows_to_gpu_mem(static_cast<int64_t>(want), per_train_row,
+                                             "quantizer", budget_percent);
+    return static_cast<uint64_t>(rows < 1 ? 1 : rows);
+}
+
 } // namespace matrixone
 #endif
 

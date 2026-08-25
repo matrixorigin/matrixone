@@ -271,26 +271,6 @@ func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) 
 
 // distinctDeviceCount is len(devices) minus duplicates. Under
 
-// quantizerStagingBytes turns a staged ROW COUNT into the host bytes that sample
-// occupies, live at the same time as the capacity allocation.
-//
-// The row count is NOT computed here. It comes from cuvs.QuantizerStagingRows,
-// i.e. from matrixone::quantizer_staging_rows -- the same function the index
-// calls -- because the rule is min(train_limit, what the device can train on)
-// plus a default and clamps, and writing that out in Go would be a second
-// implementation of it. That is the mistake this subsystem keeps making, so the
-// only arithmetic left here is the multiply.
-//
-// Zero unless the storage type is one byte: training is gated on sizeof(T)==1
-// (index_base.hpp, train_quantizer_if_needed), so a float32 or float16 quantized
-// build never stages and must not be charged for it.
-func quantizerStagingBytes(narrowStorage bool, dim, baseElemBytes, stagedRows uint64) uint64 {
-	if !narrowStorage || dim == 0 || baseElemBytes == 0 {
-		return 0
-	}
-	return stagedRows * dim * baseElemBytes
-}
-
 // baseElemBytes is the width of one element of the BASE (source) vector column,
 // which is what the quantizer staging arena retains -- not the storage width the
 // index ends up holding.

@@ -273,36 +273,6 @@ func TestPlanCapacityShardedValidatesPerShard(t *testing.T) {
 	})
 }
 
-// quantizerStagingBytes feeds the reservation HostRowsFitting subtracts before
-// deriving capacity. It is the term that was missing entirely: hostPerRow
-// charges the one-byte STORAGE width for int8/uint8, while the C++ side retains
-// RAW BASE rows to sample from, concurrently with the capacity allocation.
-func TestQuantizerStagingBytes(t *testing.T) {
-	const dim, base = uint64(768), uint64(4)
-
-	// Not charged unless the storage type is one byte: training is gated on
-	// sizeof(T)==1, so an f16- or f32-quantized build never stages.
-	require.Zero(t, quantizerStagingBytes(false, dim, base, 100000))
-	require.Zero(t, quantizerStagingBytes(false, dim, base, 88_000_000),
-		"even a huge staged count costs nothing when nothing stages")
-
-	// The row count comes from cuvs.QuantizerStagingRows -- i.e. from
-	// matrixone::quantizer_staging_rows, which applies the default, the train
-	// limit and the device bound. Nothing here recomputes it; this is the multiply.
-	require.Equal(t, uint64(100000*dim*base), quantizerStagingBytes(true, dim, base, 100000))
-	require.Equal(t, uint64(100000*dim*2), quantizerStagingBytes(true, dim, 2, 100000),
-		"an f16 base stages half as much")
-
-	// A device-capped count charges only what will actually be staged. This is why
-	// the count is asked for rather than derived from the limit: charging an
-	// uncapped 88M at dim 768 would be ~270 GB and refuse a build that would run.
-	require.Equal(t, uint64(1_760_000*dim*base), quantizerStagingBytes(true, dim, base, 1_760_000))
-
-	require.Zero(t, quantizerStagingBytes(true, 0, base, 100000), "no dimension, no arena")
-	require.Zero(t, quantizerStagingBytes(true, dim, 0, 100000))
-	require.Zero(t, quantizerStagingBytes(true, dim, base, 0), "no staged rows, no arena")
-}
-
 func TestBaseElemBytes(t *testing.T) {
 	require.Equal(t, uint64(2), baseElemBytes(types.T_array_float16))
 	require.Equal(t, uint64(4), baseElemBytes(types.T_array_float32))

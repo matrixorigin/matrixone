@@ -544,8 +544,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				}
 			}
 		}
-		stagingBytes := quantizerStagingBytes(
-			narrowStorage, dim, baseElemBytes(u.baseOid), stagedRows)
+		// Host bytes the sample occupies. stagedRows is 0 unless narrowStorage, so
+		// this is 0 for a build that never trains a quantizer.
+		stagingBytes := stagedRows * dim * baseElemBytes(u.baseOid)
 		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow, stagingBytes)
 		if herr != nil {
 			// memory.HostRowsFitting errors ONLY on a successful measurement that
