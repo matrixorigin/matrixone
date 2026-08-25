@@ -21,6 +21,7 @@ const (
 	MongoDBExternal    = 1 << iota
 	DataStreamExternal = 1 << iota
 	ForeignExternal    = 1 << iota
+	KafkaExternal      = 1 << iota
 )
 
 func IsPartitioned(f uint64) bool {
@@ -45,4 +46,8 @@ func IsDataStreamExternal(f uint64) bool {
 
 func IsForeignExternal(f uint64) bool {
 	return f&ForeignExternal != 0
+}
+
+func IsKafkaExternal(f uint64) bool {
+	return f&KafkaExternal != 0
 }

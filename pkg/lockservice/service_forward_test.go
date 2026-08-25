@@ -60,6 +60,123 @@ func TestForwardLock(t *testing.T) {
 	)
 }
 
+func TestForwardLockBudgetAcrossRequests(t *testing.T) {
+	tests := []struct {
+		name string
+		mode pb.LockMode
+	}{
+		{name: "exclusive", mode: pb.LockMode_Exclusive},
+		{name: "shared", mode: pb.LockMode_Shared},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				[]string{"s1", "s2"},
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					origin := services[0]
+					owner := services[1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+
+					const tableID = uint64(26632)
+					_, err := owner.getLockTableWithCreate(
+						ctx, 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					opts := newTestRowExclusiveOptions()
+					opts.Mode = tt.mode
+					opts.ForwardTo = "s2"
+					txnID := []byte("forward-budget-txn")
+					for _, rows := range [][][]byte{
+						{{1}, {2}},
+						{{4}},
+						{{5}},
+					} {
+						_, err = origin.Lock(ctx, tableID, rows, txnID, opts)
+						require.NoError(t, err)
+					}
+
+					txn := owner.activeTxnHolder.getActiveTxn(txnID, false, "")
+					require.NotNil(t, txn)
+					txn.RLock()
+					lockCount := txn.lockHolders[0].tableKeys[tableID].mustGet().len()
+					txn.RUnlock()
+					expectedLockCount := 2
+					if tt.mode == pb.LockMode_Shared {
+						expectedLockCount = 4
+					}
+					require.Equal(t, expectedLockCount, lockCount)
+
+					lt := owner.tableGroups.get(0, tableID).(*localLockTable)
+					lt.mu.RLock()
+					start, hasStart := lt.mu.store.Get([]byte{1})
+					end, hasEnd := lt.mu.store.Get([]byte{5})
+					lt.mu.RUnlock()
+					require.True(t, hasStart)
+					require.True(t, hasEnd)
+					if tt.mode == pb.LockMode_Exclusive {
+						require.True(t, start.isLockRangeStart())
+						require.True(t, end.isLockRangeEnd())
+					} else {
+						require.True(t, start.isLockRow())
+						require.True(t, end.isLockRow())
+					}
+					require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 3
+				})
+		})
+	}
+}
+
+func TestForwardMixedModeBudgetKeepsExactOwnership(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26713)
+			_, err := owner.getLockTableWithCreate(ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			txnA := []byte("forward-mixed-a")
+			txnB := []byte("forward-mixed-b")
+			shared := newTestRowSharedOptions()
+			shared.ForwardTo = owner.serviceID
+			_, err = origin.Lock(ctx, table, newTestRows(1, 2), txnA, shared)
+			require.NoError(t, err)
+			_, err = origin.Lock(ctx, table, newTestRows(1), txnA, shared)
+			require.NoError(t, err)
+			_, err = owner.Lock(ctx, table, newTestRows(1), txnB, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			exclusive := newTestRowExclusiveOptions()
+			exclusive.Policy = pb.WaitPolicy_FastFail
+			exclusive.ForwardTo = owner.serviceID
+			_, err = origin.Lock(ctx, table, newTestRows(3, 4), txnA, exclusive)
+			require.NoError(t, err)
+			_, err = origin.Lock(ctx, table, newTestRows(5), txnA, exclusive)
+			require.NoError(t, err)
+
+			requireExactTxnTableBookkeeping(t, owner, txnA, table, 5)
+			requireExactMixedModeLockStore(t, owner, table)
+			require.NoError(t, owner.Unlock(ctx, txnB, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, txnA, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+			c.MaxFixedSliceSize = 8
+		},
+	)
+}
+
 func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 	holderTxn := []byte("holder")
 	waiterTxn := []byte("waiter")

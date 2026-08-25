@@ -1,0 +1,42 @@
+# Copyright 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+
+# Single-node Kafka (KRaft, combined broker+controller) for the Kafka
+# external-table end-to-end harness (docs/cn/kafka_exttab.md, issue #27518).
+#
+# Kafka clients bootstrap through the ADVERTISED listener, so unlike the
+# Elasticsearch harness the host port cannot be Docker-chosen: the harness
+# picks a free port first and exports KAFKA_PORT, which is both the published
+# host port and the advertised address.
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # the CONTROLLER listener is implicitly advertised in KRaft combined
+      # mode, and 0.0.0.0 is rejected as an advertised address — bind it to
+      # localhost (it is only used inside the container)
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:${KAFKA_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    ports:
+      - "127.0.0.1:${KAFKA_PORT}:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 10s
+      retries: 60
+    networks: [kafka-e2e]
+
+networks:
+  kafka-e2e:
+    driver: bridge

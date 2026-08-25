@@ -665,6 +665,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
 	case *hashjoin.HashJoin:
+		if err := validateRemoteJoinProtocol(proc, t.JoinType); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
 			JoinType:               t.JoinType,
@@ -683,6 +686,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			NonEqCond:              t.NonEqCond,
 			JoinMapTag:             t.JoinMapTag,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			AsofRightCol:           t.AsofRightCol,
+			AsofBuildLeft:          t.AsofBuildLeft,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
@@ -812,6 +817,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 			DatastreamScan:              t.Es.DatastreamScan,
 			ForeignScan:                 t.Es.ForeignScan,
+			KafkaScan:                   t.Es.KafkaScan,
 		}
 		in.ProjectList = t.ProjectList
 	case *mongoscan.MongoScan:
@@ -1226,6 +1232,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
 		arg.SpillThreshold = opr.SpillMem
+		arg.AsofRightCol = t.AsofRightCol
+		arg.AsofBuildLeft = t.AsofBuildLeft
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
@@ -1370,6 +1378,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
 					DatastreamScan:              t.DatastreamScan,
 					ForeignScan:                 t.ForeignScan,
+					KafkaScan:                   t.KafkaScan,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1636,6 +1645,18 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+	}
+	return nil
+}
+
+func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
+	if joinType != plan.Node_ASOF && joinType != plan.Node_ASOF_LEFT {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"native ASOF join remote execution requires MORPC protocol version 27",
+		)
 	}
 	return nil
 }
