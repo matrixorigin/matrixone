@@ -1272,7 +1272,7 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		if hidden {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
 		}
-		typ, err := substraitType(&c.Typ)
+		typ, err := nativeInputType(&c.Typ)
 		if err != nil {
 			if IsNotEligible(err) {
 				return nil, err
@@ -1296,7 +1296,7 @@ func namedStructFromTypes(typesIn []planpb.Type) (*spb.NamedStruct, []string, er
 	fields := make([]*spb.Type, len(typesIn))
 	for i := range typesIn {
 		names[i] = "col_" + strconv.Itoa(i)
-		field, err := substraitType(&typesIn[i])
+		field, err := nativeInputType(&typesIn[i])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1305,6 +1305,44 @@ func namedStructFromTypes(typesIn []planpb.Type) (*spb.NamedStruct, []string, er
 	return &spb.NamedStruct{Names: append([]string(nil), names...), Struct: &spb.Type_Struct{
 		Types: fields, Nullability: spb.Type_NULLABILITY_REQUIRED,
 	}}, names, nil
+}
+
+// nativeInputType is the physical MO input contract, not the semantic
+// Substrait result contract. Keep the allow-list explicit: substraitType may
+// map a logical result to a wider signed type (currently uint32 to i64), while
+// TaeRead and StreamRead start from an unconverted MO physical type.
+func nativeInputType(t *planpb.Type) (*spb.Type, error) {
+	if t == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: missing native input type")
+	}
+	switch types.T(t.Id) {
+	case types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar,
+		types.T_date:
+		return substraitType(t)
+	case types.T_decimal64, types.T_decimal128:
+		field, err := substraitType(t)
+		if err != nil {
+			return nil, err
+		}
+		if (types.T(t.Id) == types.T_decimal64 && t.Width > 18) ||
+			(types.T(t.Id) == types.T_decimal128 && t.Width <= 18) {
+			return nil, notEligiblef(
+				EligibilityType,
+				"native input type %s does not match decimal(%d,%d)",
+				types.T(t.Id).String(), t.Width, t.Scale,
+			)
+		}
+		return field, nil
+	default:
+		return nil, notEligiblef(
+			EligibilityType,
+			"unsupported native input type %s",
+			types.T(t.Id).String(),
+		)
+	}
 }
 
 func columnMapping(t *planpb.TableDef) ([]ColumnMapping, error) {
