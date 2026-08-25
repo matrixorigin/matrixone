@@ -1946,18 +1946,36 @@ public:
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
         is.read(reinterpret_cast<char*>(&size), sizeof(size));
+        // Read STRAIGHT into host_ids. The previous shape staged into a
+        // temp_ids(size) and then let set_ids copy it into host_ids, so both
+        // buffers were live at once and the load peaked at 2*size*sizeof(IdT) --
+        // ~1.4 GB at 88M rows where the retained array is ~704 MB. The host
+        // admission this path takes is sized from ids.bin, i.e. the RETAINED
+        // array, so the staging copy was demand nothing had admitted.
+        //
+        // Resizing under the lock and reading outside it keeps the lock off the
+        // file I/O: host_ids.data() is stable once resized, and nothing else can
+        // reach this index during a load.
+        IdT* dst = nullptr;
         {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             this->host_ids.clear();
             this->id_to_index_.clear();
-            // Back to "unbuilt", not "complete and empty": set_ids below repopulates
-            // host_ids, and the map must be rebuilt from it on the next delete.
+            // Back to "unbuilt", not "complete and empty": host_ids is repopulated
+            // below, and the map must be rebuilt from it on the next delete.
             this->id_index_built_ = false;
+            if (size > 0) {
+                this->host_ids.resize(size);
+                dst = this->host_ids.data();
+            }
         }
         if (size > 0) {
-            std::vector<IdT> temp_ids(size);
-            is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
-            this->set_ids(temp_ids.data(), size);
+            is.read(reinterpret_cast<char*>(dst), size * sizeof(IdT));
+            if (!is) {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                this->host_ids.clear();
+                throw std::runtime_error("Short read loading IDs from: " + filename);
+            }
         }
     }
 

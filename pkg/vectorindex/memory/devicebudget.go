@@ -159,10 +159,8 @@ type DeviceMaxAdmissibleFunc func(dev int) (uint64, error)
 // DeviceAggregateFitsHardware refuses a finished build that could never be
 // resident on the DEVICE HARDWARE, whatever is free at the time.
 //
-// Deliberately a different question from DeviceLoadFits. That admits against a
-// fraction of CURRENTLY-FREE memory, so its refusals are situational -- evict
-// something and the same index loads. This compares against the card's TOTAL
-// capacity, so a refusal is permanent: no eviction, no quieter moment, and no
+// Compares against the card's TOTAL capacity, not what is free, so a refusal is
+// permanent: no eviction, no quieter moment, and no
 // larger device set helps, because distribution_mode is persisted and neither
 // SINGLE_GPU (all of it on devices[0]) nor REPLICATED (all of it on every device)
 // redistributes when hardware is added.
@@ -178,12 +176,11 @@ type DeviceMaxAdmissibleFunc func(dev int) (uint64, error)
 // SHARDED the caller has taken the biggest shard rather than an even division,
 // which would under-state it.
 //
-// The threshold is the budget fraction of TOTAL, not total itself. DeviceLoadFits
-// admits against that fraction of FREE, and free never exceeds total, so an index
-// above this bound is refused by every future query at every free level -- while
-// one merely above the CURRENT budget may well load once something is evicted.
-// Comparing against raw total would leave that band committing artifacts whose
-// every query fails, which is the defect this gate exists to close.
+// The threshold is the budget fraction of TOTAL, not total itself: the
+// per-deserialize claims in C++ admit against that fraction of FREE, and free
+// never exceeds total, so an index above this bound is refused at every load
+// however idle the card. Comparing against raw total would leave that band
+// committing artifacts whose every query fails.
 func DeviceAggregateFitsHardware(
 	devices []int, perDeviceBytes uint64, maxAdmissible DeviceMaxAdmissibleFunc,
 ) error {
@@ -207,86 +204,6 @@ func DeviceAggregateFitsHardware(
 					"index could never be queried on this GPU. Rebuild with a narrower storage "+
 					"type (QUANTIZATION), index fewer rows, or use a GPU with more memory",
 				perDeviceBytes>>20, dev, total>>20)
-		}
-	}
-	return nil
-}
-
-// DeviceLoadFits refuses a set of sub-indexes BEFORE any of them is loaded, when
-// their aggregate resident footprint cannot be held.
-//
-// A build is deliberately allowed to rotate into N sub-indexes that no single
-// device could hold at once: the build only ever materialises one at a time. A
-// SEARCH is the opposite -- it reaches every list of every sub-index, so all N
-// have to be resident together. Per-load admission alone cannot express that:
-// each individual load fits, so the loader admits the early sub-indexes, spends
-// the budget on them, and is refused on a later one. The query then fails having
-// already paid for most of the memory, and the operator sees a refusal naming a
-// sub-index rather than the real problem, which is the total.
-//
-// Checking the sum first turns that into one refusal, before anything is
-// allocated, that names the aggregate. It does NOT reserve: the per-deserialize
-// claims in device_memory.hpp still do the actual admission, and taking a claim
-// here as well would double-count the same bytes and refuse loads that fit.
-// This is a pre-flight check, so a peer that allocates between the check and the
-// loads is still caught -- by those per-load claims, one layer down.
-//
-// This is the SITUATIONAL half of a two-gate pair. It admits against a fraction of
-// currently-FREE VRAM, so a refusal here means "not right now" -- evict something,
-// or come back when the card is quieter, and the same index loads.
-//
-// The permanent half is DeviceAggregateFitsHardware, which CREATE runs against the
-// budget fraction of TOTAL. An index above that bound is refused here at every free
-// level, so it is rejected at build time rather than committed and then failing
-// every query. An index below it may still be refused here transiently, which is
-// correct and is why CREATE does not use this gate.
-//
-// totalBytes is the aggregate on-disk size of every sub-index to be loaded. That
-// OVER-states device residency: the tar also carries host-resident members --
-// ids.bin, the INCLUDE blobs, the quantizer and the bitset -- which never reach
-// the GPU (~8% of an IVF-PQ tar, ~11% for a narrow vector). The over-statement is
-// in the over-refuse direction and is accepted here because the models come from
-// metadata, which persists only the tar total, and because the authoritative claim
-// taken per deserialize in C++ sizes itself from the real component anyway. The
-// build side, which has the packed components to hand, uses the exact device bytes
-// instead (cuvs.PackSizes.Device).
-//
-// Attribution follows the distribution mode, as everywhere else.
-func DeviceLoadFits(
-	mode vectorindex.DistributionMode, devices []int, totalBytes uint64,
-	rowsFitting DeviceRowsFittingFunc,
-) error {
-	if totalBytes == 0 || len(devices) == 0 || rowsFitting == nil {
-		return nil
-	}
-	for dev, need := range DeviceBuildBytes(mode, DeviceDistinct(devices), totalBytes) {
-		if need == 0 {
-			continue
-		}
-		// Ask how many ONE-BYTE rows fit: that answer IS the byte budget, computed
-		// by the same code every other admission on this path uses, so the 60%
-		// fraction is not duplicated here.
-		//
-		// Do NOT instead ask whether `need` rows-of-need-bytes fit and test for 0.
-		// rows_fitting_gpu_mem clamps its result to a minimum of 1 (helper.cpp), so
-		// it never reports "does not fit" and any predicate built on it is silently
-		// always-true. That mistake shipped once and was caught only by running this
-		// against a real device.
-		budgetBytes, free, err := rowsFitting(dev, 1)
-		if err != nil {
-			// Never guess. An unmeasurable device is exactly the condition that
-			// made the previous version admit a load it could not complete.
-			return moerr.NewInternalErrorNoCtxf(
-				"vector index load: cannot measure device %d to admit %d bytes: %v", dev, need, err)
-		}
-		if budgetBytes < 0 || need > uint64(budgetBytes) {
-			return moerr.NewInternalErrorNoCtxf(
-				"vector index load: this index needs %d bytes resident on device %d to be "+
-					"searched, but only %d bytes may be claimed (%d bytes free), because a query "+
-					"reads every sub-index at once. The index built successfully -- rotation "+
-					"bounds each build, not the search. Rebuild with a narrower storage type "+
-					"(QUANTIZATION), index fewer rows, or use a GPU with more memory",
-				need, dev, budgetBytes, free)
 		}
 	}
 	return nil

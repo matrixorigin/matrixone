@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -467,22 +466,23 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 // and cgo/cuvs/device_memory.hpp claims the bytes across the window where an
 // admitted load is not resident yet.
 func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
-	// A query reads every sub-index, so all of them are resident at once. Check
-	// the AGGREGATE before loading any: per-load admission alone would admit the
-	// early sub-indexes, spend the budget, and refuse a later one -- failing after
-	// most of the memory was already taken, with a message naming one sub-index
-	// instead of the total. Rotation bounds the build, never the search.
-	var totalBytes uint64
-	for _, idx := range indexes {
-		if idx.FileSize > 0 {
-			totalBytes += uint64(idx.FileSize)
-		}
-	}
-	if err := memory.DeviceLoadFits(
-		vectorindex.DistributionMode(s.Idxcfg.CuvsIvfpq.DistributionMode), s.Devices, totalBytes, cuvs.RowsFittingFreeMem,
-	); err != nil {
-		return nil, err
-	}
+	// No aggregate pre-flight here. It used to sum metadata FileSize -- the whole
+	// tar -- and admit that against the device budget, but FileSize also counts
+	// ids.bin, the INCLUDE blobs, the quantizer and the bitset, none of which reach
+	// the GPU. CREATE admits the device-resident components only, so the two gates
+	// measured different quantities and an artifact could pass CREATE and then be
+	// refused at every load: with a 75-byte bound, 70 device bytes plus 10
+	// host-only bytes passes 70 <= 75 and fails 80 > 75, permanently, and INCLUDE
+	// columns make that host-only share arbitrarily large.
+	//
+	// Nothing compatible is available here: the models come from metadata and the
+	// tars are not fetched until LoadIndex below, which is the whole point of a
+	// pre-flight. Rather than gate on a quantity CREATE cannot honour, the
+	// aggregate is left to the per-deserialize claims in C++ (ivf_pq.hpp /
+	// cagra.hpp, "*::load"), which size themselves from the real component and
+	// accumulate on the same ledger. The cost is that an over-large set fails on a
+	// later sub-index rather than before the first -- recoverable, and preferable
+	// to committing artifacts no query can ever load.
 
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
