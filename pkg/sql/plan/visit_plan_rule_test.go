@@ -1375,6 +1375,31 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 	for _, arg := range boundComparison.GetF().Args {
 		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
 	}
+
+	for _, textValue := range []string{"foo", "1abc", "1e309"} {
+		filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{
+				Value:            "0",
+				RuntimeType:      types.T_int64.ToType(),
+				HasRuntimeType:   true,
+				IsBinaryProtocol: true,
+			},
+			ParamValue{
+				Value:            textValue,
+				RuntimeType:      types.T_text.ToType(),
+				HasRuntimeType:   true,
+				IsBinaryProtocol: true,
+			},
+		})
+		require.NoError(t, err, textValue)
+		require.True(t, specialized, textValue)
+		boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
+		for _, arg := range boundComparison.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id, textValue)
+		}
+		require.NotNil(t, boundComparison.GetF().Args[1].GetF(), textValue)
+		require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName(), textValue)
+	}
 }
 
 func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {

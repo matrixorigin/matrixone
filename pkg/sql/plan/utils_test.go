@@ -549,11 +549,13 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		{value: "1e100", want: true},
 		{value: "1e-100", want: true},
 		{value: "1.7976931348623157e308", want: true},
-		{value: "1e309", want: false},
-		{value: "1ee2", want: false},
-		{value: "NaN", want: false},
-		{value: "Inf", want: false},
-		{value: "not-a-number", want: false},
+		{value: "1e309", want: true},
+		{value: "1ee2", want: true},
+		{value: "NaN", want: true},
+		{value: "Inf", want: true},
+		{value: "not-a-number", want: true},
+		{value: "1abc", want: true},
+		{value: "", want: true},
 	} {
 		typ, ok := preparedNumericComparisonTextType(test.value)
 		require.Equal(t, test.want, ok, test.value)

@@ -200,6 +200,37 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(7), status)
 
+		// Numeric comparison must use the engine's ordinary MySQL string-to-
+		// DOUBLE conversion for the entire text domain, not only complete finite
+		// numeric literals. This preserves numeric prefixes, non-numeric-to-zero,
+		// range handling, and the corresponding truncation diagnostics.
+		for _, test := range []struct {
+			name        string
+			numeric     any
+			text        string
+			wantWarning bool
+		}{
+			{name: "non numeric becomes zero", numeric: int64(0), text: "foo", wantWarning: true},
+			{name: "numeric prefix", numeric: int64(1), text: "1abc", wantWarning: true},
+			{name: "overflow follows double range", numeric: float64(1.7976931348623157e308), text: "1e309"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+				_, err = numericTextPredicateStmt.ExecContext(ctx, test.numeric, test.text)
+				require.NoError(t, err)
+				if test.wantWarning {
+					var level, message string
+					var code uint16
+					require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+					require.Equal(t, "Warning", level)
+					require.Equal(t, uint16(1292), code)
+					require.Contains(t, message, "Truncated incorrect DOUBLE value")
+				}
+				require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+				require.Equal(t, int64(7), status)
+			})
+		}
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {

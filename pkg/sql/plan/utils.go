@@ -3942,18 +3942,8 @@ func PreparedRuntimeDecimalTypeFromString(value string) (types.Type, bool) {
 }
 
 func preparedExponentType(value string) (types.Type, bool) {
-	if !strings.ContainsAny(value, "eE") {
-		return types.Type{}, false
-	}
-	return preparedNumericComparisonTextType(value)
-}
-
-// preparedNumericComparisonTextType validates a text operand that is compared
-// with a numeric operand. MySQL evaluates string/numeric comparisons in the
-// DOUBLE domain, including integer-looking and fixed-point strings.
-func preparedNumericComparisonTextType(value string) (types.Type, bool) {
 	value = strings.TrimSpace(value)
-	if value == "" {
+	if value == "" || !strings.ContainsAny(value, "eE") {
 		return types.Type{}, false
 	}
 	unsigned := value
@@ -3973,6 +3963,17 @@ func preparedNumericComparisonTextType(value string) (types.Type, bool) {
 	if err != nil || math.IsInf(parsed, 0) {
 		return types.Type{}, false
 	}
+	return types.T_float64.ToType(), true
+}
+
+// preparedNumericComparisonTextType selects the comparison domain; it does
+// not validate or pre-convert the value. MySQL compares every text operand
+// against a numeric operand in the DOUBLE domain, including strings with a
+// numeric prefix and strings without one. preparedRuntimeParamExpr leaves
+// values that are not complete Go float literals behind an explicit cast so
+// execution uses the engine's ordinary MySQL numeric-string conversion and
+// warning path.
+func preparedNumericComparisonTextType(string) (types.Type, bool) {
 	return types.T_float64.ToType(), true
 }
 
