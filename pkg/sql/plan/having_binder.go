@@ -57,6 +57,13 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
+	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
+		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
+			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+		}
+		return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
+	}
+
 	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
 		if !b.insideAgg {
 			return &plan.Expr{

@@ -91,6 +91,20 @@ having max(sort_key) > 0
 interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by series_id, _wstart;
 
+select series_id, _wstart, max(shown) as shown_fill
+from linear_having_numeric
+group by series_id
+having max(sort_key) < 150 and max(sort_key) < 150
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart;
+
+select series_id, _wstart, max(shown) as shown_fill
+from linear_having_numeric
+group by series_id
+having max(sort_key) + max(sort_key) < 350
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart;
+
 drop table linear_having_numeric;
 
 drop table linear_order_numeric;

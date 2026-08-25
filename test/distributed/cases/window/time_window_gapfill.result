@@ -142,6 +142,24 @@ order by series_id, _wstart;
 1  ¦  2026-03-05 00:00:00  ¦  10  𝄀
 1  ¦  2026-03-05 00:01:00  ¦  20  𝄀
 1  ¦  2026-03-05 00:02:00  ¦  30
+select series_id, _wstart, max(shown) as shown_fill
+from linear_having_numeric
+group by series_id
+having max(sort_key) < 150 and max(sort_key) < 150
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart;
+➤ series_id[4,32,0]  ¦  _wstart[93,64,0]  ¦  shown_fill[-5,64,0]  𝄀
+1  ¦  2026-03-05 00:00:00  ¦  10  𝄀
+1  ¦  2026-03-05 00:01:00  ¦  20
+select series_id, _wstart, max(shown) as shown_fill
+from linear_having_numeric
+group by series_id
+having max(sort_key) + max(sort_key) < 350
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart;
+➤ series_id[4,32,0]  ¦  _wstart[93,64,0]  ¦  shown_fill[-5,64,0]  𝄀
+1  ¦  2026-03-05 00:00:00  ¦  10  𝄀
+1  ¦  2026-03-05 00:01:00  ¦  20
 drop table linear_having_numeric;
 drop table linear_order_numeric;
 create table linear_readings(series_id int, ts datetime, value int);
