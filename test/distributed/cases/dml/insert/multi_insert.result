@@ -213,6 +213,33 @@ select id, e from vecs order by id;
 ➤ id[4,32,0]  ¦  e[12,3,0]  𝄀
 1  ¦  [10, 10, 10]  𝄀
 2  ¦  [20, 20, 20]
+create table lid_one (n int auto_increment primary key, v int);
+create table lid_plain (v int);
+insert all into lid_one (v) values (lo) into lid_plain (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as one_autoincr_target;
+➤ one_autoincr_target[-5,64,0]  𝄀
+1
+create table lid_mark (n int auto_increment primary key, v int);
+insert into lid_mark (n, v) values (50, 0);
+insert into lid_mark (v) values (1);
+select last_insert_id() as prior_generated;
+➤ prior_generated[-5,64,0]  𝄀
+51
+create table lid_a (n int auto_increment primary key, v int);
+create table lid_b (n int auto_increment primary key, v int);
+insert into lid_a (n, v) values (100, 0);
+delete from lid_a;
+insert all into lid_a (v) values (lo) into lid_b (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as a_then_b_unchanged;
+➤ a_then_b_unchanged[-5,64,0]  𝄀
+51
+insert all into lid_b (v) values (lo) into lid_a (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as b_then_a_unchanged;
+➤ b_then_a_unchanged[-5,64,0]  𝄀
+51
+select (select group_concat(n order by n) from lid_a) as a_ids, (select group_concat(n order by n) from lid_b) as b_ids;
+➤ a_ids[-1,16383,0]  ¦  b_ids[-1,16383,0]  𝄀
+101,102,103,104  ¦  1,2,3,4
 begin;
 insert all into customers_other (id, name, region) values (id, name, region) into customers_us (id, name, region) values (id, name, region) select id, name, region from customers where id = 5;
 select count(*) from customers_other;

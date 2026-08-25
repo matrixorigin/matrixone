@@ -56,8 +56,17 @@ Semantics that follow from the implementation:
   maintained per target exactly as a single `INSERT` would.
 - The statement is atomic: a failure in any target (e.g. a duplicate key)
   rolls back all targets.
-- Affected rows = sum over all targets. `LAST_INSERT_ID()` is set as for a
-  single insert.
+- Affected rows = sum over all targets.
+- `LAST_INSERT_ID()` reports a value only when **exactly one** target can
+  generate `AUTO_INCREMENT` keys; then it is that target's first generated
+  value, as for a single insert. With several such targets the statement
+  reports **no** insert id. Each target has its own `PRE_INSERT` publishing
+  through one statement-wide coordinator that keeps the smallest non-zero
+  value — correct for the parallel scopes of one table, where the smallest
+  really is the first generated, but meaningless across unrelated counters:
+  it would identify neither the first target nor the first generated row, and
+  would change with the targets' counter positions rather than with the
+  statement. Reporting nothing is preferred over reporting an arbitrary one.
 - The `INSERT` privilege is required on every target table (and `SELECT`
   on the source); a missing privilege on any target denies the statement.
 
@@ -140,7 +149,7 @@ Targets never re-bind a predicate; their `FILTER` reads the selector columns:
 | statement                     | filter on the branch                                   |
 |-------------------------------|--------------------------------------------------------|
 | `INSERT ALL WHEN`             | `sel_i`                                                |
-| `INSERT FIRST WHEN`           | `sel_i AND sel_1 IS NOT TRUE AND ... AND sel_{i-1} IS NOT TRUE` |
+| `INSERT FIRST WHEN`           | `sel_i` alone — the selector is already masked by the earlier WHENs (see below), so no exclusion terms are needed |
 | `ELSE`                        | `sel_1 IS NOT TRUE AND ... AND sel_n IS NOT TRUE`      |
 | unconditional `INSERT ALL`    | none                                                   |
 
@@ -182,9 +191,14 @@ UNION ALL
   bound value cast to the target column type (`castInsertSourceColumn`, the
   same ENUM/SET/GEOMETRY-aware assignment cast the single-table tail uses);
   a column the clause does not set is the column's default expression
-  (`getDefaultExpr`). Auto-increment columns left unset become NULL, which
-  PreInsert turns into a generated value, so one clause may supply explicit
-  ids while another lets the engine generate them.
+  (`getDefaultExpr`). An AUTO_INCREMENT column left unset becomes NULL, which
+  PreInsert turns into a generated value. Clauses merged onto one table must
+  therefore AGREE on whether that column is generated: mixing a generated
+  value with an explicit one is rejected, because both branches feed one
+  PRE_INSERT concurrently and the generated values race the explicit ones
+  (`validateMergedAutoIncrColumns`). All-generated and all-explicit are both
+  supported; classification is on the folded value, so NULL and every literal
+  representation of zero count as generated in the default `sql_mode`.
 - Columns set by no clause are left to `appendNodesForInsertStmt`, exactly as
   in a single insert (so a NOT NULL column without default still errors at
   plan time).
@@ -352,7 +366,9 @@ It was chosen because it reuses the single-table insert tail unchanged
 and per-target S3 decisions, and handles skew, same-table clauses and
 irregular indexes with the machinery the engine already has. The chained,
 selector-based design remains the natural evolution if profiling shows the
-per-target fan-out or the repeated condition evaluation to be a bottleneck:
+per-target fan-out to be a bottleneck (the repeated condition evaluation it
+was also meant to remove is already gone — conditions are materialized once,
+see "Routing" above):
 it can be added as a second planning mode for targets with only regular
 indexes (falling back to the sink shape for fulltext/IVF targets and
 same-table clauses), and the BVT suite is design-independent, so it would
@@ -508,7 +524,7 @@ BVT file(s); "manual" = verified by hand only, see below):
 | ALL vs FIRST | overlapping WHENs: ALL writes the row to both targets, FIRST to the first only; ELSE receives the rest. |
 | Composition | several INTOs under one WHEN, `upper()`/`lower()`/arithmetic in VALUES, `WITH` source with `ORDER BY ... LIMIT`. |
 | Constraints | duplicate primary key; duplicate unique key; a failing second target rolls the first target back (`count(*) = 0`). |
-| Same table, several clauses | different column lists (defaults filled); overlapping keys across clauses → `Duplicate entry`; FIRST with the same table in both branches routes each row once; one clause sets the auto-increment key, the other lets the engine generate it. |
+| Same table, several clauses | different column lists (defaults filled); overlapping keys across clauses → `Duplicate entry`; FIRST with the same table in both branches routes each row once; auto_increment agreement — all-explicit and all-generated accepted, NULL / 0 / 0.0 / '0' / omitted mixed with a literal rejected, and the expression form accepted under `NO_AUTO_VALUE_ON_ZERO`. |
 | Irregular indexes | fulltext target written by two merged clauses, ivfflat target; verified by `MATCH ... AGAINST` and a vector read afterwards. |
 | Transactions | `BEGIN` / multi-insert / `ROLLBACK` leaves nothing. |
 | Errors | value-count mismatch (explicit and positional), unknown source column in VALUES / WHEN, unknown target column, missing table, `INSERT FIRST` without WHEN, foreign-key target, external-table target. |
@@ -784,9 +800,10 @@ Accepted as designed (with the reason):
 - The statement-level `WITH` is moved onto the source `SELECT` by mutating
   the AST, as `bindInsert` does; idempotent, so PREPARE/EXECUTE re-binding
   is safe.
-- Clauses are grouped by the resolved, lower-cased `schema.table`, so `t`,
-  `db.t` and `DB.T` share one pipeline (verified: overlapping keys raise
-  `Duplicate entry`).
+- Clauses are grouped by the resolved TABLE ID, so `t`, `db.t` and `DB.T`
+  share one pipeline (verified: overlapping keys raise `Duplicate entry`)
+  while two case-distinct tables under `lower_case_table_names=0` stay
+  separate — which a lower-cased name key would have merged.
 - Parenthesized source directly after a bare `INTO t` is a syntax error
   (`%prec LOWER_THAN_LPAREN`); tables named `first`/`all` keep working with
   plain `INSERT`.

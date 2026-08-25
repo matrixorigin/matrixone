@@ -156,6 +156,33 @@ select id from docs where match(body) against('bob' in natural language mode) or
 select id from docs where match(body) against('bye' in natural language mode) order by id;
 select id, e from vecs order by id;
 
+-- ================= LAST_INSERT_ID(): defined only when one target generates keys.
+-- Exactly one auto_increment target: reports that target's first generated value.
+-- (a table with no primary key carries a HIDDEN auto_increment fake key, which
+-- must not count as an auto_increment target.)
+create table lid_one (n int auto_increment primary key, v int);
+create table lid_plain (v int);
+insert all into lid_one (v) values (lo) into lid_plain (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as one_autoincr_target;
+-- Two auto_increment targets with deliberately different counters: ambiguous, so
+-- the statement reports no insert id and LAST_INSERT_ID() keeps its previous
+-- value. Establish a distinctive prior value (51) first, otherwise "unchanged"
+-- and "took the other target's value" are indistinguishable.
+create table lid_mark (n int auto_increment primary key, v int);
+insert into lid_mark (n, v) values (50, 0);
+insert into lid_mark (v) values (1);
+select last_insert_id() as prior_generated;
+create table lid_a (n int auto_increment primary key, v int);
+create table lid_b (n int auto_increment primary key, v int);
+insert into lid_a (n, v) values (100, 0);
+delete from lid_a;
+insert all into lid_a (v) values (lo) into lid_b (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as a_then_b_unchanged;
+-- reversing the clause order must give the same answer
+insert all into lid_b (v) values (lo) into lid_a (v) values (hi) select id, lo, hi from wide;
+select last_insert_id() as b_then_a_unchanged;
+select (select group_concat(n order by n) from lid_a) as a_ids, (select group_concat(n order by n) from lid_b) as b_ids;
+
 -- explicit transaction
 begin;
 insert all into customers_other (id, name, region) values (id, name, region) into customers_us (id, name, region) values (id, name, region) select id, name, region from customers where id = 5;
