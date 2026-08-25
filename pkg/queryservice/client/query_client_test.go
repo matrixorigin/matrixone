@@ -42,12 +42,12 @@ func TestSyncCommitRequiresContextAwareProtocolVersion(t *testing.T) {
 	rt := moruntime.NewRuntime(metadata.ServiceType_CN, t.Name(), logutil.GetPanicLogger())
 	req := &query.Request{CmdMethod: query.CmdMethod_SyncCommit}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 	err := moruntime.CheckMethodVersionWithRuntime(
 		context.Background(), rt, methodVersions, req)
-	assert.ErrorContains(t, err, "unsupported protocol version 27")
+	assert.ErrorContains(t, err, "unsupported protocol version 29")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
 	assert.NoError(t, moruntime.CheckMethodVersionWithRuntime(
 		context.Background(), rt, methodVersions, req))
 }

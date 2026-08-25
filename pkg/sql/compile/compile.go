@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -2465,6 +2466,9 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_FOREIGN_TB) {
 		return c.compileForeignScan(node, strictSqlMode)
 	}
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_KAFKA_TB) {
+		return c.compileKafkaScan(node, strictSqlMode)
+	}
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
@@ -2636,6 +2640,32 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// compileKafkaScan compiles a scan of a Kafka external table. The read
+// position/limits come from the __mo_read_* control predicates (consumed
+// here); the scope is pinned to the session's CN with Mcpu=1 — the read is a
+// single ordered partition consume, and LAST_KAFKA_MESSAGE_ID() lives in the
+// session.
+func (c *Compile) compileKafkaScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ks := node.ExternScan.GetKafkaScan()
+	if ks == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "kafka external table is missing scan metadata")
+	}
+	if err := external.DeriveKafkaReadControl(c.proc.Ctx, node, c.proc); err != nil {
+		return nil, err
+	}
+
+	param := external.KafkaExternParam(ks)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -4779,7 +4809,83 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 	return branches
 }
 
+// shouldBuildLeftForAsof compares the conservative retained payload of the two
+// physical ASOF strategies. Build-left keeps the logical left and uses direct
+// candidate slots for small actual groups. A larger actual group switches to a
+// range-update tree with at most two full-right candidate slots per left
+// row, so stale cardinality estimates cannot reintroduce O(actual-L*R) work.
+// Build-right retains the right input for predecessor lookup. Unknown or
+// invalid estimates stay on the established build-right path.
+func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
+	if node == nil || left == nil || right == nil ||
+		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
+		left.Stats == nil {
+		return false
+	}
+	leftRows := left.Stats.Outcnt
+	leftRowSize := left.Stats.Rowsize
+	if leftRows <= 0 || leftRowSize <= 0 ||
+		math.IsNaN(leftRows) || math.IsNaN(leftRowSize) ||
+		math.IsInf(leftRows, 0) || math.IsInf(leftRowSize, 0) {
+		return false
+	}
+	if right.Stats == nil {
+		return false
+	}
+	rightRows := right.Stats.Outcnt
+	rightRowSize := right.Stats.Rowsize
+	if rightRows <= 0 || rightRowSize <= 0 ||
+		math.IsNaN(rightRows) || math.IsNaN(rightRowSize) ||
+		math.IsInf(rightRows, 0) || math.IsInf(rightRowSize, 0) {
+		return false
+	}
+	buildLeftBytes := leftRows * (leftRowSize + 2*rightRowSize)
+	buildRightBytes := rightRows * rightRowSize
+	return !math.IsInf(buildLeftBytes, 0) && !math.IsInf(buildRightBytes, 0) &&
+		buildLeftBytes < buildRightBytes
+}
+
+func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
+	visited := make(map[*Scope]struct{}, len(scopes))
+	stack := append([]*Scope(nil), scopes...)
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		scope := stack[last]
+		stack = stack[:last]
+		if scope == nil {
+			continue
+		}
+		if _, ok := visited[scope]; ok {
+			continue
+		}
+		visited[scope] = struct{}{}
+		found := false
+		if scope.RootOp != nil {
+			_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				if op.OpType() == target {
+					found = true
+				}
+				return nil
+			})
+		}
+		if found {
+			return true
+		}
+		stack = append(stack, scope.PreScopes...)
+	}
+	return false
+}
+
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if shouldBuildLeftForAsof(node, left, right) &&
+		!scopesContainOperator(probeScopes, vm.MergeRecursive) &&
+		!scopesContainOperator(buildScopes, vm.MergeRecursive) {
+		if node.Stats.HashmapStats.Shuffle {
+			return c.compileShuffleJoinWithBuildLeft(
+				node, left, right, probeScopes, buildScopes, true)
+		}
+		return c.compileBroadcastAsofBuildLeft(node, left, right, probeScopes, buildScopes)
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -4793,17 +4899,59 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
-func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+func (c *Compile) compileBroadcastAsofBuildLeft(
+	node, left, right *plan.Node,
+	leftScopes, rightScopes []*Scope,
+) []*Scope {
+	// Independent right scan scopes would each produce one local predecessor
+	// for every broadcast left row. Merge them into one stream so finalization
+	// happens exactly once. Shuffle ASOF keeps parallelism by key instead.
+	rightScopes = c.mergeShuffleScopesIfNeeded(rightScopes, false)
+	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
+		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
+	}
+
+	leftTypes := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTypes[i] = dupType(&expr.Typ)
+	}
+	rightTypes := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTypes[i] = dupType(&expr.Typ)
+	}
+	op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+	op.AsofBuildLeft = true
+	op.RuntimeFilterSpecs = nil
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rightScopes[0].setRootOperator(op)
+	c.anal.isFirst = false
+	return c.compileBuildSideForBroadcastJoin(node, rightScopes, leftScopes)
+}
+
+func (c *Compile) compileShuffleJoin(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+) []*Scope {
+	return c.compileShuffleJoinWithBuildLeft(
+		node, left, right, leftscopes, rightscopes, false)
+}
+
+func (c *Compile) compileShuffleJoinWithBuildLeft(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+	asofBuildLeft bool,
+) []*Scope {
 	stageNodes, hasLocalDependency := c.shuffleJoinStageNodes(leftscopes, rightscopes)
 	if !hasLocalDependency &&
 		len(stageNodes) == 1 && len(leftscopes) == 1 && len(rightscopes) == 1 &&
 		sameExecutionNode(leftscopes[0].NodeInfo, rightscopes[0].NodeInfo) &&
 		leftscopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) &&
 		rightscopes[0].NodeInfo.Mcpu == int(right.Stats.Dop) {
-		return c.compileLocalShuffleJoin(node, left, right, leftscopes, rightscopes)
+		return c.compileLocalShuffleJoinWithBuildLeft(
+			node, left, right, leftscopes, rightscopes, asofBuildLeft)
 	}
 	return c.compileDistributedShuffleJoin(
-		node, left, right, leftscopes, rightscopes, stageNodes, hasLocalDependency)
+		node, left, right, leftscopes, rightscopes, stageNodes, hasLocalDependency, asofBuildLeft)
 }
 
 // canReuseDistributedShuffleJoin reports whether probeScopes already use the
@@ -4844,7 +4992,19 @@ func (c *Compile) shuffleStageNodes(scopes []*Scope) engine.Nodes {
 	return stageNodes
 }
 
-func (c *Compile) compileLocalShuffleJoin(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+func (c *Compile) compileLocalShuffleJoin(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+) []*Scope {
+	return c.compileLocalShuffleJoinWithBuildLeft(
+		node, left, right, leftscopes, rightscopes, false)
+}
+
+func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+	asofBuildLeft bool,
+) []*Scope {
 	if node.Stats.Dop != left.Stats.Dop || node.Stats.Dop != right.Stats.Dop {
 		panic("wrong dop for shuffle join!")
 	}
@@ -4852,33 +5012,70 @@ func (c *Compile) compileLocalShuffleJoin(node, left, right *plan.Node, leftscop
 		panic("wrong scopes for shuffle join!")
 	}
 
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	probeScopes, buildScopes := leftscopes, rightscopes
+	probeIsLogicalLeft := true
+	if asofBuildLeft {
+		probeScopes, buildScopes = rightscopes, leftscopes
+		probeIsLogicalLeft = false
+	}
+	reuse := !asofBuildLeft &&
+		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.shuffleStageNodes(leftscopes)) * int(node.Stats.Dop)
-	for i := range leftscopes {
-		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
+	for i := range probeScopes {
+		probeScopes[i].PreScopes = append(probeScopes[i].PreScopes, buildScopes[i])
 		if !reuse {
-			shuffleOpForProbe := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleOpForProbe := constructShuffleOperatorForJoin(
+				int32(bucketNum), node, probeIsLogicalLeft)
+			if asofBuildLeft && len(node.RuntimeFilterProbeList) > 0 {
+				// Shuffle HashBuild publishes PASS as its build-completion signal.
+				// After swapping the physical sides, move that wait to the logical
+				// right (physical probe); waiting on the logical-left build stream
+				// would create a self-dependency.
+				shuffleOpForProbe.RuntimeFilterSpec =
+					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
 			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			leftscopes[i].setRootOperator(shuffleOpForProbe)
+			probeScopes[i].setRootOperator(shuffleOpForProbe)
 		}
 
-		shuffleOpForBuild := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleOpForBuild := constructShuffleOperatorForJoin(
+			int32(bucketNum), node, !probeIsLogicalLeft)
+		if asofBuildLeft {
+			shuffleOpForBuild.RuntimeFilterSpec = nil
+		}
 		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		rightscopes[i].setRootOperator(shuffleOpForBuild)
+		buildScopes[i].setRootOperator(shuffleOpForBuild)
 	}
 
-	constructShuffleJoinOP(c, leftscopes, node, left, right, true)
+	constructShuffleJoinOPWithBuildLeft(
+		c, probeScopes, node, left, right, true, asofBuildLeft)
 
-	for i := range leftscopes {
-		buildOp := constructShuffleHashBuild(node, leftscopes[i].RootOp, c.proc)
+	for i := range probeScopes {
+		buildOp := constructShuffleHashBuild(node, probeScopes[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		rightscopes[i].setRootOperator(buildOp)
+		buildScopes[i].setRootOperator(buildOp)
 	}
 
-	return leftscopes
+	return probeScopes
 }
 
-func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right *plan.Node, sharedPool bool) {
+func constructShuffleJoinOP(
+	c *Compile,
+	shuffleJoins []*Scope,
+	node, left, right *plan.Node,
+	sharedPool bool,
+) {
+	constructShuffleJoinOPWithBuildLeft(
+		c, shuffleJoins, node, left, right, sharedPool, false)
+}
+
+func constructShuffleJoinOPWithBuildLeft(
+	c *Compile,
+	shuffleJoins []*Scope,
+	node, left, right *plan.Node,
+	sharedPool bool,
+	asofBuildLeft bool,
+) {
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -4891,9 +5088,11 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK,
+		plan.Node_ASOF, plan.Node_ASOF_LEFT:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			op.AsofBuildLeft = asofBuildLeft
 			op.ShuffleIdx = int32(i)
 			if sharedPool {
 				op.ShuffleIdx = -1
@@ -4939,9 +5138,18 @@ func (c *Compile) compileDistributedShuffleJoin(
 	lefts, rights []*Scope,
 	stageNodes engine.Nodes,
 	attachRemoteSources bool,
+	asofBuildLeft bool,
 ) []*Scope {
-	shuffleJoins := c.newShuffleJoinScopeListAt(lefts, rights, node, stageNodes, attachRemoteSources)
-	constructShuffleJoinOP(c, shuffleJoins, node, left, right, false)
+	probeScopes, buildScopes := lefts, rights
+	probeIsLogicalLeft := true
+	if asofBuildLeft {
+		probeScopes, buildScopes = rights, lefts
+		probeIsLogicalLeft = false
+	}
+	shuffleJoins := c.newShuffleJoinScopeListAtSides(
+		probeScopes, buildScopes, node, stageNodes, attachRemoteSources, probeIsLogicalLeft)
+	constructShuffleJoinOPWithBuildLeft(
+		c, shuffleJoins, node, left, right, false, asofBuildLeft)
 
 	//construct shuffle build
 	currentFirstFlag := c.anal.isFirst
@@ -5166,6 +5374,15 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
+		}
+		c.anal.isFirst = false
+	case plan.Node_ASOF, plan.Node_ASOF_LEFT:
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
+		for i := range rs {
+			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			rs[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
 	case plan.Node_OUTER:
@@ -5891,6 +6108,16 @@ func supportsRemoteTextCollationAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion14
+}
+
+func supportsRemoteAsofJoin(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion27
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {
@@ -6808,7 +7035,8 @@ func operatorTreeContainsSinkScan(op vm.Operator, visited map[vm.Operator]bool) 
 	if mergeOp, ok := op.(*merge.Merge); ok && mergeOp.SinkScan {
 		return true
 	}
-	if ext, ok := op.(*external.External); ok && ext.Es != nil && ext.Es.ForeignScan != nil {
+	if ext, ok := op.(*external.External); ok && ext.Es != nil &&
+		(ext.Es.ForeignScan != nil || ext.Es.KafkaScan != nil) {
 		return true
 	}
 	base := op.GetOperatorBase()
@@ -7111,6 +7339,17 @@ func (c *Compile) newShuffleJoinScopeListAt(
 	cnlist engine.Nodes,
 	attachRemoteSources bool,
 ) []*Scope {
+	return c.newShuffleJoinScopeListAtSides(
+		probeScopes, buildScopes, node, cnlist, attachRemoteSources, true)
+}
+
+func (c *Compile) newShuffleJoinScopeListAtSides(
+	probeScopes, buildScopes []*Scope,
+	node *plan.Node,
+	cnlist engine.Nodes,
+	attachRemoteSources bool,
+	probeIsLogicalLeft bool,
+) []*Scope {
 	if len(cnlist) == 0 {
 		cnlist = c.shuffleStageNodes(probeScopes)
 	}
@@ -7120,7 +7359,8 @@ func (c *Compile) newShuffleJoinScopeListAt(
 
 	dop := int(node.Stats.Dop)
 	bucketNum := len(cnlist) * dop
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
+	reuse := probeIsLogicalLeft &&
+		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
 		canReuseDistributedShuffleJoin(probeScopes, cnlist, dop)
 	// Multi-CN DEDUP normalizes the probe scopes below by merging them, so the
 	// per-bucket layout cannot be reused by the distributed join.
@@ -7190,7 +7430,12 @@ func (c *Compile) newShuffleJoinScopeListAt(
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleProbeOp := constructShuffleOperatorForJoin(
+				int32(bucketNum), node, probeIsLogicalLeft)
+			if !probeIsLogicalLeft && len(node.RuntimeFilterProbeList) > 0 {
+				shuffleProbeOp.RuntimeFilterSpec =
+					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
 			shuffleProbeOp.DrainAllBuckets = true
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -7211,7 +7456,11 @@ func (c *Compile) newShuffleJoinScopeListAt(
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(
+			int32(bucketNum), node, !probeIsLogicalLeft)
+		if !probeIsLogicalLeft {
+			shuffleBuildOp.RuntimeFilterSpec = nil
+		}
 		shuffleBuildOp.DrainAllBuckets = true
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)

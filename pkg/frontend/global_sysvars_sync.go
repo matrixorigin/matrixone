@@ -174,7 +174,7 @@ func requireContextAwareSyncCommit(
 				ctx, "CN %s returned no protocol version", address))
 			return
 		}
-		if resp.GetProtocolVersion.Version < defines.MORPCVersion27 {
+		if resp.GetProtocolVersion.Version < defines.MORPCVersion29 {
 			responseErr = errors.Join(responseErr, moerr.NewInternalErrorf(
 				ctx,
 				"CN %s does not support context-aware SyncCommit: protocol version %d",

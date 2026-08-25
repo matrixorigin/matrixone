@@ -62,8 +62,10 @@ const (
 	MORPCVersion24     int64 = 24 // per-target affected-row selectors for repeated physical UPDATE targets
 	MORPCVersion25     int64 = 25 // UPDATE changed-row counting
 	MORPCVersion26     int64 = 26 // statement LAST_INSERT_ID in remote terminal results
-	MORPCVersion27     int64 = 27 // context-aware SyncCommit acknowledgement
-	MORPCLatestVersion       = MORPCVersion27
+	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
+	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
+	MORPCVersion29     int64 = 29 // context-aware SyncCommit acknowledgement
+	MORPCLatestVersion       = MORPCVersion29
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -135,6 +135,7 @@ func TestWaitTooLongLoggedOncePerWaiterLifecycle(t *testing.T) {
 		lt := &localLockTable{}
 		w.conflictKey.Store(&key)
 		w.lt.Store(lt)
+		w.waitFor = append(w.waitFor, []byte("holder-1"), []byte("holder-2"))
 		events := &waiterEvents{checkOrphanC: make(chan checkOrphan, 2)}
 
 		events.addToOrphanCheck(w, waitTooLong)
@@ -146,6 +147,8 @@ func TestWaitTooLongLoggedOncePerWaiterLifecycle(t *testing.T) {
 
 		w.reset()
 		require.False(t, w.waitTooLongLogged.Load())
+		require.Nil(t, w.waitFor[:2][0])
+		require.Nil(t, w.waitFor[:2][1])
 		w.conflictKey.Store(&key)
 		w.lt.Store(lt)
 

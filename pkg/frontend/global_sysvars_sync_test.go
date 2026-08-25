@@ -88,7 +88,7 @@ func (m *globalSysVarSyncQueryClient) SendMessage(
 
 	if req.CmdMethod == querypb.CmdMethod_GetProtocolVersion {
 		if !hasProtocolVersion {
-			protocolVersion = defines.MORPCVersion27
+			protocolVersion = defines.MORPCVersion29
 		}
 		return &querypb.Response{GetProtocolVersion: &querypb.GetProtocolVersionResponse{
 			Version: protocolVersion,
