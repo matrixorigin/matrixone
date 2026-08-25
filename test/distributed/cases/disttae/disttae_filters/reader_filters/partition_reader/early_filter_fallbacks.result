@@ -37,9 +37,9 @@ select mo_ctl('dn', 'flush', 'early_filter_fallbacks.committed_spk');
   ]
 }
 
-select sleep(1);
-➤ sleep(1)[-6,8,0]  𝄀
-0
+select sum(rows_cnt) from metadata_scan('early_filter_fallbacks.committed_spk') g;
+➤ sum(rows_cnt)[5,38,0]  𝄀
+10
 select pk from committed_spk
 where pk between 2 and 8 and abs(v - 5) >= 2
 order by pk;
