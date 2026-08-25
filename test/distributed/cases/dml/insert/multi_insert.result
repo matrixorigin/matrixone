@@ -141,13 +141,29 @@ select * from narrow where id > 2000 order by id;
 2001  ¦  10  ¦  small  𝄀
 2002  ¦  200  ¦  big
 create table seqs (seq int auto_increment primary key, val int);
-insert all into seqs (seq, val) values (id * 100, lo) into seqs (val) values (hi) select id, lo, hi from wide;
+insert all into seqs (seq, val) values (id * 100, lo) into seqs (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
 select * from seqs order by seq;
 ➤ seq[4,32,0]  ¦  val[4,32,0]  𝄀
-1  ¦  100  𝄀
-2  ¦  200  𝄀
 100  ¦  10  𝄀
-200  ¦  20
+101  ¦  100  𝄀
+200  ¦  20  𝄀
+201  ¦  200
+create table seqs2 (seq int auto_increment primary key, val int);
+insert all into seqs2 (val) values (lo) into seqs2 (val) values (hi) select id, lo, hi from wide;
+select count(*), count(distinct seq), min(seq) from seqs2;
+➤ count(*)[-5,64,0]  ¦  count(distinct seq)[-5,64,0]  ¦  min(seq)[4,32,0]  𝄀
+4  ¦  4  ¦  1
+create table seqs3 (seq int auto_increment primary key, val int);
+insert all into seqs3 (seq, val) values (id * 100, lo) into seqs3 (val) values (hi) select id, lo, hi from wide;
+not supported: multi-table INSERT where some INTO clauses set auto_increment column 'seq' of table 'seqs3' and others do not
+select count(*) from seqs3;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table seqs4 (seq int auto_increment primary key, val int);
+insert all into seqs3 (seq, val) values (id * 100, lo) into seqs4 (val) values (hi) select id, lo, hi from wide;
+select (select count(*) from seqs3) as s3, (select count(*) from seqs4) as s4;
+➤ s3[-5,64,0]  ¦  s4[-5,64,0]  𝄀
+2  ¦  2
 create table docs (id int primary key, body varchar(200), fulltext (body));
 create table vecs (id int primary key, e vecf32(3));
 create index iv using ivfflat on vecs(e) lists=1 op_type "vector_l2_ops";

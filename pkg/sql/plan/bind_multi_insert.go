@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,6 +81,25 @@ func bindAndOptimizeMultiInsertQuery(ctx CompilerContext, stmt *tree.MultiInsert
 			Query: query,
 		},
 	}, nil
+}
+
+// maxMultiInsertTargets bounds the number of INTO clauses in one statement.
+// Oracle uses the same limit.
+const maxMultiInsertTargets = 127
+
+// multiInsertGroupKey identifies the physical table an INTO clause writes, so
+// that clauses naming the same table — bare, schema-qualified, or written in a
+// different case — share one write pipeline. The resolved table id is the only
+// case-policy-independent identity: keying on the lower-cased name would merge
+// two genuinely distinct tables under lower_case_table_names=0, and keying on
+// the raw name would fail to merge db.t with t. Catalog objects always carry a
+// non-zero id; the name fallback exists only for synthetic table defs (tests),
+// where failing to merge is the safe direction.
+func multiInsertGroupKey(objRef *plan.ObjectRef, tableDef *plan.TableDef) string {
+	if tableDef.TblId != 0 {
+		return "id:" + strconv.FormatUint(tableDef.TblId, 10)
+	}
+	return "name:" + objRef.SchemaName + "." + objRef.ObjName
 }
 
 // multiInsertBranch is one INTO clause together with the conditions gating it.
@@ -151,6 +171,14 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	if len(branches) == 0 {
 		return moerr.NewInternalError(builder.GetContext(), "multi-table insert has no target table")
 	}
+	// Each INTO clause adds a full write pipeline (its own dedup hash build over
+	// the whole source), so the plan's cost is linear in the clause count and the
+	// count is user-controlled. Cap it, as Oracle does, instead of letting a
+	// pathological statement consume unbounded planner and executor memory.
+	if len(branches) > maxMultiInsertTargets {
+		return moerr.NewNotSupportedf(builder.GetContext(),
+			"multi-table INSERT with more than %d INTO clauses", maxMultiInsertTargets)
+	}
 
 	// Pass WITH clause from the INSERT to the source query if present.
 	if stmt.With != nil && stmt.Source.With == nil {
@@ -191,7 +219,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 		if branch.insertColumns, err = builder.getInsertColsFromStmt(branch.target.Columns, tableDef); err != nil {
 			return err
 		}
-		key := strings.ToLower(objRef.SchemaName + "." + objRef.ObjName)
+		key := multiInsertGroupKey(objRef, tableDef)
 		group := byTable[key]
 		if group == nil {
 			group = &multiInsertGroup{dmlCtx: dmlCtx, tableDef: tableDef, objRef: objRef}
@@ -236,8 +264,11 @@ func (builder *QueryBuilder) resolveMultiInsertTarget(target *tree.MultiInsertTa
 	// resolver) so that validateMultiInsertTarget can report the precise reason.
 	dmlCtx := NewDMLContext()
 	builder.compCtx.SetContext(context.WithValue(sysCtx, defines.IgnoreForeignKey{}, true))
+	// Restore via defer: the marker lives on the shared CompilerContext, so a
+	// panic inside ResolveTables must not leave FK rejection disabled for the
+	// rest of the session's planning.
+	defer builder.compCtx.SetContext(sysCtx)
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{target.Table}, nil, nil, true)
-	builder.compCtx.SetContext(sysCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +340,9 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		// their column lists (defaults for the columns a clause does not set),
 		// cast to the target types, and UNION ALL the branches so the table is
 		// written by one pipeline with one dedup pass.
+		if err = validateMergedAutoIncrColumns(builder.GetContext(), tableDef, group.branches); err != nil {
+			return err
+		}
 		insertColumns := multiInsertUnionColumns(group.branches)
 		branchIDs := make([]int32, 0, len(group.branches))
 		for _, branch := range group.branches {
@@ -361,6 +395,49 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		builder.irregularMaintTableDef = nil
 		builder.irregularMaintObjRef = nil
 		builder.irregularMaintDeleteStep = -1
+	}
+	return nil
+}
+
+// validateMergedAutoIncrColumns rejects a same-table merge in which one INTO
+// clause supplies an AUTO_INCREMENT column explicitly while another leaves it to
+// the engine.
+//
+// Merged clauses become UNION ALL branches feeding one PRE_INSERT. The branch
+// that omits the column contributes NULLs that PRE_INSERT fills from the table
+// counter, but the branch supplying explicit values runs concurrently and has
+// not necessarily advanced that counter yet, so the generated values are
+// nondeterministic and can collide with the explicit ones (observed: 1 run in 8
+// produced a duplicate key, and without a primary key the collision is silent).
+// The same race exists for a hand-written INSERT ... SELECT ... UNION ALL, but
+// multi-table INSERT synthesizes the union, so ordinary SQL would hit it.
+// Refuse the combination rather than write nondeterministic keys; every clause
+// setting the column, or every clause omitting it, stays supported.
+func validateMergedAutoIncrColumns(ctx context.Context, tableDef *plan.TableDef, branches []*multiInsertBranch) error {
+	for _, col := range tableDef.Cols {
+		if !col.Typ.AutoIncr {
+			continue
+		}
+		set, omitted := false, false
+		for _, branch := range branches {
+			found := false
+			for _, column := range branch.insertColumns {
+				if strings.EqualFold(column, col.Name) {
+					found = true
+					break
+				}
+			}
+			if found {
+				set = true
+			} else {
+				omitted = true
+			}
+		}
+		if set && omitted {
+			return moerr.NewNotSupportedf(ctx,
+				"multi-table INSERT where some INTO clauses set auto_increment column '%s' of table '%s' and others do not",
+				col.Name, tableDef.Name)
+		}
 	}
 	return nil
 }
@@ -418,6 +495,16 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 		BindingTags: []int32{scanTag},
 		TableDef:    &plan.TableDef{Name: multiInsertSourceAlias, Cols: scanCols},
 	}, bCtx)
+	// This scan projects the shared source sink BY POSITION. createQuery prunes
+	// the columns no branch referenced from that sink and records the resulting
+	// shift in sinkColRef; only nodes registered here get their ColPos repaired
+	// afterwards. Without the registration a branch that reads a strict subset of
+	// the source columns keeps pre-prune positions into a narrower batch and the
+	// projection panics with an index-out-of-range.
+	if builder.positionalSinkScans == nil {
+		builder.positionalSinkScans = make(map[int32]struct{})
+	}
+	builder.positionalSinkScans[scanID] = struct{}{}
 	if err := builder.addBinding(scanID, tree.AliasClause{Alias: multiInsertSourceAlias}, bCtx); err != nil {
 		return 0, err
 	}
@@ -541,6 +628,15 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 // appendMultiInsertUnionAll chains the branches of one table into a left-deep
 // UNION ALL. Every branch projects the same column list, already cast to the
 // target column types.
+//
+// The union must stay EAGER: every branch is a SINK_SCAN of the shared source
+// sink, and the sink's spool lets the producer run at most N batches ahead of
+// the slowest consumer. If the union's scopes were compiled lazily (see
+// LazyPreScopes in compileUnionAll), a later branch would not start consuming
+// until an earlier one finished, and the producer would block forever. Today
+// laziness requires a Limit and a PROJECT step root, and a multi-insert step
+// root is always MULTI_UPDATE, so this holds — but it is a real constraint on
+// this plan shape, not an incidental property.
 func (builder *QueryBuilder) appendMultiInsertUnionAll(bindCtx *BindContext, branchIDs []int32) int32 {
 	lastNodeID := branchIDs[0]
 	for _, rightID := range branchIDs[1:] {

@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -272,4 +274,98 @@ func TestMultiInsertKeepsIrregularIndexMaintenance(t *testing.T) {
 		require.Equal(t, 1, tokenizers, "fulltext maintenance step missing: %s", sql)
 		require.Greater(t, len(qry.Steps), 2, sql)
 	}
+}
+
+// A branch that reads only a subset of the source's columns must still project
+// the shared sink correctly: createQuery prunes the unreferenced columns from
+// the sink, so the branch SINK_SCAN has to be registered for positional repair.
+// Before that registration this shape produced an out-of-range panic at runtime.
+func TestMultiInsertBranchSinkScansAreRepositionedAfterSinkPruning(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, sql := range []string{
+		// only the 2nd source column is written
+		"insert all into t3 (a) values (dname) select deptno, dname from dept",
+		// two targets, the middle source column unused
+		"insert all into t3 (a) values (deptno) into t2 (a, b) values (loc, loc) select deptno, dname, loc from dept",
+		// a later column referenced only by a WHEN
+		"insert first when loc > 0 then into t3 (a) values (loc) select deptno, dname, loc from dept",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		qry := logicPlan.GetQuery()
+
+		sinkWidth := len(qry.Nodes[qry.Steps[0]].ProjectList)
+		require.Greater(t, sinkWidth, 0, sql)
+		for _, node := range qry.Nodes {
+			if node.NodeType != plan.Node_SINK_SCAN {
+				continue
+			}
+			for i, expr := range node.ProjectList {
+				col := expr.GetCol()
+				require.NotNil(t, col, sql)
+				require.Less(t, col.ColPos, int32(sinkWidth),
+					"sink scan projection %d points past the pruned sink (%s)", i, sql)
+			}
+		}
+		testDeepCopy(logicPlan)
+	}
+}
+
+// Merged same-table clauses must not mix an explicit auto_increment value with a
+// generated one: the union branches feed one PRE_INSERT concurrently, so the
+// generated values race the explicit ones and can collide.
+func TestValidateMergedAutoIncrColumns(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "t",
+		Cols: []*plan.ColDef{
+			{Name: "seq", Typ: plan.Type{AutoIncr: true}},
+			{Name: "val", Typ: plan.Type{}},
+		},
+	}
+	branch := func(cols ...string) *multiInsertBranch {
+		return &multiInsertBranch{insertColumns: cols}
+	}
+	tests := []struct {
+		name     string
+		branches []*multiInsertBranch
+		rejected bool
+	}{
+		{name: "mixed explicit and generated", branches: []*multiInsertBranch{branch("seq", "val"), branch("val")}, rejected: true},
+		{name: "mixed, different case", branches: []*multiInsertBranch{branch("SEQ"), branch("val")}, rejected: true},
+		{name: "mixed across three clauses", branches: []*multiInsertBranch{branch("val"), branch("val"), branch("seq")}, rejected: true},
+		{name: "every clause sets it", branches: []*multiInsertBranch{branch("seq", "val"), branch("seq")}},
+		{name: "no clause sets it", branches: []*multiInsertBranch{branch("val"), branch("val")}},
+		{name: "single clause", branches: []*multiInsertBranch{branch("seq", "val")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateMergedAutoIncrColumns(context.Background(), tableDef, test.branches)
+			if test.rejected {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "auto_increment")
+				require.Contains(t, err.Error(), "seq")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
+	// a table without an auto_increment column is never rejected
+	plainDef := &plan.TableDef{Name: "t", Cols: []*plan.ColDef{{Name: "a"}, {Name: "b"}}}
+	require.NoError(t, validateMergedAutoIncrColumns(context.Background(),
+		plainDef, []*multiInsertBranch{branch("a"), branch("b")}))
+}
+
+func TestMultiInsertRejectsTooManyTargets(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	clause := " into t3 (a) values (deptno)"
+	var sb strings.Builder
+	sb.WriteString("insert all")
+	for i := 0; i <= maxMultiInsertTargets; i++ {
+		sb.WriteString(clause)
+	}
+	sb.WriteString(" select deptno from dept")
+	_, err := runOneStmt(mock, t, sb.String())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "INTO clauses")
 }

@@ -98,10 +98,24 @@ insert first
   else into narrow (id, val, tag) values (id + 2000, hi, 'big')
 select id, lo, hi from wide;
 select * from narrow where id > 2000 order by id;
--- auto-increment column set by one clause and left to the engine by another
+-- auto-increment in a merged group: every clause must agree on whether it sets the column.
+-- All clauses set it explicitly:
 create table seqs (seq int auto_increment primary key, val int);
-insert all into seqs (seq, val) values (id * 100, lo) into seqs (val) values (hi) select id, lo, hi from wide;
+insert all into seqs (seq, val) values (id * 100, lo) into seqs (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
 select * from seqs order by seq;
+-- No clause sets it, so every row is numbered by the engine:
+create table seqs2 (seq int auto_increment primary key, val int);
+insert all into seqs2 (val) values (lo) into seqs2 (val) values (hi) select id, lo, hi from wide;
+select count(*), count(distinct seq), min(seq) from seqs2;
+-- Mixing the two in one merged group is rejected: the generated values would race
+-- the explicit ones through the shared PRE_INSERT and could collide.
+create table seqs3 (seq int auto_increment primary key, val int);
+insert all into seqs3 (seq, val) values (id * 100, lo) into seqs3 (val) values (hi) select id, lo, hi from wide;
+select count(*) from seqs3;
+-- Distinct tables are unaffected: each has its own write pipeline.
+create table seqs4 (seq int auto_increment primary key, val int);
+insert all into seqs3 (seq, val) values (id * 100, lo) into seqs4 (val) values (hi) select id, lo, hi from wide;
+select (select count(*) from seqs3) as s3, (select count(*) from seqs4) as s4;
 
 -- targets with fulltext and ivfflat indexes get their index maintenance, including for merged clauses
 create table docs (id int primary key, body varchar(200), fulltext (body));
