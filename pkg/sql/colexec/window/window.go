@@ -3076,10 +3076,10 @@ func signedRangeBound[T signedRangeInteger](value, offset T, subtract bool) (bou
 // outOfDomainRangeBoundary maps a conceptual search key outside a numeric type
 // domain to its insertion boundary in the current SQL sort direction.
 func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
-\tif aboveDomain != desc {
-\t\treturn end
-\t}
-\treturn start
+	if aboveDomain != desc {
+		return end
+	}
+	return start
 }
 
 // temporalRangeOverflowBoundary maps a temporal search key outside the type
