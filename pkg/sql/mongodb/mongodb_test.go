@@ -207,6 +207,7 @@ func TestPredicateTranslationAndProjection(t *testing.T) {
 
 	projection := ProjectionDocument([]ColumnMapping{{Path: "a"}, {Path: "a"}, {Path: "nested.b"}})
 	require.Equal(t, bson.D{{Key: "a", Value: 1}, {Key: "nested.b", Value: 1}, {Key: "_id", Value: 0}}, projection)
+	require.Equal(t, bson.D{{Key: "_id", Value: 1}}, ProjectionDocument(nil))
 	require.Error(t, (&Predicate{Op: PredicateEqual, Path: "$where", Value: 1}).Validate(ctx))
 }
 

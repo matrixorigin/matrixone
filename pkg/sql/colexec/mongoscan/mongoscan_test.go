@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -98,6 +99,45 @@ type recordingCollection struct {
 	aggregateErr   error
 	findSpecs      []mongodb.FindSpec
 	aggregateSpecs []mongodb.AggregateSpec
+}
+
+// minimalCarrierCollection models MongoDB applying the connector projection to
+// a source document. It returns the large source unchanged for an exclusion or
+// missing projection, making the row-count converter enforce MaxValueBytes.
+type minimalCarrierCollection struct {
+	source         []byte
+	findSpecs      []mongodb.FindSpec
+	aggregateSpecs []mongodb.AggregateSpec
+}
+
+func (c *minimalCarrierCollection) Find(_ context.Context, spec mongodb.FindSpec) (mongodb.Cursor, error) {
+	c.findSpecs = append(c.findSpecs, spec)
+	projection, _ := spec.Projection.(bson.D)
+	return c.cursorFor(projection), nil
+}
+
+func (c *minimalCarrierCollection) Aggregate(_ context.Context, spec mongodb.AggregateSpec) (mongodb.Cursor, error) {
+	c.aggregateSpecs = append(c.aggregateSpecs, spec)
+	pipeline, _ := spec.Pipeline.([]bson.D)
+	if len(pipeline) == 0 {
+		return c.cursorFor(nil), nil
+	}
+	last := pipeline[len(pipeline)-1]
+	if len(last) != 1 || last[0].Key != "$project" {
+		return c.cursorFor(nil), nil
+	}
+	projection, _ := last[0].Value.(bson.D)
+	return c.cursorFor(projection), nil
+}
+
+func (c *minimalCarrierCollection) cursorFor(projection bson.D) mongodb.Cursor {
+	if len(projection) == 1 && projection[0].Key == "_id" && projection[0].Value == 1 {
+		carrier, err := bson.Marshal(bson.D{{Key: "_id", Value: "carrier"}})
+		if err == nil {
+			return &testCursor{docs: [][]byte{carrier}}
+		}
+	}
+	return &testCursor{docs: [][]byte{c.source}}
 }
 
 func (c *recordingCollection) Find(_ context.Context, spec mongodb.FindSpec) (mongodb.Cursor, error) {
@@ -282,6 +322,58 @@ func TestMongoScanExplicitQuerySupportsZeroColumnRowCarrier(t *testing.T) {
 	require.Equal(t, 1, client.disconnect)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMongoScanZeroColumnQueryProjectsMinimalCarrier(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "find", query: `{"filter":{"device_id":"pump-1"}}`},
+		{name: "aggregate", query: `{"pipeline":[{"$match":{"device_id":"pump-1"}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, err := bson.Marshal(bson.D{
+				{Key: "_id", Value: "carrier"},
+				{Key: "irrelevant", Value: strings.Repeat("x", 1024)},
+			})
+			require.NoError(t, err)
+			collection := &minimalCarrierCollection{source: source}
+			deps, client := testScanDependencies(&testCursor{})
+			deps.Config.MaxValueBytes = 128
+			client.collection = collection
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+			spec := testScanPlan()
+			spec.Columns = nil
+			applyTestUserQueryPlan(t, spec, tc.query, false)
+			scan := NewArgument().WithScan(spec)
+			scan.Dependencies = deps
+			require.NoError(t, scan.Prepare(proc))
+
+			result, err := scan.Call(proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, 1, result.Batch.RowCount())
+			require.Empty(t, result.Batch.Vecs)
+			if tc.name == "find" {
+				require.Len(t, collection.findSpecs, 1)
+				require.Equal(t, bson.D{{Key: "_id", Value: 1}}, collection.findSpecs[0].Projection)
+				require.Empty(t, collection.aggregateSpecs)
+			} else {
+				require.Empty(t, collection.findSpecs)
+				require.Len(t, collection.aggregateSpecs, 1)
+				pipeline := collection.aggregateSpecs[0].Pipeline.([]bson.D)
+				require.Equal(t, bson.D{{Key: "$project", Value: bson.D{{Key: "_id", Value: 1}}}}, pipeline[len(pipeline)-1])
+			}
+
+			scan.Free(proc, false, nil)
+			require.NoError(t, deps.Pool.Close(t.Context()))
+			require.Equal(t, 1, client.disconnect)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestMongoScanEmptyUserQueryResultAvoidsRemoteOperation(t *testing.T) {

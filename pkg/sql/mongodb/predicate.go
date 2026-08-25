@@ -167,6 +167,13 @@ func ProjectionDocument(columns []ColumnMapping) bson.D {
 		})
 		projection = append(projection, bson.E{Key: column.Path, Value: 1})
 	}
+	if len(projection) == 0 {
+		// An empty document with only _id: 0 is an exclusion projection, so it
+		// returns every large unmapped field. A zero-column scan still needs one
+		// bounded document per result to preserve cardinality for COUNT(*) and
+		// query-only scans.
+		return bson.D{{Key: "_id", Value: 1}}
+	}
 	includeID := false
 	for _, selected := range projection {
 		if selected.Key == "_id" || strings.HasPrefix(selected.Key, "_id.") {
