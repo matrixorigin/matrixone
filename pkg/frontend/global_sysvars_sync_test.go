@@ -152,6 +152,7 @@ func TestSyncCommitTimestampToCNs(t *testing.T) {
 		normalCN("cn-1", metadata.WorkState_Working),
 		normalCN("cn-1", metadata.WorkState_Working),
 		normalCN("cn-draining", metadata.WorkState_Draining),
+		normalCN("cn-drained", metadata.WorkState_Drained),
 		normalCN("", metadata.WorkState_Working),
 		normalCN("cn-2", metadata.WorkState_Unknown),
 		{
@@ -167,13 +168,17 @@ func TestSyncCommitTimestampToCNs(t *testing.T) {
 	requests, releaseCount := qc.snapshot()
 	require.ElementsMatch(t, []globalSysVarSyncRequest{
 		{address: "cn-1", method: querypb.CmdMethod_GetProtocolVersion},
+		{address: "cn-draining", method: querypb.CmdMethod_GetProtocolVersion},
+		{address: "cn-drained", method: querypb.CmdMethod_GetProtocolVersion},
 		{address: "cn-2", method: querypb.CmdMethod_GetProtocolVersion},
 		{address: "cn-timeout", method: querypb.CmdMethod_GetProtocolVersion},
 		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		{address: "cn-draining", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		{address: "cn-drained", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
 		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
 		{address: "cn-timeout", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
 	}, requests)
-	require.Equal(t, 6, releaseCount)
+	require.Equal(t, 10, releaseCount)
 }
 
 func TestSyncCommitTimestampToCNsWaitsAndReturnsPartialFailure(t *testing.T) {

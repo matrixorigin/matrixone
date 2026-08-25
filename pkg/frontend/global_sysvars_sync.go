@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -94,12 +93,11 @@ func syncCommitTimestampToCNs(
 	nodes := make([]string, 0, len(cnStores))
 	seen := make(map[string]struct{}, len(cnStores))
 	for _, cn := range cnStores {
-		// Proxy routing drops CNStore.State when it builds metadata.CNService and
-		// filters only by WorkState. Fence the same set: a TimeoutState CN that is
-		// still Working remains routable and must acknowledge or make SET fail.
-		if (cn.WorkState != metadata.WorkState_Working &&
-			cn.WorkState != metadata.WorkState_Unknown) ||
-			cn.QueryAddress == "" {
+		// Proxy discovers CNs through an independently refreshed MOCluster cache.
+		// A CN that HAKeeper now reports as Draining/Drained may still be Working
+		// in Proxy's older snapshot, so fence every store that still advertises a
+		// query address. An unreachable store fails SET closed until it is removed.
+		if cn.QueryAddress == "" {
 			continue
 		}
 		if _, ok := seen[cn.QueryAddress]; ok {

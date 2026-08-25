@@ -28,6 +28,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
+type trackingBackgroundExec struct {
+	*backgroundExecTest
+	clearCalls atomic.Int32
+	closed     atomic.Bool
+}
+
+func (b *trackingBackgroundExec) ClearExecResultSet() {
+	b.clearCalls.Add(1)
+	b.backgroundExecTest.ClearExecResultSet()
+}
+
+func (b *trackingBackgroundExec) Close() {
+	b.closed.Store(true)
+}
+
 func TestGlobalSysVarsRefreshDoesNotOverwriteConcurrentSet(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newSes(nil, ctrl)
@@ -317,6 +332,44 @@ func TestGlobalSysVarsLaterFenceCannotReturnOlderSharedCache(t *testing.T) {
 		PasswordHistory, int64(5), timestamp.Timestamp{PhysicalTime: 150}),
 		"a delayed local publication must not overwrite a catalog snapshot fenced at E2")
 	require.Equal(t, int64(0), globalVars.Get(PasswordHistory))
+}
+
+func TestGlobalSysVarsStaleSetterUsesAndClosesBackgroundExec(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	accountID := ses.GetTenantInfo().GetTenantID()
+	globalVars := &SystemVariables{mp: map[string]interface{}{PasswordHistory: int64(5)}}
+	mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: globalVars},
+	}
+	ses.gSysVars = globalVars
+	mgr.AdvancePublicationEpoch(timestamp.Timestamp{PhysicalTime: 200})
+
+	baseExec := &backgroundExecTest{}
+	baseExec.init()
+	baseExec.sql2result[getSqlForGetSystemVariablesWithAccount(uint64(accountID))] =
+		newMrsForGlobalSystemVariables([][]interface{}{{PasswordHistory, "1"}})
+	trackingExec := &trackingBackgroundExec{backgroundExecTest: baseExec}
+	var creates atomic.Int32
+	execStub := gostub.Stub(&NewBackgroundExec, func(
+		context.Context,
+		FeSession,
+		...*BackgroundExecOption,
+	) BackgroundExec {
+		creates.Add(1)
+		return trackingExec
+	})
+	t.Cleanup(execStub.Reset)
+
+	// Do not stub ExeSqlInBgSes: this exercises executeSQLInBackgroundSession's
+	// real non-nil BackgroundExec contract.
+	require.NoError(t, mgr.PublishCommittedGlobalSysVar(
+		context.Background(), ses, PasswordHistory, int64(0),
+		timestamp.Timestamp{PhysicalTime: 100}))
+	require.Equal(t, int64(1), globalVars.Get(PasswordHistory))
+	require.Equal(t, int32(1), creates.Load())
+	require.Equal(t, int32(1), trackingExec.clearCalls.Load())
+	require.True(t, trackingExec.closed.Load())
 }
 
 func TestGlobalSysVarsCrossCNNewerFenceForcesDelayedSetterRefresh(t *testing.T) {

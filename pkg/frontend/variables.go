@@ -1069,7 +1069,9 @@ func (m *GlobalSysVarsMgr) PublishCommittedGlobalSysVar(
 	m.Lock()
 	if !commitTS.IsEmpty() && commitTS.Less(m.publicationFenceTS) {
 		m.Unlock()
-		vars, err := m.Get(accountID, ses, ctx, nil)
+		bh := ses.GetBackgroundExec(ctx)
+		defer bh.Close()
+		vars, err := m.Get(accountID, ses, ctx, bh)
 		if err != nil {
 			return err
 		}
