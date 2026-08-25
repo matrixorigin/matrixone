@@ -135,6 +135,82 @@ func TestInterpreterCoercesDecimalDeclarationAndAssignment(t *testing.T) {
 	require.Equal(t, "10.00", valueScopes[0]["v1"])
 }
 
+func TestInterpreterYearAssignmentHonorsSQLMode(t *testing.T) {
+	run := func(t *testing.T, sqlMode, body string) ([]tree.Statement, *Interpreter, []map[string]interface{}) {
+		t.Helper()
+
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		ctx := context.Background()
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc, ses: ses}
+
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, body, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		statements := stmt.(*tree.CompoundStmt).Stmts
+
+		valueScopes := []map[string]interface{}{{}}
+		typeScopes := []map[string]plan.Type{{}}
+		interpreter := &Interpreter{
+			ctx:          ctx,
+			ses:          ses,
+			bh:           &evalCondBackgroundExec{},
+			varScope:     &valueScopes,
+			varTypeScope: &typeScopes,
+			fmtctx:       tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true)),
+		}
+		return statements, interpreter, valueScopes
+	}
+
+	t.Run("non-strict declaration and set adjust invalid years", func(t *testing.T) {
+		statements, interpreter, scopes := run(
+			t,
+			"",
+			"begin declare y year default 1900; set y = 2156; end",
+		)
+		for _, statement := range statements {
+			status, err := interpreter.interpret(statement)
+			require.NoError(t, err)
+			require.Equal(t, SpOk, status)
+			require.Equal(t, "0000", scopes[0]["y"])
+		}
+	})
+
+	t.Run("strict declaration rejects invalid year", func(t *testing.T) {
+		statements, interpreter, _ := run(
+			t,
+			"STRICT_TRANS_TABLES",
+			"begin declare y year default 1900; end",
+		)
+		status, err := interpreter.interpret(statements[0])
+		require.ErrorContains(t, err, "year value out of range")
+		require.Equal(t, SpNotOk, status)
+	})
+
+	t.Run("strict set rejects invalid year", func(t *testing.T) {
+		statements, interpreter, scopes := run(
+			t,
+			"STRICT_TRANS_TABLES",
+			"begin declare y year default 1901; set y = 2156; end",
+		)
+		status, err := interpreter.interpret(statements[0])
+		require.NoError(t, err)
+		require.Equal(t, SpOk, status)
+		require.Equal(t, "1901", scopes[0]["y"])
+
+		status, err = interpreter.interpret(statements[1])
+		require.ErrorContains(t, err, "year value out of range")
+		require.Equal(t, SpNotOk, status)
+		require.Equal(t, "1901", scopes[0]["y"])
+	})
+}
+
 func TestInterpreterCoercesDecimalParameters(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
