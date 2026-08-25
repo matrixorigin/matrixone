@@ -765,46 +765,6 @@ func (s *service) doCreateLocked(
 	return nil
 }
 
-func (s *service) getCommittedTableCache(
-	ctx context.Context,
-	tableID uint64) (incrTableCache, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c, ok := s.mu.tables[tableID]
-	if ok {
-		return c, nil
-	}
-
-	if _, ok := s.mu.destroyed[tableID]; ok {
-		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
-	}
-
-	cols, err := s.store.GetColumns(ctx, tableID, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(cols) == 0 {
-		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
-	}
-
-	c, err = newTableCache(
-		ctx,
-		s.sid,
-		tableID,
-		0,
-		cols,
-		s.cfg,
-		s.allocator,
-		nil,
-		true,
-	)
-	if err != nil {
-		return nil, err
-	}
-	s.doCreateLocked(tableID, c, nil)
-	return c, nil
-}
-
 func (s *service) getCommittedTableCacheForEpoch(
 	ctx context.Context,
 	tableID uint64,
@@ -948,27 +908,36 @@ func (s *service) acquireCommittedTableCache(
 	ctx context.Context,
 	tableID uint64,
 ) (incrTableCache, error) {
-	for {
-		c, err := s.getCommittedTableCache(ctx, tableID)
-		if err != nil {
-			return nil, err
-		}
-		s.mu.Lock()
-		if s.mu.tables[tableID] == c {
-			c.acquire()
-			s.mu.Unlock()
-			return c, nil
-		}
+	s.mu.Lock()
+	if s.mu.closed {
 		s.mu.Unlock()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
+	if c, ok := s.mu.tables[tableID]; ok {
+		c.acquire()
+		s.mu.Unlock()
+		return c, nil
+	}
+	s.mu.Unlock()
+
+	// CurrentValue does not carry the table epoch. A published cache of any
+	// epoch is valid for its fast path above. On a cold cache, epoch zero keeps
+	// the existing construction semantics while reusing the generation-fenced
+	// builder, which performs all store and allocator I/O without service.mu.
+	return s.getCommittedTableCacheForEpoch(ctx, tableID, 0, nil)
 }
 
 func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.handleCreatesLocked(event.Txn)
-	s.handleDeletesLocked(event.Txn)
+	retired := s.handleDeletesLocked(event.Txn)
+	s.mu.Unlock()
+
+	// Retirement takes column locks. A column may hold its lock while waiting
+	// for allocator/store I/O, so it must not extend the service.mu critical path.
+	for _, tc := range retired {
+		tc.retire()
+	}
 	return nil
 }
 
@@ -1003,28 +972,34 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 	delete(s.mu.creates, key)
 }
 
-func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
+func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) []incrTableCache {
 	key := string(txnMeta.ID)
 	tables, ok := s.mu.deletes[key]
 	if !ok {
-		return
+		return nil
 	}
 
+	var retired []incrTableCache
 	if txnMeta.Status == txn.TxnStatus_Committed {
 		for _, ctx := range tables {
+			// The cache may still be under construction and therefore absent from
+			// tables. The committed delete must invalidate that builder and leave a
+			// tombstone so it cannot publish a cache after the table was dropped.
+			s.bumpGenerationLocked(ctx.tableID)
 			if tc, ok := s.mu.tables[ctx.tableID]; ok {
-				tc.retire()
 				delete(s.mu.tables, ctx.tableID)
-				s.mu.destroyed[ctx.tableID] = ctx
-				s.logger.Info(
-					"incrservice.cache.deleted",
-					zap.Uint64("table-id", ctx.tableID),
-					zap.String("txn", hex.EncodeToString(txnMeta.ID)),
-				)
+				retired = append(retired, tc)
 			}
+			s.mu.destroyed[ctx.tableID] = ctx
+			s.logger.Info(
+				"incrservice.cache.deleted",
+				zap.Uint64("table-id", ctx.tableID),
+				zap.String("txn", hex.EncodeToString(txnMeta.ID)),
+			)
 		}
 	}
 	delete(s.mu.deletes, key)
+	return retired
 }
 
 func (s *service) getTableCache(tableID uint64) incrTableCache {

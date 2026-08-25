@@ -51,8 +51,9 @@ type setOffsetStore struct {
 type failingGetColumnsStore struct {
 	IncrValueStore
 
-	mu  sync.Mutex
-	err error
+	mu              sync.Mutex
+	err             error
+	getColumnsCalls atomic.Int64
 }
 
 type blockingGetColumnsStore struct {
@@ -155,6 +156,13 @@ type countingIncrTableCache struct {
 	retired  atomic.Bool
 }
 
+type blockingRetireIncrTableCache struct {
+	*countingIncrTableCache
+	started       chan struct{}
+	releaseRetire chan struct{}
+	once          sync.Once
+}
+
 func (c *countingIncrTableCache) table() uint64 { return c.tableID }
 func (c *countingIncrTableCache) epoch() uint32 { return 0 }
 func (c *countingIncrTableCache) acquire()      { c.acquires.Add(1) }
@@ -182,6 +190,14 @@ func (c *countingIncrTableCache) close() error {
 	return nil
 }
 
+func (c *blockingRetireIncrTableCache) retire() {
+	c.once.Do(func() {
+		close(c.started)
+		<-c.releaseRetire
+		c.countingIncrTableCache.retire()
+	})
+}
+
 func (a *countingAllocator) allocate(context.Context, uint64, string, int, client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
 	return 0, 0, timestamp.Timestamp{}, nil
 }
@@ -201,13 +217,14 @@ func (a *countingAllocator) forceSetOffset(context.Context, uint64, int, string,
 
 func (a *countingAllocator) close() {}
 
-func (s *blockingGetColumnsStore) blockNext() (<-chan struct{}, chan<- struct{}) {
+func (s *blockingGetColumnsStore) blockNext() (<-chan struct{}, func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.block = true
 	s.started = make(chan struct{})
 	s.release = make(chan struct{})
-	return s.started, s.release
+	var once sync.Once
+	return s.started, func() { once.Do(func() { close(s.release) }) }
 }
 
 func (s *blockingGetColumnsStore) GetColumns(
@@ -239,6 +256,7 @@ func (s *failingGetColumnsStore) GetColumns(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) ([]AutoColumn, error) {
+	s.getColumnsCalls.Add(1)
 	s.mu.Lock()
 	err := s.err
 	s.mu.Unlock()
@@ -325,9 +343,10 @@ func TestCreateOnOtherService(t *testing.T) {
 			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
 
-			s2 := ss[0]
-			_, err := s2.getCommittedTableCache(ctx, 0)
+			s2 := ss[1]
+			tc, err := s2.acquireCommittedTableCache(ctx, 0)
 			require.NoError(t, err)
+			tc.release()
 			s2.mu.Lock()
 			assert.Equal(t, 1, len(s2.mu.tables))
 			assert.Equal(t, 0, len(s2.mu.creates))
@@ -352,8 +371,9 @@ func TestReloadIncrCache(t *testing.T) {
 			require.NoError(t, op.Commit(ctx))
 
 			s2 := ss[1]
-			_, err := s2.getCommittedTableCache(ctx, 0)
+			tc, err := s2.acquireCommittedTableCache(ctx, 0)
 			require.NoError(t, err)
+			tc.release()
 
 			v := uint64(100000000)
 			s.mu.Lock()
@@ -372,11 +392,12 @@ func TestReloadIncrCache(t *testing.T) {
 			require.NoError(t, err)
 
 			require.NoError(t, s2.Reload(ctx, 0))
-			tc, err := s2.getCommittedTableCache(
+			tc, err = s2.acquireCommittedTableCache(
 				ctx,
 				0,
 			)
 			require.NoError(t, err)
+			defer tc.release()
 
 			c = tc.(*tableCache)
 			c.mu.Lock()
@@ -385,6 +406,190 @@ func TestReloadIncrCache(t *testing.T) {
 
 			require.Equal(t, v+1, cc.ranges.current())
 		})
+}
+
+func TestCurrentValueDoesNotHoldServiceLockDuringGetColumns(t *testing.T) {
+	store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+	testCurrentValueIOAllowsDelete(t, store, store.blockNext)
+}
+
+func TestCurrentValueDoesNotHoldServiceLockDuringAllocation(t *testing.T) {
+	store := &blockingAllocateStore{IncrValueStore: NewMemStore()}
+	testCurrentValueIOAllowsDelete(t, store, store.blockNext)
+}
+
+func testCurrentValueIOAllowsDelete(
+	t *testing.T,
+	store IncrValueStore,
+	blockNext func() (<-chan struct{}, func()),
+) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+		require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+		s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+		defer s.Close()
+
+		started, release := blockNext()
+		defer release()
+		currentResult := make(chan error, 1)
+		go func() {
+			_, err := s.CurrentValue(ctx, 0, "auto_0")
+			currentResult <- err
+		}()
+		select {
+		case <-started:
+		case <-ctx.Done():
+			require.FailNow(t, "CurrentValue did not reach blocked store I/O")
+		}
+
+		deleteTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		deleteResult := make(chan error, 1)
+		go func() { deleteResult <- s.Delete(ctx, 1, deleteTxn) }()
+		select {
+		case err := <-deleteResult:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			release()
+			<-deleteResult
+			require.FailNow(t, "Delete blocked behind CurrentValue store I/O")
+		}
+		require.NoError(t, deleteTxn.Rollback(ctx))
+
+		release()
+		require.NoError(t, <-currentResult)
+	})
+}
+
+func TestCurrentValueBuilderCannotReviveCacheAfterDelete(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+		s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+		defer s.Close()
+
+		started, release := store.blockNext()
+		defer release()
+		currentResult := make(chan error, 1)
+		go func() {
+			_, err := s.CurrentValue(ctx, 0, "auto_0")
+			currentResult <- err
+		}()
+		select {
+		case <-started:
+		case <-ctx.Done():
+			require.FailNow(t, "CurrentValue did not reach blocked GetColumns")
+		}
+
+		deleteTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Delete(ctx, 0, deleteTxn))
+		require.NoError(t, deleteTxn.Commit(ctx))
+		s.mu.Lock()
+		_, installed := s.mu.tables[0]
+		_, destroyed := s.mu.destroyed[0]
+		s.mu.Unlock()
+		require.False(t, installed)
+		require.True(t, destroyed)
+
+		release()
+		err = <-currentResult
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		s.mu.Lock()
+		_, installed = s.mu.tables[0]
+		_, generationExists := s.mu.generation[0]
+		_, generationBuildExists := s.mu.generationBuilds[0]
+		s.mu.Unlock()
+		require.False(t, installed)
+		require.False(t, generationExists)
+		require.False(t, generationBuildExists)
+
+		_, err = s.CurrentValue(ctx, 0, "auto_0")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+}
+
+func TestCurrentValueRejectsBuilderInvalidatedByReload(t *testing.T) {
+	ctx, cancel := context.WithTimeout(
+		defines.AttachAccountId(context.Background(), catalog.System_Account),
+		10*time.Second,
+	)
+	defer cancel()
+	store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+	require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+	s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+	defer s.Close()
+
+	started, release := store.blockNext()
+	defer release()
+	currentResult := make(chan error, 1)
+	go func() {
+		_, err := s.CurrentValue(ctx, 0, "auto_0")
+		currentResult <- err
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		require.FailNow(t, "CurrentValue did not reach blocked GetColumns")
+	}
+
+	require.NoError(t, s.Reload(ctx, 0))
+	release()
+	err := <-currentResult
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	s.mu.Lock()
+	_, installed := s.mu.tables[0]
+	_, generationExists := s.mu.generation[0]
+	_, generationBuildExists := s.mu.generationBuilds[0]
+	s.mu.Unlock()
+	require.False(t, installed)
+	require.False(t, generationExists)
+	require.False(t, generationBuildExists)
+}
+
+func TestCurrentValueRejectsClosedServiceWithCachedTable(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	store := NewMemStore()
+	require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+	s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+	_, err := s.CurrentValue(ctx, 0, "auto_0")
+	require.NoError(t, err)
+
+	s.Close()
+	_, err = s.CurrentValue(ctx, 0, "auto_0")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+}
+
+func TestCurrentValuePropagatesStoreRetryWithoutLooping(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	store := &failingGetColumnsStore{IncrValueStore: NewMemStore()}
+	store.failWith(moerr.NewTxnNeedRetryWithDefChanged(ctx))
+	s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+	defer s.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := s.CurrentValue(ctx, 0, "auto_0")
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		require.Equal(t, int64(1), store.getColumnsCalls.Load())
+	case <-time.After(time.Second):
+		s.Close()
+		<-result
+		require.FailNow(t, "CurrentValue retried a store error indefinitely")
+	}
 }
 
 func TestReloadDoesNotRetainGenerationWithoutActiveBuilder(t *testing.T) {
@@ -664,7 +869,59 @@ func TestDeleteOnOtherService(t *testing.T) {
 			op2 := ops[1]
 			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
+			waitStoreCachesCommitted(t, s2.store.(*memStore), 0)
 		})
+}
+
+func TestDeleteDoesNotHoldServiceLockWhileRetiringCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+		s := NewIncrService("", NewMemStore(), Config{}).(*service)
+		defer s.Close()
+		cache := &blockingRetireIncrTableCache{
+			countingIncrTableCache: &countingIncrTableCache{tableID: 0},
+			started:                make(chan struct{}),
+			releaseRetire:          make(chan struct{}),
+		}
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(cache.releaseRetire) }) }
+		defer release()
+		s.mu.Lock()
+		s.mu.tables[0] = cache
+		s.mu.Unlock()
+
+		deleteTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Delete(ctx, 0, deleteTxn))
+		commitResult := make(chan error, 1)
+		go func() { commitResult <- deleteTxn.Commit(ctx) }()
+		select {
+		case <-cache.started:
+		case <-ctx.Done():
+			require.FailNow(t, "Delete did not reach cache retirement")
+		}
+
+		reloadResult := make(chan error, 1)
+		go func() { reloadResult <- s.Reload(ctx, 1) }()
+		select {
+		case err := <-reloadResult:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			release()
+			require.NoError(t, <-commitResult)
+			<-reloadResult
+			require.FailNow(t, "Reload blocked behind cache retirement")
+		}
+
+		release()
+		require.NoError(t, <-commitResult)
+		require.Equal(t, int64(1), cache.retires.Load())
+		require.Equal(t, int64(1), cache.closes.Load())
+	})
 }
 
 func TestForceSetOffset(t *testing.T) {
@@ -1809,6 +2066,7 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
 		require.NoError(t, op.Commit(ctx))
 
 		started, release := store.blockNext()
+		defer release()
 		oldErr := make(chan error, 1)
 		go func() {
 			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
@@ -1819,7 +2077,7 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
 		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
-		close(release)
+		release()
 		require.True(t, moerr.IsMoErrCode(<-oldErr, moerr.ErrTxnNeedRetryWithDefChanged))
 		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
 	})
@@ -1995,6 +2253,7 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		require.NoError(t, op.Commit(ctx))
 
 		started, release := store.blockNext()
+		defer release()
 		result := make(chan error, 1)
 		go func() {
 			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
@@ -2013,11 +2272,11 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 				defer s.mu.Unlock()
 				return s.mu.closed
 			}, time.Second, time.Millisecond)
-			close(release)
+			release()
 			<-closed
 		} else {
 			require.NoError(t, s.Reload(ctx, 0))
-			close(release)
+			release()
 		}
 		require.True(t, moerr.IsMoErrCode(<-result, moerr.ErrTxnNeedRetryWithDefChanged))
 		s.mu.Lock()
