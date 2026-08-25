@@ -1244,6 +1244,25 @@ func resolveExternalErrorMode(param *ExternalParam) {
 	param.ErrorMode = mode
 }
 
+// isSynthesizedAttr reports whether the scan produces this column itself
+// rather than reading it out of the record.
+func isSynthesizedAttr(attr plan.ExternAttr, colId uint64, param *ExternalParam) bool {
+	switch {
+	case catalog.ContainExternalHidenCol(attr.ColName):
+		return true
+	case param.ForeignScan != nil && attr.ColName == catalog.ExternalQuery:
+		return true
+	case attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
+		return true
+	}
+	if param.KafkaScan != nil {
+		if _, ok := kafkaMetaField(attr.ColName, param); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
 	// Error-mode columns are synthesized, never read from the record. On a row
 	// that parsed, both error columns are NULL; the tolerant path overwrites
@@ -1251,6 +1270,11 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	// filled whether or not the row parsed.
 	switch colName {
 	case catalog.ExternalFileLine:
+		if param.KafkaScan != nil {
+			// A Kafka record has no line in a file; __mo_message_id is what
+			// identifies it.
+			return csvparser.Field{IsNull: true}
+		}
 		return csvparser.Field{Val: strconv.FormatInt(param.ErrorMode.RecordLine, 10)}
 	case catalog.ExternalErrorMessage, catalog.ExternalErrorText:
 		return csvparser.Field{IsNull: true}
@@ -1302,13 +1326,13 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 	for i, vec := range bat.Vecs {
 		vec.SetLength(lens[i])
 	}
-	return appendErrorRow(proc, bat, line, param, err)
+	return appendErrorRow(proc, bat, line, rowIdx, param, err)
 }
 
 // appendErrorRow emits the replacement row for a record that failed to
 // materialize: every user column NULL, __mo_filepath and __mo_file_line as
 // usual, and the two error columns describing the failure.
-func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, param *ExternalParam, cause error) error {
+func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, cause error) error {
 	mp := proc.GetMPool()
 	message := cause.Error()
 	text := recordText(line, param)
@@ -1327,12 +1351,14 @@ func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Fi
 			if err := vector.AppendBytes(vec, []byte(text), false, mp); err != nil {
 				return err
 			}
-		case attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
-			if err := vector.AppendFixed(vec, param.ErrorMode.RecordLine, false, mp); err != nil {
-				return err
-			}
-		case catalog.ContainExternalHidenCol(attr.ColName):
-			if err := vector.AppendBytes(vec, []byte(param.Fileparam.Filepath), false, mp); err != nil {
+		case isSynthesizedAttr(attr, colId, param):
+			// Position and source metadata -- __mo_filepath, __mo_file_line,
+			// the Kafka message columns -- describe where the record came
+			// from, which is exactly what a failed record needs to be found.
+			// They are synthesized, so they do not depend on the record
+			// having parsed; the ordinary column path fills them, typed as
+			// the catalog declares them.
+			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err
 			}
 		default:

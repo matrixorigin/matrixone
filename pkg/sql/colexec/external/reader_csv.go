@@ -152,7 +152,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				// dropping it silently.
 				param.ErrorMode.RawText = r.prevStr
 				r.prevStr = ""
-				if err = appendErrorRow(proc, bat, nil, param,
+				if err = appendErrorRow(proc, bat, nil, i, param,
 					moerr.NewInvalidInput(proc.Ctx, "incomplete json record at end of file")); err != nil {
 					return false, err
 				}
@@ -189,9 +189,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		rowIdx := i
 		if param.Extern.Format == tree.JSONLINE {
 			raw := row[0].Val
-			// The text this record will actually be parsed from, so a failure
-			// reports the source line rather than the decoded fields.
-			param.ErrorMode.RawText = r.prevStr + raw
+			if param.ErrorMode.Tolerate {
+				// The text this record is parsed from, so a failure reports
+				// the source line rather than the decoded fields.
+				param.ErrorMode.RawText = r.prevStr + raw
+			}
 			row, err = r.transJson2Lines(proc.Ctx, raw, param.Attrs, param.Cols, param.Extern.JsonData)
 			if err != nil {
 				// transJson2Lines holds the text over in prevStr only when the
@@ -211,7 +213,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				}
 				// A line that is not valid JSON is reported as a failed record
 				// rather than failing the query.
-				if err = appendErrorRow(proc, bat, nil, param, err); err != nil {
+				if err = appendErrorRow(proc, bat, nil, i, param, err); err != nil {
 					return false, err
 				}
 				continue
