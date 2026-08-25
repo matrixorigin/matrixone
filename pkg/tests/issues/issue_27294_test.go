@@ -43,6 +43,7 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 
 		sleep, err := db.PrepareContext(ctx, "select sleep(?)")
 		require.NoError(t, err)
+		defer sleep.Close()
 		// Reuse one server-side statement across integer, fractional, and textual
 		// bindings.  The cached plan must keep the deferred DOUBLE domain for every
 		// execution instead of retaining the first parameter's integer overload.
@@ -51,10 +52,10 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.NoError(t, sleep.QueryRowContext(ctx, value).Scan(&result))
 			require.Zero(t, result)
 		}
-		require.NoError(t, sleep.Close())
 
 		abs, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
+		defer abs.Close()
 		for _, test := range []struct {
 			value any
 			want  float64
@@ -67,6 +68,5 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.NoError(t, abs.QueryRowContext(ctx, test.value).Scan(&result))
 			require.Equal(t, test.want, result)
 		}
-		require.NoError(t, abs.Close())
 	})
 }
