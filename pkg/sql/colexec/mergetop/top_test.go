@@ -17,6 +17,7 @@ package mergetop
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -144,6 +146,33 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
+	tc := newTestCase(t, []bool{false, false}, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, 5,
+		[]*plan.OrderBySpec{{Expr: newExpression(0)}, {Expr: newExpression(1)}})
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
+		math.Float64frombits(0x7ff8000000000001), 1, math.Inf(-1),
+		math.Float64frombits(0x7ff8000000000002), -1, math.Inf(1),
+	}, nil, tc.proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{2, 40, 10, 1, 20, 60}, nil, tc.proc.Mp()))
+	bat.SetRowCount(6)
+	resetChildren(tc.arg, []*batch.Batch{bat})
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{10, 20, 40, 60, 1}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
 func BenchmarkTop(b *testing.B) {

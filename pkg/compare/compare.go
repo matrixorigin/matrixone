@@ -21,7 +21,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// New constructs the generic vector comparator used by equality and identity
+// consumers. SQL ORDER BY operators must use NewOrder.
 func New(typ types.Type, desc, nullsLast bool) Compare {
+	return newCompareFor(typ, desc, nullsLast, false)
+}
+
+// NewOrder constructs a comparator for SQL ORDER BY. Scalar floating-point
+// values use the engine's explicit ordering relation: NaNs are peers and sort
+// last in both directions.
+func NewOrder(typ types.Type, desc, nullsLast bool) Compare {
+	return newCompareFor(typ, desc, nullsLast, true)
+}
+
+func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 	switch typ.Oid {
 	case types.T_bool:
 		if desc {
@@ -74,15 +87,27 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 		}
 		return newCompare(types.GenericAscCompare[uint64], genericCopy[uint64], nullsLast)
 	case types.T_float32:
-		if desc {
-			return newCompare(types.GenericDescCompare[float32], genericCopy[float32], nullsLast)
+		if !sqlOrder {
+			if desc {
+				return newCompare(types.GenericDescCompare[float32], genericCopy[float32], nullsLast)
+			}
+			return newCompare(types.GenericAscCompare[float32], genericCopy[float32], nullsLast)
 		}
-		return newCompare(types.GenericAscCompare[float32], genericCopy[float32], nullsLast)
+		if desc {
+			return newCompare(types.Float32OrderDescCompare, genericCopy[float32], nullsLast)
+		}
+		return newCompare(types.Float32OrderAscCompare, genericCopy[float32], nullsLast)
 	case types.T_float64:
-		if desc {
-			return newCompare(types.GenericDescCompare[float64], genericCopy[float64], nullsLast)
+		if !sqlOrder {
+			if desc {
+				return newCompare(types.GenericDescCompare[float64], genericCopy[float64], nullsLast)
+			}
+			return newCompare(types.GenericAscCompare[float64], genericCopy[float64], nullsLast)
 		}
-		return newCompare(types.GenericAscCompare[float64], genericCopy[float64], nullsLast)
+		if desc {
+			return newCompare(types.Float64OrderDescCompare, genericCopy[float64], nullsLast)
+		}
+		return newCompare(types.Float64OrderAscCompare, genericCopy[float64], nullsLast)
 	case types.T_date:
 		if desc {
 			return newCompare(types.GenericDescCompare[types.Date], genericCopy[types.Date], nullsLast)

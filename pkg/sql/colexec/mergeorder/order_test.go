@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"testing"
 
@@ -321,6 +322,49 @@ func TestOrder(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestMergeOrderFloatNaNLastAndPeerTieBreak(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs: []*plan.OrderBySpec{
+			{Expr: newExpression(0, types.T_float64)},
+			{Expr: newExpression(1, types.T_int64)},
+		},
+		OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	makeBatch := func(values []float64, ids []int64) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], ids, nil, proc.Mp()))
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	resetChildren(arg, []*batch.Batch{
+		makeBatch([]float64{math.Inf(-1), 1, math.Float64frombits(0x7ff8000000000002)}, []int64{10, 40, 1}),
+		makeBatch([]float64{-1, math.Inf(1), math.Float64frombits(0x7ff8000000000001)}, []int64{20, 60, 2}),
+	})
+	require.NoError(t, arg.Prepare(proc))
+
+	var got []int64
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			got = append(got, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])...)
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, []int64{10, 20, 40, 60, 1, 2}, got)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestOrderSpill(t *testing.T) {

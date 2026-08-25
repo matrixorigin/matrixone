@@ -929,6 +929,255 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func newOrderWindowAggExpr(t *testing.T, name string) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), name, nil)
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, nil, nil)
+}
+
+// newJsonObjectAggExpr builds a two-argument aggregate expression:
+// json_objectagg(varchar_key, int32_value), using mock batch col 2 (varchar) and col 0 (int32).
+
+func collectFixedWindowColumn[T types.FixedSizeT](
+	t *testing.T,
+	arg *Window,
+	proc *process.Process,
+	column int,
+) []T {
+	t.Helper()
+	var values []T
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			return values
+		}
+		require.LessOrEqual(t, result.Batch.RowCount(), colexec.DefaultBatchSize)
+		values = append(values, vector.MustFixedColWithTypeCheck[T](result.Batch.Vecs[column])...)
+	}
+}
+
+// TestWindowAggResultAcrossChunks verifies that a cumulative aggregate retains
+// its running state across bounded output batches.
+
+func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	orderExpr := newColExprWithType(0, types.T_float64.ToType())
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:       "rank",
+				WindowFunc: newFunExpr("rank"),
+				OrderBy:    []*plan.OrderBySpec{{Expr: orderExpr}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 1))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_float64.ToType()),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+		-1,
+	}, nil, proc.Mp()))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBuildRangeIntervalFloatNaNsUseSQLOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		oid        types.T
+		ascValues  []any
+		descValues []any
+		literal    func() *plan.Expr
+	}{
+		{
+			name: "float32",
+			oid:  types.T_float32,
+			ascValues: []any{
+				float32(1), float32(2), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			descValues: []any{
+				float32(2), float32(1), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			literal: f32Lit,
+		},
+		{
+			name: "float64",
+			oid:  types.T_float64,
+			ascValues: []any{
+				float64(1), float64(2), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			descValues: []any{
+				float64(2), float64(1), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			literal: f64Lit,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+			for _, direction := range []struct {
+				name   string
+				values []any
+				desc   bool
+			}{
+				{name: "asc", values: tc.ascValues},
+				{name: "desc", values: tc.descValues, desc: true},
+			} {
+				t.Run(direction.name, func(t *testing.T) {
+					vec := vector.NewVec(tc.oid.ToType())
+					switch tc.oid {
+					case types.T_float32:
+						values := make([]float32, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float32)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					case types.T_float64:
+						values := make([]float64, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float64)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					}
+					defer vec.Free(mp)
+
+					ctr := &container{
+						orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+						desc:      []bool{direction.desc},
+					}
+					frame := &plan.FrameClause{
+						Type: plan.FrameClause_RANGE,
+						Start: &plan.FrameBound{
+							Type: plan.FrameBound_PRECEDING,
+							Val:  tc.literal(),
+						},
+						End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+					}
+
+					// A finite row adjacent to the NaN peer group must still use
+					// the SQL relation for the binary search.
+					start, end, err := ctr.buildRangeInterval(1, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 0, start)
+					require.Equal(t, 2, end)
+
+					// All NaN payloads are one peer group, and an offset from a
+					// NaN remains NaN for RANGE boundary purposes.
+					start, end, err = ctr.buildRangeInterval(2, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 2, start)
+					require.Equal(t, 4, end)
+				})
+			}
+		})
+	}
+}
+
+// TestSearchLeftRightDecimalTypes covers decimal64/128.
+
 func TestWindowOrdersPartitionedInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(2)
