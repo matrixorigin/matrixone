@@ -94,7 +94,7 @@ order by series_id, _wstart;
 select series_id, _wstart, max(shown) as shown_fill
 from linear_having_numeric
 group by series_id
-having max(sort_key) < 150 and max(sort_key) < 150
+having max(sort_key) <= 150 and max(sort_key) <= 150
 interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by series_id, _wstart;
 

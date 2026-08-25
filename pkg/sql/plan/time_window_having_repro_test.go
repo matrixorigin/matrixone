@@ -84,3 +84,46 @@ func TestTimeWindowHavingRepeatedAggregateStaysAfterFill(t *testing.T) {
 		})
 	}
 }
+
+func TestTimeWindowHavingNestedAggregateRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		having string
+	}{
+		{
+			name:   "nested after time aggregate",
+			having: "max(sort_key) < 150 and sum(max(sort_key)) > 0",
+		},
+		{
+			name:   "nested before time aggregate",
+			having: "sum(max(sort_key)) > 0 and max(sort_key) < 150",
+		},
+		{
+			name:   "repeated nested arguments",
+			having: "sum(max(sort_key) + max(sort_key)) > 0",
+		},
+		{
+			name:   "repeated nested conjunct",
+			having: "sum(max(sort_key)) > 0 and sum(max(sort_key)) > 0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.objects["tw_repeated_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_repeated_having", Obj: 42}
+			mock.ctxt.tables["tw_repeated_having"] = &plan.TableDef{
+				Name: "tw_repeated_having",
+				Cols: []*plan.ColDef{
+					{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+					{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+					{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+				},
+			}
+
+			_, err := runOneStmt(mock, t, "select series_id, _wstart, max(shown) as shown_fill\nfrom tw_repeated_having\ngroup by series_id\nhaving "+tc.having+"\ninterval(ts, 1, minute) gapfill(partition) fill(linear)\norder by series_id, _wstart")
+			require.ErrorContains(t, err, "aggregate function max calls cannot be nested")
+		})
+	}
+}
