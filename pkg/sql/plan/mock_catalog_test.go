@@ -80,6 +80,58 @@ func TestMockCompilerContextResolvesSchemaQualifiedTables(t *testing.T) {
 	require.NotNil(t, mock.tables["t1"], "unqualified compatibility view must remain available")
 }
 
+func TestMockCompilerContextLegacyTableOverlay(t *testing.T) {
+	t.Run("add", func(t *testing.T) {
+		mock := NewMockCompilerContext(true)
+		const tableID = uint64(990001)
+		mock.tables["runtime_table"] = &TableDef{Name: "runtime_table", TblId: tableID}
+		mock.objects["runtime_table"] = &ObjectRef{
+			Obj: int64(tableID), SchemaName: "tpch", ObjName: "runtime_table",
+		}
+		mock.id2name[tableID] = "runtime_table"
+
+		objRef, tableDef, err := mock.Resolve("tpch", "runtime_table", nil)
+		require.NoError(t, err)
+		require.Equal(t, tableID, tableDef.TblId)
+		require.Equal(t, tableID, uint64(objRef.Obj))
+		objRef, tableDef, err = mock.ResolveById(tableID, nil)
+		require.NoError(t, err)
+		require.Equal(t, tableID, tableDef.TblId)
+		require.Equal(t, tableID, uint64(objRef.Obj))
+	})
+
+	t.Run("replace", func(t *testing.T) {
+		mock := NewMockCompilerContext(true)
+		original := mock.tables["nation"]
+		replacement := DeepCopyTableDef(original, true)
+		replacement.Cols[0].Typ.Width = 1234
+		mock.tables["nation"] = replacement
+
+		_, tableDef, err := mock.Resolve("tpch", "nation", nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(1234), tableDef.Cols[0].Typ.Width)
+		_, tableDef, err = mock.ResolveById(original.TblId, nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(1234), tableDef.Cols[0].Typ.Width)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		mock := NewMockCompilerContext(true)
+		tableID := mock.tables["nation"].TblId
+		delete(mock.tables, "nation")
+		delete(mock.objects, "nation")
+
+		objRef, tableDef, err := mock.Resolve("tpch", "nation", nil)
+		require.NoError(t, err)
+		require.Nil(t, objRef)
+		require.Nil(t, tableDef)
+		objRef, tableDef, err = mock.ResolveById(tableID, nil)
+		require.NoError(t, err)
+		require.Nil(t, objRef)
+		require.Nil(t, tableDef)
+	})
+}
+
 func tableColumnNames(tableDef *TableDef) []string {
 	names := make([]string, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {

@@ -44,6 +44,8 @@ type MockCompilerContext struct {
 	objectsByQualifiedName map[string]*ObjectRef
 	tablesByQualifiedName  map[string]*TableDef
 	ambiguousTableNames    map[string]struct{}
+	initialTableNames      map[string]struct{}
+	initialObjectNames     map[string]struct{}
 	pks                    map[string][]int
 	id2name                map[uint64]string
 	isDml                  bool
@@ -225,6 +227,8 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 		objectsByQualifiedName: make(map[string]*ObjectRef),
 		tablesByQualifiedName:  make(map[string]*TableDef),
 		ambiguousTableNames:    make(map[string]struct{}),
+		initialTableNames:      make(map[string]struct{}),
+		initialObjectNames:     make(map[string]struct{}),
 		ctx:                    context.Background(),
 		processHolder:          &mockProcessHolder{},
 	}
@@ -1972,6 +1976,15 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		}
 	}
 
+	initialTableNames := make(map[string]struct{}, len(tables))
+	for name := range tables {
+		initialTableNames[name] = struct{}{}
+	}
+	initialObjectNames := make(map[string]struct{}, len(objects))
+	for name := range objects {
+		initialObjectNames[name] = struct{}{}
+	}
+
 	return &MockCompilerContext{
 		dbs:                    dbs,
 		isDml:                  isDml,
@@ -1980,6 +1993,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		objectsByQualifiedName: objectsByQualifiedName,
 		tablesByQualifiedName:  tablesByQualifiedName,
 		ambiguousTableNames:    ambiguousTableNames,
+		initialTableNames:      initialTableNames,
+		initialObjectNames:     initialObjectNames,
 		id2name:                id2name,
 		pks:                    pks,
 		ctx:                    context.TODO(),
@@ -2024,10 +2039,17 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	compatibilityTable := m.tables[name]
 	compatibilityObjRef := m.objects[name]
 	_, ambiguousName := m.ambiguousTableNames[name]
-	if table == nil || (compatibilityTable != nil && (!ambiguousName ||
-		(compatibilityObjRef != nil && strings.EqualFold(compatibilityObjRef.SchemaName, dbName) &&
-			compatibilityTable != table))) {
+	_, tableExisted := m.initialTableNames[name]
+	_, objectExisted := m.initialObjectNames[name]
+	compatibilityMatchesSchema := compatibilityObjRef != nil &&
+		strings.EqualFold(compatibilityObjRef.SchemaName, dbName)
+	if (tableExisted && compatibilityTable == nil) || table == nil ||
+		(compatibilityTable != nil && (!ambiguousName ||
+			(compatibilityMatchesSchema && compatibilityTable != table))) {
 		table = compatibilityTable
+	}
+	if (objectExisted && compatibilityObjRef == nil) || objRef == nil ||
+		(compatibilityObjRef != nil && (!ambiguousName || compatibilityMatchesSchema)) {
 		objRef = compatibilityObjRef
 	}
 	tableDef := DeepCopyTableDef(table, true)
@@ -2059,9 +2081,17 @@ func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*
 	objRef := m.objectsByQualifiedName[name]
 	unqualifiedName := mockUnqualifiedTableName(name)
 	_, ambiguousName := m.ambiguousTableNames[unqualifiedName]
-	if compatibilityTable := m.tables[unqualifiedName]; table == nil || (!ambiguousName && compatibilityTable != nil) {
+	compatibilityTable := m.tables[unqualifiedName]
+	compatibilityObjRef := m.objects[unqualifiedName]
+	_, tableExisted := m.initialTableNames[unqualifiedName]
+	_, objectExisted := m.initialObjectNames[unqualifiedName]
+	if (tableExisted && compatibilityTable == nil) || table == nil ||
+		(!ambiguousName && compatibilityTable != nil) {
 		table = compatibilityTable
-		objRef = m.objects[unqualifiedName]
+	}
+	if (objectExisted && compatibilityObjRef == nil) || objRef == nil ||
+		(!ambiguousName && compatibilityObjRef != nil) {
+		objRef = compatibilityObjRef
 	}
 	tableDef := DeepCopyTableDef(table, true)
 	if tableDef != nil && !m.isDml {
