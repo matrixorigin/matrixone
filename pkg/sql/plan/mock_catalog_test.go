@@ -25,6 +25,7 @@ func TestMockCompilerContextTableIDs(t *testing.T) {
 	second := NewMockCompilerContext(true)
 	require.Equal(t, len(first.tables), len(second.tables))
 
+	require.Equal(t, len(first.tables), len(first.id2name), "every current table must have exactly one reverse ID mapping")
 	seen := make(map[uint64]string, len(first.tables))
 	for name, tableDef := range first.tables {
 		require.NotZero(t, tableDef.TblId, "table %s must not use the foreign-key self-reference sentinel", name)
@@ -40,6 +41,20 @@ func TestMockCompilerContextTableIDs(t *testing.T) {
 		require.NotNil(t, resolved)
 		require.Equal(t, tableDef.TblId, uint64(objRef.Obj))
 		require.Equal(t, tableDef.TblId, resolved.TblId)
+		require.Equal(t, name, resolved.Name)
+	}
+
+	for tableID, name := range first.id2name {
+		tableDef := first.tables[name]
+		require.NotNil(t, tableDef)
+		require.Equal(t, tableID, tableDef.TblId, "reverse ID mapping must not outlive an overwritten table")
+
+		objRef, resolved, err := first.ResolveById(tableID, nil)
+		require.NoError(t, err)
+		require.NotNil(t, objRef)
+		require.NotNil(t, resolved)
+		require.Equal(t, tableID, uint64(objRef.Obj))
+		require.Equal(t, tableID, resolved.TblId)
 		require.Equal(t, name, resolved.Name)
 	}
 }

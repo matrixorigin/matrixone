@@ -1927,6 +1927,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				})
 			}
 
+			if previous := tables[tableName]; previous != nil {
+				delete(id2name, previous.TblId)
+			}
 			tables[tableName] = tableDef
 			id2name[tableDef.TblId] = tableName
 
