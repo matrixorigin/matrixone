@@ -310,3 +310,10 @@
 
 - 修复 `pkg/sql/plan/utils.go:3639` 的 staticcheck S1003，使用 `strings.ContainsAny` 保持完全等价的重复 exponent marker 判断。
 - `./pkg/sql/plan` UT、全仓 golangci-lint、build、vet、diff check 均通过。
+
+## 第十三轮：再次合并最新 mo/main
+
+1. merge `mo/main@8dd1efc201` 并枚举冲突块。
+2. 对照 main 新改动与 prepared numeric-prefix/runtime cache 语义逐块合并，不整文件选边。
+3. 运行冲突包全量 CGo UT、关键 issue 回归、build/vet/SCA/diff check。
+4. 推送 merge commit并确认 PR 恢复 MERGEABLE。
