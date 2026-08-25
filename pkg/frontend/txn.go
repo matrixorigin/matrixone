@@ -69,7 +69,9 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
-	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
+	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback ||
+		isErrorRollbackWholeTxn(execErr) ||
+		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)

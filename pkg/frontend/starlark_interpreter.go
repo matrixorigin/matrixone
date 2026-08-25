@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,6 +74,8 @@ func convertFromStarlarkValue(ctx context.Context, v starlark.Value) (any, error
 		return float64(v), nil
 	case starlark.String:
 		return string(v), nil
+	case *sqlError:
+		return v.message, nil
 	case *starlark.List:
 		ls := make([]any, v.Len())
 		for i := 0; i < v.Len(); i++ {
@@ -200,6 +203,78 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 	return nil
 }
 
+// sqlError is what mo.sql hands back in the `ok` slot of its [result, ok]
+// pair. It stays a string for every use that already worked -- it prints as
+// the message, concatenates with strings, is truthy, and converts to the
+// message when assigned to an OUT parameter -- and additionally carries the
+// codes a procedure needs to branch on an error CLASS rather than match on
+// message text:
+//
+//	rs, err = mo.sql("insert into t values (1)")
+//	if err != None and err.code == 1062:
+//	    ...                      # duplicate key, whatever the message says
+//
+// code is the MySQL error number (1062 for a duplicate key), sqlstate the
+// SQLSTATE ("23000"), and message the text. A failure that is not a moerr --
+// argument unpacking, for instance -- reports code 0.
+type sqlError struct {
+	code     uint16
+	sqlstate string
+	message  string
+}
+
+var (
+	_ starlark.Value     = (*sqlError)(nil)
+	_ starlark.HasAttrs  = (*sqlError)(nil)
+	_ starlark.HasBinary = (*sqlError)(nil)
+)
+
+func newSQLError(err error) *sqlError {
+	e := &sqlError{message: err.Error()}
+	var me *moerr.Error
+	if errors.As(err, &me) {
+		e.code = me.MySQLCode()
+		e.sqlstate = me.SqlState()
+	}
+	return e
+}
+
+func (e *sqlError) String() string        { return e.message }
+func (e *sqlError) Type() string          { return "mo.error" }
+func (e *sqlError) Freeze()               {}
+func (e *sqlError) Truth() starlark.Bool  { return starlark.Bool(e.message != "") }
+func (e *sqlError) Hash() (uint32, error) { return starlark.String(e.message).Hash() }
+
+func (e *sqlError) Attr(name string) (starlark.Value, error) {
+	switch name {
+	case "code":
+		return starlark.MakeInt(int(e.code)), nil
+	case "sqlstate":
+		return starlark.String(e.sqlstate), nil
+	case "message":
+		return starlark.String(e.message), nil
+	}
+	return nil, nil
+}
+
+func (e *sqlError) AttrNames() []string { return []string{"code", "message", "sqlstate"} }
+
+// Binary keeps `"prefix: " + err` and `err + " suffix"` working, which is how
+// a procedure built an error string before this value carried its codes.
+func (e *sqlError) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
+	if op != syntax.PLUS {
+		return nil, nil
+	}
+	other, ok := starlark.AsString(y)
+	if !ok {
+		return nil, nil
+	}
+	if side == starlark.Left {
+		return starlark.String(e.message + other), nil
+	}
+	return starlark.String(other + e.message), nil
+}
+
 // Build the mo module for starlark interpreter.  Expose a set of runtime functions in the mo module.
 // All functions should return a list of [result, ok], where ok is None if the function call is successful.
 func (si *starlarkInterpreter) buildModule() starlark.Value {
@@ -223,7 +298,7 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	var ret = []starlark.Value{starlark.None, starlark.None}
 
 	if err := starlark.UnpackPositionalArgs("sql", args, kwargs, 1, &sql); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -231,20 +306,20 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	err := si.interp.bh.Exec(si.interp.ctx, sql)
 	si.interp.recordAffectedRows()
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	erArray, err := getResultSet(si.interp.ctx, si.interp.bh)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	if len(erArray) == 0 {
 		return starlark.NewList(ret), nil
 	} else if len(erArray) > 1 {
-		ret[1] = starlark.String("sql must return a single result set")
+		ret[1] = newSQLError(moerr.NewInvalidInput(si.interp.ctx, "sql must return a single result set"))
 		return starlark.NewList(ret), nil
 	}
 
@@ -272,13 +347,13 @@ func (si *starlarkInterpreter) moJq(thread *starlark.Thread, b *starlark.Builtin
 	var data string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("jq", args, kwargs, 2, &jq, &data); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	res, err := ujson.RunJQOnString(jq, data)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -292,7 +367,7 @@ func (si *starlarkInterpreter) moQuote(thread *starlark.Thread, b *starlark.Buil
 	var s string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("quote", args, kwargs, 1, &s); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -304,19 +379,19 @@ func (si *starlarkInterpreter) moGetVar(thread *starlark.Thread, b *starlark.Bui
 	var name string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("getvar", args, kwargs, 1, &name); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	value, err := si.interp.ses.GetUserDefinedVar(name)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	starlarkValue, err := convertToStarlarkValue(si.interp.ctx, value.Value)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -329,19 +404,19 @@ func (si *starlarkInterpreter) moSetVar(thread *starlark.Thread, b *starlark.Bui
 	var value starlark.Value
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("setvar", args, kwargs, 2, &name, &value); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	sqlValue, err := convertFromStarlarkValue(si.interp.ctx, value)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	err = si.interp.ses.SetUserDefinedVar(name, sqlValue, "")
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 	return starlark.NewList(ret), nil
@@ -371,13 +446,13 @@ func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark
 	var server, addr, model, options string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_connect", args, kwargs, 3, &server, &addr, &model, &options); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
 	si.llm, err = si.llmConnect(server, addr, model, options)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 	return starlark.NewList(ret), nil
@@ -388,7 +463,7 @@ func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Bu
 	var prompt string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_chat", args, kwargs, 1, &prompt); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -402,7 +477,7 @@ func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Bu
 
 	reply, err := si.llm.Chat(si.interp.ctx, prompt)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = newSQLError(err)
 		return starlark.NewList(ret), nil
 	}
 

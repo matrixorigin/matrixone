@@ -1845,6 +1845,31 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrBackendCannotConnect:     false,
 }
 
+// sessionRollsBackTxnOnError reports whether the session has opted into
+// treating this error as fatal to the whole transaction rather than to the
+// statement alone.
+//
+// The static errCodeRollbackWholeTxn set above is infrastructure: deadlock,
+// lock timeout, a backend that went away -- failures after which the
+// transaction genuinely cannot continue. A duplicate key is different: it is a
+// data error, and MySQL rolls back only the statement, so that is MO's default
+// too. An application that treats a constraint violation as fatal to its unit
+// of work can ask for the stricter behaviour per session.
+func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
+	if ses == nil || inputErr == nil {
+		return false
+	}
+	if !moerr.IsMoErrCode(inputErr, moerr.ErrDuplicateEntry) {
+		return false
+	}
+	val, err := ses.GetSessionSysVar("mo_rollback_txn_on_duplicate_key")
+	if err != nil {
+		return false
+	}
+	v, _ := val.(int8)
+	return v > 0
+}
+
 func isErrorRollbackWholeTxn(inputErr error) bool {
 	if inputErr == nil {
 		return false

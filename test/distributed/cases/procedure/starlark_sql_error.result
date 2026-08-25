@@ -1,0 +1,58 @@
+drop database if exists slk_err;
+create database slk_err;
+use slk_err;
+create table t (a int primary key, b varchar(10));
+insert into t values (1, 'one');
+create table plog (id int, note varchar(300));
+create or replace procedure sp_err() language 'starlark'
+$$
+rs, err = mo.sql("insert into t values (1, 'dup')")
+code = -1 if err == None else err.code
+state = "none" if err == None else err.sqlstate
+isdup = False if err == None else err.code == 1062
+truthy = False if err == None else bool(err)
+attrs = [] if err == None else dir(err)
+concat = "" if err == None else "concat: " + err
+same = "" if err == None else err.message
+q, qe = mo.quote(concat)
+q2, qe2 = mo.quote(same)
+mo.sql("insert into plog values (1, 'code={} sqlstate={}')".format(code, state))
+mo.sql("insert into plog values (2, 'is_dup={}')".format(isdup))
+mo.sql("insert into plog values (3, 'truthy={}')".format(truthy))
+mo.sql("insert into plog values (4, 'attrs={}')".format(attrs))
+mo.sql("insert into plog values (5, '{}')".format(q))
+mo.sql("insert into plog values (6, '{}')".format(q2))
+$$;
+call sp_err();
+select id, note from plog order by id;
+➤ id[4,32,0]  ¦  note[12,300,0]  𝄀
+1  ¦  code=1062 sqlstate=23000  𝄀
+2  ¦  is_dup=True  𝄀
+3  ¦  truthy=True  𝄀
+4  ¦  attrs=["code", "message", "sqlstate"]  𝄀
+5  ¦  concat: Duplicate entry '1' for key 'a'  𝄀
+6  ¦  Duplicate entry '1' for key 'a'
+select a, b from t order by a;
+➤ a[4,32,0]  ¦  b[12,10,0]  𝄀
+1  ¦  one
+create or replace procedure sp_ok(out e varchar) language 'starlark'
+$$
+rs, err = mo.sql("select 1")
+out_e = "isNone" if err == None else "notNone"
+$$;
+set @e = 'unset';
+call sp_ok(@e);
+select @e as on_success;
+➤ on_success[-1,21845,0]  𝄀
+isNone
+create or replace procedure sp_out(out e varchar) language 'starlark'
+$$
+rs, err = mo.sql("insert into t values (1, 'dup')")
+out_e = err
+$$;
+set @e = 'unset';
+call sp_out(@e);
+select @e as out_param;
+➤ out_param[-1,21845,0]  𝄀
+Duplicate entry '1' for key 'a'
+drop database if exists slk_err;
