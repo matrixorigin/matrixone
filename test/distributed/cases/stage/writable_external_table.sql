@@ -102,11 +102,11 @@ explain insert into ext_remote select * from big_src;
 insert into ext_remote select * from big_src;
 set @wext_writer_counts = (select fault_inject('cn.', 'get_fault_point_count', 'fj/cn/external_writer_non_empty'));
 -- One-CN developer runs require one data-bearing writer; multi-CN CI requires
--- at least two CNs with a writer that consumed rows. Read up to eight CNs,
--- comfortably above the BVT topology, without depending on pod ordering/IDs.
-select case when json_length(@wext_writer_counts) = 1
-       then coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0
-       else (
+-- a MULTICN plan plus a writer that actually consumed rows. The scheduler is
+-- free to coalesce physical ranges onto one CN, so the test must not prescribe
+-- the number of data-bearing pipelines. Read up to eight CNs, comfortably
+-- above the BVT topology, without depending on pod ordering/IDs.
+select (
          case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0 then 1 else 0 end +
          case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[1].return_str')) as bigint), 0) > 0 then 1 else 0 end +
          case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[2].return_str')) as bigint), 0) > 0 then 1 else 0 end +
@@ -115,7 +115,7 @@ select case when json_length(@wext_writer_counts) = 1
          case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[5].return_str')) as bigint), 0) > 0 then 1 else 0 end +
          case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[6].return_str')) as bigint), 0) > 0 then 1 else 0 end +
          case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[7].return_str')) as bigint), 0) > 0 then 1 else 0 end
-       ) >= 2 end as data_bearing_cns;
+       ) >= 1 as data_bearing_writer;
 select count(*), min(a), max(a) from ext_remote;
 select disable_fault_injection();
 
