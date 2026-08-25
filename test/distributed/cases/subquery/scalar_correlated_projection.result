@@ -102,6 +102,18 @@ select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit
 1  ¦  2  ¦  1  𝄀
 11  ¦  22  ¦  11  𝄀
 11  ¦  23  ¦  11
+select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d > a limit 1) as derived_agg_mixed from t1;
+-- @regex("correlated LIMIT with non-equality predicates", true)
+correlated LIMIT with non-equality predicates is not yet implemented
+select a, (select case when x.d > 0 then a else 0 end from (select d from t2 group by d) x where x.d > a limit 1) as grouped_agg_mixed from t1;
+-- @regex("correlated LIMIT with non-equality predicates", true)
+correlated LIMIT with non-equality predicates is not yet implemented
+delete from t1 where (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
+-- @regex("correlated LIMIT with non-equality predicates", true)
+correlated LIMIT with non-equality predicates is not yet implemented
+update t1 set b = (select case when d > 0 then a else 0 end from t2 where d > a limit 1);
+-- @regex("correlated LIMIT with non-equality predicates", true)
+correlated LIMIT with non-equality predicates is not yet implemented
 select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as grouped_mixed from t1 group by a;
 -- @regex("outer input without a stable row identity", true)
 wrapped correlated LIMIT on an outer input without a stable row identity is not yet implemented

@@ -52,6 +52,14 @@ delete from t2;
 select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as empty_mixed from t1 order by a, b;
 insert into t2 values (50), (60), (70);
 select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as multi_mixed from t1 order by a, b;
+-- @regex("correlated LIMIT with non-equality predicates",true)
+select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d > a limit 1) as derived_agg_mixed from t1;
+-- @regex("correlated LIMIT with non-equality predicates",true)
+select a, (select case when x.d > 0 then a else 0 end from (select d from t2 group by d) x where x.d > a limit 1) as grouped_agg_mixed from t1;
+-- @regex("correlated LIMIT with non-equality predicates",true)
+delete from t1 where (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
+-- @regex("correlated LIMIT with non-equality predicates",true)
+update t1 set b = (select case when d > 0 then a else 0 end from t2 where d > a limit 1);
 -- @regex("outer input without a stable row identity",true)
 select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as grouped_mixed from t1 group by a;
 -- @regex("outer input without a stable row identity",true)

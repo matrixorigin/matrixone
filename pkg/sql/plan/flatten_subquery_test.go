@@ -2208,6 +2208,25 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 	require.ErrorContains(t, err, "outer input without a stable row identity")
 
 	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT max(r_regionkey) AS d FROM region) r
+		          WHERE r.d > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT r_name, max(r_regionkey) AS d FROM region GROUP BY r_name) r
+		          WHERE r.d > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+		require.NotContains(t, err.Error(), "Column remapping failed")
+	}
+
+	for _, sql := range []string{
 		`SELECT n.n_regionkey,
 		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
 		           FROM region r
@@ -2225,6 +2244,22 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 	} {
 		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
 		require.ErrorContains(t, err, "outer input without a stable row identity")
+	}
+
+	for _, sql := range []string{
+		`DELETE FROM nation n
+		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1) >= 0`,
+		`UPDATE nation n
+		    SET n_regionkey = (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                           FROM region r
+		                          WHERE r.r_regionkey > n.n_regionkey
+		                          LIMIT 1)`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
 	}
 }
 

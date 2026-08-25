@@ -709,12 +709,13 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 				return subID, nil, nil, false, nil
 			}
 			if innerDependent && (nodeID != subID || hasDistinct ||
-				(limitOne && (hasOrdering || builder.isPrepareStatement))) {
+				(limitOne && (hasOrdering || builder.isPrepareStatement ||
+					builder.qry.StmtType != plan.Query_SELECT))) {
 				return subID, nil, nil, false, nil
 			}
 			var innerOrderSource *plan.Expr
 			if innerDependent && limitOne {
-				innerOrderSource = builder.findRowIDColRef(node.Children[0])
+				innerOrderSource = builder.findReachableRowIDColRef(node.Children[0])
 				if innerOrderSource == nil {
 					return subID, nil, nil, false, nil
 				}
@@ -1793,6 +1794,30 @@ func (builder *QueryBuilder) findAggNodeBelow(nodeID int32) *plan.Node {
 			return nil
 		}
 		nodeID = node.Children[0]
+	}
+}
+
+// findReachableRowIDColRef returns a Row_ID only when the current subtree
+// demonstrably outputs the base-table binding unchanged. Projection, aggregate,
+// distinct, window, and join boundaries do not preserve that guarantee.
+func (builder *QueryBuilder) findReachableRowIDColRef(nodeID int32) *plan.Expr {
+	for {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return nil
+		}
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			return builder.findRowIDColRef(nodeID)
+		}
+		if len(node.Children) != 1 {
+			return nil
+		}
+		switch node.NodeType {
+		case plan.Node_FILTER, plan.Node_SORT:
+			nodeID = node.Children[0]
+		default:
+			return nil
+		}
 	}
 }
 
