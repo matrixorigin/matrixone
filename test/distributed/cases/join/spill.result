@@ -404,6 +404,9 @@ select sum(b) from t1;
 ➤ sum(b)[-5,64,0]  𝄀
 100000
 update t1 set b = b + 1 where a mod 5 = 0;
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
 select count(distinct object_name) > @before_object_count as update_created_object,
 sum(rows_cnt) = 120000 as update_rows_flushed
 from metadata_scan('test.t1', 'a') m;
@@ -412,7 +415,4 @@ from metadata_scan('test.t1', 'a') m;
 select sum(b) from t1;
 ➤ sum(b)[-5,64,0]  𝄀
 120000
-select disable_fault_injection();
-➤ disable_fault_injection()[-7,1,0]  𝄀
-1
 drop database if exists test;

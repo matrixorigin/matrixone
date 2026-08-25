@@ -223,9 +223,10 @@ from metadata_scan('test.t1', 'a') m;
 select sum(b) from t1;
 -- Updating 20% keeps the small dataset above the fault-injected S3 threshold.
 update t1 set b = b + 1 where a mod 5 = 0;
+-- The injected update is complete; release global FI state before assertions.
+select disable_fault_injection();
 select count(distinct object_name) > @before_object_count as update_created_object,
        sum(rows_cnt) = 120000 as update_rows_flushed
 from metadata_scan('test.t1', 'a') m;
 select sum(b) from t1;
-select disable_fault_injection();
 drop database if exists test;
