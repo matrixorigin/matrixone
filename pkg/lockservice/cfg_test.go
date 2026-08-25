@@ -51,3 +51,20 @@ func TestAdjustConfigRejectsNegativeMaxLockWaitDuration(t *testing.T) {
 	c.MaxLockWaitDuration.Duration = -1
 	assert.Panics(t, c.Validate)
 }
+
+func TestAdjustConfigPreservesFixedSliceCompatibility(t *testing.T) {
+	// These tight settings were accepted before cumulative coarsening existed
+	// and must remain bootable across an upgrade.
+	for _, c := range []Config{
+		{ServiceID: "s1", MaxLockRowCount: 1, MaxFixedSliceSize: 1},
+		{ServiceID: "s1", MaxLockRowCount: 2, MaxFixedSliceSize: 2},
+		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 3},
+		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 4},
+		{ServiceID: "s1", MaxLockRowCount: 4, MaxFixedSliceSize: 4},
+	} {
+		assert.NotPanics(t, c.Validate)
+	}
+
+	c := Config{ServiceID: "s1", MaxLockRowCount: 5, MaxFixedSliceSize: 4}
+	assert.Panics(t, c.Validate)
+}

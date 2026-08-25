@@ -106,6 +106,23 @@ func newInt64TopBatch(
 	return bat
 }
 
+func newNullableVarcharTopBatch(
+	t testing.TB,
+	proc *process.Process,
+	key int64,
+	value []byte,
+	isNull bool,
+) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, proc.Mp()))
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], value, isNull, proc.Mp()))
+	bat.SetRowCount(1)
+	return bat
+}
+
 func collectTopInt64(
 	t testing.TB,
 	op *Top,
@@ -140,6 +157,31 @@ func TestAccountedTopResidentLifecycle(t *testing.T) {
 	require.True(t, ok)
 	require.Positive(t, owner.Peak)
 	require.Positive(t, owner.Current)
+
+	child.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	finalizeTopTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestAccountedTopCopiesLateNullVarchar(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := newAccountedTop(1)
+	state := installTopTestAllocation(t, op, proc, 64<<20)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newNullableVarcharTopBatch(t, proc, 2, []byte("seed"), false),
+		newNullableVarcharTopBatch(t, proc, 1, nil, true),
+	})
+	op.AppendChild(child)
+	require.NoError(t, op.Prepare(proc))
+
+	result, err := vm.Exec(op, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])[0])
+	require.True(t, result.Batch.Vecs[1].GetNulls().Contains(0))
 
 	child.Free(proc, false, nil)
 	op.Free(proc, false, nil)

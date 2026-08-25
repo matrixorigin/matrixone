@@ -150,6 +150,8 @@ func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T)
 			s.FinishLoadObservation()
 			require.Len(t, events, 1)
 			require.Equal(t, reason, events[0].MissReason)
+			require.Equal(t, int64(11), events[0].BaseGeneration)
+			require.Equal(t, int64(22), events[0].TailGeneration)
 			require.True(t, events[0].LoadSuccess)
 			gotReason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
 			require.Empty(t, gotReason)
@@ -264,7 +266,6 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
 		return !loaded
 	}, time.Second, time.Millisecond)
-
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
 	replacement.loaded = true
@@ -325,6 +326,10 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
 		return !loaded
 	}, time.Second, time.Millisecond)
+	reason, observedGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Equal(t, LoadMissTTLExpired, reason)
+	require.NotZero(t, observedGeneration)
+	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), observedGeneration)
 
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
@@ -333,9 +338,9 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
 
-	generation := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.True(t, loadGenerationCurrent(generation))
-	endLoadGeneration(generation)
+	loadGen := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.True(t, loadGenerationCurrent(loadGen))
+	endLoadGeneration(loadGen)
 
 	oldEntry.Mutex.Unlock()
 	select {
@@ -343,7 +348,7 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("housekeeping eviction did not finish")
 	}
-	require.True(t, loadGenerationCurrent(generation))
+	require.True(t, loadGenerationCurrent(loadGen))
 	veccache.Cache.Remove(cfg.IndexTable)
 }
 

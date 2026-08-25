@@ -409,6 +409,11 @@ func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 		old = nil
 		after = -1
 	}
+	if appliedMax < tailMax {
+		// Keep the durable generation observed by the same load snapshot even
+		// when that snapshot has no tail rows to materialize.
+		appliedMax = tailMax
+	}
 	state := newTailState(baseGeneration, appliedMax, newSegs, newDeletes)
 	if after >= 0 && old != nil {
 		// Transfer old leases into the new state and append only the new frames.
@@ -438,6 +443,9 @@ func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 		newSegs, newDeletes, appliedMax, err = loadTailSegmentsAfter(sqlproc, cfg, -1, trace)
 		if err != nil {
 			return nil, nil, 0, err
+		}
+		if appliedMax < tailMax {
+			appliedMax = tailMax
 		}
 		state = newTailState(baseGeneration, appliedMax, newSegs, newDeletes)
 	}
