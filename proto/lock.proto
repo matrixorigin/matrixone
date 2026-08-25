@@ -125,6 +125,10 @@ enum Method {
   GetLockHolder      = 18;
   // CheckActiveTxn checks whether a txn is still active on the lock service
   CheckActiveTxn     = 19;
+  // GetTxnWaitingListOnLockTable gets the wait-for snapshot from the service
+  // that physically owns the transaction's locks. Unlike GetWaitingList, the
+  // handler is owner-local and never recursively calls another lock service.
+  GetTxnWaitingListOnLockTable = 20;
 }
 
 enum Status {
@@ -205,6 +209,10 @@ message LockRequest {
 // LockResponse lock response
 message LockResponse {
   Result Result = 1 [(gogoproto.nullable) = false];
+  // TxnWaitingListOnLockTableSupported is an explicit capability handshake.
+  // An origin may compact its remote bookkeeping only after the physical owner
+  // returned true for this successful Lock response.
+  bool TxnWaitingListOnLockTableSupported = 2;
 }
 
 // GetTxnLockRequest get a waiting txn list on a special lock 

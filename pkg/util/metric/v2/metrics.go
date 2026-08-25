@@ -77,6 +77,8 @@ func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
+	registry.MustRegister(MemMPoolOnHeapOutstandingBytesGauge)
+	registry.MustRegister(MemMPoolOnHeapOutstandingObjectsGauge)
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
@@ -126,6 +128,8 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
+	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
+	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
 func initLogtailMetrics() {

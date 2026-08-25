@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -60,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -1984,6 +1986,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		}
 
 		batchCase1 := genBatch()
+		defer batchCase1.Clean(mp)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
@@ -1999,6 +2002,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			}
 			return bat
 		}()
+		defer batchCase2.Clean(mp)
 
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
@@ -2072,6 +2076,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			}
 			return bat
 		}()
+		defer batchCase2.Clean(mp)
 
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
@@ -3915,6 +3920,528 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
+func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(271),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{
+			Data: [][]interface{}{{int64(1)}, {int64(2)}, {int64(3)}},
+		}, owner: ses, bytes: 1, maxBytes: 1, maxRows: 3},
+	}
+	ses.preparedCursorLimit.Store(1)
+	ses.preparedCursorBytes.Store(1)
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 271)
+	binary.LittleEndian.PutUint32(data[4:8], 2)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.NotNil(t, stmt.cursor)
+	require.Equal(t, uint64(2), stmt.cursor.offset)
+
+	resp, err = executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
+	var status uint16
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(_, got uint16) error {
+		status = got
+		return nil
+	}}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name:   getPrepareStmtName(272),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 272)
+	binary.LittleEndian.PutUint32(data[4:8], 32)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, status&SERVER_STATUS_CURSOR_EXISTS)
+	require.NotZero(t, status&SERVER_STATUS_LAST_ROW_SENT)
+}
+
+func TestExecuteStmtFetchBitColumn(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+
+	conn := &testConn{}
+	ioses, err := NewIOSession(conn, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	t.Cleanup(proto.Close)
+	ses := NewSession(context.Background(), "", proto, nil)
+	proto.ses = ses
+	ses.SetCmd(COM_STMT_FETCH)
+	ses.prepareStmts = make(map[string]*PrepareStmt)
+
+	column := &MysqlColumn{}
+	column.SetName("b")
+	column.SetColumnType(defines.MYSQL_TYPE_BIT)
+	column.SetLength(8)
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(273),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{
+			Columns: []Column{column},
+			Data:    [][]any{{uint64(0xab)}},
+		}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 273)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	packets := splitProtocolPackets(t, conn.data)
+	require.Len(t, packets, 2)
+	// COM_STMT_FETCH uses a binary row: OK header, one-byte null bitmap,
+	// then the length-encoded BIT payload.  The value must be emitted as the
+	// requested one-byte big-endian representation, not as an unsupported
+	// generic uint64 value.
+	require.Equal(t, []byte{defines.OKHeader, 0, 1, 0xab}, packets[0])
+	require.Equal(t, byte(defines.EOFHeader), packets[1][0])
+}
+
+func TestNewPreparedStmtCursorUsesSessionBudget(t *testing.T) {
+	noSession := newPreparedStmtCursor(nil)
+	require.Equal(t, preparedCursorDefaultMaxBytes, noSession.maxBytes)
+	require.Equal(t, preparedCursorMaxRows, noSession.maxRows)
+
+	ses := &Session{}
+	ses.preparedCursorLimit.Store(8 * preparedCursorBytesPerMegabyte)
+	withSession := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(8*preparedCursorBytesPerMegabyte), withSession.maxBytes)
+	require.Same(t, ses, withSession.owner)
+}
+
+func TestPreparedCursorLimitFollowsDynamicSessionValue(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{
+				QueryResultMaxsize: uint64(8),
+			}},
+		},
+	}
+
+	first := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(8*preparedCursorBytesPerMegabyte), first.maxBytes)
+
+	// Closing a cursor must not freeze the session budget. A subsequent
+	// cursor observes both decreases and increases to the dynamic variable.
+	ses.sesSysVars.Set(QueryResultMaxsize, uint64(1))
+	first.close()
+	second := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(preparedCursorBytesPerMegabyte), second.maxBytes)
+
+	// Lowering the limit while another cursor owns bytes rejects additional
+	// retention; raising it permits the next batch without losing accounting.
+	ses.preparedCursorBytes.Store(2 * preparedCursorBytesPerMegabyte)
+	require.False(t, ses.tryReservePreparedCursorBytes(preparedCursorBytesPerMegabyte, second.maxBytes))
+	ses.sesSysVars.Set(QueryResultMaxsize, uint64(4))
+	require.True(t, ses.tryReservePreparedCursorBytes(preparedCursorBytesPerMegabyte, second.maxBytes))
+	ses.releasePreparedCursorBytes(3 * preparedCursorBytesPerMegabyte)
+	second.close()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	third := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(4*preparedCursorBytesPerMegabyte), third.maxBytes)
+	third.close()
+}
+
+func TestPreparedCursorLimitHonorsExplicitZero(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{
+				QueryResultMaxsize: uint64(0),
+			}},
+		},
+	}
+	cursor := newPreparedStmtCursor(ses)
+	require.True(t, cursor.maxBytesSet)
+	require.Zero(t, cursor.maxBytes)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 1)
+	defer bat.Clean(mp)
+	stmt := &PrepareStmt{cursor: cursor}
+	err := capturePreparedCursorBatch(ses, &ExecCtx{
+		reqCtx:      context.Background(),
+		prepareStmt: stmt,
+	}, bat)
+	require.ErrorContains(t, err, "memory limit")
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
+}
+
+func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_array_uint8.ToType())
+	values := make([]uint8, types.MaxArrayDimension)
+	for i := range values {
+		values[i] = 255
+	}
+	require.NoError(t, vector.AppendArray(vec, values, false, mp))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	displayBytes := uint64(len(types.ArrayToString(values)))
+	require.GreaterOrEqual(t, estimated, displayBytes)
+}
+
+func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	arrayCases := []struct {
+		name string
+		make func(*vector.Vector) error
+	}{
+		{name: "float32", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []float32{1.25, 2.5}, false, mp)
+		}},
+		{name: "float64", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []float64{1.25, 2.5}, false, mp)
+		}},
+		{name: "bf16", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []types.BF16{1, 2}, false, mp)
+		}},
+		{name: "float16", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []types.Float16{1, 2}, false, mp)
+		}},
+		{name: "int8", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []int8{1, 2}, false, mp)
+		}},
+	}
+	for _, tc := range arrayCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var oid types.T
+			switch tc.name {
+			case "float32":
+				oid = types.T_array_float32
+			case "float64":
+				oid = types.T_array_float64
+			case "bf16":
+				oid = types.T_array_bf16
+			case "float16":
+				oid = types.T_array_float16
+			case "int8":
+				oid = types.T_array_int8
+			}
+			vec := vector.NewVec(oid.ToType())
+			require.NoError(t, tc.make(vec))
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+			estimated, err := estimatePreparedCursorMaterializedBytes(bat)
+			require.NoError(t, err)
+			require.Positive(t, estimated)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		text string
+	}{
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 2), text: "12.34"},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 4), text: "1234.5678"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			switch tc.typ.Oid {
+			case types.T_decimal64:
+				value, err := types.ParseDecimal64(tc.text, tc.typ.Width, tc.typ.Scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			case types.T_decimal128:
+				value, err := types.ParseDecimal128(tc.text, tc.typ.Width, tc.typ.Scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+			estimated, err := estimatePreparedCursorMaterializedBytes(bat)
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, estimated, uint64(len(tc.text)+32))
+		})
+	}
+}
+
+func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 65, 0)
+	value, err := types.ParseDecimal256(strings.Repeat("9", 65), typ.Width, typ.Scale)
+	require.NoError(t, err)
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	display := value.Format(typ.Scale)
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, estimated, uint64(len(display))+32)
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: estimated - 1,
+		maxRows:  1,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+	err = capturePreparedCursorBatch(ses, ctx, bat)
+	require.ErrorContains(t, err, "memory limit")
+	require.Empty(t, stmt.cursor.result.Data)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+
+	stmt.cursor.maxBytes = estimated
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Equal(t, display, stmt.cursor.result.Data[0][0])
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	points := make([]geo.Coord, 5000)
+	for i := range points {
+		points[i] = geo.Coord{X: float64(i) + 0.123456, Y: float64(i%97) + 0.654321}
+	}
+	line := geo.LineString{Points: points}
+
+	for _, tc := range []struct {
+		name    string
+		typ     types.T
+		payload []byte
+	}{
+		{name: "geometry", typ: types.T_geometry, payload: geo.WriteWKB(line)},
+		{name: "geometry32", typ: types.T_geometry32, payload: geo.WriteWKBFloat32(line)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ.ToType())
+			require.NoError(t, vector.AppendBytes(vec, tc.payload, false, mp))
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+
+			wantText, err := planfunction.GeometryPayloadToText(tc.payload)
+			require.NoError(t, err)
+			estimated, err := estimatePreparedCursorBatchBytes(bat)
+			require.NoError(t, err)
+			// The WKT allocation is retained in cursor.result.Data. The
+			// reservation must include it in addition to the compact WKB.
+			require.GreaterOrEqual(t, estimated, uint64(len(wantText))+32)
+
+			ses := &Session{}
+			stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+				result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+				maxBytes: estimated - 1,
+				maxRows:  1,
+			}}
+			ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+			err = capturePreparedCursorBatch(ses, ctx, bat)
+			require.ErrorContains(t, err, "memory limit")
+			require.Empty(t, stmt.cursor.result.Data)
+			require.Zero(t, ses.preparedCursorBytes.Load())
+
+			stmt.cursor.maxBytes = estimated
+			require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+			require.Equal(t, []byte(wantText), stmt.cursor.result.Data[0][0])
+			stmt.closeCursor()
+			require.Zero(t, ses.preparedCursorBytes.Load())
+		})
+	}
+}
+
+func TestPreparedCursorHelpersRejectInvalidStateAndReleaseSafely(t *testing.T) {
+	require.NoError(t, func() error {
+		_, err := estimatePreparedCursorBatchBytes(nil)
+		return err
+	}())
+	require.True(t, (&Session{}).tryReservePreparedCursorBytes(0, 0))
+	fallbackSession := &Session{}
+	require.True(t, fallbackSession.tryReservePreparedCursorBytes(1, 2))
+	fallbackSession.releasePreparedCursorBytes(1)
+	var nilSession *Session
+	require.True(t, nilSession.tryReservePreparedCursorBytes(1, 1))
+	nilSession.releasePreparedCursorBytes(1)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 1)
+	defer bat.Clean(mp)
+	require.NoError(t, capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background()}, nil))
+	require.Error(t, capturePreparedCursorBatch(&Session{}, nil, bat))
+	require.Error(t, capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background()}, bat))
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: preparedCursorDefaultMaxBytes,
+		maxRows:  preparedCursorMaxRows,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Same(t, ses, stmt.cursor.owner)
+	stmt.closeCursor()
+
+	ses.preparedCursorBytes.Store(3)
+	ses.releasePreparedCursorBytes(5)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	ses.releasePreparedCursorBytes(1)
+}
+
+func TestCapturePreparedCursorBatchEnforcesRowAndCursorLimits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 2)
+	defer bat.Clean(mp)
+
+	rowLimited := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{int64(1)}}},
+		maxRows:  1,
+		maxBytes: preparedCursorDefaultMaxBytes,
+	}}
+	err := capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background(), prepareStmt: rowLimited}, bat)
+	require.ErrorContains(t, err, "row limit")
+
+	sized := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxRows:  preparedCursorMaxRows,
+		maxBytes: 1,
+	}}
+	err = capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background(), prepareStmt: sized}, bat)
+	require.ErrorContains(t, err, "memory limit")
+}
+
+func TestCapturePreparedCursorBatchBoundsAndReleasesSessionBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4096)
+	defer bat.Clean(mp)
+
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: estimated,
+		maxRows:  4096,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Equal(t, uint64(4096), stmt.cursor.result.GetRowCount())
+	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
+
+	// The next batch is rejected before another row is copied into the
+	// retained result, and the cursor still owns exactly the first batch.
+	err = capturePreparedCursorBatch(ses, ctx, bat)
+	require.ErrorContains(t, err, "prepared cursor result exceeds the")
+	require.Equal(t, uint64(4096), stmt.cursor.result.GetRowCount())
+
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestCapturePreparedCursorBatchErrorReleasesSessionBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"unsupported"}, []types.Type{types.T_any.ToType()}, 1)
+	defer bat.Clean(mp)
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: preparedCursorDefaultMaxBytes,
+		maxRows:  preparedCursorMaxRows,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+
+	err := capturePreparedCursorBatch(ses, ctx, bat)
+	require.Error(t, err)
+	require.Empty(t, stmt.cursor.result.Data)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
+}
+
+func TestPreparedCursorSessionBudgetCoversMultipleCursors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4)
+	defer bat.Clean(mp)
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+
+	ses := &Session{}
+	first := &PrepareStmt{cursor: &preparedStmtCursor{
+		result: &MysqlResultSet{Columns: []Column{&MysqlColumn{}}}, maxBytes: estimated, maxRows: 4,
+	}}
+	second := &PrepareStmt{cursor: &preparedStmtCursor{
+		result: &MysqlResultSet{Columns: []Column{&MysqlColumn{}}}, maxBytes: estimated, maxRows: 4,
+	}}
+	firstCtx := &ExecCtx{reqCtx: context.Background(), prepareStmt: first}
+	secondCtx := &ExecCtx{reqCtx: context.Background(), prepareStmt: second}
+
+	require.NoError(t, capturePreparedCursorBatch(ses, firstCtx, bat))
+	err = capturePreparedCursorBatch(ses, secondCtx, bat)
+	require.ErrorContains(t, err, "prepared cursor session result exceeds")
+	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
+
+	first.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	require.NoError(t, capturePreparedCursorBatch(ses, secondCtx, bat))
+	second.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
 func Test_CMD_FIELD_LIST(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("cmd field list", t, func() {
@@ -5026,8 +5553,10 @@ func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
 
 	compCtx := plan.NewEmptyCompilerContext()
 	compCtx.GetProcessFunc = func() *process.Process { return nil }
+	compCtx.SetContext(nil)
 	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
 	require.NoError(t, err)
+	require.NotNil(t, compCtx.GetContext())
 }
 
 func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {

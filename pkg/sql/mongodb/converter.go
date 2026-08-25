@@ -16,6 +16,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -394,16 +395,20 @@ func (c *Converter) appendValue(
 		} else {
 			return errConversion
 		}
+		if target == types.T_binary {
+			return c.appendBinary(vec, data, column.Width, mp, budget)
+		}
 		return c.appendBytes(vec, data, column.Width, mp, budget)
 	case types.T_json:
-		// Canonical Extended JSON preserves BSON distinctions such as int32 vs
-		// int64, Decimal128, Date and Binary instead of silently relaxing them
-		// into a lossy generic JSON number/string representation.
-		text := value.String()
-		if text == "" {
+		// Relaxed Extended JSON maps BSON values that have a native JSON
+		// representation (including int32, int64 and finite double values) to
+		// ordinary JSON values. BSON-only values retain their Extended JSON
+		// wrappers so the result is still valid, lossless JSON.
+		text, err := relaxedExtJSONValue(value)
+		if err != nil {
 			return errConversion
 		}
-		jsonValue, err := types.ParseStringToByteJson(text)
+		jsonValue, err := types.ParseSliceToByteJson(text)
 		if err != nil {
 			return errConversion
 		}
@@ -415,6 +420,52 @@ func (c *Converter) appendValue(
 	default:
 		return errConversion
 	}
+}
+
+// MarshalExtJSON requires a document at the top level. Wrap a raw BSON value
+// in a temporary document, marshal it in relaxed mode, then unwrap the JSON
+// value without decoding its number tokens through float64.
+func relaxedExtJSONValue(value bson.RawValue) ([]byte, error) {
+	const field = "value"
+	doc := bsoncore.BuildDocument(nil, bsoncore.AppendValueElement(nil, field, bsoncore.Value{
+		Type: bsoncore.Type(value.Type),
+		Data: value.Value,
+	}))
+	text, err := bson.MarshalExtJSON(bson.Raw(doc), false, false)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(text, &wrapper); err != nil || len(wrapper.Value) == 0 {
+		return nil, errConversion
+	}
+	return wrapper.Value, nil
+}
+
+func (c *Converter) appendBinary(
+	vec *vector.Vector,
+	value []byte,
+	width int32,
+	mp *mpool.MPool,
+	budget *decodedBatchBudget,
+) error {
+	if width <= 0 {
+		return c.appendBytes(vec, value, width, mp, budget)
+	}
+	if int32(len(value)) > width || int64(width) > c.maxValueBytes {
+		return errConversion
+	}
+	if err := budget.reserve(int64(width)); err != nil {
+		return err
+	}
+	if int32(len(value)) == width {
+		return vector.AppendBytes(vec, value, false, mp)
+	}
+	padded := make([]byte, width)
+	copy(padded, value)
+	return vector.AppendBytes(vec, padded, false, mp)
 }
 
 func (c *Converter) appendBytes(

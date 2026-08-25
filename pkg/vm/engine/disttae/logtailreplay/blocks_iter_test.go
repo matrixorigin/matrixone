@@ -396,3 +396,35 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 			"The remaining delete should be at ts=400 (the last one)")
 	}
 }
+
+func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	data := batch.New([]string{"pk", "ts"})
+	data.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_int32.ToType()),
+		vector.NewVec(types.T_TS.ToType()),
+	}
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(7), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(7), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[1], types.BuildTS(10, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[1], types.BuildTS(30, 0), false, mp))
+	data.SetRowCount(2)
+	defer data.Clean(mp)
+
+	tombstone := batch.New([]string{"pk", "ts"})
+	tombstone.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_int32.ToType()),
+		vector.NewVec(types.T_TS.ToType()),
+	}
+	require.NoError(t, vector.AppendFixed(tombstone.Vecs[0], int32(7), false, mp))
+	require.NoError(t, vector.AppendFixed(tombstone.Vecs[1], types.BuildTS(20, 0), false, mp))
+	tombstone.SetRowCount(1)
+	defer tombstone.Clean(mp)
+
+	h := &ChangeHandler{primarySeqnum: 0, preserveAllVersions: true}
+	require.NoError(t, h.coalesceBatch(data, tombstone))
+	require.Equal(t, 2, data.RowCount())
+	require.Equal(t, 1, tombstone.RowCount())
+}

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -1160,7 +1159,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = selectivity_out
 			node.Stats.BlockNum = leftStats.BlockNum
 
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_ASOF, plan.Node_ASOF_LEFT:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
@@ -1937,6 +1936,11 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = true
 		}
 
+	case plan.Node_ASOF, plan.Node_ASOF_LEFT:
+		// ASOF is directional: the left input is always the event/probe side and
+		// the right input is always the historical/build side.
+		node.IsRightJoin = false
+
 	case plan.Node_DEDUP:
 		if node.OnDuplicateAction != plan.Node_FAIL || node.DedupJoinCtx != nil {
 			node.IsRightJoin = false
@@ -1947,7 +1951,8 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 	}
 
-	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
+	if node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT &&
+		builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
 }
@@ -2325,24 +2330,8 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
 
-	// Check if node has distinct aggregation, which should run in single CPU
-	hasDistinctAgg := false
-	if node.NodeType == plan.Node_AGG && len(node.AggList) > 0 {
-		for _, agg := range node.AggList {
-			if f, ok := agg.Expr.(*plan.Expr_F); ok {
-				if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-					hasDistinctAgg = true
-					break
-				}
-			}
-		}
-	}
-
-	if hasDistinctAgg {
-		// distinct aggregation should run in only one node and without any parallel
+	if node.NodeType == plan.Node_AGG && RequiresSingleStageDistinctAgg(node) {
 		if node.Stats == nil {
-			// If Stats is nil, create it first
-			// This should be rare for AGG nodes, but we handle it for safety
 			node.Stats = DefaultStats()
 		}
 		setNodeDOP(p, rootID, 1)

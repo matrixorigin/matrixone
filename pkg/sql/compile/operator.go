@@ -231,6 +231,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.EmitCompressedRowCount = t.EmitCompressedRowCount
 		op.IsShuffle = t.IsShuffle
+		op.AsofRightCol = t.AsofRightCol
+		op.AsofBuildLeft = t.AsofBuildLeft
 		if !t.IsShuffle {
 			mailbox := dupCtx.hashJoinMailboxes[t]
 			if mailbox == nil {
@@ -273,6 +275,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*limit.Limit)
 		op := limit.NewArgument()
 		op.LimitExpr = t.LimitExpr
+		op.WithFoundRows(t.IsFoundRowsOwner())
+		op.WithFoundRowsDrain(t.DrainsForFoundRows())
 		op.SetInfo(&info)
 		return op
 
@@ -280,6 +284,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*offset.Offset)
 		op := offset.NewArgument()
 		op.OffsetExpr = t.OffsetExpr
+		op.WithFoundRows(t.IsFoundRowsOwner())
 		op.SetInfo(&info)
 		return op
 	case vm.Order:
@@ -957,6 +962,10 @@ func constructMultiUpdate(
 		for j, col := range updateCtx.PartitionCols {
 			partitionCols[j] = int(col.ColPos)
 		}
+		affectedRowsCols := make([]int, len(updateCtx.AffectedRowsCols))
+		for j, col := range updateCtx.AffectedRowsCols {
+			affectedRowsCols[j] = int(col.ColPos)
+		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
@@ -970,6 +979,11 @@ func constructMultiUpdate(
 			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
 			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
 			TargetTableID:      updateCtx.TableDef.TblId,
+			AffectedRowsCols:   affectedRowsCols,
+		}
+		if updateCtx.ChangedRowsCol != nil {
+			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
 		}
 	}
 	arg.Action = action
@@ -1348,6 +1362,9 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
+				ForeignScan:     node.ExternScan.GetForeignScan(),
+				KafkaScan:       node.ExternScan.GetKafkaScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
@@ -1436,10 +1453,17 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
+	// ASOF groups rows by equality keys only.  A table primary key may also
+	// contain the temporal column, so it does not prove that an equality-key
+	// group contains a single row.
+	if node.JoinType == plan.Node_ASOF || node.JoinType == plan.Node_ASOF_LEFT {
+		arg.HashOnPK = false
+	}
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
 	arg.EmitCompressedRowCount = node.EmitCompressedRowCount
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
+	arg.AsofRightCol = node.AsofRightCol
 
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -2197,14 +2221,18 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
 		ret.NeedHashMap = true
-		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
+		buildConditions := arg.EqConds[1]
+		if arg.AsofBuildLeft {
+			buildConditions = arg.EqConds[0]
+		}
+		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
 
 		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
 		ret.TrackNullKeys = arg.IsMark()
-		if len(arg.RuntimeFilterSpecs) > 0 {
+		if !arg.AsofBuildLeft && len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		ret.JoinMapTag = arg.JoinMapTag
@@ -2282,7 +2310,11 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 	switch op.OpType() {
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
-		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
+		buildConditions := arg.EqConds[1]
+		if arg.AsofBuildLeft {
+			buildConditions = arg.EqConds[0]
+		}
+		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
 		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK

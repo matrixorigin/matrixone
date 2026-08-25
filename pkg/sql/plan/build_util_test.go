@@ -352,6 +352,30 @@ func TestGetTypeFromAstTinyTextPreservesByteLimit(t *testing.T) {
 	require.Equal(t, int32(types.MaxTinyTextLen), typ.Width)
 }
 
+func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "text", sql: "text", width: 0},
+		{name: "mediumtext", sql: "mediumtext", width: types.MaxMediumTextLen},
+		{name: "longtext", sql: "longtext", width: types.MaxLongTextLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+tc.sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_text), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+}
+
 func TestGetTypeFromAstArrayValidatesElementType(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (tags array(varchar(16777217)))", 1)
 	require.NoError(t, err)

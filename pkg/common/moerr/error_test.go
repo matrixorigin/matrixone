@@ -94,6 +94,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 
+	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
+	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
+	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
+	require.Equal(t, "22003", err.SqlState())
+	require.Equal(t, "unsigned integer value is out of range in 'EXECUTE'", err.Error())
+
 	err = NewUnknownStmtHandler(context.TODO(), "stmt1", "DEALLOCATE PREPARE")
 	require.Equal(t, ErrUnknownStmtHandler, err.ErrorCode())
 	require.Equal(t, ER_UNKNOWN_STMT_HANDLER, err.MySQLCode())
@@ -270,6 +276,14 @@ func TestErrWrongNumberOfColumnsInSelectContract(t *testing.T) {
 	decoded := new(Error)
 	require.NoError(t, decoded.UnmarshalBinary(data))
 	require.Equal(t, err, decoded)
+}
+
+func TestTooLongIdentMySQLError(t *testing.T) {
+	err := NewTooLongIdent(context.Background(), "identifier")
+	require.Equal(t, ErrTooLongIdent, err.ErrorCode())
+	require.Equal(t, ER_TOO_LONG_IDENT, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Identifier name 'identifier' is too long", err.Error())
 }
 
 type fakeErr struct {

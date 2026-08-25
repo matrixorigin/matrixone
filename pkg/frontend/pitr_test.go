@@ -3238,6 +3238,7 @@ func Test_restoreViewsWithPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
 
 		//no result set
 		bh.sql2result["begin;"] = nil

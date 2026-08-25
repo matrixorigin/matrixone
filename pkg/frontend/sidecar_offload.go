@@ -54,8 +54,7 @@ var (
 )
 
 // Shared HTTP client for sidecar requests (goroutine-safe, enables keep-alive pooling).
-// Uses a dedicated transport to avoid the 20 s ResponseHeaderTimeout set by
-// fileservice on http.DefaultTransport — sidecar queries can take minutes.
+// Uses a dedicated transport because sidecar queries can take minutes.
 var sidecarClient = &http.Client{
 	Timeout: 30 * time.Minute,
 	Transport: &http.Transport{

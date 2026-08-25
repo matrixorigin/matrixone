@@ -76,6 +76,7 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
+	ErrPreparedParamOutOfRange     uint16 = 20207
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -112,7 +113,8 @@ const (
 	ErrFtMatchingKeyNotFound uint16 = 20327
 	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
 	// allocated separately for SELECT ... INTO statements returning multiple rows.
-	ErrTooManyRows uint16 = 20328
+	ErrTooManyRows            uint16 = 20328
+	ErrMultiUpdateKeyConflict uint16 = 20329
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -196,6 +198,7 @@ const (
 	// Keep the error code added by the variables PR distinct from the
 	// field-duplicate code introduced on main.
 	ErrWrongNumberOfColumnsInSelect uint16 = 20478
+	ErrTooLongIdent                 uint16 = 20479
 
 	// Group 5: rpc errors
 	//
@@ -421,6 +424,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
+	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -452,7 +456,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
-	ErrFtMatchingKeyNotFound: {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -533,6 +538,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
 	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
+	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1022,6 +1028,10 @@ func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 	return newError(ctx, ErrOutOfRange, typ, msg)
 }
 
+func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement string) *Error {
+	return newError(ctx, ErrPreparedParamOutOfRange, typ, statement)
+}
+
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
@@ -1126,6 +1136,10 @@ func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrUnsupportedDML, msg)
+}
+
+func NewMultiUpdateKeyConflict(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrMultiUpdateKeyConflict, first, second)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -1791,6 +1805,10 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 
 func NewFieldSpecifiedTwice(ctx context.Context, column string) *Error {
 	return newError(ctx, ErrFieldSpecifiedTwice, column)
+}
+
+func NewTooLongIdent(ctx context.Context, identifier string) *Error {
+	return newError(ctx, ErrTooLongIdent, identifier)
 }
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {

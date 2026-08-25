@@ -197,6 +197,10 @@ var (
 			UNIQUE KEY (sub_account_id, sub_name)
 	)`
 
+	MoCatalogMoViewDependenciesDDL = catalog.MoViewDependenciesDDL
+
+	MoCatalogMoViewRefreshDDL = catalog.MoViewRefreshDDL
+
 	MoCatalogMoStoredProcedureDDL = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,
 				name     varchar(100),

@@ -52,6 +52,59 @@ type runSQLCoordinatorWithSQL interface {
 	CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error
 }
 
+func statementHasSQLCalcFoundRows(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok || selectStmt == nil {
+		return false
+	}
+	for selectStmt != nil {
+		switch body := selectStmt.Select.(type) {
+		case *tree.SelectClause:
+			return body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			selectStmt = body.Select
+		case *tree.UnionClause:
+			return selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func statementHasSQLCalcFoundRowsPagination(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok || selectStmt == nil {
+		return false
+	}
+	hasPagination := false
+	for selectStmt != nil {
+		hasPagination = hasPagination || selectStmt.Limit != nil
+		switch body := selectStmt.Select.(type) {
+		case *tree.SelectClause:
+			return hasPagination && body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			selectStmt = body.Select
+		case *tree.UnionClause:
+			return hasPagination && selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return statementHasSQLCalcFoundRows(stmt)
+	case *tree.ParenSelect:
+		return statementHasSQLCalcFoundRows(stmt.Select)
+	default:
+		return false
+	}
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -65,6 +118,7 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
 	// clear the last query context to avoid process reuse.
@@ -147,9 +201,16 @@ func (c *Compile) Compile(
 	// but before Sirius can export the logical plan. This preserves optimizer
 	// estimates while ensuring both native and offloaded execution see the same
 	// finite top-level LIMIT.
+	c.materializedSQLSelectLimitOwner = nil
+	defer func() {
+		c.materializedSQLSelectLimitOwner = nil
+	}()
 	materialization, materializeErr := c.materializeSQLSelectLimit(queryPlan)
 	if materializeErr != nil {
 		return materializeErr
+	}
+	if statementHasSQLCalcFoundRows(c.stmt) {
+		c.materializedSQLSelectLimitOwner = materialization.root
 	}
 	if materialization.query != nil {
 		defer materialization.restore()
@@ -827,6 +888,12 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
 		return e
 	}
+	// A retry is a new statement execution generation. Do not let a generated
+	// value from the rolled-back attempt win the new attempt's result, and
+	// restore the session-visible LAST_INSERT_ID baseline until the retry
+	// generates a replacement value.
+	c.proc.SetStatementLastInsertID(0)
+	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()

@@ -2710,6 +2710,26 @@ func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
 	require.True(t, proc.GetPrepareParams().GetNulls().Contains(1))
 }
 
+func TestParseExecuteDataAcceptsReadOnlyCursorFlag(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	data := buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "cursor")
+	data[0] = 1 // CURSOR_TYPE_READ_ONLY
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.True(t, prepareStmt.cursorRequested)
+
+	prepareStmt.clearBinaryParamState(proc)
+	data[0] = 0 // CURSOR_TYPE_NO_CURSOR
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.False(t, prepareStmt.cursorRequested)
+
+	data[0] = 2 // CURSOR_TYPE_SCROLLABLE is not supported
+	require.Error(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.False(t, prepareStmt.cursorRequested)
+}
+
 func FuzzParseExecuteData(f *testing.F) {
 	ctx := context.TODO()
 	proc := testutil.NewProcess(f)
@@ -3748,6 +3768,7 @@ type testMysqlWriter struct {
 	ioses                 *Conn
 	mod                   int
 	makeColumnDefDataFunc func(context.Context, []*planPb.ColDef) ([][]byte, error)
+	writeEOFOrOKFunc      func(uint16, uint16) error
 }
 
 func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
@@ -3812,6 +3833,9 @@ func (fp *testMysqlWriter) WriteEOFIFAndNoFlush(warnings uint16, status uint16) 
 }
 
 func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
+	if fp.writeEOFOrOKFunc != nil {
+		return fp.writeEOFOrOKFunc(warnings, status)
+	}
 	//TODO implement me
 	panic("implement me")
 }
@@ -5661,6 +5685,30 @@ func Test_appendResultSetTextRow_DateTimeCoverage(t *testing.T) {
 			err := proto.appendResultSetTextRow(rs, 0)
 			convey.So(err, convey.ShouldBeNil)
 		})
+
+		// TEXT-family result metadata can use the corresponding BLOB protocol
+		// type. All of those variants carry the same length-encoded bytes.
+		for _, tc := range []struct {
+			name string
+			typ  defines.MysqlType
+		}{
+			{name: "MYSQL_TYPE_TINY_BLOB", typ: defines.MYSQL_TYPE_TINY_BLOB},
+			{name: "MYSQL_TYPE_MEDIUM_BLOB", typ: defines.MYSQL_TYPE_MEDIUM_BLOB},
+			{name: "MYSQL_TYPE_LONG_BLOB", typ: defines.MYSQL_TYPE_LONG_BLOB},
+		} {
+			convey.Convey(tc.name, func() {
+				rs := &MysqlResultSet{}
+				mysqlCol := new(MysqlColumn)
+				mysqlCol.SetName("text_col")
+				mysqlCol.SetColumnType(tc.typ)
+				rs.AddColumn(mysqlCol)
+
+				rs.AddRow([]interface{}{[]byte("text-family value")})
+
+				err := proto.appendResultSetTextRow(rs, 0)
+				convey.So(err, convey.ShouldBeNil)
+			})
+		}
 
 		// Test NULL value
 		convey.Convey("NULL value", func() {
