@@ -120,10 +120,10 @@ func fakeMaxAdmissible(total map[int]uint64) DeviceMaxAdmissibleFunc {
 }
 
 // TestDeviceAggregateFitsHardware covers the CREATE-time refusal. Unlike
-// DeviceLoadFits, which admits against a fraction of currently-FREE memory and so
-// refuses situationally, this compares against the card's TOTAL capacity: a
-// refusal here is permanent, which is what makes it safe to fail CREATE on rather
-// than deferring to the first query.
+// DeviceAggregateFitsFree, which admits against a fraction of currently-FREE
+// memory and so refuses situationally, this compares against the card's TOTAL
+// capacity: a refusal here is permanent, which is what makes it safe to fail
+// CREATE on rather than deferring to the first query.
 func TestDeviceAggregateFitsHardware(t *testing.T) {
 	t.Run("fits on the hardware", func(t *testing.T) {
 		require.NoError(t, DeviceAggregateFitsHardware(

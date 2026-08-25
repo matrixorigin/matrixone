@@ -46,6 +46,15 @@ import (
 var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
+// reserveHostMemory is indirected for the same reason runSql above is: the claim
+// LoadIndex takes for the ids array is otherwise unobservable from a test. Sizing
+// it from idxcfg.IndexCapacity -- zero on every production load -- meant the claim
+// silently never fired, and no test noticed, because a test that only builds an
+// artifact cannot tell a right-sized claim from no claim at all. Swapping this
+// lets one assert the demand, the count, and the refusal path without squeezing
+// real host memory, which at a fixture's ~2 KB of ids is a race rather than a test.
+var reserveHostMemory = vimemory.ReserveHostMemory
+
 // IvfpqModel wraps a GpuIvfPq index and handles load/save to secondary index tables.
 type IvfpqModel[B, Q cuvs.VectorType] struct {
 	Id     string
@@ -694,7 +703,7 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	var idClaim *vimemory.HostReservation
 	if idsBytes := tarSizes.Files["ids.bin"]; idsBytes > 0 {
 		var herr error
-		idClaim, herr = vimemory.ReserveHostMemory(uint64(idsBytes), "ivfpq load ids")
+		idClaim, herr = reserveHostMemory(uint64(idsBytes), "ivfpq load ids")
 		if herr != nil {
 			gi.Destroy()
 			return herr

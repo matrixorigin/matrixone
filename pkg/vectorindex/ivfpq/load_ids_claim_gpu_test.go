@@ -22,8 +22,62 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// claimSpy records what LoadIndex asks the host governor for. Swapping the
+// package's reserveHostMemory is the only way to see the claim at all: the
+// alternative -- filling the real ledger to within the fixture's ~2 KB of ids --
+// races live availability, which moves by hundreds of KB between measuring the
+// budget and reserving against it.
+type claimSpy struct {
+	calls int
+	bytes uint64
+	who   string
+	fail  error
+}
+
+func (c *claimSpy) install(t *testing.T) {
+	t.Helper()
+	orig := reserveHostMemory
+	t.Cleanup(func() { reserveHostMemory = orig })
+	reserveHostMemory = func(b uint64, who string) (*vimemory.HostReservation, error) {
+		c.calls++
+		c.bytes, c.who = b, who
+		if c.fail != nil {
+			return nil, c.fail
+		}
+		return orig(b, who)
+	}
+}
+
+// loadForClaimTest drives a real LoadIndex against a local artifact, with the
+// tag=1/tag=2 SELECTs stubbed out. Mirrors loadedModel in search_test.go, but
+// returns the error instead of asserting success -- these cases are about the
+// failure paths.
+func loadForClaimTest(t *testing.T, id, path, checksum string, size int64) (*IvfpqModel[float32, float32], error) {
+	t.Helper()
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	orig := runSql
+	t.Cleanup(func() { runSql = orig })
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+
+	loader := &IvfpqModel[float32, float32]{
+		Id: id, Path: path, Checksum: checksum, FileSize: size, Devices: []int{0},
+	}
+	return loader, loader.LoadIndex(sqlproc, testIdxcfg(), testTblcfg(), 1, false)
+}
 
 // LoadIndex claims host memory for the ids array Unpack materialises. The claim
 // must be sized from the ARTIFACT, never from idxcfg.IndexCapacity.
@@ -34,39 +88,86 @@ import (
 // supplied a positive value. The guarded claim therefore never fired in
 // production, and an 88M artifact grew ~704 MB of ids outside the governor.
 //
-// Asserted by squeezing the ledger below the artifact's ids.bin: a load that
-// takes a non-zero claim must be REFUSED, and one that claims nothing would
-// sail through. Failure here means the claim went back to zero.
+// The first version of this test only checked ids.bin's length, so the broken
+// implementation -- which claimed nothing at all -- would have passed it too.
+// These cases execute LoadIndex and observe the reservation itself.
 func TestLoadIndexClaimsIdsSizedFromArtifact(t *testing.T) {
 	ids := make([]int64, testNVectors)
 	for i := range ids {
 		ids[i] = int64(i + 5000)
 	}
 	built := buildTestModel(t, "ids-claim", ids)
-	t.Cleanup(func() { os.Remove(built.Path) })
+	tarPath := built.Path
+	t.Cleanup(func() { os.Remove(tarPath) })
 
-	sizes, err := cuvs.MeasureTar(built.Path)
+	sizes, err := cuvs.MeasureTar(tarPath)
 	require.NoError(t, err)
 	idsBytes := sizes.Files["ids.bin"]
-
-	// The artifact is the authoritative source. save_ids writes a uint64 count
-	// header ahead of the array (load_ids reads it back the same way), so the file
-	// is 8 + rows*sizeof(int64): the claim over-states host_ids by that header,
-	// which is conservative and the direction that cannot under-admit.
 	require.Positive(t, idsBytes, "an id-bearing artifact must carry ids.bin")
+	// save_ids writes a uint64 count header ahead of the array and load_ids reads
+	// it back the same way, so the file is 8 + rows*sizeof(int64). The claim
+	// over-states host_ids by that header, which is the direction that cannot
+	// under-admit.
 	require.Equal(t, int64(8+len(ids)*8), idsBytes,
 		"ids.bin is a uint64 count header plus rows*sizeof(int64)")
 
-	// What this does NOT do: squeeze the ledger and assert the load is refused.
-	// The artifact's ids.bin is ~2 KB, and live availability moves by hundreds of
-	// KB between measuring the budget and reserving against it, so filling to
-	// within 2 KB is a race, not a test. The claim's lifecycle -- taken before the
-	// allocation, settled after, released on every error path -- is covered
-	// deterministically by the governor's own tests in pkg/vectorindex/memory.
-	//
-	// What it pins is the sizing SOURCE, which is where the bug was. Sizing from
-	// idxcfg.IndexCapacity claimed nothing on every production load, and no test
-	// caught it: this package's fixture happens to leave IndexCapacity at 0 too,
-	// so the guarded claim was skipped here exactly as it was in production, and
-	// the load still succeeded.
+	t.Run("claims exactly the artifact's ids and releases on success", func(t *testing.T) {
+		spy := &claimSpy{}
+		spy.install(t)
+
+		loader, lerr := loadForClaimTest(t, "ids-claim", tarPath, built.Checksum, built.FileSize)
+		require.NoError(t, lerr)
+		require.NotNil(t, loader.Index)
+		t.Cleanup(func() { loader.Index.Destroy() })
+
+		// The whole point of the fix: a claim is actually taken, and its size comes
+		// from the artifact. Zero calls is what the IndexCapacity version did.
+		require.Equal(t, 1, spy.calls, "exactly one host claim per load")
+		require.Equal(t, uint64(idsBytes), spy.bytes,
+			"the claim must be sized from ids.bin, not from idxcfg.IndexCapacity")
+		require.Equal(t, "ivfpq load ids", spy.who)
+
+		// Settled once host_ids is materialised. Holding it past the allocation
+		// would double-count the same bytes against every later build.
+		require.Zero(t, vimemory.HostReservedBytes(),
+			"the claim must be released once Unpack has materialised host_ids")
+	})
+
+	t.Run("a refused claim fails the load and strands nothing", func(t *testing.T) {
+		spy := &claimSpy{fail: moerr.NewInternalErrorNoCtx("host budget exhausted")}
+		spy.install(t)
+
+		loader, lerr := loadForClaimTest(t, "ids-claim", tarPath, built.Checksum, built.FileSize)
+		require.Error(t, lerr, "a refused host claim must fail the load, not proceed unadmitted")
+		require.ErrorContains(t, lerr, "host budget exhausted")
+
+		// Refusing after the GPU handle exists must still release it -- otherwise
+		// every refused load orphans VRAM for the process lifetime.
+		require.Nil(t, loader.Index, "the GPU handle must be destroyed on a refused claim")
+		require.Equal(t, 1, spy.calls)
+		require.Zero(t, vimemory.HostReservedBytes(), "a refusal must leave the ledger empty")
+	})
+
+	t.Run("an unreadable artifact fails before any claim is taken", func(t *testing.T) {
+		// Checksum is computed from the file, so a corrupt artifact with a matching
+		// checksum gets past that guard and is refused deeper in -- before MeasureTar
+		// and before the claim. What matters is that nothing was reserved.
+		bad := filepathJoinTemp(t, "corrupt.tar")
+		require.NoError(t, os.WriteFile(bad, []byte("not a tar at all"), 0o600))
+		sum, cerr := vectorindex.CheckSum(bad)
+		require.NoError(t, cerr)
+
+		spy := &claimSpy{}
+		spy.install(t)
+
+		_, lerr := loadForClaimTest(t, "corrupt", bad, sum, 16)
+		require.Error(t, lerr, "a corrupt artifact must not load")
+		require.Zero(t, spy.calls, "no host claim may be taken for an artifact that cannot be read")
+		require.Zero(t, vimemory.HostReservedBytes())
+	})
+}
+
+func filepathJoinTemp(t *testing.T, name string) string {
+	t.Helper()
+	return t.TempDir() + "/" + name
 }
