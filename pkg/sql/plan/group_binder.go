@@ -600,6 +600,18 @@ func canonicalizeMedianAstValue(
 				lower := int64(0)
 				if ctx != nil {
 					lower = ctx.lower
+					if lower == 0 {
+						database := string(node.SchemaName)
+						if database == "" {
+							database = ctx.defaultDatabase
+						}
+						if strings.EqualFold(database, "information_schema") ||
+							strings.EqualFold(database, "mysql") {
+							// These compatibility schemas are resolved
+							// case-insensitively even when mode 0 is active.
+							lower = 1
+						}
+					}
 				}
 				node.CatalogName = tree.Identifier(tree.NewCStr(string(node.CatalogName), lower).Compare())
 				node.SchemaName = tree.Identifier(tree.NewCStr(string(node.SchemaName), lower).Compare())

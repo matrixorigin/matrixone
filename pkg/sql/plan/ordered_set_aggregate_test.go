@@ -118,6 +118,9 @@ func TestBuildMedianWithinGroupRespectsLowerCaseTableNames(t *testing.T) {
 	const mixedCase = `select median((select a from select_test.bind_select limit 1))
   within group (order by (select a from SELECT_TEST.BIND_SELECT limit 1))
   from select_test.bind_select`
+	const systemSchemaMixedCase = `select median((select version from information_schema.tables limit 1))
+  within group (order by (select version from INFORMATION_SCHEMA.TABLES limit 1))
+  from select_test.bind_select`
 
 	for _, test := range []struct {
 		name    string
@@ -127,6 +130,7 @@ func TestBuildMedianWithinGroupRespectsLowerCaseTableNames(t *testing.T) {
 	}{
 		{name: "mode 0 same spelling", lower: 0, sql: sameCase},
 		{name: "mode 0 preserves case", lower: 0, sql: mixedCase, wantErr: true},
+		{name: "mode 0 folds compatibility schemas", lower: 0, sql: systemSchemaMixedCase},
 		{name: "mode 1 folds case", lower: 1, sql: mixedCase},
 		{name: "mode 2 compares case insensitively", lower: 2, sql: mixedCase},
 	} {
