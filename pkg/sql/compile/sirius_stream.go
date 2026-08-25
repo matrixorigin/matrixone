@@ -219,6 +219,7 @@ func (c *Compile) compileSiriusStreamScopes(
 			scans = c.compileLimit(node, scans)
 		}
 		root := c.newMergeScope(scans)
+		roots = append(roots, root)
 		nativeInput, err := execution.NewNativeInput(spec.StreamRef)
 		if err != nil {
 			return nil, nil, err
@@ -230,7 +231,6 @@ func (c *Compile) compileSiriusStreamScopes(
 			return nativeInput.Send(c.proc.Ctx, bat, c.proc.Mp())
 		}).WithShouldStop(nativeInput.NotNeeded))
 		inputs = append(inputs, nativeInput)
-		roots = append(roots, root)
 	}
 	succeeded = true
 	return inputs, roots, nil
