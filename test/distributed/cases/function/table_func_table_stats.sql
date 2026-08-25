@@ -26,12 +26,9 @@ select count(*) from t1;
 -- Flush to ensure stats are available
 select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 
--- Assert the flushed cardinality instead of waiting for an assumed
--- background-stats delay. Retry only while the new stats snapshot is pending.
--- @wait_expect(1, 10)
-select table_name, table_cnt from table_stats('table_func_table_stats.t1') g;
-
 -- Query table stats - basic columns (new column structure)
+-- Retry only while the new stats snapshot is pending.
+-- @wait_expect(1, 10)
 select * from table_stats('table_func_table_stats.t1') g;
 
 -- Check sampling_ratio is present

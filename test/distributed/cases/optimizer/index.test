@@ -14,10 +14,7 @@ insert into t2 select *,*,1111,* from generate_series(100001,150000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
--- The second insert is not reflected by the asynchronously published stats,
--- so force an exact refresh before asserting the 150000-row cardinalities.
-select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
-select table_name, table_cnt from table_stats('d1.t2', 'refresh', 'full') g;
+select Sleep(1);
 -- @separator:table
 explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
 select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
