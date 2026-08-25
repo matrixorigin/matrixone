@@ -4229,6 +4229,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	// get args(exprs) & types
 	argsLength := len(args)
@@ -5330,6 +5333,42 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 	}
 	args[1] = offset
 	return nil
+}
+
+// LAG/LEAD offsets must be non-NULL, non-negative integers. Prepared markers
+// are normalized to int64 above and checked before execution or plan filling;
+// row-dependent integer expressions are checked after evaluation by the
+// window operator.
+func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 {
+		return nil
+	}
+
+	offsetExpr := args[1]
+	if lagLeadOffsetIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
+		return moerr.NewWrongArguments(ctx, name)
+	}
+	lit := offsetExpr.GetLit()
+	if lit != nil {
+		if offset, ok := literalSignedValue(lit); ok && offset < 0 {
+			return moerr.NewWrongArguments(ctx, name)
+		}
+	}
+	return nil
+}
+
+func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
+	for expr != nil {
+		if lit := expr.GetLit(); lit != nil {
+			return lit.Isnull
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+			return false
+		}
+		expr = fn.Args[0]
+	}
+	return false
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
