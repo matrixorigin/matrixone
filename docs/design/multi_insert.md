@@ -287,6 +287,12 @@ INSERT ALL WHEN EXISTS (... outer ...) -- sees the statement scope
 WITH local AS (...) SELECT ...         -- source scope, private to the source
 ```
 
+The rewrite policy is installed on the statement context **before** the CTEs
+are preprocessed: `preprocessCte` snapshots a declaration context per CTE and
+that snapshot copies the policy and then detaches, so a policy assigned
+afterwards would reach the source and the branch contexts but never a CTE's
+body, leaving it reading the unrewritten base table.
+
 The statement's CTEs are installed on the statement bind context, so the source
 query (its child) and the branch contexts both see them; a source-local `WITH`
 is installed by `bindSelect` on the source context alone and stays private

@@ -783,3 +783,46 @@ func TestMultiInsertBranchSubqueriesSeeStatementScopeOnly(t *testing.T) {
 		})
 	}
 }
+
+// The statement's rewrite policy governs every read the statement performs,
+// including the body of a statement-level CTE. preprocessCte snapshots one
+// declaration context per CTE and that snapshot copies the policy, so the
+// policy has to be installed before it runs; assigning it afterwards reached
+// the source and branch contexts but left the CTE bodies reading the
+// unrewritten base table.
+//
+// Only the table-rewrite direction is asserted here: the planner mock's
+// Resolve ignores the database name and stamps back whatever was asked for, so
+// a `remapdb` policy has no observable effect under it. Both travel on the same
+// remapOption, which is what this ordering governs.
+func TestMultiInsertStatementCTEObeysRewritePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hint string
+		sql  string
+	}{
+		{
+			"table rewrite",
+			`/*+ {"rewrites": {"tpch.dept": "select 1 as x"}} */ `,
+			"with d as (select deptno from dept) insert all into t2 (a, b)" +
+				" values (deptno, 2) select deptno from d",
+		},
+		{
+			// the source declaring its own WITH must not change the policy
+			"table rewrite with a source WITH",
+			`/*+ {"rewrites": {"tpch.dept": "select 1 as x"}} */ `,
+			"with d as (select deptno from dept) insert all into t2 (a, b)" +
+				" values (k, 2) with local as (select deptno as k from d) select k from local",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// the control: without the policy the statement plans
+			_, err := runOneStmtWithRewriteHints(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			// under the policy the CTE body must not reach the raw base table
+			_, err = runOneStmtWithRewriteHints(NewMockOptimizer(true), t, tc.hint+tc.sql)
+			require.Error(t, err, "the statement CTE body bypassed the rewrite policy")
+		})
+	}
+}

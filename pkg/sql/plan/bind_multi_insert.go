@@ -188,16 +188,21 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// into the source instead would drop it whenever the source has its own,
 	// and would expose the source's private CTEs to the WHEN/VALUES
 	// expressions that lexically precede them.
+	//
+	// The rewrite policy has to be installed FIRST. It rides on the source
+	// query (that is where AddRewriteHints attaches it) but governs every read
+	// the statement performs -- the source, WHEN, VALUES, and a statement CTE's
+	// body alike. preprocessCte snapshots a declaration context per CTE, and
+	// that snapshot copies remapOption and then detaches, so a policy assigned
+	// afterwards would reach the source and branch contexts but never the CTE
+	// bodies, letting them read the unrewritten base table.
+	if stmt.Source != nil && stmt.Source.RewriteOption != nil {
+		bindCtx.remapOption = stmt.Source.RewriteOption
+	}
 	if stmt.With != nil {
 		if err := builder.preprocessCte(&tree.Select{With: stmt.With}, bindCtx); err != nil {
 			return err
 		}
-	}
-	// The statement's rewrite policy rides on the source query (that is where
-	// AddRewriteHints attaches it), but it governs every read the statement
-	// performs, including the ones in WHEN and VALUES.
-	if stmt.Source != nil && stmt.Source.RewriteOption != nil {
-		bindCtx.remapOption = stmt.Source.RewriteOption
 	}
 
 	// 1. Bind the source query once and materialize it.
