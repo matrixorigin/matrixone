@@ -3271,6 +3271,54 @@ func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
 	return rule.needs
 }
 
+// PreparedPlanNeedsRuntimeTextComparisonSpecialization reports whether the
+// current binary-protocol parameter domains expose a text operand inside a
+// numeric comparison. Prepare-time overload resolution may have wrapped that
+// marker in a provisional integer cast; only text executions need to replace
+// it with the engine's DOUBLE cast and its MySQL-compatible prefix, range, and
+// warning semantics. Numeric executions can keep the cached compile.
+func PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	preparePlan *Plan,
+	runtimeParamTypes []types.Type,
+) bool {
+	return len(preparedNumericComparisonTextParamPositions(preparePlan, runtimeParamTypes)) > 0
+}
+
+func preparedNumericComparisonTextParamPositions(
+	preparePlan *Plan,
+	runtimeParamTypes []types.Type,
+) map[int]bool {
+	positions := make(map[int]bool)
+	if preparePlan == nil || len(runtimeParamTypes) == 0 {
+		return positions
+	}
+
+	scanPlan := preparePlan
+	query := scanPlan.GetQuery()
+	if query == nil && scanPlan.GetDdl() != nil {
+		query = scanPlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return positions
+	}
+	if scanPlan.GetQuery() == nil {
+		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+
+	rule := &preparedRuntimeTextComparisonScanRule{
+		runtimeParamTypes: runtimeParamTypes,
+		positions:         positions,
+		seen:              make(map[*plan.Expr]struct{}),
+	}
+	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
+		// This scan only selects an additional specialization path. A visit
+		// failure must not reinterpret parameters globally; the normal cached
+		// execution remains the conservative fallback.
+		return make(map[int]bool)
+	}
+	return positions
+}
+
 func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	switch stmtType {
 	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
@@ -3365,6 +3413,213 @@ type preparedRuntimeSpecializationScanRule struct {
 	needs        bool
 	skipExprs    map[*plan.Expr]struct{}
 	seen         map[*plan.Expr]struct{}
+}
+
+type preparedRuntimeTextComparisonScanRule struct {
+	runtimeParamTypes []types.Type
+	positions         map[int]bool
+	seen              map[*plan.Expr]struct{}
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	rule.scanExpr(expr)
+	return expr, nil
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) scanExpr(expr *plan.Expr) {
+	if expr == nil {
+		return
+	}
+	if _, ok := rule.seen[expr]; ok {
+		return
+	}
+	rule.seen[expr] = struct{}{}
+
+	if function := expr.GetF(); function != nil {
+		name := ""
+		if function.Func != nil {
+			name = strings.ToLower(function.Func.GetObjName())
+		}
+		if isPreparedNumericComparisonContext(name) &&
+			!preparedExprsContainColumn(function.Args) && rule.argsHaveNumericDomain(function.Args) {
+			for _, arg := range function.Args {
+				rule.collectTextParams(arg)
+			}
+		}
+		for _, arg := range function.Args {
+			rule.scanExpr(arg)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			rule.scanExpr(item)
+		}
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		rule.scanExpr(window.WindowFunc)
+		for _, arg := range window.PartitionBy {
+			rule.scanExpr(arg)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				rule.scanExpr(order.Expr)
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				rule.scanExpr(window.Frame.Start.Val)
+			}
+			if window.Frame.End != nil {
+				rule.scanExpr(window.Frame.End.Val)
+			}
+		}
+	}
+}
+
+func preparedExprsContainColumn(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if preparedExprContainsColumn(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func preparedExprContainsColumn(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() != nil {
+		return true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if preparedExprContainsColumn(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedExprContainsColumn(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) argsHaveNumericDomain(args []*plan.Expr) bool {
+	for _, arg := range args {
+		if rule.exprHasNumericDomain(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		return rule.paramTypeIsNumeric(int(param.Pos))
+	}
+	if isImplicitPreparedParamCast(expr) {
+		position, ok := implicitPreparedParamPosition(expr)
+		return ok && rule.paramTypeIsNumeric(position)
+	}
+	if expr.GetCol() != nil {
+		// Rebinding an indexed numeric column against a text marker through a
+		// DOUBLE comparison can cast the column and destroy the lookup shape.
+		// Keep column-owned casts on the existing cached path; this runtime
+		// specialization is for marker/literal/expression-owned domains.
+		return false
+	}
+	if types.T(expr.Typ.Id).ToType().IsNumeric() {
+		return true
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if rule.exprHasNumericDomain(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) collectTextParams(expr *plan.Expr) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		position := int(param.Pos)
+		if rule.paramTypeIsText(position) {
+			rule.positions[position] = true
+		}
+		return
+	}
+	if function := expr.GetF(); function != nil {
+		name := ""
+		if function.Func != nil {
+			name = strings.ToLower(function.Func.GetObjName())
+			if name == "cast" && !isImplicitPreparedParamCast(expr) {
+				// An explicit CAST owns the marker's conversion contract.
+				return
+			}
+		}
+		if !isImplicitPreparedParamCast(expr) &&
+			!isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name) {
+			// Convert the result of a string-producing/consuming expression at
+			// the outer comparison, not its parameter leaves. For example,
+			// LENGTH(?) and CONCAT(?) must see the original string.
+			return
+		}
+		for _, arg := range function.Args {
+			rule.collectTextParams(arg)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			rule.collectTextParams(item)
+		}
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		rule.collectTextParams(window.WindowFunc)
+	}
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsNumeric(position int) bool {
+	return position >= 0 && position < len(rule.runtimeParamTypes) && rule.runtimeParamTypes[position].IsNumeric()
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
+	if position < 0 || position >= len(rule.runtimeParamTypes) {
+		return false
+	}
+	switch rule.runtimeParamTypes[position].Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
@@ -4290,6 +4545,25 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 	if preserveDMLWrites {
 		paramRule.preserveRoots = preparedDMLWriteExpressions(plan0.GetQuery())
 	}
+	runtimeParamTypes := make([]types.Type, len(paramVals))
+	for i, val := range paramVals {
+		param, ok := val.(ParamValue)
+		if !ok || !param.IsBinaryProtocol {
+			continue
+		}
+		if param.PrepareParamKind == vector.PrepareParamBoolean {
+			// database/sql encodes bool as MYSQL_TYPE_TINY. Keep the Boolean
+			// literal for functions such as JSON_SET, but retain its numeric
+			// protocol domain while selecting comparison coercion.
+			runtimeParamTypes[i] = types.T_int8.ToType()
+		} else if param.HasRuntimeType {
+			runtimeParamTypes[i] = param.RuntimeType
+		} else if param.IsBinaryProtocol && param.Value != nil {
+			runtimeParamTypes[i] = types.T_text.ToType()
+		}
+	}
+	paramRule.numericComparisonTextParamPositions =
+		preparedNumericComparisonTextParamPositions(plan0, runtimeParamTypes)
 	paramRule.inferTextParamPositions = make(map[int]bool)
 	for i, val := range paramVals {
 		if param, ok := val.(ParamValue); ok {

@@ -436,8 +436,25 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 
 	columnBoundPredicate := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
-	// Column-owned casts keep ordinary parameterized DML on its cached path.
+	// Numeric protocol executions retain the cached compile. A later text
+	// execution is selected by the position-aware runtime-domain scan instead
+	// of making every indexed numeric predicate pay the specialization cost.
 	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
+	require.False(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		columnBoundPredicate.Plan,
+		[]types.Type{types.T_text.ToType(), types.T_text.ToType(), types.T_text.ToType()},
+	))
+	for _, predicate := range []string{
+		"n_nationkey = abs(?)",
+		"n_nationkey = (? + 0)",
+		"n_nationkey in (abs(?), 2)",
+		"? between n_nationkey and n_regionkey",
+	} {
+		columnExpressionPredicate := buildPreparedAggregatePlan(t,
+			"update nation set n_comment = n_comment where "+predicate)
+		require.False(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+			columnExpressionPredicate.Plan, []types.Type{types.T_text.ToType()}), predicate)
+	}
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
 		context.Background(),

@@ -232,6 +232,79 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			})
 		}
 
+		// A numeric literal can make the prepare-time binder wrap the marker in
+		// an implicit integer cast. The execute-time text domain must still own
+		// MySQL numeric comparison conversion instead of executing that stale
+		// provisional cast.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		implicitNumericPredicateStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.predicate_dst set status = 8 where id = 1 and 0 = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, implicitNumericPredicateStmt.Close())
+		}()
+		_, err = implicitNumericPredicateStmt.ExecContext(ctx, "foo")
+		require.NoError(t, err)
+		var level, message string
+		var code uint16
+		require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+		require.Equal(t, "Warning", level)
+		require.Equal(t, uint16(1292), code)
+		require.Contains(t, message, "Truncated incorrect DOUBLE value")
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(8), status)
+
+		// The numeric comparison domain must reach text markers through nested
+		// expressions and the multi-operand comparison families as well.
+		for _, test := range []struct {
+			name   string
+			where  string
+			status int64
+		}{
+			{name: "nested abs", where: "0 = abs(?)", status: 9},
+			{name: "nested arithmetic", where: "0 = (? + 0)", status: 10},
+			{name: "in list", where: "0 in (?, 2)", status: 11},
+			{name: "between", where: "? between 0 and 0", status: 12},
+			{name: "not in list", where: "1 not in (?, 2)", status: 13},
+			{name: "not between", where: "? not between 1 and 2", status: 14},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+				stmt, err := db.PrepareContext(ctx,
+					fmt.Sprintf("update `%s`.predicate_dst set status = %d where id = 1 and %s", dbName, test.status, test.where))
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, stmt.Close())
+				}()
+				_, err = stmt.ExecContext(ctx, "foo")
+				require.NoError(t, err)
+				var level, message string
+				var code uint16
+				require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+				require.Equal(t, "Warning", level)
+				require.Equal(t, uint16(1292), code)
+				require.Contains(t, message, "Truncated incorrect DOUBLE value")
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+				require.Equal(t, test.status, status)
+			})
+		}
+
+		t.Run("string function keeps text input", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+			stmt, err := db.PrepareContext(ctx,
+				"update `"+dbName+"`.predicate_dst set status = 15 where id = 1 and 3 = length(?)")
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, stmt.Close())
+			}()
+			_, err = stmt.ExecContext(ctx, "foo")
+			require.NoError(t, err)
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+			require.Equal(t, int64(15), status)
+		})
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {

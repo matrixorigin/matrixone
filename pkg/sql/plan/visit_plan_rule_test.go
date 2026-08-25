@@ -1326,6 +1326,8 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 			ProjectList: []*planpb.Expr{comparison},
 		}},
 	}}}
+	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		query, []types.Type{types.T_int8.ToType(), types.T_text.ToType()}))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 		ParamValue{
@@ -1396,6 +1398,40 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 		require.NotNil(t, boundComparison.GetF().Args[1].GetF(), textValue)
 		require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName(), textValue)
 	}
+
+	implicitComparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(0),
+		param(0),
+	})
+	require.NoError(t, err)
+	implicitQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{implicitComparison},
+		}},
+	}}}
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(implicitQuery))
+	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		implicitQuery, []types.Type{types.T_text.ToType()}))
+	require.True(t, preparedNumericComparisonTextParamPositions(
+		implicitQuery, []types.Type{types.T_text.ToType()})[0])
+	require.False(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		implicitQuery, []types.Type{types.T_int64.ToType()}))
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, implicitQuery, []any{
+		ParamValue{
+			Value:            "foo",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[1].Typ.Id)
+	require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName())
 }
 
 func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {

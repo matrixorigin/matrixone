@@ -956,6 +956,10 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
+		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
+		if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
+			needsRuntimeSpecialization = true
+		}
 		var kinds []vector.PrepareParamKind
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
@@ -1250,6 +1254,24 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, specialize bo
 		values[i] = paramValue
 	}
 	return values, nil
+}
+
+func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) []types.Type {
+	if params == nil || params.Length() == 0 {
+		return nil
+	}
+	runtimeTypes := make([]types.Type, params.Length())
+	for i := range runtimeTypes {
+		if params.IsNull(uint64(i)) || i*2+1 >= len(paramTypes) {
+			continue
+		}
+		mysqlType := defines.MysqlType(paramTypes[i*2])
+		isUnsigned := paramTypes[i*2+1]&0x80 != 0
+		if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, params.GetRawBytesAt(i)); ok {
+			runtimeTypes[i] = runtimeType
+		}
+	}
+	return runtimeTypes
 }
 
 func buildExecuteUserParams(

@@ -417,6 +417,11 @@ type ResetParamRefRule struct {
 	// path used by FillValuesOfParamsInPlan callers.  COM_STMT values use the
 	// per-position map above instead of this broad fallback.
 	inferTextParamTypes bool
+	// numericComparisonTextParamPositions identifies COM_STMT text markers
+	// whose surrounding comparison has a numeric domain. Replace these leaves
+	// with an engine DOUBLE cast before rebinding any enclosing function so
+	// nested expressions, IN, and BETWEEN share MySQL numeric-string semantics.
+	numericComparisonTextParamPositions map[int]bool
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -541,7 +546,6 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		needResetFunction := false
 		compareArgTypes := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
-		binaryTextParamArgs := make(map[int]struct{})
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = strings.ToLower(exprImpl.F.Func.GetObjName())
@@ -588,56 +592,23 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// decimal parameter instead of retaining a prepare-time BIGINT cast.
 				inferText := rule.inferTextParamTypes ||
 					(hasParamPos && rule.inferTextParamPositions[paramPos])
-				if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
-					boundArgs[i] = unwrapped
-					compareArgTypes = true
-				}
-			}
-			if arg.GetP() != nil && arg.GetP().Pos >= 0 &&
-				rule.inferTextParamPositions[int(arg.GetP().Pos)] &&
-				rewrittenArg.Typ.Id == int32(types.T_text) {
-				binaryTextParamArgs[i] = struct{}{}
-			}
-		}
-		// A comparison with at least one numeric binary parameter follows MySQL's
-		// numeric coercion rules even when its other parameter was sent as
-		// VAR_STRING.  The prepare-time binder sees TEXT/TEXT and would otherwise
-		// insert an INT cast around values such as "1.00", which fails at execute
-		// time.  Infer only these per-position COM_STMT text arguments; direct text
-		// projections and ordinary string predicates keep their TEXT domain.
-		if isPreparedNumericComparison(functionName) && len(binaryTextParamArgs) > 0 {
-			hasNumericArg := false
-			for i, arg := range boundArgs {
-				if _, ok := binaryTextParamArgs[i]; ok {
-					continue
-				}
-				if arg != nil && types.T(arg.Typ.Id).ToType().IsNumeric() {
-					hasNumericArg = true
-					break
-				}
-			}
-			if hasNumericArg {
-				for i := range binaryTextParamArgs {
-					literal := boundArgs[i].GetLit()
-					if literal == nil {
-						continue
+				// A comparison cast owned by a numeric literal/column remains the
+				// authoritative domain for numeric protocol executions. Removing it
+				// can change composite-key/index predicate layout. A COM_STMT text
+				// operand is replaced by the position-aware DOUBLE engine cast
+				// before this parent is rebound instead.
+				if isPreparedNumericComparison(functionName) && hasParamPos &&
+					rule.numericComparisonTextParamPositions[paramPos] {
+					function := rewrittenArg.GetF()
+					if function != nil && len(function.Args) > 0 {
+						boundArgs[i] = function.Args[0]
+						compareArgTypes = true
 					}
-					runtimeType := preparedNumericComparisonTextType()
-					// Keep every COM_STMT text value behind the engine cast. A
-					// planner-side ParseFloat would bypass MySQL prefix scanning,
-					// range handling, native-mode behavior, and warning emission for
-					// values whose spelling differs from a complete Go float literal.
-					inferred, inferErr := makePlan2CastExpr(
-						rule.ctx,
-						boundArgs[i],
-						makePlan2Type(&runtimeType),
-					)
-					if inferErr != nil {
-						return nil, inferErr
+				} else if !isPreparedNumericComparison(functionName) || inferText {
+					if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
+						boundArgs[i] = unwrapped
+						compareArgTypes = true
 					}
-					boundArgs[i] = inferred
-					needResetFunction = true
-					compareArgTypes = true
 				}
 			}
 		}
@@ -669,7 +640,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
-		param := rule.params[int(exprImpl.P.Pos)]
+		position := int(exprImpl.P.Pos)
+		param := rule.params[position]
+		if rule.numericComparisonTextParamPositions[position] && param != nil && param.Typ.Id == int32(types.T_text) && param.GetLit() != nil {
+			runtimeType := preparedNumericComparisonTextType()
+			return makePlan2CastExpr(rule.ctx, param, makePlan2Type(&runtimeType))
+		}
 		typ := e.Typ
 		// Most prepared parameters are intentionally replaced as TEXT to retain
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
@@ -714,6 +690,18 @@ func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, re
 func isPreparedNumericComparison(name string) bool {
 	switch name {
 	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPreparedNumericComparisonContext(name string) bool {
+	if isPreparedNumericComparison(name) {
+		return true
+	}
+	switch name {
+	case "between", "not_between", "in", "not_in", "partition_in":
 		return true
 	default:
 		return false
