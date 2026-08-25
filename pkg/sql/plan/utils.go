@@ -3636,7 +3636,7 @@ func preparedDecimalType(value string) (types.Type, bool) {
 	}
 	mantissa := unsigned
 	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
-		if strings.IndexAny(unsigned[exponentAt+1:], "eE") >= 0 ||
+		if strings.ContainsAny(unsigned[exponentAt+1:], "eE") ||
 			!isDecimalExponent(unsigned[exponentAt+1:]) {
 			return types.Type{}, false
 		}

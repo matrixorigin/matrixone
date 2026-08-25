@@ -299,3 +299,14 @@
 - 合并 `mo/main@22b91fe986`，唯一冲突为 `pkg/defines/const.go` 的 MORPC capability 编号。
 - 保留 main 的 v27 ASOF JOIN 与 v28 owner-local lock capability，将 prepared numeric-prefix capability 顺延为 v29，并同步 frontend/compile/pb 检测、错误消息及测试命名。
 - defines/pb/compile/frontend/plan/function/process 全包及 issue #25526/#26685/#26725/#26840/#26866/#27088 通过；build、vet、sqlclosecheck、rowserrcheck、diff check 通过。
+
+## 第十二轮：修复 SCA staticcheck
+
+1. 按 CI `S1003` 将 exponent 重复标记检测从 `strings.IndexAny(...) >= 0` 攺为等价的 `strings.ContainsAny(...)`，不改变 bounded/O(n) exponent 语义。
+2. 运行目标 plan UT、完整 staticcheck/SCA、build/vet 与 diff check。
+3. 提交推送并确认新 head CI 启动。
+
+### 第十二轮执行结果
+
+- 修复 `pkg/sql/plan/utils.go:3639` 的 staticcheck S1003，使用 `strings.ContainsAny` 保持完全等价的重复 exponent marker 判断。
+- `./pkg/sql/plan` UT、全仓 golangci-lint、build、vet、diff check 均通过。
