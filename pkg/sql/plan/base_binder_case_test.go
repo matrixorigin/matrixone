@@ -23,6 +23,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +65,41 @@ func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
 		require.NotNil(t, fn)
 		require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
 	})
+}
+
+func TestContainsPreparedParamExprVariants(t *testing.T) {
+	param := tree.NewParamExpr(0)
+	literal := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
+
+	tests := []struct {
+		name string
+		expr tree.Expr
+		want bool
+	}{
+		{name: "parameter", expr: param, want: true},
+		{name: "binary", expr: tree.NewBinaryExpr(tree.PLUS, literal, param), want: true},
+		{name: "unary", expr: tree.NewUnaryExpr(tree.UNARY_MINUS, param), want: true},
+		{name: "parenthesized", expr: tree.NewParentExpr(param), want: true},
+		{name: "function", expr: &tree.FuncExpr{Exprs: tree.Exprs{param}}, want: true},
+		{name: "cast", expr: tree.NewCastExpr(param, nil), want: true},
+		{name: "bit cast", expr: tree.NewBitCastExpr(param, nil), want: true},
+		{name: "case operand", expr: tree.NewCaseExpr(param, nil, literal), want: true},
+		{name: "case when condition", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(param, literal)}, nil), want: true},
+		{name: "case when value", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal, param)}, nil), want: true},
+		{name: "case else", expr: tree.NewCaseExpr(nil, nil, param), want: true},
+		{name: "tuple", expr: &tree.Tuple{Exprs: tree.Exprs{literal, param}}, want: true},
+		{name: "literal", expr: literal, want: false},
+		{name: "empty case", expr: tree.NewCaseExpr(nil, nil, nil), want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, containsPreparedParamExpr(tc.expr))
+		})
+	}
+
+	require.True(t, containsPreparedParamExprs(tree.Exprs{literal, param}))
+	require.False(t, containsPreparedParamExprs(tree.Exprs{literal}))
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
