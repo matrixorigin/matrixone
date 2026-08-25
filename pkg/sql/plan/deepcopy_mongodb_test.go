@@ -118,3 +118,43 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(payload, decoded))
 	require.Equal(t, original, decoded)
 }
+
+func TestMongoScanTextDiagnosticsRedactUserQueryBSON(t *testing.T) {
+	const secretField = "password"
+	const secretValue = "super-secret-value"
+	for _, test := range []struct {
+		name      string
+		source    string
+		operation string
+	}{
+		{
+			name:      "filter",
+			source:    `{"filter":{"password":"super-secret-value"}}`,
+			operation: "find-filter",
+		},
+		{
+			name:      "pipeline",
+			source:    `{"pipeline":[{"$match":{"password":"super-secret-value"}}]}`,
+			operation: "aggregate",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query, err := sqlmongodb.ParseUserQuery(t.Context(), test.source)
+			require.NoError(t, err)
+			scan := new(pb.MongoScan)
+			require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, scan))
+			digest := query.Digest[:12]
+			for _, diagnostic := range []string{
+				scan.String(),
+				(&pb.ExternScan{MongodbScan: scan}).String(),
+				(&pb.Node{ExternScan: &pb.ExternScan{MongodbScan: scan}}).String(),
+			} {
+				require.NotContains(t, diagnostic, secretField)
+				require.NotContains(t, diagnostic, secretValue)
+				require.Contains(t, diagnostic, "operation:\""+test.operation+"\"")
+				require.Contains(t, diagnostic, "query_digest:\""+digest+"\"")
+				require.Contains(t, diagnostic, "<redacted>")
+			}
+		})
+	}
+}

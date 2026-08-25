@@ -16,9 +16,11 @@ package explain
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -127,4 +129,27 @@ func TestMongoDBExplainRedactsUnsupportedSelectorShape(t *testing.T) {
 	require.Contains(t, lines[0], "operation=explicit")
 	require.NotContains(t, lines[0], "secret-fragment")
 	require.NotContains(t, lines[0], catalog.ExternalQuery)
+}
+
+func TestMongoDBStructuredPlanRedactsSelector(t *testing.T) {
+	queryColumn := mongodbExplainTestColumn(1, catalog.ExternalQuery, types.T_varchar)
+	rawQuery := `{"filter":{"password":"super-secret-value"}}`
+	node := mongodbExplainTestNode(
+		mongodbExplainTestFunction("=", queryColumn, mongodbExplainTestString(rawQuery)),
+	)
+
+	labels, err := NewMarshalNodeImpl(node).GetNodeLabels(context.Background(), &ExplainOptions{})
+	require.NoError(t, err)
+	require.NotEmpty(t, labels)
+	for _, label := range labels {
+		rendered := fmt.Sprint(label.Value)
+		require.NotContains(t, rendered, "password")
+		require.NotContains(t, rendered, "super-secret-value")
+		require.NotEqual(t, Label_Filter_Conditions, label.Name)
+	}
+	serialized := fmt.Sprint(BuildJsonPlan(context.Background(), uuid.New(), &MarshalPlanOptions, &plan.Query{
+		Nodes: []*plan.Node{node}, Steps: []int32{0},
+	}))
+	require.NotContains(t, serialized, "password")
+	require.NotContains(t, serialized, "super-secret-value")
 }
