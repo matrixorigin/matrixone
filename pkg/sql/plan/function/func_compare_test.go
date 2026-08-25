@@ -122,6 +122,14 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.True(t, result.GetResultVector().IsNull(0))
 	})
 
+	t.Run("invalid encoded JSON is rejected", func(t *testing.T) {
+		left := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(left, []byte("invalid"), false, proc.Mp()))
+		right := makeJSON([]any{true})
+		right.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
+		require.Error(t, comparePreparedJSON([]*vector.Vector{left, right}, makeResult(1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+	})
+
 	t.Run("string and invalid numeric", func(t *testing.T) {
 		jsonValues := makeJSON([]any{"7", true})
 		params := makeJSON([]any{"7", "bad"})
