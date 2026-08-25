@@ -69,7 +69,8 @@ create external table em_json_blank (a int, s varchar(20))
 infile{'filepath'='$resources/external_table_file/error_mode_blank.jsonl', 'format'='jsonline', 'jsondata'='object'};
 select a, s, __mo_file_line, __mo_error_message from em_json_blank;
 
--- an object the file never closes is reported, not dropped
+-- a truncated object is reported as that line's own failure; the scan resumes
+-- at the next line rather than trying to complete it from what follows
 create external table em_json_trunc (a int, s varchar(20))
 infile{'filepath'='$resources/external_table_file/error_mode_trunc.jsonl', 'format'='jsonline', 'jsondata'='object'};
 select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_json_trunc;

@@ -168,8 +168,18 @@ All three were latent before error mode and are fixed here.
   *scan* could not parse. An `insert ... select` that fails a primary key or a
   NOT NULL constraint fails the statement as usual.
 - **A record too damaged to delimit.** Tolerance works per record, and a record
-  is whatever the CSV parser delimits. An unbalanced quote swallows the rest of
-  the file into one record; that record is reported as one failure.
+  is whatever the CSV parser delimits. An unbalanced quote leaves the parser
+  with no record boundary at all — it fails the scan with `csvParser error:
+  unterminated quoted field`, which tolerance cannot catch because there is no
+  record to attribute it to.
+- **Multi-line JSON objects.** A JSONLINE record is one line. A continuation
+  line that starts with a quote makes the CSV splitter fail the whole scan, so
+  objects spread over several lines are not readable regardless of error mode.
+  Under tolerance a truncated object is therefore reported as that line's own
+  failure and the scan resumes at the next line, rather than being held over to
+  be completed by what follows — holding it over would append every following
+  line to it and report a single failure at EOF, losing the good records in
+  between.
 
 ## Testing
 
@@ -178,4 +188,6 @@ All three were latent before error mode and are fixed here.
 | `pkg/sql/util/csvparser` `TestRecordLine` | line counting: one record per line, a multi-line quoted record reporting its first line, exactness across a small read block, and blank lines still counted |
 | `pkg/sql/colexec/external` `error_mode_test.go` | the switch (error columns tolerate, `__mo_file_line` alone does not, a lookalike user column does not), a pruned scan failing exactly as before, and CSV / JSONLINE / Kafka each reporting a bad record with its position, message and source text while the records around it are unaffected |
 | `pkg/sql/plan` `TestExternalScanTolerates` | the pruning rule is driven by the two error columns only, keyed on column id |
+| BVT `table/external_table_error_mode_load` | the shape a real load takes: one multi-table INSERT splits a messy CSV and a messy JSONLINE source into a destination table and a rejects table (line, message, text), over ten records covering a bad int, a bad decimal, an unparsable timestamp, too few fields, too many fields, an out-of-range int, an embedded quote, an impossible date, a non-JSON line and a truncated object; every source record is accounted for exactly once, and the same load without the error columns still fails |
+| E2E `test/kafkaexttab` (real broker, `optools/kafka_ci.bash`) | the same split over a real Kafka stream of 8 deliberately malformed messages: rejects carry `__mo_message_id` and the message value as published, `__mo_file_line` is NULL, and a read without the error columns still fails |
 | BVT `table/external_table_error_mode` | end to end over CSV, JSONLINE and the parquet boundary: hidden from `select *` / `desc` / `show create table`, the same bad record found regardless of which user columns are projected, the good/rejects split loaded into real tables, multi-line records, blank lines, an unterminated object, and the reserved names refused by DDL |

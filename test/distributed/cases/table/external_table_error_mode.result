@@ -117,7 +117,8 @@ infile{'filepath'='$resources/external_table_file/error_mode_trunc.jsonl', 'form
 select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_json_trunc;
 ➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  ¦  __mo_error_text[12,65535,0]  𝄀
 1  ¦  alpha  ¦  1  ¦  null  ¦  null  𝄀
-null  ¦  null  ¦  2  ¦  invalid input: incomplete json record at end of file  ¦  {"a":2
+null  ¦  null  ¦  2  ¦  invalid input: incomplete json record  ¦  {"a":2  𝄀
+3  ¦  gamma  ¦  3  ¦  null  ¦  null
 create external table em_parquet (`sepal.length` double, `sepal.width` double,
 `petal.length` double, `petal.width` double, variety varchar(20))
 infile{'filepath'='$resources/parquet/Iris.parquet', 'format'='parquet'};

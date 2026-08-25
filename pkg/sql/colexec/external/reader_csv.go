@@ -146,17 +146,6 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		}
 
 		if finish {
-			if r.prevStr != "" && param.ErrorMode.Tolerate {
-				// Text held over for a continuation that never arrived. It is
-				// a record the file never completed, so report it rather than
-				// dropping it silently.
-				param.ErrorMode.RawText = r.prevStr
-				r.prevStr = ""
-				if err = appendErrorRow(proc, bat, nil, i, param,
-					moerr.NewInvalidInput(proc.Ctx, "incomplete json record at end of file")); err != nil {
-					return false, err
-				}
-			}
 			closeErr := r.reader.Close()
 			if closeErr != nil {
 				logutil.Errorf("close file failed. err:%v", closeErr)
@@ -199,7 +188,8 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				// transJson2Lines holds the text over in prevStr only when the
 				// record is genuinely truncated; that -- not the EOF error
 				// alone -- is what makes this a continuation.
-				if r.prevStr != "" {
+				truncated := r.prevStr != ""
+				if truncated && !param.ErrorMode.Tolerate {
 					// Held over for the next line. Nothing is appended for
 					// this record, so there is no partial row to trim once
 					// the batch ends. (Rows used to be written into
@@ -210,6 +200,18 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				}
 				if !param.ErrorMode.Tolerate {
 					return false, err
+				}
+				if truncated {
+					// Under tolerance a truncated object is THIS line's
+					// failure, not a claim on the lines after it. Holding it
+					// over would append every following line to it and report
+					// one failure at EOF, losing every good record in between
+					// -- and it would buy nothing: a continuation line that
+					// starts with a quote makes the CSV splitter fail the
+					// whole scan, so a multi-line object is not reliably
+					// readable in the first place.
+					r.prevStr = ""
+					err = moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
 				}
 				// A line that is not valid JSON is reported as a failed record
 				// rather than failing the query.

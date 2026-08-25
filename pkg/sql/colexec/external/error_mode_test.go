@@ -244,13 +244,18 @@ func TestJSONLineErrorModeTolerates(t *testing.T) {
 		})
 	})
 
-	t.Run("record never completed", func(t *testing.T) {
+	// A truncated object is reported as that line's own failure and the scan
+	// resumes at the next line. Holding it over to be completed later would
+	// append every following line to it and report one failure at EOF, losing
+	// the good records in between.
+	t.Run("truncated object does not swallow the lines after it", func(t *testing.T) {
 		param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.OBJECT, numTestCols)
 		require.NoError(t, readAllText(t, param, proc, bat,
-			`{"a":1,"s":"alpha"}`+"\n"+`{"a":2`+"\n"))
+			`{"a":1,"s":"alpha"}`+"\n"+`{"a":2`+"\n"+`{"a":3,"s":"gamma"}`+"\n"))
 		requireRows(t, bat, []wantRow{
 			{a: 1, s: "alpha", line: 1},
-			{line: 2, message: "incomplete json record at end of file", text: `{"a":2`},
+			{line: 2, message: "incomplete json record", text: `{"a":2`},
+			{a: 3, s: "gamma", line: 3},
 		})
 	})
 
