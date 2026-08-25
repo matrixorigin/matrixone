@@ -1275,6 +1275,7 @@ func TestCompileStatementContextsPreserveCounterWithoutLeakingSelection(t *testi
 		separateChild bool
 	}{
 		{name: "selected", sql: "/*+ SIDECAR */ select 1", separateChild: true},
+		{name: "stream selected", sql: "/*+ SIDECAR STREAM */ select 1", separateChild: true},
 		{name: "unselected", sql: "select 1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
