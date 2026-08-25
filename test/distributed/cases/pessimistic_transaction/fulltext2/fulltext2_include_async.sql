@@ -131,13 +131,9 @@ execute wait_phantom_mutation;
 deallocate prepare wait_phantom_mutation;
 
 -- covered fast path (0-JOIN: Project -> Sort(score) -> Table Function, no base Table Scan/Join).
--- Assert only the stable operator contract: the plan header's runtime counters
--- can be 0 or -1 without changing the physical path.
--- @regex("Project", true)
--- @regex("Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC", true)
--- @regex("Table Function on fulltext2_search", true)
--- @regex("Table Scan on src_phantom", false)
--- @regex("Join", false)
+-- Compare every plan row exactly while ignoring only JDBC metadata: the plan
+-- column's reported precision can be 0 or -1 without changing the physical path.
+-- @metacmp(false)
 explain select id, status, prio from src_phantom where match(body) against('fox');
 -- pk 20 must be GONE (no phantom, no stale 'updated'/999); only pk 21 remains.
 select id, status, prio from src_phantom where match(body) against('fox') order by match(body) against('fox') desc, id;
