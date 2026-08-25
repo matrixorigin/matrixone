@@ -1,6 +1,6 @@
 ---
 name: mo-dev
-description: MatrixOne database kernel development - first-principles, performance-aware change design; controlled local CGo build/test setup; complete test matrices; counterexample-driven white-box/black-box validation; hung-test diagnosis; GPU builds (MO_CL_CUDA=1 / cuVS); operator lifecycle contracts (Call/Reset); pipeline protocol; and the vector/fulltext index-plugin framework. Use when modifying kernel production code or hot paths, fixing correctness/resource-lifecycle/concurrency defects, evaluating a new abstraction or framework, designing systematic non-overfit regressions for planner/explain/rewrite bugs, running CGo-transitive tests, diagnosing compile/link/load/vendor failures or silent hangs, changing colexec/process/compile pipelines, or adding/editing index algorithms.
+description: MatrixOne database kernel development - first-principles, performance-aware change design; systematic UT/BVT coverage and fixture reuse; controlled local CGo build/test setup; counterexample-driven validation; hung-test diagnosis; GPU builds; operator/pipeline lifecycle contracts; and the vector/fulltext index-plugin framework. Use when modifying kernel production code or hot paths, fixing correctness/resource-lifecycle/concurrency defects, adding or optimizing unit/BVT cases, evaluating a new abstraction, designing non-overfit regressions, running CGo-transitive tests, diagnosing build/test failures or hangs, changing execution pipelines, or adding/editing index algorithms.
 ---
 
 Compatibility: designed for Codex CLI and compatible agents on supported MatrixOne development platforms. Use the Go version declared by `go.mod`; CGo work also requires GNU Make, a supported C/C++ toolchain, and matching pre-built thirdparties.
@@ -11,6 +11,7 @@ Load only the reference needed for the task:
 
 | Need | Read |
 |------|------|
+| Adding/changing/optimizing UT or BVT; deciding whether public behavior needs BVT; consolidating duplicate/non-orthogonal cases; test fixture reuse and clean execution evidence | [references/testing-contract.md](references/testing-contract.md) |
 | CGo compile/link/load/module errors, controlled local test execution, layered matrices, hung tests, "pre-existing" claims, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests, distributed pipeline hangs, remote dispatch/receiver registration | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Systematic regression design, counterexamples, white-box/black-box validation, planner/explain/rewrite correctness, avoiding scenario overfit | [references/counterexample-testing.md](references/counterexample-testing.md) |
@@ -28,6 +29,8 @@ Consult the referenced material before acting:
 | **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |
 | **G-IDXREVIEW** | Reviewing a diff that touches index-algorithm dispatch, `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin` | Read [index-plugin.md](references/index-plugin.md) section 9 and run its greps. |
 | **G-DONE** | Before declaring "done"/"complete"/"passes" | Apply the completion gate below. |
+| **G-TEST-CONTRACT** | Before adding, changing, removing, merging, or performance-optimizing a UT/BVT case | Read [testing-contract.md](references/testing-contract.md). Inventory existing coverage first; preserve a validation map and scenario oracles; share expensive setup only across compatible isolation boundaries. |
+| **G-BVT-COVERAGE** | Production work changes SQL-visible results/errors/metadata, DDL/DML, privileges, transactions, protocol behavior, persistence/restart, or distributed topology | Read [testing-contract.md](references/testing-contract.md), decide the BVT/public-path proof before implementation is declared complete, and record a concrete no-BVT rationale when it does not apply. |
 | **G-TEST-FAIL** | `go test` returns non-zero or hangs >10s | Route by evidence: module/header/link/load errors → [cgo-build-test.md](references/cgo-build-test.md); operator/lifecycle/channel hangs → [operator-pipeline.md](references/operator-pipeline.md); ordinary assertion/panic failures → trace the owning code and test directly. Do not load unrelated references by default. |
 | **G-TEST-EVIDENCE** | A test command yields no final PASS/FAIL, returns a session/process identifier, or leaves a test process alive | Treat it as still running or failed; poll, inspect the process, and capture its real exit status/stack. |
 | **G-PIPELINE-HANG** | A distributed query, DML, `LOAD DATA`, dispatch, or remote pipeline stalls | Read [operator-pipeline.md](references/operator-pipeline.md), collect synchronized stacks from every CN, and close the cross-CN registration/wait graph before attributing storage or network cause. |
@@ -103,28 +106,26 @@ MO_CL_CUDA=1 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=300s ./
 
 Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.
 
-### End-to-end (BVT) runs
+### Unit and BVT requirements
 
-Two preconditions, both learned by wasting a run without them:
+Read [references/testing-contract.md](references/testing-contract.md) before
+changing test coverage or optimizing the suite.
 
-1. **Wait for `ISCP-Task Start` in `mo-service.log` before starting a suite.** The server
-   answers `select 1` well before the query service is registered, and DDL issued in that
-   window fails with `internal error: cannot find query address for CN <uuid>`. One
-   `pessimistic_transaction/vector` run started too early reported **51** failures; after
-   waiting, **1** — the other 50 were the gap, not the code.
-
-   ```bash
-   until grep -q "ISCP-Task Start" mo-service.log; do sleep 2; done
-   ```
-
-2. **Start from a clean instance** (`pkill -x mo-service; rm -rf mo-data`) before a suite
-   whose cases count global objects. `show pitr`, `show snapshots` and
-   `select count(*) from mo_catalog.mo_snapshots` list *everything*, so a PITR or snapshot
-   left by earlier manual work — or by an earlier suite — fails cases that are correct.
-   The same run showed snapshot 200 failures / pitr 73 dirty versus 0 / 0 clean.
-
-Re-run a suspicious failure on a clean instance before reporting it. A suite that fails only
-after other suites is an ordering artifact, not a regression.
+- Derive UT and BVT from the changed behavior; do not treat either as a coverage
+  percentage checkbox or use one as a substitute for the other.
+- Before adding a BVT file, search existing SQL surfaces and results. Extend or
+  consolidate a coherent case when contract, topology, account/database/data
+  fixture, and lifecycle match. Create a new independently runnable case when
+  those isolation boundaries differ.
+- Preserve named semantic scenarios and explicit positive/negative/boundary
+  oracles when merging tests. A lower file/test count is not proof of equivalent
+  coverage.
+- Share expensive UT/BVT setup only with deterministic state reset and cleanup.
+  Optimize repeated initialization before increasing parallelism.
+- Run BVT only on a known test-owned instance. Wait for SQL readiness and
+  `ISCP-Task Start`, use normal result-comparison mode, and repeat the exact case
+  to prove teardown/self-containment. Inspect both mo-tester report and service
+  logs.
 
 
 ## Operator / Pipeline Rules
@@ -155,6 +156,10 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
 
 ```
 □ changed artifacts and their direct/dependent validators are explicitly named
+□ changed behavior has a UT/BVT validation map; SQL/client-visible behavior has
+  public-path BVT evidence or a concrete recorded no-BVT rationale
+□ new/changed/merged tests passed the orthogonality and fixture-reuse gate in
+  `references/testing-contract.md`; every removed oracle maps to a retained case
 □ if Go is affected, each owning package pattern is named and
   `GOWORK=off go list -mod=readonly <patterns...>` proves the selection is non-empty
 □ if Go is affected, GOWORK=off go build -mod=readonly <patterns...> -> exit 0
@@ -164,6 +169,9 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
   behavior-level validation for the changed contract pass (for example shell
   syntax + script tests, Make dry-run + target test, or Docker check + relevant build)
 □ at least one real dependent consumer is validated when the change crosses an ownership boundary
+□ changed BVT case/result pairs pass exact normal comparison on a clean, fully
+  ready test-owned instance and the self-containment repetition/topology checks
+  required by `references/testing-contract.md`
 □ lint/test package sets are DERIVED FROM THE DIFF, not recalled:
   `git diff --name-only <base>...HEAD -- 'pkg/**/*.go' | xargs -n1 dirname | sort -u`
   (a hand-listed set drifts from the diff; a `golangci-lint` run reported clean this way
@@ -206,3 +214,5 @@ Hard rule: never claim a failure is "pre-existing" without reproducing it at the
 11. Never introduce a framework, generic abstraction, subsystem, background worker, cache, or retry layer merely because a small/local defect could be generalized. Require multiple independent recurring needs, a stable shared contract, and lower total complexity after including runtime, operations, testing, and maintenance.
 12. Never add a potentially material per-row, per-batch, per-message, or per-query cost without a bounded cost analysis and, when material, a focused benchmark/profile. Unbounded logging or metric cardinality is always forbidden.
 13. Never call a change systematic merely because it is broad; prove that it restores one general invariant across the relevant state transitions with less total complexity than the alternatives.
+14. Never add a new UT/BVT file before inventorying equivalent existing coverage and fixture boundaries; prefer a coherent extension or consolidation when it preserves failure localization and independent oracles.
+15. Never accept generated BVT results without reviewing the changed output and passing normal comparison mode, or use `@ignore`, `@sortkey`, `@regex`, skip tags, retries, or sleeps to hide behavior the case claims to verify.

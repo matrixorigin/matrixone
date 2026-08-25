@@ -1,6 +1,6 @@
 ---
 name: mo-self-review
-description: Pre-push self-review gate for MatrixOne changes — systematic first-principles review of the complete diff, including functional closure, unhappy paths, state/ownership models, wait-for dependencies, restart/reuse generations, and derived test matrices. Use before push/PR updates, when concurrency or lifecycle code changes, or when repeated review rounds reveal missed closure edges.
+description: Pre-push self-review gate for MatrixOne changes — systematic first-principles review of the complete diff, including functional closure, unhappy paths, state/ownership models, UT/BVT purpose and quality, fixture cost/reuse, wait-for dependencies, restart/reuse generations, and derived test matrices. Use before push/PR updates, when concurrency or lifecycle code changes, when tests are added/merged/optimized, or when repeated review rounds reveal missed closure edges.
 ---
 
 Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
@@ -31,6 +31,7 @@ These rules apply to Codex, Claude, and every other compatible reviewing agent.
 | Change shape | Read |
 |---|---|
 | Shared state, cancellation, close/terminal paths, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
+| Production behavior or any added/changed/removed/merged/optimized UT or BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
 
 ## Running this skill IS the review (don't retype the long prompt)
 
@@ -96,6 +97,7 @@ stream of nitpicks.
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
 | **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Run a minimal, explicitly named behavioral set with an adaptive `-race -count=N` budget, then run each affected owning package once with `-race`. Ordinary sequential logic uses focused tests plus an ordinary owning-package run. §6 defines the proportional budget and narrow measurement-test exception. |
+| **G-TEST-COVERAGE** | Production behavior changes, or the diff adds/changes/removes/merges/performance-optimizes UT/BVT | Read [the testing contract](../mo-dev/references/testing-contract.md). Review tests as production artifacts: purpose, coverage map, existing-case reuse, fixture isolation/cost, deterministic control, cleanup, real selection, and BVT applicability/evidence are merge gates. |
 
 Scope = committed changes vs merge-base, staged changes, unstaged changes, and
 untracked files in scope—not just the last file touched. Inspect `git status
@@ -121,6 +123,7 @@ lens is obvious to another.
 | **Contract / API** | Callers updated on both ends of a protocol change; interface impls complete (compile-time `var _` checks intact). |
 | **Performance / scale** | On frequency-sensitive paths, did allocations, copies, scans, locks/atomics, goroutines, I/O, logs, or metric cardinality materially change? Benchmark/profile only when the cost can be material; otherwise record a bounded cost analysis. |
 | **Platform / build** | Are Darwin/Linux, amd64/arm64, build tags, CGo/native loading, container users, and runtime-vs-build platform assumptions explicit and fail-closed where applicable? |
+| **Test architecture** | Does each test have the right UT/BVT purpose and a distinct oracle? Was existing coverage searched before adding a case? Can heavy setup, large data, wall-clock waits, or a new process/cluster be replaced by reuse, injection, fake time, barriers, or scoped dynamic config? Are merged cases isolated and removed oracles preserved? |
 
 ---
 
@@ -151,6 +154,8 @@ half* of the closure. Trace to the terminal node.
 | state machine | states → events → ownership/linearization point → side effects → failed transition → retry/restart |
 | control path | blocked work → cancel/close/reject → every lock/channel/RPC dependency → guaranteed local termination |
 | reused object | old work stops → cleanup completes → sealed initialization → admission/publish → new generation |
+| shared test fixture | create once → scenario admission → state reset/cleanup after success or `FailNow` → next scenario → final destruction |
+| BVT case | clean setup → public-path action → positive/negative oracle → session/global restoration → teardown → same-instance rerun |
 
 Rule: if you changed one arc of a closure, open and read the arcs that *consume*
 or *reverse* it (the reader for a writer, the restore for a backup, the Reset for
@@ -205,6 +210,32 @@ For concurrency/lifecycle changes, build the invariant, transition table,
 ownership graph, wait-for graph, and generation boundary from
 [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md). Derive
 the test matrix from semantic axes; do not reuse a remembered case list.
+
+### UT/BVT purpose, reuse, and cost gate
+
+Apply [the testing contract](../mo-dev/references/testing-contract.md) to the
+complete diff before accepting test coverage:
+
+1. Map each changed behavior to a focused UT oracle and decide whether its
+   SQL/protocol/public contract requires BVT. Record a concrete no-BVT rationale
+   when public-path coverage is not applicable.
+2. For every new BVT or heavy UT fixture, verify searches of existing cases and
+   helpers. Prefer extending/consolidating the same contract and compatible
+   fixture; require a distinct isolation/topology/lifecycle reason for a new
+   file, account/database setup, cluster, or service process.
+3. When tests are merged or deleted, map every old positive, negative, boundary,
+   metadata, privilege/session, and error oracle to the retained named scenario.
+   Fewer tests/files or similar SQL does not prove coverage equivalence.
+4. Reject large datasets, real sleeps, probabilistic scheduling, long histories,
+   repeated workloads, or wall-clock performance assertions when injection,
+   fake time, barriers/callbacks, scoped dynamic configuration, or minimum
+   boundary data can prove the behavior. Any unavoidable expensive case needs a
+   measured duration delta and written necessity.
+5. Treat test state as lifecycle state: register cleanup immediately; restore
+   sessions, globals, hooks, failpoints, accounts/catalog rows, files, and
+   dynamic config after `FailNow` too. Prove BVT teardown with explicit
+   postconditions, then repeat the exact normal-comparison case on a fully ready
+   test-owned instance; entry cleanup alone can mask leaked state.
 
 ### Proportional Go unit-test validation and race stress
 
@@ -303,6 +334,14 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
 □ every new/modified and directly affected Go behavioral unit test passed a proven non-empty focused run
+□ changed behavior has a UT/BVT purpose and validation map; applicable public
+  behavior has BVT evidence or a concrete no-BVT rationale
+□ every new/changed/merged test passed existing-case reuse, oracle-equivalence,
+  fixture-isolation, minimum-data, no-sleep/injection, cleanup, and cost review
+□ changed BVT case/result pairs passed exact normal comparison, result review,
+  clean/full-readiness checks, teardown postconditions, same-instance
+  self-containment repetition (or a justified fresh-instance substitute), and
+  every applicable topology
 □ when G-RACE-STRESS applies, focused adaptive -race -count=N and one owning-package -race run passed, with T/B/N recorded
 □ every !race measurement-only test retains a race-tested functional counterpart when race validation applies
 □ test matrix covers every changed transition and evidence is newer than the final edit/rebase
