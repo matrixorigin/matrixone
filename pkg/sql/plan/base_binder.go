@@ -3742,7 +3742,11 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 		}
 		left, right = operands[0], operands[1]
 	}
-	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
+	operands := []*Expr{left, right}
+	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, operator, operands)
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
@@ -3792,7 +3796,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err := convertValueIntoBool(name, args, true); err != nil {
 			return nil, err
 		}
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=", "<=>", "<", "<=", ">", ">=", "<>":
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
@@ -5260,7 +5264,7 @@ func adjustJsonDynamicParamType(ctx context.Context, name string, args []*Expr) 
 	switch name {
 	case "<", "<=", ">", ">=":
 		paramFunction = function.JsonOrderingParamFunctionName
-	case "=", "<>", "!=":
+	case "=", "<=>", "<>", "!=":
 		paramFunction = function.JsonComparisonParamFunctionName
 	default:
 		return nil
