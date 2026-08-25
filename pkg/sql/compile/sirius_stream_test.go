@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -95,6 +96,35 @@ func TestCompileSiriusStreamReadBindsSnapshotAndNativeInput(t *testing.T) {
 	require.NotNil(t, read)
 	require.Equal(t, substrait.StreamReadTypeURL, read.GetExtensionTable().Detail.TypeUrl)
 	require.NotEmpty(t, read.GetExtensionTable().Detail.Value)
+}
+
+func TestCompileSiriusStreamReadRejectsActualUint32NativeBatchBeforePrepare(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+
+	native := batch.NewWithSize(1)
+	native.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	require.NoError(t, vector.AppendFixed(native.Vecs[0], uint32(42), false, proc.Mp()))
+	native.SetRowCount(1)
+	defer native.Clean(proc.Mp())
+	payload, err := native.MarshalBinary()
+	require.NoError(t, err)
+
+	decoded := batch.NewOffHeapEmpty()
+	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(payload, proc.Mp()))
+	defer decoded.Clean(proc.Mp())
+	require.Equal(t, types.T_uint32, decoded.Vecs[0].GetType().Oid,
+		"the MO-native codec must not silently widen uint32 to int64")
+
+	queryPlan := siriusStreamTestPlan()
+	queryPlan.GetQuery().Nodes[0].TableDef.Cols[0].Typ = planpb.Type{
+		Id: int32(decoded.Vecs[0].GetType().Oid),
+	}
+	_, err = (&Compile{proc: proc}).CompileSiriusStreamRead(
+		context.Background(), queryPlan, 7, []byte("0123456789abcdef"), time.Minute,
+	)
+	require.True(t, substrait.IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
 }
 
 func TestCompileSiriusStreamReadRejectsBeforeOpeningTransport(t *testing.T) {

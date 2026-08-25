@@ -137,6 +137,50 @@ func TestStreamReadValidationRejectsEveryInvalidIdentityClass(t *testing.T) {
 	}
 }
 
+func TestNativeInputTypeRejectsSemanticOnlyUint32Mapping(t *testing.T) {
+	uint32Type := planpb.Type{Id: int32(types.T_uint32)}
+	semantic, err := substraitType(&uint32Type)
+	require.NoError(t, err)
+	require.NotNil(t, semantic.GetI64(), "uint32 results still use signed i64 transport")
+
+	_, err = nativeInputType(&uint32Type)
+	require.True(t, IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
+	_, err = nativeInputType(nil)
+	require.ErrorContains(t, err, "missing native input type")
+
+	for _, typ := range []planpb.Type{
+		{Id: int32(types.T_bool)},
+		{Id: int32(types.T_int8)}, {Id: int32(types.T_int16)},
+		{Id: int32(types.T_int32)}, {Id: int32(types.T_int64)},
+		{Id: int32(types.T_float32)}, {Id: int32(types.T_float64)},
+		{Id: int32(types.T_char), Width: 8}, {Id: int32(types.T_varchar), Width: 32},
+		{Id: int32(types.T_decimal64), Width: 18, Scale: 2},
+		{Id: int32(types.T_decimal128), Width: 38, Scale: 4},
+		{Id: int32(types.T_date)},
+	} {
+		_, err = nativeInputType(&typ)
+		require.NoError(t, err, types.T(typ.Id).String())
+	}
+	for _, typ := range []planpb.Type{
+		{Id: int32(types.T_decimal64), Width: 19, Scale: 2},
+		{Id: int32(types.T_decimal128), Width: 18, Scale: 2},
+	} {
+		_, err = nativeInputType(&typ)
+		require.True(t, IsNotEligible(err))
+		require.ErrorContains(t, err, "does not match decimal")
+	}
+}
+
+func TestExportRejectsUint32NativeStreamBeforeBinding(t *testing.T) {
+	query := scanQuery()
+	query.Nodes[0].TableDef.Cols[0].Typ = planpb.Type{Id: int32(types.T_uint32)}
+
+	_, err := Export(query)
+	require.True(t, IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
+}
+
 func TestExportRejectsFullOuterBeforeSnapshotAccess(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_OUTER, Children: []int32{0, 0}})
