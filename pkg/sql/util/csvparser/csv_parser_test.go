@@ -637,3 +637,55 @@ func TestParserReset(t *testing.T) {
 	_, err = parser.Read(nil)
 	require.ErrorIs(t, err, io.EOF)
 }
+
+// RecordLine reports the physical line a record starts on, which is what an
+// external scan surfaces as __mo_file_line. A record whose quoted field spans
+// several lines must report its FIRST line, and the counter must survive
+// records that are read across buffer refills.
+func TestRecordLine(t *testing.T) {
+	cfg := CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+	}
+
+	t.Run("one record per line", func(t *testing.T) {
+		parser, err := NewCSVParser(&cfg, NewStringReader("a,1\nb,2\nc,3\n"), int64(ReadBlockSize), false)
+		require.NoError(t, err)
+		for _, want := range []int64{1, 2, 3} {
+			_, err = parser.Read(nil)
+			require.NoError(t, err)
+			require.Equal(t, want, parser.RecordLine())
+		}
+	})
+
+	t.Run("multi-line quoted field reports its first line", func(t *testing.T) {
+		// line 1: a,"x            line 4: c,3
+		// lines 2-3 are inside the quoted field
+		parser, err := NewCSVParser(&cfg, NewStringReader("a,\"x\ny\nz\"\nc,3\n"), int64(ReadBlockSize), false)
+		require.NoError(t, err)
+
+		_, err = parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), parser.RecordLine(), "record starting on line 1 spans lines 1-3")
+
+		_, err = parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(4), parser.RecordLine(), "the next record starts on line 4")
+	})
+
+	t.Run("counter is exact across a small read block", func(t *testing.T) {
+		// a tiny block size forces the refill paths (readUntil's loop) that
+		// advance position in bulk rather than byte by byte
+		var sb strings.Builder
+		for i := 0; i < 50; i++ {
+			sb.WriteString("aaaaaaaaaa,bbbbbbbbbb\n")
+		}
+		parser, err := NewCSVParser(&cfg, NewStringReader(sb.String()), 8, false)
+		require.NoError(t, err)
+		for i := int64(1); i <= 50; i++ {
+			_, err = parser.Read(nil)
+			require.NoError(t, err)
+			require.Equal(t, i, parser.RecordLine(), "record %d", i)
+		}
+	})
+}

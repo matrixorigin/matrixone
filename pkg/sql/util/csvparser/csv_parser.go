@@ -151,6 +151,13 @@ type CSVParser struct {
 	// for printing error message, and the parser should not be used later,
 	// so it's ok, see readQuotedField.
 	pos int64
+	// lineNo counts the newline bytes consumed so far, and recordStartLine is
+	// lineNo at the first content byte of the record being read. Together they
+	// give the PHYSICAL line a record starts on — for a multi-line quoted field,
+	// its first line. Every byte the parser consumes passes through readByte,
+	// skipBytes or readUntil, so counting there is exact.
+	lineNo          int64
+	recordStartLine int64
 
 	// cache
 	remainBuf *bytes.Buffer
@@ -166,6 +173,8 @@ func (parser *CSVParser) Reset(reader io.Reader) {
 	parser.reader = reader
 	parser.buf = nil
 	parser.pos = 0
+	parser.lineNo = 0
+	parser.recordStartLine = 0
 	parser.isLastChunk = false
 	parser.remainBuf.Reset()
 	parser.appendBuf.Reset()
@@ -266,6 +275,13 @@ func (parser *CSVParser) Pos() int64 {
 	return parser.pos
 }
 
+// RecordLine returns the 1-based physical line the most recently read record
+// starts on. For a record whose quoted field spans several lines, this is its
+// FIRST line.
+func (parser *CSVParser) RecordLine() int64 {
+	return parser.recordStartLine + 1
+}
+
 func validDelim(r rune) bool {
 	return r != 0 && r != '"' && r != '\r' && r != '\n' && utf8.ValidRune(r) && r != utf8.RuneError
 }
@@ -358,6 +374,9 @@ const (
 	csvTokenDelimiter csvToken = 0x800
 )
 
+// newlineByte is the record/line terminator the line counter looks for.
+var newlineByte = []byte{'\n'}
+
 func (parser *CSVParser) readByte() (byte, error) {
 	if len(parser.buf) == 0 {
 		if err := parser.readBlock(); err != nil {
@@ -370,6 +389,9 @@ func (parser *CSVParser) readByte() (byte, error) {
 	b := parser.buf[0]
 	parser.buf = parser.buf[1:]
 	parser.pos++
+	if b == '\n' {
+		parser.lineNo++
+	}
 	return b, nil
 }
 
@@ -389,6 +411,7 @@ func (parser *CSVParser) peekBytes(cnt int) ([]byte, error) {
 }
 
 func (parser *CSVParser) skipBytes(n int) {
+	parser.lineNo += int64(bytes.Count(parser.buf[:n], newlineByte))
 	parser.buf = parser.buf[n:]
 	parser.pos += int64(n)
 }
@@ -528,6 +551,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	index := IndexAnyByte(parser.buf, chars)
 	if index >= 0 {
 		ret := parser.buf[:index]
+		parser.lineNo += int64(bytes.Count(ret, newlineByte))
 		parser.buf = parser.buf[index:]
 		parser.pos += int64(index)
 		return ret, parser.buf[0], nil
@@ -545,11 +569,13 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 			if err == nil {
 				err = io.EOF
 			}
+			parser.lineNo += int64(bytes.Count(parser.buf, newlineByte))
 			parser.pos += int64(len(buf))
 			return buf, 0, err
 		}
 		index := IndexAnyByte(parser.buf, chars)
 		if index >= 0 {
+			parser.lineNo += int64(bytes.Count(parser.buf[:index], newlineByte))
 			buf = append(buf, parser.buf[:index]...)
 			parser.buf = parser.buf[index:]
 			parser.pos += int64(len(buf))
@@ -559,6 +585,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 }
 
 func (parser *CSVParser) readRecord() error {
+	parser.recordStartLine = parser.lineNo
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
