@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"strings"
@@ -60,6 +61,33 @@ var (
 	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
 )
+
+type retryableLoadError struct {
+	cause error
+}
+
+func (e retryableLoadError) Error() string {
+	return e.cause.Error()
+}
+
+func (e retryableLoadError) Unwrap() error {
+	return e.cause
+}
+
+// NewRetryableLoadError marks a cache-internal load outcome that can be retried
+// after the exact failed entry is destroyed. Ordinary algorithm load errors,
+// including moerr.ErrInvalidState, must not use this marker.
+func NewRetryableLoadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return retryableLoadError{cause: err}
+}
+
+func IsRetryableLoadError(err error) bool {
+	var marker retryableLoadError
+	return errors.As(err, &marker)
+}
 
 var lifecycleHooks struct {
 	sync.RWMutex
@@ -246,8 +274,9 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		// Superseded loads are retryable for both the initiating caller and
 		// waiters already blocked on this entry. Publish the destroyed state
-		// before Broadcast so every waiter takes the retry path.
-		if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+		// before Broadcast so every waiter takes the retry path. Other load
+		// errors, including ordinary ErrInvalidState, remain terminal.
+		if IsRetryableLoadError(err) {
 			s.Status.Store(STATUS_DESTROYED)
 		} else {
 			s.Status.Store(STATUS_ERROR)
@@ -582,7 +611,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 				if algo.evicting.Load() {
 					continue
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				if IsRetryableLoadError(err) {
 					c.discardFailedLoad(key, algo)
 					continue
 				}
@@ -607,7 +636,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 
 // SearchInto is the box-free twin of Search: it fills the caller-owned out SearchResult
 // (pk/scores/includes as reusable ColumnBuffers) instead of returning boxed []any keys.
-// Same LoadOrStore / Load / ErrInvalidState-retry discipline as Search.
+// Same LoadOrStore / retryable-load discipline as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
 	for {
@@ -620,7 +649,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				if algo.evicting.Load() {
 					continue
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				if IsRetryableLoadError(err) {
 					c.discardFailedLoad(key, algo)
 					continue
 				}

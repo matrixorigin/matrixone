@@ -37,6 +37,34 @@ type blockedInvalidStateLoadSearch struct {
 	destroys atomic.Int32
 }
 
+type permanentInvalidStateLoadSearch struct {
+	loads    atomic.Int32
+	destroys atomic.Int32
+}
+
+func (m *permanentInvalidStateLoadSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return []int64{1}, []float64{1}, nil
+}
+
+func (m *permanentInvalidStateLoadSearch) SearchFloat32(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ []int64, _ []float32) error {
+	return nil
+}
+
+func (m *permanentInvalidStateLoadSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *permanentInvalidStateLoadSearch) Load(*sqlexec.SqlProcess) error {
+	if m.loads.Add(1) <= 4 {
+		return moerr.NewInvalidStateNoCtx("permanent invalid state")
+	}
+	return moerr.NewInternalErrorNoCtx("bounded probe terminator")
+}
+
+func (m *permanentInvalidStateLoadSearch) Destroy() {
+	m.destroys.Add(1)
+}
+
 func (m *blockedInvalidStateLoadSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
 	return []int64{1}, []float64{1}, nil
 }
@@ -52,7 +80,7 @@ func (m *blockedInvalidStateLoadSearch) SearchInto(*sqlexec.SqlProcess, any, vec
 func (m *blockedInvalidStateLoadSearch) Load(*sqlexec.SqlProcess) error {
 	close(m.started)
 	<-m.release
-	return moerr.NewInvalidStateNoCtx("load superseded")
+	return NewRetryableLoadError(moerr.NewInvalidStateNoCtx("load superseded"))
 }
 
 func (m *blockedInvalidStateLoadSearch) Destroy() {
@@ -75,7 +103,7 @@ func (m *retryingLoadSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.Ru
 
 func (m *retryingLoadSearch) Load(*sqlexec.SqlProcess) error {
 	if m.loads.Add(1) == 1 {
-		return moerr.NewInvalidStateNoCtx("load superseded")
+		return NewRetryableLoadError(moerr.NewInvalidStateNoCtx("load superseded"))
 	}
 	return nil
 }
@@ -166,6 +194,40 @@ func TestVectorIndexSearchWaitersRetrySupersededLoad(t *testing.T) {
 
 			s.destroyFailedLoad()
 			require.Equal(t, int32(1), algo.destroys.Load())
+		})
+	}
+}
+
+func TestVectorIndexCacheReturnsPermanentInvalidStateLoadError(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		call func(*VectorIndexCache, VectorIndexSearchIf) error
+	}{
+		{
+			name: "Search",
+			call: func(c *VectorIndexCache, algo VectorIndexSearchIf) error {
+				_, _, err := c.Search(nil, "key", algo, nil, vectorindex.RuntimeConfig{})
+				return err
+			},
+		},
+		{
+			name: "SearchInto",
+			call: func(c *VectorIndexCache, algo VectorIndexSearchIf) error {
+				return c.SearchInto(nil, "key", algo, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{})
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewVectorIndexCache()
+			algo := &permanentInvalidStateLoadSearch{}
+
+			err := tt.call(c, algo)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState), err)
+			require.Equal(t, int32(1), algo.loads.Load())
+			require.Equal(t, int32(1), algo.destroys.Load())
+			_, loaded := c.IndexMap.Load("key")
+			require.False(t, loaded)
 		})
 	}
 }

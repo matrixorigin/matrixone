@@ -354,7 +354,7 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 }
 
 func TestFulltext2SupersededLoadIsRetryable(t *testing.T) {
-	require.True(t, moerr.IsMoErrCode(errLoadGenerationSuperseded, moerr.ErrInvalidState))
+	require.True(t, veccache.IsRetryableLoadError(errLoadGenerationSuperseded))
 	require.Contains(t, errLoadGenerationSuperseded.Error(), "fulltext2 load superseded by a newer generation")
 }
 
