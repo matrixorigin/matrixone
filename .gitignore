@@ -118,3 +118,6 @@ xtool/jstfu/target/
 # written by optools/run_bvt.sh when it starts the datastream server
 /jstfu.log
 test/esqltvf/reports/
+
+# kafka external table E2E reports (local artifacts)
+test/kafkaexttab/reports/

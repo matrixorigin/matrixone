@@ -351,7 +351,7 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		// credentials; re-rendering the AST redacts them
 		// (DataStreamOption.Format / ForeignTableOption.Format), so the raw
 		// CREATE text never reaches statement logging.
-		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil {
+		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
 			return tree.String(statement, dialect.MYSQL)
 		}
 		return text
@@ -4791,6 +4791,15 @@ func executeStmtWithResponse(ses *Session,
 	// RespPostMeta below, so a commit error can never follow an advertised
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
+	// Deferred Kafka scan progress is OWNED BY THE TRANSACTION terminal
+	// (TxnHandler.Commit/Rollback): a successful statement inside BEGIN /
+	// autocommit=0 must not publish until the enclosing transaction commits,
+	// or BEGIN; INSERT..SELECT FROM kafka_t; ROLLBACK would advance the
+	// exactly-once chain past rows that were rolled back. A FAILED statement
+	// discards here as a belt (its rollback path also discards).
+	if err != nil {
+		ses.FinalizeKafkaProgress(false)
+	}
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}

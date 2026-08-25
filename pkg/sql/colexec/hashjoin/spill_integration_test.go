@@ -95,6 +95,106 @@ func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
 	require.Nil(t, result.Batch)
 }
 
+func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false, true},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 1),
+		},
+		equality,
+	)
+	tc.proc.Base.Lim.Size = 8 << 20
+	tc.proc.Base.Lim.SpillSize = 64 << 20
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		budget, err := tc.proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1
+	shuffleRuntimeFilter := &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 10000}
+	tc.arg.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{shuffleRuntimeFilter}
+	tc.barg.Conditions = equality[0]
+	tc.barg.IsShuffle = true
+	tc.barg.ShuffleIdx = 0
+	tc.barg.SpillThreshold = 1
+	tc.barg.NeedBatches = true
+	tc.barg.RuntimeFilterSpec = shuffleRuntimeFilter
+
+	const leftRows = 128
+	leftKeys := make([]int32, leftRows)
+	leftTimes := make([]types.Timestamp, leftRows)
+	rightKeys := make([]int32, 0, leftRows/2)
+	rightTimes := make([]types.Timestamp, 0, leftRows/2)
+	for i := range leftRows {
+		leftKeys[i] = int32(i)
+		leftTimes[i] = 100
+		if i%2 == 0 {
+			rightKeys = append(rightKeys, int32(i))
+			rightTimes = append(rightTimes, 50)
+		}
+	}
+	logicalLeft := makeAsofPayloadBatch(tc.proc, leftKeys, leftTimes, make([]string, leftRows))
+	logicalLeft.Vecs[2].Free(tc.proc.Mp())
+	logicalLeft.Vecs = logicalLeft.Vecs[:2]
+	logicalRight := makeAsofPayloadBatch(tc.proc, rightKeys, rightTimes, make([]string, len(rightKeys)))
+	logicalRight.Vecs[2].Free(tc.proc.Mp())
+	logicalRight.Vecs = logicalRight.Vecs[:2]
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	resetChildrenWithBatch(tc.arg, logicalRight)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	seen := make(map[int32]bool, leftRows)
+	for {
+		result, execErr := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, execErr)
+		if result.Batch != nil {
+			keys := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+			times := vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[1])
+			for row, key := range keys {
+				require.False(t, seen[key], "logical-left row emitted more than once")
+				seen[key] = true
+				if key%2 == 0 {
+					require.False(t, result.Batch.Vecs[1].IsNull(uint64(row)))
+					require.Equal(t, types.Timestamp(50), times[row])
+				} else {
+					require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
+				}
+			}
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Len(t, seen, leftRows)
+}
+
 // TestEmptyProbeDoesNotPanic verifies that emptyProbe handles empty build
 // (ctr.mp == nil) without panicking. This is the path taken when a spill
 // bucket returns BucketEmptyBuild for outer joins.

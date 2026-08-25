@@ -265,6 +265,47 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 	})
 }
 
+func TestNotifySharedHolderChange(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue().(*sliceBasedWaiterQueue)
+
+		mergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("merge")}, "", nil)
+		mergeWaiter.notifyOnSharedHolderChange = true
+		mergeWaiter.setStatus(blocking)
+		defer mergeWaiter.close("", nil)
+
+		completedMergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed-merge")}, "", nil)
+		completedMergeWaiter.notifyOnSharedHolderChange = true
+		completedMergeWaiter.setStatus(completed)
+		defer completedMergeWaiter.close("", nil)
+
+		ordinaryWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("ordinary")}, "", nil)
+		ordinaryWaiter.setStatus(blocking)
+		defer ordinaryWaiter.close("", nil)
+
+		q.put(mergeWaiter, completedMergeWaiter, ordinaryWaiter)
+		q.resetCommittedAt(timestamp.Timestamp{PhysicalTime: 3})
+		q.notifySharedHolderChange(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})
+
+		// Only the merge waiter retries; it also inherits the queue's monotonic
+		// commit timestamp instead of the older holder departure timestamp.
+		require.Equal(t, int64(3), mergeWaiter.wait(context.Background(), nil).ts.PhysicalTime)
+		require.Equal(t, 1, q.size())
+		require.Same(t, ordinaryWaiter, q.first())
+		require.Equal(t, blocking, ordinaryWaiter.getStatus())
+		// Compaction must release every removed queue reference from the
+		// backing array. The queue can live much longer than these waiters, so
+		// merely reducing len would retain pooled waiter objects at the queue's
+		// historical high-water mark.
+		retainedSlots := q.waiters[:3]
+		require.Nil(t, retainedSlots[1])
+		require.Nil(t, retainedSlots[2])
+
+		q.close(notifyValue{})
+		ordinaryWaiter.wait(context.Background(), nil)
+	})
+}
+
 func TestMoveToCannotCloseWaiter(t *testing.T) {
 	reuse.RunReuseTests(func() {
 
