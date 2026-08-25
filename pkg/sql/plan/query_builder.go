@@ -147,6 +147,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		setBitmapByDisplayNode:   make(map[[2]int32]int32),
 		indexHintOwnerByNode:     make(map[int32]int32),
 		userWindowNodes:          make(map[int32]struct{}),
+		internalTopNWindows:      make(map[int32]struct{}),
 		partitionTopNWindowNodes: make(map[int32]struct{}),
 		nextBindTag:              0,
 		mysqlCompatible:          mysqlCompatible,

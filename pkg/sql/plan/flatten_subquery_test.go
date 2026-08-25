@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -2150,7 +2153,7 @@ func TestWrappedCorrelatedScalarProjectionIsEvaluatedAfterJoin(t *testing.T) {
 }
 
 func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
 		SELECT n.n_nationkey,
 		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
 		          FROM region r
@@ -2161,20 +2164,39 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
-	var leftJoin, perOuterWindow bool
+	var leftJoin, boundedPartition, perOuterWindow bool
 	for _, node := range reachableFlattenSubqueryNodes(query) {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
 			leftJoin = true
 		}
+		if node.NodeType == plan.Node_PARTITION {
+			limit, literal := getLiteralUint64(node.Limit)
+			if literal && limit == 1 && node.PartitionByCount == 1 && len(node.OrderBy) == 2 {
+				boundedPartition = true
+			}
+		}
 		if node.NodeType == plan.Node_WINDOW && len(node.WinSpecList) == 1 {
 			window := node.WinSpecList[0].GetW()
-			if window != nil && window.Name == "row_number" && len(window.PartitionBy) == 1 {
+			if window != nil && window.Name == "row_number" && len(window.PartitionBy) == 1 &&
+				len(window.OrderBy) == 1 {
 				perOuterWindow = true
 			}
 		}
 	}
 	require.True(t, leftJoin)
+	require.True(t, boundedPartition)
 	require.True(t, perOuterWindow)
+
+	preparedStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`, 1)
+	require.NoError(t, parseErr)
+	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
+	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
 
 	_, err = runOneStmt(NewMockOptimizer(true), t, `
 		SELECT n.n_nationkey,
@@ -2184,6 +2206,26 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 		         LIMIT 1)
 		  FROM (SELECT n_nationkey, n_regionkey FROM nation) n`)
 	require.ErrorContains(t, err, "outer input without a stable row identity")
+
+	for _, sql := range []string{
+		`SELECT n.n_regionkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n
+		  GROUP BY n.n_regionkey`,
+		`SELECT n.n_regionkey
+		   FROM nation n
+		  GROUP BY n.n_regionkey
+		 HAVING (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1) >= 0`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "outer input without a stable row identity")
+	}
 }
 
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
@@ -2333,13 +2375,13 @@ func TestNormalizeCorrelatedScalarProjectionFallsBack(t *testing.T) {
 				projects:   tt.projects,
 			}
 
-			nodeID, match, outerResult, existential, perOuterLimitOne :=
+			nodeID, match, outerResult, existential, perOuterOrderKey :=
 				builder.normalizeCorrelatedScalarProjection(tt.subID, ctx)
 			require.Equal(t, tt.subID, nodeID)
 			require.Nil(t, match)
 			require.Nil(t, outerResult)
 			require.False(t, existential)
-			require.False(t, perOuterLimitOne)
+			require.Nil(t, perOuterOrderKey)
 		})
 	}
 }

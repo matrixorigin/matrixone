@@ -52,6 +52,10 @@ delete from t2;
 select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as empty_mixed from t1 order by a, b;
 insert into t2 values (50), (60), (70);
 select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as multi_mixed from t1 order by a, b;
+-- @regex("outer input without a stable row identity",true)
+select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as grouped_mixed from t1 group by a;
+-- @regex("outer input without a stable row identity",true)
+select a from t1 group by a having (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
 delete from t1 where b = 23;
 
 -- @case

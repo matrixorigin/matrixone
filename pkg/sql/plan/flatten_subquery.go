@@ -336,7 +336,7 @@ func (builder *QueryBuilder) flattenSubquery(
 	var scalarMatch *plan.Expr
 	var scalarOuterResult *plan.Expr
 	var scalarExistential bool
-	var scalarPerOuterLimitOne bool
+	var scalarPerOuterOrderKey *plan.Expr
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
@@ -384,7 +384,7 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR {
-		subID, scalarMatch, scalarOuterResult, scalarExistential, scalarPerOuterLimitOne =
+		subID, scalarMatch, scalarOuterResult, scalarExistential, scalarPerOuterOrderKey =
 			builder.normalizeCorrelatedScalarProjection(subID, subCtx)
 	}
 
@@ -460,12 +460,12 @@ func (builder *QueryBuilder) flattenSubquery(
 
 		joinType := plan.Node_SINGLE
 		var perOuterLimitKey *plan.Expr
-		if scalarPerOuterLimitOne {
+		if scalarPerOuterOrderKey != nil {
 			if len(filterPreds) > 0 {
 				return 0, nil, moerr.NewNYI(builder.GetContext(),
 					"wrapped correlated LIMIT with deep correlated predicates")
 			}
-			perOuterLimitKey = correlatedScalarOuterRowID(ctx)
+			perOuterLimitKey = builder.correlatedScalarOuterRowID(nodeID, ctx)
 			if perOuterLimitKey == nil {
 				return 0, nil, moerr.NewNYI(builder.GetContext(),
 					"wrapped correlated LIMIT on an outer input without a stable row identity")
@@ -491,8 +491,9 @@ func (builder *QueryBuilder) flattenSubquery(
 			OnList:   joinPreds,
 			SpillMem: builder.joinSpillMem,
 		}, ctx)
-		if scalarPerOuterLimitOne {
-			nodeID, err = builder.appendPerOuterLimitOne(nodeID, perOuterLimitKey, ctx)
+		if scalarPerOuterOrderKey != nil {
+			nodeID, err = builder.appendPerOuterLimitOne(
+				nodeID, perOuterLimitKey, scalarPerOuterOrderKey, ctx)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -671,14 +672,14 @@ func (builder *QueryBuilder) flattenSubquery(
 func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	subID int32,
 	ctx *BindContext,
-) (int32, *plan.Expr, *plan.Expr, bool, bool) {
+) (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr) {
 	if len(ctx.results) != 1 || len(ctx.projects) == 0 || len(ctx.aggregates) > 0 || len(ctx.groups) > 0 ||
 		!hasCorrCol(ctx.projects[0]) || !allCorrColsAtDepthOne(ctx.projects[0]) ||
 		containsVolatileFunction(ctx.projects[0]) {
-		return subID, nil, nil, false, false
+		return subID, nil, nil, false, nil
 	}
 	if !builder.casePreservesType(ctx.projects[0]) {
-		return subID, nil, nil, false, false
+		return subID, nil, nil, false, nil
 	}
 
 	innerDependent := exprHasColRef(ctx.projects[0])
@@ -689,7 +690,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	for {
 		node := builder.qry.Nodes[nodeID]
 		if node.Offset != nil || node.RankOption != nil {
-			return subID, nil, nil, false, false
+			return subID, nil, nil, false, nil
 		}
 		if len(node.OrderBy) > 0 {
 			hasOrdering = true
@@ -697,7 +698,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		if node.Limit != nil {
 			limit, ok := getLiteralUint64(node.Limit)
 			if !ok || limit == 0 {
-				return subID, nil, nil, false, false
+				return subID, nil, nil, false, nil
 			}
 			limitOne = limit == 1
 		}
@@ -705,10 +706,18 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag {
 			if len(node.ProjectList) == 0 || !exprStructuralEqual(node.ProjectList[0], ctx.projects[0]) ||
 				!hasCorrCol(node.ProjectList[0]) || !allCorrColsAtDepthOne(node.ProjectList[0]) {
-				return subID, nil, nil, false, false
+				return subID, nil, nil, false, nil
 			}
-			if innerDependent && (nodeID != subID || hasDistinct || (limitOne && hasOrdering)) {
-				return subID, nil, nil, false, false
+			if innerDependent && (nodeID != subID || hasDistinct ||
+				(limitOne && (hasOrdering || builder.isPrepareStatement))) {
+				return subID, nil, nil, false, nil
+			}
+			var innerOrderSource *plan.Expr
+			if innerDependent && limitOne {
+				innerOrderSource = builder.findRowIDColRef(node.Children[0])
+				if innerOrderSource == nil {
+					return subID, nil, nil, false, nil
+				}
 			}
 
 			liftedResult := builder.pullupThroughProj(
@@ -716,7 +725,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 			innerDependent = exprHasColRef(liftedResult)
 			liftedResult, stillCorrelated := decreaseDepth(liftedResult)
 			if stillCorrelated {
-				return subID, nil, nil, false, false
+				return subID, nil, nil, false, nil
 			}
 
 			marker := DeepCopyExpr(constTrue)
@@ -725,49 +734,78 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 			match := GetColExpr(marker.Typ, ctx.projectTag, 0)
 			if !innerDependent {
 				node.Limit = nil
-				return nodeID, match, liftedResult, limitOne || hasDistinct, false
+				return nodeID, match, liftedResult, limitOne || hasDistinct, nil
 			}
 			if limitOne {
-				// The non-equality fallback applies LIMIT after decorrelation,
-				// partitioned by a stable outer-row identity.
+				// SQL does not define which matching row an unordered LIMIT 1
+				// selects. Use a stable inner Row_ID as an arbitrary ordering key
+				// so the post-join per-outer-row take-one stays memory-bounded.
+				orderPos := int32(len(node.ProjectList))
+				node.ProjectList = append(node.ProjectList, innerOrderSource)
+				orderKey := GetColExpr(innerOrderSource.Typ, ctx.projectTag, orderPos)
 				node.Limit = nil
-				return nodeID, match, liftedResult, false, true
+				return nodeID, match, liftedResult, false, orderKey
 			}
-			return nodeID, match, liftedResult, false, false
+			return nodeID, match, liftedResult, false, nil
 		}
 
 		if len(node.Children) != 1 {
-			return subID, nil, nil, false, false
+			return subID, nil, nil, false, nil
 		}
 		switch node.NodeType {
 		case plan.Node_PROJECT, plan.Node_SORT:
 		case plan.Node_DISTINCT:
 			hasDistinct = true
 		default:
-			return subID, nil, nil, false, false
+			return subID, nil, nil, false, nil
 		}
 		nodeID = node.Children[0]
 	}
 }
 
-func correlatedScalarOuterRowID(ctx *BindContext) *plan.Expr {
+func (builder *QueryBuilder) correlatedScalarOuterRowID(nodeID int32, ctx *BindContext) *plan.Expr {
 	if ctx == nil || len(ctx.bindings) != 1 {
 		return nil
 	}
 	binding := ctx.bindings[0]
+	var rowID *plan.Expr
 	for i, col := range binding.cols {
 		if col != catalog.Row_ID || i >= len(binding.colIsHidden) || !binding.colIsHidden[i] ||
 			i >= len(binding.types) || binding.types[i] == nil {
 			continue
 		}
-		return GetColExpr(*binding.types[i], binding.tag, int32(i))
+		rowID = GetColExpr(*binding.types[i], binding.tag, int32(i))
+		break
 	}
-	return nil
+	if rowID == nil {
+		return nil
+	}
+
+	// Only transparent unary nodes preserve the base binding unchanged. AGG,
+	// PROJECT, JOIN, WINDOW, and other boundaries may retain the BindContext but
+	// no longer output its Row_ID, so fail closed instead of emitting an
+	// unremappable PARTITION key.
+	for nodeID != binding.nodeId {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return nil
+		}
+		node := builder.qry.Nodes[nodeID]
+		if len(node.Children) != 1 {
+			return nil
+		}
+		switch node.NodeType {
+		case plan.Node_FILTER, plan.Node_SORT:
+			nodeID = node.Children[0]
+		default:
+			return nil
+		}
+	}
+	return rowID
 }
 
 func (builder *QueryBuilder) appendPerOuterLimitOne(
 	nodeID int32,
-	partitionKey *plan.Expr,
+	partitionKey, orderKey *plan.Expr,
 	ctx *BindContext,
 ) (int32, error) {
 	windowTag := builder.genNewBindTag()
@@ -791,6 +829,10 @@ func (builder *QueryBuilder) appendPerOuterLimitOne(
 			WindowFunc:  rowNumberFunc,
 			Name:        "row_number",
 			PartitionBy: []*plan.Expr{DeepCopyExpr(partitionKey)},
+			OrderBy: []*plan.OrderBySpec{{
+				Expr: DeepCopyExpr(orderKey),
+				Flag: plan.OrderBySpec_INTERNAL,
+			}},
 			Frame: &plan.FrameClause{
 				Type:  plan.FrameClause_ROWS,
 				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
@@ -805,14 +847,16 @@ func (builder *QueryBuilder) appendPerOuterLimitOne(
 	if err != nil {
 		return 0, err
 	}
-	return builder.appendNode(&plan.Node{
+	windowID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_WINDOW,
 		Children:    []int32{partitionID},
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
 		FilterList:  []*plan.Expr{rowFilter},
-	}, ctx), nil
+	}, ctx)
+	builder.internalTopNWindows[windowID] = struct{}{}
+	return windowID, nil
 }
 
 func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
