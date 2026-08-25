@@ -1419,6 +1419,25 @@ public:
             // Scoped so the device matrix is released before the caller's
             // quantize pass — handing the VRAM back before the index build asks
             // for it (a 1M CAGRA build peaks at 7.65 of 8.15 GB).
+            //
+            // GOVERNED. This upload is n_rows x dimension of B and was the one
+            // large device allocation on this path taking no claim, so two int8
+            // builds could observe the same free VRAM and upload concurrently --
+            // cap_train_rows_to_gpu_mem is only a snapshot, not an admission, and
+            // a snapshot cannot serialise anything. The claim is declared BEFORE
+            // the matrix so it is destroyed after it, holding the ledger for the
+            // allocation's whole lifetime rather than just the decision.
+            //
+            // Covers the matrix, not quantizer_.train's internal scratch, which
+            // cuVS sizes; the matrix is the dominant term and the budget fraction
+            // is what the remainder rides in.
+            const size_t upload_bytes =
+                static_cast<size_t>(n_rows) * static_cast<size_t>(this->dimension) * sizeof(B);
+            matrixone::device_memory_governor::reservation train_claim;
+            if (upload_bytes > 0) {
+                train_claim = matrixone::device_memory_governor::reserve(
+                    upload_bytes, "quantizer::train upload", this->budget_percent());
+            }
             auto host_view = raft::make_host_matrix_view<const B, int64_t>(
                 rows, n_rows, static_cast<int64_t>(dimension));
             auto dev = raft::make_device_matrix<B, int64_t>(*res, n_rows, dimension);
