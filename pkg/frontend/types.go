@@ -338,6 +338,7 @@ type PrepareStmt struct {
 	// ordinary COM_STMT Query executions never scan or copy the cached plan.
 	numericPrefixConsumer bool
 	hasPaginationParams   bool
+	hasLagLeadParams      bool
 	paramKinds            []vector.PrepareParamKind
 	paramMetadata         []bool
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the

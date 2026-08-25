@@ -230,6 +230,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
+	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.reusePlanSnapshot = false
 	c.capturePlanSnapshot()
 
@@ -1230,6 +1231,7 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.compiledRightSingleNodes = nil
 	defer func() {
 		c.compiledRightSingleNodes = nil
@@ -1400,7 +1402,20 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 				return nil, err
 			}
 			if limitExpr != nil {
-				rs = c.compileLimit(&plan.Node{Limit: limitExpr}, []*Scope{rs})[0]
+				limitNode := &plan.Node{Limit: limitExpr}
+				drainForFoundRows := false
+				if statementHasSQLCalcFoundRows(c.stmt) {
+					if c.foundRowsOwnerNode == nil {
+						c.foundRowsOwnerNode = limitNode
+					} else {
+						// An explicit top-level OFFSET remains the owner of the
+						// pre-offset count. The dynamic prepared session limit is
+						// above it, so it must drain without publishing; otherwise
+						// it stops before the OFFSET observes EOF.
+						drainForFoundRows = true
+					}
+				}
+				rs = c.compileLimitWithFoundRowsDrain(limitNode, []*Scope{rs}, drainForFoundRows)[0]
 			}
 		}
 
@@ -1596,17 +1611,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	}()
 	node := nodes[curNodeIdx]
 
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				if cval.U64Val == 0 {
-					// optimize for limit 0
-					rs := c.newEmptyMergeScope()
-					rs.Proc = c.proc.NewNoContextChildProc(0)
-					return c.compileLimit(node, []*Scope{rs}), nil
-				}
-			}
-		}
+	if c.canUseLiteralLimitZeroFastPath(node) {
+		// optimize for limit 0
+		rs := c.newEmptyMergeScope()
+		rs.Proc = c.proc.NewNoContextChildProc(0)
+		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
 	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
@@ -1623,7 +1632,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, ss))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
@@ -1637,7 +1646,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(nodeCopy, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(nodeCopy, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(nodeCopy, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
@@ -1673,7 +1682,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileRestrict(node, ss)
@@ -1694,7 +1703,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		orderedGroupConcat := hasOrderedGroupConcat(node)
 		orderedSetPercentile := hasOrderedSetPercentile(node)
 		if c.canCompileShuffleGroup(node) {
@@ -1721,7 +1730,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
@@ -1731,7 +1740,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
@@ -1741,7 +1750,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileTimeWin(node, c.compileSort(node, ss))))
 		return ss, nil
 	case plan.Node_FILL:
@@ -1751,7 +1760,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
@@ -1766,10 +1775,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		if nodeHasUserLevelLockFunction(node) {
-			left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
-			right = c.ensureUserLevelLockSideEffectsOnCoordinator(node, right)
-		}
+		left = c.ensureCoordinatorOnlyFunctions(node, left)
+		right = c.ensureCoordinatorOnlyFunctions(node, right)
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -1784,7 +1791,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileSort(node, ss)))
 		return ss, nil
 	case plan.Node_PARTITION:
@@ -1794,7 +1801,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compilePartition(node, ss)))
 		return ss, nil
 	case plan.Node_UNION:
@@ -1810,7 +1817,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileUnion(node, left, right)
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
@@ -1826,7 +1833,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
@@ -1846,7 +1853,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileUnionAll(node, left, right, lazy)
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_DELETE:
@@ -1889,10 +1896,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		if nodeHasUserLevelLockFunction(node) {
-			left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
-			right = c.ensureUserLevelLockSideEffectsOnCoordinator(node, right)
-		}
+		left = c.ensureCoordinatorOnlyFunctions(node, left)
+		right = c.ensureCoordinatorOnlyFunctions(node, right)
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		return c.compileFuzzyFilter(node, nodes, left, right)
 	case plan.Node_PRE_INSERT_UK:
@@ -1957,7 +1962,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss, err = c.compileLock(node, ss)
 		if err != nil {
 			return nil, err
@@ -1977,7 +1982,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
@@ -1986,7 +1991,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
@@ -2015,7 +2020,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
+		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		ss = c.compileSort(node, c.compileApply(node, nodes[node.Children[1]], left))
 		return ss, nil
 	case plan.Node_POSTDML:
@@ -2025,13 +2030,82 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compilePostDml(node, ss)
 		return ss, nil
 
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", node))
 	}
+}
+
+func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
+	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
+	if !ok || cExpr.Lit == nil {
+		return false
+	}
+	cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val)
+	return ok && cval.U64Val == 0
+}
+
+func (c *Compile) ownsFoundRows(node *plan.Node) bool {
+	return statementHasSQLCalcFoundRows(c.stmt) && node != nil && node == c.foundRowsOwnerNode
+}
+
+// selectFoundRowsOwnerNode designates only pagination that belongs to the
+// statement's final result. An explicit top-level LIMIT/OFFSET is identified
+// from the AST before looking through projection wrappers. A finite ordinary
+// sql_select_limit is identified by the exact node materialized by Compile.
+// Prepared sql_select_limit remains dynamic and is assigned later by
+// compileSteps. Nested semantic pagination must never become the owner.
+func (c *Compile) selectFoundRowsOwnerNode(qry *plan.Query) *plan.Node {
+	if c == nil || qry == nil || !statementHasSQLCalcFoundRows(c.stmt) || len(qry.Steps) == 0 {
+		return nil
+	}
+
+	rootID := qry.Steps[len(qry.Steps)-1]
+	if rootID < 0 || int(rootID) >= len(qry.Nodes) {
+		return nil
+	}
+	if statementHasSQLCalcFoundRowsPagination(c.stmt) {
+		return findFoundRowsOwnerNode(qry, rootID)
+	}
+
+	root := qry.Nodes[rootID]
+	if root != nil && root == c.materializedSQLSelectLimitOwner {
+		return root
+	}
+	return nil
+}
+
+func findFoundRowsOwnerNode(qry *plan.Query, rootID int32) *plan.Node {
+	if qry == nil || rootID < 0 || int(rootID) >= len(qry.Nodes) {
+		return nil
+	}
+
+	queue := []int32{rootID}
+	visited := make(map[int32]struct{})
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		if _, ok := visited[nodeID]; ok || nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			continue
+		}
+		visited[nodeID] = struct{}{}
+
+		node := qry.Nodes[nodeID]
+		if node == nil {
+			continue
+		}
+		if node.Limit != nil || node.Offset != nil {
+			return node
+		}
+		queue = append(queue, node.Children...)
+	}
+	return nil
 }
 
 func isIdentityProjectionOfChild(projectList, childProjectList []*plan.Expr) bool {
@@ -2442,12 +2516,17 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	}()
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
-		if err := c.hydrateMongoScan(node); err != nil {
+		// Hydration resolves execution-time catalog state and prunes the source
+		// mapping to the physical projection.  Keep that mutation isolated even
+		// when this helper is called outside compilePlanScope, because a prepared
+		// execution may otherwise hand us its cached logical plan directly.
+		executionNode := plan2.DeepCopyNode(node)
+		if err := c.hydrateMongoScan(executionNode); err != nil {
 			return nil, err
 		}
 		scope := c.constructMongoScanScope()
 		currentFirstFlag := c.anal.isFirst
-		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
+		op := mongoscan.NewArgument().WithScan(executionNode.ExternScan.MongodbScan)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		c.anal.isFirst = false
@@ -4355,7 +4434,7 @@ func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
 }
 
 func (c *Compile) compileTableScanFiltersAndProjection(node *plan.Node, ss []*Scope) []*Scope {
-	ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 
 	hasUserLevelLockFilter := hasUserLevelLockFunction(node.FilterList)
 
@@ -4389,9 +4468,7 @@ func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
 	if len(node.FilterList) == 0 && len(node.RuntimeFilterProbeList) == 0 {
 		return ss
 	}
-	if hasUserLevelLockFunction(node.FilterList) || runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) {
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-	}
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 	currentFirstFlag := c.anal.isFirst
 	var op *filter.Filter
 	for i := range ss {
@@ -4408,10 +4485,7 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 
-	if hasUserLevelLockFunction(node.ProjectList) {
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-	}
-
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
@@ -4471,14 +4545,14 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) ensureUserLevelLockSideEffectsOnCoordinator(node *plan.Node, ss []*Scope) []*Scope {
-	if !nodeHasUserLevelLockFunction(node) || c.userLevelLockSideEffectsRunOnCoordinator(ss) {
+func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
 }
 
-func (c *Compile) userLevelLockSideEffectsRunOnCoordinator(ss []*Scope) bool {
+func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
 	if len(ss) != 1 {
 		return false
 	}
@@ -4517,9 +4591,91 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 	return false
 }
 
+func nodeHasFoundRowsFunction(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if hasFoundRowsFunction(node.ProjectList) ||
+		hasFoundRowsFunction(node.OnList) ||
+		hasFoundRowsFunction(node.FilterList) ||
+		hasFoundRowsFunction(node.GroupBy) ||
+		hasFoundRowsFunction(node.AggList) ||
+		hasFoundRowsFunction(node.WinSpecList) ||
+		orderBySpecsHaveFoundRowsFunction(node.OrderBy) ||
+		exprHasFoundRowsFunction(node.Limit) ||
+		exprHasFoundRowsFunction(node.Offset) ||
+		hasFoundRowsFunction(node.TblFuncExprList) ||
+		hasFoundRowsFunction(node.BlockFilterList) ||
+		exprHasFoundRowsFunction(node.Interval) ||
+		exprHasFoundRowsFunction(node.Sliding) ||
+		exprHasFoundRowsFunction(node.Timestamp) ||
+		exprHasFoundRowsFunction(node.WEnd) ||
+		hasFoundRowsFunction(node.FillVal) ||
+		hasFoundRowsFunction(node.OnUpdateExprs) {
+		return true
+	}
+	if node.IndexReaderParam != nil {
+		return orderBySpecsHaveFoundRowsFunction(node.IndexReaderParam.OrderBy) ||
+			exprHasFoundRowsFunction(node.IndexReaderParam.Limit)
+	}
+	return false
+}
+
 func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if exprHasUserLevelLockFunction(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFoundRowsFunction(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprHasFoundRowsFunction(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasFoundRowsFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F == nil {
+			return false
+		}
+		if e.F.Func != nil {
+			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
+			if fid == function.FOUND_ROWS {
+				return true
+			}
+		}
+		return hasFoundRowsFunction(e.F.Args)
+	case *plan.Expr_List:
+		return e.List != nil && hasFoundRowsFunction(e.List.List)
+	case *plan.Expr_W:
+		if e.W == nil {
+			return false
+		}
+		if exprHasFoundRowsFunction(e.W.WindowFunc) || hasFoundRowsFunction(e.W.PartitionBy) {
+			return true
+		}
+		for _, orderBy := range e.W.OrderBy {
+			if orderBy != nil && exprHasFoundRowsFunction(orderBy.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func orderBySpecsHaveFoundRowsFunction(specs []*plan.OrderBySpec) bool {
+	for _, spec := range specs {
+		if spec != nil && exprHasFoundRowsFunction(spec.Expr) {
 			return true
 		}
 	}
@@ -5652,6 +5808,21 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// SQL_CALC_FOUND_ROWS must not use the Top-N shortcut: Top-N is
+		// intentionally allowed to stop upstream work. Build the complete
+		// ordered stream first, then apply OFFSET and LIMIT on the final scope.
+		if len(node.OrderBy) > 0 {
+			ss = c.compileOrder(node, ss)
+		}
+		if node.Offset != nil {
+			ss = c.compileOffset(node, ss)
+		}
+		if node.Limit != nil {
+			ss = c.compileLimit(node, ss)
+		}
+		return ss
+	}
 	switch {
 	case node.Limit != nil && node.Offset == nil && len(node.OrderBy) > 0: // top
 		return c.compileTop(node, node.Limit, ss)
@@ -5822,6 +5993,19 @@ func (c *Compile) compileFill(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// OFFSET owns the pre-offset count for SQL_CALC_FOUND_ROWS, so it must
+		// run on the coordinator as well. This keeps remote workers stateless and
+		// lets the following coordinator Limit preserve this complete count.
+		rs := c.newMergeScope(ss)
+		arg := constructOffset(node)
+		arg.WithFoundRows(true)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructOffset(node)
@@ -5843,6 +6027,30 @@ func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
+	return c.compileLimitWithFoundRowsDrain(node, ss, false)
+}
+
+func (c *Compile) compileLimitWithFoundRowsDrain(node *plan.Node, ss []*Scope, drainOnly bool) []*Scope {
+	if c.ownsFoundRows(node) || drainOnly {
+		// Keep FOUND_ROWS-aware Limits on the coordinator. Installing them on
+		// producer scopes would either publish partial counts from local workers
+		// or stop a producer before the downstream owner observes EOF. Merging the
+		// complete producer streams first gives draining and publication one
+		// deterministic coordinator path.
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		rs := c.newMergeScope(ss)
+		arg := constructLimit(node)
+		if c.ownsFoundRows(node) {
+			arg.WithFoundRows(true)
+		} else {
+			arg.WithFoundRowsDrain(true)
+		}
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(node)
@@ -6182,7 +6390,7 @@ func supportsRemotePreparedNumericPrefix(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion29
+	return ok && protocolVersion >= defines.MORPCVersion30
 }
 
 func supportsRemoteStatementLastInsertID(service string) bool {

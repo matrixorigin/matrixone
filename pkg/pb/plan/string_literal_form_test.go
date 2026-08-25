@@ -144,7 +144,7 @@ func TestRequiresMORPCVersion23StringLiterals(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion29NumericPrefix(t *testing.T) {
+func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	prefixCast := &Expr{
 		Typ: Type{Id: 14, Charset: 255},
 		Expr: &Expr_F{F: &Function{
@@ -163,7 +163,7 @@ func TestRequiresMORPCVersion29NumericPrefix(t *testing.T) {
 		}},
 	}
 
-	required, err := RequiresMORPCVersion29NumericPrefix(&struct{ Expr *Expr }{Expr: prefixCast})
+	required, err := RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: prefixCast})
 	require.NoError(t, err)
 	require.True(t, required)
 	nested := &Expr{
@@ -173,10 +173,10 @@ func TestRequiresMORPCVersion29NumericPrefix(t *testing.T) {
 			Args: []*Expr{ordinaryCast, prefixCast},
 		}},
 	}
-	required, err = RequiresMORPCVersion29NumericPrefix(&struct{ Expr *Expr }{Expr: nested})
+	required, err = RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: nested})
 	require.NoError(t, err)
 	require.True(t, required)
-	required, err = RequiresMORPCVersion29NumericPrefix(&struct{ Expr *Expr }{Expr: ordinaryCast})
+	required, err = RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: ordinaryCast})
 	require.NoError(t, err)
 	require.False(t, required)
 }

@@ -6,9 +6,16 @@ use ft2db;
 create stage ft2stage URL='file://$resources/fulltext/';
 create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
 insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+set @dl_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl') limit 1);
+set @wait_tenant_dl_sql = concat(
+'select coalesce(max(chunk_id), -1) >= 0 as tenant_dl_ready from `', database(), '`.`', @dl_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_tenant_dl from @wait_tenant_dl_sql;
+execute wait_tenant_dl;
+➤ tenant_dl_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_tenant_dl;
 select id from dl where match(fpath) against('matrixone');
 ➤ id[-5,64,0]  𝄀
 0

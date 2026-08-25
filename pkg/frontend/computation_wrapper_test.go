@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -155,6 +156,8 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 		onlyFullGroupBySet:  true,
 		getFromSendLongData: make(map[int]struct{}),
 		protocolVersion:     currentProtocolVersion(proc),
+		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(preparePlan.GetDcl().GetPrepare().Plan),
+		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(preparePlan.GetDcl().GetPrepare().Plan)) > 0,
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
@@ -335,6 +338,133 @@ func BenchmarkInitExecuteStmtParamOrdinaryBinaryQueryFastPath(b *testing.B) {
 	}
 }
 
+func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
+	binaryParam := func(value string, mysqlType defines.MysqlType) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+			return nil
+		}
+	}
+	textBooleanParam := func(value bool) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, ses *Session, prepareStmt *PrepareStmt, _ *TxnComputationWrapper) *plan.Execute {
+			require.NoError(t, ses.SetUserDefinedVar("offset_value", value, ""))
+			return &plan.Execute{
+				Name: prepareStmt.Name,
+				Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "offset_value"}}}},
+			}
+		}
+	}
+
+	tests := []struct {
+		name      string
+		sql       string
+		wantParam string
+		wantError bool
+		configure func(*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper) *plan.Execute
+	}{
+		{
+			name:      "binary float",
+			sql:       "select lag(1, ?) over ()",
+			wantError: true,
+			configure: binaryParam("1", defines.MYSQL_TYPE_DOUBLE),
+		},
+		{
+			name:      "binary signed tiny zero lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "0",
+			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny one lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny zero lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "0",
+			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny one lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "text boolean false lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "0",
+			configure: textBooleanParam(false),
+		},
+		{
+			name:      "text boolean true lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: textBooleanParam(true),
+		},
+		{
+			name:      "text boolean false lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "0",
+			configure: textBooleanParam(false),
+		},
+		{
+			name:      "text boolean true lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "1",
+			configure: textBooleanParam(true),
+		},
+		{
+			name:      "binary integer control",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_LONGLONG),
+		},
+	}
+
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, uint32(120+i), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+			execPlan := test.configure(t, ses, prepareStmt, cw)
+
+			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, execPlan, prepareStmt.Name)
+			if test.wantError {
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+				require.Same(t, sentinel, prepareStmt.compile)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Same(t, sentinel, retComp)
+			require.Equal(t, test.wantParam, cw.proc.GetPrepareParams().GetStringAt(0))
+			if owned {
+				executionStmt.Free()
+			}
+		})
+	}
+}
+
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		mysqlType  defines.MysqlType
@@ -471,7 +601,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 	project := projectNode.ProjectList[0]
 	require.True(t, types.T(project.Typ.Id).IsDecimal(), project.String())
-	requiresV26, scanErr := plan.RequiresMORPCVersion29NumericPrefix(project)
+	requiresV26, scanErr := plan.RequiresMORPCVersion30NumericPrefix(project)
 	require.NoError(t, scanErr)
 	require.True(t, requiresV26, project.String())
 
@@ -488,7 +618,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0))
 
 	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
-	requiresV26, scanErr = plan.RequiresMORPCVersion29NumericPrefix(originalProjectNode.ProjectList[0])
+	requiresV26, scanErr = plan.RequiresMORPCVersion30NumericPrefix(originalProjectNode.ProjectList[0])
 	require.NoError(t, scanErr)
 	require.False(t, requiresV26)
 }
@@ -1392,8 +1522,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
-		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion29},
-		{name: "numeric prefix rollback", from: defines.MORPCVersion29, to: defines.MORPCVersion25},
+		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion30},
+		{name: "numeric prefix rollback", from: defines.MORPCVersion30, to: defines.MORPCVersion25},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)

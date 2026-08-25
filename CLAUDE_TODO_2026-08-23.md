@@ -317,3 +317,10 @@
 2. 对照 main 新改动与 prepared numeric-prefix/runtime cache 语义逐块合并，不整文件选边。
 3. 运行冲突包全量 CGo UT、关键 issue 回归、build/vet/SCA/diff check。
 4. 推送 merge commit并确认 PR 恢复 MERGEABLE。
+
+### 第十三轮执行结果
+
+- 合并 `mo/main@8dd1efc201`；解决 `defines/const.go`、`frontend/computation_wrapper.go`、`sql/plan/utils.go` 三处语义冲突。
+- main v29 已用于 FOUND_ROWS migration，prepared numeric-prefix capability 顺延为 v30并同步全部检测、错误消息和测试。
+- 合并 main 新增 LAG/LEAD offset validation 与 branch hot-path capability cache：PREPARE/rebuild 缓存 `hasLagLeadParams`，仅相关 execution 构建 runtime params并做 boolean normalization，普通 COM_STMT 不增加 plan traversal。
+- 首轮并行测试因磁盘临时空间不足失败；清理 Go build/temp cache 后重跑。defines/pb/plan/function/frontend/compile/process、关键 issue 回归、build、vet、SCA、diff check 全部通过。

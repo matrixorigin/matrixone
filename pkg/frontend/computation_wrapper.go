@@ -1030,6 +1030,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
+		prepareStmt.hasLagLeadParams = len(plan2.PreparedLagLeadParamPositions(newPreparePlan.Plan)) > 0
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -1099,7 +1100,7 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeNumericPrefixCandidate := false
 	hasNumericPrefixPacket := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
-		prepareStmt.hasPaginationParams || preparedExplain
+		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
@@ -1164,11 +1165,16 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
 	if prepareStmt.hasPaginationParams {
 		if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+	}
+	if prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams {
+		if err := normalizePreparedOffsetBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
 	}
@@ -1408,12 +1414,14 @@ func newPreparedExecutionRetry(paramVals []any, binaryExecute bool) *preparedExe
 	}
 }
 
-func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+func normalizePreparedOffsetBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
 	params := proc.GetPrepareParams()
 	if params == nil {
 		return nil
 	}
-	for _, position := range plan2.PreparedPaginationParamPositions(preparePlan) {
+	positions := plan2.PreparedPaginationParamPositions(preparePlan)
+	positions = append(positions, plan2.PreparedLagLeadParamPositions(preparePlan)...)
+	for _, position := range positions {
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}
@@ -1554,7 +1562,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			IsBin:               proc.GetPrepareParamIsBin(i),
 			IsBinaryProtocol:    true,
 			PrepareParamKind:    proc.GetPrepareParamKind(i),
-			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion29,
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
 		if params.IsNull(uint64(i)) {
 			// NULL has no runtime value type, but it must retain its parameter
@@ -1649,7 +1657,7 @@ func buildExecuteUserParams(
 			Value:               param,
 			IsBin:               paramIsBin[i],
 			PrepareParamKind:    paramKinds[i],
-			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion29,
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
 	}
 	return

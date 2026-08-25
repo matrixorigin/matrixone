@@ -5650,7 +5650,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 	commonValue := root.ProjectList[0]
 	require.Equal(t, "coalesce", commonValue.GetF().GetFunc().GetObjName(), commonValue.String())
 	require.True(t, types.T(commonValue.Typ.Id).IsDecimal(), commonValue.String())
-	requiresV26, err := plan0.RequiresMORPCVersion29NumericPrefix(commonValue)
+	requiresV26, err := plan0.RequiresMORPCVersion30NumericPrefix(commonValue)
 	require.NoError(t, err)
 	require.True(t, requiresV26, commonValue.String())
 }

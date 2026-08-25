@@ -2770,6 +2770,7 @@ func createPrepareStmtInSession(
 		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
 		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -4837,6 +4838,7 @@ func executeStmtWithResponse(ses *Session,
 	if err != nil {
 		return err
 	}
+	recordLastFoundRows(ses, execCtx)
 
 	return
 }
@@ -5381,6 +5383,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SessionId:              ses.GetSessId(),
 		ApplySQLSelectLimit:    !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
 		CountUpdateChangedRows: countUpdateChangedRows(ses),
+		FoundRows:              ses.GetLastFoundRows(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the

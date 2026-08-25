@@ -146,22 +146,22 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
-// RequiresMORPCVersion29NumericPrefix reports whether an owner contains a
+// RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
 // planner-injected CAST that uses the numeric-prefix sentinel. Charset=255 was
 // deliberately unused before this contract, so older workers must not execute
 // any plan that carries it.
-func RequiresMORPCVersion29NumericPrefix(owner any) (bool, error) {
+func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
 	required := false
 	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
 		if !required {
-			required = expr.requiresMORPCVersion29NumericPrefix()
+			required = expr.requiresMORPCVersion30NumericPrefix()
 		}
 		return nil
 	})
 	return required, err
 }
 
-func (m *Expr) requiresMORPCVersion29NumericPrefix() bool {
+func (m *Expr) requiresMORPCVersion30NumericPrefix() bool {
 	if m == nil {
 		return false
 	}
@@ -171,45 +171,45 @@ func (m *Expr) requiresMORPCVersion29NumericPrefix() bool {
 			return true
 		}
 	}
-	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion29NumericPrefix() {
+	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion30NumericPrefix() {
 		return true
 	}
 	if fn := m.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			if arg.requiresMORPCVersion29NumericPrefix() {
+			if arg.requiresMORPCVersion30NumericPrefix() {
 				return true
 			}
 		}
 	}
 	if list := m.GetList(); list != nil {
 		for _, item := range list.List {
-			if item.requiresMORPCVersion29NumericPrefix() {
+			if item.requiresMORPCVersion30NumericPrefix() {
 				return true
 			}
 		}
 	}
-	if subquery := m.GetSub(); subquery != nil && subquery.Child.requiresMORPCVersion29NumericPrefix() {
+	if subquery := m.GetSub(); subquery != nil && subquery.Child.requiresMORPCVersion30NumericPrefix() {
 		return true
 	}
 	if window := m.GetW(); window != nil {
-		if window.WindowFunc.requiresMORPCVersion29NumericPrefix() {
+		if window.WindowFunc.requiresMORPCVersion30NumericPrefix() {
 			return true
 		}
 		for _, item := range window.PartitionBy {
-			if item.requiresMORPCVersion29NumericPrefix() {
+			if item.requiresMORPCVersion30NumericPrefix() {
 				return true
 			}
 		}
 		for _, order := range window.OrderBy {
-			if order != nil && order.Expr.requiresMORPCVersion29NumericPrefix() {
+			if order != nil && order.Expr.requiresMORPCVersion30NumericPrefix() {
 				return true
 			}
 		}
 		if window.Frame != nil {
-			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion29NumericPrefix() {
+			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion30NumericPrefix() {
 				return true
 			}
-			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion29NumericPrefix() {
+			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion30NumericPrefix() {
 				return true
 			}
 		}

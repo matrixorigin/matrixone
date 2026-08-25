@@ -681,6 +681,9 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 			}
 		}
 
+		// pat can be a zero-copy string backed by a reusable input vector. Both
+		// map keys and regexp expressions must outlive the current data block.
+		pat = strings.Clone(pat)
 		reg, err = regexp.Compile(pat)
 		if err != nil {
 			return nil, err

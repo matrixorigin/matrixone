@@ -1738,16 +1738,16 @@ func validateRemoteNumericPrefixPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	requiresVersion29, err := plan.RequiresMORPCVersion29NumericPrefix(p)
+	requiresVersion30, err := plan.RequiresMORPCVersion30NumericPrefix(p)
 	if err != nil {
 		return err
 	}
-	if !requiresVersion29 {
+	if !requiresVersion30 {
 		return nil
 	}
 	if proc == nil || !supportsRemotePreparedNumericPrefix(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"prepared numeric-prefix casts require MORPC protocol version 29",
+			"prepared numeric-prefix casts require MORPC protocol version 30",
 		)
 	}
 	return nil
