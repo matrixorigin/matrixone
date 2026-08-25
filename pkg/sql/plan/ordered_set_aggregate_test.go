@@ -37,6 +37,14 @@ func findAggregateByName(query *planpb.Query, name string) *planpb.Function {
 	return nil
 }
 
+func TestMedianSetOrderReferenceMarkerPreservesCaseSensitiveKeys(t *testing.T) {
+	upper := medianSetOrderReferenceMarker("A").(*tree.UnresolvedName).ColName()
+	lower := medianSetOrderReferenceMarker("a").(*tree.UnresolvedName).ColName()
+	require.NotEqual(t, upper, lower)
+	require.Equal(t, strings.ToLower(upper), upper)
+	require.Equal(t, strings.ToLower(lower), lower)
+}
+
 func TestBuildOrderedSetAggregates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	for _, tc := range []struct {
@@ -134,6 +142,27 @@ func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
 		`select median((select a as lhs from select_test.bind_select order by lhs limit 1))
   within group (order by (select a as rhs from select_test.bind_select order by rhs limit 1))
   from select_test.bind_select x`,
+		`select median((select a as lhs from select_test.bind_select order by lhs limit 1))
+  within group (order by (select a from select_test.bind_select order by a limit 1))
+  from select_test.bind_select x`,
+		`select median((select a as lhs from select_test.bind_select order by lhs limit 1))
+  within group (order by (select a from select_test.bind_select order by 1 limit 1))
+  from select_test.bind_select x`,
+		`select median((select a + 1 as lhs from select_test.bind_select order by lhs limit 1))
+  within group (order by (select a + 1 from select_test.bind_select order by a + 1 limit 1))
+  from select_test.bind_select x`,
+		`select median((select b as a from select_test.bind_select order by a + 1 limit 1))
+  within group (order by (select b as rhs from select_test.bind_select order by a + 1 limit 1))
+  from select_test.bind_select x`,
+		`select median((select a as lhs from select_test.bind_select group by lhs limit 1))
+  within group (order by (select a from select_test.bind_select group by a limit 1))
+  from select_test.bind_select x`,
+		`select median((select a as lhs from select_test.bind_select group by lhs limit 1))
+  within group (order by (select a from select_test.bind_select group by 1 limit 1))
+  from select_test.bind_select x`,
+		`select median((select max(a) as lhs from select_test.bind_select having lhs > 0))
+  within group (order by (select max(a) from select_test.bind_select having max(a) > 0))
+  from select_test.bind_select x`,
 		`select median((select lhs.a from (select a from select_test.bind_select) lhs(a) limit 1))
   within group (order by (select rhs.b from (select a from select_test.bind_select) rhs(b) limit 1))
   from select_test.bind_select x`,
@@ -192,6 +221,39 @@ func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
     union all
     select a from select_test.bind_select
     order by rhs limit 1
+  )) from select_test.bind_select`,
+		`select median((
+    select a as lhs from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by lhs limit 1
+  )) within group (order by (
+    select a from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by a limit 1
+  )) from select_test.bind_select`,
+		`select median((
+    select a as lhs from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by lhs + 1 limit 1
+  )) within group (order by (
+    select a from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by a + 1 limit 1
+  )) from select_test.bind_select`,
+		`select median((
+    select a as lhs from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by lhs limit 1
+  )) within group (order by (
+    select a from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by 1 limit 1
   )) from select_test.bind_select`,
 		`select median((with recursive c(n) as (
     select 1 union all select n + 1 from c where n < 2
@@ -511,6 +573,28 @@ from select_test.bind_select x join select_test.bind_select y on x.a = y.a`,
 )) from select_test.bind_select`,
 		},
 		{
+			name: "top-level result alias takes precedence over source column",
+			sql: `select median((
+  select b as a from select_test.bind_select order by a limit 1
+)) within group (order by (
+  select b as rhs from select_test.bind_select order by bind_select.a limit 1
+)) from select_test.bind_select`,
+		},
+		{
+			name: "UNION compound result expressions remain semantic",
+			sql: `select median((
+  select a as lhs from select_test.bind_select
+  union all
+  select a from select_test.bind_select
+  order by lhs + 1 limit 1
+)) within group (order by (
+  select a from select_test.bind_select
+  union all
+  select a from select_test.bind_select
+  order by a + 2 limit 1
+)) from select_test.bind_select`,
+		},
+		{
 			name: "CTE local alias versus correlated outer alias",
 			sql: `select median((with c as (
   select l.a from select_test.bind_select l
@@ -538,6 +622,42 @@ from select_test.bind_select`,
 			require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
 		})
 	}
+}
+
+func TestBuildMedianWithinGroupPreservesHavingAliasPrecedence(t *testing.T) {
+	left := `select median((
+  select a + 1 as a from select_test.bind_select
+  where a = 1 having a = 0 limit 1
+)) from select_test.bind_select`
+	right := `select median((
+  select a + 1 from select_test.bind_select
+  where a = 1 having a = 0 limit 1
+)) from select_test.bind_select`
+	combined := `select median((
+  select a + 1 as a from select_test.bind_select
+  where a = 1 having a = 0 limit 1
+)) within group (order by (
+  select a + 1 from select_test.bind_select
+  where a = 1 having a = 0 limit 1
+)) from select_test.bind_select`
+
+	for _, sql := range []string{left, right} {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		mock := NewMockCompilerContext(true)
+		mock.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+		_, err = BuildPlan(mock, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, combined, 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	mock := NewMockCompilerContext(true)
+	mock.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err = BuildPlan(mock, stmt, false)
+	require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
 }
 
 func TestMedianWithinGroupValidationDoesNotLeakCTEConsumers(t *testing.T) {

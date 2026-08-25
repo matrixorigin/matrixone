@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -144,27 +145,219 @@ func medianResolvedColumnMarker(binding *Binding, colPos, depth int32) string {
 	return fmt.Sprintf("\x00mo_resolved_%d_%d_%d", binding.tag, colPos, depth)
 }
 
-func canonicalizeMedianAliasReferences(expr tree.Expr, aliases map[string]string) {
-	if expr == nil || len(aliases) == 0 {
+func medianResultReferenceMarker(pos int32) tree.Expr {
+	return tree.NewUnresolvedColName(fmt.Sprintf("\x00mo_result_%d", pos))
+}
+
+func medianSelectResultExpr(ctx *BindContext, pos int32) tree.Expr {
+	if ctx == nil || pos < 0 {
+		return nil
+	}
+	if metadata := ctx.orderResolution; metadata != nil &&
+		int(pos) < len(metadata.bindAsts) && metadata.bindAsts[pos] != nil {
+		return cloneTreeExpr(metadata.bindAsts[pos])
+	}
+	for i := range ctx.projectByAst {
+		field := &ctx.projectByAst[i]
+		if field.pos == pos && field.ast != nil {
+			return cloneTreeExpr(field.ast)
+		}
+	}
+	for _, item := range ctx.aliasMap {
+		if item != nil && item.idx == pos && item.astExpr != nil {
+			return cloneTreeExpr(item.astExpr)
+		}
+	}
+	return nil
+}
+
+// canonicalizeMedianOrderExpr applies the same name precedence as OrderBinder,
+// then expands an output alias or ordinal to the SELECT expression it denotes.
+// This makes ORDER BY alias, ORDER BY ordinal, and the equivalent direct
+// expression share one semantic representation.
+func canonicalizeMedianOrderExpr(
+	expr tree.Expr,
+	ctx *BindContext,
+	builder *QueryBuilder,
+) tree.Expr {
+	if expr == nil || ctx == nil || builder == nil {
+		return expr
+	}
+
+	rootExpr := unwrapParenExpr(expr)
+	if name, ok := rootExpr.(*tree.UnresolvedName); ok && !name.Star && name.NumParts == 1 {
+		if pos, found, err := resolveOrderOutputName(builder.GetContext(), ctx, name.ColName()); err == nil && found {
+			if resultExpr := medianSelectResultExpr(ctx, pos); resultExpr != nil {
+				return resultExpr
+			}
+			return medianResultReferenceMarker(pos)
+		}
+	}
+	if numVal, ok := expr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+		pos, _ := numVal.Int64()
+		if numVal.Negative() {
+			pos = -pos
+		}
+		pos--
+		if pos >= 0 && int(pos) < len(ctx.projects) {
+			if resultExpr := medianSelectResultExpr(ctx, int32(pos)); resultExpr != nil {
+				return resultExpr
+			}
+			return medianResultReferenceMarker(int32(pos))
+		}
+	}
+
+	qualified, _, err := qualifyOrderExpression(builder.GetContext(), ctx, expr, false, false)
+	if err == nil {
+		return qualified
+	}
+	return expr
+}
+
+// A set operation exposes positional result columns rather than the first
+// branch's source scope. Rebind the complete ORDER BY expression against that
+// output and encode the resulting plan expression, so aliases, ordinals, and
+// compound direct references compare by the value they actually order.
+func canonicalizeMedianSetOrderExpr(
+	expr tree.Expr,
+	ctx *BindContext,
+	builder *QueryBuilder,
+) tree.Expr {
+	if expr == nil || ctx == nil || builder == nil {
+		return expr
+	}
+
+	orderCtx := cloneMedianBindScope(ctx, builder)
+	projectionBinder := NewProjectionBinder(builder, orderCtx, NewHavingBinder(builder, orderCtx))
+	orderCtx.binder = projectionBinder
+	bound, err := NewOrderBinder(projectionBinder, nil).BindExpr(cloneTreeExpr(expr))
+	if err != nil {
+		return expr
+	}
+	semanticExpr := bound
+	if col := bound.GetCol(); col != nil && col.RelPos == orderCtx.projectTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(orderCtx.projects) {
+		semanticExpr = orderCtx.projects[col.ColPos]
+	}
+	semanticExpr = DeepCopyExpr(semanticExpr)
+	canonicalizeMedianPlanExpr(semanticExpr)
+	key, err := projectExprKey(semanticExpr)
+	if err != nil {
+		return expr
+	}
+	return medianSetOrderReferenceMarker(key)
+}
+
+func medianSetOrderReferenceMarker(key string) tree.Expr {
+	// Identifier comparison folds case, so use lowercase-only hex rather than a
+	// case-sensitive encoding whose distinct byte strings could collapse.
+	return tree.NewUnresolvedColName("\x00mo_set_order_" + hex.EncodeToString([]byte(key)))
+}
+
+func canonicalizeMedianPlanExpr(expr *plan.Expr) {
+	if expr == nil {
 		return
 	}
+	if col := expr.GetCol(); col != nil {
+		col.Name = ""
+		col.TblName = ""
+		col.DbName = ""
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			canonicalizeMedianPlanExpr(arg)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			canonicalizeMedianPlanExpr(item)
+		}
+	}
+	if subquery := expr.GetSub(); subquery != nil {
+		canonicalizeMedianPlanExpr(subquery.Child)
+	}
+	if window := expr.GetW(); window != nil {
+		window.Name = ""
+		canonicalizeMedianPlanExpr(window.WindowFunc)
+		for _, partition := range window.PartitionBy {
+			canonicalizeMedianPlanExpr(partition)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				canonicalizeMedianPlanExpr(order.Expr)
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				canonicalizeMedianPlanExpr(window.Frame.Start.Val)
+			}
+			if window.Frame.End != nil {
+				canonicalizeMedianPlanExpr(window.Frame.End.Val)
+			}
+		}
+	}
+}
+
+func canonicalizeMedianGroupExpr(expr tree.Expr, ctx *BindContext) tree.Expr {
+	if expr == nil || ctx == nil {
+		return expr
+	}
+	if numVal, ok := expr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+		pos, _ := numVal.Int64()
+		pos--
+		if pos >= 0 {
+			if resultExpr := medianSelectResultExpr(ctx, int32(pos)); resultExpr != nil {
+				return resultExpr
+			}
+		}
+	}
+	qualified, err := ctx.qualifyColumnNames(expr, AliasAfterColumn)
+	if err == nil {
+		return qualified
+	}
+	return expr
+}
+
+func canonicalizeMedianHavingExpr(
+	expr tree.Expr,
+	ctx *BindContext,
+	builder *QueryBuilder,
+) tree.Expr {
+	if expr == nil || ctx == nil || builder == nil {
+		return expr
+	}
+	if !builder.mysqlFullGroupByCompat || ctx.aggregateQueryForFullGroupBy() {
+		qualified, err := ctx.qualifyColumnNames(expr, AliasAfterColumn)
+		if err == nil {
+			return qualified
+		}
+		return expr
+	}
+
+	// In this compatibility mode HavingBinder resolves visible output names
+	// before source columns. Build the same alias view, including implicit output
+	// names, then let AliasBeforeColumn expand those expressions recursively.
+	havingCtx := *ctx
+	havingCtx.aliasMap = cloneMedianMap(ctx.aliasMap)
 	walkGroupingSetOrderByExpr(expr, func(current tree.Expr) bool {
-		switch node := current.(type) {
-		case *tree.Subquery:
+		if _, subquery := current.(*tree.Subquery); subquery {
 			return false
-		case *tree.UnresolvedName:
-			if node.Star || node.NumParts != 1 {
-				return true
-			}
-			marker, ok := aliases[node.ColName()]
-			if !ok {
-				return true
-			}
-			node.CStrParts = tree.CStrParts{}
-			node.CStrParts[0] = tree.NewCStr(marker, 0)
+		}
+		name, ok := current.(*tree.UnresolvedName)
+		if !ok || name.Star || name.NumParts != 1 {
+			return true
+		}
+		projected, found, ambiguous := ctx.havingOutputExpr(name.ColName())
+		if found && !ambiguous {
+			havingCtx.aliasMap[name.ColName()] = &aliasItem{astExpr: cloneTreeExpr(projected)}
 		}
 		return true
 	})
+	qualified, err := havingCtx.qualifyColumnNames(expr, AliasBeforeColumn)
+	if err == nil {
+		return qualified
+	}
+	return expr
 }
 
 func canonicalizeMedianCTEValue(
@@ -297,7 +490,7 @@ func canonicalizeMedianSelectCTEs(
 	}
 }
 
-func canonicalizeMedianSelectAliases(node *tree.Select, ctx *BindContext) {
+func canonicalizeMedianSelectAliases(node *tree.Select, ctx *BindContext, builder *QueryBuilder) {
 	if node == nil {
 		return
 	}
@@ -306,20 +499,12 @@ func canonicalizeMedianSelectAliases(node *tree.Select, ctx *BindContext) {
 	case *tree.SelectClause:
 		clause = selectStmt
 	case *tree.ParenSelect:
-		canonicalizeMedianSelectAliases(selectStmt.Select, ctx)
+		canonicalizeMedianSelectAliases(selectStmt.Select, ctx, builder)
 		return
 	case *tree.UnionClause:
-		aliases := make(map[string]string)
-		if ctx != nil {
-			for name, item := range ctx.aliasMap {
-				if item != nil {
-					aliases[name] = fmt.Sprintf("\x00mo_result_%d", item.idx)
-				}
-			}
-		}
 		for _, order := range node.OrderBy {
 			if order != nil {
-				canonicalizeMedianAliasReferences(order.Expr, aliases)
+				order.Expr = canonicalizeMedianSetOrderExpr(order.Expr, ctx, builder)
 			}
 		}
 		return
@@ -327,32 +512,30 @@ func canonicalizeMedianSelectAliases(node *tree.Select, ctx *BindContext) {
 		return
 	}
 
-	aliases := make(map[string]string)
 	for i := range clause.Exprs {
 		alias := clause.Exprs[i].As
 		if alias == nil || alias.Empty() {
 			continue
 		}
-		aliases[alias.Compare()] = fmt.Sprintf("\x00mo_result_%d", i)
 		clause.Exprs[i].As = nil
 	}
 	for _, order := range node.OrderBy {
 		if order != nil {
-			canonicalizeMedianAliasReferences(order.Expr, aliases)
+			order.Expr = canonicalizeMedianOrderExpr(order.Expr, ctx, builder)
 		}
 	}
 	if clause.GroupBy != nil {
 		for _, group := range clause.GroupBy.GroupByExprsList {
-			for _, expr := range group {
-				canonicalizeMedianAliasReferences(expr, aliases)
+			for i := range group {
+				group[i] = canonicalizeMedianGroupExpr(group[i], ctx)
 			}
 		}
-		for _, expr := range clause.GroupBy.GroupingSet {
-			canonicalizeMedianAliasReferences(expr, aliases)
+		for i := range clause.GroupBy.GroupingSet {
+			clause.GroupBy.GroupingSet[i] = canonicalizeMedianGroupExpr(clause.GroupBy.GroupingSet[i], ctx)
 		}
 	}
 	if clause.Having != nil {
-		canonicalizeMedianAliasReferences(clause.Having.Expr, aliases)
+		clause.Having.Expr = canonicalizeMedianHavingExpr(clause.Having.Expr, ctx, builder)
 	}
 }
 
@@ -398,7 +581,7 @@ func canonicalizeMedianAstValue(
 				if selectCtx != nil {
 					aliasCtx = selectCtx
 				}
-				canonicalizeMedianSelectAliases(node, aliasCtx)
+				canonicalizeMedianSelectAliases(node, aliasCtx, builder)
 			case *tree.SelectClause:
 				// A scalar SELECT result alias is a heading, not part of the
 				// value produced by the scalar subquery.
