@@ -197,7 +197,7 @@ func reconcileIndexVisibility(
 		}
 		for i, name := range names {
 			value := visible[i] != 0
-			key := strings.ToLower(name)
+			key := indexNameKey(name)
 			if previous, ok := visibility[key]; ok && previous != value {
 				readErr = moerr.NewInternalErrorf(ctx.GetContext(),
 					"inconsistent visibility metadata for index '%s'", name)
@@ -213,7 +213,7 @@ func reconcileIndexVisibility(
 
 	resolvedVisibility := make([]bool, len(tableDef.Indexes))
 	for i, indexDef := range tableDef.Indexes {
-		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
+		visible, ok := visibility[indexNameKey(indexDef.IndexName)]
 		if !ok {
 			return moerr.NewInternalErrorf(ctx.GetContext(),
 				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)
@@ -672,6 +672,12 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else if isDataStream {
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a datastream external table; drop and recreate the external table to change its schema")
+	}
+	if _, isKafka, err := IsKafkaTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isKafka {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema")
 	}
 
 	if tableDef.IsTemporary {

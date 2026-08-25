@@ -96,6 +96,9 @@ func (external *External) Prepare(proc *process.Process) error {
 			// the datastream envelope, not JSON.  Rebuild the synthetic param
 			// (remote-run decode arrives here with Extern == nil).
 			param.Extern = DatastreamExternParam()
+		} else if param.KafkaScan != nil {
+			// Same rationale: CreateSql is the kafka envelope, not JSON.
+			param.Extern = KafkaExternParam(param.KafkaScan)
 		} else {
 			param.Extern = &tree.ExternParam{}
 			if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
@@ -165,6 +168,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.reader = NewForeignScanReader(param)
 	case param.DatastreamScan != nil:
 		external.reader = NewDataStreamReader(param)
+	case param.KafkaScan != nil:
+		external.reader = NewKafkaReader(param)
 	case param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN):
 		external.reader = NewZonemapReader(param, proc)
 	case param.Extern.Format == tree.PARQUET:
@@ -354,7 +359,19 @@ func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
 		return false
 	}
 	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists || overload.IsRealTimeRelated() {
+	if !exists {
+		return false
+	}
+	// last_kafka_message_id is realTimeRelated (never constant-folded into a
+	// cached plan) but is deterministic WITHIN one compile on the session CN —
+	// it reads session state. Allowing it here is what makes server-side
+	// exactly-once chaining work:
+	//   where __mo_read_start_id = last_kafka_message_id()
+	functionID, _ := function.DecodeOverloadID(ref.Obj)
+	if functionID == function.LAST_KAFKA_MESSAGE_ID {
+		return true
+	}
+	if overload.IsRealTimeRelated() {
 		return false
 	}
 	if !overload.CannotFold() {
@@ -365,7 +382,6 @@ func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
 	// it is a deterministic transform of __mo_filepath and is the established
 	// file-pruning primitive. Other volatile functions (for example rand) are
 	// row-dependent and must remain at row level.
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
 	return functionID == function.MO_LOG_DATE
 }
 
@@ -1198,6 +1214,11 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	if catalog.ContainExternalHidenCol(colName) ||
 		(param.ForeignScan != nil && colName == catalog.ExternalQuery) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
+	}
+	if param.KafkaScan != nil {
+		if f, ok := kafkaMetaField(colName, param); ok {
+			return f
+		}
 	}
 	return line[fieldIdx]
 }
