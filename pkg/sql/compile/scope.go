@@ -715,20 +715,16 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		s.Proc.Ctx,
 		scopeRunQueryContext(s.Proc),
 	)
-	if err != nil && s.Proc.Cancel != nil {
-		cancelErr := runErr
-		if cancelErr == nil {
-			cancelErr = err
-		}
-		s.Proc.Cancel(cancelErr)
+	if runErr != nil && s.Proc.Cancel != nil {
+		s.Proc.Cancel(runErr)
 	}
 	// Normalize before cleanup mutates the pipeline context so a substantive
 	// cancellation cause remains available to the caller.
-	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
+	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
-		if err == nil {
+		if runErr == nil {
 			sender.prepareForLocalCleanup()
 		}
 		sender.close()
