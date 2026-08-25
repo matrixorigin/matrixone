@@ -10,9 +10,30 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT2 ftidx(body, title));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4'), ('id4', 4, 'bright red null', NULL);
-select sleep(30);
-sleep(30)
-0
+set @src_ft2_index = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @src2_ft2_index = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src2')
+limit 1
+);
+set @wait_initial_ft2_sql = concat(
+'select ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1) as src_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src2_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1) as src2_ready'
+);
+prepare wait_initial_ft2 from @wait_initial_ft2_sql;
+execute wait_initial_ft2;
+➤ src_ready[-7,1,0]  ¦  src2_ready[-7,1,0]  𝄀
+1  ¦  1
+deallocate prepare wait_initial_ft2;
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
@@ -23,11 +44,42 @@ id3    3
 show create table src2;
 Table    Create Table
 src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
+set @capture_src_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_tail from @capture_src_tail_sql;
+execute capture_src_tail;
+deallocate prepare capture_src_tail;
 update src set body = 'color is green' where id = 0;
+set @wait_src_mutation_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @src_tail_before_mutation,
+' as src_update_ready from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_mutation from @wait_src_mutation_sql;
+execute wait_src_mutation;
+➤ src_update_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_src_mutation;
+set @capture_src_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_tail from @capture_src_tail_sql;
+execute capture_src_tail;
+deallocate prepare capture_src_tail;
 delete from src where id = 3;
-select sleep(30);
-sleep(30)
-0
+set @wait_src_mutation_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @src_tail_before_mutation,
+' as src_delete_ready from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_mutation from @wait_src_mutation_sql;
+execute wait_src_mutation;
+➤ src_delete_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_src_mutation;
 select id from src where match(body, title) against('red') order by id;
 id
 select id from src where match(body, title) against('green') order by id;
