@@ -373,3 +373,27 @@ func TestDeviceAggregateFitsFreePartial(t *testing.T) {
 		}
 	})
 }
+
+// The refusal text is what an operator sizes a fix from, so a non-zero demand
+// must never print as "0 MB". It did: n>>20 on a sub-megabyte figure produced
+// "needs 0 MB but only 0 MB may be claimed (0 MB free)", which reads as a broken
+// gate rather than a statement about the index.
+func TestRefusalNeverPrintsZeroForNonZeroBytes(t *testing.T) {
+	require.Equal(t, "0 bytes", mib(0))
+	require.Equal(t, "1 bytes", mib(1))
+	require.Equal(t, "1048575 bytes", mib(1<<20-1), "one byte short of a MB is still not 0 MB")
+	require.Equal(t, "1 MB", mib(1<<20))
+	require.Equal(t, "2048 MB", mib(2<<30))
+
+	// End to end through the gate a small index actually hits.
+	err := DeviceAggregateFitsFree([]int{0}, 900, 1, 1, fakeRowsFitting(1000))
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "0 MB",
+		"a sub-megabyte refusal must not report zeros")
+	require.Contains(t, err.Error(), "900 bytes")
+
+	err = DeviceAggregateFitsHardware([]int{0}, 900, func(int) (uint64, error) { return 600, nil })
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "0 MB")
+	require.Contains(t, err.Error(), "900 bytes")
+}

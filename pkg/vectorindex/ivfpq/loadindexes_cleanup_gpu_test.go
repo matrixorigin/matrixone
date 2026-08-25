@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -105,5 +106,87 @@ func TestLoadIndexesRemovesFetchedTarsOnError(t *testing.T) {
 	// nothing downstream of loadIndexes ever sees these paths.
 	for p := range tempArtifacts(t) {
 		require.True(t, before[p], "loadIndexes leaked the fetched artifact %s", p)
+	}
+}
+
+// The gate runs after EACH tar so a doomed load stops downloading. Nothing else
+// in the suite proves the loop actually stops: every existing assertion is about
+// what DeviceAggregateFitsFree decides, and a version that fetched all N tars
+// before deciding would satisfy all of them.
+//
+// Driven with three sub-indexes and a budget that holds one but not two: the
+// refusal must land on the second, so the THIRD is never fetched. Counting
+// fetches is the only observable that distinguishes fail-fast from fetch-all.
+func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	built := buildTestModel(t, "stop-0", nil)
+	tarPath := built.Path
+	t.Cleanup(func() { os.Remove(tarPath) })
+
+	// All three sub-indexes share one artifact, so each contributes the same
+	// device bytes and the budget can be stated as a multiple of them.
+	sizes, err := cuvs.MeasureTar(tarPath)
+	require.NoError(t, err)
+	require.Positive(t, sizes.Device, "the fixture must carry device-resident components")
+	budget := uint64(sizes.Device) * 3 / 2 // one sub-index fits, two do not
+
+	ids := []string{"stop-0", "stop-1", "stop-2"}
+
+	origRunSql := runSql
+	t.Cleanup(func() { runSql = origRunSql })
+	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "AND tag = 1") || strings.Contains(sql, "AND tag = 2") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
+		bats := make([]*batch.Batch, 0, len(ids))
+		for _, id := range ids {
+			bats = append(bats, makeMetaBatch(proc, id, built.Checksum, 0, built.FileSize))
+		}
+		return executor.Result{Mp: proc.Mp(), Batches: bats}, nil
+	}
+
+	fetches := 0
+	origStream := runSql_streaming
+	t.Cleanup(func() { runSql_streaming = origStream })
+	runSql_streaming = func(_ context.Context, _ *sqlexec.SqlProcess, _ string,
+		ch chan executor.Result, _ chan error) (executor.Result, error) {
+		fetches++
+		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
+		return executor.Result{}, nil
+	}
+
+	// Stands in for cuvs.RowsFittingFreeMemAt: perRow = 1 means the answer IS the
+	// byte budget, and the real one clamps to a minimum of 1.
+	rowsFitting := func(_ int, perRow uint64) (int64, uint64, error) {
+		rows := int64(budget / perRow)
+		if rows < 1 {
+			rows = 1
+		}
+		return rows, budget, nil
+	}
+
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	t.Cleanup(s.Destroy)
+
+	indexes, lerr := LoadMetadata[float32, float32](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	require.NoError(t, lerr)
+	require.Len(t, indexes, len(ids))
+
+	_, err = s.loadIndexes(sqlproc, indexes, rowsFitting)
+	require.Error(t, err, "two sub-indexes exceed the budget, so the load must be refused")
+	require.Contains(t, err.Error(), "at least",
+		"a refusal on a partial aggregate must not state its figure as the whole index")
+	require.Contains(t, err.Error(), "2 of 3 sub-indexes measured")
+
+	// The point of the change: the third tar was never downloaded.
+	require.Equal(t, 2, fetches,
+		"loadIndexes must stop at the sub-index that broke the budget, not fetch all %d", len(ids))
+
+	// And the two it did fetch are gone -- an early return owns its downloads.
+	for _, idx := range indexes {
+		require.Empty(t, idx.Path, "a refused load must not leave a fetched tar behind")
 	}
 }

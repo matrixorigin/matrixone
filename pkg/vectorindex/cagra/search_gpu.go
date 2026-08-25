@@ -180,7 +180,11 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		return err
 	}
 	if len(indexes) > 0 {
-		indexes, err = s.loadIndexes(sqlproc, indexes)
+		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
+		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
+		// index the very first deserialize then refuses.
+		indexes, err = s.loadIndexes(sqlproc, indexes,
+			cuvs.RowsFittingFreeMemAt(cuvs.IndexBudgetPercent(s.Idxcfg.Type)))
 		if err != nil {
 			return err
 		}
@@ -493,10 +497,17 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 // FetchArtifact and run first -- but it is re-checked after EACH tar rather than
 // only after the last, so an index that cannot fit is refused as soon as the
 // running total says so instead of after the whole download.
-func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
+//
+// rowsFitting is the budget oracle, passed in rather than reached for, so a test
+// can drive a refusal at a chosen sub-index and prove the loop actually stops --
+// the short-circuit is the whole point of checking per tar, and a version that
+// fetched them all would otherwise still pass every assertion.
+func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q],
+	rowsFitting memory.DeviceRowsFittingFunc) ([]*CagraModel[B, Q], error) {
 	// Fetch, admit, and only then load. Splitting the download from the load is
-	// what lets the gate see the SAME quantity CREATE checked: the device-resident components of each packed artifact, measured
-	// with cuvs.MeasureTar and reduced per physical device. Admitting metadata
+	// what lets the gate see the SAME quantity CREATE checked: the device-resident
+	// components of each packed artifact, measured with cuvs.MeasureTar and reduced
+	// per physical device. Admitting metadata
 	// FileSize instead would charge the whole tar -- ids.bin, the INCLUDE blobs,
 	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
 	// then commit artifacts refused here at every free level.
@@ -523,11 +534,6 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		}
 	}()
 
-	// This algorithm's own fraction, not the governor default: IVF-PQ claims at
-	// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
-	// index the very first deserialize then refuses.
-	budget := cuvs.RowsFittingFreeMemAt(cuvs.IndexBudgetPercent(s.Idxcfg.Type))
-
 	comps := make([]map[string]int64, 0, len(indexes))
 	for _, idx := range indexes {
 		if len(idx.Path) == 0 {
@@ -552,13 +558,16 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 
 		// Re-check the RUNNING aggregate rather than waiting for the last tar.
 		// A sub-index only adds bytes to the device that holds it, so the peak is
-		// monotone and a running total over budget can only grow: downloading the
-		// rest would cost minutes and gigabytes to reach the same refusal. On the
-		// final pass measured == len(indexes), so this is also the complete gate --
-		// there is no separate check after the loop.
+		// monotone: against this free reading the finished total can only be larger,
+		// and downloading the rest would cost minutes and gigabytes to reach the
+		// same refusal. Free is re-sampled per tar, so a transient dip can refuse
+		// where one late check would not have -- which is why the refusal says to
+		// retry, and is the same situational answer the single check gave at its
+		// own sample point. On the final pass measured == len(indexes), so this is
+		// also the complete gate; there is no separate check after the loop.
 		if err := memory.DeviceAggregateFitsFree(
 			s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)),
-			len(comps), len(indexes), budget,
+			len(comps), len(indexes), rowsFitting,
 		); err != nil {
 			return nil, err
 		}

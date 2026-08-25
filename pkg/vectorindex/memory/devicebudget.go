@@ -152,6 +152,20 @@ func PeakDeviceBytes(devices []int, perSubIndex []map[string]int64) int64 {
 	return peak
 }
 
+// mib renders a byte count for an operator-facing refusal.
+//
+// Plain n>>20 rounds every non-zero value under a megabyte to "0 MB", so a
+// refusal can read "needs 0 MB but only 0 MB may be claimed (0 MB free)" -- which
+// looks like a bug in the gate rather than a statement about the index, and gives
+// the operator nothing to size a fix from. Anything below a megabyte prints as
+// bytes instead. Zero really is zero.
+func mib(n uint64) string {
+	if n < 1<<20 {
+		return fmt.Sprintf("%d bytes", n)
+	}
+	return fmt.Sprintf("%d MB", n>>20)
+}
+
 // DeviceAggregateFitsFree refuses a set of sub-indexes BEFORE any of them is
 // loaded, when the busiest device could not hold them all right now.
 //
@@ -212,11 +226,11 @@ func DeviceAggregateFitsFree(
 		}
 		if budget < 0 || perDeviceBytes > uint64(budget) {
 			return moerr.NewInternalErrorNoCtxf(
-				"vector index load: this index needs %s%d MB resident on device %d to be searched%s, "+
-					"but only %d MB may be claimed there right now (%d MB free), because a query "+
+				"vector index load: this index needs %s%s resident on device %d to be searched%s, "+
+					"but only %s may be claimed there right now (%s free), because a query "+
 					"reads every sub-index at once. Evict cached indexes, or retry when the device "+
 					"is quieter",
-				atLeast, perDeviceBytes>>20, dev, scope, uint64(budget)>>20, free>>20)
+				atLeast, mib(perDeviceBytes), dev, scope, mib(uint64(budget)), mib(free))
 		}
 	}
 	return nil
@@ -269,12 +283,12 @@ func DeviceAggregateFitsHardware(
 		}
 		if perDeviceBytes > total {
 			return moerr.NewInvalidInputNoCtxf(
-				"vector index build: one device must hold %d MB of this index to serve a query, "+
-					"but device %d can admit at most %d MB even when completely idle. Every "+
+				"vector index build: one device must hold %s of this index to serve a query, "+
+					"but device %d can admit at most %s even when completely idle. Every "+
 					"query reads all sub-indexes at once, so rotation cannot help and this "+
 					"index could never be queried on this GPU. Rebuild with a narrower storage "+
 					"type (QUANTIZATION), index fewer rows, or use a GPU with more memory",
-				perDeviceBytes>>20, dev, total>>20)
+				mib(perDeviceBytes), dev, mib(total))
 		}
 	}
 	return nil
