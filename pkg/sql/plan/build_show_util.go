@@ -31,6 +31,7 @@ import (
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -763,6 +764,16 @@ func constructCreateTableSQL(
 			}
 			return createStr, stmt, err
 		}
+		if kCfg, found, parseErr := IsKafkaTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatKafkaTableOptionsForShowCreate(kCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
@@ -1374,6 +1385,40 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, sqlMode
 	}
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = DATASTREAM WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+// formatKafkaTableOptionsForShowCreate renders the ENGINE = KAFKA clause of
+// SHOW CREATE TABLE. No option carries a credential in v1, so everything is
+// emitted verbatim and the output round-trips through CREATE.
+func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "brokers", value: cfg.Brokers},
+		{key: "topic", value: cfg.Topic},
+		{key: "partition", value: fmt.Sprintf("%d", cfg.Partition)},
+		{key: "autocommit", value: fmt.Sprintf("%t", cfg.Autocommit)},
+		{key: "group", value: cfg.Group},
+		{key: "format", value: cfg.Format},
+	}
+	if cfg.Format == sqlkafka.FormatCSV {
+		options = append(options, struct{ key, value string }{key: "separator", value: cfg.Separator})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = KAFKA WITH (")
 	for i, option := range options {
 		if i > 0 {
 			builder.WriteString(", ")

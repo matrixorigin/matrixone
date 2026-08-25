@@ -1071,8 +1071,14 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		})
 	}
 
-	makeLessThan := func(v int64) *plan.Expr {
-		return MakeFunctionExprForTest("<", []*plan.Expr{
+	makeLessEqual := func(v int64) *plan.Expr {
+		return MakeFunctionExprForTest("<=", []*plan.Expr{
+			MakeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(v),
+		})
+	}
+	makeGreaterThan := func(v int64) *plan.Expr {
+		return MakeFunctionExprForTest(">", []*plan.Expr{
 			MakeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(v),
 		})
@@ -1118,6 +1124,26 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 			},
 		},
 		{
+			name: "nested eq or keeps every branch",
+			expr: MakeFunctionExprForTest("or", []*plan.Expr{
+				MakeFunctionExprForTest("or", []*plan.Expr{
+					MakeFunctionExprForTest("or", []*plan.Expr{makeEq(1), makeEq(2)}),
+					MakeFunctionExprForTest("or", []*plan.Expr{makeEq(3), makeEq(4)}),
+				}),
+				makeEq(5),
+			}),
+			expect: expect{
+				valid: true,
+				disjuncts: []BasePKFilter{
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(1), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(2), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(3), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(4), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(5), Oid: types.T_int64},
+				},
+			},
+		},
+		{
 			name: "eq or in",
 			expr: MakeFunctionExprForTest("or", []*plan.Expr{
 				makeEq(1),
@@ -1150,20 +1176,33 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 			},
 		},
 		{
-			name: "and distribute",
+			name: "disjunction and atomic keeps atomic",
 			expr: MakeFunctionExprForTest("and", []*plan.Expr{
 				MakeFunctionExprForTest("or", []*plan.Expr{
 					makeEq(1),
-					makeEq(2),
+					makeGreaterThan(3),
 				}),
-				makeLessThan(3),
+				makeLessEqual(10),
 			}),
 			expect: expect{
 				valid: true,
-				disjuncts: []BasePKFilter{
-					{Valid: true, Op: function.EQUAL, LB: encodeVal(1), Oid: types.T_int64},
-					{Valid: true, Op: function.EQUAL, LB: encodeVal(2), Oid: types.T_int64},
-				},
+				op:    function.LESS_EQUAL,
+				lb:    encodeVal(10),
+			},
+		},
+		{
+			name: "atomic and disjunction keeps atomic",
+			expr: MakeFunctionExprForTest("and", []*plan.Expr{
+				makeLessEqual(10),
+				MakeFunctionExprForTest("or", []*plan.Expr{
+					makeEq(1),
+					makeGreaterThan(3),
+				}),
+			}),
+			expect: expect{
+				valid: true,
+				op:    function.LESS_EQUAL,
+				lb:    encodeVal(10),
 			},
 		},
 		{
@@ -1230,6 +1269,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		}
 
 		if testCases[i].expect.valid {
+			require.Equal(t, types.T_int64, basePKFilter.Oid, testCases[i].name)
 			require.Equal(t, testCases[i].expect.op, basePKFilter.Op, testCases[i].name)
 			require.Equal(t, testCases[i].expect.lb, basePKFilter.LB, testCases[i].name)
 			require.Equal(t, testCases[i].expect.ub, basePKFilter.UB, testCases[i].name)
