@@ -372,7 +372,7 @@ func StringSourcePrepareParamMetadataForRemote(
 	if !hasMetadata {
 		return nil, nil
 	}
-	if prepareParamProtocolVersion(service) < defines.MORPCVersion27 {
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion29 {
 		return nil, nil
 	}
 	return append([]uint32(nil), metadata...), nil

@@ -285,7 +285,7 @@ func TestReentrantRangeLock(t *testing.T) {
 
 					res, err = s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
-					require.True(t, res.NewLockAdd)
+					require.False(t, res.NewLockAdd)
 
 					defer func() {
 						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
@@ -1704,6 +1704,9 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 			err = l1.UnlockWithContext(unlockCtx, txnID, timestamp.Timestamp{})
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+			_, err = l1.Lock(ctx, 0, [][]byte{{2}}, txnID, option)
+			require.ErrorIs(t, err, ErrTxnNotFound,
+				"a retryable close must fence late locks without opening a same-ID generation")
 
 			l1.tableGroups.Lock()
 			l1.tableGroups.holders[0].tables[0] = localTable
@@ -2544,7 +2547,21 @@ func TestCheckTxnTimeout(t *testing.T) {
 			l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return true
 			}, closeReasonBindChanged)
-			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+			// Simulate the origin disappearing after its local lock tables were
+			// discarded. Normal Unlock now routes cleanup from the transaction's
+			// recorded bind and closes the remote owner even when the cache entry is
+			// gone, so using it here would no longer create an orphan for this test.
+			originTxn := l1.activeTxnHolder.deleteActiveTxn([]byte("txn2"))
+			require.NotNil(t, originTxn)
+			originTxn.Lock()
+			require.NoError(t, originTxn.close(
+				[]byte("txn2"),
+				timestamp.Timestamp{},
+				func(pb.LockTable) (lockTable, error) { return nil, nil },
+				l1.logger,
+			))
+			originTxn.Unlock()
+			l1.deadlockDetector.txnClosed([]byte("txn2"))
 
 			require.False(t, l2.activeTxnHolder.empty())
 
@@ -4252,7 +4269,7 @@ func TestAllocatorObserverCloseWaitersOnStaleLocalBind(t *testing.T) {
 
 			select {
 			case err := <-errC:
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound), err)
+				require.ErrorIs(t, err, ErrLockTableBindChanged)
 			case <-ctx.Done():
 				t.Fatal("waiter was not notified by stale bind purge")
 			}
@@ -6268,7 +6285,7 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 	b.Run(name, func(b *testing.B) {
 		runLockServiceTestsWithLevel(
 			b,
-			zapcore.InfoLevel,
+			zapcore.ErrorLevel,
 			[]string{"s1"},
 			time.Second*10,
 			func(alloc *lockTableAllocator, s []*service) {
@@ -6285,7 +6302,13 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 				b.ResetTimer()
 
 				b.RunParallel(func(p *testing.PB) {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					// The benchmark framework grows b.N during calibration. A context
+					// shared by all iterations must therefore not expire mid-run; making
+					// one per operation would also pollute the allocation measurement.
+					// Keep a request deadline shorter than the one-hour lock-wait ceiling
+					// so context composition exercises the same path as before. Ten minutes
+					// outlives this benchmark's five-minute process timeout.
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 					defer cancel()
 
 					row := [][]byte{buf.Uint64ToBytes(rowID.Add(1))}
@@ -6560,6 +6583,68 @@ type blockingUnlockTestTable struct {
 	release chan struct{}
 }
 
+type generationSnapshotHookTxnHolder struct {
+	activeTxnHolder
+	calls         atomic.Int32
+	firstCaptured chan struct{}
+	releaseFirst  chan struct{}
+	mu            sync.Mutex
+	captureFree   bool
+	recycled      *activeTxn
+}
+
+func (h *generationSnapshotHookTxnHolder) getActiveTxnWithGeneration(
+	txnID []byte,
+	create bool,
+	remoteService string,
+) (*activeTxn, uint64) {
+	txn, generation := h.activeTxnHolder.getActiveTxnWithGeneration(
+		txnID, create, remoteService)
+	if txn != nil && h.calls.Add(1) == 1 {
+		close(h.firstCaptured)
+		<-h.releaseFirst
+	}
+	return txn, generation
+}
+
+func (h *generationSnapshotHookTxnHolder) freeActiveTxn(txn *activeTxn) {
+	h.mu.Lock()
+	if h.captureFree {
+		h.captureFree = false
+		txn.reset()
+		h.recycled = txn
+		h.mu.Unlock()
+		return
+	}
+	h.mu.Unlock()
+	h.activeTxnHolder.freeActiveTxn(txn)
+}
+
+func (h *generationSnapshotHookTxnHolder) reuseCapturedTxn(
+	txnID []byte,
+	fsp *fixedSlicePool,
+) *activeTxn {
+	h.mu.Lock()
+	txn := h.recycled
+	h.recycled = nil
+	h.mu.Unlock()
+	if txn == nil {
+		return nil
+	}
+	initActiveTxn(txn, txnID, string(txnID), fsp, "")
+	return txn
+}
+
+func (h *generationSnapshotHookTxnHolder) releaseCapturedTxn() {
+	h.mu.Lock()
+	txn := h.recycled
+	h.recycled = nil
+	h.mu.Unlock()
+	if txn != nil {
+		h.activeTxnHolder.freeActiveTxn(txn)
+	}
+}
+
 func (l *blockingUnlockTestTable) unlockWithContext(
 	context.Context,
 	*activeTxn,
@@ -6824,7 +6909,7 @@ func TestDrainWaitsForTxnCloseLinearization(t *testing.T) {
 			txn.Lock()
 			require.True(t, txn.lockTableBindTouched(bind))
 			s.incRef(bind.Group, bind.Table)
-			require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, s.logger))
+			require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, pb.LockOptions{}, s.logger))
 			txn.Unlock()
 			s.checkCanMoveGroupTables()
 
@@ -6844,6 +6929,51 @@ func TestDrainWaitsForTxnCloseLinearization(t *testing.T) {
 		})
 }
 
+func TestOrdinaryUnlockKeepsTxnGenerationUntilCleanupCompletes(t *testing.T) {
+	runLockServiceTests(t, []string{"ordinary-close-generation"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			table := uint64(257912)
+			bind := pb.LockTable{
+				Group: 0, Table: table, OriginTable: table,
+				ServiceID: s.serviceID, Valid: true, Version: 1,
+			}
+			lt := &blockingUnlockTestTable{
+				retryableUnlockTestTable: retryableUnlockTestTable{bind: bind},
+				started:                  make(chan struct{}),
+				release:                  make(chan struct{}),
+			}
+			s.tableGroups.set(bind.Group, bind.Table, lt)
+
+			txnID := []byte("ordinary-close-generation-txn")
+			txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
+			txn.Lock()
+			require.True(t, txn.lockTableBindTouched(bind))
+			s.incRef(bind.Group, bind.Table)
+			require.NoError(t, txn.lockAdded(
+				bind.Group,
+				bind,
+				[][]byte{{1}},
+				pb.LockOptions{},
+				s.logger,
+			))
+			txn.Unlock()
+
+			done := make(chan error, 1)
+			go func() {
+				done <- s.Unlock(context.Background(), txnID, timestamp.Timestamp{})
+			}()
+			<-lt.started
+			require.Same(t, txn, s.activeTxnHolder.getActiveTxn(txnID, true, ""),
+				"cleanup must not publish a second activeTxn generation")
+
+			close(lt.release)
+			require.NoError(t, <-done)
+			require.Nil(t, s.activeTxnHolder.getActiveTxn(txnID, false, ""))
+		},
+	)
+}
+
 func TestRetryableUnknownCommitCloseReleasesAllDrainRefs(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"},
 		func(_ *lockTableAllocator, services []*service) {
@@ -6860,7 +6990,7 @@ func TestRetryableUnknownCommitCloseReleasesAllDrainRefs(t *testing.T) {
 				s.tableGroups.set(0, table, lt)
 				require.True(t, txn.lockTableBindTouched(lt.bind))
 				s.incRef(lt.bind.Group, lt.bind.Table)
-				require.NoError(t, txn.lockAdded(0, lt.bind, [][]byte{{byte(table)}}, s.logger))
+				require.NoError(t, txn.lockAdded(0, lt.bind, [][]byte{{byte(table)}}, pb.LockOptions{}, s.logger))
 			}
 			txn.Unlock()
 
@@ -7084,4 +7214,668 @@ func TestServiceCloseSealsCancelsAndJoinsOperationAdmission(t *testing.T) {
 			require.False(t, admitted)
 			require.False(t, s.beginLockTablePublication())
 		})
+}
+
+func TestRowSharedHolderPromotionWaitsAndPublishesExclusiveMode(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"row-mode-promotion"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26706)
+			row := []byte("same-row")
+			promotingTxn := []byte("promoting-shared-holder")
+			otherSharedTxn := []byte("other-shared-holder")
+
+			_, err := s.Lock(ctx, table, [][]byte{row}, promotingTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, [][]byte{row}, otherSharedTxn, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			promoted := make(chan error, 1)
+			go func() {
+				_, lockErr := s.Lock(
+					ctx,
+					table,
+					[][]byte{row},
+					promotingTxn,
+					newTestRowExclusiveOptions(),
+				)
+				promoted <- lockErr
+			}()
+
+			require.Eventually(t, func() bool {
+				txn := s.activeTxnHolder.getActiveTxn(promotingTxn, false, "")
+				if txn == nil {
+					return false
+				}
+				txn.RLock()
+				defer txn.RUnlock()
+				return len(txn.blockedWaiters) == 1
+			}, time.Second, time.Millisecond)
+			promotingActiveTxn := s.activeTxnHolder.getActiveTxn(promotingTxn, false, "")
+			require.NotNil(t, promotingActiveTxn)
+			promotingActiveTxn.RLock()
+			require.Len(t, promotingActiveTxn.blockedWaiters, 1)
+			require.Equal(t, [][]byte{otherSharedTxn},
+				promotingActiveTxn.blockedWaiters[0].waitFor,
+				"mode promotion must not publish a self-edge")
+			promotingActiveTxn.RUnlock()
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			lock, ok := lt.mu.store.Get(row)
+			require.True(t, ok)
+			require.Equal(t, pb.LockMode_Shared, lock.GetLockMode())
+			require.Equal(t, 2, lock.holders.size())
+			lt.mu.RUnlock()
+			select {
+			case err := <-promoted:
+				t.Fatalf("exclusive re-entry succeeded while another Shared holder remained: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			require.NoError(t, s.Unlock(ctx, otherSharedTxn, timestamp.Timestamp{}))
+			select {
+			case err := <-promoted:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatalf("Shared -> Exclusive promotion did not wake: %v", ctx.Err())
+			}
+
+			lt.mu.RLock()
+			lock, ok = lt.mu.store.Get(row)
+			require.True(t, ok)
+			require.Equal(t, pb.LockMode_Exclusive, lock.GetLockMode())
+			require.Equal(t, 1, lock.holders.size())
+			require.True(t, lock.holders.contains(promotingTxn))
+			lt.mu.RUnlock()
+
+			probeTxn := []byte("shared-probe")
+			probe := newTestRowSharedOptions()
+			probe.Policy = pb.WaitPolicy_FastFail
+			_, err = s.Lock(ctx, table, [][]byte{row}, probeTxn, probe)
+			require.ErrorIs(t, err, ErrLockConflict)
+			require.NoError(t, s.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, promotingTxn, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestRangeSharedHolderPromotionUpdatesBothEndpoints(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"range-mode-promotion"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26712)
+			rangeRows := [][]byte{[]byte("range-a"), []byte("range-z")}
+			promotingTxn := []byte("range-promoting-holder")
+			otherSharedTxn := []byte("range-other-holder")
+			_, err := s.Lock(ctx, table, rangeRows, promotingTxn, newTestRangeSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, rangeRows, otherSharedTxn, newTestRangeSharedOptions())
+			require.NoError(t, err)
+
+			promoted := make(chan error, 1)
+			go func() {
+				_, lockErr := s.Lock(
+					ctx,
+					table,
+					rangeRows,
+					promotingTxn,
+					newTestRangeExclusiveOptions(),
+				)
+				promoted <- lockErr
+			}()
+			require.Eventually(t, func() bool {
+				txn := s.activeTxnHolder.getActiveTxn(promotingTxn, false, "")
+				if txn == nil {
+					return false
+				}
+				txn.RLock()
+				defer txn.RUnlock()
+				return len(txn.blockedWaiters) > 0
+			}, time.Second, time.Millisecond)
+
+			require.NoError(t, s.Unlock(ctx, otherSharedTxn, timestamp.Timestamp{}))
+			select {
+			case err := <-promoted:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatalf("range Shared -> Exclusive promotion did not wake: %v", ctx.Err())
+			}
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			for _, key := range rangeRows {
+				lock, ok := lt.mu.store.Get(key)
+				require.True(t, ok)
+				require.Equal(t, pb.LockMode_Exclusive, lock.GetLockMode())
+				require.Equal(t, 1, lock.holders.size())
+				require.True(t, lock.holders.contains(promotingTxn))
+			}
+			lt.mu.RUnlock()
+
+			probeTxn := []byte("range-shared-probe")
+			probe := newTestRowSharedOptions()
+			probe.Policy = pb.WaitPolicy_FastFail
+			_, err = s.Lock(ctx, table, [][]byte{[]byte("range-m")}, probeTxn, probe)
+			require.ErrorIs(t, err, ErrLockConflict)
+			require.NoError(t, s.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, promotingTxn, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestProxyHandoffBookkeepingFailureLeavesSourceRetryable(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"proxy-handoff-owner"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26707)
+			row := []byte("handoff-row")
+			sourceTxnID := []byte("proxy-source")
+			replacementTxnID := []byte("proxy-replacement")
+			_, err := s.Lock(
+				ctx,
+				table,
+				[][]byte{row},
+				sourceTxnID,
+				newTestRowSharedOptions(),
+			)
+			require.NoError(t, err)
+			sourceTxn := s.activeTxnHolder.getActiveTxn(sourceTxnID, false, "")
+			require.NotNil(t, sourceTxn)
+			sourceTxn.Lock()
+			require.NoError(t, sourceTxn.lockHolders[0].tableKeys[table].append(
+				[][]byte{row},
+			))
+			sourceTxn.Unlock()
+
+			replacementTxn := s.activeTxnHolder.getActiveTxn(
+				replacementTxnID,
+				true,
+				"",
+			)
+			replacementTxn.Lock()
+			replacementTxn.beforeLockAdded = func([]byte, [][]byte) error {
+				return ErrTxnNotFound
+			}
+			replacementTxn.Unlock()
+
+			mutation := pb.ExtraMutation{Key: row, ReplaceTo: replacementTxnID}
+			err = s.Unlock(ctx, sourceTxnID, timestamp.Timestamp{}, mutation)
+			require.ErrorIs(t, err, ErrTxnNotFound)
+			require.NotNil(t, s.activeTxnHolder.getActiveTxn(sourceTxnID, false, ""),
+				"failed preflight must retain the source transaction")
+			_, err = s.Lock(
+				ctx,
+				table,
+				[][]byte{[]byte("late-source-row")},
+				sourceTxnID,
+				newTestRowSharedOptions(),
+			)
+			require.ErrorIs(t, err, ErrTxnNotFound,
+				"a failed handoff must fence late locks on the retained source generation")
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			holder, ok, err := lt.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, sourceTxnID, holder.TxnID,
+				"physical ownership must not move when replacement bookkeeping fails")
+
+			replacementTxn.Lock()
+			require.Empty(t, replacementTxn.lockHolders)
+			replacementTxn.beforeLockAdded = nil
+			replacementTxn.Unlock()
+
+			require.NoError(t, s.Unlock(ctx, sourceTxnID, timestamp.Timestamp{}, mutation))
+			holder, ok, err = lt.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, replacementTxnID, holder.TxnID)
+			require.Nil(t, s.activeTxnHolder.getActiveTxn(sourceTxnID, false, ""))
+
+			replacementTxn.RLock()
+			recorded := replacementTxn.lockHolders[0].tableKeys[table].slice()
+			replacementTxn.RUnlock()
+			require.Equal(t, [][]byte{row}, recorded.all())
+			recorded.unref()
+			require.NoError(t, s.Unlock(ctx, replacementTxnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestProxyHandoffClosedTableDoesNotRetainEmptyReplacement(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"proxy-handoff-closed-table"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26717)
+			row := []byte("closed-table-handoff-row")
+			sourceTxnID := []byte("closed-table-source")
+			replacementTxnID := []byte("closed-table-replacement")
+			_, err := s.Lock(
+				ctx,
+				table,
+				[][]byte{row},
+				sourceTxnID,
+				newTestRowSharedOptions(),
+			)
+			require.NoError(t, err)
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.options.beforeHandoffCommit = func() {
+				lt.options.beforeHandoffCommit = nil
+				lt.close(closeReasonBindChanged)
+			}
+			require.NoError(t, s.Unlock(
+				ctx,
+				sourceTxnID,
+				timestamp.Timestamp{},
+				pb.ExtraMutation{Key: row, ReplaceTo: replacementTxnID},
+			))
+			require.Nil(t, s.activeTxnHolder.getActiveTxn(
+				replacementTxnID,
+				false,
+				"",
+			), "an aborted handoff must remove its unpublished replacement generation")
+		},
+	)
+}
+
+func TestProxyHandoffExistingReplacementRequiresLiveLedger(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"proxy-handoff-existing-replacement"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26708)
+			row := []byte("shared-handoff-row")
+			sourceTxnID := []byte("shared-proxy-source")
+			replacementTxnID := []byte("shared-proxy-replacement")
+			_, err := s.Lock(ctx, table, [][]byte{row}, sourceTxnID, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, [][]byte{row}, replacementTxnID, newTestRowSharedOptions())
+			require.NoError(t, err)
+			replacementTxn := s.activeTxnHolder.getActiveTxn(replacementTxnID, false, "")
+			require.NotNil(t, replacementTxn)
+			replacementTxn.Lock()
+			replacementHolder := replacementTxn.lockHolders[0]
+			staleLedger := replacementHolder.tableKeys[table]
+			delete(replacementHolder.tableKeys, table)
+			delete(replacementHolder.tableBinds, table)
+			staleLedger.close()
+			replacementTxn.Unlock()
+
+			replacementTxn = s.activeTxnHolder.deleteActiveTxn(replacementTxnID)
+			require.NotNil(t, replacementTxn)
+			mutation := pb.ExtraMutation{Key: row, ReplaceTo: replacementTxnID}
+			err = s.Unlock(ctx, sourceTxnID, timestamp.Timestamp{}, mutation)
+			require.ErrorIs(t, err, ErrTxnNotFound)
+			require.NotNil(t, s.activeTxnHolder.getActiveTxn(sourceTxnID, false, ""),
+				"a stale replacement must leave the source retryable")
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			lock, ok := lt.mu.store.Get(row)
+			require.True(t, ok)
+			require.True(t, lock.holders.contains(sourceTxnID))
+			require.True(t, lock.holders.contains(replacementTxnID))
+			lt.mu.RUnlock()
+
+			require.True(t, s.activeTxnHolder.restoreActiveTxn(replacementTxn))
+			replacementTxn.Lock()
+			replacementTxn.closing.Store(true)
+			replacementTxn.Unlock()
+			err = s.Unlock(ctx, sourceTxnID, timestamp.Timestamp{}, mutation)
+			require.ErrorIs(t, err, ErrTxnNotFound,
+				"handoff must not publish ownership into a closing replacement")
+			lt.mu.RLock()
+			lock, ok = lt.mu.store.Get(row)
+			require.True(t, ok)
+			require.True(t, lock.holders.contains(sourceTxnID))
+			require.True(t, lock.holders.contains(replacementTxnID))
+			lt.mu.RUnlock()
+			replacementTxn.Lock()
+			replacementTxn.closing.Store(false)
+			replacementTxn.Unlock()
+			require.NoError(t, s.Unlock(ctx, sourceTxnID, timestamp.Timestamp{}, mutation))
+			lt.mu.RLock()
+			lock, ok = lt.mu.store.Get(row)
+			require.True(t, ok)
+			require.Equal(t, 1, lock.holders.size())
+			require.True(t, lock.holders.contains(replacementTxnID))
+			lt.mu.RUnlock()
+
+			replacementTxn.RLock()
+			recorded := replacementTxn.lockHolders[0].tableKeys[table].slice()
+			replacementTxn.RUnlock()
+			require.Equal(t, [][]byte{row}, recorded.all(),
+				"an existing replacement holder must repair its ledger exactly once")
+			recorded.unref()
+			require.NoError(t, s.Unlock(ctx, replacementTxnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestProxyHandoffAllowsClosingReplacementWithPendingTableCleanup(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"proxy-handoff-closing-replacement"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26713)
+			row := []byte("closing-replacement-row")
+			sourceTxnID := []byte("closing-replacement-source")
+			replacementTxnID := []byte("closing-replacement-target")
+			_, err := s.Lock(ctx, table, [][]byte{row}, sourceTxnID, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, [][]byte{row}, replacementTxnID, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			replacementTxn := s.activeTxnHolder.getActiveTxn(replacementTxnID, false, "")
+			require.NotNil(t, replacementTxn)
+			replacementTxn.Lock()
+			replacementTxn.closing.Store(true)
+			require.NotNil(t, replacementTxn.lockHolders[0].tableKeys[table],
+				"the closing replacement must still have a pending cleanup route")
+			replacementTxn.Unlock()
+
+			require.NoError(t, s.Unlock(
+				ctx,
+				sourceTxnID,
+				timestamp.Timestamp{},
+				pb.ExtraMutation{Key: row, ReplaceTo: replacementTxnID},
+			))
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			lock, ok := lt.mu.store.Get(row)
+			require.True(t, ok)
+			require.Equal(t, 1, lock.holders.size())
+			require.True(t, lock.holders.contains(replacementTxnID))
+			lt.mu.RUnlock()
+
+			require.NoError(t, s.Unlock(ctx, replacementTxnID, timestamp.Timestamp{}))
+			lt.mu.RLock()
+			_, ok = lt.mu.store.Get(row)
+			lt.mu.RUnlock()
+			require.False(t, ok,
+				"the replacement's pending table cleanup must release the transferred holder")
+		},
+	)
+}
+
+func TestProxyHandoffRejectsSelfReplacement(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"proxy-handoff-self"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26709)
+			row := []byte("self-handoff-row")
+			txnID := []byte("self-handoff-txn")
+			_, err := s.Lock(ctx, table, [][]byte{row}, txnID, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			err = s.Unlock(ctx, txnID, timestamp.Timestamp{}, pb.ExtraMutation{
+				Key:       row,
+				ReplaceTo: txnID,
+			})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "cannot replace a transaction with itself")
+			require.NotNil(t, s.activeTxnHolder.getActiveTxn(txnID, false, ""))
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			holder, ok, err := lt.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, txnID, holder.TxnID)
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestTxnClosureAdmissionOrdersHandoffsAndKeepsUnrelatedConcurrency(t *testing.T) {
+	s := &service{}
+	source := []byte("handoff-source-a")
+	replacement := []byte("handoff-replacement-b")
+	forward := []pb.ExtraMutation{{ReplaceTo: replacement}}
+	reverse := []pb.ExtraMutation{{ReplaceTo: source}}
+	release, err := s.acquireTxnClosureAdmission(context.Background(), source, forward)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondRelease, err := s.acquireTxnClosureAdmission(ctx, replacement, reverse)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, secondRelease.service)
+	ordinaryRelease, err := s.acquireTxnClosureAdmission(ctx, source, nil)
+	require.ErrorIs(t, err, context.Canceled,
+		"an ordinary close must serialize with a handoff for the same source")
+	require.Nil(t, ordinaryRelease.service)
+
+	// A disjoint handoff must not wait behind this pair even when both IDs hash
+	// to the same registration shards. Shards protect only map operations; the
+	// long-lived tokens are exact per-transaction entries.
+	findCollision := func(targetShard int, prefix string) []byte {
+		for idx := 0; ; idx++ {
+			candidate := []byte(fmt.Sprintf("%s-%d", prefix, idx))
+			if txnClosureAdmissionShardIndex(candidate) == targetShard &&
+				string(candidate) != string(source) &&
+				string(candidate) != string(replacement) {
+				return candidate
+			}
+		}
+	}
+	disjointSource := findCollision(txnClosureAdmissionShardIndex(source), "disjoint-source")
+	disjointReplacement := findCollision(txnClosureAdmissionShardIndex(replacement), "disjoint-replacement")
+	disjointCtx, disjointCancel := context.WithTimeout(context.Background(), time.Second)
+	defer disjointCancel()
+	disjointRelease, err := s.acquireTxnClosureAdmission(
+		disjointCtx,
+		disjointSource,
+		[]pb.ExtraMutation{{ReplaceTo: disjointReplacement}},
+	)
+	require.NoError(t, err)
+	disjointRelease.release()
+
+	release.release()
+	secondRelease, err = s.acquireTxnClosureAdmission(context.Background(), replacement, reverse)
+	require.NoError(t, err)
+	secondRelease.release()
+	for idx := range s.txnClosureAdmissions {
+		shard := &s.txnClosureAdmissions[idx]
+		shard.Lock()
+		require.Empty(t, shard.entries,
+			"closure admission entries must not grow after success or cancellation")
+		shard.Unlock()
+	}
+}
+
+func TestTxnClosureAdmissionSingleSourceFastPathDoesNotAllocate(t *testing.T) {
+	s := &service{}
+	ctx := context.Background()
+	txnID := []byte("single-source-close")
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		guard, err := s.acquireTxnClosureAdmission(ctx, txnID, nil)
+		require.NoError(t, err)
+		guard.release()
+	})
+	require.Zero(t, allocations)
+}
+
+func TestLockSynchronousTxnClosureRejectsPublishedOrMutatingGeneration(t *testing.T) {
+	logger := getLogger("")
+	holder := newMapBasedTxnHandler(
+		"s1",
+		logger,
+		newFixedSlicePool(32),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	)
+	defer holder.close()
+	s := &service{activeTxnHolder: holder}
+
+	synchronousID := []byte("synchronous-close")
+	synchronousTxn := holder.getActiveTxn(synchronousID, true, "")
+	locked, generation, state := s.lockSynchronousTxnClosure(synchronousID, nil)
+	require.Equal(t, synchronousTxnClosureLocked, state)
+	require.Same(t, synchronousTxn, locked)
+	require.Equal(t, synchronousTxn.generation, generation)
+	locked.Unlock()
+
+	locked, generation, state = s.lockSynchronousTxnClosure(
+		synchronousID,
+		[]pb.ExtraMutation{{Key: []byte("row")}},
+	)
+	require.Equal(t, synchronousTxnClosureFallback, state)
+	require.Nil(t, locked)
+	require.Zero(t, generation)
+
+	publishedID := []byte("published-close")
+	publishedTxn := holder.getActiveTxn(publishedID, true, "")
+	publishedTxn.Lock()
+	_, finishLockOp := publishedTxn.beginLockOpLocked(context.Background())
+	publishedTxn.Unlock()
+	defer finishLockOp()
+
+	locked, generation, state = s.lockSynchronousTxnClosure(publishedID, nil)
+	require.Equal(t, synchronousTxnClosureFallback, state)
+	require.Nil(t, locked)
+	require.Zero(t, generation)
+
+	locked, generation, state = s.lockSynchronousTxnClosure([]byte("absent-close"), nil)
+	require.Equal(t, synchronousTxnClosureFallback, state)
+	require.Nil(t, locked)
+	require.Zero(t, generation)
+}
+
+func TestDelayedOrdinaryUnlockDoesNotCloseReusedSameIDGeneration(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := getLogger("")
+		fsp := newFixedSlicePool(32)
+		baseHolder := newMapBasedTxnHandler(
+			"same-id-unlock-generation",
+			logger,
+			fsp,
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+				return pb.CannotCommitResponse{}, nil
+			},
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		)
+		defer baseHolder.close()
+		s := &service{
+			activeTxnHolder:  baseHolder,
+			fsp:              fsp,
+			deadlockDetector: &detector{},
+			logger:           logger,
+		}
+
+		func() {
+			txnID := []byte("same-id-reused-txn")
+			oldTxn := baseHolder.getActiveTxn(txnID, true, "")
+			oldGeneration := oldTxn.generation
+
+			hooked := &generationSnapshotHookTxnHolder{
+				activeTxnHolder: baseHolder,
+				firstCaptured:   make(chan struct{}),
+				releaseFirst:    make(chan struct{}),
+				captureFree:     true,
+			}
+			s.activeTxnHolder = hooked
+			var releaseOnce sync.Once
+			defer hooked.releaseCapturedTxn()
+
+			delayed := make(chan error, 1)
+			go func() {
+				delayed <- s.Unlock(
+					context.Background(), txnID, timestamp.Timestamp{})
+			}()
+			delayedJoined := false
+			defer func() {
+				releaseOnce.Do(func() { close(hooked.releaseFirst) })
+				if !delayedJoined {
+					<-delayed
+				}
+			}()
+			<-hooked.firstCaptured
+
+			// A second ordinary close wins the old generation while the delayed
+			// close retains its pointer plus generation snapshot.
+			require.NoError(t, s.Unlock(
+				context.Background(), txnID, timestamp.Timestamp{}))
+			require.Nil(t, baseHolder.getActiveTxn(txnID, false, ""))
+
+			// Force the holder's pool boundary to reset and reinitialize the exact
+			// object retained by the delayed close, then publish the new same-ID
+			// generation. This remains deterministic under the race detector.
+			reused := hooked.reuseCapturedTxn(txnID, s.fsp)
+			require.Same(t, oldTxn, reused)
+			require.Greater(t, reused.generation, oldGeneration)
+			require.True(t, baseHolder.restoreActiveTxn(reused))
+
+			releaseOnce.Do(func() { close(hooked.releaseFirst) })
+			delayedErr := <-delayed
+			delayedJoined = true
+			require.NoError(t, delayedErr)
+
+			current, generation := baseHolder.getActiveTxnWithGeneration(
+				txnID, false, "")
+			require.Same(t, reused, current)
+			require.Equal(t, reused.generation, generation)
+			reused.Lock()
+			require.False(t, reused.closing.Load(),
+				"the delayed old close must not fence the new generation")
+			reused.Unlock()
+			require.NoError(t, s.Unlock(
+				context.Background(), txnID, timestamp.Timestamp{}))
+			require.Nil(t, baseHolder.getActiveTxn(txnID, false, ""))
+		}()
+	})
+}
+
+func BenchmarkTxnClosureAdmissionSingleSource(b *testing.B) {
+	s := &service{}
+	ctx := context.Background()
+	txnID := []byte("single-source-close")
+
+	b.ReportAllocs()
+	for b.Loop() {
+		guard, err := s.acquireTxnClosureAdmission(ctx, txnID, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		guard.release()
+	}
 }

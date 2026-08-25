@@ -86,4 +86,4 @@
 - 未知来源：vector、batch、Literal/LiteralVec planner入口确定性拒绝。
 - public BVT：证明 projection、CTE、join、UNION、GROUP BY、DISTINCT、aggregate、materialization、flow-control、prepare-reuse 的 SQL 可达性和结果 bytes/NULL 等价；`HEX`/`COUNT`/`MAX` 不读取 source，因此不作为 source 传播 oracle。
 - source 传播由 typed owner oracle观察：planner rewrite、operator/vector、aggregate/group-state、value-window、dispatch sender、remote-result receiver分别直接断言 `GetStringSourceAt`。remote typed tests直接调用远端专用 `marshalRemoteBatch` 与 `messageReceiverOnServer.sendBatch`，从而确定性经过 v27 remote wire owner，不依赖本地 planner placement 或 BVT 调度概率。
-- 当前独立 StringSource wire capability：`MORPCVersion27`。
+- 当前独立 StringSource wire capability：`MORPCVersion29`。
