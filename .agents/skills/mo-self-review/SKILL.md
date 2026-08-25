@@ -1,6 +1,6 @@
 ---
 name: mo-self-review
-description: Pre-push self-review gate for MatrixOne changes — systematic first-principles review of the complete diff, including functional closure, unhappy paths, state/ownership models, UT/BVT purpose and quality, fixture cost/reuse, wait-for dependencies, restart/reuse generations, and derived test matrices. Use before push/PR updates, when concurrency or lifecycle code changes, when tests are added/merged/optimized, or when repeated review rounds reveal missed closure edges.
+description: Pre-push and PR review gate for MatrixOne changes — design-first review for large/complex features and major refactors (ordinary bug fixes exempt), followed by systematic first-principles review of the complete diff, including functional closure, unhappy paths, state/ownership models, UT/BVT purpose and quality, fixture cost/reuse, wait-for dependencies, restart/reuse generations, and derived test matrices. Use before push/PR updates, when reviewing features/refactors, when concurrency or lifecycle code changes, when tests are added/merged/optimized, or when repeated review rounds reveal missed closure edges.
 ---
 
 Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
@@ -30,6 +30,7 @@ These rules apply to Codex, Claude, and every other compatible reviewing agent.
 
 | Change shape | Read |
 |---|---|
+| Feature or major refactor at the default size threshold, or with architecture/compatibility/distribution/security/lifecycle/operational complexity; RFC optional | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancellation, close/terminal paths, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
 | Production behavior or any added/changed/removed/merged/optimized UT or BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
 
@@ -56,23 +57,28 @@ merge-base; do not guess `main` for a release-branch change.
 
 Then execute (do not shortcut):
 
-1. If a callable **code-review** workflow exists, launch it at **high** on the
+1. Run §0 first. Classify the whole feature/refactor or PR series, not only this diff. Ordinary bug fixes are exempt. If
+   the design-first gate triggers, review the linked design before launching a
+   full implementation review. Missing/unapproved design or an unresolved design
+   blocker means `REQUEST_CHANGES` for an external PR, or a blocked delivery for
+   self-review; stop the implementation approval path.
+2. If the design gate passes or does not apply and a callable **code-review** workflow exists, launch it at **high** on the
    resolved target and state the base ("this branch compared to `<base>`"), appending:
    `多角度评审，第一性原则，系统性思考问题，涉及到的修改需要调研完整的功能闭环，unhappy path cover.`
    Pass scope/skip instructions through. If that capability is absent, execute
    §1–§5 directly with the available repository and review tools; capability
    absence must not block the gate.
-2. On results, apply **§3** (trace each finding's functional closure to its terminal
+3. On results, apply **§3** (trace each finding's functional closure to its terminal
    node; personally spot-check any *cluster of refutations* — a verifier can repeat
    one wrong call) and **§5** (developer decisions are authoritative; severity LAST,
    calibrated to the merge bar; decision-log every won't-fix/known-gap with its
    reason; no finding without a concrete failure).
-3. Present a converged, ranked findings list, each with a **fix-or-decision-log
+4. Present a converged, ranked findings list, each with a **fix-or-decision-log
    recommendation** — not another review round.
 
-§1–§8 below are the methodology this executes; consult them when applying the
+§0–§8 below are the methodology this executes; consult them when applying the
 discipline or running the gate manually. When this skill is surfaced only as
-background reference (not explicitly invoked), treat §1–§8 as guidance — do **not**
+background reference (not explicitly invoked), treat §0–§8 as guidance — do **not**
 auto-launch a workflow.
 
 ---
@@ -95,7 +101,8 @@ stream of nitpicks.
 
 | Gate | When | Action |
 |------|------|--------|
-| **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
+| **G-FEATURE-DESIGN** | Before implementation review when the complete feature/major refactor reaches the default size threshold or any architecture/compatibility/distribution/security/lifecycle/operational complexity trigger; ordinary bug fixes are exempt unless their real scope becomes a feature/major refactor | Read [the feature design-first contract](../mo-dev/references/feature-design-review.md). Review the design document first; an RFC is optional. Missing/unapproved design or any remaining design blocker stops implementation approval; submit `REQUEST_CHANGES` for an external PR or block self-delivery. |
+| **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §0–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
 | **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Run a minimal, explicitly named behavioral set with an adaptive `-race -count=N` budget, then run each affected owning package once with `-race`. Ordinary sequential logic uses focused tests plus an ordinary owning-package run. §6 defines the proportional budget and narrow measurement-test exception. |
 | **G-TEST-COVERAGE** | Production behavior changes, or the diff adds/changes/removes/merges/performance-optimizes UT/BVT | Read [the testing contract](../mo-dev/references/testing-contract.md). Review tests as production artifacts: purpose, coverage map, existing-case reuse, fixture isolation/cost, deterministic control, cleanup, real selection, and BVT applicability/evidence are merge gates. |
 
@@ -103,6 +110,43 @@ Scope = committed changes vs merge-base, staged changes, unstaged changes, and
 untracked files in scope—not just the last file touched. Inspect `git status
 --short` and `git ls-files --others --exclude-standard`; also verify that any
 required generated/delivery artifact is not silently excluded by ignore rules.
+
+---
+
+## 0. Feature and major-refactor design-first gate
+
+Before the code lenses, classify the complete feature/refactor using
+[the feature design-first contract](../mo-dev/references/feature-design-review.md).
+Do not let a small current diff, stacked PR, or mechanical split hide the total
+change scope. Ordinary bug fixes and focused maintenance changes are exempt; if
+a nominal fix introduces a new capability or grows into a major architectural
+refactor, classify its real scope.
+
+1. Record the whole feature/refactor/PR series and the exact size or complexity
+   trigger, or a concrete ordinary-fix/maintenance exemption.
+2. When triggered, locate the linked, stable design document, verify its reviewed
+   revision and approval status, and review it from first principles before
+   treating the implementation as the proposed answer. It may be an RFC,
+   `docs/design` document, or another reviewer-accessible versioned document;
+   RFC format is not required.
+3. Test the design for problem evidence and invariants; applicable standards and
+   credible alternatives; logical consistency; end-to-end state, ownership, and
+   failure closure; compatibility and migration; bounded performance/resources;
+   security, rollout, observability, and proportionate validation. Blocking
+   unresolved questions mean the design has not passed.
+4. If the design is absent, unapproved, or fails, stop the implementation
+   approval path. For an external PR, return `REQUEST_CHANGES` with concrete
+   design findings. For self-review, block push/delivery and produce the design
+   fix list.
+5. After design approval, verify that implementation, tests, rollout, and
+   operational behavior conform to the approved revision. A material deviation
+   reopens the affected design decision before code approval.
+
+This gate intentionally precedes the implementation sweep: code quality cannot
+compensate for an unsound or unreviewed architecture. Editorial design nits may
+remain non-blocking, but missing invariants, contradictory flows, unbounded
+state, absent compatibility/migration, ignored standards/security boundaries,
+or critical deferred decisions are merge blockers.
 
 ---
 
@@ -328,6 +372,9 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 
 ```
 □ every §1 lens swept over the whole diff
+□ the complete change/PR series has a recorded design-gate classification;
+  ordinary fixes record the exemption, and triggered features/refactors have an
+  approved design revision (RFC optional) with no unreviewed material deviation
 □ every changed arc's functional closure (§3) traced to its terminal node
 □ Q1–Q3 unhappy paths (§4) checked on touched resources/waits/growth
 □ state ownership, wait-for dependencies, and generation transitions modeled where applicable

@@ -1,6 +1,6 @@
 ---
 name: mo-dev
-description: MatrixOne database kernel development - first-principles, performance-aware change design; systematic UT/BVT coverage and fixture reuse; controlled local CGo build/test setup; counterexample-driven validation; hung-test diagnosis; GPU builds; operator/pipeline lifecycle contracts; and the vector/fulltext index-plugin framework. Use when modifying kernel production code or hot paths, fixing correctness/resource-lifecycle/concurrency defects, adding or optimizing unit/BVT cases, evaluating a new abstraction, designing non-overfit regressions, running CGo-transitive tests, diagnosing build/test failures or hangs, changing execution pipelines, or adding/editing index algorithms.
+description: MatrixOne database kernel development - design-first gates for large/complex features and major refactors; first-principles, performance-aware change design; systematic UT/BVT coverage and fixture reuse; controlled local CGo build/test setup; counterexample-driven validation; hung-test diagnosis; GPU builds; operator/pipeline lifecycle contracts; and the vector/fulltext index-plugin framework. Use when designing or implementing features/refactors, modifying kernel production code or hot paths, fixing correctness/resource-lifecycle/concurrency defects, adding or optimizing unit/BVT cases, evaluating a new abstraction, designing non-overfit regressions, running CGo-transitive tests, diagnosing build/test failures or hangs, changing execution pipelines, or adding/editing index algorithms.
 ---
 
 Compatibility: designed for Codex CLI and compatible agents on supported MatrixOne development platforms. Use the Go version declared by `go.mod`; CGo work also requires GNU Make, a supported C/C++ toolchain, and matching pre-built thirdparties.
@@ -11,6 +11,7 @@ Load only the reference needed for the task:
 
 | Need | Read |
 |------|------|
+| Classifying or reviewing a large/complex feature or major refactor, its design document (RFC optional), or implementation against an approved design | [references/feature-design-review.md](references/feature-design-review.md) |
 | Adding/changing/optimizing UT or BVT; deciding whether public behavior needs BVT; consolidating duplicate/non-orthogonal cases; test fixture reuse and clean execution evidence | [references/testing-contract.md](references/testing-contract.md) |
 | CGo compile/link/load/module errors, controlled local test execution, layered matrices, hung tests, "pre-existing" claims, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests, distributed pipeline hangs, remote dispatch/receiver registration | [references/operator-pipeline.md](references/operator-pipeline.md) |
@@ -23,6 +24,7 @@ Consult the referenced material before acting:
 
 | Gate | When | Action |
 |------|------|--------|
+| **G-FEATURE-DESIGN** | Before implementing or reviewing a feature or major refactor at the default size threshold, or with any architecture/compatibility/distribution/security/lifecycle/operational complexity trigger; ordinary bug fixes are exempt unless their real scope becomes one of those change types | Read [feature-design-review.md](references/feature-design-review.md). Classify the complete feature/refactor or PR series, require a previously approved design document (RFC optional), and review it before implementation. Missing or failed design review blocks delivery; in an external PR review, submit `REQUEST_CHANGES`. |
 | **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read [operator-pipeline.md](references/operator-pipeline.md). |
 | **G-CGO-ERR** | Any build/test returns module/vendor, header, link, `dyld`, or shared-library errors | Read [cgo-build-test.md](references/cgo-build-test.md) and identify the failing layer before changing code. |
 | **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (`CONDA_PREFIX`, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
@@ -61,15 +63,22 @@ Key dependency chain: `compile` instantiates operators -> `colexec` executes -> 
 
 ## Change Design Rules
 
-Apply **G-DESIGN** before editing production code:
+Apply **G-FEATURE-DESIGN** first, then **G-DESIGN** before editing production
+code. A feature/refactor that triggers the design-first gate cannot proceed from
+a draft or unreviewed design, and stacked/split PRs are classified as one change.
+Ordinary focused bug fixes are exempt:
 
-1. Work from the violated invariant and first owner of the state or resource. Do not start from the proposed patch or the last visible stack frame.
-2. Close the complete relevant state space: success, error, cancellation, timeout, retry, reuse/reset, restart, and partial initialization. Fix the common ownership or protocol boundary instead of adding a branch for one observed trace.
-3. Keep the mechanism proportional to the problem. A small or local defect does not by itself justify a framework, generic abstraction, or subsystem; a leak is only one example. Prefer an existing primitive or the narrowest ownership correction. Introduce shared machinery only when multiple independent recurring needs reveal a stable common contract and it reduces total code, state, runtime cost, and operational/cognitive complexity.
-4. Treat row-, batch-, message-, transaction-, and query-frequency paths as performance-sensitive. Account for added allocations, scans, copies, locks/atomics, goroutines/channels, syscalls, I/O, logging, and metric cardinality. When cost could be material, compare a focused benchmark or profile before and after; do not move diagnostics onto the fast path without a bounded budget.
-5. Avoid speculative flexibility. Do not add configuration, generic layers, background workers, caches, retries, global state, or extension points for hypothetical future needs. Make the smallest change that restores the general contract; let multiple concrete uses establish a stable variation axis before generalizing.
-6. Avoid scenario overfit. Do not encode issue numbers, exact data shapes, timing coincidences, or one plan layout in production logic. Derive regression cases from the invariant and its nearby controls using [counterexample-testing.md](references/counterexample-testing.md).
-7. Prefer deleting state, transitions, and duplicated cleanup over coordinating them with another layer. Every new stateful component must have an explicit owner, bound, initialization point, normal termination, error/cancel termination, and reuse/restart rule.
+1. Classify the complete feature/refactor against
+   [feature-design-review.md](references/feature-design-review.md). When it
+   triggers, record the design link, approved revision, and review decision;
+   implementation must conform to that revision or reopen design review.
+2. Work from the violated invariant and first owner of the state or resource. Do not start from the proposed patch or the last visible stack frame.
+3. Close the complete relevant state space: success, error, cancellation, timeout, retry, reuse/reset, restart, and partial initialization. Fix the common ownership or protocol boundary instead of adding a branch for one observed trace.
+4. Keep the mechanism proportional to the problem. A small or local defect does not by itself justify a framework, generic abstraction, or subsystem; a leak is only one example. Prefer an existing primitive or the narrowest ownership correction. Introduce shared machinery only when multiple independent recurring needs reveal a stable common contract and it reduces total code, state, runtime cost, and operational/cognitive complexity.
+5. Treat row-, batch-, message-, transaction-, and query-frequency paths as performance-sensitive. Account for added allocations, scans, copies, locks/atomics, goroutines/channels, syscalls, I/O, logging, and metric cardinality. When cost could be material, compare a focused benchmark or profile before and after; do not move diagnostics onto the fast path without a bounded budget.
+6. Avoid speculative flexibility. Do not add configuration, generic layers, background workers, caches, retries, global state, or extension points for hypothetical future needs. Make the smallest change that restores the general contract; let multiple concrete uses establish a stable variation axis before generalizing.
+7. Avoid scenario overfit. Do not encode issue numbers, exact data shapes, timing coincidences, or one plan layout in production logic. Derive regression cases from the invariant and its nearby controls using [counterexample-testing.md](references/counterexample-testing.md).
+8. Prefer deleting state, transitions, and duplicated cleanup over coordinating them with another layer. Every new stateful component must have an explicit owner, bound, initialization point, normal termination, error/cancel termination, and reuse/restart rule.
 
 ## Quick Test Commands
 
@@ -156,6 +165,9 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
 
 ```
 □ changed artifacts and their direct/dependent validators are explicitly named
+□ the complete change/PR series is classified by the design-first gate; ordinary
+  fixes record the exemption, and triggered features/refactors have an approved
+  design revision (RFC optional) with deviations reviewed before delivery
 □ changed behavior has a UT/BVT validation map; SQL/client-visible behavior has
   public-path BVT evidence or a concrete recorded no-BVT rationale
 □ new/changed/merged tests passed the orthogonality and fixture-reuse gate in
@@ -216,3 +228,4 @@ Hard rule: never claim a failure is "pre-existing" without reproducing it at the
 13. Never call a change systematic merely because it is broad; prove that it restores one general invariant across the relevant state transitions with less total complexity than the alternatives.
 14. Never add a new UT/BVT file before inventorying equivalent existing coverage and fixture boundaries; prefer a coherent extension or consolidation when it preserves failure localization and independent oracles.
 15. Never accept generated BVT results without reviewing the changed output and passing normal comparison mode, or use `@ignore`, `@sortkey`, `@regex`, skip tags, retries, or sleeps to hide behavior the case claims to verify.
+16. Never implement or approve a feature/major refactor that triggers the design-first gate without a previously approved design document; an RFC is optional. Do not use a `fix` label or small, stacked, or split PRs to bypass classification of the complete change.
