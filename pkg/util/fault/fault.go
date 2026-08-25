@@ -39,6 +39,7 @@ const (
 	REMOVE
 	TRIGGER
 	LIST
+	COUNT
 )
 
 const (
@@ -88,6 +89,12 @@ type faultEntry struct {
 	removed  bool
 	mutex    sync.Mutex
 	scope    Domain
+	countOut chan faultCount
+}
+
+type faultCount struct {
+	cnt   int64
+	found bool
 }
 
 type faultMap struct {
@@ -156,6 +163,16 @@ func (fm *faultMap) run() {
 				fm.chOut <- v
 			}
 			fm.chOut <- nil
+		case COUNT:
+			out := faultCount{}
+			if v, ok := fm.faultPoints[e.name]; ok {
+				out.cnt = int64(v.cnt)
+				out.found = true
+			}
+			// COUNT has a request-local buffered response. Besides returning a
+			// snapshot, this prevents concurrent fault requests from consuming
+			// each other's response on the legacy shared chOut channel.
+			e.countOut <- out
 		default:
 			fm.chOut <- nil
 		}
@@ -379,6 +396,32 @@ func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, 
 
 func TriggerFaultInDomainWithContext(ctx context.Context, domain Domain, name string) (iret int64, sret string, exist bool) {
 	return triggerFaultInDomain(ctx, domain, name, true)
+}
+
+// GetFaultPointCount returns a point's trigger count without triggering its
+// action. The count is snapshotted by the fault-map goroutine.
+func GetFaultPointCount(name string) (int64, bool) {
+	return GetFaultPointCountInDomain(DomainDefault, name)
+}
+
+func GetFaultPointCountInDomain(domain Domain, name string) (int64, bool) {
+	fm := enabled[domain].Load()
+	if fm == nil {
+		return 0, false
+	}
+
+	msg := faultEntry{
+		cmd:      COUNT,
+		name:     name,
+		countOut: make(chan faultCount, 1),
+	}
+	select {
+	case fm.chIn <- &msg:
+	case <-fm.closeCh:
+		return 0, false
+	}
+	out := <-msg.countOut
+	return out.cnt, out.found
 }
 
 func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCtx bool) (iret int64, sret string, exist bool) {

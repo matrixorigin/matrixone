@@ -67,6 +67,8 @@ select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
 -- mode instead of degrading to engine-relation inserts.
 drop table if exists big_src;
 create table big_src(a int, b varchar(30));
+select enable_fault_injection();
+select add_fault_point('fj/cn/flush_small_objs', ':::', 'echo', 40, 'wext.big_src');
 insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
 drop table if exists ext_big;
 create external table ext_big(a int, b varchar(30))
@@ -76,17 +78,18 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 
 -- ---------- remote run (multi-CN dispatch) ----------
--- Reuse the parallel case's source after flushing it, and patch only the
--- planner statistics to the original 4.4M-row/>512-block scale. This keeps the
--- MULTICN decision while avoiding a second, non-orthogonal large-data setup.
--- On a
--- multi-CN cluster, source-scan scopes — with the external-write insert on
--- top — are dispatched to remote CNs through the pipeline protocol,
--- exercising the to_external encode/decode and the remote writer rebuild; on
--- a single CN it degenerates to the parallel case. Results are identical
--- either way.
+-- Reuse the parallel source, but force the small input into many real objects
+-- so the scan has physical ranges to distribute. Planner statistics retain the
+-- original MULTICN threshold, while a per-CN first-non-empty-batch counter below
+-- proves that execution (not just EXPLAIN) rebuilt data-bearing remote writers.
+select add_fault_point('fj/cn/external_writer_non_empty', ':::', 'return', 0, '');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'wext.big_src');
+-- @metacmp(false)
+-- @wait_expect(2, 30)
+select count(distinct object_name) > 1 as multiple_objects,
+       sum(rows_cnt) = 100000 as all_rows_flushed
+from metadata_scan('wext.big_src', 'a') m;
 set @wext_remote_stats = '{"table_cnt":4400000,"block_number":560,"accurate_object_number":35,"approx_object_number":35,"ndv_map":{"a":4400000,"b":4400000}}';
 select table_cnt from table_stats('wext.big_src', 'patch', @wext_remote_stats) g;
 drop table if exists ext_remote;
@@ -97,7 +100,24 @@ fields terminated by ',';
 -- @regex("(?i)ap query plan on multicn", true)
 explain insert into ext_remote select * from big_src;
 insert into ext_remote select * from big_src;
+set @wext_writer_counts = (select fault_inject('cn.', 'get_fault_point_count', 'fj/cn/external_writer_non_empty'));
+-- One-CN developer runs require one data-bearing writer; multi-CN CI requires
+-- at least two CNs with a writer that consumed rows. Read up to eight CNs,
+-- comfortably above the BVT topology, without depending on pod ordering/IDs.
+select case when json_length(@wext_writer_counts) = 1
+       then coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0
+       else (
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[1].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[2].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[3].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[4].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[5].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[6].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[7].return_str')) as bigint), 0) > 0 then 1 else 0 end
+       ) >= 2 end as data_bearing_cns;
 select count(*), min(a), max(a) from ext_remote;
+select disable_fault_injection();
 
 -- ---------- JSONLine writable external table ----------
 drop table if exists ext_jl;

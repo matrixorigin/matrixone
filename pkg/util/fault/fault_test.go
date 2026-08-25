@@ -17,6 +17,8 @@ package fault
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +41,9 @@ func TestCount(t *testing.T) {
 	require.Equal(t, true, ok)
 	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
+	cnt, ok = GetFaultPointCount("a")
+	require.True(t, ok)
+	require.Equal(t, int64(3), cnt)
 	cnt, _, ok = TriggerFault("aa")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(3), cnt)
@@ -63,6 +68,8 @@ func TestCount(t *testing.T) {
 
 	RemoveFaultPoint(ctx, "a")
 	RemoveFaultPoint(ctx, "aa")
+	_, ok = GetFaultPointCount("a")
+	require.False(t, ok)
 
 	AddFaultPoint(ctx, "a", "3:8:2:", "return", 0, "", false)
 	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a", false)
@@ -110,6 +117,66 @@ func TestCount(t *testing.T) {
 	require.Equal(t, int64(9), cnt)
 	Disable()
 	Disable()
+}
+
+func TestGetFaultPointCountConcurrentWithTriggers(t *testing.T) {
+	require.True(t, Enable())
+	t.Cleanup(func() { Disable() })
+	require.NoError(t, AddFaultPoint(
+		context.Background(), "count-concurrently", ":::", "return", 0, "", false))
+
+	const goroutines = 16
+	const iterations = 100
+	var wg sync.WaitGroup
+	var failed atomic.Bool
+	wg.Add(goroutines * 2)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				_, _, ok := TriggerFault("count-concurrently")
+				if !ok {
+					failed.Store(true)
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				_, ok := GetFaultPointCount("count-concurrently")
+				if !ok {
+					failed.Store(true)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	require.False(t, failed.Load())
+
+	count, ok := GetFaultPointCount("count-concurrently")
+	require.True(t, ok)
+	require.Equal(t, int64(goroutines*iterations), count)
+}
+
+func TestHandleGetFaultPointCountIsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	require.True(t, Enable())
+	t.Cleanup(func() { Disable() })
+	require.NoError(t, AddFaultPoint(ctx, "read-count", ":::", "echo", 7, "", false))
+
+	// Reading the count must not execute the ECHO action or increment the point.
+	require.Equal(t, "0", HandleFaultInject(ctx, GetFaultPointCountCmd, "read-count"))
+	require.Equal(t, "0", HandleFaultInject(ctx, GetFaultPointCountCmd, "read-count"))
+	iret, _, ok := TriggerFault("read-count")
+	require.True(t, ok)
+	require.Equal(t, int64(7), iret)
+	require.Equal(t, "1", HandleFaultInject(ctx, GetFaultPointCountCmd, "read-count"))
+
+	require.True(t, Disable())
+	require.Equal(t, "fault point 'read-count' not found",
+		HandleFaultInject(ctx, GetFaultPointCountCmd, "read-count"))
 }
 
 func wait(t *testing.T) {

@@ -64,6 +64,12 @@ select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
 4  ¦  with\backslash
 drop table if exists big_src;
 create table big_src(a int, b varchar(30));
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs', ':::', 'echo', 40, 'wext.big_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, wext.big_src)[-7,1,0]  𝄀
+1
 insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
 drop table if exists ext_big;
 create external table ext_big(a int, b varchar(30))
@@ -73,6 +79,9 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
 100000  ¦  1  ¦  100000
+select add_fault_point('fj/cn/external_writer_non_empty', ':::', 'return', 0, '');
+➤ add_fault_point(fj/cn/external_writer_non_empty, :::, return, 0, )[-7,1,0]  𝄀
+1
 select mo_ctl('dn', 'flush', 'wext.big_src');
 ➤ mo_ctl(dn, flush, wext.big_src)[12,-1,0]  𝄀
 {
@@ -84,6 +93,11 @@ select mo_ctl('dn', 'flush', 'wext.big_src');
   ]
 }
 
+select count(distinct object_name) > 1 as multiple_objects,
+sum(rows_cnt) = 100000 as all_rows_flushed
+from metadata_scan('wext.big_src', 'a') m;
+➤ multiple_objects[-7,1,0]  ¦  all_rows_flushed[-7,1,0]  𝄀
+1  ¦  1
 set @wext_remote_stats = '{"table_cnt":4400000,"block_number":560,"accurate_object_number":35,"approx_object_number":35,"ndv_map":{"a":4400000,"b":4400000}}';
 select table_cnt from table_stats('wext.big_src', 'patch', @wext_remote_stats) g;
 ➤ table_cnt[8,53,31]  𝄀
@@ -97,9 +111,27 @@ explain insert into ext_remote select * from big_src;
 ➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Multi Update
 insert into ext_remote select * from big_src;
+set @wext_writer_counts = (select fault_inject('cn.', 'get_fault_point_count', 'fj/cn/external_writer_non_empty'));
+select case when json_length(@wext_writer_counts) = 1
+then coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0
+else (
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[1].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[2].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[3].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[4].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[5].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[6].return_str')) as bigint), 0) > 0 then 1 else 0 end +
+case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[7].return_str')) as bigint), 0) > 0 then 1 else 0 end
+) >= 2 end as data_bearing_cns;
+➤ data_bearing_cns[-7,1,0]  𝄀
+1
 select count(*), min(a), max(a) from ext_remote;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
 100000  ¦  1  ¦  100000
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
 drop table if exists ext_jl;
 create external table ext_jl(a int, b varchar(20), c double)
 infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
