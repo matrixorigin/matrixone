@@ -173,6 +173,33 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(1), status)
 
+		// MySQL evaluates text/numeric comparisons in the DOUBLE domain.
+		// Exponent-form text must not be forced through a bounded DECIMAL128
+		// representation before the comparison is evaluated.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		numericTextPredicateStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.predicate_dst set status = 7 where id = 1 and ? = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, numericTextPredicateStmt.Close())
+		}()
+		_, err = numericTextPredicateStmt.ExecContext(ctx, float64(1e100), "1e100")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(7), status)
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		_, err = numericTextPredicateStmt.ExecContext(ctx, float64(1e-100), "1e-100")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(7), status)
+		// The DOUBLE rule also covers integer-looking text. These adjacent INT64
+		// values compare equal after conversion, matching MySQL's documented
+		// string/numeric comparison behavior.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		_, err = numericTextPredicateStmt.ExecContext(ctx, int64(9223372036854775806), "9223372036854775807")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(7), status)
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {

@@ -365,6 +365,13 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 	require.Equal(t, types.T_decimal128, decimal.Oid)
 	require.Equal(t, int32(29), decimal.Width)
 	require.Equal(t, int32(9), decimal.Scale)
+	exponentDecimal, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_NEWDECIMAL,
+		false,
+		[]byte("1e3"),
+	)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal128, exponentDecimal.Oid)
 
 	for _, test := range []struct {
 		name       string

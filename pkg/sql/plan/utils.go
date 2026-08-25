@@ -3848,7 +3848,10 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 	if value == "" {
 		return types.Type{}, false
 	}
-	if strings.ContainsAny(value, ".eE") {
+	if strings.ContainsAny(value, "eE") {
+		return preparedExponentType(value)
+	}
+	if strings.Contains(value, ".") {
 		return preparedDecimalType(value)
 	}
 	negative := strings.HasPrefix(value, "-")
@@ -3887,12 +3890,10 @@ func preparedDecimalType(value string) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	if strings.ContainsAny(value, "eE") {
-		// Exponent notation is accepted by the expression parser, but its
-		// textual precision is not available without evaluating it.  DECIMAL128
-		// is a safe overload domain and preserves the ordinary prepared values
-		// used by the protocol path.
-		parts := strings.FieldsFunc(value, func(r rune) bool { return r == 'e' || r == 'E' })
-		if len(parts) != 2 || !isDecimalMantissa(parts[0]) || !isDecimalExponent(parts[1]) {
+		// This helper is reserved for an explicitly DECIMAL protocol/runtime
+		// context. Generic text inference handles exponent notation as FLOAT64
+		// before reaching here.
+		if _, ok := preparedExponentType(value); !ok {
 			return types.Type{}, false
 		}
 		return types.New(types.T_decimal128, 38, 18), true
@@ -3930,6 +3931,49 @@ func preparedDecimalType(value string) (types.Type, bool) {
 	default:
 		return types.New(types.T_decimal256, width, scale), true
 	}
+}
+
+// PreparedRuntimeDecimalTypeFromString infers metadata for a parameter whose
+// binary protocol type is explicitly DECIMAL/NEWDECIMAL. It is intentionally
+// separate from generic text inference, where exponent notation is an
+// approximate FLOAT64 value.
+func PreparedRuntimeDecimalTypeFromString(value string) (types.Type, bool) {
+	return preparedDecimalType(value)
+}
+
+func preparedExponentType(value string) (types.Type, bool) {
+	if !strings.ContainsAny(value, "eE") {
+		return types.Type{}, false
+	}
+	return preparedNumericComparisonTextType(value)
+}
+
+// preparedNumericComparisonTextType validates a text operand that is compared
+// with a numeric operand. MySQL evaluates string/numeric comparisons in the
+// DOUBLE domain, including integer-looking and fixed-point strings.
+func preparedNumericComparisonTextType(value string) (types.Type, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, false
+	}
+	unsigned := value
+	if unsigned[0] == '+' || unsigned[0] == '-' {
+		unsigned = unsigned[1:]
+	}
+	if strings.ContainsAny(unsigned, "eE") {
+		exponentAt := strings.IndexAny(unsigned, "eE")
+		if exponentAt <= 0 || strings.ContainsAny(unsigned[exponentAt+1:], "eE") ||
+			!isDecimalMantissa(unsigned[:exponentAt]) || !isDecimalExponent(unsigned[exponentAt+1:]) {
+			return types.Type{}, false
+		}
+	} else if !isDecimalMantissa(unsigned) {
+		return types.Type{}, false
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsInf(parsed, 0) {
+		return types.Type{}, false
+	}
+	return types.T_float64.ToType(), true
 }
 
 func isDecimalMantissa(value string) bool {

@@ -745,7 +745,7 @@ func binaryProtocolPrepareParamType(
 	case defines.MYSQL_TYPE_DOUBLE:
 		return types.T_float64.ToType(), true
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		if typ, ok := plan2.PreparedRuntimeTypeFromString(string(value)); ok && typ.IsDecimal() {
+		if typ, ok := plan2.PreparedRuntimeDecimalTypeFromString(string(value)); ok {
 			return typ, true
 		}
 		return types.New(types.T_decimal128, 38, 18), true

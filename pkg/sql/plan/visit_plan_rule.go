@@ -622,8 +622,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if literal == nil {
 						continue
 					}
-					runtimeType, ok := PreparedRuntimeTypeFromString(literal.GetSval())
-					if !ok || !runtimeType.IsNumeric() {
+					runtimeType, ok := preparedNumericComparisonTextType(literal.GetSval())
+					if !ok {
 						continue
 					}
 					inferred, inferErr := preparedRuntimeParamExpr(rule.ctx, literal.GetSval(), literal.IsBin, runtimeType)

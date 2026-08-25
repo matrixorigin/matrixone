@@ -1308,6 +1308,75 @@ func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) 
 	require.Equal(t, int64(1), bound.GetLit().GetI64Val())
 }
 
+func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T) {
+	ctx := context.Background()
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{param(0), param(1)})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{comparison},
+		}},
+	}}}
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{
+			Value:            "1e+100",
+			RuntimeType:      types.T_float64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+		ParamValue{
+			Value:            "1e100",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	boundComparison := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_bool), boundComparison.Typ.Id)
+	require.Len(t, boundComparison.GetF().Args, 2)
+	for _, arg := range boundComparison.GetF().Args {
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		literal := arg.GetLit()
+		require.NotNil(t, literal)
+		_, ok := literal.Value.(*planpb.Literal_Dval)
+		require.True(t, ok)
+		require.Equal(t, float64(1e100), literal.GetDval())
+	}
+
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{
+			Value:            "9223372036854775806",
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+		ParamValue{
+			Value:            "9223372036854775807",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
+	for _, arg := range boundComparison.GetF().Args {
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+	}
+}
+
 func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {
 	ctx := context.Background()
 	param := func() *planpb.Expr {

@@ -452,8 +452,12 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 		{name: "decimal64", value: "12.340", want: types.T_decimal64, ok: true},
 		{name: "decimal with leading dot", value: ".125", want: types.T_decimal64, ok: true},
 		{name: "decimal with trailing dot", value: "12.", want: types.T_decimal64, ok: true},
-		{name: "decimal128 exponent", value: "1e3", want: types.T_decimal128, ok: true},
-		{name: "signed exponent", value: "1.2E-3", want: types.T_decimal128, ok: true},
+		{name: "positive exponent", value: "1e3", want: types.T_float64, ok: true},
+		{name: "negative exponent", value: "1.2E-3", want: types.T_float64, ok: true},
+		{name: "large exponent", value: "1e100", want: types.T_float64, ok: true},
+		{name: "small exponent", value: "1e-100", want: types.T_float64, ok: true},
+		{name: "maximum finite exponent", value: "1.7976931348623157e308", want: types.T_float64, ok: true},
+		{name: "overflowing exponent", value: "1e309"},
 		{name: "decimal256 integer", value: largeInteger + ".", want: types.T_decimal256, ok: true},
 		{name: "decimal256 fraction", value: largeFraction, want: types.T_decimal256, ok: true},
 		{name: "invalid exponent", value: "1e+"},
@@ -509,12 +513,53 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		{value: "1.", want: true},
 		{value: "1e+2", want: true},
 		{value: ".1e-2", want: true},
+		{value: "1.7976931348623157e308", want: true},
+		{value: "1e309", want: false},
 		{value: "1e", want: false},
 		{value: "1e+", want: false},
 		{value: "1.2.3", want: false},
 	} {
 		_, ok := preparedDecimalType(test.value)
 		require.Equal(t, test.want, ok, test.value)
+	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "1e+2", want: true},
+		{value: ".1e-2", want: true},
+		{value: "1.7976931348623157e308", want: true},
+		{value: "1e309", want: false},
+		{value: "1e", want: false},
+		{value: "e1", want: false},
+		{value: "1ee2", want: false},
+		{value: "1eE2", want: false},
+	} {
+		_, ok := preparedExponentType(test.value)
+		require.Equal(t, test.want, ok, test.value)
+	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "1", want: true},
+		{value: "1.00", want: true},
+		{value: "9223372036854775807", want: true},
+		{value: strings.Repeat("9", 80), want: true},
+		{value: "1e100", want: true},
+		{value: "1e-100", want: true},
+		{value: "1.7976931348623157e308", want: true},
+		{value: "1e309", want: false},
+		{value: "1ee2", want: false},
+		{value: "NaN", want: false},
+		{value: "Inf", want: false},
+		{value: "not-a-number", want: false},
+	} {
+		typ, ok := preparedNumericComparisonTextType(test.value)
+		require.Equal(t, test.want, ok, test.value)
+		if ok {
+			require.Equal(t, types.T_float64, typ.Oid)
+		}
 	}
 }
 
