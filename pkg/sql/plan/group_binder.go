@@ -593,6 +593,17 @@ func canonicalizeMedianAstValue(
 				// The declaration spelling of a local table alias is therefore
 				// non-semantic and must not affect the equality key.
 				node.As = tree.AliasClause{}
+			case *tree.TableName:
+				// Mode 2 preserves display spelling while sharing the
+				// case-insensitive comparison identity of mode 1. Normalize only
+				// the cloned semantic key; mode 0 remains case-sensitive.
+				lower := int64(0)
+				if ctx != nil {
+					lower = ctx.lower
+				}
+				node.CatalogName = tree.Identifier(tree.NewCStr(string(node.CatalogName), lower).Compare())
+				node.SchemaName = tree.Identifier(tree.NewCStr(string(node.SchemaName), lower).Compare())
+				node.ObjectName = tree.Identifier(tree.NewCStr(string(node.ObjectName), lower).Compare())
 			}
 			if selectCtx == nil && builder != nil {
 				if statement, ok := value.Interface().(tree.SelectStatement); ok {

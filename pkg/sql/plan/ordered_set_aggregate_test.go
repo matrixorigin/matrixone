@@ -38,6 +38,15 @@ func findAggregateByName(query *planpb.Query, name string) *planpb.Function {
 	return nil
 }
 
+type medianLowerCaseTableNamesContext struct {
+	*MockCompilerContext
+	lower int64
+}
+
+func (c *medianLowerCaseTableNamesContext) GetLowerCaseTableNames() int64 {
+	return c.lower
+}
+
 func TestMedianSetOrderReferenceMarkerPreservesCaseSensitiveKeys(t *testing.T) {
 	upper := medianSetOrderReferenceMarker("A").(*tree.UnresolvedName).ColName()
 	lower := medianSetOrderReferenceMarker("a").(*tree.UnresolvedName).ColName()
@@ -100,6 +109,58 @@ func TestBuildMedianWithinGroupCanonicalizesVariableNames(t *testing.T) {
 	t.Cleanup(stmt.Free)
 	_, err = BuildPlan(ctx, stmt, false)
 	require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
+}
+
+func TestBuildMedianWithinGroupRespectsLowerCaseTableNames(t *testing.T) {
+	const sameCase = `select median((select a from select_test.bind_select limit 1))
+  within group (order by (select a from select_test.bind_select limit 1))
+  from select_test.bind_select`
+	const mixedCase = `select median((select a from select_test.bind_select limit 1))
+  within group (order by (select a from SELECT_TEST.BIND_SELECT limit 1))
+  from select_test.bind_select`
+
+	for _, test := range []struct {
+		name    string
+		lower   int64
+		sql     string
+		wantErr bool
+	}{
+		{name: "mode 0 same spelling", lower: 0, sql: sameCase},
+		{name: "mode 0 preserves case", lower: 0, sql: mixedCase, wantErr: true},
+		{name: "mode 1 folds case", lower: 1, sql: mixedCase},
+		{name: "mode 2 compares case insensitively", lower: 2, sql: mixedCase},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := &medianLowerCaseTableNamesContext{
+				MockCompilerContext: NewMockCompilerContext(true),
+				lower:               test.lower,
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, test.lower)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			_, err = BuildPlan(ctx, stmt, false)
+			if test.wantErr {
+				require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+
+	ctx := &medianLowerCaseTableNamesContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		lower:               2,
+	}
+	for _, sql := range []string{
+		"select median((select a from select_test.bind_select limit 1)) from select_test.bind_select",
+		"select median((select a from SELECT_TEST.BIND_SELECT limit 1)) from select_test.bind_select",
+	} {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 2)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+	}
 }
 
 func TestBuildOrderedSetAggregates(t *testing.T) {
