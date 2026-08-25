@@ -2081,6 +2081,18 @@ type shortHandshakeServerConn struct {
 	rebound              *tunnel
 }
 
+type recordingShortHandshakeServerConn struct {
+	*shortHandshakeServerConn
+	statements []internalStmt
+}
+
+func (s *recordingShortHandshakeServerConn) ExecStmt(
+	stmt internalStmt, _ chan<- []byte,
+) (bool, error) {
+	s.statements = append(s.statements, stmt)
+	return true, nil
+}
+
 func (s *shortHandshakeServerConn) waitCacheReuseReady(context.Context) error {
 	return nil
 }
@@ -2416,6 +2428,29 @@ func Test_connectToBackend_BindsOnlyAuthenticatedTenant(t *testing.T) {
 		require.Nil(t, got)
 		require.Equal(t, 1, serverConn.closeCount)
 		require.Zero(t, writer.writeCount)
+	})
+
+	t.Run("cached backend restores requested database", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		serverConn := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+				connResponse:   makeOKPacket(8)[4:],
+			},
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return serverConn
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, serverConn, got)
+		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, serverConn.statements)
+		require.Equal(t, 1, writer.writeCount)
 	})
 }
 

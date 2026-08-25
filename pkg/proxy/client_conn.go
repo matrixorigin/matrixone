@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -1025,6 +1026,23 @@ func (c *clientConn) connectToBackendContext(
 				c.mysqlProto.GetAuthResponse(),
 				c.clientInfo,
 			)
+		}
+		if sc != nil {
+			// ResetSession clears the cached backend's database; restore the
+			// database requested by this login before publishing the cached response.
+			if db := c.mysqlProto.GetDatabaseName(); db != "" {
+				ok, err := execStmtWithContext(ctx, sc, internalStmt{
+					cmdType: cmdQuery,
+					s:       "use " + sqlquote.Ident(db),
+				}, nil)
+				if err != nil || !ok {
+					_ = sc.Close()
+					sc = nil
+					if cause := operationContextCause(ctx); cause != nil {
+						return nil, cause
+					}
+				}
+			}
 		}
 		if sc != nil {
 			// Pop transfers the physical backend, but serverConn and connManager
