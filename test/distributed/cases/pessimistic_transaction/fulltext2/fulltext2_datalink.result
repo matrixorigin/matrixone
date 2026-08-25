@@ -2,9 +2,16 @@ set experimental_fulltext2_index = 1;
 create stage ft2stage URL='file://$resources/fulltext/';
 create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
 insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+set @dl_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl') limit 1);
+set @wait_dl_initial_sql = concat(
+'select coalesce(max(chunk_id), -1) >= 0 as dl_ready from `', database(), '`.`', @dl_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_dl_initial from @wait_dl_initial_sql;
+execute wait_dl_initial;
+➤ dl_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_dl_initial;
 select id from dl where match(fpath) against('matrixone');
 ➤ id[-5,64,0]  𝄀
 0
@@ -17,13 +24,34 @@ select id from dl where match(fpath) against('mo');
 ➤ id[-5,64,0]
 create table dl2 (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
 insert into dl2 values (0, 'stage://ft2stage/mo.pdf');
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+set @dl2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl2') limit 1);
+set @wait_dl2_initial_sql = concat(
+'select coalesce(max(chunk_id), -1) >= 0 as dl2_ready from `', database(), '`.`', @dl2_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_dl2_initial from @wait_dl2_initial_sql;
+execute wait_dl2_initial;
+➤ dl2_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_dl2_initial;
+set @capture_dl2_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @dl2_tail_before_update from `', database(), '`.`', @dl2_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_dl2_tail from @capture_dl2_tail_sql;
+execute capture_dl2_tail;
+deallocate prepare capture_dl2_tail;
 update dl2 set fpath='stage://ft2stage/file-sample_100kB.docx' where id=0;
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+set @wait_dl2_update_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @dl2_tail_before_update,
+' as dl2_update_ready from `', database(), '`.`', @dl2_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_dl2_update from @wait_dl2_update_sql;
+execute wait_dl2_update;
+➤ dl2_update_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_dl2_update;
 select id from dl2 where match(fpath) against('Nulla facilisi' in natural language mode);
 ➤ id[-5,64,0]  𝄀
 0

@@ -3595,6 +3595,350 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
+	tests := []struct {
+		name         string
+		fillMode     tree.FillMode
+		fillTypes    []types.Type
+		fillNames    []string
+		wantErr      bool
+		errorType    string
+		wantFillType plan.Node_FillType
+	}{
+		{
+			name:         "int64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_int64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "float64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_float64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "decimal256",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.New(types.T_decimal256, 65, 0)},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:      "varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:      "bool",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_bool.ToType()},
+			wantErr:   true,
+			errorType: "BOOL",
+		},
+		{
+			name:      "datetime",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_datetime.ToType()},
+			wantErr:   true,
+			errorType: "DATETIME",
+		},
+		{
+			name:      "json",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_json.ToType()},
+			wantErr:   true,
+			errorType: "JSON",
+		},
+		{
+			name:      "any",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_any.ToType()},
+			wantErr:   true,
+			errorType: "ANY",
+		},
+		{
+			name:      "mixed numeric and varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:         "boundary carriers are excluded",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_datetime.ToType(), types.T_datetime.ToType(), types.T_int64.ToType()},
+			fillNames:    []string{TimeWindowStart, TimeWindowEnd, "value"},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "varchar prev remains supported",
+			fillMode:     tree.FillPrev,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_PREV,
+		},
+		{
+			name:         "varchar next remains supported",
+			fillMode:     tree.FillNext,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_NEXT,
+		},
+		{
+			name:         "varchar value remains supported",
+			fillMode:     tree.FillValue,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_VALUE,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+			bindCtx.times = make([]*plan.Expr, len(tt.fillTypes))
+			for i, fillType := range tt.fillTypes {
+				name := "value"
+				if i < len(tt.fillNames) {
+					name = tt.fillNames[i]
+				}
+				bindCtx.times[i] = &plan.Expr{
+					Typ: makePlan2Type(&fillType),
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(i),
+						Name:   name,
+					}},
+				}
+			}
+
+			fillVal := tree.Expr(nil)
+			if tt.fillMode == tree.FillValue {
+				fillVal = tree.NewNumVal(int64(0), "0", false, tree.P_int64)
+			}
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+					Unit: "second",
+				},
+				Fill: &tree.Fill{Mode: tt.fillMode, Val: fillVal},
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			fillType, _, _, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+				require.Contains(t, err.Error(), "FILL(LINEAR) does not support aggregate result type")
+				require.Contains(t, err.Error(), tt.errorType)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantFillType, fillType)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillRejectsOrderByOnlyAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_order", Obj: 42}
+	mock.ctxt.tables["tw_order"] = &plan.TableDef{
+		Name: "tw_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}},
+		},
+	}
+
+	_, err := runOneStmt(mock, t, `select series_id, _wstart, max(series_id) as numeric_fill
+from tw_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(value), series_id, _wstart`)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Equal(t,
+		"not supported: FILL(LINEAR) does not support aggregate result type VARCHAR",
+		err.Error())
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsOrderByOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order"] = &plan.TableDef{
+		Name: "tw_numeric_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillDeduplicatesSelectedOrderByAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order_selected"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order_selected", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order_selected"] = &plan.TableDef{
+		Name: "tw_numeric_order_selected",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order_selected
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(shown), max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_having", Obj: 42}
+	mock.ctxt.tables["tw_numeric_having"] = &plan.TableDef{
+		Name: "tw_numeric_having",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_having
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+	var havingFilter *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) == 1 {
+			havingFilter = node
+			break
+		}
+	}
+	require.NotNil(t, havingFilter)
+	require.True(t, havingFilter.FilterIsBarrier)
+	require.Len(t, havingFilter.Children, 1)
+	require.Equal(t, fillNode.NodeId, havingFilter.Children[0])
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyAggregateWithoutSelection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_having_only"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_having_only", Obj: 42}
+	mock.ctxt.tables["tw_having_only"] = &plan.TableDef{
+		Name: "tw_having_only",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart
+from tw_having_only
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 1)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -4962,7 +5306,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 	boundHavingList, err := builder.bindHaving(bindCtx, selectClause.Having, NewHavingBinder(builder, bindCtx))
 	require.NoError(t, err)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), nodeID)
 	require.Equal(t, 3, len(builder.qry.Nodes))
@@ -5012,7 +5356,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindCtx.windows, 1)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
 
