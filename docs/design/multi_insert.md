@@ -130,20 +130,33 @@ SINK_SCAN(source image)
 Because the tail is literally the single-table `bindInsert` tail, every
 constraint/index behaviour is inherited rather than re-implemented.
 
-### Routing rules as filters
+### Routing: one WHEN occurrence is one route decision
 
-For clause *i* under `WHEN cond_i`:
+Each `WHEN` is bound and evaluated **exactly once**, in a projection directly
+above the source and below the shared `SINK`, and materialized as one boolean
+**selector column** appended after the source columns (`appendMultiInsertSelectors`).
+Targets never re-bind a predicate; their `FILTER` reads the selector columns:
 
 | statement                     | filter on the branch                                   |
 |-------------------------------|--------------------------------------------------------|
-| `INSERT ALL WHEN`             | `cond_i`                                               |
-| `INSERT FIRST WHEN`           | `cond_i AND cond_1 IS NOT TRUE AND ... AND cond_{i-1} IS NOT TRUE` |
-| `ELSE`                        | `cond_1 IS NOT TRUE AND ... AND cond_n IS NOT TRUE`    |
+| `INSERT ALL WHEN`             | `sel_i`                                                |
+| `INSERT FIRST WHEN`           | `sel_i AND sel_1 IS NOT TRUE AND ... AND sel_{i-1} IS NOT TRUE` |
+| `ELSE`                        | `sel_1 IS NOT TRUE AND ... AND sel_n IS NOT TRUE`      |
 | unconditional `INSERT ALL`    | none                                                   |
 
 `IS NOT TRUE` (function `isnottrue`) rather than `NOT` so that a NULL
 condition is treated as "did not match": the row stays eligible for later
 `WHEN`s and for `ELSE`, matching Snowflake.
+
+Materializing the decision is not an optimization, it is required for
+correctness. An earlier version copied the `WHEN` AST into every branch and
+bound it again per target. With a volatile predicate the branches then made
+*independent* decisions for the same row: measured on 1000 rows with
+`rand() < 0.5`, `INSERT FIRST` put 265 rows in **both** targets and ~262 in
+neither (total 1003 instead of 1000), and two `INTO` clauses under one `WHEN`
+received completely different row sets. Evaluating once also removes the
+O(rows × branches) predicate cost and the duplicated subquery plans that the
+per-branch binding caused.
 
 ### The same table in several INTO clauses
 
@@ -702,7 +715,22 @@ Recorded from the pre-merge self-review of PR #27560 (multi-angle sweep and
 functional closure parser → planner → compile → frontend → tests), so later
 review rounds do not re-litigate them.
 
-Fixed during the review:
+Fixed after maintainer review (XuPeng-SH, CHANGES_REQUESTED):
+
+- **Route decisions were re-evaluated per target.** `WHEN` conditions were
+  copied into every branch and bound again, so one `WHEN` occurrence was not
+  one route decision. Volatile predicates therefore broke both documented
+  guarantees — `INSERT FIRST` stopped being a partition and the `INTO`
+  clauses of a single `WHEN` disagreed (reproduced above). Fixed by
+  evaluating each `WHEN` once above the shared sink into a boolean selector
+  column that every target consumes; see "Routing" above. Regressions added
+  per the review request: `TestMultiInsertEvaluatesEachWhenOnce` (each
+  predicate bound exactly once; no `FILTER` re-evaluates one) and BVT cases
+  asserting that two `INTO`s under one volatile `WHEN` receive identical key
+  sets, and that volatile `INSERT FIRST` targets are disjoint and cover the
+  source exactly once.
+
+Fixed during self-review:
 
 - **Access-control bypass:** `AddRewriteHints` (`pkg/sql/parsers/sqlparse.go`)
   attaches the table→query rewrite policy to the statement that reads tables;
@@ -753,10 +781,6 @@ growth found — see below — but three hardening gaps):
 
 Accepted as designed (with the reason):
 
-- `INSERT FIRST` evaluates earlier conditions again as `IS NOT TRUE` filters
-  (O(rows × branches)); keeps routing in plan structure with no operator
-  change. The selector-column alternative above removes it if it ever
-  matters.
 - The statement-level `WITH` is moved onto the source `SELECT` by mutating
   the AST, as `bindInsert` does; idempotent, so PREPARE/EXECUTE re-binding
   is safe.

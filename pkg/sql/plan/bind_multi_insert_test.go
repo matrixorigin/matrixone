@@ -107,18 +107,107 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 		require.Len(t, filters, 1, "step %d", i+1)
 		require.Len(t, filters[0].FilterList, expectedFilterLens[i], "step %d", i+1)
 	}
-	// The ELSE step's conditions are all IS NOT TRUE wrappers.
+	// The ELSE step's conditions are all IS NOT TRUE over a selector column.
 	var elseFilters []*plan.Node
 	collectFilterNodes(qry, qry.Steps[3], &elseFilters)
 	for _, expr := range elseFilters[0].FilterList {
-		require.Equal(t, "isnottrue", expr.GetF().Func.ObjName)
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		require.Equal(t, "isnottrue", fn.Func.ObjName)
+		require.NotNil(t, fn.Args[0].GetCol(), "IS NOT TRUE must read a materialized selector, not re-evaluate")
 	}
-	// The second WHEN keeps its own condition plus one exclusion.
+	// The second WHEN keeps its own selector plus one exclusion; the selector is
+	// a plain column reference, never a re-bound predicate.
 	var secondFilters []*plan.Node
 	collectFilterNodes(qry, qry.Steps[2], &secondFilters)
-	names := []string{secondFilters[0].FilterList[0].GetF().Func.ObjName, secondFilters[0].FilterList[1].GetF().Func.ObjName}
-	require.Contains(t, names, "isnottrue")
-	require.Contains(t, names, "<")
+	var bare, notTrue int
+	for _, expr := range secondFilters[0].FilterList {
+		if expr.GetCol() != nil {
+			bare++
+			continue
+		}
+		require.Equal(t, "isnottrue", expr.GetF().Func.ObjName)
+		notTrue++
+	}
+	require.Equal(t, 1, bare)
+	require.Equal(t, 1, notTrue)
+	testDeepCopy(logicPlan)
+}
+
+// Every WHEN must be evaluated exactly once, above the shared sink, and the
+// targets must read the materialized boolean. Re-binding the predicate per
+// branch makes one WHEN occurrence several independent route decisions, which
+// breaks INSERT FIRST partitioning and makes two INTOs of one WHEN disagree
+// whenever the predicate is volatile (rand()).
+func TestMultiInsertEvaluatesEachWhenOnce(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert first"+
+			" when deptno < 10 then into t2 (a, b) values (deptno, deptno)"+
+			"                       into t3 (a) values (deptno)"+
+			" when deptno < 20 then into dept (deptno, dname) values (deptno, dname)"+
+			" else into t2 (a, b) values (deptno * 2, deptno)"+
+			" select deptno, dname from dept")
+	require.NoError(t, err)
+	qry := logicPlan.GetQuery()
+
+	// The comparison that implements each WHEN appears exactly once in the whole
+	// plan: in the selector projection feeding the sink.
+	var lessThan int
+	var countLessThan func(*plan.Expr)
+	countLessThan = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.ObjName == "<" {
+				lessThan++
+			}
+			for _, arg := range fn.Args {
+				countLessThan(arg)
+			}
+		}
+	}
+	for _, node := range qry.Nodes {
+		for _, expr := range node.ProjectList {
+			countLessThan(expr)
+		}
+		for _, expr := range node.FilterList {
+			countLessThan(expr)
+		}
+	}
+	require.Equal(t, 2, lessThan, "each of the 2 WHEN predicates must be bound exactly once")
+
+	// No FILTER re-evaluates a predicate: every conjunct is either a selector
+	// column or IS NOT TRUE over one.
+	for _, node := range qry.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if expr.GetCol() != nil {
+				continue
+			}
+			fn := expr.GetF()
+			require.NotNil(t, fn)
+			require.Equal(t, "isnottrue", fn.Func.ObjName)
+			require.NotNil(t, fn.Args[0].GetCol())
+		}
+	}
+
+	// Both INTO clauses of the first WHEN consume the same selector column.
+	selectors := map[int32]int{}
+	for _, node := range qry.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if col := expr.GetCol(); col != nil {
+				selectors[col.ColPos]++
+			}
+		}
+	}
+	require.NotEmpty(t, selectors)
 	testDeepCopy(logicPlan)
 }
 

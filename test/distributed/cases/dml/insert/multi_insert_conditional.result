@@ -249,6 +249,45 @@ select * from t_big order by id;
 2  ¦  2  𝄀
 3  ¦  3  𝄀
 4  ¦  4
+create table v1 (id int primary key);
+create table v2 (id int primary key);
+create table v3 (id int primary key);
+create table v4 (id int primary key);
+insert all when rand() < 0.5 then into v1 (id) values (id) into v2 (id) values (id) select id from src;
+select count(*) from v1 a left join v2 b on a.id = b.id where b.id is null;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from v2 b left join v1 a on a.id = b.id where a.id is null;
+➤ count(*)[-5,64,0]  𝄀
+0
+select (select count(*) from v1) = (select count(*) from v2) as same_cardinality;
+➤ same_cardinality[-7,1,0]  𝄀
+1
+insert first when rand() < 0.5 then into v3 (id) values (id) when true then into v4 (id) values (id) select id from src;
+select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+select count(*) from v3 a join v4 b on a.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from src s where s.id not in (select id from v3) and s.id not in (select id from v4);
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from v3; delete from v4; delete from v1;
+insert first
+when id > 100000     then into v1 (id) values (id)
+when rand() < 0.5    then into v3 (id) values (id)
+else                      into v4 (id) values (id)
+select id from src;
+select count(*) from v1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+select count(*) from v3 a join v4 b on a.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+0
 delete from t_big; delete from t_rest;
 insert first when id > 0 then into t_big (id, val) values (id, val) else into t_rest (id, val) values (id, val) select id, val from src where id > 100000;
 select count(*) from t_big;

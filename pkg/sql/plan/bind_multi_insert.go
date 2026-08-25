@@ -102,17 +102,22 @@ func multiInsertGroupKey(objRef *plan.ObjectRef, tableDef *plan.TableDef) string
 	return "name:" + objRef.SchemaName + "." + objRef.ObjName
 }
 
-// multiInsertBranch is one INTO clause together with the conditions gating it.
+// multiInsertBranch is one INTO clause together with the route decision gating
+// it. Conditions are referenced by WHEN index, never by AST: every WHEN is bound
+// and evaluated exactly once, above the shared source sink, and materialized as
+// one boolean selector column. A branch only names the selectors it consumes, so
+// all INTO clauses of one WHEN necessarily observe the same decision — which
+// matters for volatile predicates such as rand().
 type multiInsertBranch struct {
 	target *tree.MultiInsertTarget
-	// cond must be true for a source row to reach the target; nil means
-	// unconditional.
-	cond tree.Expr
-	// excluded are the conditions of earlier WHEN branches that must NOT be
-	// true for the row: every earlier WHEN for INSERT FIRST, and all WHENs for
-	// the ELSE targets. A NULL condition counts as "not true", so a row whose
-	// earlier condition evaluated to NULL is still eligible.
-	excluded []tree.Expr
+	// condIdx is the WHEN whose selector must be true for a source row to reach
+	// this target; -1 for an unconditional clause and for ELSE.
+	condIdx int
+	// excludedIdx are the WHENs whose selectors must NOT be true: every earlier
+	// WHEN for INSERT FIRST, and all WHENs for the ELSE targets. A NULL selector
+	// counts as "not true", so a row whose condition evaluated to NULL is still
+	// eligible here.
+	excludedIdx []int
 	// insertColumns are the target columns this clause writes, in clause
 	// order (the explicit column list, or every insertable column).
 	insertColumns []string
@@ -132,27 +137,28 @@ type multiInsertGroup struct {
 func multiInsertBranches(stmt *tree.MultiInsert) []*multiInsertBranch {
 	branches := make([]*multiInsertBranch, 0, len(stmt.Targets)+len(stmt.Whens)+len(stmt.Else))
 	for _, target := range stmt.Targets {
-		branches = append(branches, &multiInsertBranch{target: target})
+		branches = append(branches, &multiInsertBranch{target: target, condIdx: -1})
 	}
-	seen := make([]tree.Expr, 0, len(stmt.Whens))
-	for _, when := range stmt.Whens {
-		var excluded []tree.Expr
+	all := make([]int, 0, len(stmt.Whens))
+	for i, when := range stmt.Whens {
+		var excluded []int
 		if stmt.First {
-			excluded = append([]tree.Expr(nil), seen...)
+			excluded = append([]int(nil), all...)
 		}
 		for _, target := range when.Targets {
 			branches = append(branches, &multiInsertBranch{
-				target:   target,
-				cond:     when.Cond,
-				excluded: excluded,
+				target:      target,
+				condIdx:     i,
+				excludedIdx: excluded,
 			})
 		}
-		seen = append(seen, when.Cond)
+		all = append(all, i)
 	}
 	for _, target := range stmt.Else {
 		branches = append(branches, &multiInsertBranch{
-			target:   target,
-			excluded: append([]tree.Expr(nil), seen...),
+			target:      target,
+			condIdx:     -1,
+			excludedIdx: append([]int(nil), all...),
 		})
 	}
 	return branches
@@ -202,8 +208,19 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 		srcCols[i] = &plan.ColDef{Name: name, Typ: srcNode.ProjectList[i].Typ}
 	}
 
+	// 1b. Evaluate every WHEN exactly once, here, above the shared source: one
+	// boolean selector column per WHEN, appended to the source columns and
+	// materialized by the sink. Targets consume those columns instead of
+	// re-binding the predicate, so one WHEN occurrence is one route decision for
+	// a row — the property that makes INSERT FIRST a partition and makes all
+	// INTO clauses of one WHEN agree, even for volatile predicates like rand().
+	selectorID, err := builder.appendMultiInsertSelectors(bindCtx, srcID, srcCols, stmt.Whens)
+	if err != nil {
+		return err
+	}
+
 	sinkTag := builder.genNewBindTag()
-	sinkID := appendSinkNodeWithTag(builder, bindCtx, srcID, sinkTag)
+	sinkID := appendSinkNodeWithTag(builder, bindCtx, selectorID, sinkTag)
 	sourceStep := builder.appendStep(sinkID)
 
 	// 2. Resolve every target and group the clauses by table, in source order.
@@ -236,6 +253,74 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 		}
 	}
 	return nil
+}
+
+// appendMultiInsertSelectors projects the source columns unchanged and appends
+// one boolean column per WHEN, evaluated once per source row. It returns the new
+// top node; the selector for WHEN i lives at position len(srcCols)+i.
+func (builder *QueryBuilder) appendMultiInsertSelectors(
+	bindCtx *BindContext,
+	srcID int32,
+	srcCols []*plan.ColDef,
+	whens []*tree.MultiInsertWhen,
+) (int32, error) {
+	// The conditions are written against the source query's output columns, so
+	// bind them in a context where that output is a table.
+	condCtx := NewBindContext(builder, nil)
+	condCtx.snapshot = bindCtx.snapshot
+	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx); err != nil {
+		return 0, err
+	}
+	if len(condCtx.bindings) != 1 {
+		return 0, moerr.NewInternalError(builder.GetContext(), "multi-table insert failed to bind its source query")
+	}
+	// addBinding already exposes a derived-table binding's columns unqualified;
+	// unlike the SINK_SCAN case below, no manual bindingByCol fixup is needed
+	// (and doing it would mark every column ambiguous).
+	binding := condCtx.bindings[0]
+	condCtx.binder = NewWhereBinder(builder, condCtx)
+
+	srcTag := binding.tag
+	lastNodeID := srcID
+	selectors := make([]*plan.Expr, 0, len(whens))
+	for _, when := range whens {
+		conds, err := splitAndBindCondition(when.Cond, NoAlias, condCtx)
+		if err != nil {
+			return 0, err
+		}
+		selector := conds[0]
+		for _, cond := range conds[1:] {
+			if selector, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and",
+				[]*plan.Expr{selector, cond}); err != nil {
+				return 0, err
+			}
+		}
+		if lastNodeID, selector, err = builder.flattenSubqueries(lastNodeID, selector, condCtx); err != nil {
+			return 0, err
+		}
+		if selector == nil {
+			return 0, moerr.NewInternalError(builder.GetContext(), "multi-table insert WHEN condition vanished during binding")
+		}
+		selectors = append(selectors, selector)
+	}
+
+	projList := make([]*plan.Expr, 0, len(srcCols)+len(selectors))
+	for i, col := range srcCols {
+		projList = append(projList, &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: srcTag, ColPos: int32(i), Name: col.Name},
+			},
+		})
+	}
+	projList = append(projList, selectors...)
+
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: projList,
+		BindingTags: []int32{builder.genNewBindTag()},
+	}, condCtx), nil
 }
 
 // validateMultiInsertTarget rejects target tables the multi-table INSERT does
@@ -521,42 +606,36 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	}
 	lastNodeID := scanID
 
-	// FILTER: the clause's own WHEN condition plus the negated earlier ones.
+	// FILTER: read the route decisions this clause depends on straight out of
+	// the materialized selector columns. Nothing is re-evaluated here, so every
+	// clause of one WHEN sees the identical decision and INSERT FIRST stays a
+	// partition even when the predicate is volatile.
 	bCtx.binder = NewWhereBinder(builder, bCtx)
-	filterList := make([]*plan.Expr, 0, len(branch.excluded)+1)
-	if branch.cond != nil {
-		conds, err := splitAndBindCondition(branch.cond, NoAlias, bCtx)
-		if err != nil {
-			return 0, err
+	filterList := make([]*plan.Expr, 0, len(branch.excludedIdx)+1)
+	selector := func(idx int) *plan.Expr {
+		pos := int32(len(srcCols) + idx)
+		return &plan.Expr{
+			Typ:  boolType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: pos}},
 		}
-		filterList = append(filterList, conds...)
 	}
-	for _, excluded := range branch.excluded {
-		notTrue, err := builder.bindMultiInsertNotTrue(excluded, bCtx)
+	if branch.condIdx >= 0 {
+		filterList = append(filterList, selector(branch.condIdx))
+	}
+	for _, idx := range branch.excludedIdx {
+		notTrue, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue",
+			[]*plan.Expr{selector(idx)})
 		if err != nil {
 			return 0, err
 		}
 		filterList = append(filterList, notTrue)
 	}
 	if len(filterList) > 0 {
-		flattened := make([]*plan.Expr, 0, len(filterList))
-		for _, expr := range filterList {
-			var err error
-			lastNodeID, expr, err = builder.flattenSubqueries(lastNodeID, expr, bCtx)
-			if err != nil {
-				return 0, err
-			}
-			if expr != nil {
-				flattened = append(flattened, expr)
-			}
-		}
-		if len(flattened) > 0 {
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{lastNodeID},
-				FilterList: flattened,
-			}, bCtx)
-		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{lastNodeID},
+			FilterList: filterList,
+		}, bCtx)
 	}
 
 	// The clause's values: its VALUES expressions, or every source column.
@@ -660,22 +739,4 @@ func (builder *QueryBuilder) appendMultiInsertUnionAll(bindCtx *BindContext, bra
 		}, bindCtx)
 	}
 	return lastNodeID
-}
-
-// bindMultiInsertNotTrue binds an earlier WHEN condition as "cond IS NOT TRUE",
-// so a row is excluded only when that condition actually held (NULL does not
-// exclude), matching INSERT FIRST / ELSE routing.
-func (builder *QueryBuilder) bindMultiInsertNotTrue(astCond tree.Expr, bCtx *BindContext) (*plan.Expr, error) {
-	conds, err := splitAndBindCondition(astCond, NoAlias, bCtx)
-	if err != nil {
-		return nil, err
-	}
-	cond := conds[0]
-	for _, c := range conds[1:] {
-		cond, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{cond, c})
-		if err != nil {
-			return nil, err
-		}
-	}
-	return BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue", []*plan.Expr{cond})
 }

@@ -232,7 +232,7 @@ Multi Update  𝄀
               ->  Table Scan on multi_insert_db.customers_us [ForceOneCN]  𝄀
               ->  Lock  𝄀
                     ->  Filter  𝄀
-                          Filter Cond: (__mo_multi_insert_source.region = 'US')  𝄀
+                          Filter Cond: #[0,3]  𝄀
                           ->  Sink Scan  𝄀
                                 DataSource: Plan 0  𝄀
 Plan 2:  𝄀
@@ -243,7 +243,7 @@ Multi Update  𝄀
         ->  Table Scan on multi_insert_db.customers_other [ForceOneCN]  𝄀
         ->  Lock  𝄀
               ->  Filter  𝄀
-                    Filter Cond: ((__mo_multi_insert_source.region = 'US') IS NOT TRUE)  𝄀
+                    Filter Cond: (#[0,3] IS NOT TRUE)  𝄀
                     ->  Sink Scan  𝄀
                           DataSource: Plan 0
 drop database multi_insert_db;

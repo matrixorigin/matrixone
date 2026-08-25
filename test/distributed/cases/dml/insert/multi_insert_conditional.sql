@@ -167,6 +167,35 @@ delete from t_big;
 insert all into t_big (id, val) values (cat, cat) select distinct cat from src;
 select * from t_big order by id;
 
+-- ================= volatile WHEN: one WHEN occurrence is ONE route decision per row.
+-- Each WHEN is evaluated once above the shared sink and materialized as a boolean
+-- selector, so targets cannot disagree. Asserted as properties (the row sets
+-- themselves are random, the properties are not).
+create table v1 (id int primary key);
+create table v2 (id int primary key);
+create table v3 (id int primary key);
+create table v4 (id int primary key);
+-- (1) two INTOs under ONE volatile WHEN must receive identical key sets
+insert all when rand() < 0.5 then into v1 (id) values (id) into v2 (id) values (id) select id from src;
+select count(*) from v1 a left join v2 b on a.id = b.id where b.id is null;
+select count(*) from v2 b left join v1 a on a.id = b.id where a.id is null;
+select (select count(*) from v1) = (select count(*) from v2) as same_cardinality;
+-- (2) volatile INSERT FIRST targets are disjoint and cover the source exactly once
+insert first when rand() < 0.5 then into v3 (id) values (id) when true then into v4 (id) values (id) select id from src;
+select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
+select count(*) from v3 a join v4 b on a.id = b.id;
+select count(*) from src s where s.id not in (select id from v3) and s.id not in (select id from v4);
+-- the same holds with an ELSE branch and a volatile condition in the middle
+delete from v3; delete from v4; delete from v1;
+insert first
+  when id > 100000     then into v1 (id) values (id)
+  when rand() < 0.5    then into v3 (id) values (id)
+  else                      into v4 (id) values (id)
+select id from src;
+select count(*) from v1;
+select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
+select count(*) from v3 a join v4 b on a.id = b.id;
+
 -- ================= empty source: nothing written, no error
 delete from t_big; delete from t_rest;
 insert first when id > 0 then into t_big (id, val) values (id, val) else into t_rest (id, val) values (id, val) select id, val from src where id > 100000;
