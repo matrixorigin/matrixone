@@ -764,38 +764,27 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			}
 		}
 
-		directExactMembership := sqlproc != nil && sqlproc.RelationScanner != nil &&
+		relationMembership := sqlproc != nil && sqlproc.RelationScanner != nil &&
 			sqlproc.IvfHasMembershipFilter
-		if directExactMembership && len(sqlproc.IvfRuntimeFilterData) == 0 {
+		if relationMembership && len(sqlproc.IvfRuntimeFilterData) == 0 {
 			// The build side produced an exact empty set. Never interpret that as
 			// an absent filter and scan the index unrestricted.
 			return []any{}, []float64{}, nil
 		}
-		if !directExactMembership {
-			if err = idx.getBloomFilter(sqlproc); err != nil {
-				return nil, nil, err
-			}
+		if err = idx.getBloomFilter(sqlproc); err != nil {
+			return nil, nil, err
 		}
 
 		var sql string
 		var res executor.Result
 		if sqlproc != nil && sqlproc.RelationScanner != nil {
-			scanCentroidIDs := activeCentroidIDs
-			if directExactMembership {
-				// PRE mode defines candidates by the filtered source PK set, not by
-				// whichever centroid happens to be nearest to the query. Scan the
-				// current entries version across all centroids and let the exact
-				// membership filter perform the restriction before Top-K.
-				scanCentroidIDs = nil
-				cursor.Exhausted = true
-			}
 			res, err = idx.scanEntries(
 				sqlproc,
 				idxcfg,
 				tblcfg,
 				query,
 				idx.Version,
-				scanCentroidIDs,
+				activeCentroidIDs,
 				includeCols,
 				rt.PushdownFilters,
 				roundLimit,
