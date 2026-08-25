@@ -201,8 +201,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
-		envStmt = redactStatementTextForLogging(statement, envStmt)
+	}
+	envStmt = redactStatementTextForLogging(statement, envStmt)
 
+	if cw != nil {
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
 		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
@@ -343,6 +345,17 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	// __mo_query is a user-supplied MongoDB filter or pipeline. It is valid in
+	// ordinary SELECT statements, whose AST formatting deliberately preserves
+	// string literals, so neither the default branch nor a re-rendered AST is a
+	// safe diagnostic representation. This is the last common boundary before
+	// session state and statement telemetry retain the SQL text. Redact the
+	// whole statement rather than trying to recognize one SQL expression shape:
+	// invalid, nested, or future selector forms must not become a logging leak.
+	if strings.Contains(strings.ToLower(text), catalog.ExternalQuery) {
+		return "<redacted MongoDB __mo_query statement>"
+	}
+
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
