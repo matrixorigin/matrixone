@@ -5928,6 +5928,27 @@ func TestPrepareParamKindWindowRetainsSidecarOnlyForDivergence(t *testing.T) {
 	mixed.Free(mp)
 }
 
+func TestPreExtendReservesMixedStringSourceSidecar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	for range 2 {
+		require.NoError(t, AppendBytes(vec, []byte("value"), false, mp))
+	}
+	require.NoError(t, vec.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceCOMStmt,
+	}, mp))
+	require.Equal(t, 2, cap(vec.GetStringSources()))
+	require.NoError(t, vec.PreExtend(64, mp))
+	require.GreaterOrEqual(t, cap(vec.GetStringSources()), 66)
+	admitted := mp.CurrNB()
+	vec.SetLength(66)
+	require.Equal(t, admitted, mp.CurrNB())
+}
+
 func TestSelectedBatchPreflightProtocol(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varchar.ToType())

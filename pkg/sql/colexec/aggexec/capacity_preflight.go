@@ -629,6 +629,13 @@ type prepareParamKindEvent struct {
 	kind   vector.PrepareParamKind
 }
 
+type stringSourceEvent struct {
+	chunk  int
+	column int
+	row    int
+	source types.StringSource
+}
+
 func addPrepareParamKindEvent(
 	events *[hashmap.UnitLimit]prepareParamKindEvent,
 	count *int,
@@ -644,6 +651,42 @@ func addPrepareParamKindEvent(
 		chunk: chunk, column: column, row: row, kind: kind,
 	}
 	*count++
+	return nil
+}
+
+func addStringSourceEvent(
+	events *[hashmap.UnitLimit]stringSourceEvent,
+	count *int,
+	chunk int,
+	column int,
+	row int,
+	source types.StringSource,
+) error {
+	if chunk < 0 || column < 0 || row < 0 || !source.Valid() || *count >= len(events) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	events[*count] = stringSourceEvent{
+		chunk: chunk, column: column, row: row, source: source,
+	}
+	*count++
+	return nil
+}
+
+func (ae *aggExec) applyStringSourceEvents(
+	events *[hashmap.UnitLimit]stringSourceEvent,
+	count int,
+) error {
+	for i := 0; i < count; i++ {
+		event := events[i]
+		state := ae.preflightStateAt(event.chunk)
+		if state == nil || event.column >= len(state.vecs) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if err := state.vecs[event.column].PreflightSetStringSourceAtLength(
+			event.row, max(int(state.length), event.row+1), event.source, ae.mp); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -741,9 +784,11 @@ func (ae *aggExec) applyVectorAreaCapacity(
 }
 
 type preflightGroupWinner struct {
-	group  uint64
-	winner int
-	kind   vector.PrepareParamKind
+	group     uint64
+	winner    int
+	kind      vector.PrepareParamKind
+	source    types.StringSource
+	sourceSet bool
 }
 
 func winnerForGroup(
@@ -785,6 +830,8 @@ func (exec *anyExec) PreflightBatchFill(
 	needCount := 0
 	var kindEvents [hashmap.UnitLimit]prepareParamKindEvent
 	kindEventCount := 0
+	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
+	sourceEventCount := 0
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -810,6 +857,11 @@ func (exec *anyExec) PreflightBatchFill(
 		}
 		winner.winner = row
 		kind := vectors[0].GetPrepareParamKindAt(row)
+		if err = addStringSourceEvent(
+			&sourceEvents, &sourceEventCount, x, 0, int(y),
+			vectors[0].GetStringSourceAt(row)); err != nil {
+			return err
+		}
 		if err = addPrepareParamKindEvent(
 			&kindEvents, &kindEventCount, x, 0, int(y), kind); err != nil {
 			return err
@@ -818,6 +870,9 @@ func (exec *anyExec) PreflightBatchFill(
 			&needs, &needCount, x, 0, vectors[0].GetRawBytesAt(row)); err != nil {
 			return err
 		}
+	}
+	if err := exec.applyStringSourceEvents(&sourceEvents, sourceEventCount); err != nil {
+		return err
 	}
 	if err := exec.applyPrepareParamKindEvents(&kindEvents, kindEventCount); err != nil {
 		return err
@@ -847,6 +902,8 @@ func (exec *anyExec) PreflightBatchMerge(
 	needCount := 0
 	var kindEvents [hashmap.UnitLimit]prepareParamKindEvent
 	kindEventCount := 0
+	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
+	sourceEventCount := 0
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -874,6 +931,11 @@ func (exec *anyExec) PreflightBatchMerge(
 		winner.winner = offset + i
 		source := other.state[otherX].vecs[0]
 		kind := source.GetPrepareParamKindAt(int(otherY))
+		if err = addStringSourceEvent(
+			&sourceEvents, &sourceEventCount, x, 0, int(y),
+			source.GetStringSourceAt(int(otherY))); err != nil {
+			return err
+		}
 		if err = addPrepareParamKindEvent(
 			&kindEvents, &kindEventCount, x, 0, int(y), kind); err != nil {
 			return err
@@ -882,6 +944,9 @@ func (exec *anyExec) PreflightBatchMerge(
 			&needs, &needCount, x, 0, source.GetRawBytesAt(int(otherY))); err != nil {
 			return err
 		}
+	}
+	if err := exec.applyStringSourceEvents(&sourceEvents, sourceEventCount); err != nil {
+		return err
 	}
 	if err := exec.applyPrepareParamKindEvents(&kindEvents, kindEventCount); err != nil {
 		return err
@@ -1124,6 +1189,93 @@ func (exec *minMaxExecFixed[T]) preflightFixedCandidates(
 	return exec.applyPrepareParamKindEvents(&events, eventCount)
 }
 
+func (exec *minMaxExecFixed[T]) preflightFixedStringSources(
+	groups []uint64,
+	candidate fixedMinMaxCandidate[T],
+	candidateSource func(row int) (types.StringSource, error),
+) error {
+	type winner struct {
+		group   uint64
+		value   T
+		source  types.StringSource
+		present bool
+		changed bool
+	}
+	var winners [hashmap.UnitLimit]winner
+	winnerCount := 0
+	for row, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		value, _, present, err := candidate(row)
+		if err != nil {
+			return err
+		}
+		if !present {
+			continue
+		}
+		source, err := candidateSource(row)
+		if err != nil {
+			return err
+		}
+		x, y, state, err := exec.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		index := -1
+		for i := 0; i < winnerCount; i++ {
+			if winners[i].group == group {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			if winnerCount >= len(winners) {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			index = winnerCount
+			winnerCount++
+			winners[index].group = group
+			if !state.vecs[0].IsNull(uint64(y)) {
+				winners[index].value = vector.GetFixedAtNoTypeCheck[T](state.vecs[0], int(y))
+				winners[index].source = state.vecs[0].GetStringSourceAt(int(y))
+				winners[index].present = true
+			}
+		}
+		winner := &winners[index]
+		switch {
+		case !winner.present || exec.comp(value, winner.value) < 0:
+			winner.value = value
+			winner.source = source
+			winner.present = true
+			winner.changed = true
+		case exec.comp(value, winner.value) == 0:
+			winner.source, err = types.MergeStringSources(winner.source, source)
+			if err != nil {
+				return err
+			}
+			winner.changed = true
+		}
+		_ = x
+	}
+	var events [hashmap.UnitLimit]stringSourceEvent
+	eventCount := 0
+	for i := 0; i < winnerCount; i++ {
+		if !winners[i].changed {
+			continue
+		}
+		x, y, _, err := exec.validatePreflightTarget(winners[i].group)
+		if err != nil {
+			return err
+		}
+		if err = addStringSourceEvent(
+			&events, &eventCount, x, 0, int(y), winners[i].source); err != nil {
+			return err
+		}
+	}
+	return exec.applyStringSourceEvents(&events, eventCount)
+}
+
 func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 	offset int,
 	groups []uint64,
@@ -1139,20 +1291,30 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 		return err
 	}
 	values := vector.MustFixedColNoTypeCheck[T](vectors[0])
-	return exec.preflightFixedCandidates(groups,
-		func(row int) (T, vector.PrepareParamKind, bool, error) {
+	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
+		physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
+		if err != nil {
+			var zero T
+			return zero, vector.PrepareParamNone, false, err
+		}
+		if vectors[0].IsNull(uint64(physicalRow)) {
+			var zero T
+			return zero, vector.PrepareParamNone, false, nil
+		}
+		return values[physicalRow],
+			vectors[0].GetPrepareParamKindAt(physicalRow), true, nil
+	}
+	if err := exec.preflightFixedStringSources(groups, candidate,
+		func(row int) (types.StringSource, error) {
 			physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
 			if err != nil {
-				var zero T
-				return zero, vector.PrepareParamNone, false, err
+				return types.StringSourceExpression, err
 			}
-			if vectors[0].IsNull(uint64(physicalRow)) {
-				var zero T
-				return zero, vector.PrepareParamNone, false, nil
-			}
-			return values[physicalRow],
-				vectors[0].GetPrepareParamKindAt(physicalRow), true, nil
-		}, false)
+			return vectors[0].GetStringSourceAt(physicalRow), nil
+		}); err != nil {
+		return err
+	}
+	return exec.preflightFixedCandidates(groups, candidate, false)
 }
 
 func (exec *minMaxExecFixed[T]) PreflightBatchMerge(
@@ -1170,28 +1332,40 @@ func (exec *minMaxExecFixed[T]) PreflightBatchMerge(
 	if offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	return exec.preflightFixedCandidates(groups,
-		func(row int) (T, vector.PrepareParamKind, bool, error) {
+	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
+		x, y := other.getXY(uint64(offset + row))
+		if x < 0 || x >= len(other.state) ||
+			int(y) >= int(other.state[x].length) {
+			var zero T
+			return zero, vector.PrepareParamNone, false,
+				mpool.ErrAllocationAccountInvariant
+		}
+		source := other.state[x].vecs[0]
+		if source.IsNull(uint64(y)) {
+			var zero T
+			return zero, vector.PrepareParamNone, false, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[T](source, int(y)),
+			source.GetPrepareParamKindAt(int(y)), true, nil
+	}
+	if err := exec.preflightFixedStringSources(groups, candidate,
+		func(row int) (types.StringSource, error) {
 			x, y := other.getXY(uint64(offset + row))
 			if x < 0 || x >= len(other.state) ||
 				int(y) >= int(other.state[x].length) {
-				var zero T
-				return zero, vector.PrepareParamNone, false,
-					mpool.ErrAllocationAccountInvariant
+				return types.StringSourceExpression, mpool.ErrAllocationAccountInvariant
 			}
-			source := other.state[x].vecs[0]
-			if source.IsNull(uint64(y)) {
-				var zero T
-				return zero, vector.PrepareParamNone, false, nil
-			}
-			return vector.GetFixedAtNoTypeCheck[T](source, int(y)),
-				source.GetPrepareParamKindAt(int(y)), true, nil
-		}, true)
+			return other.state[x].vecs[0].GetStringSourceAt(int(y)), nil
+		}); err != nil {
+		return err
+	}
+	return exec.preflightFixedCandidates(groups, candidate, true)
 }
 
 func (exec *minMaxExecBytes) preflightCandidates(
 	groups []uint64,
 	candidate minMaxCandidate,
+	candidateSource func(row int) (types.StringSource, error),
 ) error {
 	if len(groups) > hashmap.UnitLimit {
 		return mpool.ErrAllocationAccountInvalid
@@ -1202,6 +1376,8 @@ func (exec *minMaxExecBytes) preflightCandidates(
 	needCount := 0
 	var kindEvents [hashmap.UnitLimit]prepareParamKindEvent
 	kindEventCount := 0
+	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
+	sourceEventCount := 0
 	for row, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -1213,6 +1389,10 @@ func (exec *minMaxExecBytes) preflightCandidates(
 			}
 			continue
 		}
+		source, err := candidateSource(row)
+		if err != nil {
+			return err
+		}
 		x, y, state, err := exec.validatePreflightTarget(group)
 		if err != nil {
 			return err
@@ -1223,6 +1403,7 @@ func (exec *minMaxExecBytes) preflightCandidates(
 		}
 		var current []byte
 		var currentKind vector.PrepareParamKind
+		var currentSource types.StringSource
 		hasCurrent := false
 		if winner.winner >= 0 {
 			var present bool
@@ -1234,10 +1415,12 @@ func (exec *minMaxExecBytes) preflightCandidates(
 				return mpool.ErrAllocationAccountInvariant
 			}
 			currentKind = winner.kind
+			currentSource = winner.source
 			hasCurrent = true
 		} else if !state.vecs[0].IsNull(uint64(y)) {
 			current = state.vecs[0].GetBytesAt(int(y))
 			currentKind = state.vecs[0].GetPrepareParamKindAt(int(y))
+			currentSource = state.vecs[0].GetStringSourceAt(int(y))
 			hasCurrent = true
 		}
 		cmp := -1
@@ -1248,6 +1431,11 @@ func (exec *minMaxExecBytes) preflightCandidates(
 		case cmp < 0:
 			winner.winner = row
 			winner.kind = kind
+			winner.source = source
+			if err = addStringSourceEvent(
+				&sourceEvents, &sourceEventCount, x, 0, int(y), source); err != nil {
+				return err
+			}
 			if err = addPrepareParamKindEvent(
 				&kindEvents, &kindEventCount, x, 0, int(y), kind); err != nil {
 				return err
@@ -1258,11 +1446,22 @@ func (exec *minMaxExecBytes) preflightCandidates(
 			}
 		case cmp == 0:
 			winner.kind = vector.MergePrepareParamKinds(currentKind, kind)
+			winner.source, err = types.MergeStringSources(currentSource, source)
+			if err != nil {
+				return err
+			}
+			if err = addStringSourceEvent(
+				&sourceEvents, &sourceEventCount, x, 0, int(y), winner.source); err != nil {
+				return err
+			}
 			if err = addPrepareParamKindEvent(
 				&kindEvents, &kindEventCount, x, 0, int(y), winner.kind); err != nil {
 				return err
 			}
 		}
+	}
+	if err := exec.applyStringSourceEvents(&sourceEvents, sourceEventCount); err != nil {
+		return err
 	}
 	if err := exec.applyPrepareParamKindEvents(&kindEvents, kindEventCount); err != nil {
 		return err
@@ -1295,6 +1494,12 @@ func (exec *minMaxExecBytes) PreflightBatchFill(
 			}
 			return vectors[0].GetBytesAt(index),
 				vectors[0].GetPrepareParamKindAt(index), true, nil
+		}, func(row int) (types.StringSource, error) {
+			index, err := preflightPhysicalRow(vectors[0], offset+row)
+			if err != nil {
+				return types.StringSourceExpression, err
+			}
+			return vectors[0].GetStringSourceAt(index), nil
 		})
 }
 
@@ -1326,6 +1531,13 @@ func (exec *minMaxExecBytes) PreflightBatchMerge(
 			}
 			return source.GetBytesAt(int(y)),
 				source.GetPrepareParamKindAt(int(y)), true, nil
+		}, func(row int) (types.StringSource, error) {
+			x, y := other.getXY(uint64(offset + row))
+			if x < 0 || x >= len(other.state) ||
+				int(y) >= int(other.state[x].length) {
+				return types.StringSourceExpression, mpool.ErrAllocationAccountInvariant
+			}
+			return other.state[x].vecs[0].GetStringSourceAt(int(y)), nil
 		})
 }
 
@@ -1348,6 +1560,8 @@ func (exec *maxByExec) preflightCandidates(
 	needCount := 0
 	var kindEvents [hashmap.UnitLimit]prepareParamKindEvent
 	kindEventCount := 0
+	var sourceEvents [hashmap.UnitLimit]stringSourceEvent
+	sourceEventCount := 0
 	for row, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -1380,12 +1594,38 @@ func (exec *maxByExec) preflightCandidates(
 				return err
 			}
 		}
-		if !current[1].IsNull(uint64(currentRows[1])) &&
-			!maxByCandidateWins(
-				vectors, rows, current, currentRows, exec.argTypes) {
+		currentPresent := !current[1].IsNull(uint64(currentRows[1]))
+		wins := !currentPresent || maxByCandidateWins(
+			vectors, rows, current, currentRows, exec.argTypes)
+		equal := currentPresent && maxByCandidateEquals(
+			vectors, rows, current, currentRows, exec.argTypes)
+		if !wins && !equal {
+			continue
+		}
+		if equal {
+			currentSource := current[0].GetStringSourceAt(currentRows[0])
+			if winner.sourceSet {
+				currentSource = winner.source
+			}
+			winner.source, err = types.MergeStringSources(
+				currentSource, vectors[0].GetStringSourceAt(rows[0]))
+			if err != nil {
+				return err
+			}
+			winner.sourceSet = true
+			if err = addStringSourceEvent(
+				&sourceEvents, &sourceEventCount, x, 0, int(y), winner.source); err != nil {
+				return err
+			}
 			continue
 		}
 		winner.winner = row
+		winner.source = vectors[0].GetStringSourceAt(rows[0])
+		winner.sourceSet = true
+		if err = addStringSourceEvent(
+			&sourceEvents, &sourceEventCount, x, 0, int(y), winner.source); err != nil {
+			return err
+		}
 		if !vectors[0].IsNull(uint64(rows[0])) {
 			kind := vectors[0].GetPrepareParamKindAt(rows[0])
 			if err = addPrepareParamKindEvent(
@@ -1403,6 +1643,9 @@ func (exec *maxByExec) preflightCandidates(
 				return err
 			}
 		}
+	}
+	if err := exec.applyStringSourceEvents(&sourceEvents, sourceEventCount); err != nil {
+		return err
 	}
 	if err := exec.applyPrepareParamKindEvents(&kindEvents, kindEventCount); err != nil {
 		return err
@@ -1430,6 +1673,24 @@ func maxByCandidateWins(
 	return compareNullableRaw(
 		candidate[0], candidateRows[0],
 		current[0], currentRows[0]) > 0
+}
+
+func maxByCandidateEquals(
+	candidate []*vector.Vector,
+	candidateRows [3]int,
+	current []*vector.Vector,
+	currentRows [3]int,
+	typs []types.Type,
+) bool {
+	return compareVectorValue(
+		candidate[1], candidateRows[1],
+		current[1], currentRows[1], typs[1]) == 0 &&
+		compareNullableVectorValue(
+			candidate[2], candidateRows[2],
+			current[2], currentRows[2], typs[2]) == 0 &&
+		compareNullableRaw(
+			candidate[0], candidateRows[0],
+			current[0], currentRows[0]) == 0
 }
 
 func (exec *maxByExec) PreflightBatchFill(

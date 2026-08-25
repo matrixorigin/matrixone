@@ -30,8 +30,8 @@
 | SQL UNION / UNION ALL | set operator与group/vector owner | UNION ALL逐行透明；UNION仍按SQL值去重，不改变行数，同值代表来源按同源保持/异源→Expression合并 | group正反序与spill/reload typed UT；UNION public reachability BVT |
 | DISTINCT | distinct/hash/group owner | SQL key identity忽略来源；重复key的代表来源按所有贡献行确定性合并 | group正反序、same/mixed source UT |
 | GROUP BY | `pkg/sql/colexec/group` | key按SQL值分组；preview内按group ID把最终source保存在UnitLimit有界的operator-owned scratch，selected append以override发布且绝不修改borrowed input；sidecar从preflight跨new-row append与existing-row update保持，全部完成后统一normalize；commit显式返回published阶段，pre-publication source rejection统一进入Group/MergeGroup/spill-reload retry | hash-group正反序、borrowed sidecar identity/MPool ownership、共享ANY_VALUE参数、existing+new两批publication、resident source rejection Group/MergeGroup完整spill/retry、post-commit rejection、跨batch、spill/reload、reset UT |
-| aggregate | `pkg/sql/colexec/aggexec` | MIN/MAX/MAX_BY winner replacement（含NULL）保留完整代表来源；equal candidate同源保持、异源→Expression；MIN/MAX extra作为Expression贡献者参与wins/ties；source merge独立于字符串runtime-domain | fixed/bytes extra wins/ties/loses；MAX_BY NULL first/replacement/same/mixed/partial；其余state round-trip UT |
-| window | window operator / aggregate state | value window按实际 lag/lead/first/last/nth row透明；窗口聚合使用 aggregate merge | `TestValueWindowExecPreservesRowStringSources`；window/agg UT |
+| aggregate | `pkg/sql/colexec/aggexec` | ANY_VALUE及MIN/MAX/MAX_BY winner/equal source事件在Group hash publication前精确preflight当前/future group sidecar；runtime fill/merge不得再为source分配；equal同源保持、异源→Expression | ANY/fixed-min/bytes-min/MAX_BY equal fill+merge no-post-allocation；Group/MergeGroup resident rejection spill/retry；其余state round-trip UT |
+| window | window operator / aggregate state | value window按实际lag/lead/first/last/nth row透明；T_any time-window NULL partition materializer也复制selected SQLPrepare/COMStmt owner | value-window及const/selected T_any NULL UT |
 
 ## Vector 边界
 
@@ -44,17 +44,17 @@
 | sort | metadata-aware sorter | 值、NULL、grouping、domain、kind、source 使用同一 swap | fixed/varlen/JSON/array UT |
 | compact / DISTINCT-like dedup | metadata-aware compact | 仅值与全部逐行语义状态相同才合并；uniform source 保持 scalar fast path | uniform/mixed compact UT |
 | shuffle | vector shuffle owner | 按 shuffle permutation 精确映射 | shuffle/selection UT |
-| reset / reuse / clean / decode reuse | Vector、expression executor、Process reset owners | 旧 sidecar 释放/清零；下一代等价于 fresh | reset/reuse/allocation UT；prepared BVT |
+| generic grow / reset / reuse | `extendWithBitmaps`、Vector、expression executor、Process reset owners | PreExtend同时admit mixed stringSources等全部row-parallel sidecar；成功后SetLength不得分配；reset释放/清零 | mixed-source PreExtend capacity、reset/reuse/allocation UT；prepared BVT |
 
 ## Transport 与持久化边界
 
 | 边界 | Owner | merge rule / version | Oracle |
 |---|---|---|---|
-| batch marshal/unmarshal | `pkg/container/batch/batch.go` | MORPC v27 trailer保留来源；旧 peer 对 source-only batch降级丢弃，旧 prepared metadata仍按旧 gate拒绝 | 五类来源 buffered round-trip；invalid/const-mixed/reuse UT |
-| CN dispatch / remote result | dispatch sender、remote-run receiver | 双向使用 MORPC v27 source gate | dispatch/remoterun version-matrix UT |
+| batch marshal/unmarshal | `pkg/container/batch/batch.go` | MORPC v29 trailer保留来源；旧 peer 对 source-only batch降级丢弃，旧 prepared metadata仍按旧 gate拒绝 | 五类来源 buffered round-trip；invalid/const-mixed/reuse UT |
+| CN dispatch / remote result | dispatch sender、remote-run receiver | 双向使用 MORPC v29 source gate | dispatch/remoterun version-matrix UT |
 | grouping batch codec | batch grouping codec | grouping bitmap与五类来源同时 round-trip | 五类来源 grouping streaming UT |
-| aggregate/group state encode/decode/merge | `aggexec.SaveIntermediateResult*`、`group.saveAggregateChunkForProtocol` | MORPC v27携带来源；旧协议显式省略；merge使用贡献规则；未知值拒绝且decoder可复用 | 五类 full/chunk round-trip、group protocol gate、same/mixed merge、invalid/reuse UT |
-| Process parameters | Process/frontend codecs | SQLPrepare/COMStmt/UserVariable保留至 Param executor；v27远端携带 | process/frontend UT |
+| aggregate/group state encode/decode/merge | `aggexec.SaveIntermediateResult*`、`group.saveAggregateChunkForProtocol` | MORPC v29携带来源；旧协议显式省略；merge使用贡献规则；未知值拒绝且decoder可复用 | 五类 full/chunk round-trip、group protocol gate、same/mixed merge、invalid/reuse UT |
+| Process parameters | Process/frontend codecs | SQLPrepare/COMStmt/UserVariable保留至 Param executor；v29远端携带 | process/frontend UT |
 | spill / selected-row materialization | selection/grouping codecs、spill owners | 精确行来源随payload写入/恢复 | selection/grouping/spill consumer UT |
 | storage / derived materialization | compile/storage operators | materialized vector逐行透明；重新计算表达式为Expression | local/materialized/remote BVT |
 

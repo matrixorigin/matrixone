@@ -252,8 +252,12 @@ func getPartitionSetFunction(
 			return err
 		}
 		// A reused output vector may carry metadata from an earlier flush;
-		// NULL is not an observed conversion category.
-		return v.SetPrepareParamKindsWithMP(nil, mp)
+		// NULL is not an observed conversion category, but it retains the
+		// independently selected value owner.
+		if err := v.SetPrepareParamKindsWithMP(nil, mp); err != nil {
+			return err
+		}
+		return v.SetStringSource(w.GetStringSourceAt(int(sel)))
 	}
 }
 
