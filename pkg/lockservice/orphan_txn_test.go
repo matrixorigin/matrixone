@@ -155,13 +155,7 @@ func TestCannotUnlockOrphanTxnWithCommittingInAllocator(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
@@ -258,13 +252,7 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
@@ -375,13 +363,7 @@ func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }

@@ -289,13 +289,7 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 			// TxnIterFunc in production. Keep the synthetic remote transactions
 			// visible so the orphan checker cannot legitimately remove the lock
 			// before this test snapshots its waiters.
-			cfg.TxnIterFunc = func(fn func([]byte) bool) {
-				for _, txnID := range [][]byte{holderTxn, activeWaiterTxn} {
-					if !fn(txnID) {
-						return
-					}
-				}
-			}
+			cfg.TxnIterFunc = newTestTxnIterFunc(holderTxn, activeWaiterTxn)
 		},
 	)
 }
@@ -2453,10 +2447,7 @@ func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
 			require.NoError(t, origin.Unlock(ctx, txn1, timestamp.Timestamp{}))
 		},
 		func(cfg *Config) {
-			cfg.TxnIterFunc = func(fn func([]byte) bool) {
-				fn(txn1)
-				fn(txn2)
-			}
+			cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 		},
 	)
 }
@@ -2517,11 +2508,7 @@ func TestRemoteOwnerLocalDeadlockNormalizesEveryPendingOperation(t *testing.T) {
 			require.NoError(t, origin.Unlock(ctx, txn3, timestamp.Timestamp{}))
 		},
 		func(cfg *Config) {
-			cfg.TxnIterFunc = func(fn func([]byte) bool) {
-				fn(txn1)
-				fn(txn2)
-				fn(txn3)
-			}
+			cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 		},
 	)
 }
