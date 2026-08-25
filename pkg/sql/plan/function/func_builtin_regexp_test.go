@@ -67,6 +67,88 @@ func Test_BuiltIn_RegularInstr(t *testing.T) {
 	require.True(t, err != nil)
 }
 
+func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInRegexp()
+
+	defaultInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", ""}, []bool{false, false, true, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"^$", "x", "^$", "^$"}, []bool{false, false, false, true}),
+	}
+	for _, tc := range []struct {
+		name     string
+		fn       fEvalFn
+		expected FunctionTestResult
+	}{
+		{
+			name:     "regexp_instr_default_position",
+			fn:       op.builtInRegexpInstr,
+			expected: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0, 0, 0}, []bool{false, false, true, true}),
+		},
+		{
+			name:     "regexp_substr_default_position",
+			fn:       op.builtInRegexpSubstr,
+			expected: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", "", ""}, []bool{false, true, true, true}),
+		},
+		{
+			name:     "regexp_like_control",
+			fn:       op.builtInRegexpLike,
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, true, true}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, defaultInputs, tc.expected, tc.fn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+
+	explicitInputs := append(defaultInputs[:2:2],
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1, 1}, []bool{false, false, false, false}))
+	for _, tc := range []struct {
+		name     string
+		fn       fEvalFn
+		expected FunctionTestResult
+	}{
+		{
+			name:     "regexp_instr_explicit_position",
+			fn:       op.builtInRegexpInstr,
+			expected: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0, 0, 0}, []bool{false, false, true, true}),
+		},
+		{
+			name:     "regexp_substr_explicit_position",
+			fn:       op.builtInRegexpSubstr,
+			expected: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", "", ""}, []bool{false, true, true, true}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, explicitInputs, tc.expected, tc.fn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+
+	for _, pos := range []int64{0, 2} {
+		_, err := op.regMap.regularInstr("^$", "", pos, 1, 0)
+		require.Error(t, err)
+
+		_, _, err = op.regMap.regularSubstr("^$", "", pos, 1)
+		require.Error(t, err)
+	}
+
+	_, err := op.regMap.regularInstr("^$", "", 1, 0, 0)
+	require.Error(t, err)
+	_, err = op.regMap.regularInstr("^$", "", 1, 1, 2)
+	require.Error(t, err)
+	_, err = op.regMap.regularInstr("*", "", 1, 1, 0)
+	require.Error(t, err)
+
+	_, _, err = op.regMap.regularSubstr("^$", "", 1, 0)
+	require.Error(t, err)
+	_, _, err = op.regMap.regularSubstr("*", "", 1, 1)
+	require.Error(t, err)
+}
+
 func Test_BuiltIn_RegularLike(t *testing.T) {
 	op := newOpBuiltInRegexp()
 
