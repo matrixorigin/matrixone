@@ -1,0 +1,129 @@
+drop database if exists exterr;
+create database exterr;
+use exterr;
+create external table em_csv (a int, s varchar(20))
+infile{'filepath'='$resources/external_table_file/error_mode.csv'}
+fields terminated by ',' lines terminated by '\n';
+select * from em_csv;
+internal error: the input value 'notanint' is not int32 type for column 0
+desc em_csv;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+s  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table em_csv;
+➤ Table[12,6,0]  ¦  Create Table[12,249,0]  𝄀
+em_csv  ¦  CREATE EXTERNAL TABLE `em_csv` (
+  `a` int DEFAULT NULL,
+  `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL
+) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n'
+select a, s from em_csv;
+internal error: the input value 'notanint' is not int32 type for column 0
+select count(*) from em_csv;
+internal error: the input value 'notanint' is not int32 type for column 0
+select a, s, __mo_file_line from em_csv;
+internal error: the input value 'notanint' is not int32 type for column 0
+select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_csv;
+➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  ¦  __mo_error_text[12,65535,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  2  ¦  internal error: the input value 'notanint' is not int32 type for column 0  ¦  notanint,beta  𝄀
+3  ¦  gamma  ¦  3  ¦  null  ¦  null  𝄀
+4  ¦  delta  ¦  4  ¦  null  ¦  null  𝄀
+5  ¦  epsilon  ¦  5  ¦  null  ¦  null
+select a, s, __mo_file_line, __mo_error_text from em_csv;
+➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_text[12,65535,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  null  𝄀
+null  ¦  null  ¦  2  ¦  notanint,beta  𝄀
+3  ¦  gamma  ¦  3  ¦  null  𝄀
+4  ¦  delta  ¦  4  ¦  null  𝄀
+5  ¦  epsilon  ¦  5  ¦  null
+select count(*) from (select __mo_error_message from em_csv) t;
+➤ count(*)[-5,64,0]  𝄀
+5
+select __mo_error_message from em_csv;
+➤ __mo_error_message[12,65535,0]  𝄀
+null  𝄀
+internal error: the input value 'notanint' is not int32 type for column 0  𝄀
+null  𝄀
+null  𝄀
+null
+select s, __mo_error_message from em_csv;
+➤ s[12,20,0]  ¦  __mo_error_message[12,65535,0]  𝄀
+alpha  ¦  null  𝄀
+null  ¦  internal error: the input value 'notanint' is not int32 type for column 0  𝄀
+gamma  ¦  null  𝄀
+delta  ¦  null  𝄀
+epsilon  ¦  null
+select __mo_file_line, __mo_error_text from em_csv where __mo_error_message is not null;
+➤ __mo_file_line[-5,64,0]  ¦  __mo_error_text[12,65535,0]  𝄀
+2  ¦  notanint,beta
+select a, s from (select a, s, __mo_error_message from em_csv) t where __mo_error_message is null;
+➤ a[4,32,0]  ¦  s[12,20,0]  𝄀
+1  ¦  alpha  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+select sum(a) from (select a, __mo_error_message from em_csv) t where __mo_error_message is null;
+➤ sum(a)[-5,64,0]  𝄀
+13
+select count(*) from (select __mo_error_message from em_csv) t where __mo_error_message is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table if exists em_good;
+create table em_good (a int, s varchar(20));
+insert into em_good select a, s from (select a, s, __mo_error_message from em_csv) t where __mo_error_message is null;
+select * from em_good order by a;
+➤ a[4,32,0]  ¦  s[12,20,0]  𝄀
+1  ¦  alpha  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+drop table if exists em_rejects;
+create table em_rejects (line bigint, msg varchar(500), txt varchar(500));
+insert into em_rejects
+select __mo_file_line, __mo_error_message, __mo_error_text from em_csv
+where __mo_error_message is not null;
+select line, txt from em_rejects order by line;
+➤ line[-5,64,0]  ¦  txt[12,500,0]  𝄀
+2  ¦  notanint,beta
+create external table em_multi (a int, s varchar(20))
+infile{'filepath'='$resources/external_table_file/error_mode_multiline.csv'}
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+select a, s, __mo_file_line, __mo_error_message from em_multi;
+➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  𝄀
+1  ¦  al
+pha  ¦  1  ¦  null  𝄀
+null  ¦  null  ¦  3  ¦  internal error: the input value 'notanint' is not int32 type for column 0  𝄀
+3  ¦  gamma  ¦  4  ¦  null
+create external table em_json (a int, s varchar(20))
+infile{'filepath'='$resources/external_table_file/error_mode.jsonl', 'format'='jsonline', 'jsondata'='object'};
+select * from em_json;
+internal error: the input value 'notanint' is not int32 type for column 0
+select a, s from em_json;
+internal error: the input value 'notanint' is not int32 type for column 0
+select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_json;
+➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  ¦  __mo_error_text[12,65535,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  2  ¦  internal error: the input value 'notanint' is not int32 type for column 0  ¦  {"a":"notanint","s":"beta"}  𝄀
+null  ¦  null  ¦  3  ¦  invalid input: the line is not a well-formed json object  ¦  this is not json  𝄀
+3  ¦  gamma  ¦  4  ¦  null  ¦  null
+create external table em_json_blank (a int, s varchar(20))
+infile{'filepath'='$resources/external_table_file/error_mode_blank.jsonl', 'format'='jsonline', 'jsondata'='object'};
+select a, s, __mo_file_line, __mo_error_message from em_json_blank;
+➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  null  𝄀
+2  ¦  beta  ¦  3  ¦  null
+create external table em_json_trunc (a int, s varchar(20))
+infile{'filepath'='$resources/external_table_file/error_mode_trunc.jsonl', 'format'='jsonline', 'jsondata'='object'};
+select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_json_trunc;
+➤ a[4,32,0]  ¦  s[12,20,0]  ¦  __mo_file_line[-5,64,0]  ¦  __mo_error_message[12,65535,0]  ¦  __mo_error_text[12,65535,0]  𝄀
+1  ¦  alpha  ¦  1  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  2  ¦  invalid input: incomplete json record at end of file  ¦  {"a":2
+drop table if exists em_reserved;
+create table em_reserved (a int, __mo_error_message varchar(10));
+invalid input: column name __mo_error_message is reserved for external table scans
+create table em_reserved (a int, __mo_file_line int);
+invalid input: column name __mo_file_line is reserved for external table scans
+create external table em_reserved (a int, __mo_error_text varchar(10))
+infile{'filepath'='$resources/external_table_file/error_mode.csv'};
+invalid input: column name __mo_error_text is reserved for external table scans
+drop database if exists exterr;
