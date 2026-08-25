@@ -63,7 +63,7 @@ func siriusOffloadModeFrom(ctx context.Context) siriusOffloadMode {
 
 func siriusStatementEligible(stmt tree.Statement) bool {
 	selectStmt, ok := stmt.(*tree.Select)
-	return ok && !selectStmt.IsPerform && selectStmt.Ep == nil
+	return ok && !selectStmt.IsPerform && selectStmt.Ep == nil && !statementHasSQLCalcFoundRows(stmt)
 }
 
 // SiriusRuntime is initialized and closed by one CN service. Production lease
