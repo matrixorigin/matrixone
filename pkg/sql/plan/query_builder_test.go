@@ -3810,6 +3810,92 @@ order by max(shown), max(sort_key), series_id, _wstart`)
 	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_having", Obj: 42}
+	mock.ctxt.tables["tw_numeric_having"] = &plan.TableDef{
+		Name: "tw_numeric_having",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_having
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+	var havingFilter *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) == 1 {
+			havingFilter = node
+			break
+		}
+	}
+	require.NotNil(t, havingFilter)
+	require.True(t, havingFilter.FilterIsBarrier)
+	require.Len(t, havingFilter.Children, 1)
+	require.Equal(t, fillNode.NodeId, havingFilter.Children[0])
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyAggregateWithoutSelection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_having_only"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_having_only", Obj: 42}
+	mock.ctxt.tables["tw_having_only"] = &plan.TableDef{
+		Name: "tw_having_only",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart
+from tw_having_only
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 1)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -5177,7 +5263,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 	boundHavingList, err := builder.bindHaving(bindCtx, selectClause.Having, NewHavingBinder(builder, bindCtx))
 	require.NoError(t, err)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), nodeID)
 	require.Equal(t, 3, len(builder.qry.Nodes))
@@ -5227,7 +5313,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindCtx.windows, 1)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
 

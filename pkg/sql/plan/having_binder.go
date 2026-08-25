@@ -797,6 +797,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 
 	astStr := semanticAstKey(astExpr)
 	b.ctx.timeByAst[astStr] = colPos
+	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 
 	return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 }

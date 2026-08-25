@@ -79,6 +79,20 @@ from linear_order_numeric
 group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by max(shown), max(sort_key), series_id, _wstart;
 
+create table linear_having_numeric(series_id int, ts datetime, shown bigint, sort_key bigint);
+insert into linear_having_numeric values
+    (1, '2026-03-05 00:00:00', 10, 100),
+    (1, '2026-03-05 00:02:00', 30, 200);
+
+select series_id, _wstart, max(shown) as shown_fill
+from linear_having_numeric
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart;
+
+drop table linear_having_numeric;
+
 drop table linear_order_numeric;
 
 # A maximal run of k missing buckets is divided into k+1 equal steps. All rows

@@ -5397,6 +5397,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	var preWindowHavingList []*plan.Expr
+	var postTimeWindowHavingList []*plan.Expr
 	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
 		preWindowHavingList, _ = splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
 	}
@@ -5459,7 +5460,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	} else if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
-		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
+		if nodeID, postTimeWindowHavingList, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
 		}
 	} else if len(boundHavingList) > 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 {
@@ -5497,6 +5498,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astTimeWindow,
 		); err != nil {
 			return
+		}
+		if len(postTimeWindowHavingList) > 0 {
+			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, postTimeWindowHavingList); err != nil {
+				return
+			}
+			// Keep HAVING-only time-window aggregates through FILL. The filter
+			// references the aggregate after the FILL node; allowing pushdown to
+			// the TIME_WINDOW node makes FILL prune the matching positional slot.
+			builder.qry.Nodes[nodeID].FilterIsBarrier = true
 		}
 	}
 
@@ -8373,7 +8383,7 @@ func (builder *QueryBuilder) bindTimeWindowFill(
 			return
 		}
 
-		// ProjectionBinder records every AST occurrence in timeAsts, while
+		// Binders record every AST occurrence in timeAsts, while
 		// timeByAst/times keep one entry per unique time-window aggregate. ORDER BY
 		// may mention an aggregate already selected, so align the linear expression
 		// inputs by the unique time column position rather than by occurrence count.
@@ -9564,7 +9574,7 @@ func (builder *QueryBuilder) appendAggNode(
 	nodeID int32,
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
-) (newNodeID int32, err error) {
+) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
@@ -9588,6 +9598,9 @@ func (builder *QueryBuilder) appendAggNode(
 	}
 
 	preWindowHavingList, _ := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	if ctx.timeTag > 0 {
+		preWindowHavingList, postTimeWindowHavingList = splitTimeWindowDependentHavingFilters(preWindowHavingList, ctx.timeTag)
+	}
 	if len(preWindowHavingList) > 0 {
 		var newFilterList []*plan.Expr
 		var expr *plan.Expr
@@ -9803,6 +9816,27 @@ func splitWindowDependentHavingFilters(boundHavingList []*plan.Expr, windowTag i
 	}
 
 	return preWindow, postWindow
+}
+
+func splitTimeWindowDependentHavingFilters(boundHavingList []*plan.Expr, timeTag int32) (preWindow []*plan.Expr, postTimeWindow []*plan.Expr) {
+	if len(boundHavingList) == 0 {
+		return nil, nil
+	}
+	if timeTag <= 0 {
+		return boundHavingList, nil
+	}
+
+	preWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	postTimeWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		if containsTag(cond, timeTag) {
+			postTimeWindow = append(postTimeWindow, cond)
+			continue
+		}
+		preWindow = append(preWindow, cond)
+	}
+
+	return preWindow, postTimeWindow
 }
 
 func (builder *QueryBuilder) appendProjectionNode(
