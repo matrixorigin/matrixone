@@ -333,8 +333,23 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
                               int64_t* out_rows, uint64_t* out_free_bytes,
                               uint64_t budget_percent, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    // cudaMemGetInfo reads the CURRENT device, so the requested one has to be
+    // bound -- but the binding is per THREAD, and Go dispatches CGo calls onto
+    // arbitrary threads from a shared, long-lived pool. Leaving the binding
+    // changed therefore does not just affect the next sizing call: it silently
+    // redirects whatever UNRELATED CGo call happens to land on that worker later.
+    // The aggregate load pre-flight walks every device, so it was reliably
+    // leaving workers bound to whichever device it asked about last.
+    //
+    // That same thread-arbitrariness is why this cannot be asserted from Go: a
+    // caller would need runtime.LockOSThread to make three CGo calls share a
+    // thread, which production never does, so the test would only measure a
+    // configuration that does not occur. gpu_device_total_mem below has always
+    // saved and restored; the evidence here is that the two now agree.
+    int prev_device = device_id;
+    cudaGetDevice(&prev_device);
+    const bool rebind = (prev_device != device_id);
     try {
-        // cudaMemGetInfo reads the CURRENT device; bind the requested one first.
         RAFT_CUDA_TRY(cudaSetDevice(device_id));
         size_t free_bytes = 0;
         int64_t rows = matrixone::rows_fitting_gpu_mem(
@@ -342,11 +357,14 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
             static_cast<size_t>(budget_percent));
         if (out_rows) *out_rows = rows;
         if (out_free_bytes) *out_free_bytes = static_cast<uint64_t>(free_bytes);
+        if (rebind) cudaSetDevice(prev_device);
         return 0;
     } catch (const std::exception& e) {
+        if (rebind) cudaSetDevice(prev_device);
         matrixone::set_errmsg(errmsg, "Error in gpu_rows_fitting_free_mem", e.what());
         return -1;
     } catch (...) {
+        if (rebind) cudaSetDevice(prev_device);
         matrixone::set_errmsg(errmsg, "Error in gpu_rows_fitting_free_mem", "unknown C++ exception");
         return -1;
     }

@@ -303,6 +303,18 @@ public:
         : cost_(dim, m, bits_per_code, elem_size) {}
     size_t bytes_per_row() const override { return cost_.trainset_bytes_per_row(); }
 
+    // IVF-PQ's OWN fraction, not the base default. This is a different per-row
+    // cost for the SAME index, sized against the same card and later claimed by
+    // the same build -- so inheriting 75% here while ivf_pq_cost claims at 65%
+    // let the trainset probe plan a training set the build then refused. At
+    // 45 GiB free / dim 768 / f16 that is ~33.75 GiB planned against a ~29.25 GiB
+    // ceiling: the plan succeeds and then deterministically refuses itself before
+    // cuVS is ever called.
+    //
+    // Delegated rather than restated so it cannot drift from the index cost the
+    // way it just did.
+    size_t budget_percent() const override { return cost_.budget_percent(); }
+
 private:
     ivf_pq_cost cost_;
 };

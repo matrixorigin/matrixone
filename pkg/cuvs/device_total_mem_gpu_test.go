@@ -143,3 +143,52 @@ func TestIndexBudgetPercentFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, strict, loose)
 }
+
+// The IVF-PQ trainset probe must size against IVF-PQ's OWN fraction.
+//
+// ivf_pq_trainset_cost overrode bytes_per_row() but not budget_percent(), so it
+// inherited the base 75% while ivf_pq_cost claims at 65%. gpu_ivf_pq_rows_fitting
+// therefore returned out_rows at 65% and out_trainset_rows at 75%, and
+// planTrainFraction clamps with the latter -- so a training-dominant plan could
+// size a trainset the build then deterministically refused, before cuVS was ever
+// called. At 45 GiB free / dim 768 / f16 that is ~33.75 GiB planned against a
+// ~29.25 GiB ceiling.
+//
+// Asserted as a RATIO between the two row counts rather than against an absolute
+// figure, because free VRAM moves between the two internal probes: both are
+// budget*fraction/per_row against the same card, so trainset_rows*trainset_per_row
+// and rows*per_row must reflect the SAME fraction.
+func TestIvfPqTrainsetProbeUsesIvfPqFraction(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	require.NoError(t, err)
+	if len(devices) == 0 {
+		t.Skip("no GPU devices")
+	}
+
+	const dim, m, bits, elemSize = 768, 192, 8, 2 // f16
+	rows, trainRows, perRow, _, free, err := IvfPqRowsFitting(
+		dim, m, bits, elemSize, devices[:1], SingleGpu)
+	require.NoError(t, err)
+	require.Positive(t, rows)
+	require.Positive(t, trainRows)
+	require.Positive(t, free)
+
+	// Index side: rows * per_row is the 65% budget (within one per-row rounding).
+	pct := IndexBudgetPercent("IVFPQ")
+	require.Less(t, pct, IndexBudgetPercent("CAGRA"), "IVF-PQ must be the stricter one")
+
+	// The trainset's per-row cost is float32 dim plus, for a non-float T, a
+	// trainset_tmp in T -- both live at once (ivf_pq_build.cuh).
+	const trainPerRow = dim*4 + dim*elemSize
+	trainBudget := uint64(trainRows) * trainPerRow
+	indexBudget := uint64(rows) * perRow
+
+	// Both budgets come from the same fraction of (nearly) the same free reading,
+	// so they must agree to within the sampling jitter between the two probes.
+	// A 75%-vs-65% split would show up as trainBudget/indexBudget ~= 1.154.
+	ratio := float64(trainBudget) / float64(indexBudget)
+	require.InDelta(t, 1.0, ratio, 0.05,
+		"trainset probe (%d rows x %d B = %d) and index probe (%d rows x %d B = %d) must use "+
+			"the same fraction; ratio %.4f suggests the trainset inherited the default",
+		trainRows, trainPerRow, trainBudget, rows, perRow, indexBudget, ratio)
+}

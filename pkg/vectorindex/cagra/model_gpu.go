@@ -489,7 +489,23 @@ func (idx *CagraModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg v
 	)
 
 	// Download the tar file from the database via streaming SQL.
-	fp, err = os.CreateTemp("", "cagra")
+	// Under the LOCAL fileservice, NOT $TMPDIR. This tar is the whole sub-index --
+	// ~17.6 GB at 88M rows -- and loadIndexes fetches EVERY sub-index before it
+	// admits the aggregate, so the peak here is the sum of them plus whatever
+	// Unpack extracts alongside the current one. /tmp is frequently a small or
+	// slow mount, so a load could fail for space on a node whose LOCAL volume was
+	// provisioned for exactly this. The build path has always spilled here; the
+	// load path claimed to (see the comment above Unpack in LoadIndex) but did
+	// not, because a model straight from LoadMetadata carries no TmpDir.
+	//
+	// HostSpillDir returns "" when there is no LOCAL fileservice, and CreateTemp
+	// reads "" as $TMPDIR, so unit tests and one-shot tools keep today's behaviour
+	// with no branch here.
+	spillDir := idx.TmpDir
+	if spillDir == "" && sqlproc != nil && sqlproc.Proc != nil {
+		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
+	}
+	fp, err = os.CreateTemp(spillDir, "cagra")
 	if err != nil {
 		return "", err
 	}
@@ -694,17 +710,27 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	// every search-path load: it is resolved by the build operator and never
 	// written back to algo_params, and ParamsFromTree persists max_index_capacity
 	// only when the user supplied a positive value. Sizing from it would claim
-	// nothing at all. ids.bin is exactly rows*sizeof(IdT), so its length IS the
-	// demand, and it is right for legacy artifacts and short final sub-indexes too.
+	// nothing at all.
+	//
+	// PackSizes.Host, not just ids.bin: load_common_components materialises the
+	// quantizer, the deleted bitset AND filter_host_ (the INCLUDE columns) in this
+	// same Unpack, and all four are classified host-resident. Claiming only the ids
+	// under-counted the peak by the whole INCLUDE payload, which for a wide
+	// artifact is the largest of them -- so a big INCLUDE index, or two concurrent
+	// cold loads, could pass admission and still cross the host budget.
+	//
+	// Over-claims by manifest.json and by any component the loader happens to free
+	// again before Unpack returns. That is the direction that cannot under-admit,
+	// and the settle below is immediate, so the over-claim is not held.
 	tarSizes, cerr := cuvs.MeasureTar(idx.Path)
 	if cerr != nil {
 		gi.Destroy()
 		return cerr
 	}
 	var idClaim *vimemory.HostReservation
-	if idsBytes := tarSizes.Files["ids.bin"]; idsBytes > 0 {
+	if hostBytes := tarSizes.Host; hostBytes > 0 {
 		var herr error
-		idClaim, herr = reserveHostMemory(uint64(idsBytes), "cagra load ids")
+		idClaim, herr = reserveHostMemory(uint64(hostBytes), "cagra load host components")
 		if herr != nil {
 			gi.Destroy()
 			return herr

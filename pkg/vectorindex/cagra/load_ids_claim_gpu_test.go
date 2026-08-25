@@ -111,6 +111,34 @@ func TestLoadIndexClaimsIdsSizedFromArtifact(t *testing.T) {
 	require.Equal(t, int64(8+len(ids)*8), idsBytes,
 		"ids.bin is a uint64 count header plus rows*sizeof(int64)")
 
+	t.Run("claims the whole host-resident peak, not just the ids", func(t *testing.T) {
+		// load_common_components materialises the quantizer, the deleted bitset and
+		// filter_host_ (the INCLUDE columns) in the SAME Unpack as the ids. Claiming
+		// only ids.bin under-counted the peak by all of them -- for a wide INCLUDE
+		// artifact the ids are the small part -- so a big index, or two concurrent
+		// cold loads, could pass admission and still cross the host budget.
+		//
+		// The fixture carries a bitset alongside the ids, so Host already exceeds
+		// ids.bin here and this is a live inequality rather than a tautology.
+		require.Greater(t, sizes.Host, idsBytes,
+			"fixture must carry a host component beyond ids.bin for this to mean anything")
+
+		spy := &claimSpy{}
+		spy.install(t)
+
+		loader, lerr := loadForClaimTest(t, "ids-claim", tarPath, built.Checksum, built.FileSize)
+		require.NoError(t, lerr)
+		require.NotNil(t, loader.Index)
+		t.Cleanup(func() { loader.Index.Destroy() })
+
+		require.Equal(t, 1, spy.calls, "exactly one host claim per load")
+		require.Equal(t, uint64(sizes.Host), spy.bytes,
+			"the claim must cover every host-resident component Unpack materialises")
+		require.Greater(t, spy.bytes, uint64(idsBytes),
+			"claiming only ids.bin is the defect this pins")
+		require.Zero(t, vimemory.HostReservedBytes(), "released once Unpack has materialised them")
+	})
+
 	t.Run("claims exactly the artifact's ids and releases on success", func(t *testing.T) {
 		spy := &claimSpy{}
 		spy.install(t)
@@ -123,9 +151,9 @@ func TestLoadIndexClaimsIdsSizedFromArtifact(t *testing.T) {
 		// The whole point of the fix: a claim is actually taken, and its size comes
 		// from the artifact. Zero calls is what the IndexCapacity version did.
 		require.Equal(t, 1, spy.calls, "exactly one host claim per load")
-		require.Equal(t, uint64(idsBytes), spy.bytes,
-			"the claim must be sized from ids.bin, not from idxcfg.IndexCapacity")
-		require.Equal(t, "cagra load ids", spy.who)
+		require.Equal(t, uint64(sizes.Host), spy.bytes,
+			"the claim must be sized from the artifact, not from idxcfg.IndexCapacity")
+		require.Equal(t, "cagra load host components", spy.who)
 
 		// Settled once host_ids is materialised. Holding it past the allocation
 		// would double-count the same bytes against every later build.
