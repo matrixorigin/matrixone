@@ -2821,6 +2821,126 @@ func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
 	})
 }
 
+func signedRangeOffset(oid types.T, value int64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_int8:
+		lit.Value = &plan.Literal_I8Val{I8Val: int32(value)}
+	case types.T_int16:
+		lit.Value = &plan.Literal_I16Val{I16Val: int32(value)}
+	case types.T_int32:
+		lit.Value = &plan.Literal_I32Val{I32Val: int32(value)}
+	case types.T_int64:
+		lit.Value = &plan.Literal_I64Val{I64Val: value}
+	default:
+		panic("unsupported signed RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
+func TestSignedRangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       int8
+		offset      int8
+		subtract    bool
+		wantBound   int8
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 1, wantBound: 2, wantInRange: true},
+		{name: "subtract", value: 1, offset: 1, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "add maximum zero", value: math.MaxInt8, wantBound: math.MaxInt8, wantInRange: true},
+		{name: "subtract minimum zero", value: math.MinInt8, subtract: true, wantBound: math.MinInt8, wantInRange: true},
+		{name: "add overflow", value: math.MaxInt8, offset: 1, wantAbove: true},
+		{name: "subtract underflow", value: math.MinInt8, offset: 1, subtract: true},
+		{name: "add negative underflow", value: math.MinInt8, offset: -1},
+		{name: "subtract negative overflow", value: math.MaxInt8, offset: -1, subtract: true, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := signedRangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, false, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, true, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, true, true))
+}
+
+func testBuildRangeIntervalSignedBoundaries[T types.OrderedT](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	minValue T,
+	maxValue T,
+) {
+	t.Helper()
+
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{minValue, zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue, minValue}
+
+	// ASC addition overflow and subtraction underflow both retain the current row.
+	check(t, asc, false, 2, currentToFollowing, 2, 3)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+
+	// DESC reverses the arithmetic direction while preserving the same frame invariant.
+	check(t, desc, true, 2, currentToFollowing, 2, 3)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+}
+
+func TestBuildRangeIntervalSignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("int8", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int8, int8(math.MinInt8), int8(math.MaxInt8))
+	})
+	t.Run("int16", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int16, int16(math.MinInt16), int16(math.MaxInt16))
+	})
+	t.Run("int32", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int32, int32(math.MinInt32), int32(math.MaxInt32))
+	})
+	t.Run("int64", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int64, int64(math.MinInt64), int64(math.MaxInt64))
+	})
+}
+
 // TestSearchLeftRightAllFloatTypes covers float32/64.
 func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
