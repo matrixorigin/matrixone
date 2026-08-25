@@ -298,8 +298,8 @@ func clearLoadGenerationRegistry() {
 
 func clearReusableLoadGeneration(cfg TableConfig) {
 	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
-	clearReusableLoadPools(cfg)
 	clearLoadGeneration(index)
+	clearReusableLoadPools(cfg)
 }
 
 func clearReusableLoadPools(cfg TableConfig) {

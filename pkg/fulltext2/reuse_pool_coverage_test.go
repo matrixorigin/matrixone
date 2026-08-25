@@ -247,6 +247,113 @@ func TestReusableLoadLifecycleHookRunsHousekeepingAndShutdown(t *testing.T) {
 	c.Destroy()
 }
 
+func TestReasonlessDropInvalidatesGenerationBeforeClearingReusablePools(t *testing.T) {
+	loadedBasePool.clearAll()
+	loadedTailPool.clearAll()
+
+	cfg := TableConfig{DbName: "db", IndexTable: "drop-race"}
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	generation := beginLoadGeneration(index)
+	t.Cleanup(func() { endLoadGeneration(generation) })
+	t.Cleanup(func() {
+		loadedBasePool.clearAll()
+		loadedTailPool.clearAll()
+	})
+
+	oldBaseKey := baseKey{index: index, id: "old-base", checksum: "sum", filesize: 1}
+	oldBaseLease := newSegmentLease(NewSegment(oldBaseKey.id, 0))
+	loadedBasePool.mu.Lock()
+	loadedBasePool.entries[oldBaseKey] = &baseEntry{
+		lease:     oldBaseLease,
+		published: true,
+		lastUsed:  time.Now(),
+	}
+	loadedBasePool.totalBytes += baseEntryBytes(oldBaseKey)
+	loadedBasePool.mu.Unlock()
+	oldBaseLease.mu.Lock()
+
+	oldTail := newTailState(1, 1, []*Segment{NewSegment("old-tail", 0)}, nil)
+	oldTailLease := oldTail.segments[0]
+	loadedTailPool.mu.Lock()
+	loadedTailPool.states[index] = oldTail
+	loadedTailPool.totalBytes += oldTail.bytes
+	loadedTailPool.mu.Unlock()
+	oldTailLease.mu.Lock()
+
+	var releaseBase, releaseTail sync.Once
+	unlockBase := func() { releaseBase.Do(func() { oldBaseLease.mu.Unlock() }) }
+	unlockTail := func() { releaseTail.Do(func() { oldTailLease.mu.Unlock() }) }
+	t.Cleanup(unlockBase)
+	t.Cleanup(unlockTail)
+
+	done := make(chan struct{})
+	go func() {
+		NewFulltext2Search(cfg).OnCacheInvalidated("")
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		loadedBasePool.mu.Lock()
+		_, ok := loadedBasePool.entries[oldBaseKey]
+		loadedBasePool.mu.Unlock()
+		return !ok
+	}, time.Second, time.Millisecond)
+
+	newBaseKey := baseKey{index: index, id: "new-base", checksum: "sum", filesize: 1}
+	baseView, err := loadedBasePool.acquireOwned(context.Background(), newBaseKey, func() (*Segment, error) {
+		return NewSegment(newBaseKey.id, 0), nil
+	}, 0, generation.owner)
+	require.NoError(t, err)
+	baseView.Free()
+	basePublished := loadedBasePool.commitOwnedIfCurrent(
+		index,
+		map[baseKey]struct{}{newBaseKey: {}},
+		generation.owner,
+		func() bool { return loadGenerationCurrent(generation) },
+	)
+	if !basePublished {
+		loadedBasePool.rollback(generation.owner)
+	}
+	require.False(t, basePublished, "DROP must invalidate an active base load before pool clearing")
+
+	unlockBase()
+	require.Eventually(t, func() bool {
+		loadedTailPool.mu.Lock()
+		_, ok := loadedTailPool.states[index]
+		loadedTailPool.mu.Unlock()
+		return !ok
+	}, time.Second, time.Millisecond)
+
+	newTail := newTailState(1, 2, []*Segment{NewSegment("new-tail", 0)}, nil)
+	views, _, tailPublished := loadedTailPool.installAndAcquireIfCurrent(
+		index,
+		newTail,
+		func() bool { return loadGenerationCurrent(generation) },
+	)
+	if tailPublished {
+		freeSegs(views)
+	} else {
+		retireTailStates([]*tailState{newTail})
+	}
+	require.False(t, tailPublished, "DROP must invalidate an active tail load before pool clearing")
+
+	unlockTail()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reasonless DROP did not finish")
+	}
+
+	loadedBasePool.mu.Lock()
+	baseEntries := len(loadedBasePool.entries)
+	loadedBasePool.mu.Unlock()
+	loadedTailPool.mu.Lock()
+	tailStates := len(loadedTailPool.states)
+	loadedTailPool.mu.Unlock()
+	require.Zero(t, baseEntries)
+	require.Zero(t, tailStates)
+}
+
 func TestLoadTailWithReuseReusesUnchangedState(t *testing.T) {
 	index := "db.store"
 	loadedTailPool.clear(index)
