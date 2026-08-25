@@ -1,35 +1,34 @@
 -- @case
--- @desc: Prepared IN preserves the complete information_schema typed bag
+-- @desc: Prepared IN inside nested OR preserves all PK rows across executions
 -- @label:bvt
--- Regression for #27503. The literal query is a nearby path control; the
--- independently fixed expected rows are the five objects created below.
+-- Regression for #27503's underlying PK-filter failure, using a user table so
+-- the detector does not depend on information_schema planner casts. IN and the
+-- range arm cannot collapse into one atomic filter; the outer upper bound then
+-- exercises the disjunct-container merge that previously dropped valid rows.
 
 DROP DATABASE IF EXISTS prepared_in_equivalence;
 CREATE DATABASE prepared_in_equivalence;
 USE prepared_in_equivalence;
 
-CREATE TABLE t001 (id INT PRIMARY KEY);
-CREATE TABLE t002 (id INT PRIMARY KEY);
-CREATE TABLE t003 (id INT PRIMARY KEY);
-CREATE TABLE t004 (id INT PRIMARY KEY);
-CREATE TABLE t005 (id INT PRIMARY KEY);
+CREATE TABLE v (a VARCHAR(20) PRIMARY KEY);
+INSERT INTO v VALUES (''), ('a'), ('b'), ('c'), ('z'), ('zz');
 
-SELECT table_name
-FROM information_schema.tables
-WHERE table_schema = 'prepared_in_equivalence'
-  AND table_name IN ('t001', 't002', 't003', 't004', 't005')
-ORDER BY table_name;
+PREPARE prepared_nested_or FROM
+  'SELECT a FROM v WHERE a <= ? AND (a IN (?,?,?) OR a > ?) ORDER BY a';
 
-SET @schema_name = 'prepared_in_equivalence';
-SET @n1 = 't001';
-SET @n2 = 't002';
-SET @n3 = 't003';
-SET @n4 = 't004';
-SET @n5 = 't005';
+SET @upper = 'z';
+SET @in1 = 'a';
+SET @in2 = 'c';
+SET @in3 = 'zz';
+SET @lower = 'm';
+EXECUTE prepared_nested_or USING @upper, @in1, @in2, @in3, @lower;
 
-PREPARE prepared_names FROM
-  'SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name IN (?,?,?,?,?) ORDER BY table_name';
-EXECUTE prepared_names USING @schema_name, @n1, @n2, @n3, @n4, @n5;
-DEALLOCATE PREPARE prepared_names;
+SET @upper = 'zz';
+SET @in1 = 'b';
+SET @in2 = 'zz';
+SET @in3 = 'missing';
+SET @lower = 'z';
+EXECUTE prepared_nested_or USING @upper, @in1, @in2, @in3, @lower;
 
+DEALLOCATE PREPARE prepared_nested_or;
 DROP DATABASE prepared_in_equivalence;
