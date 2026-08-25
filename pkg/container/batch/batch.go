@@ -693,6 +693,16 @@ func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	return bat.UnmarshalBinaryWithAnyMp(data, nil)
 }
 
+func (bat *Batch) clearPrepareParamMetadata(mp *mpool.MPool) {
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			_ = vec.SetPrepareParamKindsWithMP(nil, mp)
+			_ = vec.SetStringSource(types.StringSourceExpression)
+			vec.SetIsBinaryString(false)
+		}
+	}
+}
+
 // UnmarshalBinaryWithPrepareParamKinds decodes the stable Batch prefix and an
 // optional pipeline-only provenance trailer.  The stable public decoder keeps
 // its historical trailing-byte behavior for persisted/legacy callers.
@@ -747,12 +757,7 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 			applyErr = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
 		}
 		if applyErr != nil {
-			for _, resetVec := range bat.Vecs {
-				if resetVec != nil {
-					_ = resetVec.SetPrepareParamKindsWithMP(nil, mp)
-					resetVec.SetIsBinaryString(false)
-				}
-			}
+			bat.clearPrepareParamMetadata(mp)
 			return applyErr
 		}
 		if len(record.encodedStringSources) != 0 {
@@ -762,13 +767,7 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 			applyErr = vec.SetStringSource(record.stringSource)
 		}
 		if applyErr != nil {
-			for _, resetVec := range bat.Vecs {
-				if resetVec != nil {
-					_ = resetVec.SetPrepareParamKindsWithMP(nil, mp)
-					_ = resetVec.SetStringSource(types.StringSourceExpression)
-					resetVec.SetIsBinaryString(false)
-				}
-			}
+			bat.clearPrepareParamMetadata(mp)
 			return applyErr
 		}
 	}
@@ -834,17 +833,8 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 		return moerr.NewInvalidInputNoCtx("prepared parameter metadata trailer exceeds wire limit")
 	}
 	startRemaining := trailerSize
-	clearMetadata := func() {
-		for _, vec := range bat.Vecs {
-			if vec != nil {
-				_ = vec.SetPrepareParamKindsWithMP(nil, mp)
-				_ = vec.SetStringSource(types.StringSourceExpression)
-				vec.SetIsBinaryString(false)
-			}
-		}
-	}
 	fail := func(err error) error {
-		clearMetadata()
+		bat.clearPrepareParamMetadata(mp)
 		return err
 	}
 	readByte := func() (byte, error) {
@@ -2161,7 +2151,14 @@ func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
 	return false
 }
 
+func finalizeStringSourcePreflights(vecs []*vector.Vector) {
+	for _, vec := range vecs {
+		vec.FinalizeStringSourcePreflight()
+	}
+}
+
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
+	defer finalizeStringSourcePreflights(bat.Vecs)
 	// Provenance can require an allocation even when every payload vector is
 	// already pre-sized. Admit that state for every column before the first
 	// column publishes rows, so a provenance OOM cannot split batch lengths.
@@ -2185,6 +2182,7 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 }
 
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
+	defer finalizeStringSourcePreflights(bat.Vecs)
 	for i, vec := range bat.Vecs {
 		if err := vec.PreflightUnionBatchPrepareParamKinds(
 			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
@@ -2205,6 +2203,7 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 }
 
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
+	defer finalizeStringSourcePreflights(bat.Vecs)
 	for i, vec := range bat.Vecs {
 		if err := vec.PreflightUnionOnePrepareParamKinds(bat2.Vecs[i], pos, m); err != nil {
 			return err
@@ -2244,6 +2243,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
+	defer finalizeStringSourcePreflights(bat.Vecs)
 
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].PreflightUnionBatchPrepareParamKinds(
@@ -2275,6 +2275,7 @@ func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
+	defer finalizeStringSourcePreflights(bat.Vecs)
 
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].PreflightUnionBatchPrepareParamKinds(

@@ -1670,6 +1670,33 @@ func TestColumnExpressionExecutor(t *testing.T) {
 	require.Equal(t, curr, proc.Mp().CurrNB())
 }
 
+func TestColumnExpressionExecutorConstNullPreservesStringSourceAcrossCacheReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	col := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+	}
+	executor, err := NewExpressionExecutor(proc, col)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, proc.Mp())
+	input.SetRowCount(3)
+	defer input.Clean(proc.Mp())
+
+	for _, source := range []types.StringSource{
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	} {
+		require.NoError(t, input.Vecs[0].SetStringSource(source))
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, evalErr)
+		require.True(t, result.IsConstNull())
+		require.Equal(t, source, result.GetStringSourceAt(0))
+	}
+}
+
 // TestColumnExpressionExecutor_RelIndexOutOfRange verifies that Eval returns
 // an error instead of panicking when relIndex >= len(batches).
 // This reproduces the crash seen when IVF-Flat entries table contains NULL

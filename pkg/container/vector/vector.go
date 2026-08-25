@@ -2422,11 +2422,16 @@ func (v *Vector) PreflightUnionOnePrepareParamKinds(
 		v.length+1, summarizeStringSourceOne(w, sel), mp); err != nil {
 		return err
 	}
-	return v.preflightPrepareParamKindAppend(
+	v.RetainStringSourcePreflight()
+	if err := v.preflightPrepareParamKindAppend(
 		v.length+1,
 		summarizePrepareParamKindOne(w, sel),
 		mp,
-	)
+	); err != nil {
+		v.FinalizeStringSourcePreflight()
+		return err
+	}
+	return nil
 }
 
 // PreflightUnionPrepareParamKinds is the batch-level preflight for Union.
@@ -2439,11 +2444,16 @@ func (v *Vector) PreflightUnionPrepareParamKinds(
 		v.length+len(sels), summarizeStringSourceSelection(w, sels), mp); err != nil {
 		return err
 	}
-	return v.preflightPrepareParamKindAppend(
+	v.RetainStringSourcePreflight()
+	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
 		mp,
-	)
+	); err != nil {
+		v.FinalizeStringSourcePreflight()
+		return err
+	}
+	return nil
 }
 
 // PreflightUnionBatchPrepareParamKinds is the batch-level preflight for
@@ -2487,8 +2497,13 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		finalLength, summarizeStringSourceBatch(w, offset, cnt, flags), mp); err != nil {
 		return err
 	}
+	v.RetainStringSourcePreflight()
 	if v.prepareParamKinds != nil {
-		return v.preExtendPrepareParamKinds(finalLength, mp)
+		if err := v.preExtendPrepareParamKinds(finalLength, mp); err != nil {
+			v.FinalizeStringSourcePreflight()
+			return err
+		}
+		return nil
 	}
 	// A fresh destination can adopt a uniform source directly during the
 	// propagation pass. Keep this common reset-and-UnionBatch path O(1) without
@@ -2501,11 +2516,15 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		}
 		return nil
 	}
-	return v.preflightPrepareParamKindAppend(
+	if err := v.preflightPrepareParamKindAppend(
 		finalLength,
 		summarizePrepareParamKindBatch(w, offset, cnt, flags),
 		mp,
-	)
+	); err != nil {
+		v.FinalizeStringSourcePreflight()
+		return err
+	}
+	return nil
 }
 
 func (v *Vector) propagatePrepareParamKindsAll(w *Vector, oldLength int, mp *mpool.MPool) error {
@@ -5161,10 +5180,12 @@ func (v *Vector) preExtendSelectedBatch(
 	if err := v.PreflightUnionBatchBinaryString(
 		w, int64(offset), cnt, flags, mp,
 	); err != nil {
+		v.FinalizeStringSourcePreflight()
 		return err
 	}
 	if selectedAreaBytes > cap(v.area)-len(v.area) {
 		if err := v.PreExtendWithArea(0, selectedAreaBytes, mp); err != nil {
+			v.FinalizeStringSourcePreflight()
 			return err
 		}
 	}
@@ -6400,6 +6421,8 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		); err != nil {
 			return err
 		}
+		v.RetainStringSourcePreflight()
+		defer v.FinalizeStringSourcePreflight()
 		if w.gsp.Any() {
 			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
 				return err
@@ -7651,6 +7674,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
 		return err
 	}
+	defer v.FinalizeStringSourcePreflight()
 	if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
 		return err
 	}
@@ -7770,6 +7794,8 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	); err != nil {
 		return err
 	}
+	v.RetainStringSourcePreflight()
+	defer v.FinalizeStringSourcePreflight()
 
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
@@ -7907,6 +7933,8 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	); err != nil {
 		return err
 	}
+	v.RetainStringSourcePreflight()
+	defer v.FinalizeStringSourcePreflight()
 
 	if err := extendWithBitmaps(
 		v,
@@ -8114,6 +8142,7 @@ func (v *Vector) unionBatch(
 		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
+		defer v.FinalizeStringSourcePreflight()
 		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}

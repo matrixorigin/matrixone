@@ -1794,6 +1794,72 @@ func TestSelectedBatchStringSourcePreflightSurvivesLengthPublication(t *testing.
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestDirectUnionStringSourcePreflightSurvivesLengthPublication(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(destination, source *Vector, mp *mpool.MPool) error
+	}{
+		{name: "union-one", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionOne(source, 0, mp)
+		}},
+		{name: "union-multi", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionMulti(source, 0, 1, mp)
+		}},
+		{name: "union-int64", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.Union(source, []int64{0}, mp)
+		}},
+		{name: "union-int32", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionInt32(source, []int32{0}, mp)
+		}},
+		{name: "union-batch", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionBatch(source, 0, 1, nil, mp)
+		}},
+		{name: "union-all", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return GetUnionAllFunction(types.T_int64.ToType(), mp)(destination, source)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+			require.NoError(t, err)
+			controller := &rejectNextVectorAllocation{}
+			account, err := registry.OpenWithController(1<<20, controller)
+			require.NoError(t, err)
+			selection, err := NewAllocationAccountSelection(
+				account, testVectorAllocationOwner, testVectorDataAllocationSite,
+				testVectorAreaAllocationSite, testVectorNullAllocationSite,
+				testVectorGroupAllocationSite)
+			require.NoError(t, err)
+			destination := newAccountedTestVector(t, types.T_int64.ToType(), selection)
+			require.NoError(t, destination.PreExtend(2, mp))
+			require.NoError(t, AppendFixed(destination, int64(1), false, mp))
+			source := NewVec(types.T_int64.ToType())
+			require.NoError(t, AppendFixed(source, int64(2), false, mp))
+			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+
+			// The mixed-source sidecar is the next admitted allocation. Rejecting
+			// the allocation after it proves publication consumes only reservation.
+			controller.failAt = controller.calls + 2
+			require.NoError(t, test.run(destination, source, mp))
+			require.False(t, controller.rejected,
+				"publication must not allocate after source preflight")
+			require.Equal(t, 2, destination.Length())
+			require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
+			require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(1))
+
+			destination.Free(mp)
+			source.Free(mp)
+			snapshot := account.Seal()
+			require.Zero(t, snapshot.Used)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestSelectedBatchBinaryStringPreflightClosesExactCapacity(t *testing.T) {
 	run := func(limit uint64) (uint64, bool, error) {
 		state := newTestVectorAllocationAccount(t, limit, 16)

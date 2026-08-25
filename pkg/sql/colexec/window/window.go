@@ -1311,9 +1311,6 @@ func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowId
 	if !defaultVec.IsConst() {
 		srcRow = int64(rowIdx)
 	}
-	if defaultVec.IsNull(uint64(srcRow)) {
-		return vector.AppendAny(result, nil, true, mp)
-	}
 	return result.UnionOne(defaultVec, srcRow, mp)
 }
 

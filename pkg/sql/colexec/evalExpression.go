@@ -1667,7 +1667,7 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
 		var err error
-		vec, err = expr.getConstNullVec(expr.typ, vec.Length())
+		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {
 			return nil, err
 		}
@@ -1675,7 +1675,11 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	return vec, nil
 }
 
-func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) getConstNullVec(
+	typ types.Type,
+	length int,
+	source types.StringSource,
+) (*vector.Vector, error) {
 	if expr.nullVecCache != nil {
 		expr.nullVecCache.SetType(typ)
 		expr.nullVecCache.SetLength(length)
@@ -1685,6 +1689,9 @@ func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := expr.nullVecCache.SetStringSource(source); err != nil {
+		return nil, err
 	}
 	return expr.nullVecCache, nil
 }
