@@ -6149,6 +6149,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
 			catalog.IsForeignQueryCol(col.Name, col.ColId) ||
 			catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
+			catalog.IsExternalErrorCol(col.Name, col.ColId) ||
 			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
@@ -11292,6 +11293,36 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
+			// Error-mode columns for the text-format scans (issue #27517). They
+			// are appended for every engine whose records go through the shared
+			// CSV/JSONL parsing, so a bad record can be reported instead of
+			// failing the query. Parquet/Iceberg/Mongo have their own typed
+			// readers and are excluded. For FOREIGN_TB they must come BEFORE
+			// __mo_query, which has to stay the last column.
+			if externType == plan.ExternType_EXTERNAL_TB ||
+				externType == plan.ExternType_KAFKA_TB ||
+				externType == plan.ExternType_DATASTREAM_TB ||
+				externType == plan.ExternType_FOREIGN_TB {
+				varcharT := plan.Type{
+					Id:      int32(types.T_varchar),
+					Width:   types.MaxVarcharLen,
+					Table:   table,
+					Charset: uint32(types.CharsetUTF8),
+				}
+				for _, ec := range []struct {
+					id   uint64
+					name string
+					typ  plan.Type
+				}{
+					{catalog.ExternalFileLineColId, catalog.ExternalFileLine, plan.Type{Id: int32(types.T_int64), Table: table}},
+					{catalog.ExternalErrorMessageColId, catalog.ExternalErrorMessage, varcharT},
+					{catalog.ExternalErrorTextColId, catalog.ExternalErrorText, varcharT},
+				} {
+					tableDef.Cols = append(tableDef.Cols, &ColDef{
+						ColId: ec.id, Name: ec.name, Typ: ec.typ,
+					})
+				}
+			}
 			if externType == plan.ExternType_EXTERNAL_TB {
 				col := &ColDef{
 					ColId: catalog.ExternalFilePathColId,
@@ -11695,7 +11726,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			// star expansion (identified by its reserved ColId, so a real
 			// __mo_query column in a pre-existing schema stays visible).
 			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId) ||
-				catalog.IsKafkaHiddenCol(col.Name, col.ColId)
+				catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
+				catalog.IsExternalErrorCol(col.Name, col.ColId)
 			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString
