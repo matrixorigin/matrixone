@@ -55,6 +55,67 @@ func TestIcebergRedactionDisablesGeneratedStringers(t *testing.T) {
 	}
 }
 
+func TestHashJoinDescriptorContainsAsofFields(t *testing.T) {
+	file := decodePipelineFileDescriptor(t)
+	expected := map[string]int32{
+		"asof_right_col":  17,
+		"asof_build_left": 18,
+	}
+	for _, message := range file.GetMessageType() {
+		if message.GetName() != "HashJoin" {
+			continue
+		}
+		for _, field := range message.GetField() {
+			if number, ok := expected[field.GetName()]; ok && field.GetNumber() == number {
+				delete(expected, field.GetName())
+			}
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatalf("pipeline descriptor missing HashJoin ASOF fields: %v", expected)
+	}
+}
+
+func TestGeneratedHashJoinDescriptorContainsAsofFields(t *testing.T) {
+	b, _ := (&HashJoin{}).Descriptor()
+	file := decodePipelineFileDescriptorBytes(t, b)
+	expected := map[string]int32{
+		"asof_right_col":  17,
+		"asof_build_left": 18,
+	}
+	for _, message := range file.GetMessageType() {
+		if message.GetName() != "HashJoin" {
+			continue
+		}
+		for _, field := range message.GetField() {
+			if number, ok := expected[field.GetName()]; ok && field.GetNumber() == number {
+				delete(expected, field.GetName())
+			}
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatalf("generated HashJoin descriptor missing ASOF fields: %v", expected)
+	}
+}
+
+func decodePipelineFileDescriptorBytes(t *testing.T, compressed []byte) *descriptor.FileDescriptorProto {
+	t.Helper()
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file descriptor.FileDescriptorProto
+	if err := proto.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	return &file
+}
+
 func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {
 	t.Helper()
 	compressed := proto.FileDescriptor("pipeline.proto")

@@ -2860,13 +2860,9 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 	scale := ivecs[2].GetType().Scale
 	if iTyp == types.MicroSecond {
-		scale = 6
-	}
-	// For DATETIME type input, always return DATETIME format (not DATE format)
-	// Use scale >= 1 to indicate DATETIME type input (vs scale=0 for DATE type input)
-	// This allows MySQL protocol layer to format as full DATETIME format
-	if scale == 0 {
-		scale = 1 // Mark as DATETIME type input
+		if scale < 6 {
+			scale = 6
+		}
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))

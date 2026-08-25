@@ -68,17 +68,27 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		if err != nil {
 			return vm.CancelResult, err
 		}
-		if input.Batch == nil || input.Batch.Last() {
+		if input.Batch == nil {
+			if offset.calcFoundRows && proc.IsSqlCalcFoundRows() && !proc.FoundRowsRecorded() {
+				proc.SetFoundRows(offset.ctr.inputRows)
+			}
+			return input, nil
+		}
+		if input.Batch.Last() {
+			if offset.calcFoundRows && proc.IsSqlCalcFoundRows() && !proc.FoundRowsRecorded() {
+				proc.SetFoundRows(offset.ctr.inputRows)
+			}
 			return input, nil
 		}
 		if input.Batch.IsEmpty() {
 			continue
 		}
+		length := input.Batch.RowCount()
+		offset.ctr.inputRows += uint64(length)
 		if offset.ctr.seen > offset.ctr.offset {
 			return input, nil
 		}
 
-		length := input.Batch.RowCount()
 		if offset.ctr.buf != nil {
 			offset.ctr.buf.CleanOnlyData()
 		}

@@ -715,20 +715,16 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		s.Proc.Ctx,
 		scopeRunQueryContext(s.Proc),
 	)
-	if err != nil && s.Proc.Cancel != nil {
-		cancelErr := runErr
-		if cancelErr == nil {
-			cancelErr = err
-		}
-		s.Proc.Cancel(cancelErr)
+	if runErr != nil && s.Proc.Cancel != nil {
+		s.Proc.Cancel(runErr)
 	}
 	// Normalize before cleanup mutates the pipeline context so a substantive
 	// cancellation cause remains available to the caller.
-	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
+	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
-		if err == nil {
+		if runErr == nil {
 			sender.prepareForLocalCleanup()
 		}
 		sender.close()
@@ -1269,18 +1265,11 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		originalErr := err
-		normalizedErr, _ := normalizeScopeRunError(
+		err, _ = normalizeScopeRunError(
 			err,
 			s.Proc.Ctx,
 			scopeRunQueryContext(s.Proc),
 		)
-		// QueryInterrupted is normal pipeline fallout and may be suppressed.
-		// Preserve a raw context cancellation when it has no stronger cause so
-		// registration-retry cancellation retains its historical classification.
-		if normalizedErr != nil || moerr.IsMoErrCode(originalErr, moerr.ErrQueryInterrupted) {
-			err = normalizedErr
-		}
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}

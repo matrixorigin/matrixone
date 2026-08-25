@@ -37,7 +37,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -162,6 +164,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
 		returningSourceStep:      -1,
+		returningFilterPos:       -1,
 	}
 }
 
@@ -551,7 +554,7 @@ func nodeNullExtendsChild(node *plan.Node, childIdx int) bool {
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		switch node.JoinType {
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_ASOF_LEFT:
 			return childIdx == 1
 		case plan.Node_RIGHT:
 			return childIdx == 0
@@ -1458,6 +1461,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 						}
 					}
 				}
+			}
+		}
+		if node.JoinType == plan.Node_ASOF || node.JoinType == plan.Node_ASOF_LEFT {
+			if err := refreshAsofRightColAfterRemap(node); err != nil {
+				return nil, err
 			}
 		}
 		if node.JoinType == plan.Node_MARK &&
@@ -3589,6 +3597,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	sinkColRef := make(map[[2]int32]int)
 
 	builder.parseOptimizeHints()
+	if builder.sqlCalcFoundRows {
+		if builder.optimizerHints == nil {
+			builder.optimizerHints = &OptimizerHints{}
+		}
+		// Preserve the complete input stream for FOUND_ROWS(); this hint is
+		// internal and overrides global limit-pushdown settings for this query.
+		builder.optimizerHints.pushDownLimitToScan = 1
+		builder.optimizerHints.pushDownTopThroughLeftJoin = 1
+	}
 	for i, rootID := range builder.qry.Steps {
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
@@ -3687,17 +3704,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
 
-		if builder.isForUpdate {
-			reCheckifNeedLockWholeTable(builder)
-		}
-
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 
-		if builder.qry.StmtType != plan.Query_SELECT {
-			builder.updateLocksOnDemand(rootID)
-		}
 		rootNode := builder.qry.Nodes[rootID]
 
 		for j := range rootNode.ProjectList {
@@ -3707,6 +3717,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
+	applySharedLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
@@ -5337,6 +5348,23 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	if astTimeWindow != nil && astTimeWindow.Fill != nil {
+		fillMode := astTimeWindow.Fill.Mode
+		if fillMode != tree.FillNone && fillMode != tree.FillNull {
+			finalFillCols := collectTimeWindowFillCols(ctx)
+			if fillMode == tree.FillLinear {
+				if err = builder.validateLinearFillTypes(finalFillCols); err != nil {
+					return
+				}
+			}
+			if len(finalFillCols) != len(fillCols) {
+				fillType, fillVals, fillCols, err = builder.bindTimeWindowFill(ctx, projectionBinder, astTimeWindow)
+				if err != nil {
+					return
+				}
+			}
+		}
+	}
 	if len(boundOrderBys) > 0 && len(viewRawProjects) > 0 {
 		ctx.mysqlSpecialRawProjectPositions = make(map[int32]int32, len(viewRawProjects))
 		for visiblePos, rawExpr := range viewRawProjects {
@@ -5378,6 +5406,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	var preWindowHavingList []*plan.Expr
+	var postTimeWindowHavingList []*plan.Expr
 	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
 		preWindowHavingList, _ = splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
 	}
@@ -5440,7 +5469,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	} else if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
-		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
+		if nodeID, postTimeWindowHavingList, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
 		}
 	} else if len(boundHavingList) > 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 {
@@ -5478,6 +5507,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astTimeWindow,
 		); err != nil {
 			return
+		}
+		if len(postTimeWindowHavingList) > 0 {
+			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, postTimeWindowHavingList); err != nil {
+				return
+			}
+			// Keep HAVING-only time-window aggregates through FILL. The filter
+			// references the aggregate after the FILL node; allowing pushdown to
+			// the TIME_WINDOW node makes FILL prune the matching positional slot.
+			builder.qry.Nodes[nodeID].FilterIsBarrier = true
 		}
 	}
 
@@ -6145,6 +6183,8 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 	cols := make([]*plan.ColDef, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
+			catalog.IsForeignQueryCol(col.Name, col.ColId) ||
+			catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
 			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
@@ -8291,64 +8331,154 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 
-	if astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode != tree.FillNone && astTimeWindow.Fill.Mode != tree.FillNull {
-		switch astTimeWindow.Fill.Mode {
-		case tree.FillPrev:
-			fillType = plan.Node_PREV
-		case tree.FillNext:
-			fillType = plan.Node_NEXT
-		case tree.FillValue:
-			fillType = plan.Node_VALUE
-		case tree.FillLinear:
-			fillType = plan.Node_LINEAR
-		}
+	if fillType, fillVals, fillCols, err = builder.bindTimeWindowFill(ctx, projectionBinder, astTimeWindow); err != nil {
+		return
+	}
+	return
+}
 
-		var v, castedExpr *Expr
+func (builder *QueryBuilder) bindTimeWindowFill(
+	ctx *BindContext,
+	projectionBinder *ProjectionBinder,
+	astTimeWindow *tree.TimeWindow,
+) (
+	fillType plan.Node_FillType,
+	fillVals, fillCols []*Expr,
+	err error,
+) {
+	timeAstCount := len(ctx.timeAsts)
+	defer func() {
+		ctx.timeAsts = ctx.timeAsts[:timeAstCount]
+	}()
+
+	if astTimeWindow == nil || astTimeWindow.Fill == nil ||
+		astTimeWindow.Fill.Mode == tree.FillNone || astTimeWindow.Fill.Mode == tree.FillNull {
+		return
+	}
+
+	switch astTimeWindow.Fill.Mode {
+	case tree.FillPrev:
+		fillType = plan.Node_PREV
+	case tree.FillNext:
+		fillType = plan.Node_NEXT
+	case tree.FillValue:
+		fillType = plan.Node_VALUE
+	case tree.FillLinear:
+		fillType = plan.Node_LINEAR
+	}
+
+	var v, castedExpr *Expr
+	if astTimeWindow.Fill.Val != nil {
+		if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+			return
+		}
+	}
+
+	for _, t := range ctx.times {
+		if isTimeWindowFillBoundary(t) {
+			continue
+		}
 		if astTimeWindow.Fill.Val != nil {
-			if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+			if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
 				return
 			}
+			fillVals = append(fillVals, castedExpr)
+		}
+		fillCols = append(fillCols, t)
+	}
+
+	if astTimeWindow.Fill.Mode == tree.FillLinear {
+		if err = builder.validateLinearFillTypes(fillCols); err != nil {
+			return
 		}
 
-		for _, t := range ctx.times {
-			if e, ok := t.Expr.(*plan.Expr_Col); ok {
-				if e.Col.Name == TimeWindowStart || e.Col.Name == TimeWindowEnd {
+		// Binders record every AST occurrence in timeAsts, while
+		// timeByAst/times keep one entry per unique time-window aggregate. ORDER BY
+		// may mention an aggregate already selected, so align the linear expression
+		// inputs by the unique time column position rather than by occurrence count.
+		astsByTimeCol := make(map[int32]tree.Expr, len(ctx.timeAsts))
+		for _, timeAst := range ctx.timeAsts {
+			colPos, ok := ctx.timeByAst[windowExprAstKey(timeAst)]
+			if ok {
+				if _, exists := astsByTimeCol[colPos]; !exists {
+					astsByTimeCol[colPos] = timeAst
+				}
+			}
+		}
+		linearTimeAsts := make([]tree.Expr, 0, len(fillCols))
+		if len(astsByTimeCol) == 0 {
+			// Keep the direct bindTimeWindow unit-test context, which supplies
+			// fill columns without the projection metadata used by full queries.
+			linearTimeAsts = append(linearTimeAsts, ctx.timeAsts...)
+		} else {
+			for colPos, time := range ctx.times {
+				if isTimeWindowFillBoundary(time) {
 					continue
 				}
-			}
-			if astTimeWindow.Fill.Val != nil {
-				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
+				timeAst, ok := astsByTimeCol[int32(colPos)]
+				if !ok {
+					err = moerr.NewInternalErrorf(builder.GetContext(), "linear fill AST missing for time column %d", colPos)
 					return
 				}
-				fillVals = append(fillVals, castedExpr)
+				linearTimeAsts = append(linearTimeAsts, timeAst)
 			}
-			fillCols = append(fillCols, t)
 		}
 
-		if astTimeWindow.Fill.Mode == tree.FillLinear {
-			for i, timeAst := range ctx.timeAsts {
-				b := &tree.BinaryExpr{
-					Op: tree.DIV,
-					Left: &tree.ParenExpr{
-						Expr: &tree.BinaryExpr{
-							Op:    tree.PLUS,
-							Left:  timeAst,
-							Right: timeAst,
-						},
+		for i, timeAst := range linearTimeAsts {
+			b := &tree.BinaryExpr{
+				Op: tree.DIV,
+				Left: &tree.ParenExpr{
+					Expr: &tree.BinaryExpr{
+						Op:    tree.PLUS,
+						Left:  timeAst,
+						Right: timeAst,
 					},
-					Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
-				}
-				if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
-					return
-				}
-				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
-					return
-				}
-				fillVals = append(fillVals, castedExpr)
+				},
+				Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
 			}
+			if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
+				return
+			}
+			if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
+				return
+			}
+			fillVals = append(fillVals, castedExpr)
 		}
 	}
 	return
+}
+
+func isTimeWindowFillBoundary(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	return col != nil && (col.Name == TimeWindowStart || col.Name == TimeWindowEnd)
+}
+
+func collectTimeWindowFillCols(ctx *BindContext) []*Expr {
+	fillCols := make([]*Expr, 0, len(ctx.times))
+	for _, expr := range ctx.times {
+		if isTimeWindowFillBoundary(expr) {
+			continue
+		}
+		fillCols = append(fillCols, expr)
+	}
+	return fillCols
+}
+
+func (builder *QueryBuilder) validateLinearFillTypes(fillCols []*Expr) error {
+	for _, fillCol := range fillCols {
+		fillColType := makeTypeByPlan2Type(fillCol.Typ)
+		if !fillColType.IsNumeric() {
+			return moerr.NewNotSupportedf(
+				builder.GetContext(),
+				"FILL(LINEAR) does not support aggregate result type %s",
+				fillColType.String(),
+			)
+		}
+	}
+	return nil
 }
 
 // inferGapFillBounds recognizes only the exact half-open predicate shape used
@@ -9453,7 +9583,7 @@ func (builder *QueryBuilder) appendAggNode(
 	nodeID int32,
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
-) (newNodeID int32, err error) {
+) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
@@ -9477,6 +9607,9 @@ func (builder *QueryBuilder) appendAggNode(
 	}
 
 	preWindowHavingList, _ := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	if ctx.timeTag > 0 {
+		preWindowHavingList, postTimeWindowHavingList = splitTimeWindowDependentHavingFilters(preWindowHavingList, ctx.timeTag)
+	}
 	if len(preWindowHavingList) > 0 {
 		var newFilterList []*plan.Expr
 		var expr *plan.Expr
@@ -9522,6 +9655,19 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support time window in recursive cte")
 		return
+	}
+	if fillType == plan.Node_LINEAR {
+		realAggCount := len(collectTimeWindowFillCols(ctx))
+		if len(fillCols) != realAggCount || len(fillVals) != realAggCount {
+			err = moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"linear fill layout mismatch: aggregates=%d fill columns=%d fill values=%d",
+				realAggCount,
+				len(fillCols),
+				len(fillVals),
+			)
+			return
+		}
 	}
 
 	// A GROUP BY alongside the window puts extra keys in ctx.groups next to the
@@ -9679,6 +9825,27 @@ func splitWindowDependentHavingFilters(boundHavingList []*plan.Expr, windowTag i
 	}
 
 	return preWindow, postWindow
+}
+
+func splitTimeWindowDependentHavingFilters(boundHavingList []*plan.Expr, timeTag int32) (preWindow []*plan.Expr, postTimeWindow []*plan.Expr) {
+	if len(boundHavingList) == 0 {
+		return nil, nil
+	}
+	if timeTag <= 0 {
+		return boundHavingList, nil
+	}
+
+	preWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	postTimeWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		if containsTag(cond, timeTag) {
+			postTimeWindow = append(postTimeWindow, cond)
+			continue
+		}
+		preWindow = append(preWindow, cond)
+	}
+
+	return preWindow, postTimeWindow
 }
 
 func (builder *QueryBuilder) appendProjectionNode(
@@ -11180,6 +11347,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			var icebergEnv sqliceberg.CreateSQLEnvelope
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
 			var datastreamCfg sqldatastream.Config
+			var foreignCfg foreignext.Config
+			var kafkaCfg sqlkafka.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -11207,6 +11376,24 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					if isDataStream {
 						datastreamCfg = cfg
 						externType = plan.ExternType_DATASTREAM_TB
+					} else {
+						fcfg, isForeign, err := IsForeignTableDef(builder.GetContext(), tableDef)
+						if err != nil {
+							return 0, err
+						}
+						if isForeign {
+							foreignCfg = fcfg
+							externType = plan.ExternType_FOREIGN_TB
+						} else {
+							kcfg, isKafka, err := IsKafkaTableDef(builder.GetContext(), tableDef)
+							if err != nil {
+								return 0, err
+							}
+							if isKafka {
+								kafkaCfg = kcfg
+								externType = plan.ExternType_KAFKA_TB
+							}
+						}
 					}
 				}
 			}
@@ -11244,6 +11431,27 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Recheck: datastreamCfg.Recheck,
 					ApiKey:  datastreamCfg.APIKey,
 				}
+			} else if externType == plan.ExternType_FOREIGN_TB {
+				externScan.ForeignScan = &plan.ForeignScan{
+					Kind:         foreignCfg.Kind,
+					Config:       foreignCfg.ConfigJSON,
+					DefaultQuery: foreignCfg.DefaultQuery,
+				}
+			} else if externType == plan.ExternType_KAFKA_TB {
+				// Read-control defaults; compileKafkaScan overwrites them from
+				// the __mo_read_* WHERE conjuncts.
+				externScan.KafkaScan = &plan.KafkaScan{
+					Brokers:        kafkaCfg.Brokers,
+					Topic:          kafkaCfg.Topic,
+					Partition:      kafkaCfg.Partition,
+					Autocommit:     kafkaCfg.Autocommit,
+					Group:          kafkaCfg.Group,
+					Format:         kafkaCfg.Format,
+					Separator:      kafkaCfg.Separator,
+					HasStartId:     false,
+					Size:           0,
+					TimeoutSeconds: 10,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
@@ -11259,6 +11467,54 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
+			} else if externType == plan.ExternType_FOREIGN_TB {
+				// The hidden query-text column: `__mo_query = '<text>'`
+				// predicates select what is sent to the foreign source, and
+				// each returned row carries the text that produced it. Must
+				// stay the LAST column (the query-level filter classifier
+				// requires it).
+				col := &ColDef{
+					ColId: catalog.ExternalQueryColId,
+					Name:  catalog.ExternalQuery,
+					Typ: plan.Type{
+						Id:      int32(types.T_varchar),
+						Width:   types.MaxVarcharLen,
+						Table:   table,
+						Charset: uint32(types.CharsetUTF8),
+					},
+				}
+				tableDef.Cols = append(tableDef.Cols, col)
+			} else if externType == plan.ExternType_KAFKA_TB {
+				// Synthetic Kafka columns: four per-message metadata columns
+				// and three WHERE-only read controls (their conjuncts are
+				// consumed by compileKafkaScan; selecting one returns the
+				// effective value the scan used). All are hidden from
+				// SELECT * via catalog.IsKafkaHiddenCol.
+				varcharT := plan.Type{
+					Id:      int32(types.T_varchar),
+					Width:   types.MaxVarcharLen,
+					Table:   table,
+					Charset: uint32(types.CharsetUTF8),
+				}
+				bigintT := plan.Type{Id: int32(types.T_int64), Table: table}
+				tsT := plan.Type{Id: int32(types.T_timestamp), Scale: 3, Table: table}
+				for _, kc := range []struct {
+					id   uint64
+					name string
+					typ  plan.Type
+				}{
+					{catalog.KafkaMessageIDColId, catalog.KafkaMessageID, bigintT},
+					{catalog.KafkaMessageTSColId, catalog.KafkaMessageTS, tsT},
+					{catalog.KafkaMessageKeyColId, catalog.KafkaMessageKey, varcharT},
+					{catalog.KafkaMessageValueColId, catalog.KafkaMessageValue, varcharT},
+					{catalog.KafkaReadStartIDColId, catalog.KafkaReadStartID, bigintT},
+					{catalog.KafkaReadSizeColId, catalog.KafkaReadSize, bigintT},
+					{catalog.KafkaReadTimeoutColId, catalog.KafkaReadTimeout, bigintT},
+				} {
+					tableDef.Cols = append(tableDef.Cols, &ColDef{
+						ColId: kc.id, Name: kc.name, Typ: kc.typ,
+					})
+				}
 			}
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
@@ -11598,7 +11854,11 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			}
 			originCols[i] = cols[i]
 			cols[i] = strings.ToLower(cols[i])
-			colIsHidden[i] = col.Hidden
+			// The synthetic __mo_query column of a foreign scan is hidden from
+			// star expansion (identified by its reserved ColId, so a real
+			// __mo_query column in a pre-existing schema stays visible).
+			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId) ||
+				catalog.IsKafkaHiddenCol(col.Name, col.ColId)
 			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString
@@ -11748,6 +12008,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_DEDUP:
 		joinType = plan.Node_DEDUP
+	case tree.JOIN_TYPE_ASOF:
+		joinType = plan.Node_ASOF
+	case tree.JOIN_TYPE_ASOF_LEFT:
+		joinType = plan.Node_ASOF_LEFT
 	}
 
 	leftCtx := NewBindContext(builder, ctx)
@@ -11800,7 +12064,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		nodeID = builder.appendNode(node, ctx)
 	}
 
-	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT {
+	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT ||
+		joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
 		ctx.binder = NewJoinOnBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, ctx)
@@ -11858,8 +12123,16 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			node.Children[1] = rightChildID
 		}
 		node.OnList = joinConds
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			if err = builder.configureAsofJoin(node, tbl, ctx, leftChildID, rightChildID); err != nil {
+				return 0, err
+			}
+		}
 
 	case *tree.UsingJoinCond:
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
+		}
 		if tbl.JoinType == tree.JOIN_TYPE_CENTROIDX {
 			for _, col := range cond.Cols {
 				expr, err := ctx.addUsingColForCrossL2(string(col), joinType, leftCtx, rightCtx)
@@ -11878,6 +12151,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 	default:
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
+		}
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
 			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {
@@ -12039,6 +12315,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, nil)
 		case "parse_jsonl_file":
 			nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, nil)
+		case "esql_tvf":
+			nodeId, err = builder.buildEsqlTvf(tbl, ctx, exprs, nil)
+		case "sql_tvf":
+			nodeId, err = builder.buildSqlTvf(tbl, ctx, exprs, nil)
 		case "table_stats":
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
 		case "load_file_chunks":
