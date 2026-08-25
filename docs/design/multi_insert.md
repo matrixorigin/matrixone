@@ -277,6 +277,19 @@ therefore reported as ambiguous, like in any SELECT.
 Conditions are bound with `splitAndBindCondition` (WhereBinder, cast to
 bool); `VALUES` expressions with the same binder.
 
+`WHEN` conditions and clause `VALUES` are bound in a **declaration context**
+derived from the source's (`newCTEDeclarationContext`), not in a fresh root.
+A subquery in either place is another read performed by this statement, so it
+has to see the statement's CTEs and obey its rewrite policy exactly like a read
+in the source query; binding it in a fresh root made `WITH vip ... WHEN EXISTS
+(SELECT ... FROM vip)` fail with "table vip does not exist" and let a subquery
+read a base table the statement's rewrite policy had remapped. The declaration
+context carries that metadata (CTEs, rewrite/remap option, snapshot, view
+state) while detaching from the source block's own bindings, so the source
+columns stay reachable only through the alias the binder adds explicitly. The
+write pipeline keeps its own plain context: a target is written, not read, so
+it must not inherit a read rewrite.
+
 Subqueries are flattened with `flattenSubqueries` before the FILTER/PROJECT
 node is added, but only where flattening cannot change what runs. Flattening
 turns a subquery into a join below the node that references it, which

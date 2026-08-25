@@ -201,7 +201,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// re-binding the predicate, so one WHEN occurrence is one route decision for
 	// a row — the property that makes INSERT FIRST a partition and makes all
 	// INTO clauses of one WHEN agree, even for volatile predicates like rand().
-	selectors, err := builder.appendMultiInsertSelectors(bindCtx, srcID, srcCols, stmt.Whens, stmt.First)
+	selectors, err := builder.appendMultiInsertSelectors(bindCtx, srcCtx, srcID, srcCols, stmt.Whens, stmt.First)
 	if err != nil {
 		return err
 	}
@@ -235,7 +235,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 
 	// 3. One write pipeline per table, every branch reading the sink.
 	for _, group := range groups {
-		if err = builder.bindMultiInsertGroup(bindCtx, group, sourceStep, srcCols, selectors, len(stmt.Whens)); err != nil {
+		if err = builder.bindMultiInsertGroup(bindCtx, srcCtx, group, sourceStep, srcCols, selectors, len(stmt.Whens)); err != nil {
 			return err
 		}
 	}
@@ -283,6 +283,7 @@ type multiInsertSelectors struct {
 // nowhere earlier", so the branch filters need no exclusion terms at all.
 func (builder *QueryBuilder) appendMultiInsertSelectors(
 	bindCtx *BindContext,
+	srcCtx *BindContext,
 	srcID int32,
 	srcCols []*plan.ColDef,
 	whens []*tree.MultiInsertWhen,
@@ -294,9 +295,14 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	}
 
 	// The conditions are written against the source query's output columns, so
-	// bind them in a context where that output is a table.
-	condCtx := NewBindContext(builder, nil)
-	condCtx.snapshot = bindCtx.snapshot
+	// bind them in a context where that output is a table. It has to be the
+	// source's declaration scope, not a fresh root: a subquery inside a WHEN is
+	// another read by this statement, so it must see the statement's CTEs and
+	// be subject to its rewrite policy, exactly like a read in the source. A
+	// declaration context carries that metadata but detaches from srcCtx's own
+	// bindings, so the source's columns stay reachable only through the alias
+	// added below.
+	condCtx := newCTEDeclarationContext(builder, srcCtx)
 	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx); err != nil {
 		return out, err
 	}
@@ -622,6 +628,7 @@ func (builder *QueryBuilder) resolveMultiInsertTarget(target *tree.MultiInsertTa
 // registers it as a step.
 func (builder *QueryBuilder) bindMultiInsertGroup(
 	bindCtx *BindContext,
+	srcCtx *BindContext,
 	group *multiInsertGroup,
 	sourceStep int32,
 	srcCols []*plan.ColDef,
@@ -651,7 +658,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		// Single clause: bind its row image in clause column order and hand it
 		// to the regular insert tail, which casts and fills defaults.
 		branch := group.branches[0]
-		lastNodeID, err = builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, nil, tableDef, selectors, whenCount)
+		lastNodeID, err = builder.bindMultiInsertBranchSource(bindCtx, srcCtx, branch, sourceStep, srcCols, nil, tableDef, selectors, whenCount)
 		if err != nil {
 			return err
 		}
@@ -668,7 +675,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		insertColumns := multiInsertUnionColumns(group.branches)
 		branchIDs := make([]int32, 0, len(group.branches))
 		for _, branch := range group.branches {
-			branchID, err := builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, insertColumns, tableDef, selectors, whenCount)
+			branchID, err := builder.bindMultiInsertBranchSource(bindCtx, srcCtx, branch, sourceStep, srcCols, insertColumns, tableDef, selectors, whenCount)
 			if err != nil {
 				return err
 			}
@@ -933,6 +940,7 @@ func multiInsertUnionColumns(branches []*multiInsertBranch) []string {
 // column type, or the column's default when the clause does not set it.
 func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	bindCtx *BindContext,
+	srcCtx *BindContext,
 	branch *multiInsertBranch,
 	sourceStep int32,
 	srcCols []*plan.ColDef,
@@ -945,9 +953,12 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	sysCtx := builder.GetContext()
 
 	// Every clause binds the source image under the same alias, so each gets
-	// its own bind context.
-	bCtx := NewBindContext(builder, nil)
-	bCtx.snapshot = bindCtx.snapshot
+	// its own bind context, built from the source's declaration scope: a
+	// subquery in this clause's VALUES is another read by this statement and
+	// must see the statement's CTEs and obey its rewrite policy. The
+	// declaration context detaches from srcCtx's bindings, so the source
+	// columns are reachable only through the alias added below.
+	bCtx := newCTEDeclarationContext(builder, srcCtx)
 
 	scanTag := builder.genNewBindTag()
 	scanCols := make([]*plan.ColDef, len(srcCols))

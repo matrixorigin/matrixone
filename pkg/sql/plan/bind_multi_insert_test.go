@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 func countNodeTypes(qry *plan.Query) map[plan.Node_NodeType]int {
@@ -636,4 +638,89 @@ func TestMultiInsertFirstRoutingWorkIsLinear(t *testing.T) {
 		"each added WHEN must cost a bounded number of expressions (%d -> %d)", smallExprs, largeExprs)
 	require.LessOrEqual(t, (largeProjects-smallProjects)/(large-small), 3,
 		"each added WHEN must cost a bounded number of projections (%d -> %d)", smallProjects, largeProjects)
+}
+
+// runOneStmtWithRewriteHints parses like runOneStmt but also applies the
+// statement's `/*+ {"rewrites": ...} */` hint, which is what puts a
+// RewriteOption on the statement in production.
+func runOneStmtWithRewriteHints(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
+	t.Helper()
+	ctx := opt.CurrentContext()
+	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), stmts, sql))
+	defer stmts[0].Free()
+	return BuildPlan(ctx, stmts[0], false)
+}
+
+// A subquery in a WHEN condition or in a clause's VALUES is another read
+// performed by this statement, so it must obey the statement's rewrite policy.
+// Binding those subqueries in a fresh root context instead of the source's
+// declaration scope let them read the base table directly, which is a
+// read-policy bypass.
+//
+// The rewrite maps `dept` to a relation with a single column `x`, so a
+// subquery that still resolves `deptno` proves it read the unrewritten table.
+// The source reads `nation`, which the rewrite does not touch, so only the
+// branch subquery is under test.
+func TestMultiInsertBranchSubqueriesObeyRewritePolicy(t *testing.T) {
+	const hint = `/*+ {"rewrites": {"tpch.dept": "select 1 as x"}} */ `
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			"WHEN subquery",
+			"insert all when exists (select 1 from dept where deptno = 1)" +
+				" then into t2 (a, b) values (1, 2) select n_nationkey from nation",
+		},
+		{
+			"unconditional VALUES subquery",
+			"insert all into t2 (a, b) values ((select max(deptno) from dept), 2)" +
+				" select n_nationkey from nation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// the control: without the rewrite the statement plans
+			_, err := runOneStmtWithRewriteHints(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			// under the rewrite the subquery reads the rewritten relation,
+			// which has no deptno, so planning must fail
+			_, err = runOneStmtWithRewriteHints(NewMockOptimizer(true), t, hint+tc.sql)
+			require.Error(t, err, "the branch subquery bypassed the rewrite policy")
+			require.Contains(t, err.Error(), "deptno")
+		})
+	}
+}
+
+// A statement-level CTE must be visible to a subquery in a WHEN condition and
+// in a clause's VALUES: the WITH belongs to the statement, and those subqueries
+// are reads by that statement. Binding them in a fresh root context made the
+// CTE name unresolvable.
+func TestMultiInsertBranchSubqueriesSeeStatementCTEs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			"WHEN subquery",
+			"with vip as (select n_nationkey as k from nation where n_nationkey < 5)" +
+				" insert all when exists (select 1 from vip where k = n_nationkey)" +
+				" then into t2 (a, b) values (n_nationkey, 2) select n_nationkey from nation",
+		},
+		{
+			"unconditional VALUES subquery",
+			"with vip as (select n_nationkey as k from nation where n_nationkey < 5)" +
+				" insert all into t2 (a, b) values ((select max(k) from vip), 2)" +
+				" select n_nationkey from nation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			testDeepCopy(logicPlan)
+		})
+	}
 }
