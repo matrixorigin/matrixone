@@ -701,9 +701,6 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 		return context.Cause(ctx)
 	default:
 	}
-	if node.data == nil {
-		return nil
-	}
 	initialBatch := *bat
 	var appendCheckpoint *tombstoneResultAppendCheckpoint
 	defer func() {
@@ -721,6 +718,9 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	}()
 	node.object.RLock()
 	defer node.object.RUnlock()
+	if node.data == nil {
+		return nil
+	}
 	minRow, maxRow, commitTSVec, abort, _ :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
 	if commitTSVec == nil {
@@ -820,11 +820,11 @@ func (node *memoryNode) FillBlockTombstones(
 	if deleteEndOffset < deleteStartOffset {
 		return moerr.NewInvalidInputNoCtx("tombstone fill has a reversed output row range")
 	}
+	node.object.RLock()
+	defer node.object.RUnlock()
 	if node.data == nil {
 		return nil
 	}
-	node.object.RLock()
-	defer node.object.RUnlock()
 	maxRow, visible, holes, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
 	if !visible || err != nil {
 		// blk.RUnlock()
