@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -488,23 +489,43 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 // and cgo/cuvs/device_memory.hpp claims the bytes across the window where an
 // admitted load is not resident yet.
 func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
-	// No aggregate pre-flight here. It used to sum metadata FileSize -- the whole
-	// tar -- and admit that against the device budget, but FileSize also counts
-	// ids.bin, the INCLUDE blobs, the quantizer and the bitset, none of which reach
-	// the GPU. CREATE admits the device-resident components only, so the two gates
-	// measured different quantities and an artifact could pass CREATE and then be
-	// refused at every load: with a 75-byte bound, 70 device bytes plus 10
-	// host-only bytes passes 70 <= 75 and fails 80 > 75, permanently, and INCLUDE
-	// columns make that host-only share arbitrarily large.
+	// Fetch every sub-index first, then admit the aggregate, then load. Splitting
+	// the download from the load is what lets the gate see the SAME quantity CREATE
+	// checked: the device-resident components of each packed artifact, measured
+	// with cuvs.MeasureTar and reduced per physical device. Admitting metadata
+	// FileSize instead would charge the whole tar -- ids.bin, the INCLUDE blobs,
+	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
+	// then commit artifacts refused here at every free level.
 	//
-	// Nothing compatible is available here: the models come from metadata and the
-	// tars are not fetched until LoadIndex below, which is the whole point of a
-	// pre-flight. Rather than gate on a quantity CREATE cannot honour, the
-	// aggregate is left to the per-deserialize claims in C++ (ivf_pq.hpp /
-	// cagra.hpp, "*::load"), which size themselves from the real component and
-	// accumulate on the same ledger. The cost is that an over-large set fails on a
-	// later sub-index rather than before the first -- recoverable, and preferable
-	// to committing artifacts no query can ever load.
+	// Checked before the first deserialize on purpose: per-sub-index admission
+	// alone admits the early ones, spends the budget, and fails on a later one
+	// having already paid for most of the memory.
+	comps := make([]map[string]int64, 0, len(indexes))
+	for _, idx := range indexes {
+		if len(idx.Path) == 0 {
+			fetched, ferr := idx.FetchArtifact(sqlproc, s.Tblcfg)
+			if ferr != nil {
+				return nil, ferr
+			}
+			idx.Path = fetched
+		}
+		sizes, merr := cuvs.MeasureTar(idx.Path)
+		if merr != nil {
+			return nil, merr
+		}
+		device := make(map[string]int64, len(sizes.Files))
+		for name, sz := range sizes.Files {
+			if !cuvs.IsHostResidentComponent(name) {
+				device[name] = sz
+			}
+		}
+		comps = append(comps, device)
+	}
+	if err := memory.DeviceAggregateFitsFree(
+		s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)), cuvs.RowsFittingFreeMem,
+	); err != nil {
+		return nil, err
+	}
 
 	for _, idx := range indexes {
 		idx.Devices = s.Devices

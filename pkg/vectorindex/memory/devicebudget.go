@@ -151,6 +151,55 @@ func PeakDeviceBytes(devices []int, perSubIndex []map[string]int64) int64 {
 	return peak
 }
 
+// DeviceAggregateFitsFree refuses a set of sub-indexes BEFORE any of them is
+// loaded, when the busiest device could not hold them all right now.
+//
+// The situational twin of DeviceAggregateFitsHardware, and deliberately fed the
+// SAME quantity: per-device device-resident bytes, reduced by PeakDeviceBytes from
+// the packed components the caller measured with cuvs.MeasureTar. The two gates
+// differ only in the bound -- total VRAM there, free VRAM here -- so an artifact
+// CREATE accepted can be refused here transiently, but never permanently.
+//
+// That symmetry is the point. Sizing this from metadata FileSize instead would
+// admit against the whole tar, including ids.bin, the INCLUDE blobs, the quantizer
+// and the bitset, none of which reach the GPU -- and CREATE, which charges only
+// the device-resident share, would then commit artifacts this gate refuses at
+// every free level.
+//
+// Checked before the first deserialize because per-sub-index admission alone
+// cannot express an aggregate: each fits, so the loader admits the early ones,
+// spends the budget, and is refused on a later one having already paid for most
+// of the memory, reporting a single sub-index rather than the total.
+func DeviceAggregateFitsFree(
+	devices []int, perDeviceBytes uint64, rowsFitting DeviceRowsFittingFunc,
+) error {
+	if perDeviceBytes == 0 || len(devices) == 0 || rowsFitting == nil {
+		return nil
+	}
+	for _, dev := range DeviceDistinct(devices) {
+		// perRow = 1 makes rows_fitting_gpu_mem return the byte budget itself,
+		// computed by the same C++ every other admission on this path uses, so the
+		// budget fraction is not duplicated here. Do NOT ask whether N rows of N
+		// bytes fit and test for zero: that function clamps its result to a minimum
+		// of 1, so any predicate built on it is silently always-true.
+		budget, free, err := rowsFitting(dev, 1)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"vector index load: cannot measure device %d to admit %d bytes: %v",
+				dev, perDeviceBytes, err)
+		}
+		if budget < 0 || perDeviceBytes > uint64(budget) {
+			return moerr.NewInternalErrorNoCtxf(
+				"vector index load: this index needs %d MB resident on device %d to be searched, "+
+					"but only %d MB may be claimed there right now (%d MB free), because a query "+
+					"reads every sub-index at once. Evict cached indexes, or retry when the device "+
+					"is quieter",
+				perDeviceBytes>>20, dev, uint64(budget)>>20, free>>20)
+		}
+	}
+	return nil
+}
+
 // DeviceMaxAdmissibleFunc reports the most VRAM any admission could ever grant on
 // a device -- the governor's budget fraction of TOTAL memory, not of free.
 // Indirected like DeviceRowsFittingFunc so the rule is testable without a GPU.

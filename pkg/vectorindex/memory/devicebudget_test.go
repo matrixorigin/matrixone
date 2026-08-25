@@ -253,3 +253,60 @@ func TestPeakDeviceBytes(t *testing.T) {
 		require.Zero(t, PeakDeviceBytes([]int{0}, []map[string]int64{{"index.bin": 0}}))
 	})
 }
+
+// DeviceAggregateFitsFree is the situational twin of DeviceAggregateFitsHardware
+// and must be fed the SAME quantity -- per-device device-resident bytes -- so the
+// two gates can only disagree about timing, never about what an index costs. If
+// this were sized from the whole tar again, CREATE would commit artifacts refused
+// here at every free level.
+func TestDeviceAggregateFitsFree(t *testing.T) {
+	// 1000 free -> 600 admissible at the 60% device fraction the fake mirrors,
+	// clamp included: a fake without that clamp models a contract the real
+	// rows_fitting_gpu_mem does not have, which is how an always-true predicate
+	// shipped here once before.
+	fn := fakeRowsFitting(1000)
+
+	t.Run("under the budget is admitted, over is refused", func(t *testing.T) {
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, fn))
+		require.Error(t, DeviceAggregateFitsFree([]int{0}, 601, fn))
+	})
+
+	t.Run("the refusal is situational, naming free rather than the card", func(t *testing.T) {
+		err := DeviceAggregateFitsFree([]int{0}, 900, fn)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "right now")
+		require.Contains(t, err.Error(), "device 0")
+	})
+
+	t.Run("the busiest device decides", func(t *testing.T) {
+		perDev := func(free map[int]uint64) DeviceRowsFittingFunc {
+			return func(dev int, perRow uint64) (int64, uint64, error) {
+				f, ok := free[dev]
+				if !ok {
+					return 0, 0, errors.New("no such device")
+				}
+				rows := int64(f / 10 * 6 / perRow)
+				if rows < 1 {
+					rows = 1
+				}
+				return rows, f, nil
+			}
+		}
+		err := DeviceAggregateFitsFree([]int{0, 1}, 700, perDev(map[int]uint64{0: 100000, 1: 1000}))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "device 1")
+	})
+
+	t.Run("an unmeasurable device refuses rather than guesses", func(t *testing.T) {
+		boom := func(int, uint64) (int64, uint64, error) { return 0, 0, errors.New("unreadable") }
+		err := DeviceAggregateFitsFree([]int{0}, 10, boom)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot measure device")
+	})
+
+	t.Run("degenerate inputs are no-ops", func(t *testing.T) {
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 0, fn))
+		require.NoError(t, DeviceAggregateFitsFree(nil, 600, fn))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, nil))
+	})
+}

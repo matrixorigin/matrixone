@@ -465,6 +465,100 @@ func (idx *IvfpqModel[B, Q]) loadChunk(ctx context.Context,
 	return false, nil
 }
 
+// FetchArtifact streams this sub-index's packed tar to local disk and returns its
+// path, without touching the GPU.
+//
+// Split out of LoadIndex so the search path can fetch every sub-index, measure the
+// aggregate with cuvs.MeasureTar, and refuse before any device allocation. That is
+// what keeps CREATE and the load gate on the same quantity -- both admit the
+// device-resident components of the packed artifact, differing only in whether
+// they compare against total VRAM (permanent) or free VRAM (situational).
+//
+// The caller owns the returned file. On failure the partial file is removed and
+// the path is empty.
+func (idx *IvfpqModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (path string, err error) {
+	var (
+		fp         *os.File
+		streamChan = make(chan executor.Result, 2)
+		errorChan  = make(chan error, 2)
+		fname      string
+		wg         sync.WaitGroup
+	)
+
+	fp, err = os.CreateTemp("", "ivfpq")
+	if err != nil {
+		return "", err
+	}
+	fname = fp.Name()
+
+	// On failure the partial file is this method's to remove; on success the
+	// caller owns it. LoadIndex removes it in view mode when LoadIndex fetched it;
+	// a pre-fetching caller removes it itself.
+	defer func() {
+		if fp != nil {
+			fp.Close()
+			fp = nil
+		}
+		if err != nil && len(fname) > 0 {
+			os.Remove(fname)
+			fname = ""
+		}
+	}()
+
+	if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
+		return "", err
+	}
+
+	sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
+
+	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
+	defer cancel(nil)
+
+	wg.Add(1)
+	go func() {
+		defer func() {
+			close(streamChan)
+			wg.Done()
+		}()
+		_, err2 := runSql_streaming(ctx, sqlproc, sql, streamChan, errorChan)
+		if err2 != nil {
+			errorChan <- err2
+		}
+	}()
+
+	sql_closed := false
+	for !sql_closed {
+		sql_closed, err = idx.loadChunk(ctx, sqlproc, streamChan, errorChan, fp)
+		if err != nil {
+			cancel(err)
+			break
+		}
+	}
+
+	if !sql_closed {
+		for res := range streamChan {
+			res.Close()
+		}
+	}
+	wg.Wait()
+
+	if err == nil {
+		select {
+		case err = <-errorChan:
+		default:
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+
+	path = fp.Name()
+	fp.Close()
+	fp = nil
+	return path, nil
+}
+
 // LoadIndex pulls the model tar (tag=0) plus the CDC event log (tag=1) from
 // the storage table in parallel, then unpacks the tar onto the GPU, replays
 // the event log to derive (deleted, overflow), and applies the deletes via
@@ -475,14 +569,6 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	tblcfg vectorindex.IndexTableConfig,
 	nthread int64,
 	view bool) (err error) {
-
-	var (
-		fp         *os.File
-		streamChan = make(chan executor.Result, 2)
-		errorChan  = make(chan error, 2)
-		fname      string
-		wg         sync.WaitGroup
-	)
 
 	if idx.Index != nil {
 		return nil
@@ -514,75 +600,19 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	}
 
 	if len(idx.Path) == 0 {
-		fp, err = os.CreateTemp("", "ivfpq")
-		if err != nil {
+		var fetched string
+		if fetched, err = idx.FetchArtifact(sqlproc, tblcfg); err != nil {
 			return err
 		}
-		fname = fp.Name()
-
+		idx.Path = fetched
+		// This call fetched it, so this call owns it: in view mode the tar is
+		// scratch and goes once Unpack has read it. A Path supplied by a
+		// pre-fetching caller is left for that caller to clean up.
 		defer func() {
-			if fp != nil {
-				fp.Close()
-				fp = nil
-			}
-			if view {
-				if len(fname) > 0 {
-					os.Remove(fname)
-				}
+			if view && len(fetched) > 0 {
+				os.Remove(fetched)
 			}
 		}()
-
-		if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
-			return err
-		}
-
-		sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
-			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
-
-		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-		defer cancel(nil)
-
-		wg.Add(1)
-		go func() {
-			defer func() {
-				close(streamChan)
-				wg.Done()
-			}()
-			_, err2 := runSql_streaming(ctx, sqlproc, sql, streamChan, errorChan)
-			if err2 != nil {
-				errorChan <- err2
-			}
-		}()
-
-		sql_closed := false
-		for !sql_closed {
-			sql_closed, err = idx.loadChunk(ctx, sqlproc, streamChan, errorChan, fp)
-			if err != nil {
-				cancel(err)
-				break
-			}
-		}
-
-		if !sql_closed {
-			for res := range streamChan {
-				res.Close()
-			}
-		}
-		wg.Wait()
-
-		if err == nil {
-			select {
-			case err = <-errorChan:
-			default:
-			}
-		}
-		if err != nil {
-			return
-		}
-
-		idx.Path = fp.Name()
-		fp.Close()
-		fp = nil
 	}
 
 	// Replay happens after Unpack — see below.
