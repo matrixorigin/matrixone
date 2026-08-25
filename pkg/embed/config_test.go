@@ -17,12 +17,14 @@ package embed
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -107,6 +109,57 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
+}
+
+func TestFileServiceFactoryRollsBackAfterLaterFailure(t *testing.T) {
+	ctx := context.Background()
+	capacity := toml.ByteSize(1 << 20)
+	local := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: t.TempDir(),
+		Cache: fileservice.CacheConfig{
+			MemoryCapacity: &capacity,
+		},
+	}
+
+	c := &ServiceConfig{
+		FileServices: []fileservice.Config{
+			local,
+			{Name: "broken", Backend: "NOT-A-FILESERVICE"},
+		},
+	}
+	nodeUUID := "rollback-" + strings.ReplaceAll(t.Name(), "/", "-")
+	_, err := c.createFileService(ctx, metadata.ServiceType_CN, nodeUUID)
+	require.Error(t, err)
+	_, ok := perfcounter.Named.Load(
+		perfcounter.NameForFileService(metadata.ServiceType_CN.String(), nodeUUID, defines.LocalFileServiceName),
+	)
+	require.False(t, ok, "failed construction must remove the first service counter")
+
+	c.FileServices = append(c.FileServices[:1],
+		fileservice.Config{
+			Name:    defines.SharedFileServiceName,
+			Backend: "DISK",
+			DataDir: t.TempDir(),
+			Cache: fileservice.CacheConfig{
+				MemoryCapacity: &capacity,
+			},
+		},
+		fileservice.Config{Name: defines.ETLFileServiceName, Backend: "DISK-ETL"},
+		fileservice.Config{Name: defines.TmpFileServiceName, Backend: "DISK-TMP"},
+	)
+
+	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, nodeUUID)
+	require.NoError(t, err)
+	fs.Close(ctx)
+	for _, name := range []string{
+		perfcounter.NameForFileService(metadata.ServiceType_CN.String(), nodeUUID, defines.LocalFileServiceName),
+		perfcounter.NameForFileService(metadata.ServiceType_CN.String(), nodeUUID, defines.SharedFileServiceName),
+		perfcounter.NameForNode(metadata.ServiceType_CN.String(), nodeUUID),
+	} {
+		perfcounter.Named.Delete(name)
+	}
 }
 
 func TestFileServiceFactoryScopesMemoryCacheMetrics(t *testing.T) {

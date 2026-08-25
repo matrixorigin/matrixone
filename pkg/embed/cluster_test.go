@@ -17,9 +17,11 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +33,113 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type closeTrackingService struct {
+	closeCount atomic.Int32
+	closeErr   error
+}
+
+func (s *closeTrackingService) Start() error { return nil }
+
+func (s *closeTrackingService) Close() error {
+	s.closeCount.Add(1)
+	return s.closeErr
+}
+
+type closeTrackingFileService struct {
+	closeCount atomic.Int32
+}
+
+func (s *closeTrackingFileService) Close(context.Context) {
+	s.closeCount.Add(1)
+}
+
+func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
+	svc := &closeTrackingService{}
+	op := &operator{}
+
+	require.NoError(t, op.startConstructedServiceLocked(svc))
+	require.Same(t, svc, op.reset.svc)
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.False(t, op.needsCleanup())
+	require.NoError(t, op.Close())
+}
+
+func TestClusterStartRollbackClosesPartiallyConstructedServices(t *testing.T) {
+	startErr := errors.New("service startup failed")
+	logService := &closeTrackingService{}
+	logFS := &closeTrackingFileService{}
+	tnFS := &closeTrackingFileService{}
+
+	logOp := &operator{serviceType: metadata.ServiceType_LOG}
+	tnOp := &operator{serviceType: metadata.ServiceType_TN}
+	cnOp := &operator{serviceType: metadata.ServiceType_CN}
+	c := &cluster{
+		services: []*operator{logOp, tnOp, cnOp},
+		startFn: func(op *operator) error {
+			switch op.serviceType {
+			case metadata.ServiceType_LOG:
+				op.state = started
+				op.reset.svc = logService
+				op.reset.fs = logFS
+				return nil
+			case metadata.ServiceType_TN:
+				op.reset.fs = tnFS
+				return startErr
+			default:
+				t.Fatalf("service %s must not start after rollback", op.serviceType)
+				return nil
+			}
+		},
+	}
+
+	err := c.Start()
+	require.ErrorIs(t, err, startErr)
+	require.Equal(t, int32(1), logService.closeCount.Load())
+	require.Equal(t, int32(1), logFS.closeCount.Load())
+	require.Equal(t, int32(1), tnFS.closeCount.Load())
+	require.Equal(t, stopped, logOp.state)
+	require.Equal(t, stopped, tnOp.state)
+	require.Equal(t, stopped, cnOp.state)
+
+	// Startup rollback is idempotent; a deferred Close must not double-close.
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), logService.closeCount.Load())
+	require.Equal(t, int32(1), logFS.closeCount.Load())
+	require.Equal(t, int32(1), tnFS.closeCount.Load())
+}
+
+func TestRollbackNewServicesRetriesCleanupBeforeRestart(t *testing.T) {
+	closeErr := errors.New("close failed")
+	newService := &closeTrackingService{closeErr: closeErr}
+	existingService := &closeTrackingService{}
+	existingOp := &operator{state: started}
+	existingOp.reset.svc = existingService
+	newOp := &operator{state: started, serviceType: metadata.ServiceType_CN}
+	newOp.reset.svc = newService
+
+	c := &cluster{
+		state:    started,
+		files:    []string{"existing.toml", "new.toml"},
+		services: []*operator{existingOp, newOp},
+	}
+	c.options.cn = 2
+
+	err := c.rollbackNewServicesLocked(1, 1)
+	require.ErrorIs(t, err, closeErr)
+	require.Len(t, c.pendingCleanup, 1)
+	require.Len(t, c.services, 1)
+	require.Equal(t, 1, c.options.cn)
+
+	newService.closeErr = nil
+	require.NoError(t, c.StartNewCNService(0))
+	require.Empty(t, c.pendingCleanup)
+	require.Equal(t, int32(2), newService.closeCount.Load())
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), existingService.closeCount.Load())
+}
 
 func TestBasicCluster(t *testing.T) {
 	c, err := NewCluster(

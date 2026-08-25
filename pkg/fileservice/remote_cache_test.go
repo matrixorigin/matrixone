@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockKeyRouter[K comparable] struct {
@@ -39,6 +40,221 @@ type mockKeyRouter[K comparable] struct {
 
 func (r *mockKeyRouter[K]) Target(_ fscache.CacheKey) string { return r.target }
 func (r *mockKeyRouter[K]) AddItem(_ gossip.CommonItem)      {}
+
+type remoteCacheTestRouter func(fscache.CacheKey) string
+
+func (r remoteCacheTestRouter) Target(key fscache.CacheKey) string { return r(key) }
+func (r remoteCacheTestRouter) AddItem(gossip.CommonItem)          {}
+
+type remoteCacheTestQueryClient struct {
+	responses    map[string]*query.Response
+	releaseCount int
+}
+
+var _ client.QueryClient = new(remoteCacheTestQueryClient)
+
+func (r *remoteCacheTestQueryClient) ServiceID() string { return "remote-cache-test" }
+
+func (r *remoteCacheTestQueryClient) SendMessage(
+	_ context.Context,
+	target string,
+	_ *query.Request,
+) (*query.Response, error) {
+	return r.responses[target], nil
+}
+
+func (r *remoteCacheTestQueryClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+
+func (r *remoteCacheTestQueryClient) Release(*query.Response) {
+	r.releaseCount++
+}
+
+func (r *remoteCacheTestQueryClient) Close() error { return nil }
+
+func TestHandleRemoteReadRejectsInvalidRequests(t *testing.T) {
+	fs, err := NewMemoryFS("test", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	valid := func(path string) *query.RequestCacheKey {
+		return &query.RequestCacheKey{
+			CacheKey: &query.CacheKey{Path: path, Sz: 1},
+		}
+	}
+
+	tests := []struct {
+		name string
+		req  *query.Request
+	}{
+		{name: "nil request"},
+		{name: "missing request payload", req: &query.Request{}},
+		{name: "empty key list", req: &query.Request{
+			GetCacheDataRequest: &query.GetCacheDataRequest{},
+		}},
+		{name: "missing first cache key", req: &query.Request{
+			GetCacheDataRequest: &query.GetCacheDataRequest{
+				RequestCacheKey: []*query.RequestCacheKey{{}},
+			},
+		}},
+		{name: "missing later cache key", req: &query.Request{
+			GetCacheDataRequest: &query.GetCacheDataRequest{
+				RequestCacheKey: []*query.RequestCacheKey{valid("foo"), {}},
+			},
+		}},
+		{name: "nil repeated key", req: &query.Request{
+			GetCacheDataRequest: &query.GetCacheDataRequest{
+				RequestCacheKey: []*query.RequestCacheKey{nil},
+			},
+		}},
+		{name: "mixed paths", req: &query.Request{
+			GetCacheDataRequest: &query.GetCacheDataRequest{
+				RequestCacheKey: []*query.RequestCacheKey{valid("foo"), valid("bar")},
+			},
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wr := &query.WrappedResponse{Response: &query.Response{}}
+			var readErr error
+			require.NotPanics(t, func() {
+				readErr = HandleRemoteRead(context.Background(), fs, test.req, wr)
+			})
+			require.Error(t, readErr)
+			require.Nil(t, wr.GetCacheDataResponse)
+			require.Nil(t, wr.ReleaseFunc)
+		})
+	}
+}
+
+func TestRemoteCacheReadIgnoresInvalidResponses(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseData []*query.ResponseCacheData
+		expectDone   bool
+		expectData   []byte
+	}{
+		{name: "nil repeated response", responseData: []*query.ResponseCacheData{nil}},
+		{name: "negative index", responseData: []*query.ResponseCacheData{{Index: -1, Hit: true, Data: []byte{1, 2}}}},
+		{name: "out of bounds index", responseData: []*query.ResponseCacheData{{Index: 1, Hit: true, Data: []byte{1, 2}}}},
+		{name: "wrong data length", responseData: []*query.ResponseCacheData{{Index: 0, Hit: true, Data: []byte{1}}}},
+		{
+			name: "invalid hit does not consume index",
+			responseData: []*query.ResponseCacheData{
+				{Index: 0, Hit: true, Data: []byte{1}},
+				{Index: 0, Hit: true, Data: []byte{1, 2}},
+			},
+			expectDone: true,
+			expectData: []byte{1, 2},
+		},
+		{
+			name: "duplicate valid hit keeps first",
+			responseData: []*query.ResponseCacheData{
+				{Index: 0, Hit: true, Data: []byte{1, 2}},
+				{Index: 0, Hit: true, Data: []byte{3, 4}},
+			},
+			expectDone: true,
+			expectData: []byte{1, 2},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			qt := &remoteCacheTestQueryClient{
+				responses: map[string]*query.Response{
+					"target": {
+						GetCacheDataResponse: &query.GetCacheDataResponse{
+							ResponseCacheData: test.responseData,
+						},
+					},
+				},
+			}
+			rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] {
+				return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+			})
+			vector := &IOVector{
+				FilePath: "foo",
+				Entries:  []IOEntry{{Offset: 0, Size: 2}},
+			}
+
+			require.NotPanics(t, func() {
+				require.NoError(t, rc.Read(context.Background(), vector))
+			})
+			require.Equal(t, test.expectDone, vector.Entries[0].done)
+			if test.expectDone {
+				require.Equal(t, test.expectData, vector.Entries[0].CachedData.Bytes())
+				require.Same(t, rc, vector.Entries[0].fromCache)
+				vector.Release()
+			} else {
+				require.Nil(t, vector.Entries[0].CachedData)
+				require.Nil(t, vector.Entries[0].fromCache)
+			}
+			require.Equal(t, 1, qt.releaseCount)
+		})
+	}
+}
+
+func TestRemoteCacheReadIgnoresNilResponse(t *testing.T) {
+	qt := &remoteCacheTestQueryClient{
+		responses: map[string]*query.Response{"target": nil},
+	}
+	rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] {
+		return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+	})
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 2}},
+	}
+
+	require.NotPanics(t, func() {
+		require.NoError(t, rc.Read(context.Background(), vector))
+	})
+	require.False(t, vector.Entries[0].done)
+	require.Nil(t, vector.Entries[0].CachedData)
+	require.Nil(t, vector.Entries[0].fromCache)
+	require.Zero(t, qt.releaseCount)
+}
+
+func TestRemoteCacheReadRejectsResponseFromDifferentTarget(t *testing.T) {
+	qt := &remoteCacheTestQueryClient{
+		responses: map[string]*query.Response{
+			"target-a": {
+				GetCacheDataResponse: &query.GetCacheDataResponse{
+					ResponseCacheData: []*query.ResponseCacheData{{Index: 1, Hit: true, Data: []byte{9}}},
+				},
+			},
+			"target-b": {
+				GetCacheDataResponse: &query.GetCacheDataResponse{
+					ResponseCacheData: []*query.ResponseCacheData{{Index: 0, Hit: true, Data: []byte{8}}},
+				},
+			},
+		},
+	}
+	rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] {
+		return remoteCacheTestRouter(func(key fscache.CacheKey) string {
+			if key.Offset == 0 {
+				return "target-a"
+			}
+			return "target-b"
+		})
+	})
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{Offset: 0, Size: 1},
+			{Offset: 1, Size: 1},
+		},
+	}
+
+	require.NoError(t, rc.Read(context.Background(), vector))
+	for i := range vector.Entries {
+		require.False(t, vector.Entries[i].done)
+		require.Nil(t, vector.Entries[i].CachedData)
+		require.Nil(t, vector.Entries[i].fromCache)
+	}
+	require.Equal(t, 2, qt.releaseCount)
+}
 
 type cacheFs struct {
 	qs queryservice.QueryService
