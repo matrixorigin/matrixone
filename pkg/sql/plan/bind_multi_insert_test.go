@@ -724,3 +724,62 @@ func TestMultiInsertBranchSubqueriesSeeStatementCTEs(t *testing.T) {
 		})
 	}
 }
+
+// A statement-level WITH and a WITH on the trailing source SELECT are two
+// different lexical scopes, and both can be present. WHEN conditions and
+// clause VALUES belong to the statement, so they see the statement's CTEs and
+// must NOT see CTEs the source query declared privately — those are declared
+// after them and are private to the source.
+//
+// Collapsing the two scopes (moving the statement WITH into the source, then
+// deriving the branch contexts from the source) both rejected valid SQL and
+// accepted invalid SQL: the outer CTE went missing whenever the source had its
+// own WITH, and the source-local CTE became visible to WHEN/VALUES.
+func TestMultiInsertBranchSubqueriesSeeStatementScopeOnly(t *testing.T) {
+	const (
+		outerWith  = "with outer_vip as (select n_nationkey as k from nation where n_nationkey < 5) "
+		sourceWith = " with source_only as (select n_nationkey as k from nation) select k from source_only"
+	)
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantErr string // "" means it must plan
+	}{
+		{
+			// the source declares its own WITH, so the statement's must not be
+			// pushed into it and lost
+			"WHEN sees the statement CTE alongside a source WITH",
+			outerWith + "insert all when exists (select 1 from outer_vip where k = 1)" +
+				" then into t2 (a, b) values (k, 2)" + sourceWith,
+			"",
+		},
+		{
+			"unconditional VALUES sees the statement CTE alongside a source WITH",
+			outerWith + "insert all into t2 (a, b) values ((select max(k) from outer_vip), 2)" +
+				sourceWith,
+			"",
+		},
+		{
+			"WHEN must not see a source-local CTE",
+			"insert all when exists (select 1 from source_only where k = 1)" +
+				" then into t2 (a, b) values (k, 2)" + sourceWith,
+			"source_only",
+		},
+		{
+			"unconditional VALUES must not see a source-local CTE",
+			"insert all into t2 (a, b) values ((select max(k) from source_only), 2)" + sourceWith,
+			"source_only",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			if tc.wantErr == "" {
+				require.NoError(t, err, "a statement CTE must be visible to the branch")
+				testDeepCopy(logicPlan)
+				return
+			}
+			require.Error(t, err, "a source-local CTE must not be visible to the branch")
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}

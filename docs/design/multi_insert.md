@@ -277,13 +277,35 @@ therefore reported as ambiguous, like in any SELECT.
 Conditions are bound with `splitAndBindCondition` (WhereBinder, cast to
 bool); `VALUES` expressions with the same binder.
 
+A statement-level `WITH` and a `WITH` on the trailing source `SELECT` are two
+different lexical scopes, and both can appear:
+
+```sql
+WITH outer AS (...)                    -- statement scope
+INSERT ALL WHEN EXISTS (... outer ...) -- sees the statement scope
+  THEN INTO t VALUES (...)
+WITH local AS (...) SELECT ...         -- source scope, private to the source
+```
+
+The statement's CTEs are installed on the statement bind context, so the source
+query (its child) and the branch contexts both see them; a source-local `WITH`
+is installed by `bindSelect` on the source context alone and stays private
+there. Pushing the statement `WITH` into the source instead drops it whenever
+the source has its own, and exposes the source's private CTEs to the
+`WHEN`/`VALUES` expressions that lexically precede them — rejecting valid SQL
+and accepting invalid SQL respectively.
+
 `WHEN` conditions and clause `VALUES` are bound in a **declaration context**
-derived from the source's (`newCTEDeclarationContext`), not in a fresh root.
+derived from the statement context (`newCTEDeclarationContext`), not in a fresh
+root and not from the source.
 A subquery in either place is another read performed by this statement, so it
 has to see the statement's CTEs and obey its rewrite policy exactly like a read
 in the source query; binding it in a fresh root made `WITH vip ... WHEN EXISTS
 (SELECT ... FROM vip)` fail with "table vip does not exist" and let a subquery
-read a base table the statement's rewrite policy had remapped. The declaration
+read a base table the statement's rewrite policy had remapped. The statement's
+rewrite policy rides on the source query (that is where `AddRewriteHints`
+attaches it) but governs every read the statement performs, so it is lifted to
+the statement context. The declaration
 context carries that metadata (CTEs, rewrite/remap option, snapshot, view
 state) while detaching from the source block's own bindings, so the source
 columns stay reachable only through the alias the binder adds explicitly. The
