@@ -5,11 +5,15 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
 create table t2(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
-insert into t1 select *,*,* from generate_series(5000000) g;
-insert into t2 select *,*,* from generate_series(4000000) g;
+insert into t1
+select result * 50 + result % 50, result * 50 + result % 50, result * 50 + result % 50
+from generate_series(100000) g;
+insert into t2
+select result * 50 + result % 50, result * 50 + result % 50, result * 50 + result % 50
+from generate_series(80000) g;
 set @@join_spill_mem = 1000;
 select mo_ctl('dn', 'flush', 'd1.t1');
-➤ mo_ctl(dn, flush, d1.t1)[12,-1,0]  𝄀
+➤ mo_ctl(dn, flush, d1.t1)[12,65535,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -20,7 +24,7 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 }
 
 select mo_ctl('dn', 'flush', 'd1.t2');
-➤ mo_ctl(dn, flush, d1.t2)[12,-1,0]  𝄀
+➤ mo_ctl(dn, flush, d1.t2)[12,65535,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -33,8 +37,26 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 select Sleep(1);
 ➤ Sleep(1)[-6,8,0]  𝄀
 0
-explain select count(*) from t1,t2 where t1.c1=t2.c1;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+set @spill_t1_stats = '{"table_cnt":5000000,"block_number":640,"accurate_object_number":40,"approx_object_number":40,"ndv_map":{"c1":5000000,"c2":5000000,"c3":5000000},"min_val_map":{"c1":1,"c2":1,"c3":1},"max_val_map":{"c1":5000000,"c2":5000000,"c3":5000000},"shuffle_range_map":{"c1":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c2":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c3":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]}}}';
+set @spill_t2_stats = '{"table_cnt":4000000,"block_number":520,"accurate_object_number":33,"approx_object_number":33,"ndv_map":{"c1":4000000,"c2":4000000,"c3":4000000},"min_val_map":{"c1":1,"c2":1,"c3":1},"max_val_map":{"c1":4000000,"c2":4000000,"c3":4000000},"shuffle_range_map":{"c1":{"overlap":0.1,"uniform":1,"result":[1,1000000,2000000,3000000,4000000]},"c2":{"overlap":0.1,"uniform":1,"result":[1,1000000,2000000,3000000,4000000]},"c3":{"overlap":0.1,"uniform":1,"result":[1,1000000,2000000,3000000,4000000]}}}';
+select table_cnt from table_stats(
+'d1.t1',
+'patch',
+@spill_t1_stats
+) g;
+➤ table_cnt[8,53,31]  𝄀
+5000000.0
+select table_cnt from table_stats(
+'d1.t2',
+'patch',
+@spill_t2_stats
+) g;
+➤ table_cnt[8,53,31]  𝄀
+4000000.0
+explain (check '["Join Type: INNER", "shuffle: range"]')
+select count(*) from t1,t2 where t1.c1=t2.c1;
+-- @regex("(?i)ap query plan on multicn", true)
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -45,9 +67,28 @@ Project  𝄀
               ->  Table Scan on d1.t2
 select count(*) from t1,t2 where t1.c1=t2.c1;
 ➤ count(*)[-5,64,0]  𝄀
-4000000
-explain select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+80000
+explain (analyze true, check '["Join Type: INNER", "shuffle: range"]')
+select count(*) from t1,t2 where t1.c1=t2.c1;
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+➤ ap query plan on multicn(16 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=13ms group_time=[total=3ms,min=0ms,max=1ms,dop=32] mergegroup_time=[0ms] waitTime=79ms inputRows=80000 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.75 MiB (min=128.00 KiB, max=128.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=641ms probe_time=[total=189ms,min=0ms,max=11ms,dop=32] build_time=[total=88ms,min=0ms,max=4ms,dop=32] waitTime=852ms inputRows=180000 outputRows=80000 (min=0, max=3126) InputSize=703.12 KiB OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.07 MiB (min=0 bytes, max=438.50 KiB) SpillRows=161248 SpillSize=802.12 KiB (min=0 bytes, max=15.52 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)  𝄀
+              ->  Table Scan on d1.t1  𝄀
+                    Analyze: timeConsumed=8ms scan_time=[total=0ms,min=0ms,max=0ms,dop=32] waitTime=29ms inputBlocks=0 inputRows=100000 outputRows=100000 (min=1696, max=8192) InputSize=390.62 KiB OutputSize=390.62 KiB ReadSize=392.66 KiB|0 bytes|0 bytes MemorySize=781.25 KiB (min=13.25 KiB, max=64.00 KiB)  𝄀
+              ->  Table Scan on d1.t2  𝄀
+                    Analyze: timeConsumed=0ms scan_time=[total=0ms,min=0ms,max=0ms,dop=32] waitTime=0ms inputBlocks=0 inputRows=80000 outputRows=80000 (min=6272, max=8192) InputSize=312.50 KiB OutputSize=312.50 KiB ReadSize=314.11 KiB|0 bytes|0 bytes MemorySize=625.00 KiB (min=49.00 KiB, max=64.00 KiB)
+explain (check '["Group Key: t1.c1 shuffle: REUSE", "Join Type: INNER", "shuffle: range"]')
+select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Group Key: t1.c1 shuffle: REUSE  𝄀
@@ -60,8 +101,9 @@ Project  𝄀
               ->  Table Scan on d1.t2
 select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
 ➤ cnt[-5,64,0]
-explain select count(*) from t1,t2 where t1.c2=t2.c2;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+explain (check '["Join Type: INNER", "shuffle: range"]')
+select count(*) from t1,t2 where t1.c2=t2.c2;
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -72,39 +114,28 @@ Project  𝄀
               ->  Table Scan on d1.t2
 select count(*) from t1,t2 where t1.c2=t2.c2;
 ➤ count(*)[-5,64,0]  𝄀
-4000000
+80000
 explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
-Project  𝄀
-  ->  Aggregate  𝄀
-        Aggregate Functions: starcount(1)  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)  𝄀
-              ->  Table Scan on d1.t1  𝄀
-              ->  Table Scan on d1.t2  𝄀
-                    Filter Cond: (t2.c3 < 500000)  𝄀
-                    Block Filter Cond: (t2.c3 < 500000)
+[unknown result because it is related to issue#19733]
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 ➤ count(*)[-5,64,0]  𝄀
-499999
+9999
 explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
-Project  𝄀
-  ->  Aggregate  𝄀
-        Aggregate Functions: starcount(1)  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)  𝄀
-              ->  Table Scan on d1.t1  𝄀
-              ->  Table Scan on d1.t2  𝄀
-                    Filter Cond: (t2.c3 < 1500000)  𝄀
-                    Block Filter Cond: (t2.c3 < 1500000)
+[unknown result because it is related to issue#19733]
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 ➤ count(*)[-5,64,0]  𝄀
-1499999
+29999
 explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+[unknown result because it is related to issue#19733]
+select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+5000000.0
+select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+4000000.0
+explain (check '["Join Type: SEMI", "shuffle: range"]')
+select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -117,9 +148,18 @@ Project  𝄀
                     Block Filter Cond: (t2.c3 > 100000)
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 ➤ count(*)[-5,64,0]  𝄀
-3900000
+78000
 explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+[unknown result because it is related to issue#19733]
+select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+5000000.0
+select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+4000000.0
+explain (check '["Join Type: ANTI", "shuffle: range"]')
+select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -132,9 +172,18 @@ Project  𝄀
                     Block Filter Cond: t2.c3 BETWEEN 100 AND 700000
 select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 ➤ count(*)[-5,64,0]  𝄀
-4300099
+86001
 explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
-➤ AP QUERY PLAN ON ONE CN(32 core)[12,0,0]  𝄀
+[unknown result because it is related to issue#19733]
+select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+5000000.0
+select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+4000000.0
+explain (check '["Join Type: ANTI", "shuffle: range"]')
+select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
+➤ AP QUERY PLAN ON ONE CN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -149,43 +198,20 @@ Project  𝄀
                     Block Filter Cond: t2.c3 BETWEEN 10000 AND 600000
 select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 ➤ count(*)[-5,64,0]  𝄀
-209998
+4198
 explain select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
-➤ AP QUERY PLAN ON ONE CN(32 core)[12,0,0]  𝄀
-Project  𝄀
-  ->  Aggregate  𝄀
-        Aggregate Functions: starcount(1)  𝄀
-        ->  Join  𝄀
-              Join Type: RIGHT SEMI  𝄀
-              Join Cond: (t2.c2 = t1.c2) shuffle: range(t2.c2)  𝄀
-              ->  Table Scan on d1.t2  𝄀
-                    Filter Cond: (t2.c3 > 100000)  𝄀
-                    Block Filter Cond: (t2.c3 > 100000)  𝄀
-              ->  Table Scan on d1.t1  𝄀
-                    Filter Cond: (t1.c1 < 300000)  𝄀
-                    Block Filter Cond: (t1.c1 < 300000)
+[unknown result because it is related to issue#19733]
 select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 ➤ count(*)[-5,64,0]  𝄀
-199999
+3999
 explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Aggregate  𝄀
-        Aggregate Functions: starcount(1)  𝄀
-        ->  Join  𝄀
-              Join Type: RIGHT  𝄀
-              Join Cond: (t2.c1 = t1.c1)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on d1.t2 [ForceOneCN]  𝄀
-                    Runtime Filter Probe: t2.c1  𝄀
-              ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
-                    Filter Cond: (t1.c3 > 5000000)  𝄀
-                    Block Filter Cond: (t1.c3 > 5000000)
+[unknown result because it is related to issue#19733]
 select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
 ➤ count(*)[-5,64,0]  𝄀
 0
-explain select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+explain (check '["Join Type: LEFT", "shuffle: range"]')
+select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -196,15 +222,15 @@ Project  𝄀
               ->  Table Scan on d1.t2
 select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 ➤ count(*)[-5,64,0]  𝄀
-5000000
+100000
 select count(*) from t2 right join t1 on t1.c1=t2.c1;
 ➤ count(*)[-5,64,0]  𝄀
-5000000
+100000
 select count(*) from t1, t2 where t1.c1=t2.c1 and t1.c2=t2.c2;
 ➤ count(*)[-5,64,0]  𝄀
-4000000
+80000
 set @@max_dop = 1;
-explain (check '["Join Type: MARK", "shuffle"]')
+explain (check '["Join Type: MARK", "shuffle: range"]')
 select sum(case when marker is true then 1 else 0 end) as true_count,
 sum(case when marker is false then 1 else 0 end) as false_count,
 sum(case when marker is null then 1 else 0 end) as null_count
@@ -212,7 +238,7 @@ from (
 select t1.c1 in (select c1 from t2) as marker
 from t1
 ) s;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(CASE WHEN (#[0,0] IS TRUE) THEN 1 ELSE 0 END), sum(CASE WHEN (#[0,0] IS FALSE) THEN 1 ELSE 0 END), sum(CASE WHEN (#[0,0] IS NULL) THEN 1 ELSE 0 END)  𝄀
@@ -229,12 +255,14 @@ select t1.c1 in (select c1 from t2) as marker
 from t1
 ) s;
 ➤ true_count[3,38,0]  ¦  false_count[3,38,0]  ¦  null_count[3,38,0]  𝄀
-4000000  ¦  1000000  ¦  0
+80000  ¦  20000  ¦  0
 set @@max_dop = 0;
 create table t3(c1 int not null, c2 int not null)cluster by c1;
-insert into t3 select *,* from generate_series(1,1000000)g;
+insert into t3
+select result * 5 + result % 5, result * 5 + result % 5
+from generate_series(1,200000)g;
 select mo_ctl('dn', 'flush', 'd1.t3');
-➤ mo_ctl(dn, flush, d1.t3)[12,-1,0]  𝄀
+➤ mo_ctl(dn, flush, d1.t3)[12,65535,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -245,35 +273,27 @@ select mo_ctl('dn', 'flush', 'd1.t3');
 }
 
 explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
-Project  𝄀
-  ->  Aggregate  𝄀
-        Aggregate Functions: starcount(1)  𝄀
-        ->  Join  𝄀
-              Join Type: SEMI  𝄀
-              Join Cond: (t3.c2 = t1.c3)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on d1.t3  𝄀
-                    Runtime Filter Probe: t3.c2  𝄀
-              ->  Join  𝄀
-                    Join Type: ANTI  𝄀
-                    Join Cond: (t1.c2 = t2.c2) shuffle: range(t1.c2)  𝄀
-                    ->  Table Scan on d1.t1  𝄀
-                          Filter Cond: (t1.c2 <> 20000)  𝄀
-                    ->  Table Scan on d1.t2  𝄀
-                          Filter Cond: (t2.c3 > 150000)  𝄀
-                          Block Filter Cond: (t2.c3 > 150000)
+[unknown result because it is related to issue#19733]
 select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 ➤ count(*)[-5,64,0]  𝄀
-149999
+599
 select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
 ➤ count(*)[-5,64,0]  𝄀
-1
+19601
 select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
 ➤ count(*)[-5,64,0]  𝄀
-499999
+1999
 explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+[unknown result because it is related to issue#19733]
+select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+5000000.0
+select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+4000000.0
+explain (check '["Join Type: INNER", "shuffle: REUSE", "Group Key: t1.c1 shuffle: range"]')
+select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -288,19 +308,23 @@ Project  𝄀
                     Block Filter Cond: (t2.c2 < 1000000)
 select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
 ➤ count(*)[-5,64,0]  𝄀
-999999
+19999
 delete from t1 where c3%5=1;
 insert into t1 values(-1,-2,-3);
 insert into t1 values(10,11,12);
 select count(*) from t1 where c3!=0;
 ➤ count(*)[-5,64,0]  𝄀
-4000002
+80002
 drop table t3;
 create table t4(c1 int not null, c2  int unsigned) cluster by c1;
-insert into t4 select *,* from generate_series(1000000) g;
-insert into t4 select result+10000000,result+10000000 from generate_series(1000000) g;
+insert into t4
+select result * 10 + result % 10, result * 10 + result % 10
+from generate_series(100000) g;
+insert into t4
+select result * 10 + result % 10 + 10000000, result * 10 + result % 10 + 10000000
+from generate_series(100000) g;
 select mo_ctl('dn', 'flush', 'd1.t4');
-➤ mo_ctl(dn, flush, d1.t4)[12,-1,0]  𝄀
+➤ mo_ctl(dn, flush, d1.t4)[12,65535,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -310,8 +334,9 @@ select mo_ctl('dn', 'flush', 'd1.t4');
   ]
 }
 
-explain select count(*) as cnt from t4 group by c1 having cnt>1;
-➤ AP QUERY PLAN ON ONE CN(32 core)[12,0,0]  𝄀
+explain (check '["Group Key: t4.c1 shuffle: range"]')
+select count(*) as cnt from t4 group by c1 having cnt>1;
+➤ AP QUERY PLAN ON ONE CN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Group Key: t4.c1 shuffle: range(t4.c1)  𝄀
@@ -320,8 +345,9 @@ Project  𝄀
         ->  Table Scan on d1.t4
 select count(*) as cnt from t4 group by c1 having cnt>1;
 ➤ cnt[-5,64,0]
-explain select count(*) as cnt from t4 group by c2 having cnt>1;
-➤ AP QUERY PLAN ON ONE CN(32 core)[12,0,0]  𝄀
+explain (check '["Group Key: t4.c2 shuffle: range"]')
+select count(*) as cnt from t4 group by c2 having cnt>1;
+➤ AP QUERY PLAN ON ONE CN(16 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Group Key: t4.c2 shuffle: range(t4.c2)  𝄀
@@ -334,6 +360,20 @@ drop table if exists t_dedup_spill;
 create table t_dedup_spill (id int primary key, val int);
 insert into t_dedup_spill select *,* from generate_series(400000) g;
 set @@join_spill_mem = 1000;
+explain (check '["Join Type: DEDUP", "shuffle: hash"]')
+insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
+on duplicate key update val = val + 1;
+➤ AP QUERY PLAN ON ONE CN(16 core)[12,-1,0]  𝄀
+Multi Update  𝄀
+  ->  Filter  𝄀
+        Filter Cond: ((t_dedup_spill.__mo_rowid IS NULL) or (not (t_dedup_spill.val <=> #[0,3])))  𝄀
+        ->  Join  𝄀
+              Join Type: DEDUP (UPDATE)  𝄀
+              Join Cond: (t_dedup_spill.id = #[1,0]) shuffle: hash(t_dedup_spill.id)  𝄀
+              ->  Table Scan on d1.t_dedup_spill  𝄀
+              ->  Lock  𝄀
+                    ->  Project  𝄀
+                          ->  Table Function on generate_series
 insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;
@@ -351,14 +391,27 @@ select enable_fault_injection();
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'test.t1');
 ➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, test.t1)[-7,1,0]  𝄀
 1
-insert into t1 select *, 1 from generate_series(1, 1000*1000*10)g;
+insert into t1 select *, 1 from generate_series(1, 100*1000)g;
+set @before_object_count = (
+select count(distinct object_name) from metadata_scan('test.t1', 'a') m
+);
+select @before_object_count > 1 as multiple_objects,
+sum(rows_cnt) = 100000 as all_rows_flushed
+from metadata_scan('test.t1', 'a') m;
+➤ multiple_objects[-7,1,0]  ¦  all_rows_flushed[-7,1,0]  𝄀
+1  ¦  1
 select sum(b) from t1;
 ➤ sum(b)[-5,64,0]  𝄀
-10000000
-update t1 set b = b + 1 where a mod 100 = 0;
+100000
+update t1 set b = b + 1 where a mod 5 = 0;
+select count(distinct object_name) > @before_object_count as update_created_object,
+sum(rows_cnt) = 120000 as update_rows_flushed
+from metadata_scan('test.t1', 'a') m;
+➤ update_created_object[-7,1,0]  ¦  update_rows_flushed[-7,1,0]  𝄀
+1  ¦  1
 select sum(b) from t1;
 ➤ sum(b)[-5,64,0]  𝄀
-10100000
+120000
 select disable_fault_injection();
 ➤ disable_fault_injection()[-7,1,0]  𝄀
 1
