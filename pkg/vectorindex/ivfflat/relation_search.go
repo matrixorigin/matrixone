@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (idx *IvfflatSearchIndex[T]) entryQueryBytes(idxcfg vectorindex.IndexConfig, query []T) ([]byte, plan.Type, error) {
@@ -161,6 +162,13 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	if storageTopK {
 		blockFilters = []*plan.Expr{filter}
 	}
+	filterHint := engine.FilterHint{}
+	if storageTopK && sqlproc.IvfHasMembershipFilter {
+		// Preserve the bounded-recall PRE policy: readers rank each bounded
+		// centroid candidate set first, then apply membership. The exact SEMI
+		// join in the outer plan remains the final SQL predicate check.
+		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
+	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
 		Schema:            tblcfg.DbName,
 		Table:             tblcfg.EntriesTable,
@@ -169,6 +177,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		BlockFilters:      blockFilters,
 		IndexParam:        indexParam,
 		PostFilterTopOnly: !storageTopK,
+		FilterHint:        filterHint,
 		BatchTransform: func(bat *batch.Batch) error {
 			batchResult := executor.Result{Batches: []*batch.Batch{bat}, Mp: sqlproc.Proc.Mp()}
 			if storageTopK {
@@ -250,11 +259,14 @@ func canUseStorageTopK(
 	filters []*plan.Expr,
 	limit uint,
 ) bool {
-	// Storage vector Top-N currently ranks only ascending distances. Descending
-	// requests, membership, user predicates, and bounded ranges must stay on
-	// the filter-then-local-Top-K path.
-	if sqlproc == nil || sqlproc.IvfHasMembershipFilter || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
+	// Storage vector Top-N currently ranks only ascending distances. Membership
+	// alone may be applied after the bounded Top-K as the documented approximate
+	// PRE policy. User predicates and bounded ranges remain filter-first.
+	if sqlproc == nil || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
 		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
+		return false
+	}
+	if sqlproc.IvfHasMembershipFilter && len(sqlproc.IvfMembershipFilter) == 0 {
 		return false
 	}
 	distRange := sqlproc.IndexReaderParam.GetDistRange()

@@ -29,10 +29,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var sharedCluster embed.SharedTestCluster
-
 func TestTableFeatures(t *testing.T) {
-	runFeaturesTests(
+	embed.RunSingleCNBaseClusterTests(
 		t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
@@ -106,18 +104,4 @@ func TestTableFeatures(t *testing.T) {
 			)
 		},
 	)
-}
-
-func runFeaturesTests(
-	t *testing.T,
-	fn func(embed.Cluster),
-) error {
-	createFunc := func() (embed.Cluster, error) {
-		return embed.StartTestCluster(
-			embed.WithCNCount(3),
-		)
-	}
-
-	sharedCluster.Run(t, createFunc, fn)
-	return nil
 }
