@@ -76,24 +76,27 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 
 -- ---------- remote run (multi-CN dispatch) ----------
--- A flushed source above the multi-CN stats thresholds (>512 blocks, like the
--- optimizer/shuffle cases) compiles the INSERT to a MULTICN plan: on a
+-- Reuse the parallel case's source after flushing it, and patch only the
+-- planner statistics to the original 4.4M-row/>512-block scale. This keeps the
+-- MULTICN decision while avoiding a second, non-orthogonal large-data setup.
+-- On a
 -- multi-CN cluster, source-scan scopes — with the external-write insert on
 -- top — are dispatched to remote CNs through the pipeline protocol,
 -- exercising the to_external encode/decode and the remote writer rebuild; on
 -- a single CN it degenerates to the parallel case. Results are identical
 -- either way.
-drop table if exists remote_src;
-create table remote_src(a int, b varchar(30));
-insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
 -- @separator:table
-select mo_ctl('dn', 'flush', 'wext.remote_src');
-select sleep(1);
+select mo_ctl('dn', 'flush', 'wext.big_src');
+set @wext_remote_stats = '{"table_cnt":4400000,"block_number":560,"accurate_object_number":35,"approx_object_number":35,"ndv_map":{"a":4400000,"b":4400000}}';
+select table_cnt from table_stats('wext.big_src', 'patch', @wext_remote_stats) g;
 drop table if exists ext_remote;
 create external table ext_remote(a int, b varchar(30))
 infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
 fields terminated by ',';
-insert into ext_remote select * from remote_src;
+-- Prove that the reduced physical input still exercises multi-CN dispatch.
+-- @regex("(?i)ap query plan on multicn", true)
+explain insert into ext_remote select * from big_src;
+insert into ext_remote select * from big_src;
 select count(*), min(a), max(a) from ext_remote;
 
 -- ---------- JSONLine writable external table ----------
@@ -399,7 +402,6 @@ drop table if exists tricky_src;
 drop table if exists ext_big;
 drop table if exists big_src;
 drop table if exists ext_remote;
-drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
 drop table if exists ext_sb;
