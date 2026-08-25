@@ -142,30 +142,57 @@ constraint/index behaviour is inherited rather than re-implemented.
 ### Routing: one WHEN occurrence is one route decision
 
 Each `WHEN` is bound and evaluated **exactly once**, in a projection directly
-above the source and below the shared `SINK`, and materialized as one boolean
-**selector column** appended after the source columns (`appendMultiInsertSelectors`).
-Targets never re-bind a predicate; their `FILTER` reads the selector columns:
+above the source and below the shared `SINK`, and materialized as a route
+decision appended after the source columns (`appendMultiInsertSelectors`).
+Targets never re-bind a predicate; their `FILTER` reads what was materialized.
+
+`INSERT ALL` has no first-match rule — a row can match several `WHEN`s at once
+— so it materializes **one boolean selector per WHEN**, all computed in a
+single projection:
 
 | statement                     | filter on the branch                                   |
 |-------------------------------|--------------------------------------------------------|
 | `INSERT ALL WHEN`             | `sel_i`                                                |
-| `INSERT FIRST WHEN`           | `sel_i` alone — the selector is already masked by the earlier WHENs (see below), so no exclusion terms are needed |
-| `ELSE` under `INSERT FIRST`   | `matched IS NOT TRUE` — one carried flag, not one term per WHEN |
-| `ELSE`                        | `sel_1 IS NOT TRUE AND ... AND sel_n IS NOT TRUE`      |
+| `ELSE` under `INSERT ALL`     | `sel_1 IS NOT TRUE AND ... AND sel_n IS NOT TRUE`      |
 | unconditional `INSERT ALL`    | none                                                   |
 
 `IS NOT TRUE` (function `isnottrue`) rather than `NOT` so that a NULL
 condition is treated as "did not match": the row stays eligible for later
 `WHEN`s and for `ELSE`, matching Snowflake.
 
-`INSERT FIRST` builds the selectors as a chain of two projections per WHEN:
-one computes `sel_i = if(matched, false, cond_i)`, the next accumulates
-`matched = matched OR istrue(sel_i)` from the columns the first just
-materialized. The split exists because a projection cannot reference its own
-outputs, and carrying the flag keeps the routing bookkeeping **linear** in the
-WHEN count — rebuilding the "any earlier selector matched" prefix at each level
-would be O(W²) in plan size and per-row work, which at the 127-clause cap is
-thousands of prior-selector visits per row.
+`INSERT FIRST` routes each row to at most one `WHEN`, so it materializes a
+single **route column**: an `int32` holding the index of the `WHEN` that
+claimed the row, or `-1` (`noMultiInsertRoute`) for none.
+
+| statement                     | filter on the branch                                   |
+|-------------------------------|--------------------------------------------------------|
+| `INSERT FIRST WHEN`           | `route = i`                                            |
+| `ELSE` under `INSERT FIRST`   | `route = -1`                                           |
+
+It is built as one projection per WHEN:
+
+```
+level i:  route_i = if(route_{i-1} >= 0, route_{i-1}, if(cond_i, i, -1))
+```
+
+Two properties come out of this shape.
+
+**Laziness.** `EvalIff` evaluates a false branch only on the rows whose
+condition was false, passing that selection down to the child executor, and a
+nested `if` propagates it further. So `cond_i` runs only on rows still
+unclaimed: an unreachable later predicate never runs — and never errors — for
+a row an earlier `WHEN` already took. A `WHEN` whose condition is NULL takes
+the false branch, leaving the row unclaimed, exactly as `IS TRUE` would.
+
+**Linear bookkeeping.** One decision column per level, not one per WHEN, is
+what keeps total plan work linear. Carrying W separate selectors makes every
+level re-project all the earlier ones: W² expressions, and W² executors that
+`Projection.Prepare` builds and `Projection.Call` runs for every batch —
+measured at 129 expressions for 8 WHENs and 16885 for 126, against the
+127-clause cap. With the route column the cost is a bounded amount per WHEN
+(measured: 215 expressions for 8 WHENs, 815 for 32 — 25 per added WHEN).
+`TestMultiInsertFirstRoutingWorkIsLinear` asserts this over *total* plan
+expression and projection work rather than a chosen subset of function names.
 
 Materializing the decision is not an optimization, it is required for
 correctness. An earlier version copied the `WHEN` AST into every branch and
@@ -248,8 +275,22 @@ names users write in `WHEN`/`VALUES` resolve. Duplicate source headings are
 therefore reported as ambiguous, like in any SELECT.
 
 Conditions are bound with `splitAndBindCondition` (WhereBinder, cast to
-bool); `VALUES` expressions with the same binder; subqueries in either are
-flattened with `flattenSubqueries` before the FILTER/PROJECT node is added.
+bool); `VALUES` expressions with the same binder.
+
+Subqueries are flattened with `flattenSubqueries` before the FILTER/PROJECT
+node is added, but only where flattening cannot change what runs. Flattening
+turns a subquery into a join below the node that references it, which
+evaluates it for every row regardless of routing — that is invisible for a
+predicate that was going to run anyway, and wrong for one that must not:
+
+- a subquery in a **later `INSERT FIRST` WHEN** is rejected. The masking above
+  exists precisely so that `cond_i` does not run for a row an earlier `WHEN`
+  claimed; a flattened subquery would run for it anyway. The first `WHEN` is
+  unmasked, so a subquery there is accepted.
+- a subquery in the `VALUES` of a **conditional** clause is rejected, for the
+  same reason: the values of a branch must be computed only for the rows the
+  branch received. `VALUES` subqueries in an unconditional `INSERT ALL` are
+  accepted.
 
 ### Runtime: the sink is a streaming fan-out, not a materialization
 
@@ -534,7 +575,7 @@ BVT file(s); "manual" = verified by hand only, see below):
 | ALL vs FIRST | overlapping WHENs: ALL writes the row to both targets, FIRST to the first only; ELSE receives the rest. |
 | Composition | several INTOs under one WHEN, `upper()`/`lower()`/arithmetic in VALUES, `WITH` source with `ORDER BY ... LIMIT`. |
 | Constraints | duplicate primary key; duplicate unique key; a failing second target rolls the first target back (`count(*) = 0`). |
-| Same table, several clauses | different column lists (defaults filled); overlapping keys across clauses → `Duplicate entry`; FIRST with the same table in both branches routes each row once; auto_increment agreement — all-explicit and all-generated accepted, NULL / 0 / 0.0 / '0' / omitted mixed with a literal rejected, and the expression form accepted under `NO_AUTO_VALUE_ON_ZERO`. |
+| Same table, several clauses | different column lists (defaults filled); overlapping keys across clauses → `Duplicate entry`; FIRST with the same table in both branches routes each row once; auto_increment agreement — all-explicit and all-generated accepted; NULL / 0 / 0.0 / '0' / omitted mixed with a literal rejected; a non-constant expression in the auto_increment column of a merged clause rejected in every `sql_mode`, since whether it yields zero (and so whether the row generates a key) is not knowable at plan time. |
 | Irregular indexes | fulltext target written by two merged clauses, ivfflat target; verified by `MATCH ... AGAINST` and a vector read afterwards. |
 | Transactions | `BEGIN` / multi-insert / `ROLLBACK` leaves nothing. |
 | Errors | value-count mismatch (explicit and positional), unknown source column in VALUES / WHEN, unknown target column, missing table, `INSERT FIRST` without WHEN, foreign-key target, external-table target. |
@@ -748,8 +789,9 @@ Fixed after maintainer review (XuPeng-SH, CHANGES_REQUESTED):
   one route decision. Volatile predicates therefore broke both documented
   guarantees — `INSERT FIRST` stopped being a partition and the `INTO`
   clauses of a single `WHEN` disagreed (reproduced above). Fixed by
-  evaluating each `WHEN` once above the shared sink into a boolean selector
-  column that every target consumes; see "Routing" above. Regressions added
+  evaluating each `WHEN` once above the shared sink into a materialized route
+  decision that every target consumes — one boolean selector per WHEN for
+  `INSERT ALL`, a single route column for `INSERT FIRST`; see "Routing" above. Regressions added
   per the review request: `TestMultiInsertEvaluatesEachWhenOnce` (each
   predicate bound exactly once; no `FILTER` re-evaluates one) and BVT cases
   asserting that two `INTO`s under one volatile `WHEN` receive identical key

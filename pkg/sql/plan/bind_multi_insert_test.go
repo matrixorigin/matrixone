@@ -98,107 +98,125 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 	qry := logicPlan.GetQuery()
 	require.Len(t, qry.Steps, 4)
 
-	// Each target step carries exactly one FILTER. With INSERT FIRST the
-	// selectors are already mutually exclusive (each is masked by the earlier
-	// ones), so a WHEN branch needs a single conjunct and only ELSE tests that
-	// nothing claimed the row.
-	// INSERT FIRST carries a cumulative "already matched" flag, so ELSE is a
-	// single column test rather than one term per WHEN.
-	expectedFilterLens := []int{1, 1, 1}
-	for i, step := range qry.Steps[1:] {
+	// Each target step carries exactly one FILTER with a single conjunct. With
+	// INSERT FIRST the route column already names the WHEN that claimed the
+	// row, so a branch is one integer test: no exclusion terms for a WHEN, and
+	// ELSE is the single "nothing claimed it" value rather than one term per
+	// WHEN.
+	routeTest := func(t *testing.T, step int32) int32 {
+		t.Helper()
 		var filters []*plan.Node
 		collectFilterNodes(qry, step, &filters)
-		require.Len(t, filters, 1, "step %d", i+1)
-		require.Len(t, filters[0].FilterList, expectedFilterLens[i], "step %d", i+1)
+		require.Len(t, filters, 1)
+		require.Len(t, filters[0].FilterList, 1)
+		fn := filters[0].FilterList[0].GetF()
+		require.NotNil(t, fn)
+		require.Equal(t, "=", fn.Func.ObjName)
+		require.NotNil(t, fn.Args[0].GetCol(), "the test must read a materialized column, not re-evaluate")
+		lit := fn.Args[1].GetLit()
+		require.NotNil(t, lit)
+		return lit.GetI32Val()
 	}
-	// A WHEN branch reads its selector column directly — no predicate is
-	// re-evaluated and no exclusion term is needed.
-	for _, step := range qry.Steps[1:3] {
+	// the two WHEN branches select their own route value, in order
+	require.Equal(t, int32(0), routeTest(t, qry.Steps[1]))
+	require.Equal(t, int32(1), routeTest(t, qry.Steps[2]))
+	// ELSE selects the no-route value
+	require.Equal(t, noMultiInsertRoute, routeTest(t, qry.Steps[3]))
+	// every branch reads the same materialized column
+	routeCols := map[int32]int{}
+	for _, step := range qry.Steps[1:] {
 		var filters []*plan.Node
 		collectFilterNodes(qry, step, &filters)
-		require.NotNil(t, filters[0].FilterList[0].GetCol())
+		routeCols[filters[0].FilterList[0].GetF().Args[0].GetCol().ColPos]++
 	}
-	// The ELSE step tests the carried flag, not each selector in turn.
-	var elseFilters []*plan.Node
-	collectFilterNodes(qry, qry.Steps[3], &elseFilters)
-	require.Len(t, elseFilters[0].FilterList, 1)
-	fn := elseFilters[0].FilterList[0].GetF()
-	require.NotNil(t, fn)
-	require.Equal(t, "isnottrue", fn.Func.ObjName)
-	require.NotNil(t, fn.Args[0].GetCol(), "IS NOT TRUE must read a materialized column, not re-evaluate")
+	require.NotEmpty(t, routeCols)
 	testDeepCopy(logicPlan)
 }
 
-// INSERT FIRST must not evaluate a later WHEN for a row an earlier WHEN already
-// claimed: an unreachable predicate that errors would otherwise turn a correct
-// first-match route into a statement failure. The plan expresses this by masking
-// each later condition with if(matched, false, cond), which evaluates cond only
-// on the rows still unclaimed.
+// INSERT FIRST must not evaluate a later WHEN for a row an earlier WHEN
+// already claimed: an unreachable predicate that errors would otherwise turn a
+// correct first-match route into a statement failure. The plan expresses this
+// by nesting each later claim inside the false branch of
+// if(route >= 0, route, ...), and EvalIff evaluates a false branch only on the
+// rows whose condition was false.
 func TestMultiInsertFirstMasksLaterConditions(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t,
 		"insert first"+
-			" when deptno = 1 then into t3 (a) values (deptno)"+
-			" when deptno = 2 then into t2 (a, b) values (deptno, deptno)"+
-			" when deptno = 3 then into dept (deptno, dname) values (deptno, dname)"+
+			" when deptno < 1 then into t3 (a) values (deptno)"+
+			" when deptno < 2 then into t2 (a, b) values (deptno, deptno)"+
+			" when deptno < 3 then into dept (deptno, dname) values (deptno, dname)"+
 			" select deptno, dname from dept")
 	require.NoError(t, err)
 	qry := logicPlan.GetQuery()
 
-	// One projection per WHEN, and every condition after the first is wrapped in
-	// the masking if().
-	var masked int
-	var countMasked func(*plan.Expr)
-	countMasked = func(expr *plan.Expr) {
+	// Every WHEN produces one claim -- if(cond, i, noRoute) -- and every WHEN
+	// after the first is nested inside a mask whose condition is the carried
+	// route column, a single comparison rather than a chain rebuilt from every
+	// earlier selector. That is what keeps the bookkeeping linear.
+	var claims, masks int
+	var walk func(*plan.Expr)
+	walk = func(expr *plan.Expr) {
 		if expr == nil {
 			return
 		}
-		if fn := expr.GetF(); fn != nil {
-			if fn.Func.ObjName == "iff" || fn.Func.ObjName == "if" {
-				// arg0 is the carried "already matched" flag — a single column,
-				// not an OR chain rebuilt from every earlier selector, which is
-				// what keeps the routing bookkeeping linear in the WHEN count.
-				require.Len(t, fn.Args, 3)
-				require.NotNil(t, fn.Args[0].GetCol(), "mask must be the carried matched flag")
-				masked++
+		fn := expr.GetF()
+		if fn == nil {
+			return
+		}
+		if fn.Func.ObjName == "if" || fn.Func.ObjName == "iff" {
+			require.Len(t, fn.Args, 3)
+			if cond := fn.Args[0].GetF(); cond != nil && cond.Func.ObjName == ">=" {
+				require.NotNil(t, cond.Args[0].GetCol(),
+					"the mask must read the carried route column")
+				require.NotNil(t, fn.Args[1].GetCol(),
+					"a claimed row keeps the route it already has")
+				masks++
+			} else {
+				require.NotNil(t, fn.Args[1].GetLit(), "a claim yields the WHEN index")
+				require.NotNil(t, fn.Args[2].GetLit(), "or the no-route value")
+				claims++
 			}
-			for _, arg := range fn.Args {
-				countMasked(arg)
-			}
+		}
+		require.NotEqual(t, "or", fn.Func.ObjName,
+			"routing must not rebuild an OR chain over the earlier selectors")
+		for _, arg := range fn.Args {
+			walk(arg)
 		}
 	}
 	for _, node := range qry.Nodes {
 		for _, expr := range node.ProjectList {
-			countMasked(expr)
+			walk(expr)
 		}
 	}
-	require.Equal(t, 2, masked, "WHENs 2 and 3 must be masked by the earlier ones")
+	require.Equal(t, 3, claims, "one claim per WHEN")
+	require.Equal(t, 2, masks, "WHENs 2 and 3 must be masked by the route so far")
 
 	// Each condition still appears exactly once: masking must not duplicate it.
-	var eq int
-	var countEq func(*plan.Expr)
-	countEq = func(expr *plan.Expr) {
+	var lessThan int
+	var countLessThan func(*plan.Expr)
+	countLessThan = func(expr *plan.Expr) {
 		if expr == nil {
 			return
 		}
 		if fn := expr.GetF(); fn != nil {
-			if fn.Func.ObjName == "=" {
-				eq++
+			if fn.Func.ObjName == "<" {
+				lessThan++
 			}
 			for _, arg := range fn.Args {
-				countEq(arg)
+				countLessThan(arg)
 			}
 		}
 	}
 	for _, node := range qry.Nodes {
 		for _, expr := range node.ProjectList {
-			countEq(expr)
+			countLessThan(expr)
 		}
 		for _, expr := range node.FilterList {
-			countEq(expr)
+			countLessThan(expr)
 		}
 	}
-	require.Equal(t, 3, eq, "each of the 3 WHEN predicates must be bound exactly once")
+	require.Equal(t, 3, lessThan, "each of the 3 WHEN predicates must be bound exactly once")
 	testDeepCopy(logicPlan)
 }
 
@@ -246,36 +264,32 @@ func TestMultiInsertEvaluatesEachWhenOnce(t *testing.T) {
 	}
 	require.Equal(t, 2, lessThan, "each of the 2 WHEN predicates must be bound exactly once")
 
-	// No FILTER re-evaluates a predicate: every conjunct is either a selector
-	// column or IS NOT TRUE over one.
+	// No FILTER re-evaluates a predicate: every conjunct tests the materialized
+	// route column against a constant, and every branch reads the same column.
+	routeCols := map[int32]int{}
+	routeValues := map[int32]int{}
 	for _, node := range qry.Nodes {
 		if node.NodeType != plan.Node_FILTER {
 			continue
 		}
 		for _, expr := range node.FilterList {
-			if expr.GetCol() != nil {
-				continue
-			}
 			fn := expr.GetF()
 			require.NotNil(t, fn)
-			require.Equal(t, "isnottrue", fn.Func.ObjName)
-			require.NotNil(t, fn.Args[0].GetCol())
+			require.Equal(t, "=", fn.Func.ObjName)
+			col := fn.Args[0].GetCol()
+			require.NotNil(t, col, "a branch must read the materialized route")
+			lit := fn.Args[1].GetLit()
+			require.NotNil(t, lit)
+			routeCols[col.ColPos]++
+			routeValues[lit.GetI32Val()]++
 		}
 	}
-
-	// Both INTO clauses of the first WHEN consume the same selector column.
-	selectors := map[int32]int{}
-	for _, node := range qry.Nodes {
-		if node.NodeType != plan.Node_FILTER {
-			continue
-		}
-		for _, expr := range node.FilterList {
-			if col := expr.GetCol(); col != nil {
-				selectors[col.ColPos]++
-			}
-		}
-	}
-	require.NotEmpty(t, selectors)
+	require.NotEmpty(t, routeCols)
+	// Both INTO clauses of the first WHEN consume the identical decision, so
+	// two branches select route 0; the second WHEN and ELSE take one each.
+	require.Equal(t, 2, routeValues[0], "both INTOs of WHEN 1 share one decision")
+	require.Equal(t, 1, routeValues[1])
+	require.Equal(t, 1, routeValues[noMultiInsertRoute])
 	testDeepCopy(logicPlan)
 }
 
@@ -556,8 +570,16 @@ func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
 // Rebuilding "did any earlier selector match" at every level is O(W^2) in plan
 // size and per-row work; the carried flag makes each level O(1). Measured on
 // the plan: doubling the WHEN count must not quadruple the boolean bookkeeping.
-func TestMultiInsertFirstSelectorChainIsLinear(t *testing.T) {
-	boolOps := func(whens int) int {
+// TestMultiInsertFirstRoutingWorkIsLinear measures the TOTAL expression work
+// the plan carries, not a chosen subset of function names: every expression
+// node in every ProjectList and FilterList, which is what Projection.Prepare
+// turns into executors and Projection.Call runs for every batch.
+//
+// Carrying one boolean selector per WHEN made each level re-project all the
+// earlier ones, so total work grew as W^2 (measured: 129 expressions at 8
+// WHENs, 16885 at 126). One route column per level makes it linear.
+func TestMultiInsertFirstRoutingWorkIsLinear(t *testing.T) {
+	planWork := func(whens int) (exprs int, projects int) {
 		mock := NewMockOptimizer(true)
 		var sb strings.Builder
 		sb.WriteString("insert first")
@@ -570,23 +592,22 @@ func TestMultiInsertFirstSelectorChainIsLinear(t *testing.T) {
 		logicPlan, err := runOneStmt(mock, t, sb.String())
 		require.NoError(t, err)
 
-		count := 0
 		var walk func(*plan.Expr)
 		walk = func(expr *plan.Expr) {
 			if expr == nil {
 				return
 			}
+			exprs++
 			if fn := expr.GetF(); fn != nil {
-				switch fn.Func.ObjName {
-				case "or", "istrue", "isnottrue":
-					count++
-				}
 				for _, arg := range fn.Args {
 					walk(arg)
 				}
 			}
 		}
 		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_PROJECT {
+				projects++
+			}
 			for _, expr := range node.ProjectList {
 				walk(expr)
 			}
@@ -594,14 +615,25 @@ func TestMultiInsertFirstSelectorChainIsLinear(t *testing.T) {
 				walk(expr)
 			}
 		}
-		return count
+		return exprs, projects
 	}
 
-	small := boolOps(4)
-	large := boolOps(8)
-	require.Positive(t, small)
-	// Linear growth would roughly double; quadratic would roughly quadruple.
-	// Allow generous slack and still catch a return to the prefix rebuild.
-	require.Less(t, large, small*3,
-		"boolean bookkeeping grew faster than linearly: %d ops for 4 WHENs, %d for 8", small, large)
+	const small, large = 8, 32
+	smallExprs, smallProjects := planWork(small)
+	largeExprs, largeProjects := planWork(large)
+	require.Positive(t, smallExprs)
+
+	// Quadrupling the WHENs quadruples linear work and multiplies quadratic
+	// work by ~16. The slack covers the per-target write pipelines, which are
+	// linear in the target count by construction.
+	require.Less(t, largeExprs, smallExprs*6,
+		"total plan expression work grew faster than linearly: %d for %d WHENs, %d for %d WHENs",
+		smallExprs, small, largeExprs, large)
+
+	// Stated as the per-WHEN contract: each added WHEN costs a bounded amount
+	// of expression and projection work, independent of how many came before.
+	require.Less(t, (largeExprs-smallExprs)/(large-small), 40,
+		"each added WHEN must cost a bounded number of expressions (%d -> %d)", smallExprs, largeExprs)
+	require.LessOrEqual(t, (largeProjects-smallProjects)/(large-small), 3,
+		"each added WHEN must cost a bounded number of projections (%d -> %d)", smallProjects, largeProjects)
 }

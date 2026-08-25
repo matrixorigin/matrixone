@@ -249,13 +249,17 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 // for WHEN j lives at column selectorBase+j of the returned node. For INSERT
 // FIRST the selectors are mutually exclusive by construction, so "no selector
 // is true" is exactly the ELSE predicate for both statement forms.
+// noMultiInsertRoute is the route value of a row no WHEN claimed.
+const noMultiInsertRoute int32 = -1
+
 type multiInsertSelectors struct {
 	nodeID       int32
 	selectorBase int
-	// matchedPos is the column holding "some WHEN already claimed this row",
-	// carried forward level by level for INSERT FIRST; -1 for INSERT ALL, which
-	// has no first-match rule and therefore no cumulative flag.
-	matchedPos int
+	// routePos is the column holding the index of the WHEN that claimed the
+	// row, or -1 for none, carried forward level by level for INSERT FIRST.
+	// It is -1 (absent) for INSERT ALL, where a row can match several WHENs at
+	// once and so has no single route.
+	routePos int
 }
 
 // appendMultiInsertSelectors projects the source columns unchanged and appends
@@ -284,7 +288,7 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	whens []*tree.MultiInsertWhen,
 	first bool,
 ) (multiInsertSelectors, error) {
-	out := multiInsertSelectors{nodeID: srcID, selectorBase: len(srcCols), matchedPos: -1}
+	out := multiInsertSelectors{nodeID: srcID, selectorBase: len(srcCols), routePos: -1}
 	if len(whens) == 0 {
 		return out, nil
 	}
@@ -357,17 +361,22 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		return out, nil
 	}
 
-	// INSERT FIRST: two projections per WHEN, so each level does O(1) work.
+	// INSERT FIRST: one projection per WHEN, each carrying O(1) new work.
 	//
-	//   level i-A:  sel_i     = if(matched_{i-1}, false, cond_i)
-	//   level i-B:  matched_i = matched_{i-1} OR istrue(sel_i)
+	//   level i:  route_i = if(route_{i-1} >= 0, route_{i-1},
+	//                          if(cond_i, i, noRoute))
 	//
-	// The split exists because a projection cannot reference its own outputs:
-	// matched_i needs sel_i, which is produced in the same projection, so it is
-	// accumulated in the next one from materialized columns. Carrying the flag
-	// this way keeps the routing bookkeeping LINEAR in the number of WHENs —
-	// rebuilding the full "any earlier selector is true" prefix at every level
-	// would be O(W^2) in both plan size and per-row work.
+	// A single integer says which WHEN claimed the row (noRoute = -1 for none),
+	// so the level below hands up one decision column rather than one boolean
+	// per WHEN. That is what keeps the projection bookkeeping linear: carrying
+	// W separate selectors would make every level re-project all the earlier
+	// ones, W^2 expressions and W^2 executors evaluated per batch.
+	//
+	// The nesting is what makes a later WHEN lazy. EvalIff evaluates its false
+	// branch only on the rows whose condition was false, passing that selection
+	// down, and a nested if propagates it further -- so cond_i runs only on
+	// rows still unclaimed, and an unreachable later predicate never runs, and
+	// never errors, for a row an earlier WHEN already took.
 	//
 	// Column layout, stable at every level:
 	//   [0, M)            source columns
@@ -375,15 +384,13 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	//                     condition is bound against the node below level 0
 	//                     whose tags are not visible higher up (this also
 	//                     covers a flattened subquery's output column)
-	//   base = M+C        matched
-	//   base+1 ...        sel_0, sel_1, ...
+	//   base = M+C        route
 	carrierRefs, carrierIdx := collectMultiInsertCarriers(conds)
 	base := len(srcCols) + len(carrierRefs)
-	selectorBase := base + 1
 	prevTag := srcTag
 
-	// carriedPrefix rebuilds the stable prefix (source columns, carriers,
-	// matched) from the level below.
+	// carriedPrefix rebuilds the stable prefix (source columns, carriers) from
+	// the level below.
 	carriedPrefix := func(level int) []*plan.Expr {
 		list := passthrough(prevTag, srcCols)
 		for k, ref := range carrierRefs {
@@ -398,19 +405,40 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		}
 		return list
 	}
-	matchedRef := func() *plan.Expr {
+	routeType := makePlan2Int32ConstExprWithType(0).Typ
+	routeRef := func() *plan.Expr {
 		return &plan.Expr{
-			Typ:  boolType,
+			Typ:  routeType,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(base)}},
 		}
 	}
-	selRef := func(j int) *plan.Expr {
-		return &plan.Expr{
-			Typ:  boolType,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(selectorBase + j)}},
+
+	for i, cond := range conds {
+		projList := carriedPrefix(i)
+		if i > 0 {
+			rewriteMultiInsertColRefs(cond, carrierIdx, prevTag, len(srcCols))
 		}
-	}
-	appendLevel := func(projList []*plan.Expr) {
+		// if(cond_i, i, noRoute): a NULL condition takes the false branch, so a
+		// row a WHEN cannot decide on stays unclaimed, as IS TRUE would leave it.
+		claim, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
+			[]*plan.Expr{cond, makePlan2Int32ConstExprWithType(int32(i)), makePlan2Int32ConstExprWithType(noMultiInsertRoute)})
+		if err != nil {
+			return out, err
+		}
+		route := claim
+		if i > 0 {
+			claimed, err := BindFuncExprImplByPlanExpr(builder.GetContext(), ">=",
+				[]*plan.Expr{routeRef(), makePlan2Int32ConstExprWithType(0)})
+			if err != nil {
+				return out, err
+			}
+			if route, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
+				[]*plan.Expr{claimed, routeRef(), claim}); err != nil {
+				return out, err
+			}
+		}
+		projList = append(projList, route)
+
 		tag := builder.genNewBindTag()
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -421,53 +449,9 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		prevTag = tag
 	}
 
-	for i, cond := range conds {
-		// level i-A: the masked selector.
-		projList := carriedPrefix(i)
-		selector := cond
-		if i == 0 {
-			projList = append(projList, makePlan2BoolConstExprWithType(false))
-		} else {
-			rewriteMultiInsertColRefs(selector, carrierIdx, prevTag, len(srcCols))
-			// if(matched, false, cond) evaluates cond only on rows still
-			// unclaimed: EvalIff compacts the parameters to the selected rows, so
-			// an unreachable later predicate never runs — and never errors — for
-			// a row an earlier WHEN already took.
-			var err error
-			if selector, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
-				[]*plan.Expr{matchedRef(), makePlan2BoolConstExprWithType(false), cond}); err != nil {
-				return out, err
-			}
-			projList = append(projList, matchedRef())
-		}
-		for j := 0; j < i; j++ {
-			projList = append(projList, selRef(j))
-		}
-		projList = append(projList, selector)
-		appendLevel(projList)
-
-		// level i-B: accumulate the flag from columns now materialized.
-		matched, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{selRef(i)})
-		if err != nil {
-			return out, err
-		}
-		if i > 0 {
-			if matched, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or",
-				[]*plan.Expr{matchedRef(), matched}); err != nil {
-				return out, err
-			}
-		}
-		projList = carriedPrefix(i + 1)
-		projList = append(projList, matched)
-		for j := 0; j <= i; j++ {
-			projList = append(projList, selRef(j))
-		}
-		appendLevel(projList)
-	}
-
 	out.nodeID = lastNodeID
-	out.selectorBase = selectorBase
-	out.matchedPos = base
+	out.selectorBase = -1
+	out.routePos = base
 	return out, nil
 }
 
@@ -1015,19 +999,32 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: int32(pos)}},
 		}
 	}
+	route := func(want int32) (*plan.Expr, error) {
+		col := &plan.Expr{
+			Typ:  makePlan2Int32ConstExprWithType(0).Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: int32(selectors.routePos)}},
+		}
+		return BindFuncExprImplByPlanExpr(builder.GetContext(), "=",
+			[]*plan.Expr{col, makePlan2Int32ConstExprWithType(want)})
+	}
 	var filterList []*plan.Expr
 	switch {
-	case branch.condIdx >= 0:
-		filterList = append(filterList, selector(selectors.selectorBase+branch.condIdx))
-	case branch.isElse && selectors.matchedPos >= 0:
-		// INSERT FIRST already carries the cumulative flag, so ELSE is one
-		// column test rather than one per WHEN.
-		notMatched, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue",
-			[]*plan.Expr{selector(selectors.matchedPos)})
+	case selectors.routePos >= 0 && branch.condIdx >= 0:
+		// INSERT FIRST: the route column already names the winning WHEN, so a
+		// branch is one integer test and needs no exclusion terms.
+		claimed, err := route(int32(branch.condIdx))
 		if err != nil {
 			return 0, err
 		}
-		filterList = append(filterList, notMatched)
+		filterList = append(filterList, claimed)
+	case selectors.routePos >= 0 && branch.isElse:
+		unclaimed, err := route(noMultiInsertRoute)
+		if err != nil {
+			return 0, err
+		}
+		filterList = append(filterList, unclaimed)
+	case branch.condIdx >= 0:
+		filterList = append(filterList, selector(selectors.selectorBase+branch.condIdx))
 	case branch.isElse:
 		// INSERT ALL has no first-match rule and so no cumulative flag: a row
 		// reaches ELSE only when no WHEN matched it. A NULL selector counts as

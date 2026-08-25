@@ -371,6 +371,17 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				if res.lastInsertId != 0 {
 					ses.SetLastInsertID(res.lastInsertId)
 				}
+			} else {
+				// Declining to report the ambiguous value is not enough. The
+				// targets' PRE_INSERTs published through
+				// SetStatementLastInsertIDIfEarlier, which writes the
+				// session-visible LastInsertID as well as the statement one,
+				// and doComQuery reuses this process for the next statement of
+				// the same COM_QUERY while resetting only the statement value.
+				// Left alone, the suppressed cross-table minimum would answer
+				// that statement's LAST_INSERT_ID(). Put the session's value
+				// back, which is what this statement left visible.
+				execCtx.proc.SetLastInsertID(ses.GetLastInsertID())
 			}
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
