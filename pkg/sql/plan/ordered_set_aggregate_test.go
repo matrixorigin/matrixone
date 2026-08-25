@@ -119,6 +119,29 @@ func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
 		`select median((select abs(y.a) from select_test.bind_select y limit 1))
   within group (order by (select ABS(y.A) from select_test.bind_select y limit 1))
   from select_test.bind_select x`,
+		`select median((select a as lhs from select_test.bind_select limit 1))
+  within group (order by (select a as rhs from select_test.bind_select limit 1))
+  from select_test.bind_select x`,
+		`select median((select a from select_test.bind_select limit 1))
+  within group (order by (select a as rhs from select_test.bind_select limit 1))
+  from select_test.bind_select x`,
+		`select median((select lhs.a from select_test.bind_select lhs limit 1))
+  within group (order by (select rhs.a from select_test.bind_select rhs limit 1))
+  from select_test.bind_select x`,
+		`select median((select lhs.a from select_test.bind_select lhs limit 1))
+  within group (order by (select a from select_test.bind_select limit 1))
+  from select_test.bind_select x`,
+		`select median((select a as lhs from select_test.bind_select order by lhs limit 1))
+  within group (order by (select a as rhs from select_test.bind_select order by rhs limit 1))
+  from select_test.bind_select x`,
+		`select median((select lhs.a from (select a from select_test.bind_select) lhs(a) limit 1))
+  within group (order by (select rhs.b from (select a from select_test.bind_select) rhs(b) limit 1))
+  from select_test.bind_select x`,
+		`select median((with lhs as (select a from select_test.bind_select)
+    select a from lhs limit 1))
+  within group (order by (with rhs as (select a from select_test.bind_select)
+    select a from rhs limit 1))
+  from select_test.bind_select x`,
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
@@ -133,6 +156,101 @@ func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
 			require.Len(t, fn.Args, 1)
 		})
 	}
+}
+
+func TestMedianWithinGroupValidationDoesNotChangeParentAggregateState(t *testing.T) {
+	type parentState struct {
+		aggregates int
+		boundCols  []boundColumn
+	}
+	capture := func(sql string) parentState {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+
+		var state parentState
+		_, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			planpb.Query_SELECT,
+			NewMockCompilerContext(true),
+			selectStmt,
+			false,
+			true,
+			func(*Query) error { return nil },
+			func(ctx *BindContext) {
+				state.aggregates = len(ctx.aggregates)
+				if provider, ok := ctx.binder.(interface{ medianValidationBaseBinder() *baseBinder }); ok {
+					state.boundCols = append([]boundColumn(nil), provider.medianValidationBaseBinder().boundCols...)
+				}
+			},
+			false,
+		)
+		require.NoError(t, err)
+		return state
+	}
+
+	ordinary := capture(`select empno, median((select sal))
+from constraint_test.emp
+group by empno`)
+	withinGroup := capture(`select empno,
+median((select sal)) within group (order by (select sal))
+from constraint_test.emp
+group by empno`)
+	require.Equal(t, 1, ordinary.aggregates)
+	require.Equal(t, ordinary, withinGroup)
+}
+
+func TestCloneMedianBindScopeDoesNotShareMutableParentState(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	parent := NewBindContext(builder, nil)
+	parent.isCorrelated = false
+	parent.times = []*planpb.Expr{{Typ: planpb.Type{Id: 1}}}
+	parent.timeByAst["existing"] = 0
+	parent.aggregates = []*planpb.Expr{{Typ: planpb.Type{Id: 2}}}
+	selectClause := &tree.SelectClause{}
+	parent.expandedSelectLists = map[*tree.SelectClause]tree.SelectExprs{
+		selectClause: {{Expr: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}},
+	}
+	cteRef := &CTERef{
+		ast: &tree.CTE{Name: &tree.AliasClause{Alias: tree.Identifier("c")}},
+		occurrences: []cteOccurrence{{rootID: 1}},
+	}
+	parent.cteByName = map[string]*CTERef{"c": cteRef}
+	havingBinder := NewHavingBinder(builder, parent)
+	havingBinder.boundCols = []boundColumn{{name: "existing"}}
+	parent.binder = havingBinder
+
+	isolated := cloneMedianBindScope(parent, builder)
+	require.NotSame(t, parent, isolated)
+	require.NotSame(t, parent.binder, isolated.binder)
+	require.NotSame(t, cteRef, isolated.cteByName["c"])
+	require.NotSame(t, cteRef.ast, isolated.cteByName["c"].ast)
+
+	isolated.isCorrelated = true
+	isolated.times = append(isolated.times, &planpb.Expr{Typ: planpb.Type{Id: 3}})
+	isolated.timeByAst["temporary"] = 1
+	isolated.aggregates = append(isolated.aggregates, &planpb.Expr{Typ: planpb.Type{Id: 4}})
+	isolated.expandedSelectLists[selectClause] = append(
+		isolated.expandedSelectLists[selectClause],
+		tree.SelectExpr{Expr: tree.NewNumVal(int64(2), "2", false, tree.P_int64)},
+	)
+	isolated.cteByName["c"].occurrences = append(
+		isolated.cteByName["c"].occurrences,
+		cteOccurrence{rootID: 2},
+	)
+	isolated.cteByName["c"].ast.Name.Alias = tree.Identifier("temporary")
+	clonedBinder := isolated.binder.(interface{ medianValidationBaseBinder() *baseBinder }).medianValidationBaseBinder()
+	clonedBinder.boundCols = append(clonedBinder.boundCols, boundColumn{name: "temporary"})
+
+	require.False(t, parent.isCorrelated)
+	require.Len(t, parent.times, 1)
+	require.NotContains(t, parent.timeByAst, "temporary")
+	require.Len(t, parent.aggregates, 1)
+	require.Len(t, parent.expandedSelectLists[selectClause], 1)
+	require.Len(t, cteRef.occurrences, 1)
+	require.Equal(t, tree.Identifier("c"), cteRef.ast.Name.Alias)
+	require.Equal(t, []boundColumn{{name: "existing"}}, havingBinder.boundCols)
 }
 
 func TestBuildMedianWithinGroupAcceptsCaseInsensitiveIdentifiers(t *testing.T) {
@@ -194,6 +312,11 @@ func TestBuildMedianWithinGroupRejectsScopedOrMismatchedQualifications(t *testin
 		{
 			name: "both expressions use wrong database qualifier",
 			sql:  "select median(wrong_database.bind_select.a) within group (order by wrong_database.bind_select.a) from select_test.bind_select",
+		},
+		{
+			name: "different outer bindings with the same column name",
+			sql: `select median((select x.a)) within group (order by (select y.a))
+from select_test.bind_select x join select_test.bind_select y on x.a = y.a`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

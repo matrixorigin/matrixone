@@ -39,6 +39,7 @@ import (
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -553,7 +554,7 @@ func nodeNullExtendsChild(node *plan.Node, childIdx int) bool {
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		switch node.JoinType {
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_ASOF_LEFT:
 			return childIdx == 1
 		case plan.Node_RIGHT:
 			return childIdx == 0
@@ -1460,6 +1461,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 						}
 					}
 				}
+			}
+		}
+		if node.JoinType == plan.Node_ASOF || node.JoinType == plan.Node_ASOF_LEFT {
+			if err := refreshAsofRightColAfterRemap(node); err != nil {
+				return nil, err
 			}
 		}
 		if node.JoinType == plan.Node_MARK &&
@@ -3689,17 +3695,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
 
-		if builder.isForUpdate {
-			reCheckifNeedLockWholeTable(builder)
-		}
-
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 
-		if builder.qry.StmtType != plan.Query_SELECT {
-			builder.updateLocksOnDemand(rootID)
-		}
 		rootNode := builder.qry.Nodes[rootID]
 
 		for j := range rootNode.ProjectList {
@@ -3709,6 +3708,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
+	applySharedLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
@@ -6149,6 +6149,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
 			catalog.IsForeignQueryCol(col.Name, col.ColId) ||
+			catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
 			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
@@ -11185,6 +11186,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
 			var datastreamCfg sqldatastream.Config
 			var foreignCfg foreignext.Config
+			var kafkaCfg sqlkafka.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -11220,6 +11222,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						if isForeign {
 							foreignCfg = fcfg
 							externType = plan.ExternType_FOREIGN_TB
+						} else {
+							kcfg, isKafka, err := IsKafkaTableDef(builder.GetContext(), tableDef)
+							if err != nil {
+								return 0, err
+							}
+							if isKafka {
+								kafkaCfg = kcfg
+								externType = plan.ExternType_KAFKA_TB
+							}
 						}
 					}
 				}
@@ -11264,6 +11275,21 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Config:       foreignCfg.ConfigJSON,
 					DefaultQuery: foreignCfg.DefaultQuery,
 				}
+			} else if externType == plan.ExternType_KAFKA_TB {
+				// Read-control defaults; compileKafkaScan overwrites them from
+				// the __mo_read_* WHERE conjuncts.
+				externScan.KafkaScan = &plan.KafkaScan{
+					Brokers:        kafkaCfg.Brokers,
+					Topic:          kafkaCfg.Topic,
+					Partition:      kafkaCfg.Partition,
+					Autocommit:     kafkaCfg.Autocommit,
+					Group:          kafkaCfg.Group,
+					Format:         kafkaCfg.Format,
+					Separator:      kafkaCfg.Separator,
+					HasStartId:     false,
+					Size:           0,
+					TimeoutSeconds: 10,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
@@ -11296,6 +11322,37 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
+			} else if externType == plan.ExternType_KAFKA_TB {
+				// Synthetic Kafka columns: four per-message metadata columns
+				// and three WHERE-only read controls (their conjuncts are
+				// consumed by compileKafkaScan; selecting one returns the
+				// effective value the scan used). All are hidden from
+				// SELECT * via catalog.IsKafkaHiddenCol.
+				varcharT := plan.Type{
+					Id:      int32(types.T_varchar),
+					Width:   types.MaxVarcharLen,
+					Table:   table,
+					Charset: uint32(types.CharsetUTF8),
+				}
+				bigintT := plan.Type{Id: int32(types.T_int64), Table: table}
+				tsT := plan.Type{Id: int32(types.T_timestamp), Scale: 3, Table: table}
+				for _, kc := range []struct {
+					id   uint64
+					name string
+					typ  plan.Type
+				}{
+					{catalog.KafkaMessageIDColId, catalog.KafkaMessageID, bigintT},
+					{catalog.KafkaMessageTSColId, catalog.KafkaMessageTS, tsT},
+					{catalog.KafkaMessageKeyColId, catalog.KafkaMessageKey, varcharT},
+					{catalog.KafkaMessageValueColId, catalog.KafkaMessageValue, varcharT},
+					{catalog.KafkaReadStartIDColId, catalog.KafkaReadStartID, bigintT},
+					{catalog.KafkaReadSizeColId, catalog.KafkaReadSize, bigintT},
+					{catalog.KafkaReadTimeoutColId, catalog.KafkaReadTimeout, bigintT},
+				} {
+					tableDef.Cols = append(tableDef.Cols, &ColDef{
+						ColId: kc.id, Name: kc.name, Typ: kc.typ,
+					})
+				}
 			}
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
@@ -11638,7 +11695,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			// The synthetic __mo_query column of a foreign scan is hidden from
 			// star expansion (identified by its reserved ColId, so a real
 			// __mo_query column in a pre-existing schema stays visible).
-			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId)
+			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId) ||
+				catalog.IsKafkaHiddenCol(col.Name, col.ColId)
 			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString
@@ -11788,6 +11846,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_DEDUP:
 		joinType = plan.Node_DEDUP
+	case tree.JOIN_TYPE_ASOF:
+		joinType = plan.Node_ASOF
+	case tree.JOIN_TYPE_ASOF_LEFT:
+		joinType = plan.Node_ASOF_LEFT
 	}
 
 	leftCtx := NewBindContext(builder, ctx)
@@ -11840,7 +11902,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		nodeID = builder.appendNode(node, ctx)
 	}
 
-	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT {
+	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT ||
+		joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
 		ctx.binder = NewJoinOnBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, ctx)
@@ -11898,8 +11961,16 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			node.Children[1] = rightChildID
 		}
 		node.OnList = joinConds
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			if err = builder.configureAsofJoin(node, tbl, ctx, leftChildID, rightChildID); err != nil {
+				return 0, err
+			}
+		}
 
 	case *tree.UsingJoinCond:
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
+		}
 		if tbl.JoinType == tree.JOIN_TYPE_CENTROIDX {
 			for _, col := range cond.Cols {
 				expr, err := ctx.addUsingColForCrossL2(string(col), joinType, leftCtx, rightCtx)
@@ -11918,6 +11989,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 	default:
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
+		}
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
 			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {
