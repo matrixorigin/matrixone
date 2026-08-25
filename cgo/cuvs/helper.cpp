@@ -228,9 +228,9 @@ int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_
     // Planning and claiming drifting apart would let a build be planned against
     // one budget and refused against another.
     // Per-index fraction, supplied by the caller's cost class; the governor's
-    // default stands in for callers that have no cost class to ask.
-    if (budget_percent == 0) budget_percent = device_memory_governor::kBudgetPercent;
-    const size_t budget = free_bytes / 100 * budget_percent;
+    // default stands in for callers that have no cost class to ask. Resolved and
+    // applied by the governor, so planning here cannot drift from claiming there.
+    const size_t budget = device_memory_governor::budget_bytes(free_bytes, budget_percent);
     int64_t max_rows = static_cast<int64_t>(budget / per_row_bytes);
     return max_rows < 1 ? 1 : max_rows;
 }
@@ -242,7 +242,7 @@ int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const 
     int64_t max_rows = rows_fitting_gpu_mem(per_row_bytes, who, &free_bytes, budget_percent);
     if (requested_rows > max_rows) {
         std::cerr << "[" << who << "] capped " << requested_rows << " -> " << max_rows
-                  << " rows to fit " << budget_percent
+                  << " rows to fit " << device_memory_governor::effective_percent(budget_percent)
                   << "% of " << (free_bytes >> 20)
                   << " MB free GPU mem (per_row=" << per_row_bytes << "B)" << std::endl;
         return max_rows;
@@ -390,9 +390,10 @@ int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_a
             // never be admitted however empty the card gets. Derived from the same
             // constants the admission path uses so the two cannot drift.
             // The caller's per-index fraction; 0 means "use the governor default".
-            uint64_t pct = budget_percent;
-            if (pct == 0) pct = matrixone::device_memory_governor::kBudgetPercent;
-            *out_max_admissible = static_cast<uint64_t>(total_bytes / 100 * pct);
+            // Same resolver and same arithmetic as every admission.
+            *out_max_admissible = static_cast<uint64_t>(
+                matrixone::device_memory_governor::budget_bytes(
+                    total_bytes, static_cast<size_t>(budget_percent)));
         }
         return 0;
     } catch (const std::exception& e) {
@@ -404,26 +405,50 @@ int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_a
     }
 }
 
+namespace {
+// The strictest fraction any cost class asks for. An unrecognised name takes THIS
+// rather than the default -- see the fail-closed note on gpu_index_budget_percent.
+constexpr size_t kStrictestBudgetPercent =
+    matrixone::ivf_pq_cost::kBudgetPercent < matrixone::index_cost_base::kDefaultBudgetPercent
+        ? matrixone::ivf_pq_cost::kBudgetPercent
+        : matrixone::index_cost_base::kDefaultBudgetPercent;
+}  // namespace
+
 // gpu_index_budget_percent reports an algorithm's VRAM budget fraction without
 // constructing an index: the value is a per-class constant (index_cost.hpp), and
 // callers on the Go side need it to admit a build or a load against the same
 // fraction the C++ claim will use.
 //
 // index_type is the index type name already carried by IndexConfig.Type
-// ("IVFPQ", "CAGRA", ...); unknown or null names take the default.
+// ("IVFPQ", "CAGRA", ...); an unrecognised or null name takes the STRICTEST known
+// fraction, not the default -- see the fail-closed note in the body.
 //
-// MAINTENANCE: every cost class that overrides budget_percent() must appear here.
-// A name that falls through to the default is admitted by the Go-side gates at a
-// LARGER fraction than its own claim will accept, so a load passes the aggregate
-// pre-flight and then throws on the first deserialize -- after the whole artifact
-// has been downloaded, and naming one sub-index instead of the aggregate. There is
-// no compile-time enumeration of the subclasses to key off, so this list is the
-// only thing keeping the two in step.
+// MAINTENANCE: every cost class must appear below. C++ gives no compile-time
+// enumeration of the subclasses to key off, so this list is the only thing tying
+// the Go-side gates to the fraction the claim will actually use. The fail-closed
+// fallback bounds the damage of forgetting; it does not remove the obligation.
 uint64_t gpu_index_budget_percent(const char* index_type) {
-    if (index_type != nullptr && std::strcmp(index_type, "IVFPQ") == 0) {
-        return static_cast<uint64_t>(matrixone::ivf_pq_cost::kBudgetPercent);
+    if (index_type != nullptr) {
+        if (std::strcmp(index_type, "IVFPQ") == 0) {
+            return static_cast<uint64_t>(matrixone::ivf_pq_cost::kBudgetPercent);
+        }
+        // Classes that do not override budget_percent() take the default.
+        if (std::strcmp(index_type, "CAGRA") == 0 || std::strcmp(index_type, "IVFFLAT") == 0) {
+            return static_cast<uint64_t>(matrixone::index_cost_base::kDefaultBudgetPercent);
+        }
     }
-    return static_cast<uint64_t>(matrixone::index_cost_base::kDefaultBudgetPercent);
+    // FAIL CLOSED. An unrecognised name used to fall through to the DEFAULT, which
+    // is the LOOSEST fraction -- so a future cost class that lowers its own
+    // budget_percent() without being added above would be admitted by the Go gates
+    // at 75% and then refused by its own claim at whatever it actually uses. That
+    // is the 65%-vs-75% defect re-created for the next algorithm, and a comment
+    // asking the next author to remember is not a guard.
+    //
+    // Taking the strictest known fraction instead over-refuses, which costs
+    // capacity and is visible; the other direction admits an index the device
+    // cannot hold and surfaces as a mid-load throw. Today every caller passes a
+    // name matched above (IndexConfig.Type), so this is a no-op in production.
+    return static_cast<uint64_t>(kStrictestBudgetPercent);
 }
 
 void* gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg) {

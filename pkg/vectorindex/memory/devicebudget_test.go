@@ -84,6 +84,29 @@ func TestDeviceBuildBytes(t *testing.T) {
 	})
 }
 
+// fakeBudget implements DeviceBudget for the CPU tests. A missing bound returns an
+// error rather than zero: a gate that silently treated an absent ceiling as 0
+// would refuse everything, and one that treated it as unlimited would admit
+// everything -- both are worse than a loud failure.
+type fakeBudget struct {
+	maxAdm func(dev int) (uint64, error)
+	rows   DeviceRowsFittingFunc
+}
+
+func (f fakeBudget) MaxAdmissible(dev int) (uint64, error) {
+	if f.maxAdm == nil {
+		return 0, errors.New("fakeBudget: MaxAdmissible not configured")
+	}
+	return f.maxAdm(dev)
+}
+
+func (f fakeBudget) RowsFitting(dev int, perRow uint64) (int64, uint64, error) {
+	if f.rows == nil {
+		return 0, 0, errors.New("fakeBudget: RowsFitting not configured")
+	}
+	return f.rows(dev, perRow)
+}
+
 // fakeRowsFitting stands in for cuvs.RowsFittingFreeMem. It reproduces the one
 // detail that matters to the code under test: the result is CLAMPED to a minimum
 // of 1 (helper.cpp rows_fitting_gpu_mem). A fake without that clamp lets a "did
@@ -109,7 +132,7 @@ func fakeRowsFitting(free uint64) DeviceRowsFittingFunc {
 // fakeTotalMem builds a DeviceTotalMemFunc over a per-device capacity map. This
 // is the seam that lets the hardware rule be tested without a GPU; production
 // passes cuvs.DeviceTotalMem, the only part that needs real hardware.
-func fakeMaxAdmissible(total map[int]uint64) DeviceMaxAdmissibleFunc {
+func fakeMaxAdmissible(total map[int]uint64) func(dev int) (uint64, error) {
 	return func(dev int) (uint64, error) {
 		t, ok := total[dev]
 		if !ok {
@@ -126,13 +149,11 @@ func fakeMaxAdmissible(total map[int]uint64) DeviceMaxAdmissibleFunc {
 // CREATE on rather than deferring to the first query.
 func TestDeviceAggregateFitsHardware(t *testing.T) {
 	t.Run("fits on the hardware", func(t *testing.T) {
-		require.NoError(t, DeviceAggregateFitsHardware(
-			[]int{0}, 4<<30, fakeMaxAdmissible(map[int]uint64{0: 8 << 30})))
+		require.NoError(t, DeviceAggregateFitsHardware([]int{0}, 4<<30, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("exceeding the admissible budget is refused and names both figures", func(t *testing.T) {
-		err := DeviceAggregateFitsHardware(
-			[]int{0}, 9<<30, fakeMaxAdmissible(map[int]uint64{0: 8 << 30}))
+		err := DeviceAggregateFitsHardware([]int{0}, 9<<30, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "9216 MB") // what one device must hold
 		require.Contains(t, err.Error(), "8192 MB") // what the card has
@@ -143,20 +164,17 @@ func TestDeviceAggregateFitsHardware(t *testing.T) {
 		// The refusal test is >, not >=: an index that exactly fills the admissible
 		// budget is not provably unusable, and this gate only refuses the provable
 		// case -- one that no free-memory level could ever satisfy.
-		require.NoError(t, DeviceAggregateFitsHardware(
-			[]int{0}, 8<<30, fakeMaxAdmissible(map[int]uint64{0: 8 << 30})))
+		require.NoError(t, DeviceAggregateFitsHardware([]int{0}, 8<<30, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("one byte over is refused", func(t *testing.T) {
-		require.Error(t, DeviceAggregateFitsHardware(
-			[]int{0}, (8<<30)+1, fakeMaxAdmissible(map[int]uint64{0: 8 << 30})))
+		require.Error(t, DeviceAggregateFitsHardware([]int{0}, (8<<30)+1, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("the tightest participating device decides", func(t *testing.T) {
 		// Heterogeneous devices: fitting the roomiest is not enough, because under
 		// SINGLE_GPU/REPLICATED every device must hold the whole per-device share.
-		err := DeviceAggregateFitsHardware(
-			[]int{0, 1}, 12<<30, fakeMaxAdmissible(map[int]uint64{0: 24 << 30, 1: 8 << 30}))
+		err := DeviceAggregateFitsHardware([]int{0, 1}, 12<<30, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 24 << 30, 1: 8 << 30})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "device 1")
 	})
@@ -165,22 +183,20 @@ func TestDeviceAggregateFitsHardware(t *testing.T) {
 		// gpu_multi_simulation resolves every logical rank onto physical 0. The
 		// demand is per-device already, so the aliases must collapse rather than
 		// multiply.
-		require.NoError(t, DeviceAggregateFitsHardware(
-			[]int{0, 0, 0, 0}, 4<<30, fakeMaxAdmissible(map[int]uint64{0: 8 << 30})))
+		require.NoError(t, DeviceAggregateFitsHardware([]int{0, 0, 0, 0}, 4<<30, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("an unreadable device refuses rather than guesses", func(t *testing.T) {
 		// Assuming it fits is exactly the failure this gate exists to prevent.
-		err := DeviceAggregateFitsHardware(
-			[]int{7}, 1<<30, fakeMaxAdmissible(map[int]uint64{0: 8 << 30}))
+		err := DeviceAggregateFitsHardware([]int{7}, 1<<30, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot read the admissible VRAM")
 	})
 
 	t.Run("degenerate inputs are no-ops", func(t *testing.T) {
 		fn := fakeMaxAdmissible(map[int]uint64{0: 1})
-		require.NoError(t, DeviceAggregateFitsHardware([]int{0}, 0, fn), "nothing to admit")
-		require.NoError(t, DeviceAggregateFitsHardware(nil, 1<<30, fn), "no devices")
+		require.NoError(t, DeviceAggregateFitsHardware([]int{0}, 0, fakeBudget{maxAdm: fn}), "nothing to admit")
+		require.NoError(t, DeviceAggregateFitsHardware(nil, 1<<30, fakeBudget{maxAdm: fn}), "no devices")
 		require.NoError(t, DeviceAggregateFitsHardware([]int{0}, 1<<30, nil), "no measurement source")
 	})
 }
@@ -267,17 +283,17 @@ func TestDeviceAggregateFitsFree(t *testing.T) {
 	// 1000 free -> 600 admissible at the fake's stand-in fraction, clamp included:
 	// a fake without that clamp models a contract the real rows_fitting_gpu_mem
 	// does not have, which is how an always-true predicate shipped here once
-	// before. Production passes cuvs.RowsFittingFreeMemAt with the index's own
+	// before. Production passes cuvs.BudgetFor, which carries the index's own
 	// fraction; what is under test here is the comparison, not the fraction.
 	fn := fakeRowsFitting(1000)
 
 	t.Run("under the budget is admitted, over is refused", func(t *testing.T) {
-		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, 1, 1, fn))
-		require.Error(t, DeviceAggregateFitsFree([]int{0}, 601, 1, 1, fn))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, 1, 1, fakeBudget{rows: fn}))
+		require.Error(t, DeviceAggregateFitsFree([]int{0}, 601, 1, 1, fakeBudget{rows: fn}))
 	})
 
 	t.Run("the refusal is situational, naming free rather than the card", func(t *testing.T) {
-		err := DeviceAggregateFitsFree([]int{0}, 900, 1, 1, fn)
+		err := DeviceAggregateFitsFree([]int{0}, 900, 1, 1, fakeBudget{rows: fn})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "right now")
 		require.Contains(t, err.Error(), "device 0")
@@ -297,21 +313,21 @@ func TestDeviceAggregateFitsFree(t *testing.T) {
 				return rows, f, nil
 			}
 		}
-		err := DeviceAggregateFitsFree([]int{0, 1}, 700, 2, 2, perDev(map[int]uint64{0: 100000, 1: 1000}))
+		err := DeviceAggregateFitsFree([]int{0, 1}, 700, 2, 2, fakeBudget{rows: perDev(map[int]uint64{0: 100000, 1: 1000})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "device 1")
 	})
 
 	t.Run("an unmeasurable device refuses rather than guesses", func(t *testing.T) {
 		boom := func(int, uint64) (int64, uint64, error) { return 0, 0, errors.New("unreadable") }
-		err := DeviceAggregateFitsFree([]int{0}, 10, 1, 1, boom)
+		err := DeviceAggregateFitsFree([]int{0}, 10, 1, 1, fakeBudget{rows: boom})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot measure device")
 	})
 
 	t.Run("degenerate inputs are no-ops", func(t *testing.T) {
-		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 0, 1, 1, fn))
-		require.NoError(t, DeviceAggregateFitsFree(nil, 600, 1, 1, fn))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 0, 1, 1, fakeBudget{rows: fn}))
+		require.NoError(t, DeviceAggregateFitsFree(nil, 600, 1, 1, fakeBudget{rows: fn}))
 		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, 1, 1, nil))
 	})
 }
@@ -325,13 +341,13 @@ func TestDeviceAggregateFitsFreePartial(t *testing.T) {
 	t.Run("a partial refusal does not present its figure as the whole index", func(t *testing.T) {
 		// Sizing a fix from "needs 700 MB" when only 2 of 5 sub-indexes were
 		// measured sends the operator after a target that is too small.
-		err := DeviceAggregateFitsFree([]int{0}, 700, 2, 5, fn)
+		err := DeviceAggregateFitsFree([]int{0}, 700, 2, 5, fakeBudget{rows: fn})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "at least")
 		require.Contains(t, err.Error(), "2 of 5 sub-indexes measured")
 
 		// The complete aggregate states the figure plainly, with no hedge.
-		err = DeviceAggregateFitsFree([]int{0}, 700, 5, 5, fn)
+		err = DeviceAggregateFitsFree([]int{0}, 700, 5, 5, fakeBudget{rows: fn})
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), "at least")
 		require.NotContains(t, err.Error(), "sub-indexes measured")
@@ -340,7 +356,7 @@ func TestDeviceAggregateFitsFreePartial(t *testing.T) {
 	t.Run("a partial total under budget is still admitted", func(t *testing.T) {
 		// Fail-fast must not become fail-early: the loop has to keep going while
 		// the running total still fits, or a large index could never load.
-		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 300, 1, 5, fn))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 300, 1, 5, fakeBudget{rows: fn}))
 	})
 
 	t.Run("PeakDeviceBytes is monotone, which is what makes early refusal sound", func(t *testing.T) {
@@ -386,13 +402,14 @@ func TestRefusalNeverPrintsZeroForNonZeroBytes(t *testing.T) {
 	require.Equal(t, "2048 MB", mib(2<<30))
 
 	// End to end through the gate a small index actually hits.
-	err := DeviceAggregateFitsFree([]int{0}, 900, 1, 1, fakeRowsFitting(1000))
+	err := DeviceAggregateFitsFree([]int{0}, 900, 1, 1, fakeBudget{rows: fakeRowsFitting(1000)})
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "0 MB",
 		"a sub-megabyte refusal must not report zeros")
 	require.Contains(t, err.Error(), "900 bytes")
 
-	err = DeviceAggregateFitsHardware([]int{0}, 900, func(int) (uint64, error) { return 600, nil })
+	err = DeviceAggregateFitsHardware([]int{0}, 900,
+		fakeBudget{maxAdm: func(int) (uint64, error) { return 600, nil }})
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "0 MB")
 	require.Contains(t, err.Error(), "900 bytes")

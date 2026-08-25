@@ -104,3 +104,42 @@ func TestDeviceMaxAdmissible(t *testing.T) {
 	require.NotEqual(t, free/100*IndexBudgetPercent("CAGRA"), maxAdm,
 		"must be a fraction of total, not of free")
 }
+
+// IndexBudgetPercent must FAIL CLOSED on a name it does not recognise.
+//
+// It used to return the default, which is the LOOSEST fraction. Since the Go-side
+// gates admit against this value while the C++ claim uses the cost class's own,
+// an unrecognised name meant "admit at 75%, then throw at whatever the class
+// actually uses" -- the 65-vs-75 defect, waiting for the next cost class that
+// lowers its budget and is not added to the table in helper.cpp.
+//
+// Over-refusing costs capacity and is visible. Over-admitting surfaces as a
+// mid-load throw after the whole artifact has been downloaded. This pins the
+// direction.
+func TestIndexBudgetPercentFailsClosed(t *testing.T) {
+	pq := IndexBudgetPercent("IVFPQ")
+	cagra := IndexBudgetPercent("CAGRA")
+	flat := IndexBudgetPercent("IVFFLAT")
+
+	require.Positive(t, pq)
+	require.Less(t, pq, cagra, "IVF-PQ reserves more headroom than the default")
+	require.Equal(t, cagra, flat, "neither CAGRA nor IVF-Flat overrides the default")
+
+	// The strictest known fraction, not the default.
+	for _, unknown := range []string{"", "HNSW", "ivfpq", "IVF_PQ", "NOT_AN_INDEX"} {
+		require.Equal(t, pq, IndexBudgetPercent(unknown),
+			"unrecognised name %q must take the STRICTEST fraction, not the loosest", unknown)
+	}
+
+	// And the pairing carries it: a stricter fraction must yield a lower ceiling.
+	devices, err := GetGpuDeviceList()
+	require.NoError(t, err)
+	if len(devices) == 0 {
+		t.Skip("no GPU devices")
+	}
+	strict, err := BudgetFor("NOT_AN_INDEX").MaxAdmissible(devices[0])
+	require.NoError(t, err)
+	loose, err := BudgetFor("CAGRA").MaxAdmissible(devices[0])
+	require.NoError(t, err)
+	require.Less(t, strict, loose)
+}

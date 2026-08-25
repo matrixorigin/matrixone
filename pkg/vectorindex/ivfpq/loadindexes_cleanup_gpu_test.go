@@ -33,6 +33,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testBudget implements memory.DeviceBudget with only the free-VRAM bound, which
+// is the one the load gate consults. MaxAdmissible errors rather than returning a
+// number, so a test that reaches the CREATE gate by accident fails loudly instead
+// of silently comparing against zero.
+type testBudget struct {
+	rows func(dev int, perRow uint64) (int64, uint64, error)
+}
+
+func (b testBudget) MaxAdmissible(int) (uint64, error) {
+	return 0, moerr.NewInternalErrorNoCtx("testBudget: MaxAdmissible not configured")
+}
+
+func (b testBudget) RowsFitting(dev int, perRow uint64) (int64, uint64, error) {
+	return b.rows(dev, perRow)
+}
+
 // tempArtifacts lists the fetch scratch files loadIndexes creates. FetchArtifact
 // uses os.CreateTemp("", "ivfpq"), so a leaked download is visible by name.
 func tempArtifacts(t *testing.T) map[string]bool {
@@ -158,7 +174,7 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 		return executor.Result{}, nil
 	}
 
-	// Stands in for cuvs.RowsFittingFreeMemAt: perRow = 1 means the answer IS the
+	// Stands in for the free-VRAM half of cuvs.BudgetFor: perRow = 1 means the answer IS the
 	// byte budget, and the real one clamps to a minimum of 1.
 	rowsFitting := func(_ int, perRow uint64) (int64, uint64, error) {
 		rows := int64(budget / perRow)
@@ -175,7 +191,7 @@ func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 	require.NoError(t, lerr)
 	require.Len(t, indexes, len(ids))
 
-	_, err = s.loadIndexes(sqlproc, indexes, rowsFitting)
+	_, err = s.loadIndexes(sqlproc, indexes, testBudget{rows: rowsFitting})
 	require.Error(t, err, "two sub-indexes exceed the budget, so the load must be refused")
 	require.Contains(t, err.Error(), "at least",
 		"a refusal on a partial aggregate must not state its figure as the whole index")

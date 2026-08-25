@@ -87,7 +87,10 @@ public:
     // Capacity sizing (rows_fitting) and the admission that follows both read this
     // same value, so a build cannot be sized against one fraction and admitted
     // against another.
-    static constexpr size_t kDefaultBudgetPercent = 75;
+    // Derived, not restated: device_memory_governor is where the default lives, and
+    // a second literal here would be a number two headers can disagree about.
+    static constexpr size_t kDefaultBudgetPercent =
+        matrixone::device_memory_governor::kBudgetPercent;
     virtual size_t budget_percent() const { return kDefaultBudgetPercent; }
 
     // rows_fitting: how many rows fit across a device set.

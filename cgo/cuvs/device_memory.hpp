@@ -85,12 +85,31 @@ public:
     // fails on the single allocation that needs it. CONCURRENCY is handled by the
     // ledger below instead: in-flight claims are summed, so two builds cannot both
     // pass the same free-memory snapshot however generous this fraction is.
-    static constexpr size_t kBudgetNumerator   = 3;
-    static constexpr size_t kBudgetDenominator = 4;
+    // THE default fraction, as a percentage. index_cost_base::kDefaultBudgetPercent
+    // derives from this rather than restating it -- two independent 75s in two
+    // headers is the same drift this subsystem keeps getting caught by, one header
+    // apart instead of one language apart.
+    //
+    // Was a 3/4 numerator/denominator pair, which only ever existed to compute this
+    // number and made the arithmetic differ by rounding (pool/4*3 is not
+    // pool/100*75). Every fraction is a percent now, so the pair is gone.
+    static constexpr size_t kBudgetPercent = 75;
 
-    // Budget as a percentage, for messages -- derived so the text cannot drift
-    // from the constants the way a hardcoded "60%" did.
-    static constexpr size_t kBudgetPercent = kBudgetNumerator * 100 / kBudgetDenominator;
+    // effective_percent / budget_bytes are the ONLY places the fraction is
+    // resolved and applied. Both used to be open-coded at each admission site --
+    // three copies of "0 means default" and three of "pool / 100 * percent" --
+    // and one copy drifting is not a hypothetical: this whole subsystem's bugs
+    // have been two places disagreeing about the same number, never the
+    // arithmetic itself.
+    //
+    // pool_bytes is FREE VRAM for an admission, TOTAL VRAM for the permanent
+    // ceiling; percent 0 means "no cost class asked", i.e. the default.
+    static size_t effective_percent(size_t percent) {
+        return percent == 0 ? kBudgetPercent : percent;
+    }
+    static size_t budget_bytes(size_t pool_bytes, size_t percent) {
+        return pool_bytes / 100 * effective_percent(percent);
+    }
 
     // RAII claim. Move-only; releasing twice is a no-op, so an explicit
     // release() alongside scope exit is safe.
@@ -214,8 +233,10 @@ public:
                                      " bytes: " + cudaGetErrorString(err));
         }
 
-        if (budget_percent == 0) budget_percent = kBudgetPercent;
-        const size_t budget = free_bytes / 100 * budget_percent;
+        // Normalise first: the refusal message below quotes budget_percent, and an
+        // un-normalised 0 would print "0% of N free".
+        budget_percent = effective_percent(budget_percent);
+        const size_t budget = budget_bytes(free_bytes, budget_percent);
 
         // Check-and-claim as one CAS so two concurrent callers cannot both pass
         // against the same ledger value. On CAS failure `inflight` is refreshed

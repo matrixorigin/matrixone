@@ -166,6 +166,84 @@ func mib(n uint64) string {
 	return fmt.Sprintf("%d MB", n>>20)
 }
 
+// DeviceBudget carries BOTH bounds an aggregate gate can be measured against,
+// derived from ONE budget fraction.
+//
+// They are paired deliberately. The two gates are the same comparison against
+// different pools -- total VRAM for the permanent CREATE refusal, free VRAM for
+// the situational load refusal -- and while each took its own function, each
+// CALLER chose its own fraction. They chose differently: the load pre-flight sat
+// on the 75% default while IVF-PQ's own claim used 65%, so an index sized between
+// the two passed the pre-flight and threw on the first deserialize, after the
+// whole artifact had been downloaded. Handing both gates one value obtained one
+// way (cuvs.BudgetFor) makes that disagreement unrepresentable rather than merely
+// caught.
+//
+// An INTERFACE, not a struct of closures, so that the implementation can live in
+// pkg/cuvs without either package importing the other -- Go satisfies it
+// structurally. Production passes cuvs.BudgetFor(indexType); tests pass a fake.
+// A nil budget means "no bound available", and the gates decline to judge, which
+// is the existing no-op-on-missing-input behaviour. Implement it with a VALUE
+// type, as cuvs.DeviceBudget does: a typed-nil pointer is not == nil as an
+// interface, so it would pass that guard and then panic on the first method call
+// -- which a nil func value could not do.
+//
+// Both bounds on one value is the point: a type cannot supply one fraction to
+// MaxAdmissible and a different one to RowsFitting.
+type DeviceBudget interface {
+	// MaxAdmissible: the budget fraction of TOTAL VRAM -- the most any admission
+	// could EVER grant on a device. Used by the permanent CREATE gate.
+	MaxAdmissible(dev int) (uint64, error)
+	// RowsFitting: the budget fraction of FREE VRAM, in the rows-of-perRow-bytes
+	// form the C++ exposes. Used by the situational load gate.
+	RowsFitting(dev int, perRowBytes uint64) (rows int64, freeBytes uint64, err error)
+}
+
+// deviceCeiling reports one device's admission ceiling, plus the raw reading it
+// was derived from (total or free) for the refusal message.
+type deviceCeiling func(dev int) (ceiling, observed uint64, err error)
+
+// deviceOverBudget names the device that could not hold the demand.
+type deviceOverBudget struct {
+	dev               int
+	ceiling, observed uint64
+}
+
+// deviceMeasureFailure names the device that could not be measured.
+type deviceMeasureFailure struct {
+	dev   int
+	cause error
+}
+
+// deviceAggregateExceeds is the ONE comparison both aggregate gates make: walk the
+// distinct physical devices, ask each for its ceiling, and report the first that
+// cannot hold need. Returns (nil, nil) when every device can.
+//
+// Factored out because the two gates differ ONLY in which pool they measure and
+// how they word the refusal -- the iteration, the DeviceDistinct aliasing rule and
+// the refuse-rather-than-guess response to an unmeasurable device were duplicated,
+// and duplicated admission logic is what this subsystem keeps getting wrong.
+//
+// It deliberately does NOT build the error. The two refusals are not variants of
+// one sentence: one says the index can never be queried on this GPU and to rebuild
+// it smaller, the other says not right now and to retry. Collapsing them behind a
+// mode flag would trade duplicated logic for a function that is half message
+// selection, which is worse.
+func deviceAggregateExceeds(
+	devices []int, need uint64, ceilingOf deviceCeiling,
+) (*deviceOverBudget, *deviceMeasureFailure) {
+	for _, dev := range DeviceDistinct(devices) {
+		ceiling, observed, err := ceilingOf(dev)
+		if err != nil {
+			return nil, &deviceMeasureFailure{dev: dev, cause: err}
+		}
+		if need > ceiling {
+			return &deviceOverBudget{dev: dev, ceiling: ceiling, observed: observed}, nil
+		}
+	}
+	return nil, nil
+}
+
 // DeviceAggregateFitsFree refuses a set of sub-indexes BEFORE any of them is
 // loaded, when the busiest device could not hold them all right now.
 //
@@ -198,9 +276,9 @@ func mib(n uint64) string {
 // their fix from it, and the untouched sub-indexes only make it larger. Pass
 // measured == total for a complete aggregate.
 func DeviceAggregateFitsFree(
-	devices []int, perDeviceBytes uint64, measured, total int, rowsFitting DeviceRowsFittingFunc,
+	devices []int, perDeviceBytes uint64, measured, total int, budget DeviceBudget,
 ) error {
-	if perDeviceBytes == 0 || len(devices) == 0 || rowsFitting == nil {
+	if perDeviceBytes == 0 || len(devices) == 0 || budget == nil {
 		return nil
 	}
 	// "needs N MB" for the whole index; "needs at least N MB" while sub-indexes
@@ -212,34 +290,36 @@ func DeviceAggregateFitsFree(
 		scope = fmt.Sprintf(" (%d of %d sub-indexes measured; the rest were not downloaded)",
 			measured, total)
 	}
-	for _, dev := range DeviceDistinct(devices) {
-		// perRow = 1 makes rows_fitting_gpu_mem return the byte budget itself,
-		// computed by the same C++ every other admission on this path uses, so the
-		// budget fraction is not duplicated here. Do NOT ask whether N rows of N
-		// bytes fit and test for zero: that function clamps its result to a minimum
-		// of 1, so any predicate built on it is silently always-true.
-		budget, free, err := rowsFitting(dev, 1)
-		if err != nil {
-			return moerr.NewInternalErrorNoCtxf(
-				"vector index load: cannot measure device %d to admit %d bytes: %v",
-				dev, perDeviceBytes, err)
+	// perRow = 1 makes rows_fitting_gpu_mem return the byte budget itself, computed
+	// by the same C++ every other admission on this path uses, so the fraction is
+	// not duplicated here. Do NOT ask whether N rows of N bytes fit and test for
+	// zero: that function clamps its result to a minimum of 1, so any predicate
+	// built on it is silently always-true.
+	over, unmeasured := deviceAggregateExceeds(devices, perDeviceBytes, func(dev int) (uint64, uint64, error) {
+		rows, free, ferr := budget.RowsFitting(dev, 1)
+		// A negative row count means the C++ could not size anything; treat it as a
+		// zero ceiling so the refusal quotes 0 rather than the huge number an
+		// int64 -> uint64 conversion of a negative produces.
+		if rows < 0 {
+			rows = 0
 		}
-		if budget < 0 || perDeviceBytes > uint64(budget) {
-			return moerr.NewInternalErrorNoCtxf(
-				"vector index load: this index needs %s%s resident on device %d to be searched%s, "+
-					"but only %s may be claimed there right now (%s free), because a query "+
-					"reads every sub-index at once. Evict cached indexes, or retry when the device "+
-					"is quieter",
-				atLeast, mib(perDeviceBytes), dev, scope, mib(uint64(budget)), mib(free))
-		}
+		return uint64(rows), free, ferr
+	})
+	if unmeasured != nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"vector index load: cannot measure device %d to admit %d bytes: %v",
+			unmeasured.dev, perDeviceBytes, unmeasured.cause)
+	}
+	if over != nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"vector index load: this index needs %s%s resident on device %d to be searched%s, "+
+				"but only %s may be claimed there right now (%s free), because a query "+
+				"reads every sub-index at once. Evict cached indexes, or retry when the device "+
+				"is quieter",
+			atLeast, mib(perDeviceBytes), over.dev, scope, mib(over.ceiling), mib(over.observed))
 	}
 	return nil
 }
-
-// DeviceMaxAdmissibleFunc reports the most VRAM any admission could ever grant on
-// a device -- the governor's budget fraction of TOTAL memory, not of free.
-// Indirected like DeviceRowsFittingFunc so the rule is testable without a GPU.
-type DeviceMaxAdmissibleFunc func(dev int) (uint64, error)
 
 // DeviceAggregateFitsHardware refuses a finished build that could never be
 // resident on the DEVICE HARDWARE, whatever is free at the time.
@@ -267,29 +347,32 @@ type DeviceMaxAdmissibleFunc func(dev int) (uint64, error)
 // however idle the card. Comparing against raw total would leave that band
 // committing artifacts whose every query fails.
 func DeviceAggregateFitsHardware(
-	devices []int, perDeviceBytes uint64, maxAdmissible DeviceMaxAdmissibleFunc,
+	devices []int, perDeviceBytes uint64, budget DeviceBudget,
 ) error {
-	if perDeviceBytes == 0 || len(devices) == 0 || maxAdmissible == nil {
+	if perDeviceBytes == 0 || len(devices) == 0 || budget == nil {
 		return nil
 	}
-	for _, dev := range DeviceDistinct(devices) {
-		total, err := maxAdmissible(dev)
-		if err != nil {
-			// Never guess. An unreadable device is not permission to commit an
-			// index that may be unsearchable.
-			return moerr.NewInternalErrorNoCtxf(
-				"vector index build: cannot read the admissible VRAM of device %d to validate a %d byte index: %v",
-				dev, perDeviceBytes, err)
-		}
-		if perDeviceBytes > total {
-			return moerr.NewInvalidInputNoCtxf(
-				"vector index build: one device must hold %s of this index to serve a query, "+
-					"but device %d can admit at most %s even when completely idle. Every "+
-					"query reads all sub-indexes at once, so rotation cannot help and this "+
-					"index could never be queried on this GPU. Rebuild with a narrower storage "+
-					"type (QUANTIZATION), index fewer rows, or use a GPU with more memory",
-				mib(perDeviceBytes), dev, mib(total))
-		}
+	over, unmeasured := deviceAggregateExceeds(devices, perDeviceBytes, func(dev int) (uint64, uint64, error) {
+		total, terr := budget.MaxAdmissible(dev)
+		// The ceiling IS the reading here: there is no second figure to quote, the
+		// way free memory accompanies a situational refusal.
+		return total, total, terr
+	})
+	if unmeasured != nil {
+		// Never guess. An unreadable device is not permission to commit an index
+		// that may be unsearchable.
+		return moerr.NewInternalErrorNoCtxf(
+			"vector index build: cannot read the admissible VRAM of device %d to validate a %d byte index: %v",
+			unmeasured.dev, perDeviceBytes, unmeasured.cause)
+	}
+	if over != nil {
+		return moerr.NewInvalidInputNoCtxf(
+			"vector index build: one device must hold %s of this index to serve a query, "+
+				"but device %d can admit at most %s even when completely idle. Every "+
+				"query reads all sub-indexes at once, so rotation cannot help and this "+
+				"index could never be queried on this GPU. Rebuild with a narrower storage "+
+				"type (QUANTIZATION), index fewer rows, or use a GPU with more memory",
+			mib(perDeviceBytes), over.dev, mib(over.ceiling))
 	}
 	return nil
 }

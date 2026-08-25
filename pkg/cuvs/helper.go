@@ -22,10 +22,11 @@ package cuvs
 */
 import "C"
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // DistanceType maps to C.distance_type_t
@@ -291,6 +292,41 @@ func IndexBudgetPercent(indexType string) uint64 {
 	return uint64(C.gpu_index_budget_percent(cs))
 }
 
+// BudgetFor pairs an algorithm's two admission bounds, both derived from ONE
+// IndexBudgetPercent call.
+//
+// This is the only supported way to obtain them. The permanent CREATE gate and the
+// situational load gate ask the same question of different pools, and while each
+// caller picked its own fraction they picked differently -- the load pre-flight
+// stayed on the 75% default while IVF-PQ's own claim used 65%, so an index sized
+// between the two passed the pre-flight and then threw on the first deserialize,
+// with the whole artifact already downloaded. One lookup feeding both closures
+// makes that mismatch unrepresentable.
+//
+// indexType is the name IndexConfig.Type already carries (vectorindex.IVFPQ, ...).
+func BudgetFor(indexType string) DeviceBudget {
+	return DeviceBudget{pct: IndexBudgetPercent(indexType)}
+}
+
+// DeviceBudget carries ONE budget fraction and derives both admission bounds from
+// it. It satisfies memory.DeviceBudget structurally, which is why this package
+// does not import that one -- an explicit dependency here would be an import cycle
+// in memory's own GPU test.
+//
+// The fraction is unexported on purpose: the only way to obtain a DeviceBudget is
+// BudgetFor, so the two bounds cannot be built from different fractions.
+type DeviceBudget struct{ pct uint64 }
+
+// MaxAdmissible: the fraction of TOTAL VRAM -- the permanent ceiling.
+func (b DeviceBudget) MaxAdmissible(dev int) (uint64, error) {
+	return DeviceMaxAdmissible(dev, b.pct)
+}
+
+// RowsFitting: the fraction of FREE VRAM -- the situational ceiling.
+func (b DeviceBudget) RowsFitting(dev int, perRowBytes uint64) (int64, uint64, error) {
+	return rowsFittingFreeMem(dev, perRowBytes, b.pct)
+}
+
 // DeviceMaxAdmissible reports the most VRAM any admission could EVER grant on a
 // device: the governor's budget fraction of TOTAL memory.
 //
@@ -356,23 +392,6 @@ func DeviceTotalMem(deviceID int) (uint64, error) {
 // as used memory, so a later reading understates what is actually available for the build.
 func RowsFittingFreeMem(deviceID int, perRowBytes uint64) (rows int64, freeBytes uint64, err error) {
 	return rowsFittingFreeMem(deviceID, perRowBytes, 0)
-}
-
-// RowsFittingFreeMemAt is RowsFittingFreeMem against an explicit budget fraction --
-// the algorithm's own, from IndexBudgetPercent. 0 means the governor default.
-//
-// A pre-flight that admits against a LARGER fraction than the C++ load claim uses is
-// worse than no pre-flight: IVF-PQ claims at 65% (ivf_pq_cost::kBudgetPercent), so a
-// gate left on the 75% default admits an index sized between the two, and the first
-// deserialize then refuses it -- after the whole artifact has been downloaded, and
-// with a message naming one sub-index instead of the aggregate. That is precisely
-// the failure the aggregate gate exists to turn into an up-front refusal.
-//
-// Returned as a closure so it drops straight into memory.DeviceRowsFittingFunc.
-func RowsFittingFreeMemAt(budgetPercent uint64) func(deviceID int, perRowBytes uint64) (int64, uint64, error) {
-	return func(deviceID int, perRowBytes uint64) (rows int64, freeBytes uint64, err error) {
-		return rowsFittingFreeMem(deviceID, perRowBytes, budgetPercent)
-	}
 }
 
 func rowsFittingFreeMem(deviceID int, perRowBytes uint64, budgetPercent uint64) (rows int64, freeBytes uint64, err error) {

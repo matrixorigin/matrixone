@@ -153,13 +153,10 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// statements are executed, so a refusal persists nothing.
 	if perDev := u.builder.PerDeviceBytes(); perDev > 0 {
 		// This algorithm's own fraction, read from its cost class, so the gate
-		// admits against exactly what the build was sized and claimed with.
-		budgetPct := cuvs.IndexBudgetPercent(u.idxcfg.Type)
+		// admits against exactly what the build was sized and claimed with -- and
+		// against the same value the load gate uses, since both come from BudgetFor.
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			u.devices, uint64(perDev),
-			func(dev int) (uint64, error) {
-				return cuvs.DeviceMaxAdmissible(dev, budgetPct)
-			},
+			u.devices, uint64(perDev), cuvs.BudgetFor(u.idxcfg.Type),
 		); aerr != nil {
 			return aerr
 		}

@@ -155,10 +155,12 @@ func TestShardedArtifactFeedsThePreflight(t *testing.T) {
 		// And the reduction is what the gate is actually fed, so the sharded index
 		// must be admissible against a budget that holds the biggest shard alone.
 		require.NoError(t, memory.DeviceAggregateFitsFree(
-			[]int{0, 1, 2, 3}, uint64(biggest), 1, 1,
-			func(int, uint64) (int64, uint64, error) { return biggest, uint64(biggest), nil }))
+			[]int{0, 1, 2, 3}, uint64(biggest), 1, 1, testBudget{
+				rows: func(int, uint64) (int64, uint64, error) { return biggest, uint64(biggest), nil },
+			}))
 		require.Error(t, memory.DeviceAggregateFitsFree(
-			[]int{0, 1, 2, 3}, uint64(biggest), 1, 1,
-			func(int, uint64) (int64, uint64, error) { return biggest - 1, uint64(biggest), nil }))
+			[]int{0, 1, 2, 3}, uint64(biggest), 1, 1, testBudget{
+				rows: func(int, uint64) (int64, uint64, error) { return biggest - 1, uint64(biggest), nil },
+			}))
 	})
 }

@@ -183,8 +183,7 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
 		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
 		// index the very first deserialize then refuses.
-		indexes, err = s.loadIndexes(sqlproc, indexes,
-			cuvs.RowsFittingFreeMemAt(cuvs.IndexBudgetPercent(s.Idxcfg.Type)))
+		indexes, err = s.loadIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type))
 		if err != nil {
 			return err
 		}
@@ -498,12 +497,13 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 // only after the last, so an index that cannot fit is refused as soon as the
 // running total says so instead of after the whole download.
 //
-// rowsFitting is the budget oracle, passed in rather than reached for, so a test
-// can drive a refusal at a chosen sub-index and prove the loop actually stops --
-// the short-circuit is the whole point of checking per tar, and a version that
-// fetched them all would otherwise still pass every assertion.
+// budget is the pair of admission bounds, passed in rather than reached for, so a
+// test can drive a refusal at a chosen sub-index and prove the loop actually stops
+// -- the short-circuit is the whole point of checking per tar, and a version that
+// fetched them all would otherwise still pass every assertion. Production passes
+// cuvs.BudgetFor, the same value the CREATE gate is given.
 func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q],
-	rowsFitting memory.DeviceRowsFittingFunc) ([]*CagraModel[B, Q], error) {
+	budget memory.DeviceBudget) ([]*CagraModel[B, Q], error) {
 	// Fetch, admit, and only then load. Splitting the download from the load is
 	// what lets the gate see the SAME quantity CREATE checked: the device-resident
 	// components of each packed artifact, measured with cuvs.MeasureTar and reduced
@@ -567,7 +567,7 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		// also the complete gate; there is no separate check after the loop.
 		if err := memory.DeviceAggregateFitsFree(
 			s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)),
-			len(comps), len(indexes), rowsFitting,
+			len(comps), len(indexes), budget,
 		); err != nil {
 			return nil, err
 		}
