@@ -110,11 +110,11 @@ type multiInsertGroup struct {
 // multiInsertBranches flattens the statement into per-clause branches, in
 // source order, applying the ALL/FIRST/ELSE routing rules.
 func multiInsertBranches(stmt *tree.MultiInsert) []*multiInsertBranch {
-	var branches []*multiInsertBranch
+	branches := make([]*multiInsertBranch, 0, len(stmt.Targets)+len(stmt.Whens)+len(stmt.Else))
 	for _, target := range stmt.Targets {
 		branches = append(branches, &multiInsertBranch{target: target})
 	}
-	var seen []tree.Expr
+	seen := make([]tree.Expr, 0, len(stmt.Whens))
 	for _, when := range stmt.Whens {
 		var excluded []tree.Expr
 		if stmt.First {
@@ -436,7 +436,7 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 
 	// FILTER: the clause's own WHEN condition plus the negated earlier ones.
 	bCtx.binder = NewWhereBinder(builder, bCtx)
-	var filterList []*plan.Expr
+	filterList := make([]*plan.Expr, 0, len(branch.excluded)+1)
 	if branch.cond != nil {
 		conds, err := splitAndBindCondition(branch.cond, NoAlias, bCtx)
 		if err != nil {
