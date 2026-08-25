@@ -90,8 +90,9 @@ affected design decisions to be reviewed again before approval.
 
 When the gate fails:
 
-- during an external PR review, stop the implementation approval path and submit
-  `REQUEST_CHANGES` with the missing artifact or design blockers;
+- during an external PR review, stop the implementation approval path and make
+  the decision `REQUEST_CHANGES` with the missing artifact or design blockers;
+  submit the GitHub review only when the task authorizes that external mutation;
 - during self-review or implementation work, block push/delivery and produce the
   design fix list; do not claim the change is ready.
 
@@ -156,7 +157,8 @@ following areas that apply.
 ### Verification and open decisions
 
 - Map each behavior and invariant to its cheapest deterministic validation. Use
-  the UT/BVT purposes and cost rules in
+  [validation-evidence.md](validation-evidence.md) for risk-proportional proof
+  and evidence reuse, and the UT/BVT purposes and cost rules in
   [testing-contract.md](testing-contract.md); add benchmark, compatibility,
   restart, upgrade, fault-injection, chaos, or scale evidence only where the
   contract requires it.

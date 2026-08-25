@@ -122,17 +122,22 @@ every merged or removed scenario.
 
 ### UT execution evidence
 
-- Derive owning package patterns from the final diff and prove exact focused
-  selection with `go test -list` (or the CGo wrapper). A green command that ran
-  zero tests is not evidence.
-- Run each changed/directly affected behavioral test with `-count=1`, then each
-  owning package once in normal mode. Use bounded, test-appropriate timeouts.
-- Apply the adaptive focused race protocol and full owning-package race run from
-  `mo-self-review` when shared state, concurrency, lifecycle, or timing can fail.
+- Build the change/risk map from
+  [validation-evidence.md](validation-evidence.md). Derive owning packages from
+  the final diff and prove exact focused selection with `go test -list` (or
+  named test output). A green command that ran zero tests is not evidence.
+- Evidence must include each changed/directly affected behavioral test with
+  `-count=1`, then each owning package once in normal mode where package behavior
+  changed. Use bounded, test-appropriate timeouts; an external reviewer may
+  reuse qualifying exact-head author/CI evidence instead of rerunning it.
+- Apply the adaptive focused race protocol and its conditional owning-package
+  run from [race-validation.md](race-validation.md) when shared state,
+  concurrency, lifecycle, or timing can fail.
 - Use `.agents/skills/mo-dev/scripts/mo-cgo-test` for CGo-direct or transitive
   packages. Do not substitute a successful build for a linked test binary.
-- All evidence must be newer than the last semantic edit or rebase and include
-  the real exit status.
+- Evidence must include the real exit status and remain semantically valid for
+  the code/oracle/fixture/mode/dependency/topology it proves. Unrelated docs,
+  PR metadata, or packages do not force a rerun; ambiguity does.
 
 ## 4. BVT Applicability And Reuse Gate
 
@@ -231,7 +236,8 @@ additional to the derived UT/build/vet matrix, not a substitute.
 
 ## 7. Required Handoff Record
 
-Report:
+Report, using the compact evidence format from
+[validation-evidence.md](validation-evidence.md):
 
 - behavior-to-UT/BVT validation map, including explicit no-BVT rationale;
 - reused versus new fixture/case decision and the isolation boundary;
