@@ -600,6 +600,35 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServerConn_HandleHandshakeClearsReadDeadline(t *testing.T) {
+	defer leaktest.AfterTest(t)
+
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn := testMakeCNServer("cn-deadline", addr, 0, "", labelInfo{})
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
+	defer func() { require.NoError(t, stopFn()) }()
+
+	sc, err := newServerConn(cn, nil, tp.re, 0)
+	require.NoError(t, err)
+	impl := sc.(*serverConn)
+	defer impl.Close()
+
+	// Replace the transport in both serverConn and its frontend protocol so
+	// the test can observe the deadline left by the handshake reads.
+	tracked := &readDeadlineTrackingConn{Conn: impl.conn}
+	impl.conn = tracked
+	impl.mysqlProto.UseConn(tracked)
+
+	_, err = impl.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, 3*time.Second)
+	require.NoError(t, err)
+	require.True(t, tracked.readDeadline().IsZero(),
+		"the frontend handshake deadline must not survive into the tunnel")
+}
+
 func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

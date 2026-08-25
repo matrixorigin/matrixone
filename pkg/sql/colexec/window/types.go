@@ -41,12 +41,15 @@ type container struct {
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
 
-	// runningAgg retains the one-group aggregate for a cumulative ROWS frame
-	// between bounded output chunks. runningNextRow is both the continuation
-	// cursor and a guard against accidentally reusing the state out of order.
+	// runningAgg retains the one-group aggregate for cumulative and bounded
+	// sliding ROWS frames between output chunks. runningNextRow guards against
+	// accidentally reusing the state out of order; runningLeft/runningRight
+	// describe the current half-open sliding frame.
 	runningAgg       aggexec.AggFuncExec
 	runningNextRow   int
 	runningPartition int
+	runningLeft      int
+	runningRight     int
 
 	desc      []bool
 	nullsLast []bool
@@ -209,6 +212,8 @@ func (ctr *container) freeRunningAgg() {
 	}
 	ctr.runningNextRow = 0
 	ctr.runningPartition = 0
+	ctr.runningLeft = 0
+	ctr.runningRight = 0
 }
 
 func (ctr *container) freeExes() {

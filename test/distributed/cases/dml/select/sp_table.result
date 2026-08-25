@@ -61,3 +61,5 @@ mo_user_defined_function    r
 mo_user_grant    r
 mo_variables    v
 mo_version    r
+mo_view_dependencies    cluster
+mo_view_refresh    cluster

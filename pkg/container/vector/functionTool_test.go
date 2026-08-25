@@ -258,6 +258,27 @@ func TestPreExtendAndReset(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPreExtendAndResetExpandsFoldedFixedResult(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_decimal128.ToType(), mp)
+	defer wrapper.Free()
+	result := MustFunctionResult[types.Decimal128](wrapper)
+
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.NoError(t, result.Append(types.Decimal128{B0_63: 1}, false))
+	result.vec.ToConst()
+	result.vec.SetLength(4)
+	require.True(t, result.vec.IsConst())
+
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+	require.False(t, result.vec.IsConst())
+	require.Len(t, result.cols, 4)
+	for i := int64(0); i < 4; i++ {
+		require.NoError(t, result.Append(types.Decimal128{B0_63: uint64(i + 2)}, false))
+	}
+	require.Equal(t, 4, result.vec.Length())
+}
+
 func TestAppendByteJsonEncoded(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)

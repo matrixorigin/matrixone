@@ -150,13 +150,26 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
+	// With a residual filter the hnsw search is JOIN-ed against the scan and the
+	// filter drops index candidates, so the search must over-fetch (fetch k' > k)
+	// to still return k rows. The over-fetch is done once at EXECUTE by the TVF
+	// (flag below), for literal AND parameterized limits alike (#26869).
+	postFilterOverFetch := len(scanNode.FilterList) > 0
+
+	// The TVF must NOT over-fetch again at EXECUTE: node.Limit below already carries
+	// the over-fetched k', for the parameterized case as much as the literal one, so
+	// a second application would compound the factor. The flag stays in the config
+	// for the other algorithms and for older plans that still rely on it.
+	const runtimeOverFetch = false
+
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "post_filter_overfetch": %t}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		hnswCtx.metaDef.IndexTableName,
 		hnswCtx.idxDef.IndexTableName,
 		hnswCtx.nThread,
-		hnswCtx.origFuncName)
+		hnswCtx.origFuncName,
+		runtimeOverFetch)
 
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewBindTag()
@@ -183,36 +196,33 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		return 0, err
 	}
 
-	// pushdown limit to Table Function
-	// When there are filters, over-fetch to get more candidates
-	// This ensures we have enough candidates after filtering
-	if len(scanNode.FilterList) > 0 {
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limit.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Use shared function to calculate over-fetch factor
-			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-			tableFuncNode.Limit = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		} else {
-			// If limit is not a constant, just copy it
-			tableFuncNode.Limit = DeepCopyExpr(limit)
-		}
+	// The raw candidate limit (k) is carried on IndexReaderParam.Limit; the TVF
+	// takes its budget from there and over-fetches k -> k' at EXECUTE when a
+	// residual filter drops candidates (post_filter_overfetch flag).
+	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
+		Limit:          DeepCopyExpr(limit),
+		OrigFuncName:   hnswCtx.origFuncName,
+		OverFetchLimit: overFetchDisplayLimit(limit, postFilterOverFetch, false),
+	}
+	// node.Limit carries the OVER-FETCHED budget k', never the raw k. The #26869
+	// bug was a plan-level top truncating candidates to k before the post-filter
+	// JOIN; truncating at k' instead is exactly the budget the search wants, so the
+	// fix holds while node.Limit stays the channel an old CN can still read.
+	//
+	// This matters because a vector provider child gives the FUNCTION_SCAN a child,
+	// so compileTableFunction attaches the search operator to already-compiled child
+	// scopes that may be Remote: during a rolling upgrade a new coordinator can ship
+	// it to a pre-change CN, whose Prepare reads arg.Limit alone and would default to
+	// one candidate on a nil. Because k' is computed by an expression built from
+	// functions that long predate any CN we can be mixed with, this needs no protocol
+	// capability and no low-version fallback. See BuildOverFetchLimitExpr.
+	overFetchLimit, err := BuildOverFetchLimitExpr(builder.GetContext(), limit, false)
+	if err != nil {
+		return 0, err
+	}
+	if postFilterOverFetch {
+		tableFuncNode.Limit = overFetchLimit
 	} else {
-		// No filters, use original limit
 		tableFuncNode.Limit = DeepCopyExpr(limit)
 	}
 

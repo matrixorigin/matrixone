@@ -114,8 +114,10 @@ type ClientConn interface {
 }
 
 type migration struct {
-	setVarStmtMap map[string]struct{}
-	setVarStmts   []string
+	setVarStmtMap       map[string]struct{}
+	setVarStmts         []string
+	systemSetVarStmtMap map[string]struct{}
+	systemSetVarStmts   []string
 }
 
 type clientConnOption func(*clientConn)
@@ -364,6 +366,7 @@ func newClientConn(
 		c.tlsConfig = tlsConfig
 	}
 	c.migration.setVarStmtMap = make(map[string]struct{})
+	c.migration.systemSetVarStmtMap = make(map[string]struct{})
 	owned = false
 	return c, nil
 }
@@ -765,19 +768,31 @@ func (c *clientConn) handleKill(
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
 	defer e.notify()
-	_, ok := c.migration.setVarStmtMap[e.stmt]
-	if ok {
-		for i := 0; i < len(c.migration.setVarStmts); i++ {
-			if c.migration.setVarStmts[i] == e.stmt {
-				c.migration.setVarStmts = append(c.migration.setVarStmts[:i], c.migration.setVarStmts[i+1:]...)
-				i--
+	if c.migration.setVarStmtMap == nil {
+		c.migration.setVarStmtMap = make(map[string]struct{})
+	}
+	if c.migration.systemSetVarStmtMap == nil {
+		c.migration.systemSetVarStmtMap = make(map[string]struct{})
+	}
+	recordSetVarStmt(&c.migration.setVarStmts, c.migration.setVarStmtMap, e.stmt)
+	if e.systemStmt != "" {
+		recordSetVarStmt(&c.migration.systemSetVarStmts, c.migration.systemSetVarStmtMap, e.systemStmt)
+	}
+	return nil
+}
+
+func recordSetVarStmt(stmts *[]string, stmtMap map[string]struct{}, stmt string) {
+	if _, ok := stmtMap[stmt]; ok {
+		for i := 0; i < len(*stmts); i++ {
+			if (*stmts)[i] == stmt {
+				*stmts = append((*stmts)[:i], (*stmts)[i+1:]...)
+				break
 			}
 		}
 	} else {
-		c.migration.setVarStmtMap[e.stmt] = struct{}{}
+		stmtMap[stmt] = struct{}{}
 	}
-	c.migration.setVarStmts = append(c.migration.setVarStmts, e.stmt)
-	return nil
+	*stmts = append(*stmts, stmt)
 }
 
 func (c *clientConn) handleQuitEvent(ctx context.Context) error {
@@ -841,7 +856,7 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 		// publishing that backend would leave the old response in the socket for
 		// the next generation's SET CONNECTION ID to consume. With c2s sealed and
 		// s2c stopped this state can no longer change, so discard conservatively.
-		if c.tun.hasInFlightClientRequest() {
+		if c.tun.hasUnsafeClientState() {
 			discardBackend()
 			return
 		}

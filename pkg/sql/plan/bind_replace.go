@@ -262,7 +262,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldScanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{oldScanTag},
 			ScanSnapshot: bindCtx.snapshot,
@@ -1123,7 +1123,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 	}
 
 	if len(replaceOldParentPos) > 0 {
@@ -1150,7 +1150,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			builder.preserveLockProjection = make(map[int32]struct{})
 		}
 		builder.preserveLockProjection[lockedSourceID] = struct{}{}
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 
 		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
 		builder.preserveSinkProjection[sharedSinkID] = struct{}{}

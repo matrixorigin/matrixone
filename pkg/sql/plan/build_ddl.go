@@ -32,6 +32,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -42,8 +43,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -139,8 +144,87 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 	return canonicalCreateTableSQL(stmt)
 }
 
+// validateViewDefinitionPlugins asks every registered index plugin to vet the optimized
+// plan of a view's defining SELECT before it is persisted.
+//
+// View DDL is the one statement that STORES a query without running it, so anything an
+// algorithm cannot execute commits silently and only surfaces when someone selects from
+// the view. Today only the fulltext family refuses anything: MATCH() AGAINST() binds to a
+// placeholder with no implementation, so a definition no FULLTEXT index can serve is
+// unrunnable rather than merely slow. Vector plugins return nil -- their distance
+// functions are real kernels, so a plan that misses the index still executes as a
+// brute-force scan.
+//
+// Plugins are consulted in a stable order so that a definition offending more than one
+// reports the same error every time.
+//
+// This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+// passed into the bind: that hook fires before createQuery, where an index rewrite has not
+// yet had its chance and every candidate expression still looks unresolved.
+// indexRewritesDisabled reports whether the global optimizer_hints variable turns off
+// applyIndices. Reads the same variable parseOptimizeHints does, in the same key=value
+// form, rather than depending on a QueryBuilder that genViewTableDef does not have.
+func indexRewritesDisabled(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints")
+	if !ok {
+		return false
+	}
+	str, ok := v.(string)
+	if !ok || len(str) == 0 {
+		return false
+	}
+	// splitOptimizerHint, not a private copy of the split: this must answer "did applyIndices
+	// really get switched off", and only the parser the optimizer itself uses knows that. A
+	// copy that trimmed whitespace read ` applyIndices=1` as a hint the optimizer had ignored,
+	// so the rewrites ran while validation below was skipped as if they had not.
+	for _, kv := range strings.Split(str, ",") {
+		if key, value, ok := splitOptimizerHint(kv); ok && key == "applyIndices" && value != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
+	if query == nil {
+		return nil
+	}
+	// Every plugin's answer is inferred from whether its rewrite fired, so the inference is
+	// only valid when rewrites were allowed to run at all. The global optimizer_hints knob
+	// can switch applyIndices off wholesale (apply_indices.go), leaving every placeholder in
+	// place regardless of the catalog -- under `set global optimizer_hints = 'applyIndices=1'`
+	// this would refuse EVERY fulltext view, including ones with a perfectly good index, and
+	// keep refusing cluster-wide until someone noticed the hint. A diagnostic knob must not
+	// silently turn into a DDL policy, so skip validation entirely while it is set: being
+	// permissive costs an unrunnable view, being wrong here costs working ones.
+	if indexRewritesDisabled(ctx) {
+		return nil
+	}
+	plugins := indexplugin.All()
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Algo() < plugins[j].Algo() })
+	for _, p := range plugins {
+		hooks := p.Plan()
+		if hooks == nil {
+			continue
+		}
+		if err := hooks.ValidateViewDefinition(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	dependencyCapture := newViewDependencyCaptureContext(ctx)
+	ctx = dependencyCapture
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -187,6 +271,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	}
 
 	query := stmtPlan.GetQuery()
+	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+	// above: that hook fires before createQuery, where every MATCH is still an unresolved
+	// function whether or not an index exists.
+	if err = validateViewDefinitionPlugins(ctx, query); err != nil {
+		return nil, err
+	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -243,11 +333,14 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		persistedCreateSQL = stableViewSQL
 	}
 
+	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            viewSql,
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Stmt:                viewSql,
+		DefaultDatabase:     ctx.DefaultDatabase(),
+		SQLMode:             parserSQLModeFromContext(ctx),
+		SecurityType:        getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames: &lowerCaseTableNames,
+		Dependencies:        dependencyCapture.dependencies(),
 	})
 	if err != nil {
 		return nil, err
@@ -1220,7 +1313,18 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		// CTAS creates a new table from the query result.  A source column's
+		// AUTO_INCREMENT attribute is not part of that result schema and must
+		// not be copied to the new table.
+		inheritedAutoIncr := typ.AutoIncr
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			inheritedAutoIncr = inheritedAutoIncr || provenance.Source.Metadata.Typ.AutoIncr
+		}
+		typ.AutoIncr = false
 		nullAbility := ctasExprCanBeNull(expr)
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
+		}
 		defaultDef := &plan.Default{NullAbility: nullAbility}
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			switch provenance.CTASDefaultPolicy {
@@ -1241,6 +1345,18 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				if err != nil {
 					return nil, nil, err
 				}
+			}
+		}
+
+		// AUTO_INCREMENT columns have no ordinary source default. Once the
+		// generated attribute is removed from the CTAS target, preserve the
+		// non-null insert contract with the type's default (for example,
+		// DEFAULT 0 for integer columns). An explicit target declaration is
+		// applied later by buildTableDefs and remains authoritative.
+		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
+			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 
@@ -1354,6 +1470,9 @@ func ctasExprCanBeNull(expr *Expr) bool {
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
+	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
+		return nil, err
+	}
 
 	createView := &plan.CreateView{
 		Replace:     stmt.Replace,
@@ -1384,8 +1503,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
+	if stmt.Replace && !stmt.IfNotExists {
+		ctx.SetBuildingAlterView(true, createView.Database, string(viewName))
+		defer ctx.SetBuildingAlterView(false, "", "")
+	}
+
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
+		return nil, err
+	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 
@@ -1927,6 +2054,13 @@ func buildCreateTable(
 	cloneStmt *tree.CloneTable,
 	isPrepareStmt bool,
 ) (*Plan, error) {
+	tableName := string(stmt.Table.ObjectName)
+	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
+		return nil, err
+	}
+	if err := validateTableDefinitionIdentifiers(ctx.GetContext(), stmt.Defs); err != nil {
+		return nil, err
+	}
 
 	if stmt.IsAsLike {
 		var err error
@@ -1946,10 +2080,11 @@ func buildCreateTable(
 		if err != nil {
 			return nil, err
 		}
+		previousSubscription := ctx.GetQueryingSubscription()
 		if sub != nil {
 			ctx.SetQueryingSubscription(sub)
 			defer func() {
-				ctx.SetQueryingSubscription(nil)
+				ctx.SetQueryingSubscription(previousSubscription)
 			}()
 		}
 
@@ -2011,6 +2146,9 @@ func buildCreateTable(
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
 		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
+		if sub != nil {
+			ctx.SetQueryingSubscription(previousSubscription)
+		}
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			likeSkeletonDef,
@@ -2018,11 +2156,15 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			sub,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			// The subscription binding belongs to the LIKE source only. The
+			// rewritten statement names the local target, so plan it with the
+			// caller's subscription context instead of the publisher binding.
 			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
 			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
@@ -2211,6 +2353,77 @@ func buildCreateTable(
 				Properties: &plan.PropertiesDef{Properties: properties},
 			},
 		})
+	} else if stmt.DataStreamParam != nil {
+		cfg, err := sqldatastream.ParseTableOptions(ctx.GetContext(), stmt.DataStreamParam)
+		if err != nil {
+			return nil, err
+		}
+		// Like MongoDB, the durable typed feature bit is the discriminator that
+		// cannot be injected through the user-controlled rel_createsql JSON of a
+		// generic external table.
+		createTable.TableDef.FeatureFlag |= features.DataStreamExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqldatastream.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
+	} else if stmt.ForeignParam != nil {
+		cfg, err := foreignext.ParseTableOptions(ctx.GetContext(), stmt.ForeignParam)
+		if err != nil {
+			return nil, err
+		}
+		// Validate the JSON shape of an inline config without dialing (the
+		// session-variable fallback is resolved at scan time, so there is
+		// nothing to validate here for it).
+		if cfg.ConfigJSON != "" {
+			if err := foreigntvf.ValidateConfig(ctx.GetContext(), foreigntvf.Kind(cfg.Kind), cfg.ConfigJSON); err != nil {
+				return nil, err
+			}
+		}
+		// Like MongoDB/datastream, the durable typed feature bit is the
+		// discriminator that cannot be injected through the user-controlled
+		// rel_createsql JSON of a generic external table.
+		createTable.TableDef.FeatureFlag |= features.ForeignExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: foreignext.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
+	} else if stmt.KafkaParam != nil {
+		cfg, err := sqlkafka.ParseTableOptions(ctx.GetContext(), stmt.KafkaParam)
+		if err != nil {
+			return nil, err
+		}
+		// The consumer group carries the committed-offset exactly-once
+		// bookmark; default it per table so it is stable across sessions and
+		// persisted concretely in the envelope.
+		if cfg.Group == "" {
+			cfg.Group = sqlkafka.DefaultGroup(createTable.Database, createTable.TableDef.Name)
+		}
+		// Like MongoDB/datastream/foreign, the durable typed feature bit is
+		// the discriminator that cannot be injected through the
+		// user-controlled rel_createsql JSON of a generic external table.
+		createTable.TableDef.FeatureFlag |= features.KafkaExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlkafka.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
@@ -2317,6 +2530,9 @@ func buildCreateTable(
 	if !isPrepareStmt {
 		asSelectQuery = nil
 	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), createTable.TableDef); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2329,6 +2545,139 @@ func buildCreateTable(
 			},
 		},
 	}, nil
+}
+
+func validateIdentifier(ctx context.Context, name string) error {
+	if getNumOfCharacters(name) <= MaxIdentifierLength {
+		return nil
+	}
+
+	return moerr.NewTooLongIdent(ctx, name)
+}
+
+func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
+	err := validateIdentifier(ctx.GetContext(), name)
+	if err == nil {
+		return nil
+	}
+
+	// Internal DDL and session-scoped temporary tables can materialize generated
+	// physical names with UUID prefixes or suffixes.
+	if defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name) {
+		return nil
+	}
+
+	return err
+}
+
+func validateTableDefinitionIdentifiers(ctx context.Context, defs tree.TableDefs) error {
+	for _, def := range defs {
+		if err := validateTableDefinitionIdentifier(ctx, def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTableDefinitionIdentifier(ctx context.Context, def tree.TableDef) error {
+	validateNames := func(names ...string) error {
+		for _, name := range names {
+			if err := validateIdentifier(ctx, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	switch def := def.(type) {
+	case *tree.ColumnTableDef:
+		if err := validateNames(def.Name.ColNameOrigin()); err != nil {
+			return err
+		}
+		for _, attr := range def.Attributes {
+			if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+				if err := validateNames(check.Name); err != nil {
+					return err
+				}
+			}
+		}
+	case *tree.PrimaryKeyIndex:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.Index:
+		return validateNames(def.Name)
+	case *tree.UniqueIndex:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.ForeignKey:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.FullTextIndex:
+		return validateNames(def.Name)
+	case *tree.CheckIndex:
+		return validateNames(def.ConstraintSymbol)
+	}
+	return nil
+}
+
+func validatePersistedTableIdentifiers(ctx context.Context, tableDef *plan.TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		name := col.OriginName
+		if name == "" {
+			name = col.Name
+		}
+		if err := validateIdentifier(ctx, name); err != nil {
+			return err
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index != nil {
+			if err := validateIdentifier(ctx, index.IndexName); err != nil {
+				return err
+			}
+		}
+	}
+	for _, foreignKey := range tableDef.Fkeys {
+		if foreignKey != nil {
+			if err := validateIdentifier(ctx, foreignKey.Name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, check := range tableDef.Checks {
+		if check != nil {
+			if err := validateIdentifier(ctx, check.Name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isGeneratedSessionTempTableName(ctx CompilerContext, name string) bool {
+	rootStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		ctx.GetRootSql(),
+		ctx.GetLowerCaseTableNames(),
+	)
+	if err != nil {
+		return false
+	}
+	defer rootStmt.Free()
+	if _, isCreateTable := rootStmt.(*tree.CreateTable); isCreateTable {
+		return false
+	}
+
+	proc := ctx.GetProcess()
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return false
+	}
+	sessionID := strings.ReplaceAll(proc.GetSessionInfo().SessionId.String(), "-", "")
+	return strings.HasPrefix(name, defines.TempTableNamePrefix+sessionID+"_")
 }
 
 func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.TableDef {
@@ -2391,6 +2740,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
+	if stmt.MongoDBParam != nil {
+		if err := rejectMongoDBExternalTableOnUpdate(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
 	}
@@ -2461,6 +2815,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colName := def.Name.ColName()
 			// only used in error message and ColDef.OriginName
 			colNameOrigin := def.Name.ColNameOrigin()
+			// __mo_filepath / __mo_query are the synthetic hidden columns of
+			// external scans and are hidden BY NAME in star expansion and the
+			// external readers; a real column with either name would silently
+			// disappear from SELECT * or shadow the synthetic value.
+			if catalog.IsReservedExternalColName(colName) {
+				return moerr.NewInvalidInputf(ctx.GetContext(),
+					"column name %s is reserved for external table scans", colNameOrigin)
+			}
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
 				case *tree.AttributeCheckConstraint:
@@ -2694,6 +3056,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.ForeignKey:
+			if stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"FOREIGN KEY constraints on MongoDB external tables",
+				)
+			}
 			if createTable.Temporary {
 				return moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 			}
@@ -4589,9 +4957,14 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	} else {
 		if tableDef.ViewSql == nil {
-			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			if !dropTable.IfExists {
+				return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			}
+			// DROP VIEW IF EXISTS must not target a same-named base table.
+			// An empty table name is the established DropTable executor no-op.
+			dropTable.Table = ""
 		}
-		if obj.PubInfo != nil {
+		if tableDef.ViewSql != nil && obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
@@ -4610,6 +4983,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
+		return nil, err
+	}
 
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
@@ -4686,6 +5062,9 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 
 // In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
+	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
+		return nil, err
+	}
 	createIndex := &plan.CreateIndex{}
 	if len(stmt.Table.SchemaName) == 0 {
 		createIndex.Database = ctx.DefaultDatabase()
@@ -4712,10 +5091,8 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check index
 	indexName := string(stmt.Name)
-	for _, def := range tableDef.Indexes {
-		if def.IndexName == indexName {
-			return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-		}
+	if _, found := resolveIndexName(tableDef.Indexes, indexName); found {
+		return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
 	}
 	// build index
 	var ftIdx *tree.FullTextIndex
@@ -4848,6 +5225,23 @@ func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTabl
 	return nil
 }
 
+func rejectMongoDBExternalTableOnUpdate(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		column, ok := item.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		for _, attribute := range column.Attributes {
+			if _, ok := attribute.(*tree.AttributeOnUpdate); ok {
+				return moerr.NewNotSupportedf(ctx,
+					"MongoDB external table column '%s' does not support ON UPDATE",
+					column.Name.ColNameOrigin())
+			}
+		}
+	}
+	return nil
+}
+
 // checkDropReferencedKeyForeignKeyDependency rejects removal of the exact
 // PRIMARY/UNIQUE key selected by a live child FK. ForeignKeyDef instances
 // written before ReferencedIndexName existed cannot prove which of several
@@ -4956,22 +5350,16 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// check index
-	dropIndex.IndexName = string(stmt.Name)
-	found := false
-
-	for _, indexdef := range tableDef.Indexes {
-		if dropIndex.IndexName == indexdef.IndexName {
-			found = true
-			break
-		}
-	}
+	requestedIndexName := string(stmt.Name)
+	resolvedIndexName, found := resolveIndexName(tableDef.Indexes, requestedIndexName)
+	dropIndex.IndexName = resolvedIndexName
 
 	if !found {
 		if stmt.IfExists {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
 		}
 	} else if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, dropIndex.IndexName, nil); err != nil {
 		return nil, err
@@ -5038,6 +5426,9 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}()
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
+		return nil, err
+	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 
@@ -5153,6 +5544,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			case *tree.AlterOptionTableName:
 				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				if err := validateIdentifier(ctx.GetContext(), newName); err != nil {
+					return nil, err
+				}
 				dstKey := schemaName + "." + newName
 				if oldName != newName {
 					if _, ok := nameMapping[dstKey]; ok {
@@ -5271,7 +5665,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	currentTableDef := DeepCopyTableDef(tableDef, true)
 	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
 	for _, indexDef := range currentTableDef.Indexes {
-		currentIndexNames[strings.ToLower(indexDef.IndexName)] = true
+		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
 	}
 	currentForeignKeyNames := make(map[string]bool, len(currentTableDef.Fkeys))
 	for _, foreignKey := range currentTableDef.Fkeys {
@@ -5285,7 +5679,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
-			// lower case
 			constraintName := string(opt.Name)
 			if constraintNameAreWhiteSpaces(constraintName) {
 				return nil, moerr.NewInternalErrorf(
@@ -5294,29 +5687,27 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					constraintName,
 				)
 			}
-			alterTableDrop.Name = constraintName
 			name_not_found := true
 			sequentiallyDropped := false
 			switch opt.Typ {
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_INDEX
-				for _, indexdef := range currentTableDef.Indexes {
-					if constraintName == indexdef.IndexName {
-						if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
-							return nil, err
-						}
-						name_not_found = false
-						break
+				resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+				if found {
+					constraintName = resolvedName
+					if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
+						return nil, err
 					}
+					name_not_found = false
 				}
 				if !name_not_found {
-					delete(currentIndexNames, strings.ToLower(constraintName))
-					droppedIndexNames[constraintName] = true
+					delete(currentIndexNames, indexNameKey(constraintName))
+					droppedIndexNames[indexNameKey(constraintName)] = true
 					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
 						return indexDef.IndexName == constraintName
 					})
 				} else {
-					sequentiallyDropped = droppedIndexNames[constraintName]
+					sequentiallyDropped = droppedIndexNames[indexNameKey(constraintName)]
 				}
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
@@ -5350,6 +5741,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					formatTreeNode(opt),
 				)
 			}
+			alterTableDrop.Name = constraintName
 			if name_not_found {
 				if sequentiallyDropped {
 					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), constraintName)
@@ -5616,24 +6008,17 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAlterIndex:
 			alterTableIndex := new(plan.AlterTableAlterIndex)
 			constraintName := string(opt.Name)
-			alterTableIndex.IndexName = constraintName
 			alterTableIndex.Visible = opt.Visibility == tree.VISIBLE_TYPE_VISIBLE
 
-			name_not_found := true
-			// check index
-			for _, indexdef := range currentTableDef.Indexes {
-				if constraintName == indexdef.IndexName {
-					name_not_found = false
-					break
-				}
-			}
-			if name_not_found {
+			resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+			if !found {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't ALTER '%s'; check that column/key exists",
 					constraintName,
 				)
 			}
+			alterTableIndex.IndexName = resolvedName
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterIndex{
 					AlterIndex: alterTableIndex,
@@ -5643,7 +6028,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAlterReIndex:
 			alterTableReIndex := new(plan.AlterTableAlterReIndex)
 			constraintName := string(opt.Name)
-			alterTableReIndex.IndexName = constraintName
 			// ForceSync (sync vs async rebuild) is the only build-time flag the
 			// plan node carries. The shared index_option_list grammar already
 			// restricts the algo (REINDEX rules cover only ivfflat/hnsw/ivfpq/
@@ -5653,21 +6037,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTableReIndex.ForceSync = opt.ForceSync
 			alterTableReIndex.Merge = opt.Merge
 
-			name_not_found := true
-			// check index
-			for _, indexdef := range currentTableDef.Indexes {
-				if constraintName == indexdef.IndexName {
-					name_not_found = false
-					break
-				}
-			}
-			if name_not_found {
+			resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+			if !found {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't REINDEX '%s'; check that column/key exists",
 					constraintName,
 				)
 			}
+			alterTableReIndex.IndexName = resolvedName
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterReindex{
 					AlterReindex: alterTableReIndex,
@@ -5677,7 +6055,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAlterAutoUpdate:
 			alterTableAutoUpdate := new(plan.AlterTableAlterAutoUpdate)
 			constraintName := string(opt.Name)
-			alterTableAutoUpdate.IndexName = constraintName
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
@@ -5704,21 +6081,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				)
 			}
 
-			name_not_found := true
-			// check index
-			for _, indexdef := range currentTableDef.Indexes {
-				if constraintName == indexdef.IndexName {
-					name_not_found = false
-					break
-				}
-			}
-			if name_not_found {
+			resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+			if !found {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't REINDEX '%s'; check that column/key exists",
 					constraintName,
 				)
 			}
+			alterTableAutoUpdate.IndexName = resolvedName
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterAutoUpdate{
 					AlterAutoUpdate: alterTableAutoUpdate,

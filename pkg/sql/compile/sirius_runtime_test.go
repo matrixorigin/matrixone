@@ -115,8 +115,8 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 		StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"},
 		Nodes: []*planpb.Node{{
 			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
-			ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"},
-			TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
+			ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"},
+			TableDef: &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
 				Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)},
 			}}},
 		}},
@@ -156,6 +156,7 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.True(t, siriusStatementEligible(&tree.Select{}))
 	require.False(t, siriusStatementEligible(&tree.Select{IsPerform: true}))
 	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))
+	require.False(t, siriusStatementEligible(sqlCalcFoundRowsTestStatement()))
 	require.False(t, siriusStatementEligible(nil))
 
 	requested := WithSiriusOffload(context.Background())
@@ -195,9 +196,9 @@ func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
 		ApplySqlSelectLimit: true,
 		Nodes: []*planpb.Node{{
 			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
-			ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"},
+			ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"},
 			TableDef: &planpb.TableDef{
-				TblId: 42, Version: 3, Name: "t", TableType: "r",
+				DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r",
 				Cols: []*planpb.ColDef{{
 					Name: "a", ColId: 11, Seqnum: 5,
 					Typ: planpb.Type{Id: int32(types.T_int64)},

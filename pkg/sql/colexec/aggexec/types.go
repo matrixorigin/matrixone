@@ -209,6 +209,42 @@ func MergePreservesSource(exec AggFuncExec) bool {
 	return ok
 }
 
+// windowSlidingAggregator is implemented by aggregates that can remove the
+// oldest row from a one-group running state. It is intentionally narrower
+// than AggFuncExec: only aggregates with an exact inverse for the supported
+// argument type may opt in.
+type windowSlidingAggregator interface {
+	windowSlidingSupported() bool
+	addWindowRow(row int, vectors []*vector.Vector) error
+	removeWindowRow(row int, vectors []*vector.Vector) error
+}
+
+// SupportsWindowSliding reports whether exec can maintain a bounded window by
+// adding the entering row and removing the leaving row. Callers must use a
+// one-group executor and advance the frame monotonically.
+func SupportsWindowSliding(exec AggFuncExec) bool {
+	sliding, ok := exec.(windowSlidingAggregator)
+	return ok && sliding.windowSlidingSupported()
+}
+
+// AddWindowRow adds one row to a one-group sliding aggregate.
+func AddWindowRow(exec AggFuncExec, row int, vectors []*vector.Vector) error {
+	sliding, ok := exec.(windowSlidingAggregator)
+	if !ok || !sliding.windowSlidingSupported() {
+		return moerr.NewInternalErrorNoCtx("aggregate does not support sliding windows")
+	}
+	return sliding.addWindowRow(row, vectors)
+}
+
+// RemoveWindowRow removes one row from a one-group sliding aggregate.
+func RemoveWindowRow(exec AggFuncExec, row int, vectors []*vector.Vector) error {
+	sliding, ok := exec.(windowSlidingAggregator)
+	if !ok || !sliding.windowSlidingSupported() {
+		return moerr.NewInternalErrorNoCtx("aggregate does not support sliding windows")
+	}
+	return sliding.removeWindowRow(row, vectors)
+}
+
 // GroupAggFuncExec is the complete contract required by Group. Keeping this
 // separate from AggFuncExec lets window executors retain the common aggregate
 // API without making Group rediscover its stronger allocation, preflight,
@@ -292,7 +328,22 @@ func MakeGroupAgg(
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, false, allocation, extraInformation, param...)
+		mg, aggID, isDistinct, false, false, allocation, extraInformation, param...)
+}
+
+// MakeSingleGroupAgg constructs an aggregate for an execution path whose
+// cardinality is statically bounded to one group. Aggregates may use this
+// stronger contract to select representations that would not be safe for an
+// unbounded GROUP BY.
+func MakeSingleGroupAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, false, true, allocation, extraInformation, param...)
 }
 
 // MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
@@ -316,13 +367,31 @@ func MakeGroupAggWithLegacyTextMinMax(
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, true, allocation, extraInformation, param...)
+		mg, aggID, isDistinct, true, false, allocation, extraInformation, param...)
+}
+
+// MakeSingleGroupAggWithLegacyTextMinMax combines the static single-group
+// contract with mixed-version text MIN/MAX compatibility.
+func MakeSingleGroupAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, true, true, allocation, extraInformation, param...)
+}
+
+type singleGroupAggregate interface {
+	setSingleGroupExecution() error
 }
 
 func makeGroupAgg(
 	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
 	legacyTextMinMax bool,
+	singleGroup bool,
 	allocation *AllocationAccount,
 	extraInformation any,
 	param ...types.Type,
@@ -336,6 +405,14 @@ func makeGroupAgg(
 		exec.Free()
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"aggregate %d does not support group execution", aggID)
+	}
+	if singleGroup {
+		if configurable, ok := groupExec.(singleGroupAggregate); ok {
+			if err := configurable.setSingleGroupExecution(); err != nil {
+				groupExec.Free()
+				return nil, err
+			}
+		}
 	}
 	if extraInformation != nil {
 		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
@@ -649,6 +726,9 @@ func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 		}
 		expr := &plan.Expr{}
 		if err := proto.Unmarshal(bs, expr); err != nil {
+			return err
+		}
+		if err := expr.ValidateStringLiteralForms(); err != nil {
 			return err
 		}
 		ag.argExpressions = append(ag.argExpressions, expr)

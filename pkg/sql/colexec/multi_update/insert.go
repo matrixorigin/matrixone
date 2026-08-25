@@ -142,7 +142,8 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 		return err
 	}
 	tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
-	update.addInsertAffectRows(tableType, uint64(newRowCount))
+	update.addInsertAffectRows(
+		tableType, physicalInsertAffectedRows(updateCtx, uint64(newRowCount)))
 	source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 	crs := analyzer.GetOpCounterSet()
@@ -228,7 +229,12 @@ func (update *MultiUpdate) insert_table(
 		}
 	}
 
-	update.addInsertAffectRows(info.tableType, uint64(writeBatch.RowCount()))
+	affectedRows := uint64(writeBatch.RowCount())
+	if info.tableType == UpdateMainTable && update.ctr.action == actionUpdate {
+		affectedRows = physicalInsertAffectedRows(
+			updateCtx, update.insertAffectedRows(updateCtx, inputBatch))
+	}
+	update.addInsertAffectRows(info.tableType, affectedRows)
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
@@ -342,7 +348,8 @@ func (update *MultiUpdate) check_null_and_insert_table(
 	if newRowCount > 0 {
 		insertBatch.SetRowCount(newRowCount)
 		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
-		update.addInsertAffectRows(tableType, uint64(newRowCount))
+		update.addInsertAffectRows(
+			tableType, physicalInsertAffectedRows(updateCtx, uint64(newRowCount)))
 		source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 		crs := analyzer.GetOpCounterSet()

@@ -101,7 +101,40 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 }
 
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	if b.insideAgg {
+	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
+		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() && !astExpr.Star {
+		var projected tree.Expr
+		var found, ambiguous bool
+		if astExpr.NumParts == 1 {
+			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
+			if !found && !ambiguous {
+				// MySQL also keeps the unqualified source spelling visible when
+				// the source column is directly projected under a different alias
+				// (for example SELECT a AS x ... HAVING a). Resolve this only after
+				// output-name lookup so aliases still have precedence and duplicate
+				// output names remain ambiguous.
+				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
+			}
+		} else {
+			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
+		}
+		if ambiguous {
+			return nil, ambiguousHavingColumn(b.GetContext(), astExpr.ColName())
+		}
+		if found {
+			// Bind the expression represented by the visible output name while
+			// suppressing ONLY_FULL_GROUP_BY checks for its source columns. The
+			// flag is scoped to this recursive bind so an anonymous expression
+			// written directly in HAVING still follows normal visibility rules.
+			previous := b.bindingProjectedAlias
+			b.bindingProjectedAlias = true
+			expr, err := b.baseBindExpr(projected, depth, isRoot)
+			b.bindingProjectedAlias = previous
+			return expr, err
+		}
+	}
+
+	if b.insideAgg || b.bindingProjectedAlias {
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {
 			return nil, err
@@ -184,6 +217,10 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 		return nil, b.newGroupByColumnError(astExpr)
 	}
+}
+
+func ambiguousHavingColumn(sysCtx context.Context, name string) error {
+	return moerr.NewInvalidInputf(sysCtx, "Column '%s' in having clause is ambiguous", name)
 }
 
 func (b *HavingBinder) newGroupByColumnError(astExpr *tree.UnresolvedName) error {

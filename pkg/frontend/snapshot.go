@@ -34,6 +34,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type tableType string
@@ -108,6 +110,8 @@ var (
 		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
 		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
 		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
+		catalog.MO_VIEW_DEPENDENCIES: systemCatalogRestoreSkip,
+		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
@@ -226,6 +230,11 @@ type tableInfo struct {
 	relKind   string
 	viewDef   string
 	createSql string
+	// unservable marks a view whose stored definition can never run -- the #27027 refusal,
+	// raised while the dependency sort plans it. Such a view is still visited by the restore
+	// loop so the object it would replace is DROPped; only the CREATE is skipped. Set by
+	// sortedViewInfos and the PITR sort, read by restoreViews and restoreViewsWithPitr.
+	unservable bool
 }
 
 type accountRecord struct {
@@ -642,6 +651,38 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				string(stmt.Name),
 			)
 		}
+		var viewMetadataEnabled bool
+		if viewMetadataEnabled, err = prepareViewMetadataMutation(ctx, bh, ses.GetService()); err != nil {
+			return err
+		}
+		if viewMetadataEnabled {
+			var record *snapshotRecord
+			if record, err = getSnapshotByName(ctx, bh, string(stmt.Name)); err != nil {
+				return err
+			}
+			var boundSnapshot *pbplan.Snapshot
+			if boundSnapshot, err = planSnapshotFromRecord(ctx, record); err != nil {
+				return err
+			}
+			var snapshotData []byte
+			if snapshotData, err = json.Marshal(boundSnapshot); err != nil {
+				return err
+			}
+			var invalidateTimestampBindings bool
+			if invalidateTimestampBindings, err = shouldInvalidateTimestampSnapshotBindings(
+				ctx, bh, record.snapshotId, record.ts); err != nil {
+				return err
+			}
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+				return err
+			}
+			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
+				string(snapshotData), record.ts, invalidateTimestampBindings,
+				uint64(time.Now().UnixNano()))); err != nil {
+				return err
+			}
+		}
 		sql = getSqlForDropSnapshot(string(stmt.Name))
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -654,6 +695,37 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("drop snapshot %s success", string(stmt.Name)))
 	return err
+}
+
+func shouldInvalidateTimestampSnapshotBindings(
+	ctx context.Context,
+	bh BackgroundExec,
+	droppedSnapshotID string,
+	snapshotTS int64,
+) (bool, error) {
+	query := fmt.Sprintf(
+		"select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id for update;",
+		snapshotTS)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, query); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			snapshotID, getErr := result.GetString(ctx, row, 0)
+			if getErr != nil {
+				return false, getErr
+			}
+			if snapshotID != droppedSnapshotID {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
@@ -680,6 +752,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	// Serialize catalog restore with View metadata recovery before either path
+	// locks a target View. The gate row belongs to a preserved catalog table, so
+	// it remains stable while relation identities are rebuilt.
+	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return stats, err
+	}
 
 	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)
@@ -700,6 +778,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
 	if err != nil {
 		return stats, err
+	}
+	if stmt.Level == tree.RESTORELEVELACCOUNT {
+		if err = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+			return stats, err
+		}
 	}
 
 	// restore cluster
@@ -840,6 +923,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT {
 		if err = restoreSystemCatalogsAfterObjects(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
+			return stats, err
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
+		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
 			return stats, err
 		}
 	}
@@ -1424,6 +1515,12 @@ func dropClusterTable(
 
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
+			if tblInfo.tblName == catalog.MO_VIEW_DEPENDENCIES || tblInfo.tblName == catalog.MO_VIEW_REFRESH {
+				if err = bh.Exec(ctx, fmt.Sprintf("delete from %s.%s", moCatalog, tblInfo.tblName)); err != nil {
+					return
+				}
+				continue
+			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 			if err = bh.Exec(ctx, dropTableIfExistsSQL(moCatalog, tblInfo.tblName)); err != nil {
 				return
@@ -1485,6 +1582,10 @@ func restoreViews(
 				return err
 			}
 
+			if skipUnservableViewInRestore(ses, snapshotName, tblInfo) {
+				continue
+			}
+
 			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
@@ -1494,6 +1595,20 @@ func restoreViews(
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
 
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A view whose MATCH() no FULLTEXT index can serve cannot be re-created
+				// (ValidateViewDefinition refuses it), but such views could be
+				// created before that guard existed, so a snapshot may well contain one.
+				// The view has already been dropped above, and aborting here would leave
+				// the whole account unrestorable over a single object that never worked.
+				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
+				// false, so gating on that flag would not help the case that matters.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
+							"the view is NOT present in the restored account",
+						snapshotName, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				if skipIfDependencyMissing && canSkipRestoreViewError(err) {
 					getLogger(ses.GetService()).Info(fmt.Sprintf(
 						"[%s] skip restore view %v because dependency is missing: %v",
@@ -1507,6 +1622,71 @@ func restoreViews(
 	}
 
 	return nil
+}
+
+// markUnservableViewInSort is the #27027 tolerance shared by every view-restore dependency
+// sort: restoreViews' sortedViewInfos, restoreViewsWithPitr, and restoreViewsFromTS.
+//
+// The sort plans every stored definition BEFORE the create loop, so the refusal lands here
+// first and would abort the whole restore. Returns true when err is that refusal, having
+// marked the view and KEPT its vertex — dropped from the graph, the restore loop would never
+// visit it, and dependents would lose their ordering against it. No edges are added: its plan
+// never built, so its dependencies are unknown; a view that depends on this one plans the same
+// definition through it and is marked here too.
+//
+// It exists as one function because it was three near-verbatim copies, and the third
+// (restoreViewsFromTS, the cluster-snapshot path) was missed entirely — that restore still
+// aborted on a view the other two paths tolerated.
+func markUnservableViewInSort(ses *Session, label string, viewEntry *tableInfo, g *toposort, key string, err error) bool {
+	if !isUnservableViewError(err) {
+		return false
+	}
+	getLogger(ses.GetService()).Warn(fmt.Sprintf(
+		"[%s] view %v.%v will not be restored: its definition can never run (%v)",
+		label, viewEntry.dbName, viewEntry.tblName, err))
+	viewEntry.unservable = true
+	g.addVertex(key)
+	return true
+}
+
+// skipUnservableViewInRestore reports whether the create loop must leave this view alone.
+//
+// Alone means ALONE: not re-created, and NOT DROPPED either. The snapshot may hold an
+// unservable definition while the target holds a WORKING view of that name, because the
+// FULLTEXT index it needs was recreated after the snapshot was taken. Dropping what cannot be
+// re-created would delete a working view and put nothing back, reporting success. A stale
+// object is an inconsistency; deleting a working one is data loss.
+//
+// The same reasoning covers a false positive of isUnservableViewError, which must match on
+// message text because the background executor strips the moerr code: a misclassification now
+// costs a skipped view rather than a deleted one.
+func skipUnservableViewInRestore(ses *Session, label string, tblInfo *tableInfo) bool {
+	if !tblInfo.unservable {
+		return false
+	}
+	getLogger(ses.GetService()).Warn(fmt.Sprintf(
+		"[%s] view %v.%v left untouched and NOT restored: its stored definition can never run; "+
+			"any existing object of that name is kept", label, tblInfo.dbName, tblInfo.tblName))
+	return true
+}
+
+// isUnservableViewError reports whether err is the #27027 refusal: a view definition whose
+// MATCH() no FULLTEXT index can serve.
+//
+// Checks the code AND the text on purpose. Restore executes the stored CREATE VIEW through
+// the background executor, which reconstructs the error on the way back, so the moerr code
+// is lost and only the message survives -- verified end to end: a PITR restore aborted with
+// ERROR 1191 while an IsMoErrCode-only guard sat right there and did not fire. The unit
+// tests injected the error directly and could not see this. canSkipRestoreViewError pairs
+// its code checks with text checks for the same reason.
+func isUnservableViewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+		return true
+	}
+	return strings.Contains(err.Error(), moerr.FtMatchingKeyNotFoundMsg)
 }
 
 func canSkipRestoreViewError(err error) bool {
@@ -1584,6 +1764,24 @@ func sortedViewInfos(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// The dependency sort plans every view BEFORE the restore loop, so the
+				// #27027 refusal lands here first and would abort the whole restore -- the
+				// skip further down never gets a chance.
+				//
+				// KEEP the vertex and mark the view instead of dropping it from the graph.
+				// Dropping it meant the restore loop never visited it, so it never ran the
+				// DROP either: wherever the target database is not rebuilt (a table-level
+				// restore, a restore into a live account), the OLD view object stayed behind
+				// and the restore reported success over it. Marked, it is dropped like any
+				// other restored view and only its CREATE is skipped, so the target ends up
+				// without the view rather than with a stale one.
+				//
+				// No dependency edges are added: its plan never built, so its dependencies
+				// are unknown. A view that depends on THIS one plans the same definition
+				// through it and trips the same refusal, so it is marked here too.
+				if markUnservableViewInSort(ses, snapshotName, viewEntry, &g, key, err) {
+					continue
+				}
 				return nil, err
 			}
 		}
@@ -1618,6 +1816,37 @@ func recreateTable(
 ) (err error) {
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		curAccountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		sourceSnapshot := fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
+		if curAccountID != toAccountId {
+			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
+		}
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
+		)
+	}
+	if isSequence(tblInfo) {
+		curAccountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			snapshotTs,
+			curAccountID,
+			toAccountId,
+		)
 	}
 
 	getLogger(sid).Debug(
@@ -1886,7 +2115,12 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		return
 	}
 
+	return planSnapshotFromRecord(ctx, record)
+}
+
+func planSnapshotFromRecord(ctx context.Context, record *snapshotRecord) (*pbplan.Snapshot, error) {
 	var accountId uint32
+	var err error
 	// cluster level record has no accountName, so accountId is 0
 	if len(record.accountName) != 0 {
 		if record.level == tree.RESTORELEVELACCOUNT.String() {
@@ -1894,7 +2128,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		} else {
 			accountId, err = defines.GetAccountId(ctx)
 			if err != nil {
-				return
+				return nil, err
 			}
 		}
 	}
@@ -2106,7 +2340,6 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	if len(tblName) > 0 {
 		whereClause += fmt.Sprintf(" and relname = %s", quoteSQLStringLiteral(tblName))
 	}
-	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
 }
 
@@ -2156,9 +2389,174 @@ func getTableInfos(
 		fmt.Sprint(snapshot),
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				sequenceCtx := ctx
+				if snapshot != nil && snapshot.Tenant != nil {
+					sequenceCtx = defines.AttachAccountId(sequenceCtx, snapshot.Tenant.TenantID)
+				}
+				return getCreateSequenceSQL(
+					sequenceCtx,
+					snapshotPhysicalTime(snapshot),
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsList(queryCtx, bh, sql, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
+}
+
+type restoreStringRows func(context.Context, string, ...uint64) ([][]string, error)
+
+func snapshotPhysicalTime(snapshot *plan.Snapshot) int64 {
+	if snapshot == nil || snapshot.TS == nil {
+		return 0
+	}
+	return snapshot.TS.PhysicalTime
+}
+
+func isSequence(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.relKind == catalog.SystemSequenceRel
+}
+
+func getCreateSequenceSQL(
+	ctx context.Context,
+	snapshotTS int64,
+	dbName string,
+	tblName string,
+	query restoreStringRows,
+) (string, error) {
+	snapshotSpec := ""
+	if snapshotTS > 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+
+	typeSQL := fmt.Sprintf(
+		"select mo_show_visible_bin(atttyp, 2) from %s.mo_columns%s where att_database = %s and att_relname = %s and attname = %s",
+		moCatalog,
+		snapshotSpec,
+		quoteSQLStringLiteral(dbName),
+		quoteSQLStringLiteral(tblName),
+		quoteSQLStringLiteral(plan.Sequence_cols_name[0]),
+	)
+	typeRows, err := query(ctx, typeSQL, 0)
+	if err != nil {
+		return "", err
+	}
+	if len(typeRows) != 1 || len(typeRows[0]) != 1 || typeRows[0][0] == "" {
+		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	stateSQL := fmt.Sprintf(
+		"select %s, %s, %s, %s, %s from %s%s",
+		quoteIdentifierForSQL(plan.Sequence_cols_name[1]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[2]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[3]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[4]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[5]),
+		qualifiedTableName(dbName, tblName),
+		snapshotSpec,
+	)
+	stateRows, err := query(ctx, stateSQL, 0, 1, 2, 3, 4)
+	if err != nil {
+		return "", err
+	}
+	if len(stateRows) != 1 || len(stateRows[0]) != 5 {
+		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	cycleSQL := "no cycle"
+	switch strings.ToLower(stateRows[0][4]) {
+	case "1", "true":
+		cycleSQL = "cycle"
+	case "0", "false":
+	default:
+		return "", moerr.NewInternalErrorf(ctx,
+			"invalid cycle state %q for sequence %s.%s", stateRows[0][4], dbName, tblName)
+	}
+
+	return fmt.Sprintf(
+		"create sequence %s as %s increment by %s minvalue %s maxvalue %s start with %s %s",
+		qualifiedTableName(dbName, tblName),
+		typeRows[0][0],
+		stateRows[0][3],
+		stateRows[0][0],
+		stateRows[0][1],
+		stateRows[0][2],
+		cycleSQL,
+	), nil
+}
+
+func dropCurrentRestoreObject(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+) error {
+	tableInfos, err := showFullTables(ctx, "", bh, nil, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if len(tableInfos) == 0 {
+		return nil
+	}
+	if len(tableInfos) != 1 {
+		return moerr.NewInternalErrorf(ctx,
+			"found %d current objects named %s.%s during restore", len(tableInfos), dbName, tblName)
+	}
+
+	current := tableInfos[0]
+	name := qualifiedTableName(dbName, tblName)
+	var dropSQL string
+	switch current.relKind {
+	case catalog.SystemSequenceRel:
+		dropSQL = "drop sequence if exists " + name
+	case catalog.SystemViewRel:
+		dropSQL = "drop view if exists " + name
+	default:
+		dropSQL = dropTableIfExistsSQL(dbName, tblName)
+	}
+	return bh.Exec(ctx, dropSQL)
+}
+
+func restoreSequence(
+	ctx context.Context,
+	bh BackgroundExec,
+	createSQL string,
+	srcDBName string,
+	srcTblName string,
+	dstDBName string,
+	dstTblName string,
+	snapshotTS int64,
+	fromAccountID uint32,
+	toAccountID uint32,
+) error {
+	toCtx := defines.AttachAccountId(ctx, toAccountID)
+	dstName := qualifiedTableName(dstDBName, dstTblName)
+	if err := dropCurrentRestoreObject(toCtx, bh, dstDBName, dstTblName); err != nil {
+		return err
+	}
+	if err := bh.Exec(toCtx, createSQL); err != nil {
+		return err
+	}
+	if err := bh.Exec(toCtx, "delete from "+dstName+" where true"); err != nil {
+		return err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS > 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+	copySQL := fmt.Sprintf(
+		"insert into %s select * from %s%s",
+		dstName,
+		qualifiedTableName(srcDBName, srcTblName),
+		snapshotSpec,
+	)
+	return bh.ExecRestore(toCtx, copySQL, fromAccountID, toAccountID)
 }
 
 func fillTableCreateSQLsForRestore(
@@ -2167,6 +2565,7 @@ func fillTableCreateSQLsForRestore(
 	tableInfos []*tableInfo,
 	getCreateSQL func(*tableInfo) (string, error),
 ) ([]*tableInfo, error) {
+	sequences := make([]*tableInfo, 0)
 	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
 		createSQL, err := getCreateSQL(tblInfo)
@@ -2185,9 +2584,13 @@ func fillTableCreateSQLsForRestore(
 		}
 
 		tblInfo.createSql = createSQL
-		restorable = append(restorable, tblInfo)
+		if isSequence(tblInfo) {
+			sequences = append(sequences, tblInfo)
+		} else {
+			restorable = append(restorable, tblInfo)
+		}
 	}
-	return restorable, nil
+	return append(sequences, restorable...), nil
 }
 
 const legacyViewParserSQLModeForRestore = "PIPES_AS_CONCAT"
@@ -2564,7 +2967,7 @@ func getFkDepsFromTableInfos(
 ) (map[string][]string, error) {
 	deps := make(map[string][]string)
 	for _, info := range tableInfos {
-		if info == nil || info.typ == view || info.createSql == "" {
+		if info == nil || info.typ == view || isSequence(info) || info.createSql == "" {
 			continue
 		}
 		statements, err := parsers.Parse(ctx, dialect.MYSQL, info.createSql, 0)
@@ -2771,6 +3174,9 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 	}
+	if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -2826,7 +3232,104 @@ func restoreToAccountUsingCluster(
 	if err != nil {
 		return err
 	}
+	if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+		return err
+	}
+	if toAccountId == catalog.System_Account {
+		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+			return err
+		}
+	}
 	return err
+}
+
+func seedMissingViewMetadataAfterCatalogReset(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	return bh.Exec(systemCtx, compile.SeedMissingViewMetadataSQL(uint64(time.Now().UnixNano())))
+}
+
+func invalidateAccountViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
+	}
+	return invalidateAccountViewMetadataEnabled(ctx, bh, accountID)
+}
+
+func invalidateAccountViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	return bh.Exec(process.WithSystemCTELimits(systemCtx),
+		compile.AccountViewMetadataInvalidationSQL(accountID, uint64(time.Now().UnixNano())))
+}
+
+func reconcileAccountViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
+	}
+	return reconcileAccountViewMetadataEnabled(ctx, bh, accountID)
+}
+
+func reconcileAccountViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareViewMetadataMutation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+) (bool, error) {
+	if compile.ViewMetadataRefreshEnabled(serviceID) {
+		return true, nil
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	for _, sql := range compile.ViewMetadataRequireRevalidationSQL() {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {

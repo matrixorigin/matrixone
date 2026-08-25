@@ -19,7 +19,7 @@
 -- top-k distance distinct (no ties) so the result is deterministic for every narrow type;
 -- integer values 1..55 are exact in bf16/f16 and in int8/uint8 range, so the narrow base
 -- stores them without ambiguity. Queries are `ORDER BY l2_distance LIMIT k` with no
--- secondary sort key so the ivfflat index pushdown (ivf_search) actually fires.
+-- secondary sort key so the ivfflat index pushdown (VECTOR_INDEX_SCAN) actually fires.
 SET probe_limit=10;
 
 create table nbf(a int primary key, v vecbf16(4));

@@ -471,6 +471,11 @@ func (ctr *container) processAggregateFuncRange(
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
 		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
 	}
+	if boundedSlidingRowsFrame(frame) &&
+		aggexec.MergePreservesSource(ctr.batAggs[idx]) &&
+		aggexec.SupportsWindowSliding(ctr.batAggs[idx]) {
+		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame)
+	}
 
 	n := ctr.bat.RowCount()
 	for j := outputStart; j < outputEnd; j++ {
@@ -554,6 +559,21 @@ func cumulativeRowsFrame(frame *plan.FrameClause, partitions []int64, rowCount i
 	return bound.U64Val >= uint64(maxPartitionRows-1)
 }
 
+// boundedSlidingRowsFrame recognizes the finite ROWS shape whose left and
+// right edges each advance monotonically by one row. Aggregates that expose an
+// exact inverse can evaluate it with one add and one remove per output row.
+func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
+	if frame == nil || frame.Type != plan.FrameClause_ROWS ||
+		frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING || frame.Start.UnBounded ||
+		frame.End.Type != plan.FrameBound_CURRENT_ROW || frame.End.UnBounded ||
+		frame.Start.Val == nil || frame.Start.Val.GetLit() == nil {
+		return false
+	}
+	_, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
+	return ok
+}
+
 func largestPartitionSize(partitions []int64, rowCount int) (int, bool) {
 	if rowCount < 0 {
 		return 0, false
@@ -633,6 +653,103 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 			return nil, err
 		}
 		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+			return nil, err
+		}
+		ctr.runningNextRow = j + 1
+	}
+
+	vecs, err := ctr.batAggs[idx].Flush()
+	if err != nil {
+		return nil, err
+	}
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	if outputEnd == n {
+		ctr.freeRunningAgg()
+	}
+	return vec, nil
+}
+
+// processSlidingAggregateFuncRange retains one aggregate for a finite
+// PRECEDING/CURRENT ROW frame. Each row adds the new right edge and removes the
+// expired left edge, reducing bounded SUM evaluation from O(N*W) to O(N).
+func (ctr *container) processSlidingAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+	frame *plan.FrameClause,
+) (_ *vector.Vector, retErr error) {
+	if outputStart != ctr.runningNextRow {
+		ctr.freeRunningAgg()
+		return nil, moerr.NewInternalErrorNoCtx("sliding window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeRunningAgg()
+		}
+	}()
+
+	if ctr.runningAgg == nil {
+		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+		if retErr != nil {
+			return nil, retErr
+		}
+		if !aggexec.SupportsWindowSliding(ctr.runningAgg) {
+			return nil, moerr.NewInternalErrorNoCtx("running aggregate does not support sliding windows")
+		}
+	}
+
+	n := ctr.bat.RowCount()
+	partitionStart := 0
+	if len(ctr.ps) > 0 {
+		partitionStart = int(ctr.ps[ctr.runningPartition])
+	}
+	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+		if j == currentPartitionEnd {
+			ctr.runningAgg.Free()
+			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+			if retErr != nil {
+				return nil, retErr
+			}
+			ctr.runningPartition++
+			partitionStart = j
+			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
+			ctr.runningLeft = partitionStart
+			ctr.runningRight = partitionStart
+		}
+
+		left, right, err := ctr.buildInterval(j, partitionStart, currentPartitionEnd, frame)
+		if err != nil {
+			return nil, err
+		}
+		left = max(left, partitionStart)
+		right = min(right, currentPartitionEnd)
+		if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+			return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
+		}
+
+		for row := ctr.runningLeft; row < left; row++ {
+			if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+		}
+		for row := ctr.runningRight; row < right; row++ {
+			if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+		}
+		ctr.runningLeft = left
+		ctr.runningRight = right
+		if err = ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
 			return nil, err
 		}
 		ctr.runningNextRow = j + 1
@@ -1531,14 +1648,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -1550,11 +1664,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int8], cmpl)
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int8], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int8], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -1566,11 +1680,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int16], cmpl)
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int16], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int16], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -1582,11 +1696,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int32], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int32], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int32], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -1598,11 +1712,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int64], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int64], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int64], cmpl)
 		}
 	case types.T_uint8:
 		col := vector.MustFixedColNoTypeCheck[uint8](vec)
@@ -1671,14 +1785,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
@@ -1955,14 +2066,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -1974,11 +2082,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int8])
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int8], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int8], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -1990,11 +2098,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int16])
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int16], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int16], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -2006,11 +2114,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int32])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int32], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int32], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -2022,11 +2130,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int64], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int64], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int64], cmpl)
 		}
 	case types.T_uint8:
 		col := vector.MustFixedColNoTypeCheck[uint8](vec)
@@ -2095,14 +2203,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
@@ -2299,6 +2404,54 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	// genericSearchRight returns high in [start-1, end-1]. When all values > target,
 	// high = start-1, so right+1 = start (correct exclusive upper bound).
 	return right + 1, nil
+}
+
+// uint64RangeBound computes a finite RANGE search key without allowing
+// unsigned arithmetic to wrap into the opposite end of the type domain.
+// aboveDomain distinguishes addition overflow from subtraction underflow.
+func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+	if subtract {
+		if value < offset {
+			return 0, false, false
+		}
+		return value - offset, false, true
+	}
+	if value > math.MaxUint64-offset {
+		return 0, true, false
+	}
+	return value + offset, false, true
+}
+
+type signedRangeInteger interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+
+// signedRangeBound computes a finite RANGE search key without allowing signed
+// arithmetic to wrap into the opposite end of the type domain. aboveDomain
+// distinguishes overflow above the maximum from underflow below the minimum.
+func signedRangeBound[T signedRangeInteger](value, offset T, subtract bool) (bound T, aboveDomain bool, ok bool) {
+	if subtract {
+		bound = value - offset
+		if (offset > 0 && bound > value) || (offset < 0 && bound < value) {
+			return 0, offset < 0, false
+		}
+		return bound, false, true
+	}
+
+	bound = value + offset
+	if (offset > 0 && bound < value) || (offset < 0 && bound > value) {
+		return 0, offset > 0, false
+	}
+	return bound, false, true
+}
+
+// outOfDomainRangeBoundary maps a conceptual search key outside a numeric type
+// domain to its insertion boundary in the current SQL sort direction.
+func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
+	if aboveDomain != desc {
+		return end
+	}
+	return start
 }
 
 func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {

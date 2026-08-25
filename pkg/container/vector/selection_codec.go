@@ -38,6 +38,7 @@ const (
 	selectedRowsBinaryMask  = byte(3 << selectedRowsBinaryShift)
 
 	selectedRowsRowBinary = byte(1 << 2)
+	selectedRowsRowText   = byte(1 << 3)
 
 	selectedRowsKindNone    = byte(0)
 	selectedRowsKindUniform = byte(1)
@@ -46,6 +47,7 @@ const (
 	selectedRowsBinaryNone    = byte(0)
 	selectedRowsBinaryUniform = byte(1)
 	selectedRowsBinaryRows    = byte(2)
+	selectedRowsBinaryText    = byte(3)
 )
 
 // MarshalSelectedRowsTo writes a bounded, private execution codec for the
@@ -136,7 +138,7 @@ func (v *Vector) marshalSelectedRowsTo(
 		}
 		metadata |= kindMode << selectedRowsKindShift
 	}
-	var firstBinary bool
+	var firstDomain types.RuntimeStringDomain
 	binarySeen := false
 	binaryMixed := false
 	if v.HasBinaryStringMetadata() {
@@ -148,17 +150,19 @@ func (v *Vector) marshalSelectedRowsTo(
 			if v.IsNull(uint64(row)) {
 				continue
 			}
-			binaryString := v.GetBinaryStringMetadataAt(row)
+			domain := v.GetRuntimeStringDomainAt(row)
 			if !binarySeen {
-				firstBinary, binarySeen = binaryString, true
-			} else if binaryString != firstBinary {
+				firstDomain, binarySeen = domain, true
+			} else if domain != firstDomain {
 				binaryMixed = true
 			}
 		}
 	}
 	binaryMode := selectedRowsBinaryNone
-	if binarySeen && firstBinary {
+	if binarySeen && firstDomain == types.RuntimeStringBinary {
 		binaryMode = selectedRowsBinaryUniform
+	} else if binarySeen && firstDomain == types.RuntimeStringText {
+		binaryMode = selectedRowsBinaryText
 	}
 	if binaryMixed {
 		binaryMode = selectedRowsBinaryRows
@@ -187,8 +191,12 @@ func (v *Vector) marshalSelectedRowsTo(
 				rowFlags |= selectedRowsHasGrouping
 			}
 			if binaryMode == selectedRowsBinaryRows &&
-				v.GetBinaryStringMetadataAt(row) {
+				v.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
 				rowFlags |= selectedRowsRowBinary
+			}
+			if binaryMode == selectedRowsBinaryRows &&
+				v.GetRuntimeStringDomainAt(row) == types.RuntimeStringText {
+				rowFlags |= selectedRowsRowText
 			}
 			if err := writeVectorMarshalByte(w, rowFlags); err != nil {
 				return err
@@ -249,7 +257,7 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 	binaryMode := (metadata & selectedRowsBinaryMask) >> selectedRowsBinaryShift
 	if metadata&^(selectedRowsHasNull|selectedRowsHasGrouping|
 		selectedRowsKindMask|selectedRowsBinaryMask) != 0 ||
-		kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryRows {
+		kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryText {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector metadata")
 	}
 	var uniformKind PrepareParamKind
@@ -286,11 +294,12 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return err
 		}
 	}
-	if binaryMode == selectedRowsBinaryRows {
+	if binaryMode == selectedRowsBinaryRows || binaryMode == selectedRowsBinaryText {
 		if err := v.ensureBinaryStringCapacity(count, mp); err != nil {
 			return err
 		}
 		v.binaryStringRows.InitWithSize(int64(count))
+		v.textStringRows.InitWithSize(int64(count))
 	}
 	v.SetLength(count)
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
@@ -303,11 +312,13 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 				return err
 			}
 			if rowFlags&^(selectedRowsHasNull|selectedRowsHasGrouping|
-				selectedRowsRowBinary) != 0 ||
+				selectedRowsRowBinary|selectedRowsRowText) != 0 ||
 				rowFlags&selectedRowsHasNull != 0 && metadata&selectedRowsHasNull == 0 ||
 				rowFlags&selectedRowsHasGrouping != 0 && metadata&selectedRowsHasGrouping == 0 ||
 				rowFlags&selectedRowsRowBinary != 0 && binaryMode != selectedRowsBinaryRows ||
-				rowFlags&selectedRowsHasNull != 0 && rowFlags&selectedRowsRowBinary != 0 {
+				rowFlags&selectedRowsRowText != 0 && binaryMode != selectedRowsBinaryRows ||
+				rowFlags&selectedRowsRowBinary != 0 && rowFlags&selectedRowsRowText != 0 ||
+				rowFlags&selectedRowsHasNull != 0 && rowFlags&(selectedRowsRowBinary|selectedRowsRowText) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid selected vector row metadata")
 			}
 		}
@@ -320,6 +331,9 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		}
 		if rowFlags&selectedRowsRowBinary != 0 {
 			v.binaryStringRows.Add(uint64(row))
+		}
+		if rowFlags&selectedRowsRowText != 0 {
+			v.textStringRows.Add(uint64(row))
 		}
 		valueSize, err := types.ReadInt32AsInt(r)
 		if err != nil {
@@ -343,6 +357,10 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 	switch binaryMode {
 	case selectedRowsBinaryUniform:
 		v.setBinaryStringScalar(true)
+	case selectedRowsBinaryText:
+		if err := v.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp); err != nil {
+			return err
+		}
 	case selectedRowsBinaryRows:
 		v.binaryString = true
 		v.binaryStringRowsActive = true

@@ -186,6 +186,17 @@ func mergeableLockTargets(left, right lockTarget) bool {
 		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
 }
 
+// getHasNewVersionInRangeFunc returns the configured checker when one is
+// supplied, and otherwise uses the normal lock checker. The callback is
+// optional for lock operators created by the planner; merged targets must not
+// dereference a nil callback while checking each target's relation.
+func (lockOp *LockOp) getHasNewVersionInRangeFunc() hasNewVersionInRangeFunc {
+	if lockOp.ctr.hasNewVersionInRange != nil {
+		return lockOp.ctr.hasNewVersionInRange
+	}
+	return hasNewVersionInRange
+}
+
 func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
 	return func(
 		proc *process.Process,
@@ -199,9 +210,10 @@ func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionI
 		from timestamp.Timestamp,
 		to timestamp.Timestamp,
 	) (bool, error) {
+		hasNewVersionInRange := lockOp.getHasNewVersionInRangeFunc()
 		for _, groupIdx := range group {
 			groupTarget := lockOp.targets[groupIdx]
-			changed, err := lockOp.ctr.hasNewVersionInRange(
+			changed, err := hasNewVersionInRange(
 				proc,
 				lockOp.ctr.relations[groupIdx],
 				analyzer,
@@ -260,7 +272,11 @@ func performLock(
 			continue
 		}
 		group := []int{idx}
-		if targetIdx == -1 && target.filter == nil && !target.lockTable && target.lockRows == nil {
+		// Shared targets must remain independent row locks. Combining them into
+		// a full range lock can require lockservice to merge ranges that are
+		// already held by multiple foreign-key validation transactions.
+		if targetIdx == -1 && target.mode != lock.LockMode_Shared &&
+			target.filter == nil && !target.lockTable && target.lockRows == nil {
 			for next := idx + 1; next < len(lockOp.targets); next++ {
 				candidate := lockOp.targets[next]
 				if !mergeableLockTargets(target, candidate) {
@@ -319,10 +335,14 @@ func performLock(
 		// order. Use one full-domain range lock for the group. This keeps the
 		// operator streaming and bounds memory independently of input size.
 		lockTable := target.lockTable || len(group) > 1
-		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
+		hasNewVersionInRangeFunc := lockOp.getHasNewVersionInRangeFunc()
 		if len(group) > 1 {
 			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
 		}
+		// Keep the planner target row-scoped. fetchRows bounds an oversized batch,
+		// and lockservice additionally bounds the actual keys retained across calls
+		// for a transaction and physical lock table. A planner estimate cannot own
+		// that runtime budget and must not widen it to the full table domain.
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
@@ -636,12 +656,20 @@ func doLock(
 	if fetchFunc == nil {
 		fetchFunc = GetFetchRowsFunc(pkType)
 	}
+	fetchLimit := opts.maxCountPerLock
+	if opts.mode == lock.LockMode_Shared && !opts.lockTable && vec != nil {
+		// A runtime cardinality surprise must not change Shared compatibility.
+		// Only an explicit planner table fallback may widen a Shared row target;
+		// otherwise retain its exact rows until lockservice reaches the separate
+		// fixed-bookkeeping ceiling and requests a table-lock upgrade.
+		fetchLimit = vec.Length()
+	}
 
 	has, rows, g := fetchFunc(
 		vec,
 		opts.parker,
 		pkType,
-		opts.maxCountPerLock,
+		fetchLimit,
 		opts.lockTable,
 		opts.filter,
 		opts.filterCols)
@@ -1032,21 +1060,27 @@ func lockWithRetry(
 	var err error
 	retryState := lockRetryState{}
 
-	options, err = refreshLockWaitOptions(options)
-	if err != nil {
-		return result, err
-	}
-	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-		return result, getLockRetryExitError(ctx, err)
-	}
-
 	for {
 		options, err = refreshLockWaitOptions(options)
 		if err != nil {
 			return result, err
 		}
-		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
+		// A retryable bind/backend error can be returned by the table-level attempt
+		// after the row-level request already reported NeedUpgrade. Keep every
+		// attempt in one upgrade-aware state machine so retries cannot drift back to
+		// raw row locking and surface NeedUpgrade to the caller.
+		result, err = LockWithMayUpgrade(
+			ctx,
+			lockService,
+			tableID,
+			rows,
+			txnID,
+			options,
+			fetchFunc,
+			vec,
+			opts,
+			pkType,
+		)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
 		}
@@ -1330,11 +1364,10 @@ func (opts LockOptions) WithLockTable(lockTable, changeDef bool) LockOptions {
 	return opts
 }
 
-// WithMaxBytesPerLock every lock operation, will add some lock rows into
-// lockservice. If very many rows of data are added at once, this can result
-// in an excessive memory footprint. This value limits the amount of lock memory
-// that can be allocated per lock operation, and if it is exceeded, it will be
-// converted to a range lock.
+// WithMaxBytesPerLock bounds row keys before an Exclusive lock request enters
+// lockservice. Shared row requests stay exact because silently converting them
+// to a range can introduce conflicts with compatible holders; their explicit
+// table fallback is chosen by the planner instead.
 func (opts LockOptions) WithMaxBytesPerLock(maxBytesPerLock int) LockOptions {
 	opts.maxCountPerLock = maxBytesPerLock
 	return opts

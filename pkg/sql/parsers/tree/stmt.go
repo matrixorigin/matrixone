@@ -149,7 +149,7 @@ func (node *Select) StmtKind() StmtKind {
 	if node.IsPerform {
 		return defaultStatusTyp
 	}
-	if node.Ep != nil {
+	if node.Ep != nil || len(node.IntoVars) > 0 {
 		return defaultStatusTyp
 	}
 	return defaultResRowTyp

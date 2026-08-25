@@ -25,7 +25,7 @@ insert into t values
 (222,'g02',0,17,'archived',14,'2024-07-27 06:00:00'),
 (232,'g02',10,34,'active',23,'2024-05-09 16:00:00');
 select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.t');
-➤ mo_ctl(dn, flush, mysql_compat_index_hint.t)[12,-1,0]  𝄀
+➤ mo_ctl(dn, flush, mysql_compat_index_hint.t)[12,49151,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -60,7 +60,7 @@ select id,a,b,c
 from t use index(idx_b_a_id)
 where b = 7 and a in ('g01','g03','g05')
 order by a,id;
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,6,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 81  ¦  g01  ¦  7  ¦  37  𝄀
 155  ¦  g05  ¦  7  ¦  25
 explain select id,a,b,c
@@ -91,7 +91,7 @@ select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
 order by a,b,c,id
 limit 8;
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,6,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 81  ¦  g01  ¦  7  ¦  37  𝄀
 222  ¦  g02  ¦  0  ¦  17  𝄀
 112  ¦  g02  ¦  1  ¦  42  𝄀
@@ -116,7 +116,7 @@ select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
 where a = 'g02' and b between 1 and 8
 order by b,c,id;
-➤ id[4,32,0]  ¦  a[12,8,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,6,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 112  ¦  g02  ¦  1  ¦  42  𝄀
 2  ¦  g02  ¦  2  ¦  14  𝄀
 152  ¦  g02  ¦  4  ¦  4  𝄀
@@ -149,7 +149,7 @@ from t force index(idx_a_b_c_id)
 where a = 'g02' and b between 1 and 8
 order by b desc,c desc,id desc
 limit 4;
-➤ id[4,32,0]  ¦  status[12,12,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  status[12,9,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 82  ¦  archived  ¦  8  ¦  44  𝄀
 192  ¦  active  ¦  7  ¦  19  𝄀
 42  ¦  archived  ¦  5  ¦  29  𝄀
@@ -171,7 +171,7 @@ select id,a,b
 from t force index(idx_a_b_c_id)
 where a in ('g01','g02')
 order by b,id;
-➤ id[4,32,0]  ¦  a[12,8,0]  ¦  b[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,6,0]  ¦  b[4,32,0]  𝄀
 222  ¦  g02  ¦  0  𝄀
 112  ¦  g02  ¦  1  𝄀
 2  ¦  g02  ¦  2  𝄀
@@ -218,7 +218,7 @@ select id,a,c
 from t force index(idx_a_b_c_id)
 where a = 'g02'
 order by c,id;
-➤ id[4,32,0]  ¦  a[12,8,0]  ¦  c[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,6,0]  ¦  c[4,32,0]  𝄀
 152  ¦  g02  ¦  4  𝄀
 2  ¦  g02  ¦  14  𝄀
 222  ¦  g02  ¦  17  𝄀
@@ -280,7 +280,7 @@ Project  𝄀
         Sort Key: __mo_index_pri_col INTERNAL  𝄀
         Limit: 10  𝄀
         ->  Index Table Scan on t.idx_a_b_c_id  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'g01')
 explain select id,a,b
 from t force index for order by(idx_a_b_c_id)
 where b = 1
@@ -303,14 +303,14 @@ from t force index for order by(idx_a_b_c_id)
 where b = 1
 order by a
 limit 1;
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,6,0]  ¦  b[4,32,0]  𝄀
 112  ¦  g02  ¦  1
 select a,count(*)
 from t force index for group by(idx_a_b_c_id)
 where b = 7
 group by a
 order by a;
-➤ a[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
+➤ a[12,6,0]  ¦  count(*)[-5,64,0]  𝄀
 g01  ¦  1  𝄀
 g02  ¦  1  𝄀
 g05  ¦  1
@@ -335,7 +335,7 @@ select a,max(score)
 from t force index for group by(idx_a_b_c_id)
 group by a
 order by a;
-➤ a[12,-1,0]  ¦  max(score)[4,32,0]  𝄀
+➤ a[12,6,0]  ¦  max(score)[4,32,0]  𝄀
 g01  ¦  83  𝄀
 g02  ¦  94  𝄀
 g05  ¦  89
@@ -377,7 +377,7 @@ insert into owner_tasks values
 (2,1,2,'done',50,'keep',20),
 (2,2,1,'done',60,'drop',60);
 select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.owner_tasks');
-➤ mo_ctl(dn, flush, mysql_compat_index_hint.owner_tasks)[12,-1,0]  𝄀
+➤ mo_ctl(dn, flush, mysql_compat_index_hint.owner_tasks)[12,49151,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -400,7 +400,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on owner_tasks.idx_status_due_owner  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'active')
 select count(*) from owner_tasks force index(idx_status_due_owner) where status = 'active';
 ➤ count(*)[-5,64,0]  𝄀
 4
@@ -422,7 +422,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on owner_tasks.idx_policy_owner  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'keep')
 select count(*) from owner_tasks force index(idx_policy_owner) where policy = 'keep';
 ➤ count(*)[-5,64,0]  𝄀
 4

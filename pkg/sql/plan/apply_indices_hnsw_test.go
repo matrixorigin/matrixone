@@ -18,12 +18,16 @@ import (
 	"context"
 	"testing"
 
+	"encoding/json"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -658,6 +662,148 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Len(t, scanNode.FilterList, 2)
+}
+
+// applyHnswAndGetTableConfig runs the hnsw rewrite for a filtered top-k with the
+// given limit and returns the IndexTableConfig JSON pushed to the search TVF plus
+// the TVF node itself.
+func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.IndexTableConfig, *plan.Node) {
+	t.Helper()
+	baseMockCtx := NewMockCompilerContext(true)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			if varName == "hnsw_threads_search" {
+				return int64(4), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	scanTag := builder.genNewBindTag()
+	tableDef := &plan.TableDef{
+		Name: "t_hnsw_of",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "embedding": 1},
+	}
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    tableDef,
+		ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: "t_hnsw_of"},
+		BindingTags: []int32{scanTag},
+	}
+	scanNodeID := builder.appendNode(scanNode, ctx)
+	// residual filter: id >= 4 (post-filter that drops index candidates).
+	scanNode.FilterList = []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: ">="},
+					Args: []*plan.Expr{
+						{Typ: tableDef.Cols[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 0, Name: "id"}}},
+						MakePlan2Int64ConstExprWithType(4),
+					},
+				},
+			},
+		},
+	}
+
+	vecTyp := plan.Type{Id: int32(types.T_array_float32), Width: 3}
+	vecCtx := &vectorSortContext{
+		scanNode: scanNode,
+		sortNode: &plan.Node{NodeType: plan.Node_SORT},
+		projNode: &plan.Node{
+			NodeType: plan.Node_PROJECT,
+			Children: []int32{scanNodeID},
+			ProjectList: []*plan.Expr{
+				{Typ: tableDef.Cols[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 0, Name: "id"}}},
+			},
+		},
+		distFnExpr: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{Typ: vecTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 1, Name: "embedding"}}},
+				{Typ: vecTyp, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[0,1,0]"}}}},
+			},
+		},
+		limit:       limit,
+		resultLimit: DeepCopyExpr(limit),
+	}
+
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	multiTableIndex := &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexHnswAlgo.ToString(),
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.Hnsw_TblType_Metadata: {
+				IndexName: "idx_hnsw_of", IndexAlgo: catalog.MoIndexHnswAlgo.ToString(),
+				IndexAlgoTableType: catalog.Hnsw_TblType_Metadata, IndexTableName: "hnsw_meta",
+				Parts: []string{"embedding"}, IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.Hnsw_TblType_Storage: {
+				IndexName: "idx_hnsw_of", IndexAlgo: catalog.MoIndexHnswAlgo.ToString(),
+				IndexAlgoTableType: catalog.Hnsw_TblType_Storage, IndexTableName: "hnsw_index",
+				Parts: []string{"embedding"}, IndexAlgoParams: idxAlgoParams,
+			},
+		},
+	}
+
+	_, err := builder.applyIndicesForSortUsingHnsw(scanNodeID, vecCtx, multiTableIndex, nil)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	tableFuncNode := findHnswTableFunctionNode(builder, sortNode.Children[0])
+	require.NotNil(t, tableFuncNode)
+	require.NotEmpty(t, tableFuncNode.TblFuncExprList)
+	cfgStr := tableFuncNode.TblFuncExprList[0].GetLit().GetSval()
+	require.NotEmpty(t, cfgStr)
+	var cfg vectorindex.IndexTableConfig
+	require.NoError(t, json.Unmarshal([]byte(cfgStr), &cfg))
+	return cfg, tableFuncNode
+}
+
+// A prepared (non-literal) LIMIT with a residual filter cannot be over-fetched at
+// plan time, so node.Limit carries an EXPRESSION that computes the over-fetched
+// budget k' at EXECUTE. node.Limit must never be nil here: it is the only
+// candidate-budget channel a pre-change CN reads, and a nil makes that CN default
+// to a single candidate and silently under-return (#26869, and the rolling-upgrade
+// hazard that motivated moving the budget back onto node.Limit).
+func TestApplyIndicesForSortUsingHnswFlagsPreparedLimitOverFetch(t *testing.T) {
+	paramLimit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	cfg, tf := applyHnswAndGetTableConfig(t, paramLimit)
+	require.False(t, cfg.PostFilterOverFetch,
+		"the budget is baked into node.Limit; a second EXECUTE-time over-fetch would compound the factor")
+	require.NotNil(t, tf.Limit, "an old CN reads node.Limit alone -- a nil there under-returns")
+	require.Nil(t, tf.Limit.GetLit(), "a prepared k resolves to the over-fetch expression, not a plan-time constant")
+	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k must still be carried on IndexReaderParam.Limit")
+	require.Nil(t, tf.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
+	require.Equal(t, uint64(0), tf.IndexReaderParam.GetOverFetchLimit(), "prepared ? has no plan-time over-fetch to display")
+}
+
+// A literal LIMIT with a filter takes the SAME path as a prepared one, except the
+// budget folds at plan time: node.Limit is the literal k' rather than an
+// expression. The plan-level top therefore truncates at k', which is the budget
+// the search wants, so no candidate is lost before the post-filter JOIN.
+func TestApplyIndicesForSortUsingHnswLiteralLimitOverFetch(t *testing.T) {
+	cfg, tf := applyHnswAndGetTableConfig(t, makePlan2Uint64ConstExprWithType(2))
+	require.False(t, cfg.PostFilterOverFetch,
+		"the budget is baked into node.Limit; the TVF must not over-fetch a second time")
+	require.NotNil(t, tf.Limit, "an old CN reads node.Limit alone -- a nil there under-returns")
+	require.Equal(t, overfetch.PostFilterLimit(2), tf.Limit.GetLit().GetU64Val(),
+		"a literal k folds to the over-fetched budget (2 -> 12)")
+	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k carried on IndexReaderParam.Limit")
+	require.Equal(t, uint64(2), tf.IndexReaderParam.GetLimit().GetLit().GetU64Val(), "raw literal k, not over-fetched at plan time")
+	// EXPLAIN-only annotation: the over-fetched budget for a literal k (2 -> 12).
+	require.Equal(t, uint64(12), tf.IndexReaderParam.GetOverFetchLimit(), "literal 2 -> PostFilterLimit 12 for display")
 }
 
 func findHnswTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {

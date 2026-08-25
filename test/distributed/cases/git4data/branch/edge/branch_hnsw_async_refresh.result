@@ -1,0 +1,157 @@
+set experimental_hnsw_index = 1;
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+drop database if exists issue27457_hnsw_table;
+create database issue27457_hnsw_table;
+use issue27457_hnsw_table;
+create table merge_base (id bigint primary key, v vecf32(3));
+insert into merge_base values (1, '[1,1,1]'), (2, '[4,4,4]');
+create index ix_merge using hnsw on merge_base(v)
+op_type 'vector_l2_ops' max_index_capacity 1000;
+select add_fault_point('fj/cdc/executor', ':::', 'echo', 0, 'processInitSQLNewTxn');
+➤ add_fault_point(fj/cdc/executor, :::, echo, 0, processInitSQLNewTxn)[-7,1,0]  𝄀
+1
+data branch create table merge_leaf from merge_base;
+create table plain_base (id bigint primary key, v vecf32(3));
+insert into plain_base values (1, '[1,1,1]'), (2, '[4,4,4]');
+data branch create table plain_leaf from plain_base;
+update merge_leaf set v = '[10,10,10]' where id = 1;
+insert into merge_leaf values (4, '[0,0,0]');
+update plain_leaf set v = '[10,10,10]' where id = 1;
+insert into plain_leaf values (4, '[0,0,0]');
+data branch diff merge_leaf against merge_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch diff plain_leaf against plain_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+set @merge_leaf_version = (
+select rel_version from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'merge_leaf'
+);
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'merge_leaf'
+and rel_version > @merge_leaf_version;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch diff merge_leaf against merge_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch diff plain_leaf against plain_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge merge_leaf into merge_base when conflict accept;
+select id from merge_base order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select count(*) from merge_base
+where id = 1 and l2_distance(v, '[10,10,10]') = 0;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from merge_base
+where id = 4 and l2_distance(v, '[0,0,0]') = 0;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table pick_base (id bigint primary key, v vecf32(3));
+insert into pick_base values (1, '[1,1,1]'), (2, '[4,4,4]');
+create index ix_pick using hnsw on pick_base(v)
+op_type 'vector_l2_ops' max_index_capacity 1000;
+select add_fault_point('fj/cdc/executor', ':::', 'echo', 0, 'processInitSQLNewTxn');
+➤ add_fault_point(fj/cdc/executor, :::, echo, 0, processInitSQLNewTxn)[-7,1,0]  𝄀
+1
+data branch create table pick_leaf from pick_base;
+update pick_leaf set v = '[10,10,10]' where id = 1;
+insert into pick_leaf values (4, '[0,0,0]');
+data branch diff pick_leaf against pick_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+set @pick_leaf_version = (
+select rel_version from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'pick_leaf'
+);
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'pick_leaf'
+and rel_version > @pick_leaf_version;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch diff pick_leaf against pick_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch pick pick_leaf into pick_base keys(1, 4);
+select id from pick_base order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select count(*) from pick_base
+where id = 1 and l2_distance(v, '[10,10,10]') = 0;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pick_base
+where id = 4 and l2_distance(v, '[0,0,0]') = 0;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop database issue27457_hnsw_table;
+drop database if exists issue27457_hnsw_db_src;
+drop database if exists issue27457_hnsw_db_leaf;
+create database issue27457_hnsw_db_src;
+create table issue27457_hnsw_db_src.t (id bigint primary key, v vecf32(3));
+insert into issue27457_hnsw_db_src.t values (1, '[1,1,1]'), (2, '[4,4,4]');
+create index ix_db using hnsw on issue27457_hnsw_db_src.t(v)
+op_type 'vector_l2_ops' max_index_capacity 1000;
+select add_fault_point('fj/cdc/executor', ':::', 'echo', 0, 'processInitSQLNewTxn');
+➤ add_fault_point(fj/cdc/executor, :::, echo, 0, processInitSQLNewTxn)[-7,1,0]  𝄀
+1
+data branch create database issue27457_hnsw_db_leaf from issue27457_hnsw_db_src;
+update issue27457_hnsw_db_leaf.t set v = '[10,10,10]' where id = 1;
+insert into issue27457_hnsw_db_leaf.t values (4, '[0,0,0]');
+data branch diff issue27457_hnsw_db_leaf.t against issue27457_hnsw_db_src.t output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+set @db_leaf_version = (
+select rel_version from mo_catalog.mo_tables
+where reldatabase = 'issue27457_hnsw_db_leaf' and relname = 't'
+);
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'issue27457_hnsw_db_leaf' and relname = 't'
+and rel_version > @db_leaf_version;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch diff issue27457_hnsw_db_leaf.t against issue27457_hnsw_db_src.t output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge issue27457_hnsw_db_leaf.t into issue27457_hnsw_db_src.t when conflict accept;
+select id from issue27457_hnsw_db_src.t order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select count(*) from issue27457_hnsw_db_src.t
+where id = 1 and l2_distance(v, '[10,10,10]') = 0;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from issue27457_hnsw_db_src.t
+where id = 4 and l2_distance(v, '[0,0,0]') = 0;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop database issue27457_hnsw_db_leaf;
+drop database issue27457_hnsw_db_src;
+set experimental_hnsw_index = 0;

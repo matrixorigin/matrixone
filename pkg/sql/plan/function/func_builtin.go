@@ -73,11 +73,41 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
+// ToInterval normalizes dynamic string interval values per row. Invalid values
+// become NULL, matching DATE_ADD/DATE_SUB invalid-interval behavior.
+func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	values := vector.GenerateFunctionStrParameter(ivecs[0])
+	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := values.GetStrValue(i)
+		unit, unitNull := units.GetValue(i)
+		if valueNull || unitNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		number, _, err := types.NormalizeInterval(string(value), types.IntervalType(unit))
+		if err != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(number, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
-	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
-	scale := int32(6)
+	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
+	// FSP is supplied as the single argument and overrides this below.
+	scale := int32(0)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
@@ -100,7 +130,9 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
-	scale := int32(6)
+	// SYSDATE() follows the same default FSP=0 rule as NOW() and
+	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
+	scale := int32(0)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
@@ -372,6 +404,17 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
+			} else if typ.Oid == types.T_text {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYTEXT"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMTEXT"
+				case types.MaxLongTextLen:
+					ret = "LONGTEXT"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -1602,7 +1645,10 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > types.MaxVarcharLen {
+		if sourceLen == 0 {
+			return "", false
+		}
+		if n > types.MaxVarcharLen/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false

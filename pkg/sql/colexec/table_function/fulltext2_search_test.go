@@ -133,6 +133,17 @@ func TestFulltext2SearchStartValidation(t *testing.T) {
 		require.True(t, st.inited)
 		st.free(tf, proc, false, nil)
 	}
+	// A malformed pushed score range is rejected before any index access. The planner only
+	// ever emits this argument itself, so a bad value means the plan and the engine disagree
+	// about the encoding -- fail loudly rather than silently searching without the bound.
+	{
+		st := &fulltext2SearchState{}
+		tf.ctr.argVecs = []*vector.Vector{
+			ft2ConstStr(t, mp, `{"index":"__idx"}`), patVec, modeVec,
+			ft2ConstStr(t, mp, ""), ft2ConstStr(t, mp, "{not json"),
+		}
+		require.ErrorContains(t, st.start(tf, proc, 0, nil), "invalid score range")
+	}
 }
 
 // TestFulltext2SearchCallMaterialized drives the non-streaming call() path: pre-loaded

@@ -1870,16 +1870,31 @@ func TestLastActiveWithStream(t *testing.T) {
 // active() for non-internal messages. Heartbeat (ping/pong) is internal and must not update
 // LastActiveTime, so idle timeout can still collect backends that only receive heartbeats.
 func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
-	// Event-driven: wait for server to send pong (pongSent), then assert lastActive unchanged (no Sleep ordering).
-	pongSent := make(chan struct{}, 1)
+	internalRequestReceived := make(chan struct{}, 1)
+	releaseInternalResponse := make(chan struct{})
+	userRequestReceived := make(chan struct{}, 1)
+	releaseUserResponse := make(chan struct{})
+	var releaseInternalOnce sync.Once
+	releaseInternal := func() {
+		releaseInternalOnce.Do(func() { close(releaseInternalResponse) })
+	}
+	var releaseOnce sync.Once
+	releaseResponse := func() {
+		releaseOnce.Do(func() { close(releaseUserResponse) })
+	}
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 			request := msg.(RPCMessage)
 			if request.InternalMessage() {
 				if m, ok := request.Message.(*flagOnlyMessage); ok && m.flag == flagPing {
 					select {
-					case pongSent <- struct{}{}:
+					case internalRequestReceived <- struct{}{}:
 					default:
+					}
+					select {
+					case <-releaseInternalResponse:
+					case <-time.After(10 * time.Second):
+						return context.DeadlineExceeded
 					}
 					return conn.Write(RPCMessage{
 						Ctx:      request.Ctx,
@@ -1888,36 +1903,54 @@ func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
 					}, goetty.WriteOptions{Flush: true})
 				}
 			}
+			select {
+			case userRequestReceived <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseUserResponse:
+			case <-time.After(10 * time.Second):
+				return context.DeadlineExceeded
+			}
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			t0 := b.LastActiveTime()
-			select {
-			case <-pongSent:
-			case <-time.After(10 * time.Second):
-				t.Fatal("timeout waiting for pong (heartbeat may not have fired or readLoop stalled)")
-			}
-			deadline := time.Now().Add(2 * time.Second)
-			for time.Now().Before(deadline) {
-				runtime.Gosched()
-				if b.LastActiveTime().Equal(t0) {
-					break
-				}
-			}
-			require.True(t, b.LastActiveTime().Equal(t0), "internal (pong) message must not call active(); lastActive changed")
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer releaseInternal()
+			defer releaseResponse()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			internalFuture, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+			require.NoError(t, err)
+			defer internalFuture.Close()
+			select {
+			case <-internalRequestReceived:
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not receive internal request")
+			}
+			lastActiveAfterInternalSend := b.LastActiveTime()
+			releaseInternal()
+			_, err = internalFuture.Get()
+			require.NoError(t, err)
+			require.True(t, b.LastActiveTime().Equal(lastActiveAfterInternalSend),
+				"internal response must not call active(); lastActive changed")
+
 			req := newTestMessage(1)
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
+			select {
+			case <-userRequestReceived:
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not receive user request")
+			}
+			lastActiveAfterSend := b.LastActiveTime()
+			releaseResponse()
 			_, err = f.Get()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			t2 := b.LastActiveTime()
-			assert.True(t, t2.After(t0), "user response must call active() and update lastActive")
+			require.True(t, t2.After(lastActiveAfterSend), "user response must call active() and update lastActive")
 		},
-		WithBackendReadTimeout(30*time.Millisecond),
+		WithBackendReadTimeout(10*time.Second),
 	)
 }
 

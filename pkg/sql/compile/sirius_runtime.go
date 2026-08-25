@@ -47,7 +47,7 @@ func siriusOffloadRequested(ctx context.Context) bool {
 
 func siriusStatementEligible(stmt tree.Statement) bool {
 	selectStmt, ok := stmt.(*tree.Select)
-	return ok && !selectStmt.IsPerform && selectStmt.Ep == nil
+	return ok && !selectStmt.IsPerform && selectStmt.Ep == nil && !statementHasSQLCalcFoundRows(stmt)
 }
 
 // SiriusRuntime is initialized and closed by one CN service. Production lease
@@ -162,7 +162,7 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)
-	if err != nil || accountID == 0 {
+	if err != nil {
 		return false, nil
 	}
 	statementID := c.proc.GetStmtProfile().GetStmtId()

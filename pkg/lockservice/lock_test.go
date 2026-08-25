@@ -22,6 +22,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTryHoldEmptyLockReturnsError(t *testing.T) {
+	l := Lock{
+		holders: newHolders(),
+		waiters: newWaiterQueue(),
+	}
+
+	_, _, err := l.tryHold(nil, nil, nil)
+	assert.ErrorIs(t, err, errEmptyLock)
+}
+
 func TestNewRowLock(t *testing.T) {
 	txnID := []byte("1")
 	opts := LockOptions{}

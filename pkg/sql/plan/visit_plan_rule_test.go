@@ -79,6 +79,29 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 	})
 }
 
+func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeId:   0,
+			NodeType: planpb.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &planpb.VectorIndexScan{
+				QueryVector:     param(4),
+				CandidateLimit:  param(3),
+				FirstRoundLimit: param(0),
+				PreFilters:      []*planpb.Expr{param(2)},
+				DistanceRange:   &planpb.DistRange{LowerBound: param(1)},
+			},
+		}},
+	}}}
+	rule := NewGetParamRule()
+	require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+	require.Equal(t, map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0}, rule.params)
+}
+
 func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
 	newWindow := func() *planpb.WindowSpec {
 		param := func() *planpb.Expr {

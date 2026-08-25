@@ -42,6 +42,11 @@ RUN mkdir -p /mo-prebuilt && touch /mo-prebuilt/warm-status
 # instrumentation changes the compiled objects.
 RUN make build GOBUILD_OPT=-cover
 
+# Warm the plain flavor consumed by merge-trigger-tke. Coverage instrumentation
+# changes Go's compile cache keys, so the normal post-merge binary needs its
+# own complete warm build instead of reusing only the -cover objects.
+RUN make build
+
 # Warm the UT compile flavors without running any test: -exec /bin/true
 # replaces test-binary execution and -vet=off keeps vet findings out of the
 # nightly warm (PR CI runs vet itself). The CGO_* values mirror
@@ -79,17 +84,18 @@ RUN if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|
 
 # Fingerprint the native inputs the prebuilt thirdparties were produced
 # from. Consumers restore thirdparties/install only on an exact match, so a
-# PR that changes thirdparties/, a different architecture, or a branch
-# whose native tree diverges from this image all rebuild from source
-# instead of silently testing stale native code. Bump schema= whenever the
-# native build contract (base image, compiler, layout) changes.
-RUN { \
-      echo "schema=1"; \
-      echo "os=$(uname -s)"; \
-      echo "arch=$(uname -m)"; \
-      echo "thirdparties_tree=$(git rev-parse HEAD:thirdparties)"; \
-    } > /mo-prebuilt/thirdparties.fingerprint && \
-    cat /mo-prebuilt/thirdparties.fingerprint
+# PR that changes thirdparties/, cgo, the compiler, or the native build
+# contract rebuilds from source instead of silently testing stale native code.
+# Keep this script in MatrixOne so the producer and every consumer use the
+# same contract. Bump schema= whenever the native layout changes.
+RUN if [ -x optools/images/ci-builder-fingerprint.sh ]; then \
+      optools/images/ci-builder-fingerprint.sh > /mo-prebuilt/thirdparties.fingerprint; \
+    else \
+      echo "schema=1" > /mo-prebuilt/thirdparties.fingerprint; \
+      echo "os=$(uname -s)" >> /mo-prebuilt/thirdparties.fingerprint; \
+      echo "arch=$(uname -m)" >> /mo-prebuilt/thirdparties.fingerprint; \
+      echo "thirdparties_tree=$(git rev-parse HEAD:thirdparties)" >> /mo-prebuilt/thirdparties.fingerprint; \
+    fi && cat /mo-prebuilt/thirdparties.fingerprint
 
 # Keep only the caches and prebuilt native artifacts; dropping the source
 # tree (and its .git) keeps the nightly image as small as the caches allow.

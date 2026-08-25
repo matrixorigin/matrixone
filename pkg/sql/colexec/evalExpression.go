@@ -92,6 +92,90 @@ type ExpressionExecutor interface {
 	TypeName() string
 }
 
+type memoExpressionState struct {
+	executor ExpressionExecutor
+	cached   *vector.Vector
+	refs     int
+}
+
+type memoExpressionExecutor struct {
+	state *memoExpressionState
+}
+
+func (expr *memoExpressionExecutor) Eval(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	if expr.state.cached != nil {
+		return expr.state.cached, nil
+	}
+	result, err := expr.state.executor.Eval(proc, batches, selectList)
+	if err == nil {
+		expr.state.cached = result
+	}
+	return result, err
+}
+
+func (expr *memoExpressionExecutor) EvalWithoutResultReusing(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	return expr.Eval(proc, batches, selectList)
+}
+
+func (expr *memoExpressionExecutor) ResetForNextQuery() {}
+
+func (expr *memoExpressionExecutor) Free() {
+	expr.state.refs--
+	if expr.state.refs == 0 {
+		expr.state.executor.Free()
+		expr.state.executor = nil
+		expr.state.cached = nil
+	}
+}
+
+func (expr *memoExpressionExecutor) IsColumnExpr() bool { return false }
+func (expr *memoExpressionExecutor) TypeName() string   { return "memo expression" }
+
+type memoRootExpressionExecutor struct {
+	executor ExpressionExecutor
+	states   []*memoExpressionState
+}
+
+func (expr *memoRootExpressionExecutor) resetCachedValues() {
+	for _, state := range expr.states {
+		state.cached = nil
+	}
+}
+
+func (expr *memoRootExpressionExecutor) Eval(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	expr.resetCachedValues()
+	return expr.executor.Eval(proc, batches, selectList)
+}
+
+func (expr *memoRootExpressionExecutor) EvalWithoutResultReusing(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	expr.resetCachedValues()
+	return expr.executor.EvalWithoutResultReusing(proc, batches, selectList)
+}
+
+func (expr *memoRootExpressionExecutor) ResetForNextQuery() {
+	expr.executor.ResetForNextQuery()
+	for _, state := range expr.states {
+		state.executor.ResetForNextQuery()
+	}
+}
+
+func (expr *memoRootExpressionExecutor) Free()              { expr.executor.Free() }
+func (expr *memoRootExpressionExecutor) IsColumnExpr() bool { return expr.executor.IsColumnExpr() }
+func (expr *memoRootExpressionExecutor) TypeName() string   { return expr.executor.TypeName() }
+
+type expressionExecutorBuildContext struct {
+	memos  map[int32]*memoExpressionState
+	states []*memoExpressionState
+}
+
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
 	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, nil)
 }
@@ -126,6 +210,39 @@ func NewExpressionExecutorWithAllocation(
 	planExpr *plan.Expr,
 	selection *vector.AllocationAccountSelection,
 ) (ExpressionExecutor, error) {
+	buildCtx := &expressionExecutorBuildContext{}
+	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx)
+	if err != nil || len(buildCtx.states) == 0 {
+		return executor, err
+	}
+	return &memoRootExpressionExecutor{executor: executor, states: buildCtx.states}, nil
+}
+
+func newExpressionExecutorWithAllocation(
+	proc *process.Process,
+	planExpr *plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	buildCtx *expressionExecutorBuildContext,
+) (ExpressionExecutor, error) {
+	if planExpr.AuxId < 0 {
+		if buildCtx.memos == nil {
+			buildCtx.memos = make(map[int32]*memoExpressionState)
+		}
+		if state, ok := buildCtx.memos[planExpr.AuxId]; ok {
+			state.refs++
+			return &memoExpressionExecutor{state: state}, nil
+		}
+		withoutMemo := *planExpr
+		withoutMemo.AuxId = 0
+		executor, err := newExpressionExecutorWithAllocation(proc, &withoutMemo, selection, buildCtx)
+		if err != nil {
+			return nil, err
+		}
+		state := &memoExpressionState{executor: executor, refs: 1}
+		buildCtx.memos[planExpr.AuxId] = state
+		buildCtx.states = append(buildCtx.states, state)
+		return &memoExpressionExecutor{state: state}, nil
+	}
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		typ := types.NewWithCharset(
@@ -209,7 +326,7 @@ func NewExpressionExecutorWithAllocation(
 			return nil, err
 		}
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.List.List[i], selection)
+			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.List.List[i], selection, buildCtx)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -233,7 +350,12 @@ func NewExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
-			executor.volatile, executor.timeDependent = overload.CannotFold(), overload.IsRealTimeRelated()
+			// String-to-numeric casts can emit one warning for every logical
+			// output row.  Do not constant-fold them: a folded vector has only
+			// one physical value, so warning generation would depend on the
+			// physical batch layout rather than the rows evaluated by the query.
+			executor.volatile = overload.CannotFold() || isStringToNumericCast(planExpr)
+			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
@@ -247,7 +369,7 @@ func NewExpressionExecutorWithAllocation(
 		}
 
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.F.Args[i], selection)
+			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -258,6 +380,24 @@ func NewExpressionExecutorWithAllocation(
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
+}
+
+func isStringToNumericCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) == 0 {
+		return false
+	}
+	switch f.Func.GetObjName() {
+	case "cast", "cast_strict", "cast_assign", "cast_ignore":
+	default:
+		return false
+	}
+	source := types.T(f.Args[0].Typ.Id)
+	target := types.T(expr.Typ.Id)
+	return source.IsMySQLString() && target.ToType().IsNumeric()
 }
 
 func newExpressionOffHeapVector(
@@ -367,7 +507,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKind          vector.PrepareParamKind
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
-	flowControlBinaryStrings []bool
+	flowControlStringDomains []types.RuntimeStringDomain
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -409,7 +549,10 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if noRowsSelected(selectList, expressionRowCount(batches)) {
+	// Scalar values stay physically constant, but their logical cardinality
+	// must follow the input batch for downstream materialization and shuffle.
+	rowCount := expressionRowCount(batches)
+	if noRowsSelected(selectList, rowCount) {
 		if expr.maskedNull == nil {
 			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
@@ -417,12 +560,15 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 				return nil, err
 			}
 		}
+		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
 	}
 	if expr.folded {
 		if expr.foldedNull {
+			expr.null.SetLength(rowCount)
 			return expr.null, nil
 		}
+		expr.vec.SetLength(rowCount)
 		return expr.vec, nil
 	}
 
@@ -440,6 +586,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.folded = true
 		expr.foldedNull = true
+		expr.null.SetLength(rowCount)
 		return expr.null, nil
 	}
 
@@ -456,6 +603,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
+		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
 }
@@ -515,7 +663,10 @@ type VarExpressionExecutor struct {
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if noRowsSelected(selectList, expressionRowCount(batches)) {
+	// Scalar values stay physically constant, but their logical cardinality
+	// must follow the input batch for downstream materialization and shuffle.
+	rowCount := expressionRowCount(batches)
+	if noRowsSelected(selectList, rowCount) {
 		if expr.maskedNull == nil {
 			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
@@ -523,6 +674,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 				return nil, err
 			}
 		}
+		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
 	}
 	resolveVariableFunc := proc.GetResolveVariableFunc()
@@ -557,11 +709,23 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		if err == nil {
 			expr.null.SetIsBin(isBin)
 			expr.null.SetPrepareParamKind(prepareParamKind)
+			expr.null.SetLength(rowCount)
 		}
 		return expr.null, err
 	}
 
 	if expr.vec == nil {
+		expr.vec, err = util.GenVectorByVarValueWithAllocation(
+			proc, expr.typ, val, expr.allocation,
+		)
+	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArrayRelate() {
+		// Fixed-width user-variable values (including DECIMAL), JSON values, and
+		// array/vector values need typed reconstruction on every evaluation.
+		// Reusing the generic varlena update path would either reinterpret a
+		// fixed vector's backing memory as a Varlena, skip JSON's binary
+		// encoding, or replace array element bytes with display text such as
+		// "[1 2 3]".
+		expr.vec.Free(expr.mp)
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
 		)
@@ -578,6 +742,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
 		expr.vec.SetPrepareParamKind(prepareParamKind)
+		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
 }
@@ -802,7 +967,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], trueBranch)
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
 	} else {
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
 		if err != nil {
@@ -814,7 +979,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], falseBranch)
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
 		return nil
 	}
 	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
@@ -836,8 +1001,8 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlKinds != nil {
 		expr.flowControlKinds = expr.flowControlKinds[:0]
 	}
-	if expr.flowControlBinaryStrings != nil {
-		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:0]
+	if expr.flowControlStringDomains != nil {
+		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
 }
 
@@ -855,16 +1020,16 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows i
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows int) {
-	if rows <= len(expr.flowControlBinaryStrings) {
+	if rows <= len(expr.flowControlStringDomains) {
 		return
 	}
-	old := len(expr.flowControlBinaryStrings)
-	if rows <= cap(expr.flowControlBinaryStrings) {
-		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:rows]
-		clear(expr.flowControlBinaryStrings[old:])
+	old := len(expr.flowControlStringDomains)
+	if rows <= cap(expr.flowControlStringDomains) {
+		expr.flowControlStringDomains = expr.flowControlStringDomains[:rows]
+		clear(expr.flowControlStringDomains[old:])
 		return
 	}
-	expr.flowControlBinaryStrings = append(expr.flowControlBinaryStrings, make([]bool, rows-old)...)
+	expr.flowControlStringDomains = append(expr.flowControlStringDomains, make([]types.RuntimeStringDomain, rows-old)...)
 }
 
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
@@ -873,18 +1038,41 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows i
 // observe non-NULL values from inactive rows.
 func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	value *vector.Vector,
+	executor ExpressionExecutor,
 	selection []bool,
 ) {
+	value = flowControlSelectedValueSource(value, executor)
 	if value == nil || value.Length() == 0 {
+		return
+	}
+	resultDomain := types.StaticStringDomain(expr.resultType)
+	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
+		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
+		types.StaticStringDomain(*value.GetType()) == resultDomain &&
+		len(expr.flowControlKinds) == 0 &&
+		(!expr.flowControlKindSeen || expr.flowControlKind == vector.PrepareParamNone) {
+		expr.flowControlKind = vector.PrepareParamNone
+		expr.flowControlKindSeen = true
 		return
 	}
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
-			binaryString := value.GetBinaryStringMetadataAt(row)
-			if binaryString || len(expr.flowControlBinaryStrings) != 0 {
+			domain := value.GetRuntimeStringDomainAt(row)
+			if domain == types.RuntimeStringInherit {
+				switch staticDomain := types.StaticStringDomain(*value.GetType()); {
+				case staticDomain == types.StringDomainText && resultDomain == types.StringDomainBinary:
+					domain = types.RuntimeStringText
+				case staticDomain == types.StringDomainBinary && resultDomain == types.StringDomainText:
+					domain = types.RuntimeStringBinary
+				}
+			} else if (domain == types.RuntimeStringText && resultDomain == types.StringDomainText) ||
+				(domain == types.RuntimeStringBinary && resultDomain == types.StringDomainBinary) {
+				domain = types.RuntimeStringInherit
+			}
+			if domain != types.RuntimeStringInherit || len(expr.flowControlStringDomains) != 0 {
 				expr.ensureFlowControlBinaryStringRows(len(selection))
-				expr.flowControlBinaryStrings[row] = binaryString
+				expr.flowControlStringDomains[row] = domain
 			}
 			kind := value.GetPrepareParamKindAt(row)
 			if !expr.flowControlKindSeen {
@@ -904,6 +1092,25 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	}
 }
 
+// flowControlSelectedValueSource unwraps only binder-inserted casts. Explicit
+// CAST uses overload 1 and remains a semantic boundary. An implicit cast has
+// already evaluated its source, so this does not execute an expression twice.
+func flowControlSelectedValueSource(value *vector.Vector, executor ExpressionExecutor) *vector.Vector {
+	for {
+		fn, ok := executor.(*FunctionExpressionExecutor)
+		if !ok || fn.fid != function.CAST || len(fn.parameterResults) == 0 ||
+			len(fn.parameterExecutor) == 0 || fn.parameterResults[0] == nil {
+			return value
+		}
+		_, overload := function.DecodeOverloadID(fn.overloadID)
+		if overload != 0 {
+			return value
+		}
+		value = fn.parameterResults[0]
+		executor = fn.parameterExecutor[0]
+	}
+}
+
 func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	result *vector.Vector,
 	rows int,
@@ -912,9 +1119,9 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	if result == nil || rows <= 0 {
 		return nil
 	}
-	if len(expr.flowControlBinaryStrings) != 0 {
+	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
-		if err := result.SetBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
+		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
 			return err
 		}
 	}
@@ -995,9 +1202,11 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			if err != nil {
 				return err
 			}
-			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i+1], selectedBranch)
+			expr.observeFlowControlPrepareParamKind(
+				expr.parameterResults[i+1], expr.parameterExecutor[i+1], selectedBranch)
 		} else {
-			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
+			expr.observeFlowControlPrepareParamKind(
+				expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		}
 	}
 	return err
@@ -1025,7 +1234,8 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
+		expr.observeFlowControlPrepareParamKind(
+			expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		for row := range remaining {
 			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
 				remaining[row] = false
@@ -1448,7 +1658,11 @@ func generateConstExpressionExecutor(
 		case *plan.Literal_I16Val:
 			vec, err = newExpressionConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I32Val:
-			vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
+			if typ.Oid == types.T_year {
+				vec, err = newExpressionConstFixed(typ, types.MoYear(val.I32Val), 1, proc.Mp(), selection)
+			} else {
+				vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
+			}
 		case *plan.Literal_I64Val:
 			vec, err = newExpressionConstFixed(constI64Type, val.I64Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U8Val:
@@ -1512,6 +1726,14 @@ func generateConstExpressionExecutor(
 					return nil, err1
 				}
 				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
+			} else if typ.Oid.IsMySQLString() {
+				// String literals use the executor's canonical VARCHAR container,
+				// but must retain the plan charset. Raw HEX/BIT literals are
+				// VARCHAR-shaped with CharsetBinary, while an empty SQL string is
+				// plan-typed CHAR and still materializes as VARCHAR for consumers.
+				constStringType := constSType
+				constStringType.Charset = typ.Charset
+				vec, err = newExpressionConstBytes(constStringType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
 				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
 			}
@@ -1540,6 +1762,29 @@ func generateConstExpressionExecutor(
 		}
 		if err == nil {
 			vec.SetIsBin(con.IsBin)
+			if typ.Oid.IsMySQLString() {
+				domain := types.RuntimeStringInherit
+				effectiveDomain := types.StaticStringDomain(typ)
+				switch con.LiteralForm {
+				case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+					effectiveDomain = types.StringDomainText
+				case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+					plan.StringLiteralForm_STRING_LITERAL_HEX,
+					plan.StringLiteralForm_STRING_LITERAL_BIT:
+					effectiveDomain = types.StringDomainBinary
+				}
+				if effectiveDomain != types.StaticStringDomain(typ) {
+					if effectiveDomain == types.StringDomainBinary {
+						domain = types.RuntimeStringBinary
+					} else {
+						domain = types.RuntimeStringText
+					}
+				}
+				if err = vec.SetRuntimeStringDomainWithMP(domain, proc.Mp()); err != nil {
+					vec.Free(proc.Mp())
+					return nil, err
+				}
+			}
 		}
 	}
 	return vec, err

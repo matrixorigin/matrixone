@@ -21,8 +21,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTupleMemoIdentityMarksStableVolatileSource(t *testing.T) {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	newCandidate := func(wrapperType types.T) (*planpb.Expr, *planpb.Expr) {
+		source := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: randFn.GetEncodedOverloadID(), ObjName: "rand"},
+			}},
+		}
+		wrapper := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(wrapperType)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{source}}},
+		}
+		return wrapper, source
+	}
+	first, firstSource := newCandidate(types.T_float64)
+	second, secondSource := newCandidate(types.T_decimal128)
+	binder := &baseBinder{ctx: &BindContext{}}
+	var memoIDs []int32
+
+	binder.markTupleVolatileSources(first, &memoIDs)
+	binder.markTupleVolatileSources(second, &memoIDs)
+
+	require.Zero(t, first.AuxId)
+	require.Zero(t, second.AuxId)
+	require.Negative(t, firstSource.AuxId)
+	require.Equal(t, firstSource.AuxId, secondSource.AuxId)
+}
 
 func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
 	t.Helper()

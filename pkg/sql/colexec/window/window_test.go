@@ -216,6 +216,37 @@ func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(31)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	// Cancel after the sliding state has both added entering rows and removed
+	// expired rows, then verify the error path releases both aggregate owners.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -576,6 +607,38 @@ func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPreparedBoundedSlidingSumUsesRuntimeValue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, 0),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, boundedSlidingRowsFrame(arg.ctr.runtimeFrames[0]))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 30, 50, 70},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
 	tests := []struct {
 		name string
@@ -705,6 +768,31 @@ func TestCumulativeRowsFrameEligibility(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want,
 				cumulativeRowsFrame(test.frame, test.partitions, test.rows))
+		})
+	}
+}
+
+func TestBoundedSlidingRowsFrameEligibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame *plan.FrameClause
+		want  bool
+	}{
+		{name: "finite preceding", frame: makeFiniteCumulativeFrame(31), want: true},
+		{name: "zero preceding", frame: makeFiniteCumulativeFrame(0), want: true},
+		{name: "unbounded", frame: makeCumulativeFrame()},
+		{name: "current row start", frame: makeCurrentRowFrame()},
+		{name: "following end", frame: makeFullFrame()},
+		{name: "range", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: makeFiniteCumulativeFrame(1).Start.Val},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, boundedSlidingRowsFrame(test.frame))
 		})
 	}
 }
@@ -1513,6 +1601,201 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 	require.Equal(t, []int64{1, 3, 10, 30},
 		vector.MustFixedColWithTypeCheck[int64](result))
 	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize*2 + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1024)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	require.Len(t, resultValues, rows)
+	for _, row := range []int{0, 1023, 1024, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
+		require.Equal(t, int64(min(row+1, 1025)), resultValues[row], "row %d", row)
+	}
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
+	require.NoError(t, err)
+	first.Free(proc.Mp())
+	require.NotNil(t, ctr.runningAgg)
+
+	// A retained sliding state is valid only for the immediately following
+	// output range; skipping a row must fail and release that state.
+	_, err = ctr.processAggregateFuncRange(0, arg, proc, 2, 3)
+	require.ErrorContains(t, err, "sliding window output is not sequential")
+	require.Nil(t, ctr.runningAgg)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 10, 20, 30, 40})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 4},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 5, 7, 10, 30, 50, 70},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 0, 4}, []uint64{1, 2}, proc.Mp())
+	bat.SetRowCount(4)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 1, 0, 4},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewInt64Vector(
+		4, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{1, 2, 3, 4})
+	bat.SetRowCount(4)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, types.T_int64.ToType())},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(1),
+		types.Decimal128FromInt64(3),
+		types.Decimal128FromInt64(5),
+		types.Decimal128FromInt64(7),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.New(types.T_decimal64, 18, 2)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewDecimal64Vector(
+		5, typ, proc.Mp(), false,
+		[]bool{false, true, true, false, false},
+		[]types.Decimal64{100, 0, 0, types.Decimal64(300).Minus(), 400})
+	bat.SetRowCount(5)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(100),
+		types.Decimal128FromInt64(100),
+		{},
+		types.Decimal128FromInt64(-300),
+		types.Decimal128FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+	require.False(t, result.IsNull(4))
 
 	result.Free(proc.Mp())
 	bat.Clean(proc.Mp())
@@ -2418,6 +2701,243 @@ func TestSearchLeftRightAllUintTypes(t *testing.T) {
 	t.Run("uint64", func(t *testing.T) {
 		testSearchLeftRightNumeric(t, mp, types.T_uint64,
 			[]uint64{1, 2, 2, 4}, []uint64{4, 2, 2, 1}, u64Lit)
+	})
+}
+
+func uint64RangeOffset(value uint64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_U64Val{U64Val: value},
+	}}}
+}
+
+func TestUint64RangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       uint64
+		offset      uint64
+		subtract    bool
+		wantBound   uint64
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 10, wantBound: 11, wantInRange: true},
+		{name: "subtract", value: 10, offset: 10, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "subtract underflow", value: 9, offset: 10, subtract: true},
+		{name: "add maximum", value: math.MaxUint64, wantBound: math.MaxUint64, wantInRange: true},
+		{name: "add overflow", value: math.MaxUint64, offset: 1, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := uint64RangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, false, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, true, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, true, true))
+}
+
+func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	currentToFollowing := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_FOLLOWING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	precedingOnly := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type: plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	check := func(t *testing.T, oid types.T, values []uint64, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	asc := make([]uint64, 21)
+	desc := make([]uint64, 21)
+	for i := range asc {
+		asc[i] = uint64(i)
+		desc[i] = uint64(20 - i)
+	}
+
+	for _, oid := range []types.T{types.T_uint64, types.T_bit} {
+		t.Run(oid.String(), func(t *testing.T) {
+			check(t, oid, asc, false, 0, currentToFollowing(10), 0, 11)
+			check(t, oid, asc, false, 0, currentToFollowing(0), 0, 1)
+			check(t, oid, asc, false, 10, currentToFollowing(10), 10, 21)
+			check(t, oid, desc, true, 11, currentToFollowing(10), 11, 21)
+			check(t, oid, asc, false, 10, precedingOnly(10), 0, 1)
+			check(t, oid, asc, false, 5, precedingOnly(10), 0, 0)
+			check(t, oid, []uint64{math.MaxUint64 - 2, math.MaxUint64 - 1, math.MaxUint64}, false, 0, currentToFollowing(10), 0, 3)
+		})
+	}
+
+	t.Run("null peers", func(t *testing.T) {
+		vec := vector.NewVec(types.T_uint64.ToType())
+		for i, value := range []uint64{0, 0, 0, 1} {
+			require.NoError(t, vector.AppendFixed(vec, value, i < 2, mp))
+		}
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{false},
+		}
+		start, end, err := ctr.buildRangeInterval(0, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 0, start)
+		require.Equal(t, 2, end)
+		start, end, err = ctr.buildRangeInterval(2, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 2, start)
+		require.Equal(t, 4, end)
+	})
+}
+
+func signedRangeOffset(oid types.T, value int64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_int8:
+		lit.Value = &plan.Literal_I8Val{I8Val: int32(value)}
+	case types.T_int16:
+		lit.Value = &plan.Literal_I16Val{I16Val: int32(value)}
+	case types.T_int32:
+		lit.Value = &plan.Literal_I32Val{I32Val: int32(value)}
+	case types.T_int64:
+		lit.Value = &plan.Literal_I64Val{I64Val: value}
+	default:
+		panic("unsupported signed RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
+func TestSignedRangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       int8
+		offset      int8
+		subtract    bool
+		wantBound   int8
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 1, wantBound: 2, wantInRange: true},
+		{name: "subtract", value: 1, offset: 1, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "add maximum zero", value: math.MaxInt8, wantBound: math.MaxInt8, wantInRange: true},
+		{name: "subtract minimum zero", value: math.MinInt8, subtract: true, wantBound: math.MinInt8, wantInRange: true},
+		{name: "add overflow", value: math.MaxInt8, offset: 1, wantAbove: true},
+		{name: "subtract underflow", value: math.MinInt8, offset: 1, subtract: true},
+		{name: "add negative underflow", value: math.MinInt8, offset: -1},
+		{name: "subtract negative overflow", value: math.MaxInt8, offset: -1, subtract: true, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := signedRangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, false, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, true, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, true, true))
+}
+
+func testBuildRangeIntervalSignedBoundaries[T types.OrderedT](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	minValue T,
+	maxValue T,
+) {
+	t.Helper()
+
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{minValue, zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue, minValue}
+
+	// ASC addition overflow and subtraction underflow both retain the current row.
+	check(t, asc, false, 2, currentToFollowing, 2, 3)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+
+	// DESC reverses the arithmetic direction while preserving the same frame invariant.
+	check(t, desc, true, 2, currentToFollowing, 2, 3)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+}
+
+func TestBuildRangeIntervalSignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("int8", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int8, int8(math.MinInt8), int8(math.MaxInt8))
+	})
+	t.Run("int16", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int16, int16(math.MinInt16), int16(math.MaxInt16))
+	})
+	t.Run("int32", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int32, int32(math.MinInt32), int32(math.MaxInt32))
+	})
+	t.Run("int64", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int64, int64(math.MinInt64), int64(math.MaxInt64))
 	})
 }
 

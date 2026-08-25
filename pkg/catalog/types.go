@@ -47,6 +47,34 @@ const (
 	// remapping, unlike TbColToDataCol's original file-field indexes.
 	ExternalFilePathColId = ^uint64(0)
 
+	// ExternalQuery is the hidden column of ESQL/SQL foreign external tables
+	// (ENGINE = ESQL|SQL). The query text plays the role the file name plays
+	// for __mo_filepath: `__mo_query = '<text>'` predicates select what is sent
+	// to the foreign source, and every returned row carries the text of the
+	// query that produced it. See docs/cn/esql_sql_exttab.md.
+	ExternalQuery      = "__mo_query"
+	ExternalQueryColId = ^uint64(0) - 1
+
+	// Kafka external table (ENGINE = KAFKA) synthetic columns. The four
+	// message columns are selectable per-row metadata; the three read
+	// controls are WHERE-only knobs resolved at compile time (their conjuncts
+	// are consumed, and selecting them returns the effective value used by
+	// the scan). See docs/cn/kafka_exttab.md and issue #27518.
+	KafkaMessageID         = "__mo_message_id"
+	KafkaMessageIDColId    = ^uint64(0) - 2
+	KafkaMessageTS         = "__mo_message_ts"
+	KafkaMessageTSColId    = ^uint64(0) - 3
+	KafkaMessageKey        = "__mo_message_key"
+	KafkaMessageKeyColId   = ^uint64(0) - 4
+	KafkaMessageValue      = "__mo_message_value"
+	KafkaMessageValueColId = ^uint64(0) - 5
+	KafkaReadStartID       = "__mo_read_start_id"
+	KafkaReadStartIDColId  = ^uint64(0) - 6
+	KafkaReadSize          = "__mo_read_size"
+	KafkaReadSizeColId     = ^uint64(0) - 7
+	KafkaReadTimeout       = "__mo_read_timeout"
+	KafkaReadTimeoutColId  = ^uint64(0) - 8
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
@@ -105,7 +133,54 @@ var InternalTableNames = map[string]int8{
 }
 
 func ContainExternalHidenCol(col string) bool {
+	// Only __mo_filepath is hidden globally BY NAME (pre-existing behavior).
+	// __mo_query is scoped: use IsForeignQueryCol (name + reserved ColId) so a
+	// real __mo_query column in a pre-existing schema keeps working.
 	return col == ExternalFilePath
+}
+
+// IsForeignQueryCol reports whether (name, colId) is the SYNTHETIC __mo_query
+// column of an ESQL/SQL foreign external scan, as opposed to a real user
+// column of the same name in a pre-existing schema (new schemas cannot create
+// one: see IsReservedExternalColName).
+func IsForeignQueryCol(name string, colId uint64) bool {
+	return name == ExternalQuery && colId == ExternalQueryColId
+}
+
+// IsKafkaHiddenCol reports whether (name, colId) is one of the SYNTHETIC
+// Kafka external-scan columns (scoped by reserved ColId like
+// IsForeignQueryCol, so a real column of the same name in a pre-existing
+// schema keeps working).
+func IsKafkaHiddenCol(name string, colId uint64) bool {
+	switch name {
+	case KafkaMessageID:
+		return colId == KafkaMessageIDColId
+	case KafkaMessageTS:
+		return colId == KafkaMessageTSColId
+	case KafkaMessageKey:
+		return colId == KafkaMessageKeyColId
+	case KafkaMessageValue:
+		return colId == KafkaMessageValueColId
+	case KafkaReadStartID:
+		return colId == KafkaReadStartIDColId
+	case KafkaReadSize:
+		return colId == KafkaReadSizeColId
+	case KafkaReadTimeout:
+		return colId == KafkaReadTimeoutColId
+	}
+	return false
+}
+
+// IsReservedExternalColName reports whether a column name is reserved for the
+// synthetic external-scan columns and must be rejected at CREATE/ALTER.
+func IsReservedExternalColName(name string) bool {
+	switch name {
+	case ExternalFilePath, ExternalQuery,
+		KafkaMessageID, KafkaMessageTS, KafkaMessageKey, KafkaMessageValue,
+		KafkaReadStartID, KafkaReadSize, KafkaReadTimeout:
+		return true
+	}
+	return false
 }
 
 func IsHiddenTable(name string) bool {
@@ -159,6 +234,11 @@ const (
 
 	// MO_SUBS subscriptions meta table
 	MO_SUBS = "mo_subs"
+
+	// MO_VIEW_DEPENDENCIES stores exact reverse bindings for persisted Views.
+	MO_VIEW_DEPENDENCIES = "mo_view_dependencies"
+	// MO_VIEW_REFRESH stores monotonic refresh state and worker leases.
+	MO_VIEW_REFRESH = "mo_view_refresh"
 
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"

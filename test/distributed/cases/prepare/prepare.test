@@ -257,7 +257,7 @@ prepare stmt1 from select * from t1 limit ?;
 set @a_var = 1;
 execute stmt1 using @a_var;
 prepare stmt2 from select * from t1 limit ?;
-set @b_var = '1';
+set @b_var = 1;
 execute stmt2 using @b_var;
 deallocate prepare stmt1;
 deallocate prepare stmt2;

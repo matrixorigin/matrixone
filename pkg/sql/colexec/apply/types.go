@@ -19,8 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -54,8 +56,28 @@ type Apply struct {
 	Result    []colexec.ResultPos
 	Typs      []types.Type
 
-	TableFunction *table_function.TableFunction
+	TableFunction   *table_function.TableFunction
+	VectorIndexScan *plan.VectorIndexScan
+	VectorAttrs     []string
+	// TxnReadView is the immutable statement boundary used by correlated vector
+	// scans. Remote generations intentionally receive NoWorkspaceReadView because
+	// a read view belongs only to the CN workspace that published it.
+	TxnReadView client.WorkspaceReadView
+	Source      AppliedSource
 	vm.OperatorBase
+}
+
+// AppliedSource is a parameterized row source evaluated once per left input
+// row. Table functions and correlated vector-index scans share this lifecycle;
+// APPLY owns the generation boundary and guarantees EndRow before StartRow.
+type AppliedSource interface {
+	ApplyPrepare(*process.Process) error
+	ApplyArgsEval(*batch.Batch, *process.Process) error
+	ApplyStart(int, *process.Process, process.Analyzer) error
+	ApplyCall(*process.Process) (vm.CallResult, error)
+	ApplyEnd(*process.Process) error
+	Reset(*process.Process, bool, error)
+	Free(*process.Process, bool, error)
 }
 
 func (apply *Apply) GetOperatorBase() *vm.OperatorBase {
@@ -99,7 +121,9 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 	ctr := &apply.ctr
 
 	ctr.inbat = nil
-	if apply.TableFunction != nil {
+	if apply.Source != nil {
+		apply.Source.Reset(proc, pipelineFailed, err)
+	} else if apply.TableFunction != nil {
 		apply.TableFunction.Reset(proc, pipelineFailed, err)
 	}
 }
@@ -113,7 +137,9 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 	ctr.cleanBatch(proc.Mp())
 	ctr.sels = nil
 
-	if apply.TableFunction != nil {
+	if apply.Source != nil {
+		apply.Source.Free(proc, pipelineFailed, err)
+	} else if apply.TableFunction != nil {
 		apply.TableFunction.Free(proc, pipelineFailed, err)
 	}
 }

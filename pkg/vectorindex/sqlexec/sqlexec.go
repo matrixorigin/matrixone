@@ -86,12 +86,20 @@ type SqlProcess struct {
 	// This contains serialized unique join keys and must be converted by IVF code
 	// before it is exposed to entries table scans.
 	IvfRuntimeFilterData []byte
+	// True when the runtime-filter producer sent an exact key set. It is
+	// separate from the payload because an empty set is semantically different
+	// from no filter (RF PASS).
+	IvfHasMembershipFilter bool
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
-	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
+	// When set, the legacy SQL search adapter uses it to build "pk IN (...)".
 	ExactPkFilter string
 	// Optional IndexReaderParam attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	IndexReaderParam *plan.IndexReaderParam
+
+	// RelationScanner is installed by VECTOR_INDEX_SCAN. Query-time index
+	// reads use it instead of generating SQL and invoking a nested planner.
+	RelationScanner RelationScanExecutor
 
 	// Optional trusted execution identity for planner-generated internal SQL.
 	// SQL/table-function arguments must never populate these fields.

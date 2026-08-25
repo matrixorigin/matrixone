@@ -89,13 +89,35 @@ type ExParamConst struct {
 	NeedRowOrdinal              bool
 	IcebergDeleteMaxMemoryBytes int64
 	IcebergDeleteSpillEnabled   bool
-	Ctx                         context.Context
-	Extern                      *tree.ExternParam
-	ClusterTable                *plan.ClusterTable
+	// DatastreamScan marks this scan as a datastream external table read and
+	// carries the gRPC endpoint plus the pushed-down filter text.
+	DatastreamScan *plan.DataStreamScan
+	// ForeignScan marks this scan as an ESQL/SQL foreign external table read
+	// and carries the connection config reference and default query.
+	ForeignScan *plan.ForeignScan
+	// KafkaScan marks this scan as a Kafka external table read and carries
+	// the broker/topic/partition plus the compile-resolved read controls.
+	KafkaScan *plan.KafkaScan
+	// ESQLTemporalUTC marks a scan whose CSV source renders temporal values as
+	// ISO 8601 UTC (ES|QL); getColData then rewrites them as session-zone wall
+	// clock, preserving the instant. Set for ESQL foreign tables (Prepare) and
+	// schema-mode esql_tvf (BuildForeignTVFExternParam).
+	ESQLTemporalUTC bool
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {
-	Fileparam                   *ExFileparam
+	Fileparam *ExFileparam
+	// KafkaMeta carries the per-message metadata FIFO of a running Kafka
+	// scan (set by KafkaReader.Open, consumed row-by-row in makeBatchRows).
+	KafkaMeta *KafkaMetaState
+	// KafkaPending is the deferred progress of a DRAINED Kafka scan: the
+	// reader hands it off at source EOF, and External.Reset publishes it
+	// only when the whole statement succeeded (discarding it on failure or
+	// cancel), so an aborted statement never advances the exactly-once chain.
+	KafkaPending                *KafkaPendingProgress
 	Filter                      *FilterParam
 	currentPartValues           map[string]string
 	parquetProfile              process.ParquetProfileStats
@@ -259,6 +281,24 @@ func (external *External) Release() {
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if external.Es != nil && external.Es.KafkaPending != nil {
+		pending := external.Es.KafkaPending
+		external.Es.KafkaPending = nil
+		if pipelineFailed || err != nil {
+			pending.Finalize(proc, false)
+		} else if ses, ok := proc.GetSession().(process.KafkaSessionState); ok {
+			// SOURCE-pipeline success is not STATEMENT success: on split
+			// scopes this Reset runs before downstream pipelines consume the
+			// final batch. Defer publication to the statement terminal.
+			pendingProc := proc
+			ses.EnqueueKafkaProgress(func(publish bool) {
+				pending.Finalize(pendingProc, publish)
+			})
+		} else {
+			// no statement coordinator (internal executor): best effort
+			pending.Finalize(proc, true)
+		}
+	}
 	if external.reader != nil {
 		if closeErr := external.reader.Close(); closeErr != nil {
 			logutil.Debugf("external reader close on reset: %v", closeErr)
@@ -294,6 +334,12 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.Es != nil && external.Es.KafkaPending != nil {
+		// Free without a prior Reset means the statement did not complete
+		// normally: discard, never publish (replay is safe, skipping is not)
+		external.Es.KafkaPending.Finalize(proc, false)
+		external.Es.KafkaPending = nil
+	}
 	if external.reader != nil {
 		external.reader.Close()
 		external.reader = nil

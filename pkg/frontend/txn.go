@@ -442,6 +442,15 @@ func (th *TxnHandler) setNextTxnIsolation(
 	return nil
 }
 
+func (th *TxnHandler) nextTxnIsolationSnapshot() (pbtxn.TxnIsolation, bool) {
+	if th == nil {
+		return 0, false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.nextTxnIsolation, th.hasNextTxnIsolation
+}
+
 // txnIsolationUnsafe returns the isolation override for the transaction being
 // created and whether a next-transaction override must be consumed after New
 // successfully publishes an owned operator. The caller must hold th.mu.
@@ -676,7 +685,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt),
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
 	); ok {
 		opts = append(opts, txnclient.WithTxnIsolation(isolation))
 		consumeNextTxnIsolation = consumeNext
@@ -701,6 +710,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	if consumeNextTxnIsolation {
 		th.hasNextTxnIsolation = false
+		if ses, ok := execCtx.ses.(*Session); ok {
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
+		}
 	}
 	return err
 }
@@ -734,8 +746,15 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPCommitBeforeCommitUnsafe)
 		err = th.commitUnsafe(execCtx)
 		if err != nil {
+			// the transaction did not become durable: discard any deferred
+			// Kafka progress instead of skipping messages
+			sessionFinalizeKafkaProgress(execCtx, false)
 			return err
 		}
+		// the TRANSACTION terminal: rows are durable now, publish deferred
+		// Kafka progress (commit + LAST_KAFKA_MESSAGE_ID). Inside BEGIN /
+		// autocommit=0 the deferring branch below keeps it queued instead.
+		sessionFinalizeKafkaProgress(execCtx, true)
 	} else if owner := upstreamUserSession(execCtx.ses); owner != nil {
 		owner.commitTempTableStatement(
 			tempTableTxnKey(th.txnOp),
@@ -905,6 +924,10 @@ func (th *TxnHandler) rollback(
 ) error {
 	execCtx.ses.EnterFPrint(FPRollback)
 	defer execCtx.ses.ExitFPrint(FPRollback)
+	// any rollback (full transaction or statement-level within one) makes
+	// this statement's rows non-durable: deferred Kafka progress must be
+	// discarded, never published — the chain replays, it never skips
+	sessionFinalizeKafkaProgress(execCtx, false)
 	var err error
 	var hasRecovered bool
 	th.mu.Lock()
@@ -977,6 +1000,12 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if IsParameterModificationStatement(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 	}
+	// Sequence DDL normally finishes an active user transaction. In a background
+	// executor it is nested inside an enclosing clone or restore transaction and
+	// must not finish that transaction early.
+	if execCtx.ses != nil && execCtx.ses.IsBackgroundSession() && IsCreateDropSequence(execCtx.stmt) {
+		return false
+	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
 		return true
 	}
@@ -1021,13 +1050,18 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 }
 
 // statementConsumesNextTxnIsolation marks semantic transaction admission.
-// SET statements can create an implementation-only frontend transaction for
-// expression evaluation or catalog writes; that temporary owner must never
-// consume a NEXT override intended for the next application transaction.
-func statementConsumesNextTxnIsolation(stmt tree.Statement) bool {
+// SET statements and autocommit PREPARE statements can create an
+// implementation-only frontend transaction; those temporary owners must never
+// consume a NEXT override intended for the next application transaction. With
+// autocommit disabled, PREPARE owns the user transaction that remains active
+// after the statement, so it must consume the NEXT override consistently with
+// the transaction it creates.
+func statementConsumesNextTxnIsolation(stmt tree.Statement, autoCommit bool) bool {
 	switch stmt.(type) {
 	case *tree.SetVar, *tree.SetTransaction:
 		return false
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
+		return !autoCommit
 	default:
 		return true
 	}

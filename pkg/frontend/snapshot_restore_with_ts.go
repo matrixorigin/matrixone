@@ -180,6 +180,17 @@ func getTableInfosFromTS(ctx context.Context,
 		fmt.Sprintf("%d:%d", from, ts),
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					newCtx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsListFromTS(queryCtx, bh, sql, from, to, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
 		},
 	)
@@ -524,6 +535,29 @@ func recreateTableFromTS(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
+			restoreAccount,
+			toAccountId,
+		)
+	}
+	if isSequence(tblInfo) {
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			snapshotTs,
+			restoreAccount,
+			toAccountId,
+		)
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
@@ -679,6 +713,9 @@ func restoreViewsFromTS(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -710,12 +747,23 @@ func restoreViewsFromTS(
 				return err
 			}
 
+			if skipUnservableViewInRestore(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), tblInfo) {
+				continue
+			}
+
 			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A refusal can also surface here when the sort's plan happened to succeed.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%d:%d] skip restore view %v.%v: its definition can never run (%v)",
+						restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))

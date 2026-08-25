@@ -463,7 +463,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err = retComp.Reset(
 				cwft.proc,
 				getStatementStartAt(execCtx.reqCtx),
-				compileOutputCallback(cwft.stmt, fill),
+				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill),
 				cwft.ses.GetSql(),
 			); err != nil {
 				return nil, err
@@ -939,6 +939,12 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling or Sirius intent must be evaluated for this execution,
 	// so neither can reuse a native topology compiled under prepare-time defaults.
@@ -949,6 +955,12 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
+		// The cached compile was built from the prepare-time parameter types and
+		// cannot execute a plan whose pagination values must be rebound for this
+		// execution.
+		retComp = nil
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
@@ -966,6 +978,34 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+}
+
+func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+	params := proc.GetPrepareParams()
+	if params == nil {
+		return nil
+	}
+	for _, position := range plan2.PreparedPaginationParamPositions(preparePlan) {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.PrepareParamKind != vector.PrepareParamBoolean {
+			continue
+		}
+		value, ok := param.Value.(bool)
+		if !ok {
+			continue
+		}
+		encoded := "0"
+		if value {
+			encoded = "1"
+		}
+		if err := vector.SetStringAt(params, int(position), encoded, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
@@ -1274,7 +1314,7 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
 		return
 	}
@@ -1306,6 +1346,8 @@ func siriusStatementSelected(sql string, stmt tree.Statement) bool {
 // callback. Apply the same rule both when compiling a fresh pipeline and when
 // resetting a cached prepared pipeline for another execution.
 func compileOutputCallback(
+	execCtx *ExecCtx,
+	ses FeSession,
 	stmt tree.Statement,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 ) func(*batch.Batch, *perfcounter.CounterSet) error {
@@ -1313,7 +1355,7 @@ func compileOutputCallback(
 	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
 	default:
-		return fill
+		return selectIntoUserVariablesOutputCallback(execCtx, ses, stmt, fill)
 	}
 }
 

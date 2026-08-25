@@ -40,3 +40,187 @@ DROP TABLE t1;
 # Range check (should return 0-59)
 SELECT MINUTE('15:30:45') AS result1, MINUTE('15:00:45') AS result2, MINUTE('15:59:45') AS result3;
 
+-- VARCHAR time-string input
+SELECT MINUTE(CAST('12:30:00' AS VARCHAR)) AS varchar_minute,
+       MINUTE(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_minute,
+       MINUTE(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_minute,
+       MINUTE(CAST(NULL AS VARCHAR)) AS varchar_null_minute;
+
+-- Date-only strings use MySQL TIME coercion; complete DATETIME strings use clock fields.
+SELECT MINUTE('2024-12-20') AS date_string_minute,
+       MINUTE(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_minute;
+
+-- Whitespace-only string values are invalid TIME inputs.
+SELECT MINUTE(CAST('   ' AS CHAR)) AS char_spaces_minute,
+       MINUTE(CAST('\t' AS VARCHAR)) AS varchar_tab_minute,
+       MINUTE(CAST('   ' AS TEXT)) AS text_spaces_minute;
+
+-- MySQL str_to_time recognizes YYMMDDHHMMSS and keeps a valid TIME prefix.
+SELECT MINUTE('241220153045') AS compact_datetime_minute,
+       MINUTE('15:30:45abc') AS trailing_time_minute,
+       MINUTE('2024-12-20 15:30:45abc') AS trailing_datetime_minute,
+       MINUTE('2024-12-20foo') AS malformed_datetime_minute;
+
+-- String TIME coercion: fractional/day/compact forms, range clamp, and invalid fields.
+SELECT MINUTE('12:34:56.789012') AS fractional_time_minute,
+       MINUTE('2 03:04:05.9') AS day_fractional_time_minute,
+       MINUTE('-12:34:56.789012') AS negative_fractional_time_minute,
+       MINUTE('-2 03:04:05.9') AS negative_day_fractional_time_minute,
+       MINUTE('839:00:00') AS overflow_time_minute,
+       MINUTE('-839:00:00') AS negative_overflow_time_minute,
+       MINUTE('12:60:00') AS invalid_minute_minute,
+       MINUTE('12:34:60') AS invalid_second_minute,
+       MINUTE('123045.987654') AS compact_time_minute,
+       MINUTE('20241220153045.999999') AS compact_datetime_fractional_minute,
+       MINUTE('20241220156045') AS invalid_compact_datetime_minute,
+       MINUTE('2024-12-20') AS date_only_time_minute,
+       MINUTE('2024-12-20T15:30:45.123456') AS t_datetime_minute,
+       MINUTE('  12:34:56  ') AS trimmed_time_minute,
+       MINUTE('foo12:34:56') AS malformed_time_minute;
+
+-- Signed DATETIME, invalid compact DATETIME, extended day-TIME, and invalid compact seconds.
+SELECT MINUTE('-2024-12-20 15:30:45') AS negative_datetime_minute,
+       MINUTE('-20241220153045') AS negative_compact_datetime_minute,
+       MINUTE('20240230010203') AS invalid_calendar_compact_datetime_minute,
+       MINUTE('2 30:00:00') AS extended_day_time_minute,
+       MINUTE('60') AS invalid_compact_second_minute;
+
+-- MySQL DATETIME grammar and numeric overflow for string TIME coercion.
+SELECT MINUTE('24-12-20 15:30:45') AS two_digit_year_minute,
+       MINUTE('2000:01:01 12:34:56') AS colon_datetime_minute,
+       MINUTE('1998-01-01 00:00:009') AS wide_second_datetime_minute,
+       MINUTE('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_minute,
+       MINUTE('2001-11-00 01:02:03') AS incomplete_datetime_minute,
+       MINUTE('99999990000') AS uint32_overflow_minute,
+       MINUTE('- 12:34:56') AS signed_space_time_minute,
+       MINUTE('12:34:56.') AS trailing_dot_time_minute;
+
+-- Zero date components retain the clock; ISO-T uses DATE-prefix TIME coercion.
+SELECT MINUTE('0000-01-01 12:34:56') AS zero_year_datetime_minute,
+       MINUTE('2024-00-01 11:22:33') AS zero_month_datetime_minute,
+       MINUTE('2024-01-00 10:20:30') AS zero_day_datetime_minute,
+       MINUTE('0000-00-00 09:08:07') AS zero_date_datetime_minute,
+       MINUTE('2024-12-20T15:30:45.123456') AS iso_t_datetime_minute;
+
+-- A DATETIME may omit seconds; zero year still requires a valid nonzero month/day.
+SELECT MINUTE('2024-12-20 12:34') AS minute_datetime_minute,
+       MINUTE('0000-02-28 12:34:56') AS valid_zero_year_february_minute,
+       MINUTE('0000-02-29 12:34:56') AS invalid_zero_year_leap_day_minute,
+       MINUTE('0000-02-31 12:34:56') AS invalid_zero_year_february_minute,
+       MINUTE('0000-04-31 12:34:56') AS invalid_zero_year_april_minute,
+       MINUTE('1900-02-29 12:34:56') AS invalid_nonleap_datetime_minute,
+       MINUTE('2000-02-29 01:02:03') AS leap_datetime_minute;
+
+-- Compact DATETIME only accepts exact 14/12-digit forms or a fractional suffix.
+SELECT MINUTE('20241220153045') AS compact_14_minute,
+       MINUTE('241220153045') AS compact_12_minute,
+       MINUTE('202412201530451') AS compact_14_extra_digit_minute,
+       MINUTE('2412201530451') AS compact_12_extra_digit_minute,
+       MINUTE('20241220153045abc') AS compact_14_alpha_suffix_minute,
+       MINUTE('241220153045abc') AS compact_12_alpha_suffix_minute;
+
+-- Compact DATETIME consumes the fractional prefix, including an empty fraction
+-- or non-numeric text after the fractional digits.
+SELECT MINUTE('20241220153045.123abc') AS compact_14_fraction_text_minute,
+       MINUTE('20241220153045.') AS compact_14_empty_fraction_minute,
+       MINUTE('241220153045.123abc') AS compact_12_fraction_text_minute,
+       MINUTE('241220153045.') AS compact_12_empty_fraction_minute,
+       MINUTE('20241220153045.-') AS compact_14_negative_fraction_minute,
+       MINUTE('20241220153045.+') AS compact_14_positive_fraction_minute,
+       MINUTE('241220153045.-') AS compact_12_negative_fraction_minute,
+       MINUTE('241220153045.+') AS compact_12_positive_fraction_minute,
+       MINUTE('20241220153045.123-') AS compact_14_fraction_negative_suffix_minute,
+       MINUTE('20241220153045.123+') AS compact_14_fraction_positive_suffix_minute,
+       MINUTE('241220153045.123-') AS compact_12_fraction_negative_suffix_minute,
+       MINUTE('241220153045.123+') AS compact_12_fraction_positive_suffix_minute,
+       MINUTE('20241220153045.123abc-') AS compact_14_fraction_text_negative_suffix_minute,
+       MINUTE('241220153045.123abc+') AS compact_12_fraction_text_positive_suffix_minute;
+
+-- TIME coercion stops after the valid clock prefix.
+SELECT MINUTE('12:') AS trailing_colon_minute,
+       MINUTE(':34') AS leading_colon_minute,
+       MINUTE('12:34:56-') AS trailing_dash_minute,
+       MINUTE('12:34:56..') AS trailing_dots_minute,
+       MINUTE('123:') AS compact_3_trailing_colon_minute,
+       MINUTE('1234:') AS compact_4_trailing_colon_minute,
+       MINUTE('12345:') AS compact_5_trailing_colon_minute,
+       MINUTE('123456:') AS compact_6_trailing_colon_minute;
+
+-- MySQL retains every valid field consumed before a partial TIME suffix.
+SELECT MINUTE(':34:56') AS leading_colon_with_seconds_minute,
+       MINUTE('12:34:') AS trailing_second_colon_minute,
+       MINUTE('12::56') AS empty_minute_minute,
+       MINUTE('12:34:56:') AS fourth_field_colon_minute,
+       MINUTE('12-.abc') AS compact_prefix_before_fraction_minute;
+
+-- Context-aware prefix consumption must agree across all string types.
+CREATE TABLE time_extract_prefix_boundaries(v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_prefix_boundaries VALUES
+  ('12-34', '12-34', '12-34'),
+  ('1234-56', '1234-56', '1234-56'),
+  ('1 02', '1 02', '1 02'),
+  ('1 02:', '1 02:', '1 02:'),
+  ('1 02-34', '1 02-34', '1 02-34'),
+  ('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
+  ('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
+  ('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
+  ('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
+  ('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
+  ('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34'),
+  ('2024-12-20 12/34/56', '2024-12-20 12/34/56', '2024-12-20 12/34/56'),
+  ('2024@12@20 12@34@56', '2024@12@20 12@34@56', '2024@12@20 12@34@56'),
+  ('2024-12-20\t12:34:56', '2024-12-20\t12:34:56', '2024-12-20\t12:34:56'),
+  ('1\t02:34:56', '1\t02:34:56', '1\t02:34:56'),
+  ('12:34 56', '12:34 56', '12:34 56'),
+  ('1 02:34 56', '1 02:34 56', '1 02:34 56'),
+  ('1 02 34', '1 02 34', '1 02 34'),
+  ('2024--12--20 12:34:56', '2024--12--20 12:34:56', '2024--12--20 12:34:56'),
+  ('2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56'),
+  ('2024-12-20 -12:34:56', '2024-12-20 -12:34:56', '2024-12-20 -12:34:56'),
+  ('2024-12-20 +12:34:56', '2024-12-20 +12:34:56', '2024-12-20 +12:34:56'),
+  ('2024-12-20 12:34 56', '2024-12-20 12:34 56', '2024-12-20 12:34 56'),
+  ('2024-12-20 12 34', '2024-12-20 12 34', '2024-12-20 12 34');
+SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_prefix_boundaries;
+DROP TABLE time_extract_prefix_boundaries;
+
+-- DATE/DATETIME/day-TIME/compact-TIME ownership uses one ordered prefix grammar.
+CREATE TABLE time_extract_ambiguous_prefix_ownership(v VARCHAR(40), c CHAR(40), t TEXT);
+INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
+  ('1 2', '1 2', '1 2'),
+  ('1 02', '1 02', '1 02'),
+  ('12:34:56', '12:34:56', '12:34:56'),
+  ('12:34:56 78', '12:34:56 78', '12:34:56 78'),
+  ('1-2-3 4:5:6', '1-2-3 4:5:6', '1-2-3 4:5:6'),
+  ('12345:', '12345:', '12345:'),
+  ('12345-1-1 1:2:3', '12345-1-1 1:2:3', '12345-1-1 1:2:3'),
+  ('-12:34', '-12:34', '-12:34'),
+  ('--12:34', '--12:34', '--12:34'),
+  ('2024-12-20 +12:34', '2024-12-20 +12:34', '2024-12-20 +12:34'),
+  ('2024-12-20 ++12:34', '2024-12-20 ++12:34', '2024-12-20 ++12:34'),
+  ('2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc'),
+  ('2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc'),
+  ('2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc'),
+  ('1 2:3', '1 2:3', '1 2:3'),
+  ('1 2:3:4', '1 2:3:4', '1 2:3:4'),
+  ('12 3', '12 3', '12 3'),
+  ('12 3:4', '12 3:4', '12 3:4'),
+  ('12 3:4:5', '12 3:4:5', '12 3:4:5'),
+  ('12-2-3 4:5:6', '12-2-3 4:5:6', '12-2-3 4:5:6'),
+  ('123-2-3 4:5:6', '123-2-3 4:5:6', '123-2-3 4:5:6'),
+  ('1234-2-3 4:5:6', '1234-2-3 4:5:6', '1234-2-3 4:5:6'),
+  ('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+  ('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+  ('1-2-3 12:34:56', '1-2-3 12:34:56', '1-2-3 12:34:56'),
+  ('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56'),
+  ('2024-12-20 12:34:56+', '2024-12-20 12:34:56+', '2024-12-20 12:34:56+'),
+  ('2024-12-20 12:34:56-', '2024-12-20 12:34:56-', '2024-12-20 12:34:56-');
+SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_ambiguous_prefix_ownership;
+DROP TABLE time_extract_ambiguous_prefix_ownership;
+
+-- Preserve nonempty trailing whitespace until the ordered parser assigns its owner.
+SELECT MINUTE('123:34:56 78') AS unpadded_123_minute,
+       MINUTE('123:34:56 78 ') AS padded_123_minute,
+       MINUTE('\t123:34:56 78\t') AS tab_padded_123_minute,
+       MINUTE('838:59:59 78') AS unpadded_838_minute,
+       MINUTE('838:59:59 78 ') AS padded_838_minute,
+       MINUTE('\t838:59:59 78\t') AS tab_padded_838_minute;

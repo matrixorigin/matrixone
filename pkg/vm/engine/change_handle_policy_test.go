@@ -42,3 +42,34 @@ func TestRetainRowIDContextRoundTrip(t *testing.T) {
 	ctx := WithRetainRowID(base, true)
 	require.True(t, RetainRowIDFromContext(ctx))
 }
+
+type testVisibleStateRecoveryResources struct{}
+
+func (*testVisibleStateRecoveryResources) NewVisibleStateStore() (VisibleStateStore, error) {
+	return nil, nil
+}
+
+func (*testVisibleStateRecoveryResources) ReserveBuffer(int64) error { return nil }
+
+func (*testVisibleStateRecoveryResources) ReleaseBuffer(int64) {}
+
+func TestVisibleStateRecoveryResourcesContextRoundTrip(t *testing.T) {
+	base := context.Background()
+	resources := &testVisibleStateRecoveryResources{}
+	require.Nil(t, VisibleStateRecoveryResourcesFromContext(nil))
+	require.Nil(t, VisibleStateRecoveryResourcesFromContext(base))
+	require.True(t, WithVisibleStateRecoveryResources(base, nil) == base)
+	ctx := WithVisibleStateRecoveryResources(base, resources)
+	require.Same(t, resources, VisibleStateRecoveryResourcesFromContext(ctx))
+}
+
+func TestCollectChangesPreserveAllVersionsContextRoundTrip(t *testing.T) {
+	base := context.Background()
+
+	require.False(t, CollectChangesPreserveAllVersionsFromContext(nil))
+	require.False(t, CollectChangesPreserveAllVersionsFromContext(base))
+	require.Nil(t, WithCollectChangesPreserveAllVersions(nil))
+
+	ctx := WithCollectChangesPreserveAllVersions(base)
+	require.True(t, CollectChangesPreserveAllVersionsFromContext(ctx))
+}

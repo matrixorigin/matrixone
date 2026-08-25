@@ -41,7 +41,7 @@ const (
 	doActionMethod      = flightService + "DoAction"
 	commandDescriptor   = int32(2)
 	ticketBytes         = 32
-	protocolVersion     = uint32(2)
+	protocolVersion     = uint32(3)
 	substraitVersion    = "0.78.0"
 )
 
@@ -190,7 +190,7 @@ func (r *Runtime) Prepare(
 	if release == nil {
 		return nil, internalErrorf("sidecar flight: lease release owner is required")
 	}
-	if accountID == 0 || len(queryID) != 16 || len(plan) == 0 || len(plan) > 16<<20 {
+	if len(queryID) != 16 || len(plan) == 0 || len(plan) > 16<<20 {
 		primary := internalErrorf("sidecar flight: query identity and Substrait plan are required")
 		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
@@ -237,7 +237,7 @@ func (r *Runtime) Prepare(
 		CapabilityHash: r.capabilityHash[:], MaxBatchBytes: r.config.MaxBatchBytes,
 		DeadlineUnixMS: uint64(deadline.UnixMilli()), Plan: plan,
 		QueryID: append([]byte(nil), queryID...), IdempotencyKey: idempotencyKey[:],
-		AccountID: accountID,
+		AccountID: proto.Uint64(accountID),
 	}
 	command, err := proto.Marshal(request)
 	if err != nil {
@@ -347,7 +347,7 @@ func (r *Runtime) Reconcile(
 	queryID []byte,
 	release func(context.Context) error,
 ) error {
-	if r == nil || accountID == 0 || len(queryID) == 0 || release == nil {
+	if r == nil || len(queryID) == 0 || release == nil {
 		return internalErrorf("sidecar flight: invalid replayed execution")
 	}
 	idempotencyKey := executionIdempotencyKey(accountID, queryID)

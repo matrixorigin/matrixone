@@ -210,11 +210,22 @@ func TestProcessCodecHelpers(t *testing.T) {
 		})
 		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
 
-		// Resolver returns explicit empty string -> sentinel (explicitly non-strict).
+		// A frontend resolver returning an explicit empty string means the
+		// session is intentionally non-strict.
+		proc.Base.IsFrontend = true
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "", nil
 		})
 		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+
+		// A background resolver may return its empty compiled default, but the
+		// captured strict snapshot must survive the first serialization.
+		proc.Base.IsFrontend = false
+		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc),
+			"an already-captured explicit empty mode must remain non-strict")
+		proc.Base.SessionInfo.SqlMode = "STRICT_ALL_TABLES"
 
 		// Resolver error / non-string -> fall back to captured SessionInfo.SqlMode.
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
@@ -233,6 +244,30 @@ func TestProcessCodecHelpers(t *testing.T) {
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
 		require.Equal(t, "", resolveSqlMode(emptyProc))
 	})
+}
+
+func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "", nil
+	})
+
+	first, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", first.SessionInfo.SqlMode)
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	require.NoError(t, err)
+	defer decoded.Free()
+
+	// The decoded remote process has no resolver. A second forward must retain
+	// the snapshot produced by the first forward rather than defaulting to
+	// non-strict mode.
+	second, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {

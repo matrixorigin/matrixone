@@ -320,6 +320,30 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
+func TestNewAssignCastRemoteEmptyResolverUsesSessionSnapshot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// A remote CN has no frontend session. Its resolver may still be attached
+	// by an internal executor and return the empty default, while the process
+	// carries the coordinator's serialized sql_mode snapshot.
+	proc.Base.IsFrontend = false
+	proc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "", nil
+	})
+
+	_, err := castTextToVarchar3(t, proc, "abcd")
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+
+	// The serialized empty-mode sentinel is an explicit non-strict setting and
+	// must continue to allow the normal truncation behavior.
+	proc.Base.SessionInfo.SqlMode = process.EmptySqlModeSentinel
+	got, err := castTextToVarchar3(t, proc, "abcd")
+	require.NoError(t, err)
+	require.Equal(t, "abc", got)
+}
+
 func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 	run := func(
 		t *testing.T,

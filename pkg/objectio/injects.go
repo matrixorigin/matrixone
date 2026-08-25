@@ -31,6 +31,7 @@ const (
 	FJ_CommitSlowLog              = "fj/commit/slowlog"
 	FJ_CommitWait                 = "fj/commit/wait"
 	FJ_TransferSlow               = "fj/transfer/slow"
+	FJ_DataMergeAfterCollectTS    = "fj/merge/data/after-collect-ts"
 	FJ_TransferError              = "fj/transfer/error"
 	FJ_TransferErrorAfterTransfer = "fj/transfer/error-after-transfer"
 	FJ_FlushTimeout               = "fj/flush/timeout"

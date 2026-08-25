@@ -185,6 +185,8 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_view_dependencies
+mo_view_refresh
 select count(*) from mo_catalog.mo_database;
 count(*)
 13
@@ -252,6 +254,8 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_view_dependencies
+mo_view_refresh
 drop database mo_catalog_new_new;
 drop database mo_catalog_new;
 drop database if exists test100;

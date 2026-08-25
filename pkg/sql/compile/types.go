@@ -139,9 +139,12 @@ type Source struct {
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
 	node            *plan.Node
-	TableDef        *plan.TableDef
-	Timestamp       timestamp.Timestamp
-	AccountId       *plan.PubInfo
+	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
+	// Each execution folds a fresh copy into node.VectorIndexScan.
+	vectorIndexScanTemplate *plan.VectorIndexScan
+	TableDef                *plan.TableDef
+	Timestamp               timestamp.Timestamp
+	AccountId               *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
@@ -328,6 +331,14 @@ type Compile struct {
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
+	// foundRowsOwnerNode is the final result node allowed to publish the
+	// SQL_CALC_FOUND_ROWS count. Nested LIMIT/OFFSET nodes are not owners.
+	foundRowsOwnerNode *plan.Node
+	// materializedSQLSelectLimitOwner is the exact final-result node on which
+	// materializeSQLSelectLimit temporarily installed the session row cap.
+	// Keeping its identity avoids inferring top-level ownership from arbitrary
+	// LIMIT/OFFSET nodes introduced by nested queries or optimizer rewrites.
+	materializedSQLSelectLimitOwner *plan.Node
 
 	counterSet *perfcounter.CounterSet
 

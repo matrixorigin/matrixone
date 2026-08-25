@@ -1,0 +1,166 @@
+# Kafka external table (`ENGINE = KAFKA`)
+
+Implements issue #27518: read a Kafka topic partition through an external
+table, with per-message metadata columns, WHERE-driven read controls, and
+`LAST_KAFKA_MESSAGE_ID()` for exactly-once chaining.
+
+## 1. DDL
+
+```sql
+create external table kt (
+    a int,
+    b varchar(100)
+) engine = kafka with (
+    'brokers'    = 'host1:9092,host2:9092', -- required, comma-separated host:port
+    'topic'      = 'mytopic',               -- required
+    'partition'  = '0',                     -- optional, default 0
+    'autocommit' = 'false',                 -- optional, default false
+    'group'      = 'g1',                    -- optional, default mo_kafka_<db>_<table>
+    'format'     = 'csv',                   -- csv | jsonl, default csv
+    'separator'  = ','                      -- csv only, one character, default ','
+);
+```
+
+Options are validated at CREATE (`pkg/sql/kafka.ParseTableOptions`) and
+persisted in the planner-owned `rel_createsql` envelope (`/* MO_KAFKA: ... */`)
+plus the durable `features.KafkaExternal` bit — envelope and bit must agree at
+recognition time (`IsKafkaTableDef`), same anti-forgery rule as
+datastream/foreign tables. `SHOW CREATE TABLE` round-trips every option
+(nothing is secret in v1). `ALTER TABLE` is rejected; drop and recreate.
+
+## 2. Message format
+
+Each Kafka message **value** must parse to exactly one record:
+
+* `format=csv`: one CSV record with the configured separator, plain quoting,
+  no backslash escaping. The field count must equal the declared column count.
+* `format=jsonl`: one JSON object; every declared column name must be a key.
+
+A message that parses to zero or multiple records fails the query ("did not
+parse to exactly one record"), as does a wrong field count.
+
+The scan consumes at Kafka's `read_committed` isolation: records of aborted
+or still-open producer transactions never surface as rows, never become
+`LAST_KAFKA_MESSAGE_ID()`, and never advance committed progress.
+
+## 3. Synthetic columns
+
+Hidden from `SELECT *`, selectable by name, ColId-scoped
+(`catalog.IsKafkaHiddenCol`) so a pre-existing real column with the same name
+in an ordinary table keeps working; the names are reserved for new schemas.
+
+| column | type | meaning |
+|---|---|---|
+| `__mo_message_id` | bigint | Kafka offset of the message |
+| `__mo_message_ts` | timestamp(3) | Kafka message timestamp |
+| `__mo_message_key` | varchar | message key (NULL when absent) |
+| `__mo_message_value` | varchar | raw message value |
+| `__mo_read_start_id` | bigint | read control (below); reads back the effective value |
+| `__mo_read_size` | bigint | read control; 0 = unlimited |
+| `__mo_read_timeout` | bigint | read control, seconds; 0 = block forever |
+
+## 4. Read controls
+
+Top-level `<control> = <constant>` conjuncts are resolved at compile time
+(`external.DeriveKafkaReadControl`) and **consumed** — they position the read
+instead of filtering rows:
+
+```sql
+select * from kt
+where __mo_read_start_id = 1000
+  and __mo_read_size = 1000000
+  and __mo_read_timeout = 10;
+```
+
+* `__mo_read_start_id` is the **last consumed offset**: reading begins at
+  `start_id + 1`. With `autocommit=false` it is **required**, and the read
+  offset is committed at that position before reading (committing the same
+  start twice is idempotent, so a retried read returns the same data);
+  `-1` means "from the earliest". With `autocommit=true`, `0` (the default)
+  means earliest-inclusive and `-1` means latest.
+* `__mo_read_size` caps the message count (default unlimited).
+* `__mo_read_timeout` ends the read when no new message arrives within that
+  many seconds (default 10; 0 blocks until cancelled).
+
+An explicit start id is validated against the partition's real bounds at scan
+open: below the log start (messages expired) or beyond the partition end is a
+clear error, never a silent reset (Kafka clients otherwise auto-reset an
+out-of-range offset, which would replay or skip data under the exactly-once
+contract; a mid-scan retention race can at worst skip, never replay). The
+same open-time check makes an unreachable broker or a missing
+topic/partition a loud error instead of an empty result. Control values that
+would overflow arithmetic (start/size > 2^62, timeout > 2^31 seconds) are
+rejected at compile. A cancelled or timed-out QUERY always aborts the scan —
+only the scan's own idle timeout is a clean end; an aborted scan never
+commits and never updates LAST_KAFKA_MESSAGE_ID().
+
+Contradictory duplicate controls are an error. Any other use of a control
+column (ranges, ORs) stays an ordinary row filter over the effective value.
+
+## 5. `LAST_KAFKA_MESSAGE_ID()`
+
+Session builtin (`id 576`): the offset of the last message a **completed**
+Kafka scan returned in this session, NULL before any scan. With
+`autocommit=false`, feeding it back as the next `__mo_read_start_id` gives
+exactly-once consumption:
+
+```sql
+select * from kt where __mo_read_start_id = 1000 and __mo_read_size = 100000;
+select last_kafka_message_id();      -- e.g. 4711
+select * from kt where __mo_read_start_id = 4711 and ...;  -- continues after
+```
+
+Progress side effects publish only when the WHOLE statement succeeds, not
+when the source merely reaches end-of-stream: a drained scan hands its
+pending progress (committed-offset advance and session last id) to the
+statement terminal, which publishes on success and discards on any failure
+or cancellation — including a downstream operator error after the source
+finished. An aborted statement therefore never advances the exactly-once
+chain (retry replays, never skips). With `autocommit=true` a successful
+statement commits `last+1` (Kafka next-to-read convention).
+
+## 6. Execution
+
+`plan.KafkaScan` (ExternType `KAFKA_TB = 7`) rides the shared external-scan
+pipeline: `compileKafkaScan` pins the scope to the session CN with Mcpu=1
+(session state + ordered partition read) and participates in the shuffle
+receiver graph like foreign scans. `KafkaReader`
+(`pkg/sql/colexec/external/reader_kafka.go`, franz-go client at
+`read_committed` isolation) parses EVERY message independently — one Reset of
+the scan's single reusable CSV parser per message (~16 B and 2 allocs per
+small record, gated by an allocation-budget test), exactly-one-record
+enforced on each message's own boundary, jsonl via one object parse per
+value — so record↔message pairing is exact by construction;
+`getFieldFromLine` synthesizes the metadata columns. A drained scan hands
+its progress to the session, and the statement terminal publishes it only
+when the whole statement succeeds.
+
+v1 limits: one partition per table (create several tables for several
+partitions), plaintext brokers (no SASL/TLS yet), no discovery of committed
+group progress as an implicit start (state your start explicitly or use
+autocommit earliest/latest).
+
+## 7. Tests
+
+* `pkg/sql/kafka`: option/envelope round-trip.
+* `pkg/sql/colexec/external`: `reader_kafka_test.go` runs the full reader
+  against an in-process `kfake` cluster (csv, jsonl, metadata columns,
+  start/size caps, commit and session-id semantics, malformed messages);
+  `kafka_read_control_test.go` covers the control derivation.
+* `pkg/sql/plan` / `compile` / `parsers` / `function`: DDL build, SHOW
+  CREATE, recognition, hiding, ALTER guard, compile dispatch, shuffle
+  receiver pinning, builtin.
+* BVT `test/distributed/cases/function/kafka_exttab.sql`: DDL/SHOW
+  CREATE/guard/control-validation paths that need no broker.
+* E2E (`make test-kafka-exttab-e2e-local`, mirrors the mongodb/esql
+  harnesses): `optools/kafka_ci.bash` boots a single-node KRaft Kafka via
+  docker compose plus a fresh mo-service; the driver
+  (`test/kafkaexttab/kafka_e2e_local.go`) seeds the topic itself and proves
+  the exactly-once contract end to end — a drain-the-stream read that ends
+  by timeout is not an error and records the right last id; chaining
+  LAST_KAFKA_MESSAGE_ID() into the next __mo_read_start_id tiles the stream
+  with no overlap or gap; a repeated start id replays the same data; after
+  new messages the chained read resumes at the right offset; a 0-message
+  read leaves the last id NULL in a fresh session and untouched in a
+  chained one. The same script also runs broker-free as a unit test against
+  an offset-semantics simulator (kafka_e2e_local_test.go).

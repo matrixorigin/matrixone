@@ -81,6 +81,82 @@ func Test_asyncUpgradeTenantTask(t *testing.T) {
 	)
 }
 
+func TestDrainUpgradeTenants(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []struct {
+			hasTenants bool
+			err        error
+		}
+		wantCalls int
+	}{
+		{
+			name: "drains healthy work",
+			results: []struct {
+				hasTenants bool
+				err        error
+			}{
+				{hasTenants: true},
+				{hasTenants: true},
+				{},
+			},
+			wantCalls: 3,
+		},
+		{
+			name: "stops when no work remains",
+			results: []struct {
+				hasTenants bool
+				err        error
+			}{{}},
+			wantCalls: 1,
+		},
+		{
+			name: "stops on error",
+			results: []struct {
+				hasTenants bool
+				err        error
+			}{{err: moerr.NewInternalErrorNoCtx("upgrade failed")}},
+			wantCalls: 1,
+		},
+		{
+			name: "error wins over stale work flag",
+			results: []struct {
+				hasTenants bool
+				err        error
+			}{{hasTenants: true, err: moerr.NewInternalErrorNoCtx("upgrade failed")}},
+			wantCalls: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			drainUpgradeTenants(t.Context(), func() (bool, error) {
+				if calls >= len(test.results) {
+					t.Fatalf("unexpected call %d", calls+1)
+				}
+				result := test.results[calls]
+				calls++
+				return result.hasTenants, result.err
+			})
+			require.Equal(t, test.wantCalls, calls)
+		})
+	}
+}
+
+func TestDrainUpgradeTenantsStopsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+
+	drainUpgradeTenants(ctx, func() (bool, error) {
+		calls++
+		cancel()
+		return true, nil
+	})
+
+	require.Equal(t, 1, calls)
+}
+
 func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

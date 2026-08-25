@@ -46,19 +46,25 @@ type streamSink struct {
 	err          error
 	stopped      bool
 	wantInclude  bool // covered fast path: also carry each doc's INCLUDE values through emit
+	// scoreRange drops a scored doc outside the pushed relevance interval before it is
+	// batched, so out-of-range rows never leave the TVF. nil ⇒ keep everything.
+	scoreRange *ScoreRange
 }
 
 // newStreamSink resolves the index's pk type (all segments share it). The batch buffer
 // itself is fetched from the pool lazily on the first push. Callers create it only after
 // the globalN==0 early-out, so segments is non-empty. wantInclude turns on the covered
 // fast path: each pushed doc also carries its INCLUDE values (box-free) through emit.
-func newStreamSink(idx *Index, wantInclude bool, emit func(out *vectorindex.SearchOutput) error) *streamSink {
+func newStreamSink(idx *Index, wantInclude bool, filter *prefilter, emit func(out *vectorindex.SearchOutput) error) *streamSink {
 	pkType := idx.segments[0].PkType
 	w, fixed := fixedPkByteWidth(pkType)
 	if !fixed {
 		w = 0
 	}
 	s := &streamSink{emit: emit, pkType: types.T(pkType), fixedW: w, wantInclude: wantInclude}
+	if filter != nil {
+		s.scoreRange = filter.scoreRange
+	}
 	if wantInclude {
 		s.includeTypes = idx.segments[0].includeTypes
 	}
@@ -94,7 +100,7 @@ func (s *streamSink) appendIncludes(seg *Segment, ord int64) {
 // pushPk appends the pk at (seg, ord) to the typed batch WITHOUT boxing, decoding it
 // straight from the segment docmap into ColumnBuffer.Data.
 func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
-	if s.stopped {
+	if s.stopped || !s.scoreRange.contains(score) {
 		return
 	}
 	s.ensure()
@@ -115,7 +121,7 @@ func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 // boolean) by re-encoding its concrete value into ColumnBuffer.Data — no NEW box. When the
 // covered fast path is on, the INCLUDE values are pulled box-free from (seg, ord).
 func (s *streamSink) pushAny(seg *Segment, ord int64, pk any, score float32) {
-	if s.stopped {
+	if s.stopped || !s.scoreRange.contains(score) {
 		return
 	}
 	s.ensure()
@@ -228,7 +234,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 	if idx.globalN == 0 {
 		return nil
 	}
-	sink := newStreamSink(idx, wantInclude, emit)
+	sink := newStreamSink(idx, wantInclude, filter, emit)
 	p := normalizeParser(parser)
 
 	// Resolve the query the same way SearchQuery does, but prefer the streaming
@@ -332,7 +338,7 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	if !ok {
 		return nil // no resolvable tokens → nothing to stream
 	}
-	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, wantInclude, emit))
+	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, wantInclude, filter, emit))
 }
 
 // streamDisjunction streams a pure OR of terms heap-free across all segments (global

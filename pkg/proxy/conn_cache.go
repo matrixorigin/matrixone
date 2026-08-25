@@ -503,6 +503,18 @@ func (c *connCache) PopContext(
 				c.closeCachedConnection(sc)
 				continue
 			}
+			// SET CONNECTION ID is the final protocol read before this cached
+			// backend is handed to a new tunnel. IOSession re-arms SessionTimeout
+			// for that read, so do not return a connection with a stale absolute
+			// deadline that can terminate active traffic later.
+			if err := clearServerConnReadDeadline(sc); err != nil {
+				c.logger.Error("failed to clear cached backend read deadline",
+					zap.Uint32("conn ID", sc.ConnID()),
+					zap.Error(err),
+				)
+				c.closeCachedConnection(sc)
+				continue
+			}
 
 			// Before use the connection, we have to check the authentication.
 			if sc.Authenticator != nil && !sc.Authenticate(salt, authResp) {

@@ -349,4 +349,26 @@ var (
 			Help:      "Total number of disk cache errors",
 		},
 	)
+
+	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
+	// dropped when the bounded asynchronous queue cannot admit more work.
+	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_async_update_dropped_total",
+			Help:      "Total number of disk cache async updates dropped by admission control",
+		},
+	)
+
+	// FSDiskCacheAsyncCallbackPanicCounter tracks callback panics contained at
+	// the disk-cache-owned async goroutine boundary.
+	FSDiskCacheAsyncCallbackPanicCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_async_callback_panic_total",
+			Help:      "Total number of panics contained in disk cache async callbacks",
+		},
+	)
 )
