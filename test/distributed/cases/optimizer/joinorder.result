@@ -14,8 +14,8 @@ create table t4 clone t1;
 create table t5 clone t2;
 create table t6 clone t3;
 select (select count(*) from t4), (select count(*) from t5), (select count(*) from t6);
-(select count(*) from t4)  (select count(*) from t5)  (select count(*) from t6)
-3000000  2000000  1000000
+(select count(*) from t4)  ¦  (select count(*) from t5)  ¦  (select count(*) from t6)  𝄀
+3000000  ¦  2000000  ¦  1000000
 explain select * from t1,t2,t3 where t1.c1=t2.c1 and t2.c3=t3.c3 and t3.c2=1;
 QUERY PLAN
 Project
