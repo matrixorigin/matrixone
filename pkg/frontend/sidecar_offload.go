@@ -36,9 +36,10 @@ import (
 )
 
 const (
-	sidecarHintPrefix      = "/*+ SIDECAR */"
-	sidecarGPUHintPrefix   = "/*+ SIDECAR GPU */"
-	sidecarMaxResponseSize = 512 << 20 // 512 MB
+	sidecarHintPrefix       = "/*+ SIDECAR */"
+	sidecarGPUHintPrefix    = "/*+ SIDECAR GPU */"
+	sidecarStreamHintPrefix = "/*+ SIDECAR STREAM */"
+	sidecarMaxResponseSize  = 512 << 20 // 512 MB
 )
 
 // errSidecarNotConfigured is a sentinel indicating sidecar offload should
@@ -94,6 +95,9 @@ func getManifestBaseURL() string {
 func isSidecarQuery(sql string) (bool, bool) {
 	trimmed := strings.TrimSpace(sql)
 	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, sidecarStreamHintPrefix) {
+		return true, true
+	}
 	if strings.HasPrefix(upper, sidecarGPUHintPrefix) {
 		return true, true
 	}
@@ -108,6 +112,9 @@ func isSidecarQuery(sql string) (bool, bool) {
 func stripSidecarHint(sql string) string {
 	trimmed := strings.TrimSpace(sql)
 	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, sidecarStreamHintPrefix) {
+		return strings.TrimSpace(trimmed[len(sidecarStreamHintPrefix):])
+	}
 	if strings.HasPrefix(upper, sidecarGPUHintPrefix) {
 		return strings.TrimSpace(trimmed[len(sidecarGPUHintPrefix):])
 	}

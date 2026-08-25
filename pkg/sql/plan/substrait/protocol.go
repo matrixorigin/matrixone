@@ -24,18 +24,62 @@ import (
 )
 
 const (
-	ProtocolVersion        = 1
-	TaeReadProtocolVersion = 2
-	maxTaeReadSize         = 16 << 10
-	maxResolveRequestSize  = maxTaeReadSize + maxCanonicalSchemaSize + 32
+	ProtocolVersion           = 1
+	TaeReadProtocolVersion    = 2
+	StreamReadProtocolVersion = 1
+	maxTaeReadSize            = 16 << 10
+	maxResolveRequestSize     = maxTaeReadSize + maxCanonicalSchemaSize + 32
 	// GC protection stores the expiry as Unix nanoseconds. Keep the wire value
 	// within that signed range before any consumer converts it through
 	// time.UnixMilli(...).UnixNano().
 	maxTaeReadExpiryUnixMS = uint64(math.MaxInt64 / 1_000_000)
-	CapabilityDocument     = `{"protocol_version":3,"substrait_version":"0.78.0","tae_read_protocol_version":2,"tae_read_feature_bits":0,"operators":["read","filter","project","aggregate","sort","fetch","join","reference"],"join_types":["inner","left","right","left_semi","left_anti","right_semi","right_anti"],"expressions":["literal","selection","scalar_function","cast","if_then","singular_or_list"],"types":["bool","i8","i16","i32","i64","fp32","fp64","varchar","decimal","date"],"semantic_registry":"exact-mo-bound-overload-and-tpch-family-v1","scalar_functions":["and","or","not","equal","not_equal","lt","lte","gt","gte","is_null","is_not_null","is_not_distinct_from","add","subtract","multiply","divide","modulus","between","like","starts_with","substring","extract"],"aggregate_functions":["count","sum","min","max","avg"],"transport":"arrow-flight","sirius_execution_contract":1,"max_plan_bytes":16777216}`
+	CapabilityDocument     = `{"protocol_version":4,"substrait_version":"0.78.0","tae_read_protocol_version":2,"tae_read_feature_bits":0,"stream_read_protocol_version":1,"stream_read_feature_bits":0,"operators":["read","filter","project","aggregate","sort","fetch","join","reference"],"join_types":["inner","left","right","left_semi","left_anti","right_semi","right_anti"],"expressions":["literal","selection","scalar_function","cast","if_then","singular_or_list"],"types":["bool","i8","i16","i32","i64","fp32","fp64","varchar","decimal","date"],"semantic_registry":"exact-mo-bound-overload-and-tpch-family-v1","scalar_functions":["and","or","not","equal","not_equal","lt","lte","gt","gte","is_null","is_not_null","is_not_distinct_from","add","subtract","multiply","divide","modulus","between","like","starts_with","substring","extract"],"aggregate_functions":["count","sum","min","max","avg"],"transport":"arrow-flight","stream_input_transport":"flight-do-put-mo-native","mo_native_batch_codec_version":1,"mo_type_size":16,"mo_varlena_size":24,"mo_native_endian":"little","stream_input_ack":"ready-consumed-final-v1","stream_input_slots_per_read":1,"max_stream_inputs":16,"max_stream_input_batch_bytes":4194304,"sirius_execution_contract":1,"max_plan_bytes":16777216}`
 )
 
 var CapabilityHash = sha256.Sum256([]byte(CapabilityDocument))
+
+// StreamRead identifies one post-scan relation whose MO-native batches are
+// supplied over the execution's authenticated Flight input stream.
+type StreamRead struct {
+	ProtocolVersion                          uint32
+	FeatureBits                              uint64
+	StreamRef, QueryID                       []byte
+	AccountID                                uint64
+	SnapshotTS, SchemaDigest, CapabilityHash []byte
+	ExpiresAtUnixMS                          uint64
+}
+
+func (r *StreamRead) Validate(nowUnixMS uint64) error {
+	if r == nil || r.ProtocolVersion != StreamReadProtocolVersion || r.FeatureBits != 0 {
+		return moerr.NewInternalErrorNoCtx("invalid StreamRead protocol")
+	}
+	if len(r.StreamRef) != 32 || len(r.QueryID) != 16 || len(r.SnapshotTS) != 12 ||
+		len(r.SchemaDigest) != sha256.Size || len(r.CapabilityHash) != sha256.Size {
+		return moerr.NewInternalErrorNoCtx("invalid StreamRead identity or digest length")
+	}
+	if r.ExpiresAtUnixMS <= nowUnixMS || r.ExpiresAtUnixMS > maxTaeReadExpiryUnixMS ||
+		!equalBytes(r.CapabilityHash, CapabilityHash[:]) {
+		return moerr.NewInternalErrorNoCtx("invalid or expired StreamRead")
+	}
+	return nil
+}
+
+func MarshalStreamRead(r *StreamRead) ([]byte, error) {
+	if err := r.Validate(0); err != nil {
+		return nil, err
+	}
+	var b []byte
+	b = appendUint(b, 1, uint64(r.ProtocolVersion))
+	b = appendUint(b, 2, r.FeatureBits)
+	b = appendBytes(b, 3, r.StreamRef)
+	b = appendBytes(b, 4, r.QueryID)
+	b = appendRequiredUint(b, 5, r.AccountID)
+	b = appendBytes(b, 6, r.SnapshotTS)
+	b = appendBytes(b, 7, r.SchemaDigest)
+	b = appendBytes(b, 8, r.CapabilityHash)
+	b = appendUint(b, 9, r.ExpiresAtUnixMS)
+	return b, nil
+}
 
 // TaeRead is the exact matrixone.sirius.v1.TaeRead v1 wire contract.
 type TaeRead struct {

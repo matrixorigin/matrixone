@@ -62,6 +62,41 @@ func TestExportBuildSupportedSubset(t *testing.T) {
 	require.Equal(t, TaeReadTypeURL, p.Relations[0].GetRoot().Input.GetFilter().Input.GetRead().GetExtensionTable().Detail.TypeUrl)
 }
 
+func TestBuildStreamReadReplacesTheCompleteScanNode(t *testing.T) {
+	q := scanQuery()
+	q.Nodes[0].FilterList = []*planpb.Expr{fn(">", boolType(), col(0), i64(7))}
+	q.Nodes[0].ProjectList = []*planpb.Expr{col(0)}
+	q.Nodes[0].Limit = i64(10)
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	reads := candidate.Reads()
+	require.Len(t, reads, 1)
+	require.Equal(t, []string{"col_0"}, reads[0].StreamNames)
+	digest := sha256.Sum256(reads[0].StreamSchema)
+	wire, err := MarshalStreamRead(&StreamRead{
+		ProtocolVersion: StreamReadProtocolVersion,
+		StreamRef:       bytes.Repeat([]byte{1}, 32), QueryID: bytes.Repeat([]byte{2}, 16),
+		SnapshotTS: bytes.Repeat([]byte{3}, 12), SchemaDigest: digest[:],
+		CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: 2000,
+	})
+	require.NoError(t, err)
+	_, err = candidate.BuildWithBindings(map[int32]ReadBinding{0: {
+		TypeURL: StreamReadTypeURL, Value: wire, Schema: append(append([]byte(nil), reads[0].StreamSchema...), 0),
+	}})
+	require.ErrorContains(t, err, "stream schema differs")
+	built, err := candidate.BuildWithBindings(map[int32]ReadBinding{0: {
+		TypeURL: StreamReadTypeURL, Value: wire, Schema: reads[0].StreamSchema,
+	}})
+	require.NoError(t, err)
+	var plan spb.Plan
+	require.NoError(t, proto.Unmarshal(built, &plan))
+	require.Equal(t, []string{StreamReadTypeURL}, plan.ExpectedTypeUrls)
+	read := plan.Relations[0].GetRoot().Input.GetRead()
+	require.NotNil(t, read)
+	require.Equal(t, StreamReadTypeURL, read.GetExtensionTable().Detail.TypeUrl)
+	require.Equal(t, []string{"col_0"}, read.BaseSchema.Names)
+}
+
 func TestExportRejectsFullOuterBeforeSnapshotAccess(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_OUTER, Children: []int32{0, 0}})
@@ -156,6 +191,7 @@ func TestSharedScanNodeProducesOneAdmissionRead(t *testing.T) {
 	candidate, err := Export(q)
 	require.NoError(t, err)
 	require.Len(t, candidate.Reads(), 1)
+	require.Equal(t, uint32(2), candidate.Reads()[0].Occurrences)
 }
 
 func TestProjectEmitsOnlyMOProjectColumns(t *testing.T) {
@@ -433,7 +469,7 @@ func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 }
 
 func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
-	require.Equal(t, "6f788b3d6665ecdd1ac734043fb757968893f14fd7d197fabcfa287764ee6bad", hex.EncodeToString(CapabilityHash[:]))
+	require.Equal(t, "cf5b91ce5ad2c29a952df10905d025ee143e0481f9eb2f28e6d129b81d673dc1", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {

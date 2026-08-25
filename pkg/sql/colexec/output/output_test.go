@@ -156,6 +156,26 @@ func TestOutputCallbackCPUIsNotOutputWait(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestOutputCanStopOneProducerAfterSuccessfulCallback(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	calls := 0
+	arg := NewArgument().WithFunc(func(_ *batch.Batch, _ *perfcounter.CounterSet) error {
+		calls++
+		return nil
+	}).WithShouldStop(func() bool { return calls == 1 })
+	require.NoError(t, arg.Prepare(proc))
+	first := newBatch([]types.Type{types.T_int8.ToType()}, proc, 1)
+	second := newBatch([]types.Type{types.T_int8.ToType()}, proc, 1)
+	resetChildren(arg, []*batch.Batch{first, second})
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, 1, calls)
+	arg.GetChildren(0).Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
 // create a new block based on the type information
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())

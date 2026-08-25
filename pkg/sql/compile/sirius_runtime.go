@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,15 +35,30 @@ const SiriusRuntimeKey = "sql-compile-sirius-runtime"
 
 type siriusOffloadContextKey struct{}
 
+type siriusOffloadMode uint8
+
+const (
+	siriusOffloadDirect siriusOffloadMode = iota + 1
+	siriusOffloadStream
+)
+
 // WithSiriusOffload marks an explicitly hinted statement. Absence of this
 // marker leaves every native compile and execution path unchanged.
 func WithSiriusOffload(ctx context.Context) context.Context {
-	return context.WithValue(ctx, siriusOffloadContextKey{}, true)
+	return context.WithValue(ctx, siriusOffloadContextKey{}, siriusOffloadDirect)
+}
+
+func WithSiriusStreamOffload(ctx context.Context) context.Context {
+	return context.WithValue(ctx, siriusOffloadContextKey{}, siriusOffloadStream)
 }
 
 func siriusOffloadRequested(ctx context.Context) bool {
-	requested, _ := ctx.Value(siriusOffloadContextKey{}).(bool)
-	return requested
+	return siriusOffloadModeFrom(ctx) != 0
+}
+
+func siriusOffloadModeFrom(ctx context.Context) siriusOffloadMode {
+	mode, _ := ctx.Value(siriusOffloadContextKey{}).(siriusOffloadMode)
+	return mode
 }
 
 func siriusStatementEligible(stmt tree.Statement) bool {
@@ -135,10 +151,15 @@ func lookupSiriusRuntime(service string) (*SiriusRuntime, bool) {
 type siriusReadOwner struct {
 	execution *sidecarflight.Execution
 	runtime   *SiriusRuntime
+	inputs    []*sidecarflight.NativeInput
 }
 
 func newSiriusReadOwner(execution *sidecarflight.Execution, runtime *SiriusRuntime) *siriusReadOwner {
 	return &siriusReadOwner{execution: execution, runtime: runtime}
+}
+
+func newSiriusStreamOwner(execution *sidecarflight.Execution, runtime *SiriusRuntime, inputs []*sidecarflight.NativeInput) *siriusReadOwner {
+	return &siriusReadOwner{execution: execution, runtime: runtime, inputs: inputs}
 }
 
 func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
@@ -154,12 +175,24 @@ func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
 }
 
 func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan) (bool, error) {
-	if c == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal || !siriusStatementEligible(c.stmt) {
+	if c == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal {
+		return false, nil
+	}
+	if !siriusStatementEligible(c.stmt) {
+		if siriusOffloadModeFrom(ctx) == siriusOffloadStream {
+			return false, moerr.NewInternalError(ctx, "substrait: streamed Sirius offload requires a SELECT statement")
+		}
 		return false, nil
 	}
 	runtime, ok := lookupSiriusRuntime(c.proc.GetService())
 	if !ok {
+		if siriusOffloadModeFrom(ctx) == siriusOffloadStream {
+			return false, moerr.NewInternalError(ctx, "substrait: streamed Sirius runtime is not configured")
+		}
 		return false, nil
+	}
+	if siriusOffloadModeFrom(ctx) == siriusOffloadStream {
+		return c.tryCompileSiriusStreamRead(ctx, queryPlan, runtime)
 	}
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -237,10 +270,16 @@ func releaseReadRefs(ctx context.Context, leases *substrait.LeaseManager, readRe
 	return result
 }
 
-func (c *Compile) runSiriusRead(ctx context.Context) (err error) {
+func (c *Compile) runSiriusRead(
+	ctx context.Context,
+	allocationExporter func(mpool.AllocationAccountTerminalSnapshot),
+) (err error) {
 	owner := c.siriusRead
 	if owner == nil {
 		return moerr.NewInternalError(ctx, "substrait: missing Sirius execution owner")
+	}
+	if len(owner.inputs) != 0 {
+		return c.runSiriusStreamRead(ctx, owner, allocationExporter)
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -249,5 +288,100 @@ func (c *Compile) runSiriusRead(ctx context.Context) (err error) {
 		}
 	}()
 	runErr := owner.execution.Run(ctx, c.proc.Mp(), c.counterSet, c.fill)
+	return errors.Join(runErr, owner.finish(ctx, runErr == nil))
+}
+
+func (c *Compile) runSiriusStreamRead(
+	ctx context.Context,
+	owner *siriusReadOwner,
+	allocationExporter func(mpool.AllocationAccountTerminalSnapshot),
+) (err error) {
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(context.Canceled)
+	if c.MessageBoard == nil {
+		setupErr := moerr.NewInternalError(ctx, "substrait: streamed Sirius execution has no message board")
+		return errors.Join(setupErr, owner.finish(ctx, false))
+	}
+	c.remoteFragmentCounts = collectRemoteFragmentCounts(c.scopes, c.addr)
+	if len(c.remoteFragmentCounts) != 0 {
+		setupErr := moerr.NewInternalError(ctx, "substrait: streamed Sirius execution is not local-CN")
+		return errors.Join(setupErr, owner.finish(ctx, false))
+	}
+	if setupErr := c.ensureAllocationAccountLifecycle(allocationExporter); setupErr != nil {
+		return errors.Join(setupErr, owner.finish(ctx, false))
+	}
+	allocationAttempt, setupErr := c.beginAllocationAccountAttempt()
+	if setupErr != nil {
+		return errors.Join(setupErr, owner.finish(ctx, false))
+	}
+	defer func() {
+		if allocationAttempt == nil {
+			return
+		}
+		_, finishErr := allocationAttempt.finish()
+		if c.allocationAttempt == allocationAttempt {
+			c.allocationAttempt = nil
+		}
+		err = errors.Join(err, finishErr)
+	}()
+	for _, input := range owner.inputs {
+		if startErr := input.Start(runCtx); startErr != nil {
+			cancel(startErr)
+			for _, pending := range owner.inputs {
+				pending.Abort(startErr)
+			}
+			return errors.Join(startErr, owner.finish(ctx, false))
+		}
+	}
+	producerDone := make(chan error, 1)
+	producerJoined := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			panicErr := moerr.ConvertPanicError(c.proc.Ctx, recovered)
+			cancel(panicErr)
+			if c.proc != nil && c.proc.Cancel != nil {
+				c.proc.Cancel(panicErr)
+			}
+			_ = owner.finish(ctx, false)
+			if !producerJoined {
+				<-producerDone
+			}
+			panic(recovered)
+		}
+	}()
+	go func() {
+		var producerErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				producerErr = moerr.ConvertPanicError(c.proc.Ctx, recovered)
+			}
+			if producerErr != nil {
+				cancel(producerErr)
+				if c.proc != nil && c.proc.Cancel != nil {
+					c.proc.Cancel(producerErr)
+				}
+			}
+			producerDone <- producerErr
+		}()
+		producerErr = c.prePipelineInitializer()
+		if producerErr == nil {
+			c.MessageBoard.BeforeRunonce()
+			producerErr = c.runOnce()
+		}
+	}()
+
+	resultErr := owner.execution.Run(runCtx, c.proc.Mp(), c.counterSet, c.fill)
+	if resultErr != nil {
+		cancel(resultErr)
+		if c.proc != nil && c.proc.Cancel != nil {
+			c.proc.Cancel(resultErr)
+		}
+	}
+	producerErr := <-producerDone
+	producerJoined = true
+	for _, input := range owner.inputs {
+		producerErr = errors.Join(producerErr, input.Err())
+	}
+	runErr := errors.Join(resultErr, producerErr)
 	return errors.Join(runErr, owner.finish(ctx, runErr == nil))
 }
