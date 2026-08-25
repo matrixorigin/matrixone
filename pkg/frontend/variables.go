@@ -1043,7 +1043,13 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 			m.Unlock()
 			return current, nil
 		}
-		current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp, refreshFenceTS)
+		if !current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp, refreshFenceTS) {
+			m.Unlock()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		m.Unlock()
 		return current, nil
 	}
@@ -1147,14 +1153,15 @@ func (sv *SystemVariables) replaceIfMutationGeneration(
 	generation uint64,
 	mp map[string]interface{},
 	fenceTS timestamp.Timestamp,
-) {
+) bool {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	if sv.mutationGeneration != generation {
-		return
+		return false
 	}
 	sv.mp = mp
 	sv.advancePublicationFloorLocked(fenceTS)
+	return true
 }
 
 func (sv *SystemVariables) advancePublicationFloor(fenceTS timestamp.Timestamp) {

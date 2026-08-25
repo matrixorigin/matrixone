@@ -64,21 +64,28 @@ func TestGlobalSysVarsRefreshDoesNotOverwriteConcurrentSet(t *testing.T) {
 	releaseRefresh := make(chan struct{})
 	var releaseOnce sync.Once
 
+	var reads atomic.Int32
 	staleSnapshot := newMrsForGlobalSystemVariables([][]interface{}{
 		{PasswordHistory, "5"},
+	})
+	freshSnapshot := newMrsForGlobalSystemVariables([][]interface{}{
+		{PasswordHistory, "0"},
 	})
 	execStub := gostub.Stub(&ExeSqlInBgSes, func(
 		ctx context.Context,
 		_ BackgroundExec,
 		_ string,
 	) ([]ExecResult, error) {
-		close(refreshCaptured)
-		select {
-		case <-releaseRefresh:
-			return []ExecResult{staleSnapshot}, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if reads.Add(1) == 1 {
+			close(refreshCaptured)
+			select {
+			case <-releaseRefresh:
+				return []ExecResult{staleSnapshot}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
+		return []ExecResult{freshSnapshot}, nil
 	})
 	t.Cleanup(execStub.Reset)
 
@@ -123,6 +130,7 @@ func TestGlobalSysVarsRefreshDoesNotOverwriteConcurrentSet(t *testing.T) {
 	value, err := ses.GetGlobalSysVar(PasswordHistory)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), value)
+	require.Equal(t, int32(2), reads.Load())
 }
 
 func TestGlobalSysVarsFencePreventsOldRefreshFromOverwritingNewPublication(t *testing.T) {
@@ -496,6 +504,127 @@ func TestGlobalSysVarsCommitOrderIsTrackedPerVariable(t *testing.T) {
 		"a later publication for another variable must not reject this commit")
 	require.Equal(t, int64(1), globalVars.Get(PasswordHistory))
 	require.Equal(t, int64(2), globalVars.Get(PasswordReuseInterval))
+}
+
+func TestGlobalSysVarsRefreshRetriesAfterUnrelatedVariablePublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	accountID := ses.GetTenantInfo().GetTenantID()
+	globalVars := &SystemVariables{mp: map[string]interface{}{
+		PasswordHistory:       int64(5),
+		PasswordReuseInterval: int64(0),
+	}}
+	mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: globalVars},
+	}
+
+	firstReadCaptured := make(chan struct{})
+	releaseFirstRead := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirstRead) }) })
+	var reads atomic.Int32
+	newSnapshot := newMrsForGlobalSystemVariables([][]interface{}{
+		{PasswordHistory, "1"},
+		{PasswordReuseInterval, "1"},
+	})
+	execStub := gostub.Stub(&ExeSqlInBgSes, func(
+		ctx context.Context,
+		_ BackgroundExec,
+		_ string,
+	) ([]ExecResult, error) {
+		if reads.Add(1) == 1 {
+			close(firstReadCaptured)
+			select {
+			case <-releaseFirstRead:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return []ExecResult{newSnapshot}, nil
+	})
+	t.Cleanup(execStub.Reset)
+
+	type refreshResult struct {
+		vars *SystemVariables
+		err  error
+	}
+	resultC := make(chan refreshResult, 1)
+	go func() {
+		vars, err := mgr.Get(accountID, ses, context.Background(), nil)
+		resultC <- refreshResult{vars: vars, err: err}
+	}()
+	select {
+	case <-firstReadCaptured:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not capture the A/B catalog snapshot")
+	}
+
+	// B publishes while the full A/B snapshot is in flight. The first replace
+	// must fail, but Get must retry rather than return current with stale A.
+	require.True(t, globalVars.SetIfNewerCommitTS(
+		PasswordReuseInterval, int64(1), timestamp.Timestamp{PhysicalTime: 100}))
+	releaseOnce.Do(func() { close(releaseFirstRead) })
+
+	select {
+	case result := <-resultC:
+		require.NoError(t, result.err)
+		require.Equal(t, int64(1), result.vars.Get(PasswordHistory))
+		require.Equal(t, int64(1), result.vars.Get(PasswordReuseInterval))
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not retry after unrelated B publication")
+	}
+	require.Equal(t, int32(2), reads.Load())
+}
+
+func TestGlobalSysVarsRefreshGenerationRetryHonorsCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	accountID := ses.GetTenantInfo().GetTenantID()
+	globalVars := &SystemVariables{mp: map[string]interface{}{
+		PasswordHistory:       int64(5),
+		PasswordReuseInterval: int64(0),
+	}}
+	mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: globalVars},
+	}
+
+	firstReadCaptured := make(chan struct{})
+	releaseFirstRead := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirstRead) }) })
+	newSnapshot := newMrsForGlobalSystemVariables([][]interface{}{{PasswordHistory, "1"}})
+	execStub := gostub.Stub(&ExeSqlInBgSes, func(
+		context.Context,
+		BackgroundExec,
+		string,
+	) ([]ExecResult, error) {
+		close(firstReadCaptured)
+		<-releaseFirstRead
+		return []ExecResult{newSnapshot}, nil
+	})
+	t.Cleanup(execStub.Reset)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultC := make(chan error, 1)
+	go func() {
+		_, err := mgr.Get(accountID, ses, ctx, nil)
+		resultC <- err
+	}()
+	select {
+	case <-firstReadCaptured:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+	require.True(t, globalVars.SetIfNewerCommitTS(
+		PasswordReuseInterval, int64(1), timestamp.Timestamp{PhysicalTime: 100}))
+	cancel()
+	releaseOnce.Do(func() { close(releaseFirstRead) })
+	select {
+	case err := <-resultC:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("generation retry ignored cancellation")
+	}
 }
 
 func TestGlobalSysVarsRefreshDoesNotAdvanceMutationGeneration(t *testing.T) {
