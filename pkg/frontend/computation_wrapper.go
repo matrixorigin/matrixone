@@ -997,10 +997,13 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
 	if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
-	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+	if err := normalizePreparedOffsetBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
 
@@ -1074,12 +1077,14 @@ func initExecuteStmtParamWithResolverInSession(
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
-func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+func normalizePreparedOffsetBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
 	params := proc.GetPrepareParams()
 	if params == nil {
 		return nil
 	}
-	for _, position := range plan2.PreparedPaginationParamPositions(preparePlan) {
+	positions := plan2.PreparedPaginationParamPositions(preparePlan)
+	positions = append(positions, plan2.PreparedLagLeadParamPositions(preparePlan)...)
+	for _, position := range positions {
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}

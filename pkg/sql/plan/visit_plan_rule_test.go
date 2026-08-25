@@ -1430,8 +1430,38 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 	require.NoError(t, err)
 	require.True(t, specialized)
 	boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
-	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[1].Typ.Id)
+	// A numeric-column comparison keeps its original target domain so the
+	// column side remains indexable; the text marker is converted by the
+	// explicit MySQL-prefix cast for that domain.
+	require.Equal(t, int32(types.T_int64), boundComparison.GetF().Args[1].Typ.Id)
 	require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName())
+}
+
+func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
+	int32Source := types.T_int32.ToType()
+	float64Source := types.T_float64.ToType()
+	decimalSource := types.T_decimal128.ToType()
+	int32Type := makePlan2Type(&int32Source)
+	float64Type := makePlan2Type(&float64Source)
+	decimalType := makePlan2Type(&decimalSource)
+	for _, test := range []struct {
+		name   string
+		value  string
+		target planpb.Type
+		want   bool
+	}{
+		{name: "numeric prefix fits integer", value: "1abc", target: int32Type, want: false},
+		{name: "fractional integer comparison", value: "0.9", target: int32Type, want: true},
+		{name: "integer range overflow", value: "2147483648", target: int32Type, want: true},
+		{name: "double range overflow", value: "1e309", target: int32Type, want: true},
+		{name: "floating target", value: "0.9", target: float64Type, want: false},
+		{name: "decimal target uses common domain", value: "1", target: decimalType, want: true},
+		{name: "missing prefix coerces zero", value: "foo", target: int32Type, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, preparedComparisonTextNeedsDoubleFallback(test.value, test.target))
+		})
+	}
 }
 
 func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {

@@ -232,6 +232,160 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			})
 		}
 
+		// Indexed numeric columns must use the same text-to-DOUBLE conversion
+		// as marker-only comparisons. The cached prepare-time integer cast
+		// rejects numeric prefixes and non-numeric text before MySQL can apply
+		// its prefix/zero rules.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		indexedTextPredicateStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.predicate_dst set status = 16 where id = ?")
+		require.NoError(t, err)
+		var indexedLevel, indexedMessage string
+		var indexedCode uint16
+		defer func() {
+			require.NoError(t, indexedTextPredicateStmt.Close())
+		}()
+		_, err = indexedTextPredicateStmt.ExecContext(ctx, "1abc")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&indexedLevel, &indexedCode, &indexedMessage))
+		require.Equal(t, "Warning", indexedLevel)
+		require.Equal(t, uint16(1292), indexedCode)
+		require.Contains(t, indexedMessage, "Truncated incorrect DOUBLE value")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(16), status)
+
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		nonNumericIndexedStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.predicate_dst set status = 17 where id = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, nonNumericIndexedStmt.Close())
+		}()
+		_, err = nonNumericIndexedStmt.ExecContext(ctx, "foo")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&indexedLevel, &indexedCode, &indexedMessage))
+		require.Equal(t, "Warning", indexedLevel)
+		require.Equal(t, uint16(1292), indexedCode)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(0), status)
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		_, err = indexedTextPredicateStmt.ExecContext(ctx, "0.9")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(0), status)
+
+		// NULL keeps SQL NULL comparison semantics and must not fall back to the
+		// prepare-time strict integer cast. The row remains untouched.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		_, err = nonNumericIndexedStmt.ExecContext(ctx, nil)
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(0), status)
+
+		// Range-overflow text values use the common DOUBLE domain and must be a
+		// no-match, not an invalid integer-cast error.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		overflowIndexedStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.predicate_dst set status = 18 where id = ?")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, overflowIndexedStmt.Close()) }()
+		_, err = overflowIndexedStmt.ExecContext(ctx, "1e309")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(0), status)
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		_, err = overflowIndexedStmt.ExecContext(ctx, "2147483648")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(0), status)
+
+		// Multi-operand numeric predicates must use the same conversion while
+		// retaining the indexed column side. This covers the index rewrite paths
+		// for IN and BETWEEN in addition to direct equality.
+		for _, test := range []struct {
+			name       string
+			where      string
+			value      any
+			status     int64
+			wantUpdate bool
+			warning    bool
+		}{
+			{name: "in prefix", where: "id in (?)", value: "1abc", status: 20, wantUpdate: true, warning: true},
+			{name: "between prefix", where: "id between ? and 1", value: "1abc", status: 21, wantUpdate: true, warning: true},
+			{name: "in null", where: "id in (?)", value: nil, status: 22},
+			{name: "between overflow", where: "id between ? and 2", value: "1e309", status: 23},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+				stmt, err := db.PrepareContext(ctx,
+					"update `"+dbName+"`.predicate_dst set status = ? where "+test.where)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, stmt.Close()) }()
+				_, err = stmt.ExecContext(ctx, test.status, test.value)
+				require.NoError(t, err)
+				if test.warning {
+					var level, message string
+					var code uint16
+					require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+					require.Equal(t, "Warning", level)
+					require.Equal(t, uint16(1292), code)
+					require.Contains(t, message, "Truncated incorrect DOUBLE value")
+				}
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+				if test.wantUpdate {
+					require.Equal(t, test.status, status)
+				} else {
+					require.Equal(t, int64(0), status)
+				}
+			})
+		}
+
+		// The same protocol conversion is required for a non-indexed numeric
+		// column; no index rewrite should be needed for the heap path. Exercise
+		// the same prefix, missing-prefix, NULL, and range-overflow matrix.
+		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.heap_predicate (id int, status int)")
+		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.heap_predicate values (1, 0), (2, 0)")
+		for _, test := range []struct {
+			name        string
+			value       any
+			status      int64
+			wantStatus  int64
+			wantWarning bool
+		}{
+			{name: "prefix", value: "1abc", status: 19, wantStatus: 19, wantWarning: true},
+			{name: "missing prefix", value: "foo", status: 20, wantStatus: 0, wantWarning: true},
+			{name: "null", value: nil, status: 21, wantStatus: 0},
+			{name: "range overflow", value: "1e309", status: 22, wantStatus: 0},
+		} {
+			t.Run("heap "+test.name, func(t *testing.T) {
+				stmt, err := db.PrepareContext(ctx,
+					fmt.Sprintf("update `%s`.heap_predicate set status = %d where id = ?", dbName, test.status))
+				require.NoError(t, err)
+				defer func() { require.NoError(t, stmt.Close()) }()
+				_, err = stmt.ExecContext(ctx, test.value)
+				require.NoError(t, err)
+				if test.wantWarning {
+					var level, message string
+					var code uint16
+					require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+					require.Equal(t, "Warning", level)
+					require.Equal(t, uint16(1292), code)
+					require.Contains(t, message, "Truncated incorrect DOUBLE value")
+				}
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select status from `"+dbName+"`.heap_predicate where id=1").Scan(&status))
+				require.Equal(t, test.wantStatus, status)
+				execSQLRequire(t, ctx, db, "update `"+dbName+"`.heap_predicate set status = 0 where id = 1")
+			})
+		}
+
 		// A numeric literal can make the prepare-time binder wrap the marker in
 		// an implicit integer cast. The execute-time text domain must still own
 		// MySQL numeric comparison conversion instead of executing that stale

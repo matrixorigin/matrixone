@@ -3232,6 +3232,98 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return filled, err
 }
 
+// ValidatePreparedLagLeadParams validates LAG/LEAD offset markers before the
+// generic expression cast path can discard their protocol source type. This
+// is also called by the cached prepared-execution path, which does not replace
+// ParamRefs in the plan for each execution.
+func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	if preparePlan == nil || len(paramVals) == 0 {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.GetWinSpecList() {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			function := window.GetWindowFunc().GetF()
+			if function == nil || len(function.Args) < 2 {
+				continue
+			}
+			name := function.GetFunc().GetObjName()
+			if name != "lag" && name != "lead" {
+				continue
+			}
+			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
+				if position < 0 || int(position) >= len(paramVals) {
+					continue
+				}
+				if !isNonNegativePreparedInteger(paramVals[position]) {
+					return moerr.NewWrongArguments(ctx, name)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// PreparedLagLeadParamPositions returns the zero-based parameter positions
+// used as prepared LAG/LEAD offsets.
+func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
+	positions := make(map[int32]struct{})
+	if preparePlan == nil {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.GetWinSpecList() {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			function := window.GetWindowFunc().GetF()
+			if function == nil || len(function.Args) < 2 {
+				continue
+			}
+			name := function.GetFunc().GetObjName()
+			if name != "lag" && name != "lead" {
+				continue
+			}
+			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
+				positions[position] = struct{}{}
+			}
+		}
+	}
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 // PreparedPlanNeedsRuntimeSpecialization reports whether a binary prepared
 // execution can change a result-column domain or an overloaded expression.
 // Most prepared DML only needs the current parameter values.  Avoid copying
@@ -3452,8 +3544,7 @@ func (rule *preparedRuntimeTextComparisonScanRule) scanExpr(expr *plan.Expr) {
 		if function.Func != nil {
 			name = strings.ToLower(function.Func.GetObjName())
 		}
-		if isPreparedNumericComparisonContext(name) &&
-			!preparedExprsContainColumn(function.Args) && rule.argsHaveNumericDomain(function.Args) {
+		if isPreparedNumericComparisonContext(name) && rule.argsHaveNumericDomain(function.Args) {
 			for _, arg := range function.Args {
 				rule.collectTextParams(arg)
 			}
@@ -3490,39 +3581,6 @@ func (rule *preparedRuntimeTextComparisonScanRule) scanExpr(expr *plan.Expr) {
 	}
 }
 
-func preparedExprsContainColumn(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if preparedExprContainsColumn(expr) {
-			return true
-		}
-	}
-	return false
-}
-
-func preparedExprContainsColumn(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if expr.GetCol() != nil {
-		return true
-	}
-	if function := expr.GetF(); function != nil {
-		for _, arg := range function.Args {
-			if preparedExprContainsColumn(arg) {
-				return true
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if preparedExprContainsColumn(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (rule *preparedRuntimeTextComparisonScanRule) argsHaveNumericDomain(args []*plan.Expr) bool {
 	for _, arg := range args {
 		if rule.exprHasNumericDomain(arg) {
@@ -3544,11 +3602,11 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 		return ok && rule.paramTypeIsNumeric(position)
 	}
 	if expr.GetCol() != nil {
-		// Rebinding an indexed numeric column against a text marker through a
-		// DOUBLE comparison can cast the column and destroy the lookup shape.
-		// Keep column-owned casts on the existing cached path; this runtime
-		// specialization is for marker/literal/expression-owned domains.
-		return false
+		// A numeric column is a numeric comparison domain too. Keep the column
+		// expression itself unchanged; the text marker is rebound to the
+		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
+		// preserved without relying on the stale prepare-time integer cast.
+		return types.T(expr.Typ.Id).ToType().IsNumeric()
 	}
 	if types.T(expr.Typ.Id).ToType().IsNumeric() {
 		return true
@@ -3579,7 +3637,16 @@ func (rule *preparedRuntimeTextComparisonScanRule) collectTextParams(expr *plan.
 		if function.Func != nil {
 			name = strings.ToLower(function.Func.GetObjName())
 			if name == "cast" && !isImplicitPreparedParamCast(expr) {
-				// An explicit CAST owns the marker's conversion contract.
+				// An explicit CAST owns a direct marker's conversion contract.
+				// If its child is a domain-sensitive expression (for example
+				// CAST(ABS(?) AS INT)), keep walking so the nested overload can
+				// still receive the COM_STMT text-to-DOUBLE conversion.
+				if len(function.Args) > 0 && preparedExprContainsParam(function.Args[0]) &&
+					function.Args[0].GetP() == nil {
+					for _, arg := range function.Args {
+						rule.collectTextParams(arg)
+					}
+				}
 				return
 			}
 		}
@@ -3667,8 +3734,8 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
 		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
-			for _, arg := range exprImpl.F.Args {
-				if preparedExprRequiresRuntimeSpecialization(name, arg) {
+			for argIndex, arg := range exprImpl.F.Args {
+				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
 					rule.needs = true
 					return
 				}
@@ -3720,6 +3787,16 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 		return preparedExprHasUnboundParam(expr)
 	}
 	return true
+}
+
+func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// LAG/LEAD/NTH_VALUE offset markers affect row selection, not the result
+	// value's type. Their value argument remains domain-sensitive, while the
+	// cached compile can safely retain an offset parameter after validation.
+	if (functionName == "lag" || functionName == "lead" || functionName == "nth_value") && argIndex == 1 {
+		return false
+	}
+	return preparedExprRequiresRuntimeSpecialization(functionName, expr)
 }
 
 // preparedExprHasUnboundParam distinguishes a marker whose domain is still
@@ -3920,6 +3997,9 @@ func fillValuesOfParamsInPlanWithSpecialization(
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	}
+	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, false, err
 	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
@@ -4264,7 +4344,7 @@ func isDecimalExponent(value string) bool {
 	return true
 }
 
-func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
+func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 	if param := expr.GetP(); param != nil {
 		return param.Pos, true
 	}
@@ -4321,6 +4401,35 @@ func isPositivePreparedInteger(value any) bool {
 	default:
 		return false
 	}
+}
+
+func isNonNegativePreparedInteger(value any) bool {
+	kind := vector.PrepareParamNone
+	if paramValue, ok := value.(ParamValue); ok {
+		value = paramValue.Value
+		kind = paramValue.PrepareParamKind
+	}
+	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal {
+		return false
+	}
+	if kind == vector.PrepareParamBoolean {
+		switch value := value.(type) {
+		case bool:
+			return true
+		case string:
+			return value == "0" || value == "1"
+		default:
+			return false
+		}
+	}
+	if _, ok := value.(bool); ok {
+		return true
+	}
+	valid, negative := validatePreparedPaginationValue(ParamValue{
+		Value:            value,
+		PrepareParamKind: kind,
+	})
+	return valid && !negative
 }
 
 // preparedRuntimeParamExpr materializes a binary-protocol parameter using the
@@ -4594,7 +4703,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 		if name != "nth_value" || len(args) != 2 {
 			return nil
 		}
-		pos, ok := preparedNthValueParamPosition(args[1])
+		pos, ok := preparedWindowArgumentParamPosition(args[1])
 		if !ok {
 			return nil
 		}
@@ -4602,7 +4711,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
 		}
 		if !isPositivePreparedInteger(paramVals[pos]) {
-			return moerr.NewWrongArguments(ctx, "nth_value")
+			return moerr.NewWrongArguments(ctx, name)
 		}
 		return nil
 	}

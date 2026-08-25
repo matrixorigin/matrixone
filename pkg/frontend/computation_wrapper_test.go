@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -323,6 +324,83 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	require.Equal(t, vector.PrepareParamBoolean, param.PrepareParamKind)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
+}
+
+func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
+	binaryParam := func(value string, mysqlType defines.MysqlType) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+			return nil
+		}
+	}
+	textBooleanParam := func(value bool) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, ses *Session, prepareStmt *PrepareStmt, _ *TxnComputationWrapper) *plan.Execute {
+			require.NoError(t, ses.SetUserDefinedVar("offset_value", value, ""))
+			return &plan.Execute{
+				Name: prepareStmt.Name,
+				Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "offset_value"}}}},
+			}
+		}
+	}
+
+	tests := []struct {
+		name      string
+		sql       string
+		wantParam string
+		wantError bool
+		configure func(*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper) *plan.Execute
+	}{
+		{name: "binary float", sql: "select lag(1, ?) over ()", wantError: true, configure: binaryParam("1", defines.MYSQL_TYPE_DOUBLE)},
+		{name: "binary signed tiny zero lag", sql: "select lag(1, ?) over ()", wantParam: "0", configure: binaryParam("0", defines.MYSQL_TYPE_TINY)},
+		{name: "binary signed tiny one lag", sql: "select lag(1, ?) over ()", wantParam: "1", configure: binaryParam("1", defines.MYSQL_TYPE_TINY)},
+		{name: "binary signed tiny zero lead", sql: "select lead(1, ?) over ()", wantParam: "0", configure: binaryParam("0", defines.MYSQL_TYPE_TINY)},
+		{name: "binary signed tiny one lead", sql: "select lead(1, ?) over ()", wantParam: "1", configure: binaryParam("1", defines.MYSQL_TYPE_TINY)},
+		{name: "text boolean false lag", sql: "select lag(1, ?) over ()", wantParam: "0", configure: textBooleanParam(false)},
+		{name: "text boolean true lag", sql: "select lag(1, ?) over ()", wantParam: "1", configure: textBooleanParam(true)},
+		{name: "text boolean false lead", sql: "select lead(1, ?) over ()", wantParam: "0", configure: textBooleanParam(false)},
+		{name: "text boolean true lead", sql: "select lead(1, ?) over ()", wantParam: "1", configure: textBooleanParam(true)},
+		{name: "binary integer control", sql: "select lag(1, ?) over ()", wantParam: "1", configure: binaryParam("1", defines.MYSQL_TYPE_LONGLONG)},
+	}
+
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, uint32(120+i), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+			execPlan := test.configure(t, ses, prepareStmt, cw)
+
+			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, execPlan, prepareStmt.Name)
+			if test.wantError {
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+				require.Same(t, sentinel, prepareStmt.compile)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Same(t, sentinel, retComp)
+			require.Equal(t, test.wantParam, cw.proc.GetPrepareParams().GetStringAt(0))
+			if owned {
+				executionStmt.Free()
+			}
+		})
+	}
 }
 
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {

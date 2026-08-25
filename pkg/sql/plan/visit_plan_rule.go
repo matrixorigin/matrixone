@@ -17,8 +17,11 @@ package plan
 import (
 	"bytes"
 	"context"
+	"errors"
+	"math"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -422,6 +425,15 @@ type ResetParamRefRule struct {
 	// with an engine DOUBLE cast before rebinding any enclosing function so
 	// nested expressions, IN, and BETWEEN share MySQL numeric-string semantics.
 	numericComparisonTextParamPositions map[int]bool
+	// numericComparisonTextOverflowExprs records DOUBLE fallback expressions
+	// for text values whose numeric prefix is outside DOUBLE's finite range.
+	// The filter can safely compare the clamped DOUBLE value, but a LOCK_OP key
+	// expression must retain the primary-key type; using the DOUBLE fallback
+	// there would make the lock executor read a vector with the wrong physical
+	// type. Such a value cannot match an integral primary key, so the lock
+	// expression is replaced by a typed NULL (the filter still performs the
+	// conversion).
+	numericComparisonTextOverflowExprs map[*Expr]struct{}
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -474,6 +486,24 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 func (rule *ResetParamRefRule) PreserveAssignmentCast(e *plan.Expr) bool {
 	_, ok := rule.preserveRoots[e]
 	return ok
+}
+
+// NormalizePreparedLockRows keeps an overflowing text comparison out of the
+// lock executor's typed primary-key fetch path.  The corresponding scan
+// filter remains responsible for the MySQL DOUBLE conversion and warning;
+// NULL here simply means that no primary-key row can be locked for a value
+// outside the primary-key domain.
+func (rule *ResetParamRefRule) NormalizePreparedLockRows(rewritten *Expr, target plan.Type) *Expr {
+	if _, ok := rule.numericComparisonTextOverflowExprs[rewritten]; !ok {
+		return rewritten
+	}
+	target.NotNullable = false
+	return &Expr{
+		Typ: target,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+		}},
+	}
 }
 
 // applyExprPreservingRoot replaces parameters below a DML write expression,
@@ -550,6 +580,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if exprImpl.F.Func != nil {
 			functionName = strings.ToLower(exprImpl.F.Func.GetObjName())
 		}
+		// An implicit cast around a COM_STMT text marker is provisional.  For a
+		// numeric comparison, however, the column/literal side owns the
+		// comparison domain and must remain indexable.  Replace the provisional
+		// cast with the explicit MySQL numeric-prefix cast to that same target
+		// type, instead of stripping it and rebinding the comparison as DOUBLE
+		// (which would cast the column and can make an indexed predicate fail).
+		implicitComparisonCast := functionName == "cast" && isImplicitPreparedParamCast(e)
+		implicitComparisonCastPos := -1
+		if implicitComparisonCast {
+			if pos, ok := implicitPreparedParamPosition(e); ok {
+				implicitComparisonCastPos = pos
+			}
+		}
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
@@ -592,25 +635,67 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// decimal parameter instead of retaining a prepare-time BIGINT cast.
 				inferText := rule.inferTextParamTypes ||
 					(hasParamPos && rule.inferTextParamPositions[paramPos])
-				// A comparison cast owned by a numeric literal/column remains the
-				// authoritative domain for numeric protocol executions. Removing it
-				// can change composite-key/index predicate layout. A COM_STMT text
-				// operand is replaced by the position-aware DOUBLE engine cast
-				// before this parent is rebound instead.
-				if isPreparedNumericComparison(functionName) && hasParamPos &&
-					rule.numericComparisonTextParamPositions[paramPos] {
-					function := rewrittenArg.GetF()
-					if function != nil && len(function.Args) > 0 {
-						boundArgs[i] = function.Args[0]
-						compareArgTypes = true
-					}
-				} else if !isPreparedNumericComparison(functionName) || inferText {
+				// Keep the original comparison-domain cast for text parameters. The
+				// implicit cast node itself is rewritten to the explicit prefix cast
+				// below; unwrapping it here would make the binder promote the column
+				// side to DOUBLE and lose indexability.
+				if !(isPreparedNumericComparison(functionName) && hasParamPos &&
+					rule.numericComparisonTextParamPositions[paramPos]) &&
+					(!isPreparedNumericComparison(functionName) || inferText) {
 					if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
 						boundArgs[i] = unwrapped
 						compareArgTypes = true
 					}
 				}
 			}
+		}
+
+		if implicitComparisonCast && implicitComparisonCastPos >= 0 &&
+			implicitComparisonCastPos < len(rule.params) &&
+			rule.numericComparisonTextParamPositions[implicitComparisonCastPos] &&
+			rule.params[implicitComparisonCastPos] != nil {
+			if literal := rule.params[implicitComparisonCastPos].GetLit(); literal != nil &&
+				preparedComparisonTextNeedsDoubleFallback(literal.GetSval(), originalTyp) {
+				// The native column domain cannot represent an overflowing DOUBLE
+				// prefix. Keep the comparison in DOUBLE space for this value so it
+				// becomes a normal no-match/diagnostic rather than an integer-cast
+				// error. Ordinary prefixes still use the column-domain cast and keep
+				// the indexed column side untouched.
+				numericType := preparedNumericComparisonTextType()
+				fallback, castErr := makePlan2CastExpr(
+					rule.ctx,
+					rule.params[implicitComparisonCastPos],
+					makePlan2Type(&numericType),
+				)
+				if castErr != nil {
+					return nil, castErr
+				}
+				if rule.numericComparisonTextOverflowExprs == nil {
+					rule.numericComparisonTextOverflowExprs = make(map[*Expr]struct{})
+				}
+				rule.numericComparisonTextOverflowExprs[fallback] = struct{}{}
+				rule.specialized = true
+				return fallback, nil
+			}
+			numericType := preparedNumericComparisonTextType()
+			numeric, castErr := makePlan2CastExpr(
+				rule.ctx,
+				rule.params[implicitComparisonCastPos],
+				makePlan2Type(&numericType),
+			)
+			if castErr != nil {
+				return nil, castErr
+			}
+			explicit, castErr := appendExplicitCastBeforeExpr(
+				rule.ctx,
+				numeric,
+				originalTyp,
+			)
+			if castErr != nil {
+				return nil, castErr
+			}
+			rule.specialized = true
+			return explicit, nil
 		}
 
 		// reset function
@@ -669,6 +754,52 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	default:
 		return e, nil
+	}
+}
+
+func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) bool {
+	prefix, ok := planfunction.GetNumericStringPrefix(value)
+	if !ok {
+		return false
+	}
+	numeric, err := strconv.ParseFloat(prefix, 64)
+	if errors.Is(err, strconv.ErrRange) {
+		return true
+	}
+	if err != nil || math.IsNaN(numeric) || math.IsInf(numeric, 0) {
+		return true
+	}
+
+	// An integral column can keep its index only when the text value is an
+	// exactly representable value in that column's domain.  Converting a
+	// fractional DOUBLE through an integer cast would round it and change
+	// MySQL's numeric-comparison result (for example, 1 = '0.9'). Values outside
+	// the target range likewise need the common DOUBLE comparison domain instead
+	// of an overflowing integer cast.
+	switch types.T(target.Id) {
+	case types.T_int8:
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt8 || numeric > math.MaxInt8
+	case types.T_int16:
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt16 || numeric > math.MaxInt16
+	case types.T_int32:
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt32 || numeric > math.MaxInt32
+	case types.T_int64:
+		return math.Trunc(numeric) != numeric || numeric < -math.Exp2(63) || numeric >= math.Exp2(63)
+	case types.T_uint8:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint8
+	case types.T_uint16:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint16
+	case types.T_uint32:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint32
+	case types.T_uint64:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric >= math.Exp2(64)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		// Decimal-vs-text comparisons use the floating common domain here; an
+		// intermediate DOUBLE-to-DECIMAL cast would lose scale/precision before
+		// comparison.
+		return true
+	default:
+		return false
 	}
 }
 

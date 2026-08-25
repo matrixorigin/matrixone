@@ -149,6 +149,14 @@ alter table index02 alter index key1 invisible;
 show index from index02;
 drop table index02;
 
+drop table if exists index_case;
+create table index_case(v varchar(20));
+create index StandAloneIdx on index_case(v);
+show index from index_case;
+drop index standaloneidx on index_case;
+show index from index_case;
+drop table index_case;
+
 drop table if exists index03;
 create table index03(col1 int, col2 int, col3 int);
 alter table index03 add unique key(col1,col2) comment 'abcTest';

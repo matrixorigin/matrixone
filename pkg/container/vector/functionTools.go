@@ -652,6 +652,12 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
+	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
+		// Allocation-accounted storage can outlive several evaluations and be
+		// larger than this result. Publish the current row domain explicitly so
+		// NULL unions never infer it from a reused source or physical capacity.
+		nullBitmap.TryExpandWithSize(targetSize)
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0
