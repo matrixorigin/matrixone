@@ -2,6 +2,19 @@ drop database if exists vector_ivfflat_include_phase3;
 create database vector_ivfflat_include_phase3;
 use vector_ivfflat_include_phase3;
 
+-- This CDC-only PK scenario is independent of the synchronous INCLUDE cases
+-- below. Start its insert-then-async-index build now and verify it only after
+-- the synchronous work, overlapping convergence without weakening either wait.
+create table vector_ivfflat_async_pk(
+    id bigint primary key,
+    embedding vecf32(3)
+);
+insert into vector_ivfflat_async_pk values
+    (10, "[1,2,3]"),
+    (30, "[7,8,9]");
+create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
+lists=1 op_type "vector_l2_ops" async;
+
 drop table if exists vector_ivfflat_include_phase3;
 create table vector_ivfflat_include_phase3(
     id int primary key,
@@ -134,16 +147,6 @@ drop table vector_ivfflat_fake_pk;
 -- Async IVF maintenance is CDC-only. Updating the source PK must replace the
 -- active-version entry identity without retaining the old PK or duplicating
 -- the new one.
-create table vector_ivfflat_async_pk(
-    id bigint primary key,
-    embedding vecf32(3)
-);
-insert into vector_ivfflat_async_pk values
-    (10, "[1,2,3]"),
-    (30, "[7,8,9]");
-create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
-lists=1 op_type "vector_l2_ops" async;
-
 set @async_entries = (
     select index_table_name
     from mo_catalog.mo_indexes
