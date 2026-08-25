@@ -132,6 +132,86 @@ func TestMockCompilerContextLegacyTableOverlay(t *testing.T) {
 	})
 }
 
+func TestMockCompilerContextAmbiguousLegacyOverlayUsesOwner(t *testing.T) {
+	testCases := []struct {
+		name          string
+		replaceTable  bool
+		replaceObject bool
+		deleteTable   bool
+		deleteObject  bool
+	}{
+		{name: "table replacement", replaceTable: true},
+		{name: "object replacement", replaceObject: true},
+		{name: "both replacement", replaceTable: true, replaceObject: true},
+		{name: "table deletion", deleteTable: true},
+		{name: "object deletion", deleteObject: true},
+		{name: "both deletion", deleteTable: true, deleteObject: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockCompilerContext(true)
+			ownerKey := mock.legacyTableOwners["t1"]
+			require.Equal(t, mockQualifiedTableName("cte_test", "t1"), ownerKey)
+			ownerID := mock.tablesByQualifiedName[ownerKey].TblId
+
+			if tc.replaceTable {
+				replacement := DeepCopyTableDef(mock.tables["t1"], true)
+				replacement.Version = 777
+				mock.tables["t1"] = replacement
+			}
+			if tc.replaceObject {
+				replacement := *mock.objects["t1"]
+				replacement.ServerName = "replacement"
+				mock.objects["t1"] = &replacement
+			}
+			if tc.deleteTable {
+				delete(mock.tables, "t1")
+			}
+			if tc.deleteObject {
+				delete(mock.objects, "t1")
+			}
+
+			assertOwner := func(objRef *ObjectRef, tableDef *TableDef) {
+				if tc.deleteTable {
+					require.Nil(t, tableDef)
+				} else {
+					require.NotNil(t, tableDef)
+					if tc.replaceTable {
+						require.Equal(t, uint32(777), tableDef.Version)
+					}
+				}
+				if tc.deleteObject {
+					require.Nil(t, objRef)
+				} else {
+					require.NotNil(t, objRef)
+					if tc.replaceObject {
+						require.Equal(t, "replacement", objRef.ServerName)
+					}
+				}
+			}
+			objRef, tableDef, err := mock.Resolve("cte_test", "t1", nil)
+			require.NoError(t, err)
+			assertOwner(objRef, tableDef)
+			objRef, tableDef, err = mock.ResolveById(ownerID, nil)
+			require.NoError(t, err)
+			assertOwner(objRef, tableDef)
+
+			for _, dbName := range []string{"bvt_test1", "constraint_test"} {
+				objRef, tableDef, err = mock.Resolve(dbName, "t1", nil)
+				require.NoError(t, err)
+				require.NotNil(t, objRef)
+				require.NotNil(t, tableDef)
+				require.NotEqual(t, ownerID, tableDef.TblId)
+				objRef, tableDef, err = mock.ResolveById(tableDef.TblId, nil)
+				require.NoError(t, err)
+				require.NotNil(t, objRef)
+				require.NotNil(t, tableDef)
+			}
+		})
+	}
+}
+
 func tableColumnNames(tableDef *TableDef) []string {
 	names := make([]string, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {
