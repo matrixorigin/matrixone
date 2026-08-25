@@ -999,6 +999,150 @@ func TestCommitGroupByChunkClassifiesCommitPreviewErrorBeforePublication(t *test
 	g.Free(proc, false, nil)
 }
 
+func TestGroupKeySourceReservationSurvivesCompletePublication(t *testing.T) {
+	tests := []struct {
+		name               string
+		initialGroups      int
+		secondValues       []int64
+		secondSources      []types.StringSource
+		allowedAllocations int
+	}{
+		{
+			name: "all-existing-reverse-order", initialGroups: 2,
+			secondValues: []int64{0, 1},
+			secondSources: []types.StringSource{
+				types.StringSourceLiteral, types.StringSourceCOMStmt,
+			},
+			allowedAllocations: 1,
+		},
+		{
+			name: "current-full-with-standby-new-group", initialGroups: aggBatchSize,
+			secondValues: []int64{0, 1, aggBatchSize},
+			secondSources: []types.StringSource{
+				types.StringSourceLiteral,
+				types.StringSourceCOMStmt,
+				types.StringSourceLiteral,
+			},
+			allowedAllocations: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int64)}, nil)
+			generation, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)
+			require.NoError(t, err)
+			controller := &rejectNextGroupAllocationController{}
+			account, err := registry.OpenWithController(128<<20, controller)
+			require.NoError(t, err)
+			require.NoError(t, g.ctr.setAllocationAccount(account))
+			allocation := groupTestAllocation{
+				generation: generation, registry: registry, account: account,
+			}
+			require.NoError(t, g.Prepare(proc))
+			require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
+
+			commit := func(input *batch.Batch) ([]uint64, int, error) {
+				require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
+					0, input.RowCount(), g.ctr.hashKeyVectors(input.Vecs),
+					g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
+				preview := groupInsertPreview{
+					values:    g.ctr.hr.insertPlan.Values(),
+					inserted:  g.ctr.hr.insertPlan.Inserted(),
+					newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
+				}
+				if !g.ctr.recoveryCapacityCovers(preview.newGroups) {
+					require.NoError(t,
+						g.ctr.ensureRecoveryCapacity(preview.newGroups, g.OpAnalyzer))
+				}
+				require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
+				require.NoError(t, g.ctr.preflightBuildChunk(
+					input.Vecs, 0, input.RowCount(), preview.inserted, preview.newGroups))
+				return g.ctr.commitGroupByChunk(input.Vecs, 0, input.RowCount(), preview)
+			}
+
+			initialBatches := make([]*batch.Batch, 0,
+				(test.initialGroups+hashmap.UnitLimit-1)/hashmap.UnitLimit)
+			initialAdded := 0
+			for start := 0; start < test.initialGroups; start += hashmap.UnitLimit {
+				count := min(hashmap.UnitLimit, test.initialGroups-start)
+				initialValues := make([]int64, count)
+				for i := range initialValues {
+					initialValues[i] = int64(start + i)
+				}
+				initial := batch.NewWithSize(1)
+				initial.Vecs[0] = testutil.MakeInt64Vector(initialValues, nil, proc.Mp())
+				require.NoError(t,
+					initial.Vecs[0].SetStringSource(types.StringSourceLiteral))
+				initial.SetRowCount(len(initialValues))
+				initialBatches = append(initialBatches, initial)
+				_, added, err := commit(initial)
+				require.NoError(t, err)
+				initialAdded += added
+			}
+			require.Equal(t, test.initialGroups, initialAdded)
+
+			second := batch.NewWithSize(1)
+			second.Vecs[0] = testutil.MakeInt64Vector(test.secondValues, nil, proc.Mp())
+			require.NoError(t,
+				second.Vecs[0].SetStringSourcesWithMP(test.secondSources, proc.Mp()))
+			second.SetRowCount(len(test.secondValues))
+			require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
+				0, second.RowCount(), g.ctr.hashKeyVectors(second.Vecs),
+				g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
+			preview := groupInsertPreview{
+				values:    g.ctr.hr.insertPlan.Values(),
+				inserted:  g.ctr.hr.insertPlan.Inserted(),
+				newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
+			}
+			if !g.ctr.recoveryCapacityCovers(preview.newGroups) {
+				require.NoError(t,
+					g.ctr.ensureRecoveryCapacity(preview.newGroups, g.OpAnalyzer))
+			}
+			require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
+			require.NoError(t, g.ctr.preflightBuildChunk(
+				second.Vecs, 0, second.RowCount(), preview.inserted, preview.newGroups))
+			remaining := test.allowedAllocations
+			controller.rejectWhen = func() bool {
+				if remaining > 0 {
+					remaining--
+					return false
+				}
+				return true
+			}
+			values, added, err := g.ctr.commitGroupByChunk(
+				second.Vecs, 0, second.RowCount(), preview)
+			require.NoError(t, err)
+			require.Zero(t, remaining, "test must observe current/standby preflight allocations")
+			_, rejected := controller.snapshot()
+			require.False(t, rejected,
+				"group-key publication must not allocate after retained preflight")
+			require.Equal(t, test.initialGroups+preview.newGroups,
+				int(g.ctr.hr.Hash.GroupCount()))
+			require.Equal(t, preview.newGroups, added)
+			require.Equal(t, preview.values, values)
+			if test.initialGroups == aggBatchSize {
+				require.Len(t, g.ctr.groupByBatches, 2)
+			}
+			keys := g.ctr.groupByBatches[0].Vecs[0]
+			require.Equal(t, types.StringSourceLiteral, keys.GetStringSourceAt(0))
+			require.Equal(t, types.StringSourceExpression, keys.GetStringSourceAt(1))
+
+			controller.rejectWhen = nil
+			g.Free(proc, false, nil)
+			require.Zero(t, account.Snapshot().Used)
+			finalizeGroupTestAllocation(t, g, allocation)
+			for _, initial := range initialBatches {
+				initial.Clean(proc.Mp())
+			}
+			second.Clean(proc.Mp())
+		})
+	}
+}
+
 func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T) {
 	for _, rejectPreflight := range []bool{true, false} {
 		t.Run(fmt.Sprintf("reject-preflight=%v", rejectPreflight), func(t *testing.T) {

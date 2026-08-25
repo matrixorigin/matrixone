@@ -322,8 +322,15 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 		vectors, offset, groups,
 		func(destination *vector.Vector, row int, source types.StringSource) error {
 			publication.addDestination(destination)
-			return destination.PreflightSetStringSourceAtLength(
-				row, max(destination.Length(), row+1), source, ctr.mp)
+			if err := destination.PreflightSetStringSourceAtLength(
+				row, max(destination.Length(), row+1), source, ctr.mp); err != nil {
+				return err
+			}
+			// Existing-row preflight has finalLength == Length and therefore does
+			// not infer a deferred publication. Keep both current and standby
+			// reservations alive until groupKeySourcePublication.finalize.
+			destination.RetainStringSourcePreflight()
+			return nil
 		},
 	); err != nil {
 		return err
