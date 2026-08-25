@@ -101,7 +101,12 @@ type service struct {
 		drainSnapshotReady bool
 		groupTables        [][]pb.LockTable
 		lockTableRef       map[uint32]map[uint64]uint64
-		allocating         map[uint32]map[uint64]chan struct{}
+		// remoteBindRefs is a source-local index of exact remote binds that a
+		// transaction may still depend on. A bind enters before its first remote
+		// Lock RPC and leaves only after transaction cleanup succeeds. Route-cache
+		// membership alone must not keep an owner-side lock lease alive.
+		remoteBindRefs map[remoteBindKey]remoteBindRef
+		allocating     map[uint32]map[uint64]chan struct{}
 	}
 
 	option struct {
@@ -334,6 +339,36 @@ func (s *service) acquireTxnClosureAdmission(
 	return guard, nil
 }
 
+// remoteBindKey identifies one exact allocator generation of a remote bind.
+// Keep every routing field here: a transaction using an old generation must
+// continue refreshing that generation until it is fenced and cleaned up.
+type remoteBindKey struct {
+	group       uint32
+	table       uint64
+	originTable uint64
+	sharding    pb.Sharding
+	serviceID   string
+	version     uint64
+	allocatorID string
+}
+
+type remoteBindRef struct {
+	bind pb.LockTable
+	refs uint64
+}
+
+func makeRemoteBindKey(bind pb.LockTable) remoteBindKey {
+	return remoteBindKey{
+		group:       bind.Group,
+		table:       bind.Table,
+		originTable: bind.OriginTable,
+		sharding:    bind.Sharding,
+		serviceID:   bind.ServiceID,
+		version:     bind.Version,
+		allocatorID: bind.AllocatorID,
+	}
+}
+
 const maxSupersededAllocatorIDs = 64
 
 var _ CommitSequenceProvider = (*service)(nil)
@@ -377,6 +412,7 @@ func NewLockService(
 	s.tableGroups = &lockTableHolders{service: s.serviceID, logger: s.logger, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.mu.lockTableRef = make(map[uint32]map[uint64]uint64)
+	s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
 	s.deadlockDetector = newDeadlockDetector(
 		s.logger,
 		s.fetchTxnWaitingList,
@@ -522,11 +558,7 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	if txn.lockTableBindTouched(bind) &&
-		bind.ServiceID == s.serviceID &&
-		!admission.consume(bind) {
-		s.incRef(bind.Group, bind.Table)
-	}
+	s.acquireTxnBindRef(txn, bind, &admission)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
 	if _, local := l.(*localLockTable); !local {
@@ -753,7 +785,7 @@ func (s *service) Unlock(
 		return moerr.NewInternalErrorNoCtx(
 			"transaction changed while finalizing ordinary closure")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	// activeTxn pooling uses the still-held transaction mutex as its generation
@@ -876,7 +908,7 @@ func (s *service) unlockRemoteLockTable(
 		return moerr.NewInternalErrorNoCtx(
 			"remote transaction changed while its final lock table was closing")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	s.activeTxnHolder.freeActiveTxn(txn)
@@ -1027,7 +1059,7 @@ func (s *service) unlockUnknownCommit(
 		return moerr.NewInternalErrorNoCtx(
 			"unknown-commit transaction changed while finalizing closure")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	s.activeTxnHolder.freeActiveTxn(txn)
@@ -1099,7 +1131,7 @@ func (s *service) unlockWithContext(
 		return moerr.NewInternalErrorNoCtx(
 			"retryable transaction changed while finalizing closure")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -1148,19 +1180,87 @@ func (s *service) Resume() error {
 	return err
 }
 
-func (s *service) reduceCanMoveGroupTables(binds []pb.LockTable) {
+func (s *service) releaseTxnBindRefs(binds []pb.LockTable) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.mu.lockTableRef) == 0 {
-		return
-	}
 
 	for _, bind := range binds {
 		if bind.ServiceID != s.serviceID {
+			s.releaseRemoteBindRefLocked(bind)
 			continue
 		}
 		s.releaseBindRefLocked(bind.Group, bind.Table, bind, s.mu.drainSnapshotReady)
 	}
+}
+
+// acquireTxnBindRef records the first exact bind generation touched by a
+// transaction. The caller holds txn's mutex. Local binds participate in CN
+// drain accounting; remote binds participate in owner-side lease heartbeats.
+func (s *service) acquireTxnBindRef(
+	txn *activeTxn,
+	bind pb.LockTable,
+	admission *lockAdmission,
+) {
+	if !txn.lockTableBindTouched(bind) {
+		return
+	}
+	if bind.ServiceID != s.serviceID {
+		s.acquireRemoteBindRef(bind)
+		return
+	}
+	if !admission.consume(bind) {
+		s.incRef(bind.Group, bind.Table)
+	}
+}
+
+func (s *service) acquireRemoteBindRef(bind pb.LockTable) {
+	if bind.ServiceID == s.serviceID {
+		return
+	}
+	key := makeRemoteBindKey(bind)
+	s.mu.Lock()
+	if s.mu.remoteBindRefs == nil {
+		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
+	}
+	s.acquireRemoteBindRefLocked(key, bind)
+	s.mu.Unlock()
+}
+
+func (s *service) acquireRemoteBindRefLocked(key remoteBindKey, bind pb.LockTable) {
+	ref := s.mu.remoteBindRefs[key]
+	if ref.refs == 0 {
+		ref.bind = bind
+	}
+	ref.refs++
+	s.mu.remoteBindRefs[key] = ref
+}
+
+func (s *service) releaseRemoteBindRefLocked(bind pb.LockTable) {
+	key := makeRemoteBindKey(bind)
+	ref, ok := s.mu.remoteBindRefs[key]
+	if !ok {
+		return
+	}
+	if ref.refs > 1 {
+		ref.refs--
+		s.mu.remoteBindRefs[key] = ref
+		return
+	}
+	delete(s.mu.remoteBindRefs, key)
+}
+
+func (s *service) collectRemoteLockBinds(scratch []pb.LockTable) []pb.LockTable {
+	oldLen := len(scratch)
+	binds := scratch[:0]
+	s.mu.RLock()
+	for _, ref := range s.mu.remoteBindRefs {
+		binds = append(binds, ref.bind)
+	}
+	s.mu.RUnlock()
+	if len(binds) < oldLen {
+		clear(scratch[len(binds):oldLen])
+	}
+	return binds
 }
 
 func (s *service) releaseBindRefLocked(

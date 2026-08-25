@@ -227,6 +227,10 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(holderTxn, false, ""))
 
+			// Route-cache eviction no longer stops a live transaction's bind
+			// heartbeat. Stop the keeper explicitly to exercise the missing-heartbeat
+			// orphan path.
+			require.NoError(t, l2.remote.keeper.Close())
 			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
 				return id == table1
 			}, closeReasonBindChanged)

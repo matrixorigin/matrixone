@@ -592,6 +592,8 @@ func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
 		func(_ *lockTableAllocator, services []*service) {
 			s := services[0]
 			s.setStatus(pb.Status_ServiceCanRestart)
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = s.serviceID
 
 			req := &pb.Request{
 				RequestID: 1,
@@ -601,7 +603,7 @@ func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
 					TxnID:     []byte("txn1"),
 					ServiceID: "remote-service",
 					Rows:      [][]byte{{1}},
-					Options:   newTestRowExclusiveOptions(),
+					Options:   options,
 				},
 			}
 			resp := acquireResponse()
@@ -612,6 +614,61 @@ func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
 			require.True(t, cs.writeCalled)
 			require.False(t, cs.closeCalled)
 			require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrRetryForCNRollingRestart))
+		},
+	)
+}
+
+func TestHandleForwardLockRejectsStaleTargetIncarnation(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx := context.Background()
+			const tableID = uint64(24921)
+			row := []byte{1}
+			_, err := s.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			l := s.tableGroups.get(0, tableID)
+			require.NotNil(t, l)
+
+			staleTarget := getServiceIdentifier(getUUIDFromServiceIdentifier(s.serviceID), 1)
+			require.NotEqual(t, s.serviceID, staleTarget)
+			require.Equal(t,
+				getUUIDFromServiceIdentifier(s.serviceID),
+				getUUIDFromServiceIdentifier(staleTarget))
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = staleTarget
+			txnID := []byte("stale-forward-target")
+			req := &pb.Request{
+				RequestID: 1,
+				Method:    pb.Method_ForwardLock,
+				LockTable: l.getBind(),
+				Lock: pb.LockRequest{
+					TxnID:     txnID,
+					ServiceID: "mirror-service",
+					Rows:      [][]byte{row},
+					Options:   options,
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: ctx}
+
+			s.handleForwardLock(ctx, nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t,
+				moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrRetryForCNRollingRestart))
+			require.False(t, s.activeTxnHolder.hasActiveTxn(txnID))
+			require.Empty(t, s.collectRemoteLockBinds(nil))
+			_, ok, err := l.getLockHolder(ctx, row)
+			require.NoError(t, err)
+			require.False(t, ok)
+			s.mu.Lock()
+			lockAdmissions := s.mu.lockAdmissions
+			s.mu.Unlock()
+			require.Zero(t, lockAdmissions)
 		},
 	)
 }
@@ -637,6 +694,8 @@ func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testin
 			s.mu.Lock()
 			s.mu.allocating[group] = map[uint64]chan struct{}{table: waitC}
 			s.mu.Unlock()
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = s.serviceID
 
 			req := &pb.Request{
 				RequestID: 1,
@@ -646,7 +705,7 @@ func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testin
 					TxnID:     []byte("forward-waiting-bind"),
 					ServiceID: "remote-service",
 					Rows:      [][]byte{{1}},
-					Options:   newTestRowExclusiveOptions(),
+					Options:   options,
 				},
 			}
 			resp := acquireResponse()
@@ -764,6 +823,8 @@ func TestHandleForwardLockRemoteSendCanceledByServiceClose(t *testing.T) {
 					s.logger,
 				),
 			)
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = s.serviceID
 
 			req := &pb.Request{
 				RequestID: 1,
@@ -773,7 +834,7 @@ func TestHandleForwardLockRemoteSendCanceledByServiceClose(t *testing.T) {
 					TxnID:     []byte("remote-forward-close"),
 					ServiceID: "requesting-service",
 					Rows:      [][]byte{{1}},
-					Options:   newTestRowExclusiveOptions(),
+					Options:   options,
 				},
 			}
 			resp := acquireResponse()
@@ -840,6 +901,8 @@ func TestHandleForwardLockCloseWaitsForAsyncCallback(t *testing.T) {
 			require.NotNil(t, l)
 			local, ok := l.(*localLockTable)
 			require.True(t, ok)
+			options := newTestRowExclusiveOptions()
+			options.ForwardTo = s.serviceID
 
 			req := &pb.Request{
 				RequestID: 1,
@@ -849,7 +912,7 @@ func TestHandleForwardLockCloseWaitsForAsyncCallback(t *testing.T) {
 					TxnID:     []byte("async-forward-waiter"),
 					ServiceID: "remote-service",
 					Rows:      [][]byte{row},
-					Options:   newTestRowExclusiveOptions(),
+					Options:   options,
 				},
 			}
 			resp := acquireResponse()
@@ -983,6 +1046,9 @@ func TestRemoteLockHandlersRejectReusedSameIDGeneration(t *testing.T) {
 							Options:   newTestRowExclusiveOptions(),
 						},
 					}
+					if tc.method == pb.Method_ForwardLock {
+						req.Lock.Options.ForwardTo = s.serviceID
+					}
 					resp := acquireResponse()
 					defer releaseResponse(resp)
 					cs := &testClientSession{ctx: context.Background()}
@@ -1083,6 +1149,9 @@ func TestRemoteLockHandlersDeadlineCancelsLockTableAllocationWait(t *testing.T) 
 					options := newTestRowExclusiveOptions()
 					options.LockWaitTimeout = 60
 					options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+					if tc.method == pb.Method_ForwardLock {
+						options.ForwardTo = s.serviceID
+					}
 					req := &pb.Request{
 						RequestID: 1,
 						Method:    tc.method,
@@ -2120,7 +2189,7 @@ func TestRemoteLockRechecksBindChangedAfterGetLocalLockTable(t *testing.T) {
 	)
 }
 
-func TestIssue14346(t *testing.T) {
+func TestInactiveRemoteRouteCacheDoesNotDriveHeartbeat(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
@@ -2142,25 +2211,21 @@ func TestIssue14346(t *testing.T) {
 			// txn1 hold lock row1 on s2
 			mustAddTestLock(t, ctx, s2, table, txn2, rows, pb.Granularity_Row)
 			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.Empty(t, s2.collectRemoteLockBinds(nil))
+			keeper := s2.remote.keeper.(*lockTableKeeper)
+			require.NoError(t, keeper.Close())
 
 			// remove s1
 			clusterservice.GetMOCluster(s1.GetConfig().ServiceID).RemoveCN("s1")
 			clusterservice.GetMOCluster(s2.GetConfig().ServiceID).RemoveCN("s1")
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
-			// wait bind remove on s2
-			for {
-				select {
-				case <-ctx.Done():
-					t.Fatal("timeout waiting for bind removal on s2")
-				default:
-					v, err := s2.getLockTable(context.Background(), 0, table)
-					require.NoError(t, err)
-					if v == nil {
-						return
-					}
-					time.Sleep(time.Millisecond * 100)
-				}
-			}
+			// An inactive route may remain cached. It is validated lazily on the
+			// next use and must not keep an owner-side lease alive by itself.
+			v, err := s2.getLockTable(context.Background(), 0, table)
+			require.NoError(t, err)
+			require.NotNil(t, v)
+			require.Equal(t, s1.serviceID, v.getBind().ServiceID)
 		},
 	)
 }
