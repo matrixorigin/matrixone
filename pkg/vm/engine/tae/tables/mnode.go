@@ -355,7 +355,16 @@ func (node *memoryNode) getDataWindowLocked(
 			colDef := readSchema.ColDefs[colIdx]
 			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
 			target := lookupTNBatchVector(*bat, colDef.Name)
-			if target == nil || *target.GetType() != colDef.Type {
+			targetType := colDef.Type
+			if ok {
+				if idx < 0 || idx >= len(node.data.Vecs) || node.data.Vecs[idx] == nil {
+					return moerr.NewInternalErrorNoCtxf(
+						"in-memory source column %q is missing", colDef.Name,
+					)
+				}
+				targetType = *node.data.Vecs[idx].GetType()
+			}
+			if target == nil || *target.GetType() != targetType {
 				return moerr.NewInternalErrorNoCtxf(
 					"in-memory scan output column %q is missing or incompatible", colDef.Name,
 				)
@@ -605,13 +614,14 @@ func (node *memoryNode) Scan(
 				)
 			}
 			attr, typ = def.Name, def.Type
-			if sourcePos, ok := node.writeSchema.SeqnumMap[def.SeqNum]; ok &&
-				(sourcePos < 0 || sourcePos >= len(node.data.Vecs) ||
-					node.data.Vecs[sourcePos] == nil ||
-					*node.data.Vecs[sourcePos].GetType() != def.Type) {
-				return moerr.NewInternalErrorNoCtxf(
-					"in-memory source column %q is missing or incompatible", def.Name,
-				)
+			if sourcePos, ok := node.writeSchema.SeqnumMap[def.SeqNum]; ok {
+				if sourcePos < 0 || sourcePos >= len(node.data.Vecs) ||
+					node.data.Vecs[sourcePos] == nil {
+					return moerr.NewInternalErrorNoCtxf(
+						"in-memory source column %q is missing", def.Name,
+					)
+				}
+				typ = *node.data.Vecs[sourcePos].GetType()
 			}
 		}
 		if _, exists := seenAttrs[attr]; exists {
@@ -675,8 +685,8 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
 ) (err error) {
-	if node == nil || node.object == nil || node.object.appendMVCC == nil || node.data == nil {
-		return moerr.NewInternalErrorNoCtx("tombstone range scan has no in-memory object data")
+	if node == nil || node.object == nil || node.object.appendMVCC == nil {
+		return moerr.NewInternalErrorNoCtx("tombstone range scan has no object or append state")
 	}
 	if ctx == nil || objID == nil || bat == nil || mp == nil {
 		return moerr.NewInvalidInputNoCtx(
@@ -690,6 +700,9 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	default:
+	}
+	if node.data == nil {
+		return nil
 	}
 	initialBatch := *bat
 	var appendCheckpoint *tombstoneResultAppendCheckpoint
@@ -796,8 +809,8 @@ func (node *memoryNode) FillBlockTombstones(
 	deleteStartOffset uint64,
 	deleteEndOffset uint64,
 	mp *mpool.MPool) error {
-	if node == nil || node.object == nil || node.object.appendMVCC == nil || node.data == nil {
-		return moerr.NewInternalErrorNoCtx("tombstone fill has no in-memory object data")
+	if node == nil || node.object == nil || node.object.appendMVCC == nil {
+		return moerr.NewInternalErrorNoCtx("tombstone fill has no object or append state")
 	}
 	if ctx == nil || txn == nil || blkID == nil || deletes == nil || mp == nil {
 		return moerr.NewInvalidInputNoCtx(
@@ -806,6 +819,9 @@ func (node *memoryNode) FillBlockTombstones(
 	}
 	if deleteEndOffset < deleteStartOffset {
 		return moerr.NewInvalidInputNoCtx("tombstone fill has a reversed output row range")
+	}
+	if node.data == nil {
+		return nil
 	}
 	node.object.RLock()
 	defer node.object.RUnlock()
