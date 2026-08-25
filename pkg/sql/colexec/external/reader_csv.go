@@ -169,6 +169,12 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			curBatchSize += uint64(len(row[j].Val))
 		}
 
+		// The physical line this record starts on, for __mo_file_line. Recorded
+		// per record so a multi-line quoted field reports its FIRST line.
+		if param.ErrorMode.WantLine {
+			param.ErrorMode.RecordLine = csvReader.RecordLine()
+		}
+
 		rowIdx := i
 		if param.Extern.Format == tree.JSONLINE {
 			row, err = r.transJson2Lines(proc.Ctx, row[0].Val, param.Attrs, param.Cols, param.Extern.JsonData)
@@ -307,7 +313,7 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 	if !ok || g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a json array")
 	}
-	if len(g.Values) < getRealAttrCnt(attrs) {
+	if len(g.Values) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, valN := range g.Values {

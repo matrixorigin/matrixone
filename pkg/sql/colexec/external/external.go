@@ -162,6 +162,10 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.fileOpened = false
 	}
 
+	// Error-mode columns are resolved from the pruned attribute list before any
+	// reader is built, so every reader sees the same decision.
+	resolveExternalErrorMode(param)
+
 	// Create reader (single dispatch point)
 	switch {
 	case param.ForeignScan != nil:
@@ -970,10 +974,22 @@ func isDirectParallelLoadType(id types.T) bool {
 	return id == types.T_array_float32 || id == types.T_array_float64
 }
 
-func getRealAttrCnt(attrs []plan.ExternAttr) int {
+// getRealAttrCnt counts the attributes that must be present as FIELDS in the
+// record. Synthesized columns — __mo_filepath and the error-mode columns — are
+// produced by the scan, not read from the record, so they must not inflate the
+// expected field count.
+func getRealAttrCnt(attrs []plan.ExternAttr, cols []*plan.ColDef) int {
 	cnt := 0
 	for i := 0; i < len(attrs); i++ {
 		if catalog.ContainExternalHidenCol(attrs[i].ColName) {
+			cnt++
+			continue
+		}
+		var colId uint64
+		if idx := int(attrs[i].ColIndex); idx < len(cols) && cols[idx] != nil {
+			colId = cols[idx].ColId
+		}
+		if catalog.IsExternalErrorCol(attrs[i].ColName, colId) {
 			cnt++
 		}
 	}
@@ -983,12 +999,12 @@ func getRealAttrCnt(attrs []plan.ExternAttr) int {
 func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
 	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 		//the column account_id of the cluster table do need to be filled here
-		if len(line)+1 != getRealAttrCnt(param.Attrs) {
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
 			return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 		}
 	} else {
 		if param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) {
-			if len(line) < getRealAttrCnt(param.Attrs) {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
 			}
 			return nil
@@ -1207,7 +1223,38 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 	}
 }
 
+// resolveExternalErrorMode decides, once per scan, whether the error-mode
+// columns survived column pruning. An attribute absent from param.Attrs was
+// pruned, so a query that does not mention these columns behaves exactly as
+// before and pays nothing per row.
+func resolveExternalErrorMode(param *ExternalParam) {
+	mode := ExternalErrorMode{}
+	for _, attr := range param.Attrs {
+		var colId uint64
+		if int(attr.ColIndex) < len(param.Cols) && param.Cols[attr.ColIndex] != nil {
+			colId = param.Cols[attr.ColIndex].ColId
+		}
+		if catalog.IsExternalErrorToleranceCol(attr.ColName, colId) {
+			mode.Tolerate = true
+		}
+		if attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId {
+			mode.WantLine = true
+		}
+	}
+	param.ErrorMode = mode
+}
+
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
+	// Error-mode columns are synthesized, never read from the record. On a row
+	// that parsed, both error columns are NULL; the tolerant path overwrites
+	// them for a row that did not. __mo_file_line is position metadata and is
+	// filled whether or not the row parsed.
+	switch colName {
+	case catalog.ExternalFileLine:
+		return csvparser.Field{Val: strconv.FormatInt(param.ErrorMode.RecordLine, 10)}
+	case catalog.ExternalErrorMessage, catalog.ExternalErrorText:
+		return csvparser.Field{IsNull: true}
+	}
 	// __mo_filepath is synthesized by name (pre-existing behavior); __mo_query
 	// only on foreign scans, so a real __mo_query data column in a
 	// pre-existing generic external table still reads source data.
