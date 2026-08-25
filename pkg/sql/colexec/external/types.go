@@ -123,6 +123,9 @@ type ExternalErrorMode struct {
 	// refreshed per record by the reader. Readers with no file (Kafka,
 	// datastream) use the record ordinal of the current read instead.
 	RecordLine int64
+	// rowLens is scratch reused across rows to snapshot the batch's vector
+	// lengths, so rolling a failed row back costs no allocation per record.
+	rowLens []int
 }
 
 type ExParam struct {

@@ -1270,7 +1270,106 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	return line[fieldIdx]
 }
 
+// getOneRowData materializes one record into the batch.
+//
+// Without error mode this is exactly the historical behaviour: the first
+// conversion failure aborts the statement.
+//
+// With error mode (the query kept __mo_error_message or __mo_error_text) a
+// record that cannot be materialized must not fail the query. Columns are
+// appended one at a time, so a failure part-way leaves the batch's vectors at
+// unequal lengths; the row is therefore rolled back to the lengths captured
+// before it and re-emitted with every user column NULL and the error columns
+// describing the failure.
 func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
+	if !param.ErrorMode.Tolerate {
+		return materializeOneRow(proc, bat, line, rowIdx, param)
+	}
+
+	mode := &param.ErrorMode
+	if cap(mode.rowLens) < len(bat.Vecs) {
+		mode.rowLens = make([]int, len(bat.Vecs))
+	}
+	lens := mode.rowLens[:len(bat.Vecs)]
+	for i, vec := range bat.Vecs {
+		lens[i] = vec.Length()
+	}
+
+	err := materializeOneRow(proc, bat, line, rowIdx, param)
+	if err == nil {
+		return nil
+	}
+	for i, vec := range bat.Vecs {
+		vec.SetLength(lens[i])
+	}
+	return appendErrorRow(proc, bat, line, param, err)
+}
+
+// appendErrorRow emits the replacement row for a record that failed to
+// materialize: every user column NULL, __mo_filepath and __mo_file_line as
+// usual, and the two error columns describing the failure.
+func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, param *ExternalParam, cause error) error {
+	mp := proc.GetMPool()
+	message := cause.Error()
+	text := recordText(line, param)
+	for _, attr := range param.Attrs {
+		vec := bat.Vecs[attr.ColIndex]
+		var colId uint64
+		if idx := int(attr.ColIndex); idx < len(param.Cols) && param.Cols[idx] != nil {
+			colId = param.Cols[idx].ColId
+		}
+		switch {
+		case attr.ColName == catalog.ExternalErrorMessage && colId == catalog.ExternalErrorMessageColId:
+			if err := vector.AppendBytes(vec, []byte(message), false, mp); err != nil {
+				return err
+			}
+		case attr.ColName == catalog.ExternalErrorText && colId == catalog.ExternalErrorTextColId:
+			if err := vector.AppendBytes(vec, []byte(text), false, mp); err != nil {
+				return err
+			}
+		case attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
+			if err := vector.AppendFixed(vec, param.ErrorMode.RecordLine, false, mp); err != nil {
+				return err
+			}
+		case catalog.ContainExternalHidenCol(attr.ColName):
+			if err := vector.AppendBytes(vec, []byte(param.Fileparam.Filepath), false, mp); err != nil {
+				return err
+			}
+		default:
+			// A record that failed to parse has no trustworthy value for any
+			// user column, so all of them are NULL — including the ones that
+			// happened to convert before the failure.
+			if err := vector.AppendBytes(vec, nil, true, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// recordText rebuilds the failed record as text for __mo_error_text. The
+// parser hands back decoded fields, so the reconstruction re-joins them with
+// the configured terminator: quoting and escaping are normalized rather than
+// byte-identical to the file.
+func recordText(line []csvparser.Field, param *ExternalParam) string {
+	sep := ","
+	if param.Extern != nil && param.Extern.Tail != nil && param.Extern.Tail.Fields != nil &&
+		param.Extern.Tail.Fields.Terminated != nil && param.Extern.Tail.Fields.Terminated.Value != "" {
+		sep = param.Extern.Tail.Fields.Terminated.Value
+	}
+	var sb strings.Builder
+	for i, field := range line {
+		if i > 0 {
+			sb.WriteString(sep)
+		}
+		if !field.IsNull {
+			sb.WriteString(field.Val)
+		}
+	}
+	return sb.String()
+}
+
+func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := proc.GetMPool()
 	if checkLineStrict(param) {
 		if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
