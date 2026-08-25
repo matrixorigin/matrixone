@@ -9467,7 +9467,7 @@ create_index_stmt:
             io = tree.NewIndexOption()
             io.IType = tree.INDEX_TYPE_INVALID
 	    }
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
         var IndexCat = $2
@@ -11950,7 +11950,7 @@ constraint_elem:
     {
         var IfNotExists = $3
         var KeyParts = $6
-        var Name = $4
+        var Name = tree.NewCStr($4, 1).Compare()
         var Refer = $8
         var Empty = true
         $$ = tree.NewForeignKey(
@@ -12006,7 +12006,7 @@ index_name_and_type_opt:
 |   ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.Compare()
+        $$[0] = $1.Origin()
         $$[1] = $3
     }
 
@@ -12034,7 +12034,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.Compare()
+		$$ = $1.Origin()
 	}
 
 column_def:
