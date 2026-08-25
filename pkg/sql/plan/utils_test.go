@@ -558,6 +558,133 @@ func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
 	require.Equal(t, int64(-42), root.ProjectList[0].GetLit().GetI64Val())
 }
 
+func TestPreparedRuntimeTypeFromString(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		wantOK    bool
+		wantType  types.T
+		wantScale int32
+	}{
+		{name: "empty", value: "", wantType: types.T_any},
+		{name: "whitespace", value: "  \t", wantType: types.T_any},
+		{name: "sign only", value: "+", wantType: types.T_any},
+		{name: "signed int", value: "-42", wantOK: true, wantType: types.T_int64},
+		{name: "explicit plus", value: "+42", wantOK: true, wantType: types.T_int64},
+		{name: "signed minimum", value: "-9223372036854775808", wantOK: true, wantType: types.T_int64},
+		{name: "unsigned maximum", value: "18446744073709551615", wantOK: true, wantType: types.T_uint64},
+		{name: "signed overflow", value: "-9223372036854775809", wantType: types.T_any},
+		{name: "unsigned overflow", value: "18446744073709551616", wantType: types.T_any},
+		{name: "decimal64", value: "12.3400", wantOK: true, wantType: types.T_decimal64, wantScale: 4},
+		{name: "leading decimal point", value: ".5", wantOK: true, wantType: types.T_decimal64, wantScale: 1},
+		{name: "trailing decimal point", value: "12.", wantOK: true, wantType: types.T_decimal64},
+		{name: "exponent", value: "1.25e+3", wantOK: true, wantType: types.T_decimal128, wantScale: 18},
+		{name: "decimal256", value: "1234567890123456789012345678901234567890123456789012345678901234567890123456.1", wantOK: true, wantType: types.T_decimal256, wantScale: 1},
+		{name: "bad exponent", value: "1e+", wantType: types.T_any},
+		{name: "bad decimal", value: "1.2.3", wantType: types.T_any},
+		{name: "bad numeric", value: "12x", wantType: types.T_any},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedRuntimeTypeFromString(test.value)
+			require.Equal(t, test.wantOK, ok)
+			if !ok {
+				return
+			}
+			require.Equal(t, test.wantType, got.Oid)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestPreparedRuntimeParamExprMaterializesProtocolTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		runtimeTyp types.Type
+		wantLit    func(*plan.Literal) bool
+		wantCast   bool
+	}{
+		{name: "bool", value: "true", runtimeTyp: types.T_bool.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Bval); return l != nil && ok }},
+		{name: "bool cast fallback", value: "not-bool", runtimeTyp: types.T_bool.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int8", value: "-8", runtimeTyp: types.T_int8.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I8Val); return l != nil && ok }},
+		{name: "int8 cast fallback", value: "128", runtimeTyp: types.T_int8.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int16", value: "-16", runtimeTyp: types.T_int16.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I16Val); return l != nil && ok }},
+		{name: "int16 cast fallback", value: "32768", runtimeTyp: types.T_int16.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int32", value: "-32", runtimeTyp: types.T_int32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I32Val); return l != nil && ok }},
+		{name: "int32 cast fallback", value: "2147483648", runtimeTyp: types.T_int32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int64", value: "-64", runtimeTyp: types.T_int64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I64Val); return l != nil && ok }},
+		{name: "int64 cast fallback", value: "bad", runtimeTyp: types.T_int64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint8", value: "8", runtimeTyp: types.T_uint8.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U8Val); return l != nil && ok }},
+		{name: "uint8 cast fallback", value: "256", runtimeTyp: types.T_uint8.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint16", value: "16", runtimeTyp: types.T_uint16.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U16Val); return l != nil && ok }},
+		{name: "uint16 cast fallback", value: "bad", runtimeTyp: types.T_uint16.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint32", value: "32", runtimeTyp: types.T_uint32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U32Val); return l != nil && ok }},
+		{name: "uint32 cast fallback", value: "bad", runtimeTyp: types.T_uint32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint64", value: "64", runtimeTyp: types.T_uint64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U64Val); return l != nil && ok }},
+		{name: "bit", value: "7", runtimeTyp: types.T_bit.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U64Val); return l != nil && ok }},
+		{name: "uint64 cast fallback", value: "bad", runtimeTyp: types.T_uint64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "year", value: "2026", runtimeTyp: types.T_year.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I32Val); return l != nil && ok }},
+		{name: "year cast fallback", value: "bad", runtimeTyp: types.T_year.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "float32", value: "1.25", runtimeTyp: types.T_float32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Fval); return l != nil && ok }},
+		{name: "float32 cast fallback", value: "bad", runtimeTyp: types.T_float32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "float64", value: "1.25", runtimeTyp: types.T_float64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Dval); return l != nil && ok }},
+		{name: "float64 cast fallback", value: "bad", runtimeTyp: types.T_float64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal64", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 inferred", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal128", value: "12.34", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 inferred", value: "123456789012345678901234567890123456.12", runtimeTyp: types.New(types.T_decimal128, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal256 cast", value: "12.34", runtimeTyp: types.New(types.T_decimal256, 20, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "text", value: "text", runtimeTyp: types.T_text.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Sval); return l != nil && ok }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := preparedRuntimeParamExpr(context.Background(), test.value, true, test.runtimeTyp)
+			require.NoError(t, err)
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.runtimeTyp.Oid), expr.Typ.Id)
+			lit := expr.GetLit()
+			if test.wantCast {
+				require.Nil(t, lit, "expected cast expression")
+			} else {
+				require.NotNil(t, lit)
+				require.True(t, test.wantLit(lit), "unexpected literal form: %T", lit.Value)
+			}
+		})
+	}
+}
+
+func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
+	param := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	literal := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	makePlan := func(query *plan.Query) *Plan {
+		return &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+	tests := []struct {
+		name string
+		plan *Plan
+		want bool
+	}{
+		{name: "nil", want: false},
+		{name: "non-select", plan: makePlan(&plan.Query{StmtType: plan.Query_INSERT}), want: false},
+		{name: "no steps", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT}), want: false},
+		{name: "invalid returning step", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, HasReturning: true, ReturningStep: 2}), want: false},
+		{name: "negative node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{-1}}), want: false},
+		{name: "out of range node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{1}, Nodes: []*plan.Node{{}}}), want: false},
+		{name: "nil node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{nil}}), want: false},
+		{name: "no direct marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{nil, literal}}}}), want: false},
+		{name: "direct marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{literal, param}}}}), want: true},
+		{name: "returning marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0, 1}, HasReturning: true, ReturningStep: 1, Nodes: []*plan.Node{{}, {ProjectList: []*plan.Expr{param}}}}), want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedPlanHasDirectResultParams(test.plan))
+		})
+	}
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -327,6 +327,101 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	}
 }
 
+func TestBinaryProtocolPrepareParamType(t *testing.T) {
+	tests := []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		isUnsigned bool
+		value      string
+		wantOID    types.T
+		wantOK     bool
+	}{
+		{name: "tiny signed", mysqlType: defines.MYSQL_TYPE_TINY, value: "1", wantOID: types.T_int8, wantOK: true},
+		{name: "tiny unsigned", mysqlType: defines.MYSQL_TYPE_TINY, isUnsigned: true, value: "1", wantOID: types.T_uint8, wantOK: true},
+		{name: "short signed", mysqlType: defines.MYSQL_TYPE_SHORT, value: "1", wantOID: types.T_int16, wantOK: true},
+		{name: "short unsigned", mysqlType: defines.MYSQL_TYPE_SHORT, isUnsigned: true, value: "1", wantOID: types.T_uint16, wantOK: true},
+		{name: "int24", mysqlType: defines.MYSQL_TYPE_INT24, value: "1", wantOID: types.T_int32, wantOK: true},
+		{name: "long unsigned", mysqlType: defines.MYSQL_TYPE_LONG, isUnsigned: true, value: "1", wantOID: types.T_uint32, wantOK: true},
+		{name: "longlong", mysqlType: defines.MYSQL_TYPE_LONGLONG, value: "1", wantOID: types.T_int64, wantOK: true},
+		{name: "longlong unsigned", mysqlType: defines.MYSQL_TYPE_LONGLONG, isUnsigned: true, value: "1", wantOID: types.T_uint64, wantOK: true},
+		{name: "bit", mysqlType: defines.MYSQL_TYPE_BIT, value: "1", wantOID: types.T_bit, wantOK: true},
+		{name: "bit unsigned", mysqlType: defines.MYSQL_TYPE_BIT, isUnsigned: true, value: "1", wantOID: types.T_uint64, wantOK: true},
+		{name: "year", mysqlType: defines.MYSQL_TYPE_YEAR, value: "2026", wantOID: types.T_year, wantOK: true},
+		{name: "float", mysqlType: defines.MYSQL_TYPE_FLOAT, value: "1.25", wantOID: types.T_float32, wantOK: true},
+		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, value: "1.25", wantOID: types.T_float64, wantOK: true},
+		{name: "decimal", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "1.25", wantOID: types.T_decimal64, wantOK: true},
+		{name: "newdecimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "1.25", wantOID: types.T_decimal64, wantOK: true},
+		{name: "decimal fallback", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "not-decimal", wantOID: types.T_decimal128, wantOK: true},
+		{name: "null", mysqlType: defines.MYSQL_TYPE_NULL, wantOID: types.T_any, wantOK: false},
+		{name: "text", mysqlType: defines.MYSQL_TYPE_VAR_STRING, value: "1", wantOID: types.T_text, wantOK: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := binaryProtocolPrepareParamType(
+				test.mysqlType, test.isUnsigned, []byte(test.value))
+			require.Equal(t, test.wantOK, ok)
+			require.Equal(t, test.wantOID, got.Oid)
+		})
+	}
+}
+
+func TestPreparedParamValuesWithRuntimeTypes(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 110, "select ?, ?, ?, ?, ?")
+	defer prepareStmt.Close()
+	params := vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"1", "2", "1.5", "text", "3"} {
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+	}
+	cw.proc.SetPrepareParamsWithMeta(params,
+		[]bool{true, false, false, false, false},
+		[]vector.PrepareParamKind{
+			vector.PrepareParamBoolean,
+			vector.PrepareParamInteger,
+			vector.PrepareParamFloat,
+			vector.PrepareParamNone,
+			vector.PrepareParamInteger,
+		})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, specialized, err := preparedParamValuesWithRuntimeTypes(cw.proc, []byte{
+		byte(defines.MYSQL_TYPE_TINY), 0,
+		byte(defines.MYSQL_TYPE_LONG), 0x80,
+		byte(defines.MYSQL_TYPE_DOUBLE), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_NULL), 0,
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.Len(t, values, 5)
+
+	first := values[0].(plan2.ParamValue)
+	require.Equal(t, types.T_bool, first.RuntimeType.Oid, "TINY 0/1 keeps Boolean semantics")
+	require.True(t, first.HasRuntimeType)
+	second := values[1].(plan2.ParamValue)
+	require.Equal(t, types.T_uint32, second.RuntimeType.Oid)
+	third := values[2].(plan2.ParamValue)
+	require.Equal(t, types.T_float64, third.RuntimeType.Oid)
+	fourth := values[3].(plan2.ParamValue)
+	require.False(t, fourth.HasRuntimeType)
+	fifth := values[4].(plan2.ParamValue)
+	require.False(t, fifth.HasRuntimeType)
+
+	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, []byte{byte(defines.MYSQL_TYPE_TINY), 0})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.Len(t, values, 5)
+
+	cw.proc.SetPrepareParams(nil)
+	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, nil)
+	require.NoError(t, err)
+	require.False(t, specialized)
+	require.Nil(t, values)
+	cw.proc.SetPrepareParams(params)
+}
+
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T
