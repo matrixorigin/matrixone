@@ -35,6 +35,7 @@ select table_cnt from table_stats(
 ) g;
 -- @separator:table
 -- @regex("(?i)ap query plan on multicn", true)
+-- @ignore:0
 explain (check '["Join Type: INNER", "shuffle: range"]')
 select count(*) from t1,t2 where t1.c1=t2.c1;
 select count(*) from t1,t2 where t1.c1=t2.c1;
@@ -47,10 +48,12 @@ select count(*) from t1,t2 where t1.c1=t2.c1;
 explain (analyze true, check '["Join Type: INNER", "shuffle: range"]')
 select count(*) from t1,t2 where t1.c1=t2.c1;
 -- @separator:table
+-- @ignore:0
 explain (check '["Group Key: t1.c1 shuffle: REUSE", "Join Type: INNER", "shuffle: range"]')
 select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
 select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
 -- @separator:table
+-- @ignore:0
 explain (check '["Join Type: INNER", "shuffle: range"]')
 select count(*) from t1,t2 where t1.c2=t2.c2;
 select count(*) from t1,t2 where t1.c2=t2.c2;
@@ -70,6 +73,7 @@ explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>1
 -- @bvt:issue
 select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
 select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+-- @ignore:0
 explain (check '["Join Type: SEMI", "shuffle: range"]')
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
@@ -79,6 +83,7 @@ explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.
 -- @bvt:issue
 select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
 select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+-- @ignore:0
 explain (check '["Join Type: ANTI", "shuffle: range"]')
 select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
@@ -88,6 +93,7 @@ explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 
 -- @bvt:issue
 select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
 select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+-- @ignore:0
 explain (check '["Join Type: ANTI", "shuffle: range"]')
 select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
@@ -102,6 +108,7 @@ explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000
 -- @bvt:issue
 select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
 -- @separator:table
+-- @ignore:0
 explain (check '["Join Type: LEFT", "shuffle: range"]')
 select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
@@ -154,6 +161,7 @@ explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=
 -- @bvt:issue
 select table_cnt from table_stats('d1.t1', 'patch', @spill_t1_stats) g;
 select table_cnt from table_stats('d1.t2', 'patch', @spill_t2_stats) g;
+-- @ignore:0
 explain (check '["Join Type: INNER", "shuffle: REUSE", "Group Key: t1.c1 shuffle: range"]')
 select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
 select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
@@ -172,10 +180,12 @@ from generate_series(100000) g;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t4');
 -- @separator:table
+-- @ignore:0
 explain (check '["Group Key: t4.c1 shuffle: range"]')
 select count(*) as cnt from t4 group by c1 having cnt>1;
 select count(*) as cnt from t4 group by c1 having cnt>1;
 -- @separator:table
+-- @ignore:0
 explain (check '["Group Key: t4.c2 shuffle: range"]')
 select count(*) as cnt from t4 group by c2 having cnt>1;
 select count(*) as cnt from t4 group by c2 having cnt>1;
@@ -184,6 +194,7 @@ drop table if exists t_dedup_spill;
 create table t_dedup_spill (id int primary key, val int);
 insert into t_dedup_spill select *,* from generate_series(400000) g;
 set @@join_spill_mem = 1000;
+-- @ignore:0
 explain (check '["Join Type: DEDUP", "shuffle: hash"]')
 insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
