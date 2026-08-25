@@ -1709,7 +1709,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 		}
 	}
-	nextTableID := uint64(1)
+	nextTableID := uint64(catalog.MO_RESERVED_MAX + 1)
 	allocateTableID := func() uint64 {
 		for {
 			if _, used := usedTableIDs[nextTableID]; !used {
