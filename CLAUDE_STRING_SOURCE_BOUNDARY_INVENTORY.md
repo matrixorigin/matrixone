@@ -30,7 +30,7 @@
 | SQL UNION / UNION ALL | set operator与group/vector owner | UNION ALL逐行透明；UNION仍按SQL值去重，不改变行数，同值代表来源按同源保持/异源→Expression合并 | group正反序与spill/reload typed UT；UNION public reachability BVT |
 | DISTINCT | distinct/hash/group owner | SQL key identity忽略来源；重复key的代表来源按所有贡献行确定性合并 | group正反序、same/mixed source UT |
 | GROUP BY | `pkg/sql/colexec/group` | key按SQL值分组；preview内按group ID把最终source保存在UnitLimit有界的operator-owned scratch，selected append以override发布且绝不修改borrowed input；sidecar从preflight跨new-row append与existing-row update保持，全部完成后统一normalize；commit显式返回published阶段，pre-publication source rejection统一进入Group/MergeGroup/spill-reload retry | hash-group正反序、borrowed sidecar identity/MPool ownership、共享ANY_VALUE参数、existing+new两批publication、resident source rejection Group/MergeGroup完整spill/retry、post-commit rejection、跨batch、spill/reload、reset UT |
-| aggregate | `pkg/sql/colexec/aggexec` | ANY_VALUE及MIN/MAX/MAX_BY winner/equal source事件在Group hash publication前精确preflight当前/future group sidecar；runtime fill/merge不得再为source分配；equal同源保持、异源→Expression | ANY/fixed-min/bytes-min/MAX_BY equal fill+merge no-post-allocation；Group/MergeGroup resident rejection spill/retry；其余state round-trip UT |
+| aggregate | `pkg/sql/colexec/aggexec` | ANY_VALUE及MIN/MAX/MAX_BY source admission在Group hash publication前preflight当前/future group sidecar；fixed MIN/MAX与runtime一致覆盖每个非NULL loser/tie/transient winner；runtime fill/merge不得再为source分配 | ANY/fixed-min loser+transient/bytes-min/MAX_BY fill+merge reject-next-allocation；Group/MergeGroup resident rejection spill/retry UT |
 | window | window operator / aggregate state | value window按实际lag/lead/first/last/nth row透明；T_any time-window NULL partition materializer也复制selected SQLPrepare/COMStmt owner | value-window及const/selected T_any NULL UT |
 
 ## Vector 边界
@@ -39,7 +39,7 @@
 |---|---|---|---|
 | append / append-list / append-null | `pkg/container/vector/vector.go` | payload 发布前预检来源；普通追加贡献 Expression | append rollback/allocation UT |
 | clone / copy / window | vector clone/window helpers | 与值相同的 row/window 映射 | lifecycle/allocation UT |
-| union / union-one / union-batch | vector union helpers | 与 selection/flags 相同映射；const 物理 row 正确展开 | union fast-path/selection UT |
+| union / union-one / union-batch | vector union helpers | 与 selection/flags 相同映射；selected preflight创建的sidecar跨length publication保持到provenance propagation完成，再统一normalize | Expression→Literal reject-next-allocation、union fast-path/selection UT |
 | shrink / selection | vector shrink、selection codec | 按 sels/mask 精确映射 | row-transform/selection-codec UT |
 | sort | metadata-aware sorter | 值、NULL、grouping、domain、kind、source 使用同一 swap | fixed/varlen/JSON/array UT |
 | compact / DISTINCT-like dedup | metadata-aware compact | 仅值与全部逐行语义状态相同才合并；uniform source 保持 scalar fast path | uniform/mixed compact UT |

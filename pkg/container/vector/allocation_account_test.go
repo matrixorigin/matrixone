@@ -41,6 +41,30 @@ type testVectorAllocationAccount struct {
 	selection *AllocationAccountSelection
 }
 
+type rejectNextVectorAllocation struct {
+	calls    int
+	failAt   int
+	rejected bool
+	used     uint64
+}
+
+func (c *rejectNextVectorAllocation) AcquireAllocationCapacity(size uint64) error {
+	c.calls++
+	if c.failAt != 0 && c.calls == c.failAt {
+		c.rejected = true
+		return mpool.ErrAllocationAccountCapacity
+	}
+	c.used += size
+	return nil
+}
+
+func (c *rejectNextVectorAllocation) ReleaseAllocationCapacity(size uint64) {
+	if c.used < size {
+		panic("vector allocation controller release underflow")
+	}
+	c.used -= size
+}
+
 func newTestVectorAllocationAccount(
 	t testing.TB,
 	limit uint64,
@@ -1722,6 +1746,51 @@ func TestSelectedRowsBinaryStringDecodeAllocationFailureIsAtomic(t *testing.T) {
 	destination.Free(mp)
 	source.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSelectedBatchStringSourcePreflightSurvivesLengthPublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	controller := &rejectNextVectorAllocation{}
+	account, err := registry.OpenWithController(1<<20, controller)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+
+	destination := newAccountedTestVector(t, types.T_int64.ToType(), selection)
+	require.NoError(t, AppendFixed(destination, int64(1), false, mp))
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(2), false, mp))
+	require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+
+	require.NoError(t, destination.PreExtendSelectedBatch(
+		source, 0, 1, []uint8{1}, 2, mp))
+	require.Equal(t, 2, cap(destination.GetStringSources()))
+	controller.failAt = controller.calls + 1
+	admitted := account.Snapshot().Used
+	require.NoError(t, destination.UnionBatchPreflighted(
+		source, 0, 1, []uint8{1}, mp))
+	require.False(t, controller.rejected, "publication must not allocate after preflight")
+	require.Equal(t, admitted, account.Snapshot().Used)
+	require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(1))
+
+	destination.Free(mp)
+	source.Free(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 	require.Zero(t, mp.CurrNB())
 }
 

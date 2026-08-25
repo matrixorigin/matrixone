@@ -1194,20 +1194,19 @@ func (exec *minMaxExecFixed[T]) preflightFixedStringSources(
 	candidate fixedMinMaxCandidate[T],
 	candidateSource func(row int) (types.StringSource, error),
 ) error {
-	type winner struct {
-		group   uint64
-		value   T
-		source  types.StringSource
-		present bool
-		changed bool
+	if len(groups) > hashmap.UnitLimit {
+		return mpool.ErrAllocationAccountInvalid
 	}
-	var winners [hashmap.UnitLimit]winner
-	winnerCount := 0
+	// Runtime admits every non-NULL candidate source before comparing values.
+	// Mirror that admission order exactly: losers and transient winners can
+	// require a mixed sidecar even when the final representatives stay uniform.
+	var events [hashmap.UnitLimit]stringSourceEvent
+	eventCount := 0
 	for row, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
-		value, _, present, err := candidate(row)
+		_, _, present, err := candidate(row)
 		if err != nil {
 			return err
 		}
@@ -1218,58 +1217,12 @@ func (exec *minMaxExecFixed[T]) preflightFixedStringSources(
 		if err != nil {
 			return err
 		}
-		x, y, state, err := exec.validatePreflightTarget(group)
-		if err != nil {
-			return err
-		}
-		index := -1
-		for i := 0; i < winnerCount; i++ {
-			if winners[i].group == group {
-				index = i
-				break
-			}
-		}
-		if index < 0 {
-			if winnerCount >= len(winners) {
-				return mpool.ErrAllocationAccountInvalid
-			}
-			index = winnerCount
-			winnerCount++
-			winners[index].group = group
-			if !state.vecs[0].IsNull(uint64(y)) {
-				winners[index].value = vector.GetFixedAtNoTypeCheck[T](state.vecs[0], int(y))
-				winners[index].source = state.vecs[0].GetStringSourceAt(int(y))
-				winners[index].present = true
-			}
-		}
-		winner := &winners[index]
-		switch {
-		case !winner.present || exec.comp(value, winner.value) < 0:
-			winner.value = value
-			winner.source = source
-			winner.present = true
-			winner.changed = true
-		case exec.comp(value, winner.value) == 0:
-			winner.source, err = types.MergeStringSources(winner.source, source)
-			if err != nil {
-				return err
-			}
-			winner.changed = true
-		}
-		_ = x
-	}
-	var events [hashmap.UnitLimit]stringSourceEvent
-	eventCount := 0
-	for i := 0; i < winnerCount; i++ {
-		if !winners[i].changed {
-			continue
-		}
-		x, y, _, err := exec.validatePreflightTarget(winners[i].group)
+		x, y, _, err := exec.validatePreflightTarget(group)
 		if err != nil {
 			return err
 		}
 		if err = addStringSourceEvent(
-			&events, &eventCount, x, 0, int(y), winners[i].source); err != nil {
+			&events, &eventCount, x, 0, int(y), source); err != nil {
 			return err
 		}
 	}

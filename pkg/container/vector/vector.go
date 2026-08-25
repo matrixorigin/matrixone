@@ -5166,6 +5166,10 @@ func (v *Vector) preExtendSelectedBatch(
 			return err
 		}
 	}
+	// Keep a preflight-created mixed source sidecar alive while length and
+	// payload are published. Provenance propagation fills its future rows before
+	// UnionBatchPreflighted finalizes and normalizes it.
+	v.preflightStringSourceReady = v.stringSources != nil
 	v.preflightAreaBytes = selectedAreaBytes
 	v.preflightRowCount = targetRows
 	v.preflightAreaReady = true

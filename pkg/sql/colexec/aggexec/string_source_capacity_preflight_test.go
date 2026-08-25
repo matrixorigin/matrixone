@@ -25,10 +25,23 @@ import (
 
 func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 	for _, mode := range []string{"fill", "merge"} {
-		for _, kind := range []string{"any", "fixed-min", "bytes-min", "max-by-equal"} {
+		for _, kind := range []string{
+			"any", "fixed-min", "fixed-min-loser", "fixed-min-transient",
+			"bytes-min", "max-by-equal",
+		} {
 			t.Run(mode+"/"+kind, func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				registry, account, allocation := newTestAggregateAllocation(t)
+				registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+				require.NoError(t, err)
+				controller := &rejectNthAggregateAllocation{}
+				account, err := registry.OpenWithController(128<<20, controller)
+				require.NoError(t, err)
+				allocation, err := NewAllocationAccount(
+					account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+						VectorData: 1, VectorArea: 2, VectorNulls: 3,
+						VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					})
+				require.NoError(t, err)
 				makeExec := func(id int64, params ...types.Type) GroupAggFuncExec {
 					exec, err := MakeGroupAgg(mp, id, false, allocation, nil, params...)
 					require.NoError(t, err)
@@ -54,6 +67,7 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 
 				var left, right GroupAggFuncExec
 				var candidate []*vector.Vector
+				groups := []uint64{1, 2}
 				wantFirst := types.StringSourceExpression
 				switch kind {
 				case "any":
@@ -64,16 +78,31 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 						[]string{"winner", "winner"},
 						[]types.StringSource{types.StringSourceCOMStmt, types.StringSourceLiteral})}
 					wantFirst = types.StringSourceCOMStmt
-				case "fixed-min":
+				case "fixed-min", "fixed-min-loser", "fixed-min-transient":
 					left = makeExec(AggIdOfMin, types.T_int64.ToType())
 					seed := makeInt([]int64{5, 5})
 					require.NoError(t, seed.SetStringSource(types.StringSourceLiteral))
 					require.NoError(t, left.BatchFill(0, []uint64{1, 2}, []*vector.Vector{seed}))
 					seed.Free(mp)
-					values := makeInt([]int64{5, 5})
-					require.NoError(t, values.SetStringSourcesWithMP([]types.StringSource{
-						types.StringSourceCOMStmt, types.StringSourceLiteral}, mp))
-					candidate = []*vector.Vector{values}
+					values := []int64{5, 5}
+					sources := []types.StringSource{
+						types.StringSourceCOMStmt, types.StringSourceLiteral}
+					if kind == "fixed-min-loser" {
+						values = []int64{6, 5}
+						wantFirst = types.StringSourceLiteral
+					} else if kind == "fixed-min-transient" {
+						values = []int64{4, 3, 5}
+						sources = []types.StringSource{
+							types.StringSourceCOMStmt,
+							types.StringSourceLiteral,
+							types.StringSourceLiteral,
+						}
+						groups = []uint64{1, 1, 2}
+						wantFirst = types.StringSourceLiteral
+					}
+					input := makeInt(values)
+					require.NoError(t, input.SetStringSourcesWithMP(sources, mp))
+					candidate = []*vector.Vector{input}
 				case "bytes-min":
 					left = makeExec(AggIdOfMin, types.T_text.ToType())
 					seed := makeText([]string{"5", "5"}, []types.StringSource{
@@ -103,28 +132,41 @@ func TestSourcePreservingAggregatePreflightsMixedSidecars(t *testing.T) {
 
 				if mode == "merge" {
 					argTypes, _ := left.TypesInfo()
-					right = makeExec(left.AggID(), argTypes...)
-					require.NoError(t, right.BatchFill(0, []uint64{1, 2}, candidate))
+					var err error
+					right, err = MakeGroupAgg(
+						mp, left.AggID(), false, allocation, nil, argTypes...)
+					require.NoError(t, err)
+					SyncAggregatorsToChunkSize([]AggFuncExec{right}, AggBatchSize)
+					require.NoError(t, right.GroupGrow(len(groups)))
+					rightGroups := make([]uint64, len(groups))
+					for i := range rightGroups {
+						rightGroups[i] = uint64(i + 1)
+					}
+					require.NoError(t, right.BatchFill(0, rightGroups, candidate))
 				}
 				state := left.(aggregateBaseCarrier).aggregateBase().state[0].vecs[0]
 				require.Empty(t, state.GetStringSources())
-				var err error
+				var preflightErr error
 				if mode == "fill" {
-					err = left.PreflightBatchFill(0, []uint64{1, 2}, candidate)
+					preflightErr = left.PreflightBatchFill(0, groups, candidate)
 				} else {
-					err = left.PreflightBatchMerge(right, 0, []uint64{1, 2})
+					preflightErr = left.PreflightBatchMerge(right, 0, groups)
 				}
-				require.NoError(t, err)
+				require.NoError(t, preflightErr)
 				require.Equal(t, []types.StringSource{
 					types.StringSourceLiteral, types.StringSourceLiteral,
 				}, state.GetStringSources(), "preflight must reserve without publishing metadata")
 				admitted := mp.CurrNB()
+				controller.failAt = controller.calls + 1
 				if mode == "fill" {
-					require.NoError(t, left.BatchFill(0, []uint64{1, 2}, candidate))
+					require.NoError(t, left.BatchFill(0, groups, candidate))
 				} else {
-					require.NoError(t, left.BatchMerge(right, 0, []uint64{1, 2}))
+					require.NoError(t, left.BatchMerge(right, 0, groups))
 				}
-				require.Equal(t, admitted, mp.CurrNB(), "runtime source publication must use preflighted capacity")
+				require.False(t, controller.rejected,
+					"runtime source publication must not allocate after preflight")
+				require.LessOrEqual(t, mp.CurrNB(), admitted,
+					"runtime may normalize and release a now-uniform sidecar")
 				require.Equal(t, wantFirst, state.GetStringSourceAt(0))
 				require.Equal(t, types.StringSourceLiteral, state.GetStringSourceAt(1))
 
