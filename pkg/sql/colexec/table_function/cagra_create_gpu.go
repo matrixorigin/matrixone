@@ -445,6 +445,28 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// cover id_to_index_: that map is built on demand and is never allocated
 		// during a build (index_base.hpp, ensure_id_index), so charging for it would
 		// reserve host memory against a structure this path never creates.
+		// DECISION -- the int8/uint8 STAGING arena is deliberately NOT charged here.
+		//
+		// quantizationBytes(qt) is the STORAGE width (1 byte for int8/uint8), but
+		// before the scalar quantizer is trained the C++ side retains RAW base rows
+		// in staging_data_ to sample from. That arena is real host memory and no
+		// reservation covers it. Not charging it is a decision, not an oversight:
+		//
+		//   - it is capped at kDefaultQuantizerTrainLimit = 100000 rows and is
+		//     INDEPENDENT of table size, so 88M rows stage the same sample 1M does.
+		//     At dim 768 that is ~293 MiB from an f32 base, ~147 MiB from f16;
+		//   - staging_row_limit() takes min(limit, cap_train_rows_to_gpu_mem(...)),
+		//     so even an explicit multi-million quantizer_train_limit from SQL
+		//     cannot size it directly -- that min exists for exactly that case;
+		//   - it does not exist at all unless the storage type is one byte
+		//     (train_quantizer_if_needed is gated on sizeof(T)==1), so a float16
+		//     quantized build -- what the 88M configuration uses -- never stages;
+		//   - it is transient, freed once training completes.
+		//
+		// Charging it would mean restating in Go a bound C++ already owns, and the
+		// two drifting apart is the failure mode this subsystem keeps hitting. If
+		// the arena ever stops being size-independent, or the sizeof(T)==1 gate
+		// widens, revisit -- those are the assumptions this rests on.
 		hostPerRow := uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt) +
 			uint64(includeBytesPerRowFromCols(u.filterCols)) + vimemory.HostIDBytesPerRow
 
