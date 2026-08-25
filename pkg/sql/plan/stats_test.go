@@ -780,14 +780,11 @@ func TestUpdateStatsInfo_Decimal_DifferentScales(t *testing.T) {
 	}
 }
 
-// TestCalcNodeDOP_DistinctAggregation tests that distinct aggregation nodes
-// are correctly set to Dop=1 and ForceOneCN=true
-func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
-	// Create a plan with an AGG node containing COUNT(DISTINCT ...)
-	// Use a variable to avoid constant overflow when combining COUNT with Distinct flag
-	countVal := uint64(function.COUNT)
-	distinctVal := uint64(function.Distinct)
-	countWithDistinct := int64(countVal | distinctVal)
+// TestCalcNodeDOP_ParallelMergeableDistinctAggregation verifies that exact
+// DISTINCT states supported by MergeGroup retain the normal parallel DOP.
+func TestCalcNodeDOP_ParallelMergeableDistinctAggregation(t *testing.T) {
+	countID := function.EncodeOverloadID(function.COUNT, 0)
+	countWithDistinct := int64(uint64(countID) | uint64(function.Distinct))
 	p := &planpb.Plan{
 		Plan: &planpb.Plan_Query{
 			Query: &planpb.Query{
@@ -796,14 +793,14 @@ func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
 					{
 						NodeId:   0,
 						NodeType: planpb.Node_TABLE_SCAN,
-						Stats:    DefaultStats(),
+						Stats:    &planpb.Stats{BlockNum: 128, HashmapStats: &planpb.HashMapStats{}},
 					},
 					// AGG node with COUNT(DISTINCT ...)
 					{
 						NodeId:   1,
 						NodeType: planpb.Node_AGG,
 						Children: []int32{0},
-						Stats:    DefaultStats(),
+						Stats:    &planpb.Stats{BlockNum: 128, HashmapStats: &planpb.HashMapStats{}},
 						AggList: []*planpb.Expr{
 							{
 								Expr: &planpb.Expr_F{
@@ -839,16 +836,14 @@ func TestCalcNodeDOP_DistinctAggregation(t *testing.T) {
 	lencn := 2
 	CalcNodeDOP(p, 1, ncpu, lencn)
 
-	// Verify that the AGG node has Dop=1 and ForceOneCN=true
 	aggNode := p.GetQuery().Nodes[1]
 	require.NotNil(t, aggNode.Stats, "AGG node should have Stats")
-	require.Equal(t, int32(1), aggNode.Stats.Dop, "Distinct aggregation should have Dop=1")
-	require.True(t, aggNode.Stats.ForceOneCN, "Distinct aggregation should have ForceOneCN=true")
+	require.Equal(t, ncpu, aggNode.Stats.Dop)
+	require.False(t, aggNode.Stats.ForceOneCN)
 
-	// Verify that child node also has Dop=1 (recursively set)
 	childNode := p.GetQuery().Nodes[0]
 	require.NotNil(t, childNode.Stats, "Child node should have Stats")
-	require.Equal(t, int32(1), childNode.Stats.Dop, "Child node should have Dop=1 (recursively set)")
+	require.Equal(t, ncpu, childNode.Stats.Dop)
 }
 
 // TestCalcNodeDOP_NonDistinctAggregation tests that non-distinct aggregation nodes
@@ -912,14 +907,12 @@ func TestCalcNodeDOP_NonDistinctAggregation(t *testing.T) {
 	require.Greater(t, aggNode.Stats.Dop, int32(0), "Non-distinct aggregation should have Dop > 0")
 }
 
-// TestCalcNodeDOP_DistinctAggregationWithNilStats tests that distinct aggregation
-// nodes with nil Stats are handled correctly
-func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
-	// Create a plan with an AGG node containing COUNT(DISTINCT ...) but no Stats
-	// Use a variable to avoid constant overflow when combining COUNT with Distinct flag
-	countVal := uint64(function.COUNT)
-	distinctVal := uint64(function.Distinct)
-	countWithDistinct := int64(countVal | distinctVal)
+// TestCalcNodeDOP_NonMergeableDistinctAggregationWithNilStats keeps the
+// conservative single-stage fallback for DISTINCT aggregates without an exact
+// parallel merge contract.
+func TestCalcNodeDOP_NonMergeableDistinctAggregationWithNilStats(t *testing.T) {
+	avgID := function.EncodeOverloadID(function.AVG, 0)
+	avgWithDistinct := int64(uint64(avgID) | uint64(function.Distinct))
 	p := &planpb.Plan{
 		Plan: &planpb.Plan_Query{
 			Query: &planpb.Query{
@@ -930,21 +923,19 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 						NodeType: planpb.Node_TABLE_SCAN,
 						Stats:    DefaultStats(),
 					},
-					// AGG node with COUNT(DISTINCT ...) but nil Stats
+					// AGG node with AVG(DISTINCT ...) but nil Stats
 					{
 						NodeId:   1,
 						NodeType: planpb.Node_AGG,
 						Children: []int32{0},
-						Stats:    nil, // nil Stats
+						Stats:    nil,
 						AggList: []*planpb.Expr{
 							{
 								Expr: &planpb.Expr_F{
 									F: &planpb.Function{
 										Func: &planpb.ObjectRef{
-											// COUNT with Distinct flag: use uint64 to avoid overflow, then convert to int64
-											// Similar to having_binder.go:144, we need to convert to uint64 first
-											Obj:     countWithDistinct,
-											ObjName: "count",
+											Obj:     avgWithDistinct,
+											ObjName: "avg",
 										},
 										Args: []*planpb.Expr{
 											{
@@ -974,8 +965,8 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 	// Verify that Stats was created and set correctly
 	aggNode := p.GetQuery().Nodes[1]
 	require.NotNil(t, aggNode.Stats, "Stats should be created for distinct aggregation")
-	require.Equal(t, int32(1), aggNode.Stats.Dop, "Distinct aggregation should have Dop=1")
-	require.True(t, aggNode.Stats.ForceOneCN, "Distinct aggregation should have ForceOneCN=true")
+	require.Equal(t, int32(1), aggNode.Stats.Dop)
+	require.True(t, aggNode.Stats.ForceOneCN)
 }
 
 func TestGetExprNdv(t *testing.T) {

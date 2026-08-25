@@ -218,6 +218,65 @@ func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_LikeUTF8Underscore(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		pattern  string
+		values   []string
+		expected []bool
+	}{
+		{
+			name:     "single underscore",
+			pattern:  "_",
+			values:   []string{"A", "é", "中", "🙂", "ab", ""},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "leading underscore",
+			pattern:  "_tail",
+			values:   []string{"Atail", "étail", "中tail", "🙂tail", "abtail", "tail"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "trailing underscore",
+			pattern:  "head_",
+			values:   []string{"headA", "headé", "head中", "head🙂", "headab", "head"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "percent then trailing underscore",
+			pattern:  "%tail_",
+			values:   []string{"tailA", "prefixtailé", "tail中", "prefixtail🙂", "tail", "tailab"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "leading underscore then percent",
+			pattern:  "_head%",
+			values:   []string{"Ahead", "éheadtail", "中head", "🙂headtail", "head", "abhead"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), tc.values, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.pattern}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, tc.expected, nil),
+				newOpBuiltInRegexp().likeFn,
+			)
+
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
 func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

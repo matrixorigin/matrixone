@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -97,6 +98,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		"create external table mongodb_ci.decoded_budget(payload_1 text mongodb_path 'payload', payload_2 text mongodb_path 'payload', payload_3 text mongodb_path 'payload', payload_4 text mongodb_path 'payload', payload_5 text mongodb_path 'payload', payload_6 text mongodb_path 'payload', payload_7 text mongodb_path 'payload', payload_8 text mongodb_path 'payload') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='decoded_budget','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.json_scalar(value json, payload json, arr json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.binary_padding(id varchar(2) mongodb_path '_id', value binary(4)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='binary_padding','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.temporal_order(id varchar(2) mongodb_path '_id', d datetime(6), t timestamp(6)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_order','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -118,7 +120,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		}
 		r.Cases = append(r.Cases, "non-admin-marker-injection-boundary")
 	}
-	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", `"text"`); err != nil {
+	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", "text"); err != nil {
 		return err
 	}
 	if err := expectScalar(ctx, db, "select json_unquote(json_extract(payload, '$.a')) from mongodb_ci.json_scalar", "2"); err != nil {
@@ -155,7 +157,21 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := verifyPrimaryKeyInsertSelect(ctx, db); err != nil {
 		return err
 	}
-	r.Cases = append(r.Cases, "insert-select-primary-key-target")
+	r.Cases = append(r.Cases, "insert-select-primary-key-targets")
+	if _, err := db.ExecContext(ctx, "set time_zone = '+00:00'"); err != nil {
+		return fmt.Errorf("set UTC time zone for temporal ordering: %w", err)
+	}
+	if err := expectRows(ctx, db,
+		"select id,date_format(d,'%Y-%m-%d %H:%i:%s.%f'),date_format(t,'%Y-%m-%d %H:%i:%s.%f') from mongodb_ci.temporal_order order by id",
+		[][]string{
+			{"a", "2026-03-08 01:59:59.123000", "2026-03-08 01:59:59.123000"},
+			{"b", "2026-03-08 03:00:00.456000", "2026-03-08 03:00:00.456000"},
+			{"c", "2026-11-01 01:59:59.789000", "2026-11-01 01:59:59.789000"},
+			{"d", "2026-11-01 02:00:00.012000", "2026-11-01 02:00:00.012000"},
+		}); err != nil {
+		return fmt.Errorf("DATE_FORMAT with ORDER BY: %w", err)
+	}
+	r.Cases = append(r.Cases, "date-format-order-by")
 
 	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
 	// The source predicate must therefore remain residual-only: an exact MongoDB
@@ -299,15 +315,49 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 }
 
 func verifyPrimaryKeyInsertSelect(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx,
-		"create table mongodb_ci.events_insert_target(mongo_id char(24) primary key, device_id varchar(20), site_id varchar(10), ts datetime(3), measurement double, source_batch varchar(50))"); err != nil {
-		return fmt.Errorf("create primary-key insert target: %w", err)
+	const sourceID = "64b000000000000000000001"
+	insertSingle := "insert into mongodb_ci.events_insert_target select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='" + sourceID + "'"
+	for _, target := range []struct {
+		name, create, insert, count string
+	}{
+		{
+			name:   "single primary key",
+			create: "create table mongodb_ci.events_insert_target(mongo_id char(24) primary key, device_id varchar(20), site_id varchar(10), ts datetime(3), measurement double, source_batch varchar(50))",
+			insert: insertSingle,
+			count:  "select count(*) from mongodb_ci.events_insert_target",
+		},
+		{
+			name:   "composite primary key",
+			create: "create table mongodb_ci.events_composite_insert_target(site_id varchar(10) not null, mongo_id char(24) not null, device_id varchar(20), ts datetime(3), measurement double, source_batch varchar(50), primary key(site_id,mongo_id))",
+			insert: "insert into mongodb_ci.events_composite_insert_target select site_id,mongo_id,device_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='" + sourceID + "'",
+			count:  "select count(*) from mongodb_ci.events_composite_insert_target",
+		},
+	} {
+		if _, err := db.ExecContext(ctx, target.create); err != nil {
+			return fmt.Errorf("create %s target: %w", target.name, err)
+		}
+		insertCtx, cancelInsert := context.WithTimeout(ctx, 15*time.Second)
+		_, err := db.ExecContext(insertCtx, target.insert)
+		cancelInsert()
+		if err != nil {
+			return fmt.Errorf("insert-select into %s target: %w", target.name, err)
+		}
+		if err := expectScalar(ctx, db, target.count, "1"); err != nil {
+			return fmt.Errorf("verify %s target: %w", target.name, err)
+		}
 	}
-	insertCtx, cancelInsert := context.WithTimeout(ctx, 15*time.Second)
-	defer cancelInsert()
-	if _, err := db.ExecContext(insertCtx,
-		"insert into mongodb_ci.events_insert_target select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='66a7b7000000000000000001'"); err != nil {
-		return fmt.Errorf("insert-select into primary-key target: %w", err)
+
+	duplicateCtx, cancelDuplicate := context.WithTimeout(ctx, 15*time.Second)
+	_, err := db.ExecContext(duplicateCtx, insertSingle)
+	cancelDuplicate()
+	if err == nil {
+		return errors.New("duplicate insert-select into primary-key target unexpectedly succeeded")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("duplicate insert-select into primary-key target timed out: %w", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		return fmt.Errorf("duplicate insert-select into primary-key target returned unexpected error: %w", err)
 	}
 	return expectScalar(ctx, db, "select count(*) from mongodb_ci.events_insert_target", "1")
 }
@@ -406,8 +456,12 @@ func expectRows(ctx context.Context, db *sql.DB, query string, expected [][]stri
 	}
 	defer rows.Close()
 	actual := make([][]string, 0, len(expected))
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
 	for rows.Next() {
-		row := make([]string, 6)
+		row := make([]string, len(columns))
 		dest := make([]any, len(row))
 		for i := range row {
 			dest[i] = &row[i]

@@ -30,9 +30,169 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
+
+func TestRangeCoalescingUsesPhysicalPrimarySeqnum(t *testing.T) {
+	const (
+		logicalPrimaryIdx = 1
+		primarySeqnum     = 3
+	)
+	require.NotEqual(t, logicalPrimaryIdx, primarySeqnum)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	newInt32Vec := func(t *testing.T, value int32) *vector.Vector {
+		t.Helper()
+		vec := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		return vec
+	}
+	newTSVec := func(t *testing.T, value types.TS) *vector.Vector {
+		t.Helper()
+		vec := vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		return vec
+	}
+	newRowIDVec := func(t *testing.T, value types.Rowid) *vector.Vector {
+		t.Helper()
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		return vec
+	}
+
+	t.Run("partition state range", func(t *testing.T) {
+		state := NewPartitionState("", false, 42, false)
+		state.start = types.BuildTS(0, 0)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+		rowID := objectio.NewRowid(blockID, 0)
+		insertVecs := []*vector.Vector{
+			newRowIDVec(t, rowID),
+			newTSVec(t, types.BuildTS(10, 0)),
+			newInt32Vec(t, 111),
+			newInt32Vec(t, 222), // current logical index after positioned schema change
+			newInt32Vec(t, 333),
+			newInt32Vec(t, 999), // stable physical primary-key seqnum
+		}
+		defer func() {
+			for _, vec := range insertVecs {
+				vec.Free(mp)
+			}
+		}()
+		state.HandleRowsInsert(context.Background(), &api.Batch{
+			Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "c0", "c1", "c2", "pk"},
+			Vecs: []api.Vector{
+				mustVectorToProto(insertVecs[0]),
+				mustVectorToProto(insertVecs[1]),
+				mustVectorToProto(insertVecs[2]),
+				mustVectorToProto(insertVecs[3]),
+				mustVectorToProto(insertVecs[4]),
+				mustVectorToProto(insertVecs[5]),
+			},
+		}, primarySeqnum, packer, mp)
+
+		deleteVecs := []*vector.Vector{
+			newRowIDVec(t, rowID),
+			newTSVec(t, types.BuildTS(20, 0)),
+			newInt32Vec(t, 999),
+			newRowIDVec(t, types.RandomRowid()),
+		}
+		defer func() {
+			for _, vec := range deleteVecs {
+				vec.Free(mp)
+			}
+		}()
+		state.HandleRowsDelete(context.Background(), &api.Batch{
+			Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.TombstoneAttr_PK_Attr, "tombstone_rowid"},
+			Vecs: []api.Vector{
+				mustVectorToProto(deleteVecs[0]),
+				mustVectorToProto(deleteVecs[1]),
+				mustVectorToProto(deleteVecs[2]),
+				mustVectorToProto(deleteVecs[3]),
+			},
+		}, packer, mp)
+
+		controlCtx := engine.WithCollectChangesPreserveAllVersions(context.Background())
+		control, err := NewChangesHandlerWithPartitionStateRange(
+			controlCtx, state,
+			types.BuildTS(5, 0), types.BuildTS(25, 0),
+			false, 16, primarySeqnum, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, control.Close()) }()
+		controlData, controlTombstone, _, err := control.Next(controlCtx, mp)
+		require.NoError(t, err)
+		require.NotNil(t, controlData)
+		defer controlData.Clean(mp)
+		require.NotNil(t, controlTombstone)
+		defer controlTombstone.Clean(mp)
+		require.Equal(t, 1, controlData.RowCount())
+		require.Equal(t, int32(999), vector.GetFixedAtNoTypeCheck[int32](controlData.Vecs[primarySeqnum], 0))
+		require.Equal(t, 1, controlTombstone.RowCount())
+		require.Equal(t, int32(999), vector.GetFixedAtNoTypeCheck[int32](controlTombstone.Vecs[0], 0))
+
+		h, err := NewChangesHandlerWithPartitionStateRange(
+			context.Background(), state,
+			types.BuildTS(5, 0), types.BuildTS(25, 0),
+			false, 16, primarySeqnum, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, h.Close()) }()
+
+		data, tombstone, _, err := h.Next(context.Background(), mp)
+		require.NoError(t, err)
+		if data != nil {
+			defer data.Clean(mp)
+		}
+		if tombstone != nil {
+			defer tombstone.Clean(mp)
+		}
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+	})
+
+	t.Run("persisted object normalization", func(t *testing.T) {
+		data := batch.NewWithSize(7)
+		data.SetAttributes([]string{
+			"c0", "c1", "c2", "pk",
+			catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.DefaultAbort_Attr,
+		})
+		data.Vecs[0] = newInt32Vec(t, 111)
+		data.Vecs[logicalPrimaryIdx] = newInt32Vec(t, 222)
+		data.Vecs[2] = newInt32Vec(t, 333)
+		data.Vecs[primarySeqnum] = newInt32Vec(t, 999)
+		data.Vecs[4] = newRowIDVec(t, types.RandomRowid())
+		data.Vecs[5] = newTSVec(t, types.BuildTS(10, 0))
+		data.Vecs[6] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixed(data.Vecs[6], false, false, mp))
+		data.SetRowCount(1)
+		defer data.Clean(mp)
+
+		layout := objectio.SpecialColumnLayout{PhysicalAddr: 4, CommitTS: 5, Abort: 6}
+		require.NoError(t, updateDataBatch(
+			data, types.BuildTS(5, 0), types.BuildTS(25, 0), nil, &layout, false, mp,
+		))
+		require.Equal(t, int32(999), vector.GetFixedAtNoTypeCheck[int32](data.Vecs[primarySeqnum], 0))
+
+		tombstone := batch.NewWithSize(2)
+		tombstone.Vecs[0] = newInt32Vec(t, 999)
+		tombstone.Vecs[1] = newTSVec(t, types.BuildTS(20, 0))
+		tombstone.SetRowCount(1)
+		defer tombstone.Clean(mp)
+
+		h := &ChangeHandler{primarySeqnum: primarySeqnum}
+		require.NoError(t, h.coalesceBatch(data, tombstone))
+		require.Zero(t, data.RowCount())
+		require.Zero(t, tombstone.RowCount())
+	})
+}
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()

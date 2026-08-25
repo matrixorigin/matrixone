@@ -16,11 +16,9 @@ package plan
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -117,67 +115,31 @@ func (builder *QueryBuilder) buildParseJsonl(tvfName string, tbl *tree.TableFunc
 		}
 		optstr := param2.String()
 
+		opts, err := parseTVFColumnSchema(builder.GetContext(), optstr)
+		if err != nil {
+			return 0, err
+		}
+		// The jsonl TVFs require an explicit, valid record format for the long
+		// (JSON object) spec; the short spec sets it implicitly.
 		if strings.Contains(optstr, "{") {
-			// long format,
-			err := json.Unmarshal([]byte(optstr), &opts)
-			if err != nil {
-				return 0, err
-			}
-
 			switch opts.Format {
 			case ParseJsonlFormatArray, ParseJsonlFormatObject:
 				// OK
 			default:
 				return 0, moerr.NewInvalidInputf(builder.GetContext(), "Invalid format %s in options, must be array or object", opts.Format)
 			}
-		} else {
-			// short format,
-			opts.Format = "array"
-			for idx, c := range optstr {
-				switch c {
-				case 'b':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeBool})
-				case 'i':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeInt32})
-				case 'I':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeInt64})
-				case 'f':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeFloat32})
-				case 'F':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeFloat64})
-				case 's':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeString})
-				case 't':
-					opts.Cols = append(opts.Cols, ParseJsonlOptionsCol{Name: fmt.Sprintf("col%d", idx), Type: ParseJsonlTypeTimestamp})
-				default:
-					return 0, moerr.NewInvalidInputf(builder.GetContext(), "Invalid character '%c' in options", c)
-				}
-			}
 		}
+		return builder.finishParseJsonl(tvfName, opts, ctx, exprs, children)
 	}
 
+	return builder.finishParseJsonl(tvfName, opts, ctx, exprs, children)
+}
+
+func (builder *QueryBuilder) finishParseJsonl(tvfName string, opts ParseJsonlOptions, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	// build the table def
-	cols := make([]*plan.ColDef, 0, len(opts.Cols))
-	for idx, col := range opts.Cols {
-		cols = append(cols, &plan.ColDef{
-			Name: col.Name,
-		})
-		switch col.Type {
-		case ParseJsonlTypeBool:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_bool)
-		case ParseJsonlTypeInt32:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_int32)
-		case ParseJsonlTypeInt64:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_int64)
-		case ParseJsonlTypeTimestamp:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_timestamp)
-		case ParseJsonlTypeFloat32:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_float32)
-		case ParseJsonlTypeFloat64:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_float64)
-		case ParseJsonlTypeString:
-			cols[idx].Typ = makeSimplePlan2Type(types.T_varchar)
-		}
+	cols, err := buildTVFColDefs(builder.GetContext(), opts)
+	if err != nil {
+		return 0, err
 	}
 
 	paramData, err := json.Marshal(opts)

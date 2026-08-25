@@ -2255,6 +2255,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_array_append`
+	{
+		functionId: JSON_ARRAY_APPEND,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonArrayAppend
+				},
+			},
+		},
+	},
+
 	// function `json_remove`
 	{
 		functionId: JSON_REMOVE,
@@ -12488,6 +12508,28 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	// Internal helper used by the interval binder for dynamic string values.
+	{
+		functionId: TO_INTERVAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
+		},
+	},
+
 	// function `build_version`
 	{
 		functionId: BUILD_VERSION,
@@ -13519,6 +13561,32 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `last_kafka_message_id`: the offset of the last message a
+	// completed Kafka external-table scan returned in this session (NULL
+	// before any scan). Feed it back as __mo_read_start_id for exactly-once
+	// chaining. See docs/cn/kafka_exttab.md.
+	{
+		functionId: LAST_KAFKA_MESSAGE_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return builtInLastKafkaMessageID
+				},
+			},
+		},
+	},
+
 	// function `last_query_id`, `last_uuid`
 	{
 		functionId: LAST_QUERY_ID,
@@ -14352,6 +14420,84 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// esql_tvf / sql_tvf connection management. Volatile so the connect side
+	// effect runs and is never constant-folded.
+	{
+		functionId: ESQL_TVF_CONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInEsqlTvfConnect
+				},
+			},
+		},
+	},
+	{
+		functionId: SQL_TVF_CONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqlTvfConnect
+				},
+			},
+		},
+	},
+	{
+		functionId: ESQL_TVF_DISCONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInEsqlTvfDisconnect
+				},
+			},
+		},
+	},
+	{
+		functionId: SQL_TVF_DISCONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqlTvfDisconnect
+				},
+			},
+		},
+	},
 	// function `uuid`
 	{
 		functionId: UUID,

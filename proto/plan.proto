@@ -922,6 +922,8 @@ message Node {
     INDEX = 8;
     L2 = 9;
     DEDUP = 10;
+    ASOF = 11;
+    ASOF_LEFT = 12;
   }
 
   enum AggMode {
@@ -1139,6 +1141,10 @@ message Node {
 
   // VECTOR_INDEX_SCAN only: typed vector-index access-path description.
   VectorIndexScan vector_index_scan = 85;
+
+  // ASOF/ASOF_LEFT only: right input column used to choose the latest
+  // qualifying predecessor after equality-key lookup.
+  int32 asof_right_col = 86;
 }
 
 message SnapshotExtraInfo {
@@ -1170,6 +1176,8 @@ enum ExternType {
   ICEBERG_TB = 3;
   MONGODB_TB = 4;
   DATASTREAM_TB = 5;
+  FOREIGN_TB = 6;
+  KAFKA_TB = 7;
 }
 
 message ExternScan {
@@ -1186,6 +1194,8 @@ message ExternScan {
   IcebergScan iceberg_scan = 11;
   MongoScan mongodb_scan = 12;
   DataStreamScan datastream_scan = 13;
+  ForeignScan foreign_scan = 14;
+  KafkaScan kafka_scan = 15;
 }
 
 // DataStreamScan describes a scan of a datastream external table: a
@@ -1202,6 +1212,51 @@ message DataStreamScan {
   // api_key is the shared secret presented to the server ("" when the table
   // configured none).
   string api_key = 6;
+}
+
+// ForeignScan describes a scan of an ESQL/SQL foreign external table
+// (CREATE EXTERNAL TABLE ... ENGINE = ESQL|SQL): the query texts to run come
+// from __mo_query predicates (the scan's FileList), the connection from
+// config (inline JSON, or "" meaning the session's @esql_tvf_config /
+// @sql_tvf_config). See docs/cn/esql_sql_exttab.md.
+message ForeignScan {
+  // kind is "esql" or "sql".
+  string kind = 1;
+  // config is the connection config option, verbatim ("" means session var).
+  string config = 2;
+  // default_query is the 'query' table option ("" when not set).
+  string default_query = 3;
+}
+
+// KafkaScan describes a scan of a Kafka external table (CREATE EXTERNAL
+// TABLE ... ENGINE = KAFKA): one topic partition read as csv or jsonl
+// records, one record per message. Read position/limits come from
+// __mo_read_start_id / __mo_read_size / __mo_read_timeout predicates,
+// resolved at compile time. See docs/cn/kafka_exttab.md and issue #27518.
+message KafkaScan {
+  // brokers is the comma-separated bootstrap host:port list.
+  string brokers = 1;
+  string topic = 2;
+  int32 partition = 3;
+  // autocommit false requires __mo_read_start_id on every SELECT and commits
+  // the read offset at that position; true reads earliest/latest and commits
+  // as the scan completes.
+  bool autocommit = 4;
+  // group is the consumer group carrying the committed-offset bookmark.
+  string group = 5;
+  // format is "csv" or "jsonl"; separator is the csv field separator rune.
+  string format = 6;
+  string separator = 7;
+  // Effective read controls, resolved from the WHERE conjuncts at compile
+  // time (defaults applied there): start_id is the last-consumed offset
+  // (reading begins after it; with autocommit true, 0 means earliest
+  // inclusive and -1 means latest), size caps the record count (0 = no
+  // cap), timeout_seconds ends the read when no new message arrives in
+  // time (0 = block forever).
+  int64 start_id = 8;
+  bool has_start_id = 9;
+  int64 size = 10;
+  int64 timeout_seconds = 11;
 }
 
 message IcebergScan {

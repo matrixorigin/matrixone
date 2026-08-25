@@ -363,10 +363,10 @@ a    bnewnew    c    d
 3    database    1981-02-22    500.00
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 index02    1    a    1    a    A    0    NULL    NULL                        YES    a
 index02    1    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
 index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
