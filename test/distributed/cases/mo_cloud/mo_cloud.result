@@ -328,7 +328,7 @@ db  ¦  CREATE TABLE `db` (
   `Event_priv` varchar(10) NOT NULL DEFAULT 'N',
   `Trigger_priv` varchar(10) NOT NULL DEFAULT 'N',
   PRIMARY KEY (`Host`,`Db`,`User`),
-  KEY `user` (`User`)
+  KEY `User` (`User`)
 )
 SHOW CREATE TABLE mysql.procs_priv;
 ➤ Table[12,10,0]  ¦  Create Table[12,510,0]  𝄀
@@ -342,7 +342,7 @@ procs_priv  ¦  CREATE TABLE `procs_priv` (
   `Proc_priv` varchar(10) NOT NULL DEFAULT '',
   `Timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
   PRIMARY KEY (`Host`,`Db`,`User`,`Routine_name`,`Routine_type`),
-  KEY `grantor` (`Grantor`)
+  KEY `Grantor` (`Grantor`)
 )
 SHOW CREATE TABLE mysql.tables_priv;
 ➤ Table[12,11,0]  ¦  Create Table[12,503,0]  𝄀
@@ -356,7 +356,7 @@ tables_priv  ¦  CREATE TABLE `tables_priv` (
   `Table_priv` varchar(10) NOT NULL DEFAULT '',
   `Column_priv` varchar(10) NOT NULL DEFAULT '',
   PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`),
-  KEY `grantor` (`Grantor`)
+  KEY `Grantor` (`Grantor`)
 )
 SHOW CREATE TABLE mysql.user;
 ➤ Table[12,4,0]  ¦  Create Table[12,2645,0]  𝄀
