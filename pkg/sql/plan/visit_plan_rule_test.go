@@ -1346,14 +1346,10 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 	boundComparison := filled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_bool), boundComparison.Typ.Id)
 	require.Len(t, boundComparison.GetF().Args, 2)
-	for _, arg := range boundComparison.GetF().Args {
-		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
-		literal := arg.GetLit()
-		require.NotNil(t, literal)
-		_, ok := literal.Value.(*planpb.Literal_Dval)
-		require.True(t, ok)
-		require.Equal(t, float64(1e100), literal.GetDval())
-	}
+	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, float64(1e100), boundComparison.GetF().Args[0].GetLit().GetDval())
+	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[1].Typ.Id)
+	require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName())
 
 	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 		ParamValue{
@@ -1376,7 +1372,7 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
 	}
 
-	for _, textValue := range []string{"foo", "1abc", "1e309"} {
+	for _, textValue := range []string{"foo", "1abc", "1e309", "\u00a01"} {
 		filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{
 				Value:            "0",

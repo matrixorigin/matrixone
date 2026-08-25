@@ -622,13 +622,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if literal == nil {
 						continue
 					}
-					runtimeType, ok := preparedNumericComparisonTextType(literal.GetSval())
-					if !ok {
-						continue
-					}
-					inferred, inferErr := preparedRuntimeParamExpr(rule.ctx, literal.GetSval(), literal.IsBin, runtimeType)
+					runtimeType := preparedNumericComparisonTextType()
+					// Keep every COM_STMT text value behind the engine cast. A
+					// planner-side ParseFloat would bypass MySQL prefix scanning,
+					// range handling, native-mode behavior, and warning emission for
+					// values whose spelling differs from a complete Go float literal.
+					inferred, inferErr := makePlan2CastExpr(
+						rule.ctx,
+						boundArgs[i],
+						makePlan2Type(&runtimeType),
+					)
 					if inferErr != nil {
-						continue
+						return nil, inferErr
 					}
 					boundArgs[i] = inferred
 					needResetFunction = true

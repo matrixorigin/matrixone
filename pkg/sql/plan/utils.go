@@ -3969,12 +3969,11 @@ func preparedExponentType(value string) (types.Type, bool) {
 // preparedNumericComparisonTextType selects the comparison domain; it does
 // not validate or pre-convert the value. MySQL compares every text operand
 // against a numeric operand in the DOUBLE domain, including strings with a
-// numeric prefix and strings without one. preparedRuntimeParamExpr leaves
-// values that are not complete Go float literals behind an explicit cast so
-// execution uses the engine's ordinary MySQL numeric-string conversion and
-// warning path.
-func preparedNumericComparisonTextType(string) (types.Type, bool) {
-	return types.T_float64.ToType(), true
+// numeric prefix and strings without one. The caller keeps the text value
+// behind an explicit cast so execution uses the engine's ordinary MySQL
+// numeric-string conversion and warning path.
+func preparedNumericComparisonTextType() types.Type {
+	return types.T_float64.ToType()
 }
 
 func isDecimalMantissa(value string) bool {

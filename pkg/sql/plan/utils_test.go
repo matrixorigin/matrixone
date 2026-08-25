@@ -538,31 +538,7 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		_, ok := preparedExponentType(test.value)
 		require.Equal(t, test.want, ok, test.value)
 	}
-	for _, test := range []struct {
-		value string
-		want  bool
-	}{
-		{value: "1", want: true},
-		{value: "1.00", want: true},
-		{value: "9223372036854775807", want: true},
-		{value: strings.Repeat("9", 80), want: true},
-		{value: "1e100", want: true},
-		{value: "1e-100", want: true},
-		{value: "1.7976931348623157e308", want: true},
-		{value: "1e309", want: true},
-		{value: "1ee2", want: true},
-		{value: "NaN", want: true},
-		{value: "Inf", want: true},
-		{value: "not-a-number", want: true},
-		{value: "1abc", want: true},
-		{value: "", want: true},
-	} {
-		typ, ok := preparedNumericComparisonTextType(test.value)
-		require.Equal(t, test.want, ok, test.value)
-		if ok {
-			require.Equal(t, types.T_float64, typ.Oid)
-		}
-	}
+	require.Equal(t, types.T_float64, preparedNumericComparisonTextType().Oid)
 }
 
 func TestPreparedRuntimeParamExprMaterializesRuntimeTypes(t *testing.T) {

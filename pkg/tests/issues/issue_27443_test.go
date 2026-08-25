@@ -212,6 +212,7 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		}{
 			{name: "non numeric becomes zero", numeric: int64(0), text: "foo", wantWarning: true},
 			{name: "numeric prefix", numeric: int64(1), text: "1abc", wantWarning: true},
+			{name: "non mysql whitespace is not skipped", numeric: int64(0), text: "\u00a01", wantWarning: true},
 			{name: "overflow follows double range", numeric: float64(1.7976931348623157e308), text: "1e309"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
