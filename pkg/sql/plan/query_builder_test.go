@@ -201,7 +201,7 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
 }
 
-func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
+func TestMongoDBExternalScanCatalogStateAndPrepare(t *testing.T) {
 	newMock := func(createSQL string) *MockOptimizer {
 		mock := NewMockOptimizer(false)
 		mock.ctxt.dbs["telemetry_source"] = true
@@ -233,13 +233,56 @@ func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 	})
 
 	t.Run("prepared scan", func(t *testing.T) {
-		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(mapping))
-		stmts, err := parsers.Parse(mock.ctxt.GetContext(), dialect.MYSQL,
-			"select value from telemetry_source.events_external", 1)
+		preparedMapping := mapping
+		preparedMapping.Columns = append([]sqlmongodb.ColumnMapping(nil), mapping.Columns...)
+		preparedMapping.Columns[0].Conversion = sqlmongodb.ConversionTryNull
+		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(preparedMapping))
+		prepareControl, err := buildPrepare(tree.NewPrepareString("mongo_ps",
+			"select count(*) from telemetry_source.events_external where value > ?"), &mock.ctxt)
 		require.NoError(t, err)
-		_, err = BuildPlan(&mock.ctxt, stmts[0], true)
-		require.ErrorContains(t, err, "prepared MongoDB external scans")
+		prepare := prepareControl.GetDcl().GetPrepare()
+		require.NotNil(t, prepare)
+		require.Len(t, prepare.ParamTypes, 1)
+		prepared := prepare.Plan
+
+		preparedScan := findMongoDBScanNode(prepared)
+		require.NotNil(t, preparedScan)
+		require.Len(t, preparedScan.FilterList, 1)
+		require.Nil(t, preparedScan.ExternScan.MongodbScan.PushedPredicate,
+			"an unbound parameter must not be pushed to MongoDB")
+		require.Equal(t, "mo-residual:f", preparedScan.ExternScan.MongodbScan.ResidualFilterDigest)
+
+		runtimeFilters := make([]string, 0, 2)
+		for _, value := range []int64{10, 20} {
+			runtimePlan, err := FillValuesOfParamsInPlan(t.Context(), prepared, []any{value})
+			require.NoError(t, err)
+			runtimeScan := findMongoDBScanNode(runtimePlan)
+			require.NotNil(t, runtimeScan)
+			require.Len(t, runtimeScan.FilterList, 1)
+			runtimeFilters = append(runtimeFilters, runtimeScan.FilterList[0].String())
+		}
+		require.NotEqual(t, runtimeFilters[0], runtimeFilters[1],
+			"each execution must bind its own parameter value")
+
+		// The CAST around a prepared value remains conservative for MongoDB
+		// pushdown. The original filter is always retained as an MO residual, and
+		// repeated execution leaves the cached plan parameterized for the next run.
+		pushed, _ := sqlmongodb.PushdownPlanFilters(
+			t.Context(), preparedScan.FilterList, preparedScan.ExternScan.MongodbScan.Columns)
+		require.Nil(t, pushed)
 	})
+}
+
+func findMongoDBScanNode(logicPlan *Plan) *plan.Node {
+	if logicPlan == nil || logicPlan.GetQuery() == nil {
+		return nil
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.GetExternScan().GetMongodbScan() != nil {
+			return node
+		}
+	}
+	return nil
 }
 
 func TestCanPruneSampleExprs(t *testing.T) {
