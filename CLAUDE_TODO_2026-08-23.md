@@ -286,3 +286,10 @@
 - 定位 coverage CI 首个根因是 `TestIssue25526PreparedUpdateJoinSecondExecute` 中无关 `open` 被误转 Decimal64，后续大量 branch tests 是环境级 cascade；逐参数过滤修复后该测试本地通过。
 - benchmark：普通 fast path 623.2-674.9 ns/op、200 B/op、3 allocs；repeated specialized category 4.35-4.37 us/op、488 B/op、15 allocs，仍复用 plan/compile且远低于 cache miss 19.15us/14KB/164 allocs。
 - function/plan/frontend/compile/process/pb 全包、issue #25526/#26725/#26866/#26840/#26685/#27088、build、vet、SCA/Rows 检查均通过。
+
+## 第十一轮：合并最新 mo/main 并解决代码冲突
+
+1. merge `mo/main@22b91fe986`，列出全部冲突块。
+2. 逐块比较 main 新语义与 PR prepared-decimal/runtime-cache 语义，保留双方非互斥修复，不使用 ours/theirs 整文件覆盖。
+3. 对冲突涉及包运行定向与全包 CGo 测试，并重跑 issue #25526/#26685/#26725/#26840/#26866/#27088。
+4. 运行 build/vet/SCA、diff check，推送 merge commit并确认 PR 恢复 MERGEABLE。
