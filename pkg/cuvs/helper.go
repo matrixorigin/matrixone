@@ -356,6 +356,33 @@ func DeviceMaxAdmissible(deviceID int, budgetPercent uint64) (uint64, error) {
 	return uint64(maxAdm), nil
 }
 
+// QuantizerStagingRows reports how many rows the int8/uint8 quantizer will stage
+// on a device, by calling the same C++ the index itself uses.
+//
+// The staging sample is HOST memory live at the same time as the capacity
+// allocation, so the create path must charge it against the host budget before
+// deriving capacity. Computing min(trainLimit, deviceCap) in Go would be a second
+// implementation of matrixone::quantizer_staging_rows -- including its default and
+// its clamps -- so it asks instead.
+//
+// perTrainRow is dim * sizeof(BASE element): the sample retains raw base rows, not
+// the storage type. trainLimit 0 means the C++ default.
+func QuantizerStagingRows(deviceID int, perTrainRow, trainLimit uint64, indexType string) (uint64, error) {
+	if perTrainRow == 0 {
+		return 0, nil
+	}
+	var errmsg *C.char
+	rows := C.gpu_quantizer_staging_rows(
+		C.int(deviceID), C.uint64_t(perTrainRow), C.uint64_t(trainLimit),
+		C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return uint64(rows), nil
+}
+
 // DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
 // not what is currently free.
 //

@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -90,9 +91,12 @@ type capacityPlan struct {
 // sharded rejects a split outright. A sharded sub-index is packed with a "shards" key in
 // its manifest and reloaded by a loader that branches on the configured mode, so silently
 // building sharded sub-indexes as single-GPU produces indexes that cannot be loaded back.
+// numShards is the SHARDED shard count -- len(devices), including the aliases
+// gpu_multi_simulation produces, because that is what the native splitter counts
+// (index_base.hpp: num_shards = devices_.size()). Ignored unless sharded.
 func planCapacity(
 	srcRowCount, explicitCapacity, rowsFit, hostRowsFit, threshold int64,
-	sharded bool, algo, paramName string,
+	sharded bool, numShards int, algo, paramName string,
 ) (capacityPlan, error) {
 	if srcRowCount <= 0 {
 		return capacityPlan{}, moerr.NewInternalErrorNoCtxf("%s: source row count must be positive", algo)
@@ -162,6 +166,36 @@ func planCapacity(
 			"%s: %s (%d) must be >= %d; every sub-index would fall below the k-means "+
 				"minimum and the whole table would be written as a brute-force CDC tail",
 			algo, paramName, capacity, threshold)
+	}
+
+	// SHARDED is validated PER SHARD, not globally. Everything above compares the
+	// whole row count against the k-means minimum, but a sharded build splits
+	// first and each shard trains its own centroids, so a table that clears the
+	// minimum in total can produce shards that every one of them fails -- 2000
+	// rows over 4 devices with n_lists 1024 plans cleanly and then dies on
+	// 480/480/480/560. The rows are already ingested by then.
+	//
+	// The split is rows_per_shard = (total / num_shards) & ~31, last shard taking
+	// the remainder (index_base.hpp, and the rounding is required for word-aligned
+	// bitset slicing). So every shard is at least rows_per_shard and checking that
+	// one is sufficient. Duplicating the formula here is deliberate: this file is
+	// untagged so CI exercises the planning without a GPU, and
+	// TestShardSplitMatchesNativeLayout cross-checks it against a real build's
+	// manifest.
+	//
+	// Runs after the threshold block above so a table below the minimum in TOTAL
+	// has already taken the legitimate CDC-tail path rather than being reported as
+	// a sharding problem.
+	if sharded && numShards > 1 && threshold > 0 {
+		perShard := (srcRowCount / int64(numShards)) &^ 31
+		if perShard < threshold {
+			return capacityPlan{}, moerr.NewInvalidInputNoCtxf(
+				"%s: distribution_mode 'sharded' over %d devices splits %d rows into shards of "+
+					"%d (rounded down to a multiple of 32, the last taking the remainder), below "+
+					"the k-means minimum of %d -- every shard would fail to build. Use "+
+					"'single'/'replicated', index more rows, or lower the minimum",
+				algo, numShards, srcRowCount, perShard, threshold)
+		}
 	}
 
 	plan := capacityPlan{Capacity: capacity, CdcCutoff: srcRowCount,
@@ -236,3 +270,33 @@ func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) 
 }
 
 // distinctDeviceCount is len(devices) minus duplicates. Under
+
+// quantizerStagingBytes turns a staged ROW COUNT into the host bytes that sample
+// occupies, live at the same time as the capacity allocation.
+//
+// The row count is NOT computed here. It comes from cuvs.QuantizerStagingRows,
+// i.e. from matrixone::quantizer_staging_rows -- the same function the index
+// calls -- because the rule is min(train_limit, what the device can train on)
+// plus a default and clamps, and writing that out in Go would be a second
+// implementation of it. That is the mistake this subsystem keeps making, so the
+// only arithmetic left here is the multiply.
+//
+// Zero unless the storage type is one byte: training is gated on sizeof(T)==1
+// (index_base.hpp, train_quantizer_if_needed), so a float32 or float16 quantized
+// build never stages and must not be charged for it.
+func quantizerStagingBytes(narrowStorage bool, dim, baseElemBytes, stagedRows uint64) uint64 {
+	if !narrowStorage || dim == 0 || baseElemBytes == 0 {
+		return 0
+	}
+	return stagedRows * dim * baseElemBytes
+}
+
+// baseElemBytes is the width of one element of the BASE (source) vector column,
+// which is what the quantizer staging arena retains -- not the storage width the
+// index ends up holding.
+func baseElemBytes(baseOid types.T) uint64 {
+	if baseOid == types.T_array_float16 {
+		return 2
+	}
+	return 4
+}

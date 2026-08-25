@@ -22,19 +22,19 @@ import (
 
 // HostRowsFitting reads real memory, so assert the contract rather than a figure.
 func TestHostRowsFitting(t *testing.T) {
-	rows, avail, err := HostRowsFitting(1536) // dim 768 f16
+	rows, avail, err := HostRowsFitting(1536, 0) // dim 768 f16
 	require.NoError(t, err)
 	require.Positive(t, avail)
 	require.Positive(t, rows)
 	require.Less(t, uint64(rows)*1536, avail, "must leave headroom, not spend all of it")
 
 	// A wider row must not fit more of itself.
-	wide, _, err := HostRowsFitting(3072)
+	wide, _, err := HostRowsFitting(3072, 0)
 	require.NoError(t, err)
 	require.LessOrEqual(t, wide, rows)
 
 	// Zero is inert rather than a divide-by-zero.
-	z, _, err := HostRowsFitting(0)
+	z, _, err := HostRowsFitting(0, 0)
 	require.NoError(t, err)
 	require.Zero(t, z)
 
@@ -42,7 +42,7 @@ func TestHostRowsFitting(t *testing.T) {
 	// silent zero. Silently returning (0, avail, nil) here would let the caller
 	// treat the bound as "unmeasured" and disable it — exactly the OOM the
 	// bound exists to prevent.
-	huge, availHuge, err := HostRowsFitting(avail) // one row costs the entire node
+	huge, availHuge, err := HostRowsFitting(avail, 0) // one row costs the entire node
 	require.Error(t, err)
 	require.Zero(t, huge)
 	require.Positive(t, availHuge, "err path must still report the measured avail")
@@ -73,10 +73,10 @@ func TestHostIDBytesPerRowIsCharged(t *testing.T) {
 
 	const narrowVector = 8 // int8 x dim 8
 
-	vectorOnly, avail, err := HostRowsFitting(narrowVector)
+	vectorOnly, avail, err := HostRowsFitting(narrowVector, 0)
 	require.NoError(t, err)
 	require.Positive(t, avail)
-	withIDs, _, err := HostRowsFitting(narrowVector + HostIDBytesPerRow)
+	withIDs, _, err := HostRowsFitting(narrowVector+HostIDBytesPerRow, 0)
 	require.NoError(t, err)
 
 	require.Less(t, withIDs, vectorOnly,
@@ -85,4 +85,43 @@ func TestHostIDBytesPerRowIsCharged(t *testing.T) {
 	// ID term is an overstatement of the budget, not a rounding error.
 	require.LessOrEqual(t, withIDs*2, vectorOnly,
 		"for a narrow row the ID term is a full share; omitting it overstates capacity")
+}
+
+// The int8/uint8 staging arena is live at the SAME TIME as the capacity
+// allocation, so it is subtracted from the budget BEFORE capacity is derived.
+// Clamping the arena against the budget instead would let both be promised the
+// same bytes -- the arena is not per-row, so it cannot be folded into perRow,
+// and it does not shrink just because capacity grew.
+func TestHostRowsFittingReservesBeforeCapacity(t *testing.T) {
+	const avail = 4000
+	withHostAvail(t, avail, true)
+	budget := uint64(avail) / hostBudgetDenominator * hostBudgetNumerator // 3000
+
+	base, _, err := HostRowsFitting(100, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(budget/100), base)
+
+	// A reservation takes its bytes off the top: the rows left are what the
+	// REMAINDER holds, not what the whole budget would have.
+	withRes, _, err := HostRowsFitting(100, 1000)
+	require.NoError(t, err)
+	require.Equal(t, int64((budget-1000)/100), withRes)
+	require.Less(t, withRes, base, "reserving must cost capacity, not be free")
+
+	// A sample that eats the whole budget is a configuration to reject, not to
+	// round down to zero rows and carry on.
+	_, _, err = HostRowsFitting(100, budget)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "quantizer_train_limit")
+
+	_, _, err = HostRowsFitting(100, budget+1)
+	require.Error(t, err)
+
+	// Unmeasured stays unmeasured: a reservation must not turn "cannot tell" into
+	// a hard failure, or an unmeasurable host would stop building entirely.
+	withHostAvail(t, 0, false)
+	rows, availOut, err := HostRowsFitting(100, 1<<40)
+	require.NoError(t, err)
+	require.Zero(t, rows)
+	require.Zero(t, availOut)
 }

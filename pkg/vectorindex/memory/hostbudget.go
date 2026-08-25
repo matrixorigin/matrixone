@@ -114,7 +114,22 @@ const hostBudgetNumerator, hostBudgetDenominator = 3, 4
 // that was supposed to stop the build, handing it to the OOM killer. The
 // measured flag now separates them, and callers can treat any non-nil error as
 // fatal without inspecting availBytes.
-func HostRowsFitting(perRowBytes uint64) (rows int64, availBytes uint64, err error) {
+// reservedBytes is host memory that will be live AT THE SAME TIME as the
+// capacity allocation and is not per-row -- today, the int8/uint8 quantizer
+// staging arena. It is subtracted from the budget before the division, so the
+// two allocations cannot be promised the same bytes.
+//
+// This is why a clamp on the arena's own size would not have worked: the arena
+// and the capacity buffer are concurrent, so bounding either against the WHOLE
+// budget lets their sum exceed it. Charging the arena first and deriving
+// capacity from what is left is the only ordering that bounds the sum, and it
+// puts the cost where it belongs -- ask for a bigger training sample and you get
+// less index capacity, rather than silently overcommitting the node.
+//
+// A reservation that swallows the whole budget is a hard error, the same as a
+// per-row cost that cannot fit: it means the requested sample alone cannot be
+// held, which is a configuration to reject, not to round down.
+func HostRowsFitting(perRowBytes uint64, reservedBytes uint64) (rows int64, availBytes uint64, err error) {
 	if perRowBytes == 0 {
 		return 0, 0, nil
 	}
@@ -128,12 +143,22 @@ func HostRowsFitting(perRowBytes uint64) (rows int64, availBytes uint64, err err
 		return 0, 0, nil
 	}
 	budget := avail / hostBudgetDenominator * hostBudgetNumerator
+	if reservedBytes > 0 {
+		if reservedBytes >= budget {
+			return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"host memory budget of %d bytes (75%% of %d available) cannot hold the %d bytes "+
+					"reserved before capacity (the int8/uint8 quantizer training sample); lower "+
+					"quantizer_train_limit, or free memory on this node",
+				budget, avail, reservedBytes))
+		}
+		budget -= reservedBytes
+	}
 	rows = int64(budget / perRowBytes)
 	if rows == 0 {
 		return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-			"host memory budget of %d bytes (75%% of %d available) cannot hold one row of %d bytes; "+
-				"free memory on this node or run the build on a larger CN",
-			budget, avail, perRowBytes))
+			"host memory budget of %d bytes (75%% of %d available, less %d reserved) cannot hold "+
+				"one row of %d bytes; free memory on this node or run the build on a larger CN",
+			budget, avail, reservedBytes, perRowBytes))
 	}
 	return rows, avail, nil
 }

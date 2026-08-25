@@ -445,36 +445,52 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// cover id_to_index_: that map is built on demand and is never allocated
 		// during a build (index_base.hpp, ensure_id_index), so charging for it would
 		// reserve host memory against a structure this path never creates.
-		// DECISION -- the int8/uint8 STAGING arena is deliberately NOT charged here.
-		//
-		// quantizationBytes(qt) is the STORAGE width (1 byte for int8/uint8), but
-		// before the scalar quantizer is trained the C++ side retains RAW base rows
-		// in staging_data_ to sample from. That arena is real host memory and no
-		// reservation covers it. Not charging it is a decision, not an oversight:
-		//
-		//   - it is capped at kDefaultQuantizerTrainLimit = 100000 rows and is
-		//     INDEPENDENT of table size, so 88M rows stage the same sample 1M does.
-		//     At dim 768 that is ~293 MiB from an f32 base, ~147 MiB from f16;
-		//   - staging_row_limit() takes min(limit, cap_train_rows_to_gpu_mem(...)),
-		//     so even an explicit multi-million quantizer_train_limit from SQL
-		//     cannot size it directly -- that min exists for exactly that case;
-		//   - it does not exist at all unless the storage type is one byte
-		//     (train_quantizer_if_needed is gated on sizeof(T)==1), so a float16
-		//     quantized build -- what the 88M configuration uses -- never stages;
-		//   - it is transient, freed once training completes.
-		//
-		// Charging it would mean restating in Go a bound C++ already owns, and the
-		// two drifting apart is the failure mode this subsystem keeps hitting. If
-		// the arena ever stops being size-independent, or the sizeof(T)==1 gate
-		// widens, revisit -- those are the assumptions this rests on.
+		// The int8/uint8 quantizer stages RAW BASE rows to sample from, concurrently
+		// with the capacity allocation below, and hostPerRow charges only the STORAGE
+		// width. Charge that arena FIRST and derive capacity from what is left: the
+		// two are live together, so bounding either against the whole budget lets
+		// their sum exceed it. Ask for a bigger training sample and you get less
+		// index capacity, instead of silently overcommitting the node.
 		hostPerRow := uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt) +
 			uint64(includeBytesPerRowFromCols(u.filterCols)) + vimemory.HostIDBytesPerRow
 
-		// CAGRA's per-row cost still includes the dataset, so its VRAM bound already
-		// keeps the host buffer at or under the device budget. The host bound is applied
-		// anyway: it costs one syscall, and it stops the two algorithms from drifting
-		// apart the next time one of their cost models changes.
-		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow)
+		narrowStorage := qt == metric.Quantization_INT8 || qt == metric.Quantization_UINT8
+		// How many rows the quantizer will actually stage, asked of the same C++ the
+		// index uses (matrixone::quantizer_staging_rows). It applies the default, the
+		// train limit and the device bound; Go only multiplies. Probed on the SMALLEST
+		// participating card, matching how the index's own capacity is sized.
+		//
+		// A failed probe falls back to the requested limit, charging the sample in
+		// full: over-charging costs capacity, under-charging hands the node to the OOM
+		// killer.
+		var stagedRows uint64
+		if narrowStorage {
+			perTrainRow := uint64(u.idxcfg.CuvsCagra.Dimensions) * baseElemBytes(u.baseOid)
+			for _, d := range vimemory.DeviceDistinct(u.devices) {
+				r, rerr := cuvs.QuantizerStagingRows(d, perTrainRow, u.idxcfg.CuvsCagra.QuantizerTrainLimit, u.idxcfg.Type)
+				if rerr != nil || r == 0 {
+					// FAIL CLOSED. There is no safe fallback: the sample size is
+					// min(train_limit, device cap), and train_limit is 0 when the user
+					// did not set one -- 0 means "the C++ default", not "no rows". Using
+					// it as a fallback charges NOTHING for an arena that will still be
+					// allocated, which is the direction that hands the node to the OOM
+					// killer. Naming the default here instead would restate a C++
+					// constant, which is what routing through QuantizerStagingRows exists
+					// to avoid.
+					//
+					// An unreadable device at CREATE is already fatal for the capacity
+					// probes on this path, so erroring is consistent, not stricter.
+					return moerr.NewInternalErrorf(proc.Ctx,
+						"cagra: cannot size the quantizer training sample on device %d: %v", d, rerr)
+				}
+				if stagedRows == 0 || r < stagedRows {
+					stagedRows = r
+				}
+			}
+		}
+		stagingBytes := quantizerStagingBytes(
+			narrowStorage, uint64(u.idxcfg.CuvsCagra.Dimensions), baseElemBytes(u.baseOid), stagedRows)
+		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow, stagingBytes)
 		if herr != nil {
 			// memory.HostRowsFitting errors ONLY on a successful measurement that
 			// cannot hold one row — which now includes a cgroup sitting at its
@@ -513,7 +529,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// would double it.
 		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
-			"cagra", "max_index_capacity")
+			len(u.devices), "cagra", "max_index_capacity")
 		if err != nil {
 			return err
 		}

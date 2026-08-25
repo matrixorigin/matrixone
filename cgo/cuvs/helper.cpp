@@ -17,6 +17,7 @@
 #include "helper.h"
 #include "device_memory.hpp"
 #include "index_cost.hpp"
+#include "index_base.hpp"
 #include <unordered_map>
 #include <stdexcept>
 #include <cuda_runtime.h>
@@ -377,6 +378,34 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // resident footprint exceeds it can never be searched on this GPU no matter what
 // else is evicted, which makes it the honest basis for refusing a build outright
 // rather than deferring the failure to a query.
+uint64_t gpu_quantizer_staging_rows(int device_id, uint64_t per_train_row,
+                                    uint64_t train_limit, uint64_t budget_percent,
+                                    void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    if (per_train_row == 0) return 0;
+    // Same bind/restore contract as the other sizing entry points: the binding is
+    // per thread and CGo runs this on an arbitrary shared worker.
+    int prev_device = device_id;
+    cudaGetDevice(&prev_device);
+    const bool rebind = (prev_device != device_id);
+    try {
+        RAFT_CUDA_TRY(cudaSetDevice(device_id));
+        const uint64_t rows = matrixone::quantizer_staging_rows(
+            static_cast<size_t>(per_train_row), train_limit,
+            static_cast<size_t>(budget_percent));
+        if (rebind) cudaSetDevice(prev_device);
+        return rows;
+    } catch (const std::exception& e) {
+        if (rebind) cudaSetDevice(prev_device);
+        matrixone::set_errmsg(errmsg, "Error in gpu_quantizer_staging_rows", e.what());
+        return 0;
+    } catch (...) {
+        if (rebind) cudaSetDevice(prev_device);
+        matrixone::set_errmsg(errmsg, "Error in gpu_quantizer_staging_rows", "unknown C++ exception");
+        return 0;
+    }
+}
+
 int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible,
                          uint64_t budget_percent, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;

@@ -238,6 +238,18 @@ uint64_t gpu_index_budget_percent(const char* index_type);
 // because a Go-side claim can span the whole decided-but-not-yet-allocated
 // window, which a claim taken inside the C++ build cannot.
 
+// gpu_quantizer_staging_rows reports how many rows the int8/uint8 quantizer will
+// stage on device_id, i.e. matrixone::quantizer_staging_rows -- the SAME function
+// the index itself uses (staging_row_limit), so the Go planner that must charge
+// this host arena against the host budget cannot drift from the native rule.
+//
+// per_train_row is dim * sizeof(BASE element); train_limit 0 means the default;
+// budget_percent 0 means the governor default. Returns 0 with errmsg set on
+// failure. Binds device_id and restores the caller's device.
+uint64_t gpu_quantizer_staging_rows(int device_id, uint64_t per_train_row,
+                                    uint64_t train_limit, uint64_t budget_percent,
+                                    void* errmsg);
+
 // gpu_device_total_mem reports a device's TOTAL VRAM in bytes -- hardware
 // capacity, NOT free memory. Free is a moving target; total is a property of the
 // card, so an index whose resident footprint exceeds it can never be searched
