@@ -97,6 +97,46 @@ func TestBuildStreamReadReplacesTheCompleteScanNode(t *testing.T) {
 	require.Equal(t, []string{"col_0"}, read.BaseSchema.Names)
 }
 
+func TestStreamReadValidationRejectsEveryInvalidIdentityClass(t *testing.T) {
+	valid := func() *StreamRead {
+		return &StreamRead{
+			ProtocolVersion: StreamReadProtocolVersion,
+			StreamRef:       bytes.Repeat([]byte{1}, 32),
+			QueryID:         bytes.Repeat([]byte{2}, 16),
+			SnapshotTS:      bytes.Repeat([]byte{3}, 12),
+			SchemaDigest:    bytes.Repeat([]byte{4}, sha256.Size),
+			CapabilityHash:  append([]byte(nil), CapabilityHash[:]...),
+			ExpiresAtUnixMS: 2000,
+		}
+	}
+	require.ErrorContains(t, (*StreamRead)(nil).Validate(1000), "protocol")
+	_, err := MarshalStreamRead(nil)
+	require.ErrorContains(t, err, "protocol")
+
+	for _, tc := range []struct {
+		name      string
+		configure func(*StreamRead)
+		want      string
+	}{
+		{name: "version", configure: func(r *StreamRead) { r.ProtocolVersion++ }, want: "protocol"},
+		{name: "features", configure: func(r *StreamRead) { r.FeatureBits = 1 }, want: "protocol"},
+		{name: "stream identity", configure: func(r *StreamRead) { r.StreamRef = r.StreamRef[:31] }, want: "identity"},
+		{name: "query identity", configure: func(r *StreamRead) { r.QueryID = r.QueryID[:15] }, want: "identity"},
+		{name: "snapshot", configure: func(r *StreamRead) { r.SnapshotTS = r.SnapshotTS[:11] }, want: "identity"},
+		{name: "schema digest", configure: func(r *StreamRead) { r.SchemaDigest = r.SchemaDigest[:31] }, want: "identity"},
+		{name: "capability length", configure: func(r *StreamRead) { r.CapabilityHash = r.CapabilityHash[:31] }, want: "identity"},
+		{name: "expired", configure: func(r *StreamRead) { r.ExpiresAtUnixMS = 1000 }, want: "expired"},
+		{name: "expiry overflow", configure: func(r *StreamRead) { r.ExpiresAtUnixMS = maxTaeReadExpiryUnixMS + 1 }, want: "expired"},
+		{name: "capability mismatch", configure: func(r *StreamRead) { r.CapabilityHash[0] ^= 1 }, want: "expired"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			streamRead := valid()
+			tc.configure(streamRead)
+			require.ErrorContains(t, streamRead.Validate(1000), tc.want)
+		})
+	}
+}
+
 func TestExportRejectsFullOuterBeforeSnapshotAccess(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_OUTER, Children: []int32{0, 0}})

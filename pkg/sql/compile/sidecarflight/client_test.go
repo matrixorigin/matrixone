@@ -252,6 +252,9 @@ func TestFlightFallbackClassificationAndWireMessages(t *testing.T) {
 	require.Contains(t, (&flightData{DataHeader: []byte{1}, DataBody: []byte{2}}).String(), "1,1 bytes")
 	require.Contains(t, (&executeSubstraitRequest{Plan: []byte{1}}).String(), "1 bytes")
 	require.Contains(t, (&cancelExecutionRequest{Ticket: []byte{1}}).String(), "1,0 bytes")
+	require.Contains(t, (&flightPutResult{AppMetadata: []byte{1}}).String(), "1 bytes")
+	require.Contains(t, (&uploadInputRequest{Ticket: []byte{1}, StreamRef: []byte{2}}).String(), "1,1 bytes")
+	require.Contains(t, (&uploadInputAck{AcknowledgedBatches: 1, Rows: 2, Bytes: 3}).String(), "1,false,false,false")
 }
 
 func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
@@ -324,6 +327,99 @@ func TestNativeInputStreamsOneConsumedBatchAtATime(t *testing.T) {
 	require.NoError(t, input.Send(context.Background(), bat, mp))
 	require.NoError(t, input.Finish(context.Background()))
 	require.NoError(t, input.Err())
+}
+
+func TestNativeInputRejectsInvalidAndTerminalStates(t *testing.T) {
+	ref := bytes.Repeat([]byte{7}, 32)
+	_, err := (*Execution)(nil).NewNativeInput(ref)
+	require.ErrorContains(t, err, "invalid native input identity")
+	_, err = (&Execution{}).NewNativeInput(ref)
+	require.ErrorContains(t, err, "invalid native input identity")
+	_, err = (&Execution{runtime: &Runtime{}, ticket: make([]byte, ticketBytes)}).NewNativeInput(ref[:31])
+	require.ErrorContains(t, err, "invalid native input identity")
+
+	for _, tc := range []struct {
+		name      string
+		configure func(*Execution)
+	}{
+		{name: "started", configure: func(e *Execution) { e.started = true }},
+		{name: "cleanup", configure: func(e *Execution) { e.cleanupRunning = true }},
+		{name: "terminal", configure: func(e *Execution) { e.terminal = true }},
+		{name: "quiesced", configure: func(e *Execution) { e.quiesced = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			execution := &Execution{runtime: &Runtime{}, ticket: make([]byte, ticketBytes)}
+			tc.configure(execution)
+			_, err := execution.NewNativeInput(ref)
+			require.ErrorContains(t, err, "no longer accepts native inputs")
+		})
+	}
+
+	full := &Execution{
+		runtime: &Runtime{}, ticket: make([]byte, ticketBytes),
+		inputs: make([]*NativeInput, maxNativeInputs),
+	}
+	_, err = full.NewNativeInput(ref)
+	require.ErrorContains(t, err, "count exceeds")
+
+	execution := &Execution{runtime: &Runtime{}, ticket: make([]byte, ticketBytes)}
+	input, err := execution.NewNativeInput(ref)
+	require.NoError(t, err)
+	ref[0] = 0
+	require.Equal(t, byte(7), input.streamRef[0])
+
+	require.ErrorContains(t, (*NativeInput)(nil).Start(context.Background()), "nil native input")
+	require.NoError(t, (*NativeInput)(nil).Send(context.Background(), nil, nil))
+	require.NoError(t, (*NativeInput)(nil).Finish(context.Background()))
+	require.NoError(t, (*NativeInput)(nil).Err())
+	require.False(t, (*NativeInput)(nil).NotNeeded())
+	(*NativeInput)(nil).Abort(nil)
+
+	notNeeded := &NativeInput{notNeeded: true}
+	require.NoError(t, notNeeded.Start(context.Background()))
+	require.True(t, notNeeded.NotNeeded())
+
+	terminalCause := errors.New("terminal input")
+	terminal := &NativeInput{finished: true, terminalErr: terminalCause}
+	require.ErrorIs(t, terminal.Start(context.Background()), terminalCause)
+	require.ErrorIs(t, terminal.Finish(context.Background()), terminalCause)
+	require.ErrorIs(t, terminal.Err(), terminalCause)
+
+	aborted := new(NativeInput)
+	aborted.Abort(nil)
+	require.ErrorIs(t, aborted.Err(), context.Canceled)
+	require.ErrorIs(t, aborted.Finish(context.Background()), context.Canceled)
+}
+
+func TestCloneNativeWindowHandlesConstAndRejectsImpossibleRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	withNil := batch.NewWithSize(1)
+	withNil.SetRowCount(1)
+	_, err := cloneNativeWindow(withNil, 0, 1, mp)
+	require.ErrorContains(t, err, "nil vector")
+
+	constVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 4, mp)
+	require.NoError(t, err)
+	constant := batch.NewWithSize(1)
+	constant.Vecs[0] = constVec
+	constant.SetRowCount(4)
+	window, err := cloneNativeWindow(constant, 1, 3, mp)
+	require.NoError(t, err)
+	require.Equal(t, 2, window.RowCount())
+	require.True(t, window.Vecs[0].IsConst())
+	require.Equal(t, 2, window.Vecs[0].Length())
+	window.Clean(mp)
+	constant.Clean(mp)
+
+	largeVec, err := vector.NewConstBytes(types.T_varchar.ToType(), bytes.Repeat([]byte{'x'}, 1024), 1, mp)
+	require.NoError(t, err)
+	large := batch.NewWithSize(1)
+	large.Vecs[0] = largeVec
+	large.SetRowCount(1)
+	require.ErrorContains(t, new(NativeInput).sendSplitLocked(large, 1, mp), "one native input row exceeds")
+	large.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestNativeInputAbortCancelsBlockedAcknowledgement(t *testing.T) {
