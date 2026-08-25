@@ -333,6 +333,21 @@ select count(*) from e2;
 ➤ count(*)[-5,64,0]  𝄀
 0
 delete from e1; delete from e2;
+insert first
+when id = 1 then into e1 (id) values (id)
+else into e2 (id) values ((select cast(s as signed) from bad limit 1))
+select id, s from esrc;
+not supported: multi-table INSERT with a subquery in the VALUES of a conditional INTO clause: it cannot be skipped for rows the clause does not select
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from e1;
+insert all into e1 (id) values ((select count(*) from bad)) select id from esrc;
+Duplicate entry '1' for key 'id'
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from e1; delete from e2;
 insert all
 when id >= 0 then into e1 (id) values (id)
 when (select count(*) from bad) > 0 then into e2 (id) values (id)

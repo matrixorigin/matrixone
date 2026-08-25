@@ -173,9 +173,34 @@ select count(*) from seqs8;
 set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
 create table seqs6 (seq int auto_increment primary key, val int);
 insert all into seqs6 (seq, val) values (id * 100, lo) into seqs6 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs6' is generated (every clause must omit it or supply a value that cannot be NULL)
 select count(*) from seqs6;
 ➤ count(*)[-5,64,0]  𝄀
-4
+0
+set sql_mode = default;
+create table seqs9 (seq int auto_increment primary key, val int);
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+prepare ps9 from 'insert all into seqs9 (seq, val) values (0, lo) into seqs9 (seq, val) values (1000, hi) select id, lo, hi from wide where id = 1';
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs9' is generated (every clause must omit it or supply a value that cannot be NULL)
+set sql_mode = default;
+execute ps9;
+invalid state prepared statement 'ps9' does not exist
+select count(*) from seqs9;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare ps9;
+Unknown prepared statement handler (ps9) given to DEALLOCATE PREPARE
+set sql_mode = default;
+prepare ps10 from 'insert all into seqs9 (seq, val) values (0, lo) into seqs9 (seq, val) values (1000, hi) select id, lo, hi from wide where id = 1';
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs9' is generated (every clause must omit it or supply a value that cannot be NULL)
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+execute ps10;
+invalid state prepared statement 'ps10' does not exist
+select count(*) from seqs9;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare ps10;
+Unknown prepared statement handler (ps10) given to DEALLOCATE PREPARE
 set sql_mode = default;
 create table seqs2 (seq int auto_increment primary key, val int);
 insert all into seqs2 (val) values (lo) into seqs2 (val) values (hi) select id, lo, hi from wide;

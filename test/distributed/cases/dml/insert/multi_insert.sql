@@ -123,11 +123,29 @@ select count(*) from seqs7;
 create table seqs8 (seq int auto_increment primary key, val int);
 insert all into seqs8 (seq, val) values ('0', lo) into seqs8 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
 select count(*) from seqs8;
--- Under NO_AUTO_VALUE_ON_ZERO a 0 keeps its value, so non-NULL means explicit.
+-- Classification does NOT depend on sql_mode: the guard must not bake a session
+-- bit into the plan, because PRE_INSERT re-reads that bit at EXECUTE time. A
+-- zero is treated as generated in either mode, so this stays refused.
 set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
 create table seqs6 (seq int auto_increment primary key, val int);
 insert all into seqs6 (seq, val) values (id * 100, lo) into seqs6 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
 select count(*) from seqs6;
+set sql_mode = default;
+-- A plan prepared under one mode and executed under another must stay refused,
+-- in both directions.
+create table seqs9 (seq int auto_increment primary key, val int);
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+prepare ps9 from 'insert all into seqs9 (seq, val) values (0, lo) into seqs9 (seq, val) values (1000, hi) select id, lo, hi from wide where id = 1';
+set sql_mode = default;
+execute ps9;
+select count(*) from seqs9;
+deallocate prepare ps9;
+set sql_mode = default;
+prepare ps10 from 'insert all into seqs9 (seq, val) values (0, lo) into seqs9 (seq, val) values (1000, hi) select id, lo, hi from wide where id = 1';
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+execute ps10;
+select count(*) from seqs9;
+deallocate prepare ps10;
 set sql_mode = default;
 -- No clause sets it, so every row is numbered by the engine:
 create table seqs2 (seq int auto_increment primary key, val int);

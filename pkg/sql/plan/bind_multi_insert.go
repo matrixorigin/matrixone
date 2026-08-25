@@ -727,13 +727,22 @@ const (
 //
 // The branch projection holds the value already cast to the column's integer
 // type, so the expression is constant-folded first: that is what turns 0.0,
-// '0', or a decimal zero into the integer 0 that PRE_INSERT sees. Unless
-// NO_AUTO_VALUE_ON_ZERO is set, that 0 is converted to NULL and generated like
-// an omitted value (shouldConvertZeroToNull in the preinsert operator), so a
-// zero in ANY literal representation is not an explicit value in the default
-// mode. Anything that does not fold to a constant is unknown, and unknown is
-// refused rather than assumed safe.
-func classifyAutoIncrValue(expr *plan.Expr, zeroIsGenerated bool, proc *process.Process) autoIncrValueKind {
+// '0', or a decimal zero into the integer 0 that PRE_INSERT sees.
+//
+// A zero counts as GENERATED regardless of sql_mode. In the default mode that
+// is simply what happens (shouldConvertZeroToNull in the preinsert operator);
+// under NO_AUTO_VALUE_ON_ZERO a zero is really explicit, so treating it as
+// generated only ever refuses a statement that would have been safe. The
+// alternative — reading sql_mode here — would bake a session setting into the
+// plan, and PRE_INSERT re-reads that setting at EXECUTE time: a plan prepared
+// under one mode and executed under another would classify with a stale bit
+// and let the mixed generated/explicit pipeline through. Mode-independence
+// removes that whole class of staleness instead of tracking one more prepared
+// plan dependency.
+//
+// Anything that does not fold to a constant is unknown, and unknown is refused
+// rather than assumed safe: a non-literal can still evaluate to zero or NULL.
+func classifyAutoIncrValue(expr *plan.Expr, proc *process.Process) autoIncrValueKind {
 	if expr == nil {
 		return autoIncrGenerated
 	}
@@ -745,21 +754,10 @@ func classifyAutoIncrValue(expr *plan.Expr, zeroIsGenerated bool, proc *process.
 	}
 	lit := folded.GetLit()
 	if lit == nil {
-		// Not a constant. Under NO_AUTO_VALUE_ON_ZERO a value is generated only
-		// when it is NULL, so a provably non-null expression is explicit. In the
-		// default mode it could still evaluate to 0 and be generated, which
-		// cannot be decided here.
-		if !zeroIsGenerated && expr.Typ.NotNullable {
-			return autoIncrExplicit
-		}
 		return autoIncrUnknown
 	}
 	if lit.Isnull {
 		return autoIncrGenerated
-	}
-	if !zeroIsGenerated {
-		// NO_AUTO_VALUE_ON_ZERO: a non-NULL value is used as written.
-		return autoIncrExplicit
 	}
 	switch classifyZeroLiteral(lit) {
 	case literalZero:
@@ -863,13 +861,6 @@ func (builder *QueryBuilder) validateMergedAutoIncrColumns(
 			continue
 		}
 
-		zeroIsGenerated := true
-		if mode, err := builder.compCtx.ResolveVariable("sql_mode", true, false); err == nil {
-			if text, ok := mode.(string); ok {
-				zeroIsGenerated = !strings.Contains(strings.ToUpper(text), "NO_AUTO_VALUE_ON_ZERO")
-			}
-		}
-
 		var generated, explicit, unknown bool
 		for _, id := range branchIDs {
 			node := builder.qry.Nodes[id]
@@ -877,7 +868,7 @@ func (builder *QueryBuilder) validateMergedAutoIncrColumns(
 				return moerr.NewInternalErrorf(builder.GetContext(),
 					"multi-table insert branch is missing column %s", col.Name)
 			}
-			switch classifyAutoIncrValue(node.ProjectList[pos], zeroIsGenerated, builder.compCtx.GetProcess()) {
+			switch classifyAutoIncrValue(node.ProjectList[pos], builder.compCtx.GetProcess()) {
 			case autoIncrGenerated:
 				generated = true
 			case autoIncrExplicit:
@@ -1036,6 +1027,18 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			expr, err := bCtx.binder.BindExpr(astExpr, 0, true)
 			if err != nil {
 				return 0, err
+			}
+			// A subquery in the VALUES of a CONDITIONAL clause has the same
+			// unmaskable-join problem as one in a later WHEN: flattenSubqueries
+			// rewrites it into a join whose build side is attached as a PreScope,
+			// and MergeRun starts PreScopes even when the filtered probe selects
+			// no rows. The subquery would therefore run — and could fail — for a
+			// clause the row never reached. The FILTER below cannot prevent it,
+			// so refuse the shape rather than evaluate an unreachable value.
+			// Unconditional clauses are unaffected: every row reaches them.
+			if (branch.condIdx >= 0 || branch.isElse) && exprHasSubquery(expr) {
+				return 0, moerr.NewNotSupported(sysCtx,
+					"multi-table INSERT with a subquery in the VALUES of a conditional INTO clause: it cannot be skipped for rows the clause does not select")
 			}
 			lastNodeID, expr, err = builder.flattenSubqueries(lastNodeID, expr, bCtx)
 			if err != nil {

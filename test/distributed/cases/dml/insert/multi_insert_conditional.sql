@@ -234,6 +234,20 @@ insert first
 select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
+-- A subquery in the VALUES of a CONDITIONAL clause has the same problem: the
+-- flattened join's build side runs as a PreScope even when the branch selects
+-- no rows, so an unreachable ELSE value would still be evaluated. Refused.
+delete from e1; delete from e2;
+insert first
+  when id = 1 then into e1 (id) values (id)
+  else into e2 (id) values ((select cast(s as signed) from bad limit 1))
+select id, s from esrc;
+select count(*) from e1;
+-- an UNCONDITIONAL clause is unaffected: every row reaches it
+delete from e1;
+insert all into e1 (id) values ((select count(*) from bad)) select id from esrc;
+select count(*) from e1;
+
 -- INSERT ALL has no first-match rule, so a subquery in any WHEN is fine
 delete from e1; delete from e2;
 insert all

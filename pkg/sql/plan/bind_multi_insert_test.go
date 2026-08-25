@@ -470,35 +470,28 @@ func TestMultiInsertBranchSinkScansAreRepositionedAfterSinkPruning(t *testing.T)
 func TestClassifyAutoIncrValue(t *testing.T) {
 	nullLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
 	intLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 7}}}}
-	notNullExpr := &plan.Expr{
-		Typ:  plan.Type{NotNullable: true},
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
-	}
-	nullableExpr := &plan.Expr{
-		Typ:  plan.Type{NotNullable: false},
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
-	}
 	zeroLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}}}
 	zeroFloat := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0}}}}
 	zeroStr := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: " 0 "}}}}
+	notNullExpr := &plan.Expr{Typ: plan.Type{NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	nullableExpr := &plan.Expr{Typ: plan.Type{NotNullable: false}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
 
-	// default sql_mode: an explicit 0 is converted to NULL and generated
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nil, true, nil), "an omitted column is generated")
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, true, nil), "a listed column holding NULL is still generated")
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroLit, true, nil), "0 is generated unless NO_AUTO_VALUE_ON_ZERO")
-	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(intLit, true, nil))
-	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(notNullExpr, true, nil), "a non-literal could still evaluate to 0")
-	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, true, nil), "a nullable expression may be either per row")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nil, nil), "an omitted column is generated")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, nil), "a listed column holding NULL is still generated")
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(intLit, nil))
 
-	// every representation of zero counts, not just an int64 literal
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroFloat, true, nil), "0.0 reaches PRE_INSERT as 0")
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroStr, true, nil), "'0' reaches PRE_INSERT as 0")
+	// Zero counts as generated in EVERY representation and independently of
+	// sql_mode: under NO_AUTO_VALUE_ON_ZERO it is really explicit, but calling
+	// it generated only refuses a statement that would have been safe, whereas
+	// reading the mode here would bake a session bit into the plan that
+	// PRE_INSERT re-reads at EXECUTE time.
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroLit, nil))
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroFloat, nil), "0.0 reaches PRE_INSERT as 0")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroStr, nil), "'0' reaches PRE_INSERT as 0")
 
-	// NO_AUTO_VALUE_ON_ZERO: 0 keeps its value, so non-NULL means explicit
-	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(zeroLit, false, nil))
-	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(notNullExpr, false, nil))
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, false, nil))
-	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, false, nil))
+	// Not a constant: could still be zero or NULL per row, so it is refused.
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(notNullExpr, nil))
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, nil))
 }
 
 func TestMultiInsertRejectsTooManyTargets(t *testing.T) {
