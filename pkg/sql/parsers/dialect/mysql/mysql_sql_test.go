@@ -60,6 +60,72 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	var names []string
+	for _, def := range createStmt.Defs {
+		switch index := def.(type) {
+		case *tree.Index:
+			names = append(names, index.Name)
+		case *tree.UniqueIndex:
+			names = append(names, index.GetIndexName())
+		}
+	}
+
+	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
+}
+
+func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (v varchar(20), key TypeOptionIdx type btree(v))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	index, ok := createStmt.Defs[1].(*tree.Index)
+	require.True(t, ok)
+	require.Equal(t, "TypeOptionIdx", index.Name)
+}
+
+func TestCreateIndexPreservesIndexIdentifierCase(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create index MixedCaseIdx on t(v)", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateIndex)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("MixedCaseIdx"), createStmt.Name)
+}
+
+func TestForeignKeyNameRemainsCaseInsensitive(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (id int, parent_id int, foreign key MixedFK(parent_id) references t(id))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	foreignKey, ok := createStmt.Defs[2].(*tree.ForeignKey)
+	require.True(t, ok)
+	require.Equal(t, "mixedfk", foreignKey.Name)
+
+	stmt, err = ParseOne(context.Background(),
+		"alter table t drop foreign key MixedFK", 1)
+	require.NoError(t, err)
+
+	alterStmt, ok := stmt.(*tree.AlterTable)
+	require.True(t, ok)
+	drop, ok := alterStmt.Options[0].(*tree.AlterOptionDrop)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("mixedfk"), drop.Name)
+}
+
 func TestSetNamesAssignmentKind(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -57,6 +57,17 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
+	// Reuse time-window and aggregate results only outside aggregate arguments.
+	// Nested aggregate calls must reach BindAggFunc for the standard rejection.
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.timeByAst[astStr]; ok {
+			if astStr != TimeWindowEnd && astStr != TimeWindowStart {
+				b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+			}
+			return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
+		}
+	}
+
 	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
 		if !b.insideAgg {
 			return &plan.Expr{
@@ -68,8 +79,6 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 					},
 				},
 			}, nil
-		} else {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "nestted aggregate function")
 		}
 	}
 
@@ -858,6 +867,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 
 	astStr := semanticAstKey(astExpr)
 	b.ctx.timeByAst[astStr] = colPos
+	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 
 	return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 }

@@ -8354,7 +8354,7 @@ func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultW
 
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return 0
+		return proc.GetFoundRows()
 	})
 }
 

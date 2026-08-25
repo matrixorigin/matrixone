@@ -32,6 +32,45 @@ func keyPartWithLength(colName string, length int) *tree.KeyPart {
 	}
 }
 
+func TestIndexNameKeyUsesCanonicalLowercaseInsteadOfSimpleFold(t *testing.T) {
+	require.Equal(t, indexNameKey("MixedCaseIdx"), indexNameKey("mixedcaseidx"))
+	require.Equal(t, indexNameKey("Σ"), indexNameKey("σ"))
+	require.NotEqual(t, indexNameKey("Σ"), indexNameKey("ς"))
+
+	indexes := []*plan.IndexDef{
+		{IndexName: "Σ"},
+		{IndexName: "ς"},
+	}
+	resolved, found := resolveIndexName(indexes, "ς")
+	require.True(t, found)
+	require.Equal(t, "ς", resolved)
+
+	resolved, found = resolveIndexName(indexes, "σ")
+	require.True(t, found)
+	require.Equal(t, "Σ", resolved)
+}
+
+func TestIndexNameKeyIsUsedForDuplicateChecksAndGeneratedNames(t *testing.T) {
+	ctx := context.Background()
+	names := make(map[string]bool)
+
+	require.NoError(t, checkDuplicateConstraint(names, "Σ", false, ctx))
+	require.NoError(t, checkDuplicateConstraint(names, "ς", false, ctx))
+	require.Error(t, checkDuplicateConstraint(names, "σ", false, ctx))
+
+	ordinary := &tree.Index{KeyParts: []*tree.KeyPart{keyPartWithLength("ς", 0)}}
+	setEmptyIndexName(map[string]bool{indexNameKey("Σ"): true}, ordinary)
+	require.Equal(t, "ς", ordinary.Name)
+
+	unique := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{keyPartWithLength("σ", 0)}}
+	setEmptyUniqueIndexName(map[string]bool{indexNameKey("Σ"): true}, unique)
+	require.Equal(t, "σ_2", unique.Name)
+
+	fulltext := &tree.FullTextIndex{KeyParts: []*tree.KeyPart{keyPartWithLength("σ", 0)}}
+	setEmptyFullTextIndexName(map[string]bool{indexNameKey("Σ"): true}, fulltext)
+	require.Equal(t, "σ_2", fulltext.Name)
+}
+
 func TestIndexTableKeyTypeForPrefix(t *testing.T) {
 	tests := []struct {
 		name     string
