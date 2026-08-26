@@ -93,7 +93,7 @@ with_default  ¦  CREATE EXTERNAL TABLE `with_default` (
 select * from orders;
 invalid input: sql external table requires a __mo_query = '<text>' predicate or a 'query' table option
 select * from orders where __mo_query = 'select nope from no_such';
-invalid input: sql_tvf: query failed: Error 1146 (HY000): SQL parser error: table "no_such" does not exist
+invalid input: sql_tvf: query failed: Error 1146 (42S02): SQL parser error: table "no_such" does not exist
 select * from orders where __mo_query = 'select id, name from src';
 invalid input: the data of row 1 contained is not equal to input columns
 insert into orders values (9,'x',1.0,'2026-01-01 00:00:00');
