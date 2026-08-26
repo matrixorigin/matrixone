@@ -514,27 +514,55 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{
 		types.T_varchar.ToType(), geometry32Type,
 	}))
-
-	mp := mpool.MustNewZero()
-	exec, err := MakeAgg(mp, AggIdOfGroupConcat, false, geometryType)
-	require.NoError(t, err)
-	defer exec.Free()
-	require.NoError(t, exec.GroupGrow(1))
-	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 20), 0))
-
 	wkb := geo.WriteWKB(geo.Point{X: 1, Y: 2})
 	require.Len(t, wkb, 21)
-	values := vector.NewVec(geometryType)
-	defer values.Free(mp)
-	require.NoError(t, vector.AppendBytes(values, wkb, false, mp))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
 
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	defer results[0].Free(mp)
-	require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
-	require.Equal(t, wkb[:20], results[0].GetBytesAt(0))
+	t.Run("geometry WKB max-length boundary", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		exec, err := MakeAgg(mp, AggIdOfGroupConcat, false, geometryType)
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 20), 0))
+
+		values := vector.NewVec(geometryType)
+		defer values.Free(mp)
+		require.NoError(t, vector.AppendBytes(values, wkb, false, mp))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		defer results[0].Free(mp)
+		require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
+		require.Equal(t, wkb[:20], results[0].GetBytesAt(0))
+	})
+
+	t.Run("mixed text and geometry WKB max-length boundary", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		exec, err := MakeAgg(
+			mp, AggIdOfGroupConcat, false, types.T_varchar.ToType(), geometryType)
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 20), 0))
+
+		textValues := vector.NewVec(types.T_varchar.ToType())
+		defer textValues.Free(mp)
+		require.NoError(t, vector.AppendBytes(textValues, []byte("x"), false, mp))
+		geometryValues := vector.NewVec(geometryType)
+		defer geometryValues.Free(mp)
+		require.NoError(t, vector.AppendBytes(geometryValues, wkb, false, mp))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{textValues, geometryValues}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		defer results[0].Free(mp)
+		require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
+		expected := append([]byte("x"), wkb[:19]...)
+		require.Equal(t, expected, results[0].GetBytesAt(0))
+	})
 }
 
 func TestGroupConcatPreservesTextCharsetForNestedMin(t *testing.T) {
