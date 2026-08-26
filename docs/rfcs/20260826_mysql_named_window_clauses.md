@@ -119,12 +119,14 @@ compatibility over accepting an ambiguous extension.
 | 127 cap and inline occurrence counting | planner boundary tests, including nested-select control | 127 declarations accepted and 128 rejected |
 
 The BVT uses a four-row table in its own database, deterministic ordering, no
-sleeps, and explicit database teardown. Acceptance requires normal-comparison
-execution against a ready test-owned service, verification of the teardown
-postcondition, then a second execution against that same service; the two-run
-record is validation evidence rather than a property asserted by this document.
-Existing focused parser, planner, frontend, and `moerr` tests remain the
-cheapest white-box proofs; the BVT supplies the independent frontend/SQL oracle.
+sleeps, entry cleanup with `DROP DATABASE IF EXISTS`, and final database
+teardown. Normal-comparison execution against a ready test-owned service is the
+acceptance evidence. A separate same-instance repeat is not a feature
+requirement: the entry cleanup makes a fresh invocation independent of residue,
+while the final `DROP DATABASE` is the deterministic teardown boundary covered
+by the normal comparison. Existing focused parser, planner, frontend, and
+`moerr` tests remain the cheapest white-box proofs; the BVT supplies the
+independent frontend/SQL oracle.
 
 ## Rollout and review record
 
