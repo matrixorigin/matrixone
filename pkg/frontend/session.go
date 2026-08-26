@@ -385,6 +385,11 @@ type tempTableIdentity struct {
 	internal bool
 }
 
+// A migration snapshot carries identifiers only, not table data. Keep its
+// count bounded nevertheless: every entry becomes a CREATE ... CLONE statement
+// on the target and all entries share the fixed connection-transfer deadline.
+const maxMigrateTempTableCount = 1024
+
 type tempTableTxnJournal struct {
 	before     map[string]tempTableAliasState
 	statements map[string]map[string]tempTableAliasState
@@ -722,6 +727,24 @@ func (ses *Session) snapshotTempTables() []*query.MigrateTempTable {
 		})
 	}
 	return result
+}
+
+// snapshotTempTablesForMigration applies the same wire-size limit used by the
+// typed variable snapshots. The source must reject an oversized snapshot before
+// proxy starts a handoff: the old session remains authoritative and no target
+// clone can be left behind by a transfer that cannot complete in one attempt.
+func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*query.MigrateTempTable, error) {
+	result := ses.snapshotTempTables()
+	if len(result) > maxMigrateTempTableCount {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"temporary tables exceed the connection migration size limit (table limit %d)",
+			maxMigrateTempTableCount)
+	}
+	if (&query.MigrateConnToRequest{TempTables: result}).ProtoSize() > maxMigrateUserDefinedVarsSize {
+		return nil, moerr.NewInternalError(ctx,
+			"temporary tables exceed the connection migration size limit")
+	}
+	return result, nil
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -3232,6 +3255,16 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 
 type migrateTempTableExec func(sql string) error
 
+// isStaleTempTableMigrationError identifies only catalog errors that prove a
+// migration entry cannot be cloned: the database was dropped, or its source
+// physical relation was dropped and the database was subsequently recreated.
+// Other clone errors remain fatal so a target problem is never mistaken for
+// stale source state.
+func isStaleTempTableMigrationError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
+}
+
 func migrateTempTables(
 	ctx context.Context,
 	ses *Session,
@@ -3283,6 +3316,13 @@ func migrateTempTables(
 			return exec(sql)
 		}()
 		if err != nil {
+			if isStaleTempTableMigrationError(err) {
+				// DROP DATABASE can originate from a different session, leaving
+				// this session's local alias map stale. The catalog error proves
+				// that this entry has no source relation to preserve; discard just
+				// this entry and continue migrating the usable session state.
+				continue
+			}
 			return moerr.AttachCause(ctx, err)
 		}
 		targetName, ok := ses.GetTempTable(table.Database, table.Alias)

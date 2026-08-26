@@ -613,7 +613,16 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	tempTables := ses.snapshotTempTables()
+	tempTables, err := ses.snapshotTempTablesForMigration(operationCtx)
+	if err != nil {
+		if isMigrationSnapshotSizeLimitError(err) {
+			// Do not send an impossible clone batch to a target CN. The current
+			// session remains usable on the source and a later transfer can be
+			// admitted after the client reduces its temporary-table state.
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+		return err
+	}
 	if len(tempTables) > 0 && !tempTableMigrationSupported {
 		// An older Proxy would silently omit the alias map and let source-session
 		// cleanup delete the physical tables after handoff. Keep the connection

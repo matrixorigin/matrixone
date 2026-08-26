@@ -1583,6 +1583,53 @@ func TestMigrateTempTablesClonesIntoTargetOwnership(t *testing.T) {
 		require.Empty(t, ses.tempTableIdentities)
 	})
 
+	t.Run("skips mappings made stale by another session dropping or recreating the database", func(t *testing.T) {
+		ses := newSession()
+		staleDroppedDB := &query.MigrateTempTable{
+			Database: "dropped", Alias: "t", PhysicalName: "__mo_tmp_dropped_t",
+		}
+		staleRecreatedDB := &query.MigrateTempTable{
+			Database: "recreated", Alias: "t", PhysicalName: "__mo_tmp_old_t",
+		}
+		live := &query.MigrateTempTable{
+			Database: "live", Alias: "t", PhysicalName: "__mo_tmp_live_t",
+		}
+		calls := 0
+		committed := false
+		err := migrateTempTables(
+			context.Background(), ses,
+			[]*query.MigrateTempTable{staleDroppedDB, staleRecreatedDB, live},
+			func(sql string) error {
+				if sql == "COMMIT" {
+					committed = true
+					return nil
+				}
+				calls++
+				switch calls {
+				case 1:
+					return moerr.NewBadDBNoCtx(staleDroppedDB.Database)
+				case 2:
+					return moerr.NewNoSuchTableNoCtx(staleRecreatedDB.Database, staleRecreatedDB.PhysicalName)
+				case 3:
+					ses.AddTempTable(live.Database, live.Alias, "__mo_tmp_target_live_t")
+					return nil
+				default:
+					return moerr.NewInternalErrorNoCtx("unexpected clone")
+				}
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
+		require.True(t, committed)
+		_, ok := ses.GetTempTable(staleDroppedDB.Database, staleDroppedDB.Alias)
+		require.False(t, ok)
+		_, ok = ses.GetTempTable(staleRecreatedDB.Database, staleRecreatedDB.Alias)
+		require.False(t, ok)
+		target, ok := ses.GetTempTable(live.Database, live.Alias)
+		require.True(t, ok)
+		require.Equal(t, "__mo_tmp_target_live_t", target)
+	})
+
 	t.Run("commit failure leaves only target-owned clone", func(t *testing.T) {
 		ses := newSession()
 		err := migrateTempTables(

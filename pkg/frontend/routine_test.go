@@ -756,6 +756,29 @@ func TestMigrateConnectionFromExportsTemporaryTablesOnlyToCapableProxy(t *testin
 	}}, resp.TempTables)
 }
 
+func TestMigrateConnectionFromRejectsOversizedTemporaryTableSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	for i := 0; i <= maxMigrateTempTableCount; i++ {
+		alias := fmt.Sprintf("tmp_%d", i)
+		ses.AddTempTable("db", alias, "__mo_tmp_source_"+alias)
+	}
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	err := rt.migrateConnectionFromActionWithCapabilities(
+		context.Background(),
+		query.MigrateConnFromAction_MigrateConnFromExport,
+		true,
+		resp,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Empty(t, resp.TempTables)
+	require.False(t, resp.TempTableStateExported)
+}
+
 func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
