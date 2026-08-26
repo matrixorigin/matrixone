@@ -686,6 +686,41 @@ func TestRecordLine(t *testing.T) {
 		}
 	})
 
+	// A quoted field spanning more bytes than one read block drains several
+	// blocks into the record. Counting only the last block's prefix loses every
+	// newline in the blocks before it -- which is exactly the record shape
+	// __mo_file_line exists to report.
+	t.Run("newlines are counted in every drained block", func(t *testing.T) {
+		parser, err := NewCSVParser(&cfg,
+			NewStringReader("a,\"xxxxxxxx\nxxxxxxxx\nxxxxxxxx\"\nb,2\n"), 4, false)
+		require.NoError(t, err)
+
+		_, err = parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), parser.RecordLine(), "the quoted record starts on line 1")
+
+		_, err = parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(4), parser.RecordLine(),
+			"the quoted field spans lines 1-3, so the next record is on line 4")
+	})
+
+	// LINES STARTING BY reads ahead a whole line, then pushes the unmatched
+	// remainder back and rewinds pos. The counter has to rewind with it, or the
+	// newline consumed by the lookahead is counted twice.
+	t.Run("lines starting by does not double count", func(t *testing.T) {
+		startCfg := cfg
+		startCfg.LinesStartingBy = "xxx"
+		startCfg.LinesTerminatedBy = "\n"
+		parser, err := NewCSVParser(&startCfg, NewStringReader("xxxa,1\nxxxb,2\n"), int64(ReadBlockSize), false)
+		require.NoError(t, err)
+		for _, want := range []int64{1, 2} {
+			_, err = parser.Read(nil)
+			require.NoError(t, err)
+			require.Equal(t, want, parser.RecordLine())
+		}
+	})
+
 	t.Run("counter is exact across a small read block", func(t *testing.T) {
 		// a tiny block size forces the refill paths (readUntil's loop) that
 		// advance position in bulk rather than byte by byte

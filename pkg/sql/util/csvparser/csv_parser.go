@@ -560,6 +560,11 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	// not found in parser.buf, need allocate and loop.
 	var buf []byte
 	for {
+		// Every byte of parser.buf is drained into buf here, so this is where
+		// its newlines are consumed. Counting only the final block's prefix
+		// below would lose the newlines of every block drained before it,
+		// which is what a quoted field spanning more than one read block does.
+		parser.lineNo += int64(bytes.Count(parser.buf, newlineByte))
 		buf = append(buf, parser.buf...)
 		if len(buf) > config.LargestEntryLimit {
 			return buf, 0, moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
@@ -569,7 +574,6 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 			if err == nil {
 				err = io.EOF
 			}
-			parser.lineNo += int64(bytes.Count(parser.buf, newlineByte))
 			parser.pos += int64(len(buf))
 			return buf, 0, err
 		}
@@ -625,6 +629,7 @@ outside:
 		// end of a line, the substring can still be dropped by rule 2.
 		if len(parser.startingBy) > 0 && !foundStartingByThisLine {
 			oldPos := parser.pos
+			oldLineNo := parser.lineNo
 			content, _, err := parser.readUntilTerminator()
 			if err != nil {
 				if len(content) == 0 {
@@ -638,9 +643,15 @@ outside:
 				continue
 			}
 			foundStartingByThisLine = true
+			// The lookahead consumed -- and counted -- a whole line. Only the
+			// prefix up to and including startingBy stays consumed; the rest is
+			// pushed back and parsed again, so the line counter has to rewind
+			// with pos or that newline is counted twice.
+			consumed := content[:idx+len(parser.startingBy)]
 			content = content[idx+len(parser.startingBy):]
 			parser.buf = append(content, parser.buf...)
 			parser.pos = oldPos + int64(idx+len(parser.startingBy))
+			parser.lineNo = oldLineNo + int64(bytes.Count(consumed, newlineByte))
 		}
 
 		content, firstByte, err := parser.readUntil(&parser.unquoteByteSet)

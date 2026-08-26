@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -385,5 +386,162 @@ func TestKafkaErrorModeTolerates(t *testing.T) {
 		require.True(t, bat.Vecs[colMsg].IsNull(2))
 		require.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](bat.Vecs[colA])[2],
 			"a bad message does not disturb the message after it")
+	})
+}
+
+// TestLookalikeUserColumnStillReadsItsData: an external table created before
+// these names were reserved can have a REAL user column called
+// __mo_error_message, with an ordinary ColId. resolveExternalErrorMode already
+// refuses to switch tolerance on for it -- the switch is keyed on the reserved
+// ColId -- but the column must also still read its own data. Synthesizing by
+// name alone returned NULL and silently corrupted `select *` on such a table
+// after upgrade.
+func TestLookalikeUserColumnStillReadsItsData(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+
+	// (a int, __mo_error_message varchar) -- both ordinary columns, ColId 0
+	cols := []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: catalog.ExternalErrorMessage, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+	}
+	attrs := []plan.ExternAttr{
+		{ColName: "a", ColIndex: 0, ColFieldIndex: 0},
+		{ColName: catalog.ExternalErrorMessage, ColIndex: 1, ColFieldIndex: 1},
+	}
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs:         attrs,
+			Cols:          cols,
+			ColumnListLen: 2,
+			StrictSqlMode: true,
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV, Tail: &tree.TailParameter{}},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileCnt: 1}, Filter: &FilterParam{}},
+	}
+	resolveExternalErrorMode(param)
+	require.False(t, param.ErrorMode.Tolerate, "a lookalike column must not switch tolerance on")
+
+	bat := batch.NewOffHeap([]string{"a", catalog.ExternalErrorMessage})
+	for i := range cols {
+		bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&cols[i].Typ, false))
+	}
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+
+	line := []csvparser.Field{{Val: "7"}, {Val: "real user value"}}
+	require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+	require.Equal(t, int32(7), vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[0], 0))
+	require.False(t, bat.Vecs[1].IsNull(0), "the user column must not be synthesized to NULL")
+	require.Equal(t, "real user value", string(bat.Vecs[1].GetBytesAt(0)))
+}
+
+// TestErrorRowsRespectMaxBatchSize: a reject row is a row. Appending one and
+// continuing without re-checking the accumulated size let a run of malformed
+// records build a single batch far past maxBatchSize -- up to OneBatchMaxRow
+// records, each carrying a copy of its source text in __mo_error_text --
+// which defeats the transport and memory bound the limit exists to enforce.
+func TestErrorRowsRespectMaxBatchSize(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		format  string
+		jsonFmt string
+		content string
+	}{
+		{"jsonline", tree.JSONLINE, tree.OBJECT, "bad1\nbad2\nbad3\n"},
+		{"csv", tree.CSV, "", "notanint,a\nnotanint,b\nnotanint,c\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tc.format, tc.jsonFmt, numTestCols)
+			param.maxBatchSize = 1
+
+			r := &CsvReader{param: param}
+			r.reader = io.NopCloser(strings.NewReader(tc.content))
+			parser, err := newCSVParserFromReader(param.Extern, r.reader)
+			require.NoError(t, err)
+			r.plh = &ParseLineHandler{csvReader: parser}
+
+			finished, err := r.makeBatchRows(proc, bat)
+			require.NoError(t, err)
+			require.False(t, finished, "the batch must be handed on before the file is drained")
+			require.Equal(t, 1, bat.RowCount(),
+				"one reject row already exceeds maxBatchSize, so the batch ends there")
+		})
+	}
+}
+
+// TestJSONArrayArityIgnoresSyntheticColumns: the arity of a JSON array record
+// is measured against the columns the RECORD supplies, not against the table's
+// whole column list. Keeping the error-mode columns lengthens that list, so
+// bounding by len(cols) let extra values land in a synthetic slot: a record
+// that is rejected without error mode was silently accepted with it, which is
+// the one thing a diagnostic mode must never do.
+func TestJSONArrayArityIgnoresSyntheticColumns(t *testing.T) {
+	// (a int, s varchar) fed array records; the third value is extra
+	const content = `[1,"alpha"]` + "\n" + `[2,"beta","extra"]` + "\n" + `[3,"gamma"]` + "\n"
+
+	t.Run("rejected without error mode", func(t *testing.T) {
+		param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.ARRAY, colLine)
+		err := readAllText(t, param, proc, bat, content)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "wrong number of colunms")
+	})
+
+	t.Run("still rejected with error mode, as a reported row", func(t *testing.T) {
+		param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.ARRAY, numTestCols)
+		require.NoError(t, readAllText(t, param, proc, bat, content))
+		requireRows(t, bat, []wantRow{
+			{a: 1, s: "alpha", line: 1},
+			{line: 2, message: "wrong number of colunms", text: `[2,"beta","extra"]`},
+			{a: 3, s: "gamma", line: 3},
+		})
+	})
+}
+
+// TestJSONLineUnsupportedFormatRejected: jsondata is validated when the reader
+// is built, but transJson2Lines is also reachable from the Kafka path, so it
+// refuses an unknown shape rather than silently producing no fields.
+func TestJSONLineUnsupportedFormatRejected(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	r := &CsvReader{}
+	_, err := r.transJson2Lines(proc.Ctx, `{"a":1}`, nil, nil, "neither")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not support")
+}
+
+// TestJSONArrayJSONColumnKeepsRawJSON: a T_json column in an array record is
+// carried through as its raw JSON rather than its printed form.
+func TestJSONArrayJSONColumnKeepsRawJSON(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	attrs := []plan.ExternAttr{
+		{ColName: "a", ColIndex: 0, ColFieldIndex: 0},
+		{ColName: "j", ColIndex: 1, ColFieldIndex: 1},
+	}
+	cols := []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: "j", Typ: plan.Type{Id: int32(types.T_json)}},
+	}
+	r := &CsvReader{}
+	line, err := r.transJsonArray2Lines(proc.Ctx, `[1,{"k":"v"}]`, attrs, cols)
+	require.NoError(t, err)
+	require.Len(t, line, 2)
+	require.Equal(t, "1", line[0].Val)
+	require.Contains(t, line[1].Val, "k")
+}
+
+// TestErrorTextUsesTheConfiguredSeparator: __mo_error_text rebuilds a failed
+// CSV record from the decoded fields, so it has to re-join them with the
+// separator the table declared, not a comma.
+func TestErrorTextUsesTheConfiguredSeparator(t *testing.T) {
+	param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
+	param.Extern.Tail.Fields = &tree.Fields{Terminated: &tree.Terminated{Value: "|"}}
+	require.NoError(t, readAllText(t, param, proc, bat, "1|alpha\nnotanint|beta\n"))
+	requireRows(t, bat, []wantRow{
+		{a: 1, s: "alpha", line: 1},
+		{line: 2, message: "is not int32 type", text: "notanint|beta"},
 	})
 }

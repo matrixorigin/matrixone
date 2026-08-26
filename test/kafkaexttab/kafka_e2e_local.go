@@ -566,19 +566,27 @@ func seedKafkaRaw(ctx context.Context, bootstrap, tp string, values []string) er
 // broker-free unit test against a SQL simulator, and teaching that simulator to
 // model multi-table INSERT would make it the oracle for a feature it does not
 // implement.
+// errModeMessages is the stream runErrorMode reads: 8 messages, 2 that parse
+// cleanly and 6 that fail in a different way each. It is package level so the
+// broker-free simulator answers from the same list the driver asserts against.
+var errModeMessages = []string{
+	"1,alpha,10.50,2024-01-01 00:00:00",      // good
+	"abc,beta,20.50,2024-01-02 00:00:00",     // id is not a number
+	"3,gamma,notanumber,2024-01-03 00:00:00", // amount is not a number
+	"4,delta,40.50,not-a-timestamp",          // ts is unparsable
+	"5,epsilon,50.50",                        // too few fields
+	"6,zeta,60.50,2024-01-06 00:00:00,extra", // too many fields
+	"",                                       // empty value: not one record
+	"8,theta,80.50,2024-01-08 00:00:00",      // good
+}
+
+// seedRawFn is a test seam, like committedOffsetFn: the broker-free simulator
+// substitutes its own producer so runErrorMode is executable without Kafka.
+var seedRawFn = seedKafkaRaw
+
 func runErrorMode(ctx context.Context, db *sql.DB, bootstrap string, r *report) error {
-	// 8 messages: 2 parse cleanly, 6 fail in a different way each.
-	msgs := []string{
-		"1,alpha,10.50,2024-01-01 00:00:00",      // good
-		"abc,beta,20.50,2024-01-02 00:00:00",     // id is not a number
-		"3,gamma,notanumber,2024-01-03 00:00:00", // amount is not a number
-		"4,delta,40.50,not-a-timestamp",          // ts is unparsable
-		"5,epsilon,50.50",                        // too few fields
-		"6,zeta,60.50,2024-01-06 00:00:00,extra", // too many fields
-		"",                                       // empty value: not one record
-		"8,theta,80.50,2024-01-08 00:00:00",      // good
-	}
-	if err := seedKafkaRaw(ctx, bootstrap, errTopic, msgs); err != nil {
+	msgs := errModeMessages
+	if err := seedRawFn(ctx, bootstrap, errTopic, msgs); err != nil {
 		return err
 	}
 

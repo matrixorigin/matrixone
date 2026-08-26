@@ -218,6 +218,14 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				if err = appendErrorRow(proc, bat, nil, i, param, err); err != nil {
 					return false, err
 				}
+				// A reject row is a row: the batch has to be handed on at the
+				// same size limit as a row that parsed. Skipping this check let
+				// a run of malformed records build one batch far past
+				// maxBatchSize -- each carrying a copy of its source text in
+				// __mo_error_text -- defeating the transport and memory bound.
+				if curBatchSize >= param.maxBatchSize {
+					break
+				}
 				continue
 			}
 		}
@@ -360,11 +368,17 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 	if !ok || g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a json array")
 	}
-	if len(g.Values) < getRealAttrCnt(attrs, cols) {
+	// Both bounds are measured against the columns the RECORD supplies, never
+	// against len(cols): the error-mode columns are synthesized and lengthen
+	// the table's column list, so bounding by it would let an extra array
+	// value land in a synthetic slot and turn a malformed record into a
+	// successful row -- rejected without error mode, accepted with it.
+	realCnt := getRealAttrCnt(attrs, cols)
+	if len(g.Values) < realCnt {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, valN := range g.Values {
-		if idx >= len(cols) {
+		if idx >= realCnt || idx >= len(cols) {
 			return nil, moerr.NewInvalidInput(ctx, str+" , wrong number of colunms")
 		}
 

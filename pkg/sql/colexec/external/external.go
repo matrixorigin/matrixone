@@ -1263,20 +1263,25 @@ func isSynthesizedAttr(attr plan.ExternAttr, colId uint64, param *ExternalParam)
 	return false
 }
 
-func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
+func getFieldFromLine(line []csvparser.Field, colName string, colId uint64, param *ExternalParam, fieldIdx int32) csvparser.Field {
 	// Error-mode columns are synthesized, never read from the record. On a row
 	// that parsed, both error columns are NULL; the tolerant path overwrites
 	// them for a row that did not. __mo_file_line is position metadata and is
 	// filled whether or not the row parsed.
-	switch colName {
-	case catalog.ExternalFileLine:
+	//
+	// Scoped by the reserved ColId, not by name: a table created before these
+	// names were reserved can have a REAL user column called
+	// __mo_error_message, and it has to keep reading its own data.
+	switch {
+	case colName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
 		if param.KafkaScan != nil {
 			// A Kafka record has no line in a file; __mo_message_id is what
 			// identifies it.
 			return csvparser.Field{IsNull: true}
 		}
 		return csvparser.Field{Val: strconv.FormatInt(param.ErrorMode.RecordLine, 10)}
-	case catalog.ExternalErrorMessage, catalog.ExternalErrorText:
+	case colName == catalog.ExternalErrorMessage && colId == catalog.ExternalErrorMessageColId,
+		colName == catalog.ExternalErrorText && colId == catalog.ExternalErrorTextColId:
 		return csvparser.Field{IsNull: true}
 	}
 	// __mo_filepath is synthesized by name (pre-existing behavior); __mo_query
@@ -1442,7 +1447,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	fieldIdx := attr.ColFieldIndex
 
-	field := getFieldFromLine(line, colName, param, fieldIdx)
+	var colId uint64
+	if col != nil {
+		colId = col.ColId
+	}
+	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
 	id := types.T(col.Typ.Id)
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
