@@ -131,9 +131,30 @@ it has no cgroup concept, which is the part that matters in a container, and the
 library is dormant. The reader is ~200 lines of `/proc` and cgroup parsing,
 mirroring the Go rules case for case.
 
-**Serialise builds instead of admitting them.** Rejected: it converts a capacity
-problem into a throughput problem, and concurrent builds that genuinely fit are
-the common case.
+**Serialise builds instead of admitting them.** The build *call* is already
+serialised per device by `device_build_mutex`, because the cuVS kmeans workspace
+is not re-entrant. But that is not where the memory is taken: the capacity
+buffers are allocated in the index constructor, from `InitEmpty` at the start of
+CREATE INDEX, while `device_build_mutex` is taken much later inside `build()`
+and only around the cuVS call. There is no lock to widen -- the allocations were
+never on that path.
+
+Serialising them would mean holding a lock from the constructor, through the
+whole ingest (which scans the source table), to the end of the build: two
+independent `CREATE INDEX` statements, each running for minutes, serialised
+against each other at statement level. Rejected because:
+
+- **it is a DDL concurrency change, not a locking detail.** Two CREATE INDEX
+  statements are separate SQL executions; making one wait for the other for the
+  duration of a table scan is a much larger semantic change than adding a ledger;
+- **it still does not cover loads.** A load deserializes on the search path, from
+  an unrelated session, and takes no build lock. Build-vs-load is one of the two
+  overcommit shapes the device governor exists for; the other is load-vs-load,
+  since the index cache deduplicates by cache key and two *different* cold
+  indexes load concurrently;
+- **it does not fix a single oversized build.** Serialising removes concurrency,
+  not size: one build larger than the card still fails, so the capacity model and
+  the admission check are needed regardless.
 
 ## Rollout and compatibility
 
