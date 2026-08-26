@@ -129,7 +129,10 @@ func (c *Compile) tryCompileSiriusStreamRead(
 	}
 	inputs, scopes, err := c.compileSiriusStreamScopes(queryPlan.GetQuery(), readPlan.StreamInputs, execution)
 	if err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtime.CleanupTimeout)
+		cleanupCtx, cancel := context.WithTimeoutCause(
+			context.WithoutCancel(ctx), runtime.CleanupTimeout,
+			moerr.NewInternalErrorNoCtx("substrait: timed out cleaning up failed streamed compile"),
+		)
 		defer cancel()
 		return false, errors.Join(err, execution.Cleanup(cleanupCtx))
 	}
