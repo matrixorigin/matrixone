@@ -58,7 +58,7 @@ type CDCStatementBuilder struct {
 	maxSQLSize uint64
 
 	// Flags
-	isMO bool // Whether target is MatrixOne (affects DELETE syntax)
+	isMO bool // Whether target is MatrixOne (affects feature compatibility)
 }
 
 // NewCDCStatementBuilder creates a new SQL statement builder for a specific table
@@ -332,33 +332,18 @@ func (b *CDCStatementBuilder) buildInsertPrefix(fromTs, toTs types.TS) []byte {
 // buildDeletePrefix builds the DELETE statement prefix with timestamp comment
 func (b *CDCStatementBuilder) buildDeletePrefix(fromTs, toTs types.TS) []byte {
 	tsComment := fmt.Sprintf("/* [%s, %s) */ ", fromTs.ToString(), toTs.ToString())
-
-	if b.isMO && !b.isSinglePK {
-		// MO multi-column PK: DELETE FROM t WHERE pk1=a1 AND pk2=a2 OR ...
-		prefix := fmt.Sprintf("%sDELETE FROM `%s`.`%s` WHERE ", tsComment, b.dbName, b.tableName)
-		return []byte(prefix)
-	} else {
-		// Single PK or MySQL: DELETE FROM t WHERE (pk1,pk2) IN (...)
-		pkStr := b.buildPKColumnList()
-		prefix := fmt.Sprintf("%sDELETE FROM `%s`.`%s` WHERE %s IN (",
-			tsComment, b.dbName, b.tableName, pkStr)
-		return []byte(prefix)
-	}
+	pkStr := b.buildPKColumnList()
+	return []byte(fmt.Sprintf("%sDELETE FROM `%s`.`%s` WHERE %s IN (",
+		tsComment, b.dbName, b.tableName, pkStr))
 }
 
 // buildDeleteSuffix builds the DELETE statement suffix
 func (b *CDCStatementBuilder) buildDeleteSuffix() []byte {
-	if b.isMO && !b.isSinglePK {
-		return []byte(";")
-	}
 	return []byte(");")
 }
 
 // buildDeleteRowSeparator returns the separator between DELETE row conditions
 func (b *CDCStatementBuilder) buildDeleteRowSeparator() []byte {
-	if b.isMO && !b.isSinglePK {
-		return []byte(" or ")
-	}
 	return []byte(",")
 }
 
@@ -405,8 +390,7 @@ func (b *CDCStatementBuilder) formatInsertRow(ctx context.Context, row []any) ([
 // formatDeleteRow formats a primary key value for DELETE statement
 //
 // For single PK: (val)
-// For composite PK (MO): pk1=a1 AND pk2=a2
-// For composite PK (MySQL): (val1,val2,...)
+// For composite PK: (val1,val2,...)
 func (b *CDCStatementBuilder) formatDeleteRow(ctx context.Context, pkValue any) ([]byte, error) {
 	buf := make([]byte, 0, 128)
 
@@ -438,32 +422,17 @@ func (b *CDCStatementBuilder) formatDeleteRow(ctx context.Context, pkValue any) 
 			len(b.pkColTypes), len(pkTuple)))
 	}
 
-	if b.isMO {
-		// MO format: pk1=a1 AND pk2=a2
-		for i, val := range pkTuple {
-			if i > 0 {
-				buf = append(buf, []byte(" and ")...)
-			}
-			buf = append(buf, []byte(b.pkColNames[i]+"=")...)
-			buf, err = convertColIntoSql(ctx, val, b.pkColTypes[i], buf)
-			if err != nil {
-				return nil, err
-			}
+	buf = append(buf, '(')
+	for i, val := range pkTuple {
+		if i > 0 {
+			buf = append(buf, ',')
 		}
-	} else {
-		// MySQL format: (val1,val2,...)
-		buf = append(buf, '(')
-		for i, val := range pkTuple {
-			if i > 0 {
-				buf = append(buf, ',')
-			}
-			buf, err = convertColIntoSql(ctx, val, b.pkColTypes[i], buf)
-			if err != nil {
-				return nil, err
-			}
+		buf, err = convertColIntoSql(ctx, val, b.pkColTypes[i], buf)
+		if err != nil {
+			return nil, err
 		}
-		buf = append(buf, ')')
 	}
+	buf = append(buf, ')')
 
 	return buf, nil
 }
@@ -479,10 +448,6 @@ func (b *CDCStatementBuilder) EstimateInsertRowSize() int {
 func (b *CDCStatementBuilder) EstimateDeleteRowSize() int {
 	if b.isSinglePK {
 		return 50 // (value)
-	}
-	if b.isMO {
-		// pk1=val1 AND pk2=val2 ...
-		return len(b.pkColNames) * 60
 	}
 	// (val1,val2,...)
 	return len(b.pkColNames) * 50
