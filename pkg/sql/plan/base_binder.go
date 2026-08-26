@@ -4233,6 +4233,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	// get args(exprs) & types
 	argsLength := len(args)
@@ -4518,30 +4521,43 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "timestampadd":
-		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
-		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
-		// This ensures GetResultColumnsFromPlan returns correct column type for MySQL protocol layer
-		if len(args) >= 3 && argsType[2].Oid == types.T_date {
-			// Check if first argument (unit) is a constant string
-			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
-				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
-					unitStr := strings.ToUpper(sval.Sval)
-					// Parse interval type
-					iTyp, err := types.IntervalTypeOf(unitStr)
-					if err == nil {
-						// Check if it's a date unit (DAY, WEEK, MONTH, QUARTER, YEAR)
-						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
-							iTyp == types.Month || iTyp == types.Quarter ||
-							iTyp == types.Year
-						if isDateUnit {
-							// Return DATE type for date units (MySQL compatible)
-							returnType = types.T_date.ToType()
+		if len(args) >= 3 {
+			inputType := argsType[2]
+			switch inputType.Oid {
+			case types.T_date, types.T_datetime, types.T_timestamp:
+				unit, known := timestampAddUnitFromPlanExpr(args[0])
+				if !known {
+					// A runtime unit can still be MICROSECOND, so retain a safe
+					// upper bound until execution resolves it.
+					if inputType.Oid == types.T_date {
+						returnType = types.T_datetime.ToTypeWithScale(6)
+					} else {
+						returnType.Oid = inputType.Oid
+						returnType.Scale = inputType.Scale
+						if returnType.Scale < 6 {
+							returnType.Scale = 6
 						}
-						// For time units (HOUR, MINUTE, SECOND, MICROSECOND), keep DATETIME (from retType)
+					}
+					break
+				}
+
+				if inputType.Oid == types.T_date {
+					if timestampAddDateUnit(unit) {
+						returnType = types.T_date.ToType()
+					} else {
+						returnType = types.T_datetime.ToTypeWithScale(0)
+						if unit == types.MicroSecond {
+							returnType.Scale = 6
+						}
+					}
+				} else {
+					returnType.Oid = inputType.Oid
+					returnType.Scale = inputType.Scale
+					if unit == types.MicroSecond && returnType.Scale < 6 {
+						returnType.Scale = 6
 					}
 				}
 			}
-			// If unit is not constant, keep DATETIME (conservative approach)
 		}
 
 	case "python_user_defined_function":
@@ -4715,6 +4731,24 @@ func temporalFunctionFSPFromPlanExpr(expr *Expr) (int32, bool) {
 		return 0, false
 	}
 	return int32(fsp.I64Val), true
+}
+
+func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	value, ok := literal.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	unit, err := types.IntervalTypeOf(strings.ToUpper(value.Sval))
+	return unit, err == nil
+}
+
+func timestampAddDateUnit(unit types.IntervalType) bool {
+	return unit == types.Day || unit == types.Week || unit == types.Month ||
+		unit == types.Quarter || unit == types.Year
 }
 
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional
@@ -5307,6 +5341,42 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 	}
 	args[1] = offset
 	return nil
+}
+
+// LAG/LEAD offsets must be non-NULL, non-negative integers. Prepared markers
+// are normalized to int64 above and checked before execution or plan filling;
+// row-dependent integer expressions are checked after evaluation by the
+// window operator.
+func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 {
+		return nil
+	}
+
+	offsetExpr := args[1]
+	if lagLeadOffsetIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
+		return moerr.NewWrongArguments(ctx, name)
+	}
+	lit := offsetExpr.GetLit()
+	if lit != nil {
+		if offset, ok := literalSignedValue(lit); ok && offset < 0 {
+			return moerr.NewWrongArguments(ctx, name)
+		}
+	}
+	return nil
+}
+
+func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
+	for expr != nil {
+		if lit := expr.GetLit(); lit != nil {
+			return lit.Isnull
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+			return false
+		}
+		expr = fn.Args[0]
+	}
+	return false
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
