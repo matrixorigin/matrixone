@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -40,6 +41,7 @@ const (
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
+	shuffleDistinctGroupMinNDV      = 64
 
 	overlapThreshold = 0.95
 	uniformThreshold = 0.3
@@ -1181,7 +1183,24 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	factor := 1 / math.Pow((node.Stats.Outcnt/node.Stats.Selectivity/child.Stats.Outcnt), 0.8)
-	if node.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
+	standardShuffle := node.Stats.HashmapStats.HashmapSize >= threshHoldForShuffleGroup*factor
+
+	// The ordinary group estimate only accounts for the final number of groups.
+	// A mergeable COUNT(DISTINCT) also retains its exact argument set, which can
+	// be orders of magnitude larger. Compare that state with the input using the
+	// same reduction-factor model: shuffling a large input is justified only when
+	// the retained exact state is itself a material fraction of that input.
+	distinctStateNDV := countDistinctStateNDV(node, builder)
+	distinctStateShuffle := false
+	if distinctStateNDV > 0 && child.Stats.Outcnt > 0 {
+		// Base-column NDV can exceed the filtered child cardinality. The exact
+		// state cannot retain more distinct tuples than rows reaching this node.
+		distinctStateRows := min(distinctStateNDV, child.Stats.Outcnt)
+		distinctRatio := distinctStateRows / child.Stats.Outcnt
+		distinctFactor := 1 / math.Pow(distinctRatio, 0.8)
+		distinctStateShuffle = distinctStateRows >= threshHoldForShuffleGroup*distinctFactor
+	}
+	if !standardShuffle && !distinctStateShuffle {
 		return
 	}
 
@@ -1197,7 +1216,14 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 			idx = i
 		}
 	}
-	if highestNDV < ShuffleThreshHoldOfNDV {
+	minimumGroupNDV := float64(ShuffleThreshHoldOfNDV)
+	if distinctStateShuffle {
+		// Keep enough logical groups to expose useful parallel ownership.
+		// Hash/range shuffle then sends every row for one logical group to exactly
+		// one Group operator, removing the exact-state MergeGroup altogether.
+		minimumGroupNDV = shuffleDistinctGroupMinNDV
+	}
+	if highestNDV < minimumGroupNDV {
 		return
 	}
 
@@ -1211,7 +1237,9 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		node.Stats.HashmapStats.Shuffle = true
 		determineShuffleType(hashCol, node, builder)
-		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash &&
+			node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle &&
+			!distinctStateShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 		}
 	}
@@ -1236,6 +1264,40 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
+}
+
+func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
+	maxNDV := float64(-1)
+	if node == nil {
+		return maxNDV
+	}
+	for _, expr := range node.AggList {
+		if expr == nil {
+			continue
+		}
+		agg := expr.GetF()
+		if agg == nil || agg.Func == nil ||
+			uint64(agg.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		baseID := int64(uint64(agg.Func.Obj) & function.DistinctMask)
+		functionID, _ := function.DecodeOverloadID(baseID)
+		if functionID != function.COUNT {
+			continue
+		}
+		for _, arg := range agg.Args {
+			if arg == nil {
+				continue
+			}
+			// Aggregate arguments do not normally have Expr.Ndv populated by
+			// ReCalcNodeStats. Resolve the estimate through the same table/expression
+			// statistics path used elsewhere in the planner. Retain Expr.Ndv as a
+			// fallback for remapped or synthesized expressions whose source column
+			// is no longer available in tag2Table.
+			maxNDV = max(maxNDV, arg.Ndv, getExprNdv(arg, builder))
+		}
+	}
+	return maxNDV
 }
 
 // default shuffle type for scan is hash

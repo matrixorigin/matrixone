@@ -377,6 +377,27 @@ func TestNonDistinctMultiArgumentPreflightRemainsPublicationFree(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestNextArgumentArenaCapacityUsesGeometricGrowth(t *testing.T) {
+	capacity, err := nextArgumentArenaCapacity(1024, 1024)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1024), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(16<<10, 16<<10+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(16<<10+kAggArgArenaSize), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(kAggArgArenaSize, kAggArgArenaSize+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2*kAggArgArenaSize), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(math.MaxUint32-1, math.MaxUint32)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint32), capacity)
+
+	_, err = nextArgumentArenaCapacity(math.MaxUint32, uint64(math.MaxUint32)+1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+}
+
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
 	tests := []aggregateAllocationTestCase{
 		{name: "any", id: AggIdOfAny, params: []types.Type{types.T_varchar.ToType()}},
