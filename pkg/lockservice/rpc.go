@@ -346,6 +346,7 @@ func (c *client) asyncSend(
 				})
 		case pb.Method_Lock,
 			pb.Method_Unlock,
+			pb.Method_BatchUnlock,
 			pb.Method_GetTxnLock,
 			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
