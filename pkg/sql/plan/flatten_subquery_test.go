@@ -2325,6 +2325,35 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 	}
 
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          LIMIT 1 OFFSET 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT DISTINCT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		         HAVING count(*) > 0)
+		   FROM nation n`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated aggregate projection cannot be safely decorrelated")
+	}
+
 	preparedStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, `
 		SELECT n.n_nationkey,
 		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END

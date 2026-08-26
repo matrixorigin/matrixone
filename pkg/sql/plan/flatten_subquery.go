@@ -488,6 +488,10 @@ func (builder *QueryBuilder) flattenSubquery(
 		if err != nil {
 			return nodeID, nil, err
 		}
+		if scalarProjectionStatus == scalarProjectionAggregatePending && !finalizeProjection {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"wrapped correlated aggregate projection cannot be safely decorrelated")
+		}
 
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
@@ -674,6 +678,7 @@ type scalarProjectionNormalization uint8
 const (
 	scalarProjectionNotApplicable scalarProjectionNormalization = iota
 	scalarProjectionNormalized
+	scalarProjectionAggregatePending
 	scalarProjectionUnsafe
 )
 
@@ -694,10 +699,10 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	if len(ctx.results) != 1 || len(ctx.groups) > 0 || !allCorrColsAtDepthOne(ctx.projects[0]) {
 		return unsafe()
 	}
-	// Ungrouped scalar aggregates have a dedicated decorrelation path that
-	// already reconstructs their final projection after the join.
+	// Ungrouped scalar aggregates are accepted only if the dedicated post-join
+	// reconstruction later proves that their exact plan shape is supported.
 	if len(ctx.aggregates) > 0 {
-		return subID, nil, nil, false, nil, scalarProjectionNotApplicable
+		return subID, nil, nil, false, nil, scalarProjectionAggregatePending
 	}
 	if containsVolatileFunction(ctx.projects[0]) || !builder.casePreservesType(ctx.projects[0]) {
 		return unsafe()
