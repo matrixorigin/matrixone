@@ -3000,6 +3000,12 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 	if err != nil {
 		return err
 	}
+	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"MongoDB explicit queries require MORPC protocol version 30",
+		)
+	}
 	return sqlmongodb.ApplyUserQueryToPlan(c.proc.Ctx, query, scan)
 }
 
@@ -6771,6 +6777,20 @@ func supportsRemoteAsofJoin(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion27
+}
+
+// supportsRemoteMongoUserQuery guards the MongoScan payload that carries
+// validated BSON. An older CN would ignore these protobuf fields and silently
+// execute the legacy unfiltered Find path, so explicit queries must wait until
+// deployment has raised the cluster's oldest-live protocol version.
+func supportsRemoteMongoUserQuery(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion30
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {

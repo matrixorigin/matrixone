@@ -18,7 +18,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -168,4 +171,27 @@ func TestConfigureMongoUserQueryLeavesLegacyFindPathUnchanged(t *testing.T) {
 	require.Zero(t, node.ExternScan.MongodbScan.UserQueryKind)
 	require.False(t, node.ExternScan.MongodbScan.IncludeQueryColumn)
 	require.False(t, node.ExternScan.MongodbScan.EmptyResult)
+}
+
+func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
+	node := mongoUserQueryNode()
+	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
+	node.FilterList = []*plan.Expr{
+		mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"filter":{"value":1}}`)),
+	}
+	compiler := &Compile{proc: testutil.NewProcess(t)}
+	rt := runtime.ServiceRuntime(compiler.proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+
+	err := compiler.configureMongoUserQuery(node)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Zero(t, node.ExternScan.MongodbScan.UserQueryKind)
 }
