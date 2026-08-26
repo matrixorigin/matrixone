@@ -1,0 +1,56 @@
+drop database if exists mysql_compat_window_bit_xor;
+create database mysql_compat_window_bit_xor;
+use mysql_compat_window_bit_xor;
+create table t (
+id int primary key,
+grp int,
+v int
+);
+insert into t values
+(1, 1, 10),
+(2, 1, 20),
+(3, 1, 30),
+(4, 2, 40),
+(5, 2, null),
+(6, 2, 5);
+select id,
+bit_and(v) over (order by id rows between unbounded preceding and current row) as cumulative_and,
+bit_or(v) over (order by id rows between unbounded preceding and current row) as cumulative_or,
+bit_xor(v) over (order by id rows between unbounded preceding and current row) as cumulative_xor
+from t
+order by id;
+➤ id[4,32,0]  ¦  cumulative_and[-5,64,0]  ¦  cumulative_or[-5,64,0]  ¦  cumulative_xor[-5,64,0]  𝄀
+1  ¦  10  ¦  10  ¦  10  𝄀
+2  ¦  0  ¦  30  ¦  30  𝄀
+3  ¦  0  ¦  30  ¦  0  𝄀
+4  ¦  0  ¦  62  ¦  40  𝄀
+5  ¦  0  ¦  62  ¦  40  𝄀
+6  ¦  0  ¦  63  ¦  45
+select id, grp,
+bit_xor(v) over (partition by grp) as partition_xor,
+bit_xor(v) over (order by id rows between 1 preceding and current row) as sliding_xor
+from t
+order by id;
+➤ id[4,32,0]  ¦  grp[4,32,0]  ¦  partition_xor[-5,64,0]  ¦  sliding_xor[-5,64,0]  𝄀
+1  ¦  1  ¦  0  ¦  10  𝄀
+2  ¦  1  ¦  0  ¦  30  𝄀
+3  ¦  1  ¦  0  ¦  10  𝄀
+4  ¦  2  ¦  45  ¦  54  𝄀
+5  ¦  2  ¦  45  ¦  40  𝄀
+6  ¦  2  ¦  45  ¦  5
+create table t_null (
+id int primary key,
+grp int,
+v int
+);
+insert into t_null values (1, 1, null), (2, 1, null), (3, 2, 7);
+select id,
+bit_xor(v) over (partition by grp) as partition_xor,
+bit_xor(v) over (order by id rows between 1 preceding and 1 preceding) as previous_xor
+from t_null
+order by id;
+➤ id[4,32,0]  ¦  partition_xor[-5,64,0]  ¦  previous_xor[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  7  ¦  0
+drop database mysql_compat_window_bit_xor;
