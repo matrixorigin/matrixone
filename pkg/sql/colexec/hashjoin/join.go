@@ -446,7 +446,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	if buildErr := dep.BuildError(); buildErr != nil {
 		// A terminal BuildError is a failed dependency, never an empty build.
 		// Return before consuming probe input so no successful rows can escape.
-		return buildErr.AsMoErr()
+		return buildErr.AsError()
 	}
 	// Close the previous metadata generation before adopting a different
 	// JoinMap. Reset normally makes this empty; keeping the transition local
@@ -1519,6 +1519,13 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 		if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
 			return err
 		}
+		// AppendMultiFixed only grows the NULL bitmap when a NULL value is
+		// appended.  The marker currently contains all FALSE values, so its
+		// bitmap can still have a zero logical length even though the result
+		// vector has rowCnt rows.  Establish the visible result range before
+		// merging probe-side NULLs; otherwise a bounded external bitmap treats
+		// every probe NULL as outside the destination and silently drops it.
+		marker.GetNulls().GetBitmap().TryExpandWithSize(rowCnt)
 		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
 	}
 	return nil

@@ -39,11 +39,12 @@ import (
 )
 
 var (
-	defaultRPCTimeout          = time.Second * 10
-	defaultRPCWriteTimeout     = time.Second * 3
-	defaultRPCEnqueueTimeout   = time.Second * 5
-	defaultHandleWorkers       = 12
-	defaultHandleGetTxnWorkers = 4
+	defaultRPCTimeout           = time.Second * 10
+	defaultRPCWriteTimeout      = time.Second * 3
+	defaultRPCEnqueueTimeout    = time.Second * 5
+	defaultHandleWorkers        = 12
+	defaultHandleGetTxnWorkers  = 4
+	defaultOwnerSnapshotWorkers = 4
 	// Recovery identity and validation probes must fail fast when a remote lock
 	// service is gone. Factory execution and process-local queue admission are
 	// different failure domains: the former is peer health, while the latter is
@@ -283,7 +284,16 @@ func checkMethodVersion(
 	service string,
 	req *pb.Request,
 ) error {
-	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
+	err := runtime.CheckMethodVersion(ctx, service, methodVersions, req)
+	if err != nil && req.Method == pb.Method_GetTxnWaitingListOnLockTable {
+		// This method has an explicit Lock-response capability handshake. If the
+		// process-wide deployment protocol later moves below v28, surface the
+		// loss as a terminal capability error instead of an Internal error that
+		// remote snapshot retry loops would treat as transport-transient.
+		return moerr.NewNotSupportedNoCtx(
+			"owner-local lock wait snapshot is unavailable in the current protocol version")
+	}
+	return err
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
@@ -336,6 +346,7 @@ func (c *client) asyncSend(
 				})
 		case pb.Method_Lock,
 			pb.Method_Unlock,
+			pb.Method_BatchUnlock,
 			pb.Method_GetTxnLock,
 			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
@@ -354,7 +365,8 @@ func (c *client) asyncSend(
 					address = s.LockServiceAddress
 					return false
 				})
-		case pb.Method_GetWaitingList:
+		case pb.Method_GetWaitingList,
+			pb.Method_GetTxnWaitingListOnLockTable:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
 			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
@@ -975,6 +987,7 @@ type server struct {
 	closeErr              error
 	requests              chan requestCtx
 	getActiveTxnRequests  chan requestCtx
+	ownerSnapshotRequests chan requestCtx
 	requestEnqueueTimeout time.Duration
 	stopper               *stopper.Stopper
 
@@ -998,6 +1011,7 @@ func NewServer(
 		handlers:              make(map[pb.Method]RequestHandleFunc),
 		requests:              make(chan requestCtx, 10240),
 		getActiveTxnRequests:  make(chan requestCtx, 10240),
+		ownerSnapshotRequests: make(chan requestCtx, 10240),
 		requestEnqueueTimeout: defaultRPCEnqueueTimeout,
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(logger.RawLogger())),
@@ -1026,6 +1040,7 @@ func NewServer(
 func (s *server) Start() error {
 	s.setupRemoteHandles(defaultHandleWorkers, s.requests)
 	s.setupRemoteHandles(defaultHandleGetTxnWorkers, s.getActiveTxnRequests)
+	s.setupRemoteHandles(defaultOwnerSnapshotWorkers, s.ownerSnapshotRequests)
 	return s.rpc.Start()
 }
 
@@ -1045,8 +1060,14 @@ func (s *server) Close() error {
 		s.stopper.Stop()
 		releaseQueuedRequests(s.requests)
 		releaseQueuedRequests(s.getActiveTxnRequests)
+		if s.ownerSnapshotRequests != nil {
+			releaseQueuedRequests(s.ownerSnapshotRequests)
+		}
 		close(s.requests)
 		close(s.getActiveTxnRequests)
+		if s.ownerSnapshotRequests != nil {
+			close(s.ownerSnapshotRequests)
+		}
 	})
 	return s.closeErr
 }
@@ -1131,6 +1152,8 @@ func (s *server) onMessage(
 	if req.Method == pb.Method_GetActiveTxn ||
 		req.Method == pb.Method_CheckActiveTxn {
 		c = s.getActiveTxnRequests
+	} else if req.Method == pb.Method_GetTxnWaitingListOnLockTable {
+		c = s.ownerSnapshotRequests
 	}
 	queuedRequest := requestCtx{
 		req:     req,
@@ -1158,7 +1181,7 @@ func (s *server) onMessage(
 	select {
 	case c <- queuedRequest:
 		s.lifecycle.RUnlock()
-		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(s.queuedRequestCount()))
 		return nil
 	default:
 	}
@@ -1176,7 +1199,7 @@ func (s *server) onMessage(
 	select {
 	case c <- queuedRequest:
 		s.lifecycle.RUnlock()
-		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(s.queuedRequestCount()))
 		return nil
 	case <-closingC:
 		s.lifecycle.RUnlock()
@@ -1211,6 +1234,12 @@ func (s *server) onMessage(
 		releaseRequest(req)
 		return nil
 	}
+}
+
+func (s *server) queuedRequestCount() int {
+	return len(s.requests) +
+		len(s.getActiveTxnRequests) +
+		len(s.ownerSnapshotRequests)
 }
 
 func rejectRequestForServerClose(
@@ -1265,7 +1294,7 @@ func (s *server) handle(
 		case <-ctx.Done():
 			return
 		case ctx := <-requests:
-			v2.TxnLockRPCQueueSizeGauge.Set(float64(len(requests)))
+			v2.TxnLockRPCQueueSizeGauge.Set(float64(s.queuedRequestCount()))
 			fn(ctx)
 		}
 	}

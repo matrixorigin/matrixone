@@ -46,23 +46,23 @@ Dual-protocol compatibility: `GetNextBatch` handles both explicit typed signals 
 
 ### Test Freshness
 
-Test output must be from the current turn:
-
-1. `go test` command appears in current turn's tool calls.
-2. Exit code is 0.
-3. Timestamp is after the last edit.
+Use [validation-evidence.md](validation-evidence.md). Exact-head author/CI or
+local output is valid when selection, mode, terminal status, and relevant
+semantic inputs match. Do not rerun it merely because a reviewer turn changed
+or an unrelated document/PR body was edited.
 
 ### Completion Gate
 
-Before declaring a change done, all boxes must be checked:
+Before declaring an operator/pipeline change done, combine the shared evidence
+contract with these domain-specific checks:
 
 ```
-□ explicitly name each changed owning package and prove `go list -mod=readonly` selects at least one package
-□ GOWORK=off go build -mod=readonly <each named owning package> -> exit 0
-□ GOWORK=off go vet -mod=readonly <each named owning package>   -> exit 0
-□ GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s <each named owning package> -> exit 0, no hangs
-□ git diff --stat                            -> inspected, no unintended files
-□ Regression: at least one test from dependent package passes
+□ sender/receiver and Call/Reset/cleanup closures are mapped
+□ exact changed/directly affected regression selection is non-empty and passes
+□ every affected owning package has valid normal evidence
+□ shared-state/lifecycle race evidence satisfies the shared adaptive protocol
+□ at least one real dependent endpoint is validated when the protocol crosses packages
+□ final delivery diff/generated artifacts are inspected
 ```
 
 Hang = failure. If `go test` produces more than 10s of no output, investigate.
@@ -157,7 +157,7 @@ Do not infer an object-store stall from `runtime.netpoll`, TLS, or `net/http.(*p
 1. Never send terminal signals (`End`, `Error`, `Abort`) from `Call()`. Only `Reset()` sends terminal signals.
 2. Never call `sp.CloseWithTimeout()` after switching to explicit typed terminal signals. Use deferred graceful cleanup after delivered `EventEnd`, or `sp.Abort(cause)` on failure.
 3. Never claim "pre-existing" from `git stash`; reproduce the same command at the correct clean baseline in an isolated worktree.
-4. Never declare done without fresh test output.
+4. Never declare done without semantically valid test evidence.
 5. Never assume `go build` success means `go test` will pass.
 6. Never skip bottom-up testing.
 7. Never add per-algorithm `switch`/`if` on index algo names in the SQL layer. Route through `indexplugin.Get(algo)`.

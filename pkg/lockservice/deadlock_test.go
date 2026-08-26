@@ -278,7 +278,7 @@ func TestConcurrentChecksSelectOneVictimPerCycle(t *testing.T) {
 				for _, waiter := range depends[string(txn.TxnID)] {
 					if !w.add(waiter, "") {
 						// Hold both detector workers after they have independently
-						// found the same cycle, but before either can abort a txn.
+						// found the same cycle, but before either can claim abort ownership.
 						cycleFound <- struct{}{}
 						<-release
 						return false, nil
@@ -309,11 +309,9 @@ func TestConcurrentChecksSelectOneVictimPerCycle(t *testing.T) {
 			defer d.mu.Unlock()
 			return len(d.mu.activeCheckTxn) == 0
 		}, 5*time.Second, 10*time.Millisecond)
-		require.Len(t, abortC, 2)
-		victim1 := <-abortC
-		victim2 := <-abortC
-		require.Equal(t, victim1.TxnID, victim2.TxnID)
-		require.Contains(t, []string{string(txn1), string(txn2)}, string(victim1.TxnID))
+		require.Len(t, abortC, 1)
+		victim := <-abortC
+		require.Contains(t, []string{string(txn1), string(txn2)}, string(victim.TxnID))
 	})
 }
 

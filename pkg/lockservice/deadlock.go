@@ -159,8 +159,16 @@ func (d *detector) doCheck(ctx context.Context) {
 				if err == nil {
 					err = ErrDeadLockDetected
 				}
-				d.ignoreTxns.Store(string(deadlockTxn.TxnID), struct{}{})
-				d.waitTxnAbortFunc(deadlockTxn, err)
+				// Different detector workers can discover the same cycle from
+				// different roots. All traversals choose the same deterministic
+				// victim; LoadOrStore is the linearization point that gives exactly
+				// one worker ownership of the abort notification.
+				if _, loaded := d.ignoreTxns.LoadOrStore(
+					string(deadlockTxn.TxnID),
+					struct{}{},
+				); !loaded {
+					d.waitTxnAbortFunc(deadlockTxn, err)
+				}
 			}
 			d.mu.Lock()
 			delete(d.mu.activeCheckTxn, util.UnsafeBytesToString(txn.waitTxn.TxnID))

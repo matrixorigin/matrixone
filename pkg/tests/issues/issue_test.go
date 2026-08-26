@@ -656,38 +656,39 @@ func TestLockNeedUpgrade(t *testing.T) {
 				cn2,
 			)
 
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"truncate table "+table+";",
-				"insert into "+table+" select result, result from generate_series(1,5000) g;",
-			)
+			exec1 := testutils.GetSQLExecutor(cn1)
+			getTableID := func() uint64 {
+				var tableID uint64
+				err := exec1.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						tableID = testutils.GetTableID(t, db, table, txn)
+						return nil
+					},
+					executor.Options{}.
+						WithDatabase("mo_catalog").
+						WithWaitCommittedLogApplied(),
+				)
+				require.NoError(t, err)
+				require.NotZero(t, tableID)
+				return tableID
+			}
 
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
-			)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
-			)
-
+			lockOwner := lockservice.GetLockServiceByServiceID(cn1.ServiceID())
+			lockBudget := int(lockOwner.GetConfig().MaxLockRowCount)
+			require.Greater(t, lockBudget, 0)
+			fixtureRows := lockBudget + 2
 			committedAt := testutils.ExecSQL(
 				t,
 				db,
 				cn1,
-				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+				"truncate table "+table+";",
+				fmt.Sprintf("insert into %s select result, result from generate_series(1,%d) g;", table, fixtureRows),
 			)
+			tableID := getTableID()
 
 			// case 1
-			// test for local LocalTable that need upgrade row level lock to table level lock
-			exec1 := testutils.GetSQLExecutor(cn1)
+			// Test coarsening at the local lock-table owner.
 			err = exec1.ExecTxn(
 				ctx,
 				func(txn executor.TxnExecutor) error {
@@ -697,6 +698,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 					)
 					require.NoError(t, err)
 					res.Close()
+					requireIssueLockCoarsened(t, lockOwner, tableID)
 					return nil
 				},
 				executor.Options{}.
@@ -704,38 +706,23 @@ func TestLockNeedUpgrade(t *testing.T) {
 					WithMinCommittedTS(committedAt),
 			)
 			require.NoError(t, err)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"truncate table "+table+";",
-				"insert into "+table+" select result, result from generate_series(1,5000) g;",
-			)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
-			)
-
-			_ = testutils.ExecSQL(
-				t,
-				db,
-				cn1,
-				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
-			)
+			res, err := exec1.Exec(ctx, "select count(*) from "+table,
+				executor.Options{}.WithDatabase(db).WithWaitCommittedLogApplied())
+			require.NoError(t, err)
+			require.Equal(t, 1, testutils.ReadCount(res))
+			res.Close()
 
 			committedAt = testutils.ExecSQL(
 				t,
 				db,
 				cn1,
-				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+				"truncate table "+table+";",
+				fmt.Sprintf("insert into %s select result, result from generate_series(1,%d) g;", table, fixtureRows),
 			)
+			tableID = getTableID()
 
 			// case 2
-			// test for remote LockTable that need upgrade row level lock to table level lock
+			// Test the same coarsening through a remote lock-table proxy.
 			exec2 := testutils.GetSQLExecutor(cn2)
 			err = exec2.ExecTxn(
 				ctx,
@@ -746,6 +733,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 					)
 					require.NoError(t, err)
 					res.Close()
+					requireIssueLockCoarsened(t, lockOwner, tableID)
 					return nil
 				},
 				executor.Options{}.
@@ -753,8 +741,30 @@ func TestLockNeedUpgrade(t *testing.T) {
 					WithMinCommittedTS(committedAt),
 			)
 			require.NoError(t, err)
+			res, err = exec2.Exec(ctx, "select count(*) from "+table,
+				executor.Options{}.WithDatabase(db).WithWaitCommittedLogApplied())
+			require.NoError(t, err)
+			require.Equal(t, 1, testutils.ReadCount(res))
+			res.Close()
 		},
 	)
+}
+
+func requireIssueLockCoarsened(
+	t *testing.T,
+	lockService lockservice.LockService,
+	tableID uint64,
+) {
+	t.Helper()
+	rangeLocks := 0
+	lockService.IterLocks(func(lockedTableID uint64, keys [][]byte, _ lockservice.Lock) bool {
+		if lockedTableID == tableID && len(keys) == 2 {
+			rangeLocks++
+		}
+		return true
+	})
+	require.Greater(t, rangeLocks, 0,
+		"the over-budget DELETE must replace row locks with a range lock")
 }
 
 func TestIssue19551(t *testing.T) {

@@ -3771,6 +3771,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if err := normalizeDecimalParamInArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
@@ -4140,9 +4143,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					continue
 				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-					if err != nil {
-						return nil, err
+					inExpr := rightVal
+					// Keep the partition-IN coercion path unchanged. Ordinary IN can
+					// retain an already same-typed constant cast; casting UUID to UUID
+					// is both redundant and unsupported.
+					if partitionIn || !makeTypeByPlan2Expr(rightVal).Eq(typLeft) {
+						inExpr, err = appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+						if err != nil {
+							return nil, err
+						}
 					}
 					inExprList = append(inExprList, inExpr)
 				} else {
@@ -4227,6 +4236,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
+		return nil, err
+	}
+	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
 		return nil, err
 	}
 
@@ -4514,30 +4526,43 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "timestampadd":
-		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
-		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
-		// This ensures GetResultColumnsFromPlan returns correct column type for MySQL protocol layer
-		if len(args) >= 3 && argsType[2].Oid == types.T_date {
-			// Check if first argument (unit) is a constant string
-			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
-				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
-					unitStr := strings.ToUpper(sval.Sval)
-					// Parse interval type
-					iTyp, err := types.IntervalTypeOf(unitStr)
-					if err == nil {
-						// Check if it's a date unit (DAY, WEEK, MONTH, QUARTER, YEAR)
-						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
-							iTyp == types.Month || iTyp == types.Quarter ||
-							iTyp == types.Year
-						if isDateUnit {
-							// Return DATE type for date units (MySQL compatible)
-							returnType = types.T_date.ToType()
+		if len(args) >= 3 {
+			inputType := argsType[2]
+			switch inputType.Oid {
+			case types.T_date, types.T_datetime, types.T_timestamp:
+				unit, known := timestampAddUnitFromPlanExpr(args[0])
+				if !known {
+					// A runtime unit can still be MICROSECOND, so retain a safe
+					// upper bound until execution resolves it.
+					if inputType.Oid == types.T_date {
+						returnType = types.T_datetime.ToTypeWithScale(6)
+					} else {
+						returnType.Oid = inputType.Oid
+						returnType.Scale = inputType.Scale
+						if returnType.Scale < 6 {
+							returnType.Scale = 6
 						}
-						// For time units (HOUR, MINUTE, SECOND, MICROSECOND), keep DATETIME (from retType)
+					}
+					break
+				}
+
+				if inputType.Oid == types.T_date {
+					if timestampAddDateUnit(unit) {
+						returnType = types.T_date.ToType()
+					} else {
+						returnType = types.T_datetime.ToTypeWithScale(0)
+						if unit == types.MicroSecond {
+							returnType.Scale = 6
+						}
+					}
+				} else {
+					returnType.Oid = inputType.Oid
+					returnType.Scale = inputType.Scale
+					if unit == types.MicroSecond && returnType.Scale < 6 {
+						returnType.Scale = 6
 					}
 				}
 			}
-			// If unit is not constant, keep DATETIME (conservative approach)
 		}
 
 	case "python_user_defined_function":
@@ -4711,6 +4736,24 @@ func temporalFunctionFSPFromPlanExpr(expr *Expr) (int32, bool) {
 		return 0, false
 	}
 	return int32(fsp.I64Val), true
+}
+
+func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	value, ok := literal.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	unit, err := types.IntervalTypeOf(strings.ToUpper(value.Sval))
+	return unit, err == nil
+}
+
+func timestampAddDateUnit(unit types.IntervalType) bool {
+	return unit == types.Day || unit == types.Week || unit == types.Month ||
+		unit == types.Quarter || unit == types.Year
 }
 
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional
@@ -5167,6 +5210,47 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	return nil
 }
 
+// normalizeDecimalParamInArgs gives a direct prepared marker on the left of IN
+// a provisional DECIMAL envelope when a list member supplies that domain.
+// Parameters inside a DECIMAL-left list need no treatment here: the generic IN
+// binder already recognizes direct numeric parameters and gives each one the
+// left type while preserving a single typed list.
+func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr) error {
+	if (name != "in" && name != "not_in") || len(args) != 2 {
+		return nil
+	}
+	list := args[1].GetList()
+	if list == nil {
+		return nil
+	}
+
+	if isDirectDynamicParam(args[0]) {
+		// Inspect the complete list before choosing a provisional envelope.
+		// DECIMAL mixed with any approximate member has one FLOAT64 common
+		// domain; selecting an earlier DECIMAL item would freeze the marker and
+		// violate the precision/rounding behavior of the complete IN list.
+		for _, item := range list.List {
+			if item != nil && types.T(item.Typ.Id).IsFloat() {
+				var err error
+				floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
+				args[0], err = appendCastBeforeExpr(ctx, args[0], floatType)
+				return err
+			}
+		}
+		for _, item := range list.List {
+			if item != nil && types.T(item.Typ.Id).IsDecimal() {
+				var err error
+				args[0], err = appendCastBeforeExpr(ctx, args[0], item.Typ)
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+	return nil
+}
+
 // MySQL compares scalar TIME expressions to strings as text, but converts a
 // constant string or direct prepared parameter to TIME(scale) when the TIME
 // side is a column.
@@ -5299,6 +5383,42 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 	}
 	args[1] = offset
 	return nil
+}
+
+// LAG/LEAD offsets must be non-NULL, non-negative integers. Prepared markers
+// are normalized to int64 above and checked before execution or plan filling;
+// row-dependent integer expressions are checked after evaluation by the
+// window operator.
+func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 {
+		return nil
+	}
+
+	offsetExpr := args[1]
+	if lagLeadOffsetIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
+		return moerr.NewWrongArguments(ctx, name)
+	}
+	lit := offsetExpr.GetLit()
+	if lit != nil {
+		if offset, ok := literalSignedValue(lit); ok && offset < 0 {
+			return moerr.NewWrongArguments(ctx, name)
+		}
+	}
+	return nil
+}
+
+func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
+	for expr != nil {
+		if lit := expr.GetLit(); lit != nil {
+			return lit.Isnull
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+			return false
+		}
+		expr = fn.Args[0]
+	}
+	return false
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {

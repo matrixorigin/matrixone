@@ -155,13 +155,7 @@ func TestCannotUnlockOrphanTxnWithCommittingInAllocator(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
@@ -233,6 +227,10 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(holderTxn, false, ""))
 
+			// Route-cache eviction no longer stops a live transaction's bind
+			// heartbeat. Stop the keeper explicitly to exercise the missing-heartbeat
+			// orphan path.
+			require.NoError(t, l2.remote.keeper.Close())
 			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
 				return id == table1
 			}, closeReasonBindChanged)
@@ -258,13 +256,7 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
@@ -375,13 +367,7 @@ func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
