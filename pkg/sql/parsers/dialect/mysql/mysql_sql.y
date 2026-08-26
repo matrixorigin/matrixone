@@ -182,6 +182,10 @@ func sqlTaskInt64(v any) int64 {
     selectOption uint64
 
     insert *tree.Insert
+    multiInsertTarget *tree.MultiInsertTarget
+    multiInsertTargets []*tree.MultiInsertTarget
+    multiInsertWhen *tree.MultiInsertWhen
+    multiInsertWhens []*tree.MultiInsertWhen
     insertPartition *tree.InsertPartitionClause
     partitionValues tree.PartitionValues
     replace *tree.Replace
@@ -370,6 +374,7 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
+%nonassoc LOWER_THAN_LPAREN
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
@@ -909,6 +914,11 @@ func sqlTaskInt64(v any) int64 {
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
+%type <statement> multi_insert_stmt
+%type <multiInsertTarget> multi_insert_into
+%type <multiInsertTargets> multi_insert_into_list multi_insert_else_opt
+%type <multiInsertWhen> multi_insert_when
+%type <multiInsertWhens> multi_insert_when_list
 %type <replace> replace_data
 %type <rowsExprs> values_list
 %type <str> name_datetime_scale braces_opt name_braces
@@ -5967,6 +5977,94 @@ insert_stmt:
             goto ret1
         }
         $$ = $2
+    }
+|   multi_insert_stmt
+|   with_clause multi_insert_stmt
+    {
+        $2.(*tree.MultiInsert).With = $1
+        $$ = $2
+    }
+
+// Snowflake-style multi-table INSERT. The source query must not start with
+// '(' unless the preceding INTO clause carries a column list, because the
+// grammar cannot tell a parenthesized subquery from an INTO column list.
+multi_insert_stmt:
+    INSERT ALL multi_insert_into_list select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{Targets: $3, Source: $4}
+    }
+|   INSERT ALL multi_insert_when_list multi_insert_else_opt select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{Whens: $3, Else: $4, Source: $5}
+    }
+|   INSERT FIRST multi_insert_when_list multi_insert_else_opt select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{First: true, Whens: $3, Else: $4, Source: $5}
+    }
+
+multi_insert_when_list:
+    multi_insert_when
+    {
+        $$ = []*tree.MultiInsertWhen{$1}
+    }
+|   multi_insert_when_list multi_insert_when
+    {
+        $$ = append($1, $2)
+    }
+
+multi_insert_when:
+    WHEN expression THEN multi_insert_into_list
+    {
+        $$ = &tree.MultiInsertWhen{Cond: $2, Targets: $4}
+    }
+
+multi_insert_else_opt:
+    {
+        $$ = nil
+    }
+|   ELSE multi_insert_into_list
+    {
+        $$ = $2
+    }
+
+multi_insert_into_list:
+    multi_insert_into
+    {
+        $$ = []*tree.MultiInsertTarget{$1}
+    }
+|   multi_insert_into_list multi_insert_into
+    {
+        $$ = append($1, $2)
+    }
+
+multi_insert_into:
+    INTO table_name %prec LOWER_THAN_LPAREN
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2}
+    }
+|   INTO table_name VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Values: $5}
+    }
+|   INTO table_name '(' insert_column_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Columns: $4.Identifiers, ColumnNames: $4.Names}
+    }
+|   INTO table_name '(' insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Columns: $4.Identifiers, ColumnNames: $4.Names, Values: $8}
     }
 
 insert_no_with_stmt:
