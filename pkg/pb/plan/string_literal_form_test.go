@@ -192,3 +192,31 @@ func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiresMORPCVersion30JSONComparisonParam(t *testing.T) {
+	param := func(typ Type, pos int32) *Expr {
+		return &Expr{Typ: typ, Expr: &Expr_P{P: &ParamRef{Pos: pos}}}
+	}
+	jsonComparison := func(arg *Expr) *Expr {
+		return &Expr{Typ: Type{Id: 10}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(internalJSONComparisonParamFunctionID) << 32},
+			Args: []*Expr{arg},
+		}}}
+	}
+
+	owner := struct{ Expressions []*Expr }{Expressions: []*Expr{
+		jsonComparison(param(Type{Id: 1}, 0)),
+		jsonComparison(param(Type{Id: 61}, 1)),
+	}}
+	required, err := RequiresMORPCVersion30JSONComparisonParam(&owner)
+	require.NoError(t, err)
+	require.True(t, required)
+
+	ordinary := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(21) << 32},
+		Args: []*Expr{param(Type{Id: 61}, 0)},
+	}}}
+	required, err = RequiresMORPCVersion30JSONComparisonParam(ordinary)
+	require.NoError(t, err)
+	require.False(t, required)
+}

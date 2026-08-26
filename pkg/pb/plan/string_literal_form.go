@@ -146,6 +146,71 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
+// RequiresMORPCVersion30JSONComparisonParam reports whether an owner contains
+// the internal prepared-JSON comparison function.  The function is deliberately
+// identified by its numeric ID: unlike ordinary SQL functions, its name is an
+// implementation detail and the receiver dispatches it by ID after decoding.
+func RequiresMORPCVersion30JSONComparisonParam(owner any) (bool, error) {
+	required := false
+	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
+		required = required || exprContainsJSONComparisonParam(expr)
+		return nil
+	})
+	return required, err
+}
+
+const internalJSONComparisonParamFunctionID int32 = 577
+
+func exprContainsJSONComparisonParam(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && int32(fn.Func.Obj>>32) == internalJSONComparisonParamFunctionID {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsJSONComparisonParam(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsJSONComparisonParam(item) {
+				return true
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil && exprContainsJSONComparisonParam(sub.Child) {
+		return true
+	}
+	if window := expr.GetW(); window != nil {
+		if exprContainsJSONComparisonParam(window.WindowFunc) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if exprContainsJSONComparisonParam(item) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && exprContainsJSONComparisonParam(order.Expr) {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && exprContainsJSONComparisonParam(window.Frame.Start.Val) {
+				return true
+			}
+			if window.Frame.End != nil && exprContainsJSONComparisonParam(window.Frame.End.Val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {
 	if m == nil {
 		return 0, false, nil

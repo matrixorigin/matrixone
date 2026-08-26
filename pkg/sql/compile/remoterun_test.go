@@ -875,6 +875,53 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 }
 
+func TestJSONComparisonParamRemoteProtocolValidationMixedTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	comparisonParam := func(typ types.Type, pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(typ.Oid)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     int64(577) << 32,
+					ObjName: "__mo_json_comparison_param",
+				},
+				Args: []*planpb.Expr{{
+					Typ:  planpb.Type{Id: int32(typ.Oid)},
+					Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+				}},
+			}},
+		}
+	}
+
+	remotePipeline := &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{
+			ProjectList: []*planpb.Expr{
+				comparisonParam(types.T_bool.ToType(), 0),
+				comparisonParam(types.T_varchar.ToType(), 1),
+			},
+		}},
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+	require.ErrorContains(t,
+		validateRemoteJSONComparisonParamPipelineProtocol(proc, remotePipeline),
+		"requires MORPC protocol version 30")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+	require.NoError(t,
+		validateRemoteJSONComparisonParamPipelineProtocol(proc, remotePipeline))
+}
+
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,

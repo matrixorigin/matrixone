@@ -6380,6 +6380,19 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
+func supportsRemoteJSONComparisonParam(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion30
+}
+
 func supportsRemoteStatementLastInsertID(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {

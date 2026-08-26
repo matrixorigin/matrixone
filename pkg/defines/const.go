@@ -65,7 +65,7 @@ const (
 	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
 	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
-	MORPCVersion30     int64 = 30 // concrete prepared-parameter types for JSON comparisons
+	MORPCVersion30     int64 = 30 // internal JSON comparison parameter function
 	MORPCLatestVersion       = MORPCVersion30
 )
 
