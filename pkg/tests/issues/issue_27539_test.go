@@ -53,7 +53,7 @@ func TestIssue27539DeleteSetNullMaintainsSecondaryIndex(t *testing.T) {
 			mustExec(t, cleanupCtx, conn, fmt.Sprintf("drop database if exists `%s`", dbName))
 		}()
 
-		testDelete := func(t *testing.T, prefix string, indexed, prepared bool) {
+		createTables := func(t *testing.T, prefix string, indexed bool) (string, string, string) {
 			t.Helper()
 			parent := prefix + "_parent"
 			child := prefix + "_child"
@@ -83,7 +83,60 @@ func TestIssue27539DeleteSetNullMaintainsSecondaryIndex(t *testing.T) {
 					fmt.Sprintf("select count(*) from `%s`", hiddenIndexTable)).Scan(&hiddenCount))
 				require.Equal(t, 3, hiddenCount)
 			}
+			return parent, child, hiddenIndexTable
+		}
 
+		assertSetNullState := func(t *testing.T, child, hiddenIndexTable string) {
+			t.Helper()
+			var parentID sql.NullInt64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select parent_id from %s where child_id = 1", child)).Scan(&parentID))
+			require.False(t, parentID.Valid)
+
+			var count int
+			if hiddenIndexTable != "" {
+				require.NoError(t, conn.QueryRowContext(ctx,
+					fmt.Sprintf("select count(*) from `%s`", hiddenIndexTable)).Scan(&count))
+				require.Equal(t, 3, count)
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s force index(idx_parent) where parent_id is null and note = 's100-a'", child)).Scan(&count))
+				require.Equal(t, 1, count)
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s force index(idx_parent) where parent_id = 100 and note = 's100-a'", child)).Scan(&count))
+				require.Zero(t, count)
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s force index(idx_parent) where parent_id = 200 and note in ('s200-a', 's200-b')", child)).Scan(&count))
+				require.Equal(t, 2, count)
+				return
+			}
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s where parent_id = 100", child)).Scan(&count))
+			require.Zero(t, count)
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s where parent_id = 200", child)).Scan(&count))
+			require.Equal(t, 2, count)
+		}
+
+		assertOriginalState := func(t *testing.T, parent, child, hiddenIndexTable string) {
+			t.Helper()
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select count(*) from %s where id = 100", parent)).Scan(&count))
+			require.Equal(t, 1, count)
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s force index(idx_parent) where parent_id = 100 and note = 's100-a'", child)).Scan(&count))
+			require.Equal(t, 1, count)
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s force index(idx_parent) where parent_id is null and note = 's100-a'", child)).Scan(&count))
+			require.Zero(t, count)
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select count(*) from `%s`", hiddenIndexTable)).Scan(&count))
+			require.Equal(t, 3, count)
+		}
+
+		testDelete := func(t *testing.T, prefix string, indexed, prepared bool) {
+			t.Helper()
+			parent, child, hiddenIndexTable := createTables(t, prefix, indexed)
 			deleteSQL := fmt.Sprintf("delete from %s where id = ?", parent)
 			if prepared {
 				stmt, err := conn.PrepareContext(ctx, deleteSQL)
@@ -95,25 +148,7 @@ func TestIssue27539DeleteSetNullMaintainsSecondaryIndex(t *testing.T) {
 				mustExec(t, ctx, conn, fmt.Sprintf("delete from %s where id = 100", parent))
 			}
 
-			var parentID sql.NullInt64
-			require.NoError(t, conn.QueryRowContext(ctx,
-				fmt.Sprintf("select parent_id from %s where child_id = 1", child)).Scan(&parentID))
-			require.False(t, parentID.Valid)
-
-			var count int
-			queryHint := ""
-			if indexed {
-				queryHint = " force index(idx_parent)"
-				require.NoError(t, conn.QueryRowContext(ctx,
-					fmt.Sprintf("select count(*) from `%s`", hiddenIndexTable)).Scan(&count))
-				require.Equal(t, 2, count)
-			}
-			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
-				"select count(*) from %s%s where parent_id = 100", child, queryHint)).Scan(&count))
-			require.Zero(t, count)
-			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
-				"select count(*) from %s%s where parent_id = 200", child, queryHint)).Scan(&count))
-			require.Equal(t, 2, count)
+			assertSetNullState(t, child, hiddenIndexTable)
 		}
 
 		t.Run("indexed literal delete", func(t *testing.T) {
@@ -124,6 +159,25 @@ func TestIssue27539DeleteSetNullMaintainsSecondaryIndex(t *testing.T) {
 		})
 		t.Run("no index control", func(t *testing.T) {
 			testDelete(t, "no_index", false, false)
+		})
+		t.Run("rollback restores composite secondary index", func(t *testing.T) {
+			parent, child, hiddenIndexTable := createTables(t, "rollback", true)
+			mustExec(t, ctx, conn, "begin")
+			mustExec(t, ctx, conn, fmt.Sprintf("delete from %s where id = 100", parent))
+			assertSetNullState(t, child, hiddenIndexTable)
+			mustExec(t, ctx, conn, "rollback")
+			assertOriginalState(t, parent, child, hiddenIndexTable)
+		})
+		t.Run("failed delete preserves composite secondary index", func(t *testing.T) {
+			parent, child, hiddenIndexTable := createTables(t, "failed_delete", true)
+			blocker := "failed_delete_blocker"
+			mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+				id int primary key, parent_id int,
+				foreign key(parent_id) references %s(id) on delete restrict)`, blocker, parent))
+			mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(1, 100)", blocker))
+			_, err := conn.ExecContext(ctx, fmt.Sprintf("delete from %s where id = 100", parent))
+			require.Error(t, err)
+			assertOriginalState(t, parent, child, hiddenIndexTable)
 		})
 	})
 }

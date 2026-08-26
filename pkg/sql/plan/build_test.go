@@ -3937,7 +3937,7 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 	})
 }
 
-func TestDeleteSetNullDropsSecondaryIndexEntry(t *testing.T) {
+func TestDeleteSetNullMaintainsCompositeSecondaryIndexEntry(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
 
@@ -3945,28 +3945,29 @@ func TestDeleteSetNullDropsSecondaryIndexEntry(t *testing.T) {
 	require.Len(t, emp.Indexes, 2)
 	emp.Indexes = emp.Indexes[1:]
 	require.False(t, emp.Indexes[0].Unique)
-	emp.Indexes[0].Parts = []string{"deptno", "ename"}
-	secondaryIndexTable := emp.Indexes[0].IndexTableName
+	emp.Indexes[0].Parts = []string{"deptno", "ename", catalog.AliasPrefix + "empno"}
 
 	logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
-	var secondaryDelete *plan.Node
-	for _, node := range query.Nodes {
-		require.NotEqual(t, plan.Node_PRE_INSERT_SK, node.NodeType,
-			"SET NULL must not reinsert a secondary-index entry")
-		if node.NodeType == plan.Node_DELETE && node.DeleteCtx != nil &&
-			node.DeleteCtx.Ref != nil && node.DeleteCtx.Ref.ObjName == secondaryIndexTable {
-			secondaryDelete = node
-		}
-	}
-	require.NotNil(t, secondaryDelete)
-	require.Len(t, secondaryDelete.Children, 1)
-	indexJoin := query.Nodes[secondaryDelete.Children[0]]
-	require.Equal(t, plan.Node_JOIN, indexJoin.NodeType)
-	require.Equal(t, plan.Node_RIGHT, indexJoin.JoinType)
-	require.Equal(t, int32(len(emp.Cols)+1), secondaryDelete.DeleteCtx.RowIdIdx)
-	require.Equal(t, secondaryDelete.DeleteCtx.RowIdIdx+1, secondaryDelete.DeleteCtx.PrimaryKeyIdx)
+	require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_SK),
+		"a composite secondary index retains a row whose key has a NULL component")
+}
+
+func TestDeleteSetNullDropsSingleColumnSecondaryIndexEntry(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+	emp := mock.ctxt.tables["emp"]
+	require.Len(t, emp.Indexes, 2)
+	emp.Indexes = emp.Indexes[1:]
+	require.False(t, emp.Indexes[0].Unique)
+	emp.Indexes[0].Parts = []string{"deptno", catalog.AliasPrefix + "empno"}
+
+	logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
+	require.NoError(t, err)
+	require.Zero(t, countUpdateFkPlanNodes(logicPlan.GetQuery(), plan.Node_PRE_INSERT_SK),
+		"a single-column secondary index compacts the NULL replacement key")
 }
 
 func TestPreparedInsertForeignKeyPlansRemainSensitiveAcrossChecks(t *testing.T) {

@@ -120,8 +120,8 @@ type dmlPlanCtx struct {
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
 	// fkSetNullColumns records columns that are unconditionally NULL in every
-	// row of this recursive FK update source. A regular hidden index containing
-	// one of these columns has no replacement row to insert.
+	// row of this recursive FK update source. An index representation that
+	// compacts NULL keys has no replacement row to insert.
 	fkSetNullColumns map[string]struct{}
 	// isConditionalFkSetNullAction marks a combined FK SET NULL update whose
 	// columns are NULL only on matching rows. Its hidden UNIQUE-index insert
@@ -4134,6 +4134,7 @@ func appendDeleteIndexTablePlan(
 	isUK bool,
 	preserveProjection bool,
 	preserveActionRows bool,
+	matchedDeleteOnly bool,
 ) (int32, error) {
 	/********
 	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
@@ -4356,8 +4357,9 @@ func appendDeleteIndexTablePlan(
 		  2. SECONDARY INDEX: handling new inserts in ON DUPLICATE KEY UPDATE scenarios
 
 		Note: The original assumption "secondary index won't have null situation" was incorrect.
-		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
-		new inserts that don't yet exist in the index table.
+		Single-part secondary indexes compact NULL keys, while composite indexes retain
+		NULL-containing keys via serial_full. RIGHT JOIN is also needed for new inserts
+		that do not yet exist in the hidden table.
 	*/
 	joinNode := &plan.Node{
 		NodeType:    plan.Node_JOIN,
@@ -4366,7 +4368,16 @@ func appendDeleteIndexTablePlan(
 		IsRightJoin: true,
 		OnList:      joinConds,
 	}
-	if preserveActionRows {
+	if matchedDeleteOnly {
+		// This source only feeds deletion of the old hidden row. The replacement
+		// composite SET NULL key is built from an independent action stream, so
+		// unmatched action rows must not flow into the delete pipeline.
+		joinNode.JoinType = plan.Node_INNER
+		joinNode.IsRightJoin = false
+		if !preserveProjection {
+			joinNode.ProjectList = projectList
+		}
+	} else if preserveActionRows {
 		// Recursive FK maintenance must preserve the action source, not the
 		// complete hidden-index scan. Express that ownership directly as a LEFT
 		// join so the later physical right-join swap cannot invert the row domain.
@@ -6190,15 +6201,22 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 
 	var isUk = indexdef.Unique
 	var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
-	skipIndexInsert := false
+	logicalIndexParts := 0
+	indexBecomesNull := false
 	if isUpdate && len(delCtx.fkSetNullColumns) > 0 {
 		for _, part := range indexdef.Parts {
+			if catalog.IsAlias(part) {
+				continue
+			}
+			logicalIndexParts++
 			if _, becomesNull := delCtx.fkSetNullColumns[catalog.ResolveAlias(part)]; becomesNull {
-				skipIndexInsert = true
-				break
+				indexBecomesNull = true
 			}
 		}
 	}
+	skipIndexInsert := indexBecomesNull &&
+		(isUk || (isSK && logicalIndexParts == 1))
+	rebuildCompositeSetNullIndex := indexBecomesNull && isSK && logicalIndexParts > 1
 	usePositionalIndexDelete := skipIndexInsert &&
 		delCtx.sourceTag == 0 && !delCtx.preserveUpdateSourceProjection
 
@@ -6223,6 +6241,12 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
 		preserveActionRows := delCtx.isFkRecursionCall &&
 			(delCtx.sourceTag != 0 || delCtx.preserveUpdateSourceProjection)
+		if rebuildCompositeSetNullIndex {
+			// The replacement insert has its own action stream, so this branch only
+			// needs the positional old-row image plus the matched hidden row.
+			preserveIndexProjection = false
+			preserveActionRows = false
+		}
 		if usePositionalIndexDelete {
 			// This branch ends after deleting the old hidden row. Keep the join's
 			// established positional layout; preserving the recursive action's
@@ -6232,7 +6256,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		}
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
-			lastNodeId, isUk, preserveIndexProjection, preserveActionRows,
+			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
 		)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
@@ -6276,7 +6300,21 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 				lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 			}
 			delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-			delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+			if rebuildCompositeSetNullIndex {
+				inputProjection := getProjectionByLastNode(builder, lastNodeId)
+				lastNodeId = builder.appendNode(&Node{
+					NodeType: plan.Node_PROJECT,
+					Children: []int32{lastNodeId},
+					ProjectList: []*Expr{
+						inputProjection[uniqueDeleteIdx],
+						inputProjection[uniqueTblPkPos],
+					},
+				}, bindCtx)
+				delNodeInfo.deleteIndex = 0
+				delNodeInfo.pkPos = 1
+			} else {
+				delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+			}
 			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 			putDeleteNodeInfo(delNodeInfo)
 			if err != nil {
@@ -6286,7 +6324,13 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		}
 		// update uk plan
 		{
-			if indexSourceTag != 0 {
+			if rebuildCompositeSetNullIndex {
+				// Composite secondary indexes retain rows whose keys contain NULL.
+				// Rebuild their replacement keys directly from the FK action image:
+				// the shared index-join source is also consumed by the delete branch
+				// and cannot provide a second independent stream here.
+				lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			} else if indexSourceTag != 0 {
 				lastNodeId = builder.appendTaggedSinkScan(bindCtx, newSourceStep, indexSourceTag)
 			} else {
 				lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
@@ -6294,12 +6338,25 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 			projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
 			for j, uCols := range delCtx.tableDef.Cols {
+				if _, becomesNull := delCtx.fkSetNullColumns[uCols.Name]; becomesNull {
+					nullType := uCols.Typ
+					nullType.NotNullable = false
+					projectProjection[j] = &plan.Expr{
+						Typ:  nullType,
+						Expr: &plan.Expr_Lit{Lit: &Const{Isnull: true}},
+					}
+					continue
+				}
 				if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
 					projectProjection[j] = lastProject[nIdx]
 				} else {
 					if uCols.Name == catalog.Row_ID {
-						// replace the origin table's row_id with unique table's row_id
-						projectProjection[j] = lastProject[len(lastProject)-2]
+						if rebuildCompositeSetNullIndex {
+							projectProjection[j] = lastProject[delCtx.rowIdPos]
+						} else {
+							// replace the origin table's row_id with unique table's row_id
+							projectProjection[j] = lastProject[len(lastProject)-2]
+						}
 					} else {
 						projectProjection[j] = lastProject[j]
 					}
