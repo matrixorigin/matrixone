@@ -120,7 +120,7 @@ type dmlPlanCtx struct {
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
 	// fkSetNullColumns records columns that are unconditionally NULL in every
-	// row of this recursive FK update source. A UNIQUE hidden index containing
+	// row of this recursive FK update source. A regular hidden index containing
 	// one of these columns has no replacement row to insert.
 	fkSetNullColumns map[string]struct{}
 	// isConditionalFkSetNullAction marks a combined FK SET NULL update whose
@@ -6190,6 +6190,17 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 
 	var isUk = indexdef.Unique
 	var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
+	skipIndexInsert := false
+	if isUpdate && len(delCtx.fkSetNullColumns) > 0 {
+		for _, part := range indexdef.Parts {
+			if _, becomesNull := delCtx.fkSetNullColumns[catalog.ResolveAlias(part)]; becomesNull {
+				skipIndexInsert = true
+				break
+			}
+		}
+	}
+	usePositionalIndexDelete := skipIndexInsert &&
+		delCtx.sourceTag == 0 && !delCtx.preserveUpdateSourceProjection
 
 	uniqueObjRef, uniqueTableDef, err := builder.compCtx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
 	if err != nil {
@@ -6212,6 +6223,13 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
 		preserveActionRows := delCtx.isFkRecursionCall &&
 			(delCtx.sourceTag != 0 || delCtx.preserveUpdateSourceProjection)
+		if usePositionalIndexDelete {
+			// This branch ends after deleting the old hidden row. Keep the join's
+			// established positional layout; preserving the recursive action's
+			// binding tags would leak those tags into the two-batch join executor.
+			preserveIndexProjection = false
+			preserveActionRows = false
+		}
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
 			lastNodeId, isUk, preserveIndexProjection, preserveActionRows,
@@ -6224,18 +6242,10 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		return err
 	}
 	if isUpdate {
-		skipIndexInsert := false
-		if isUk && len(delCtx.fkSetNullColumns) > 0 {
-			for _, part := range indexdef.Parts {
-				if _, becomesNull := delCtx.fkSetNullColumns[catalog.ResolveAlias(part)]; becomesNull {
-					skipIndexInsert = true
-					break
-				}
-			}
-		}
 		if skipIndexInsert {
 			delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-			delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+			delNodeInfo.preserveProjection = !usePositionalIndexDelete &&
+				(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 			putDeleteNodeInfo(delNodeInfo)
 			if err != nil {
