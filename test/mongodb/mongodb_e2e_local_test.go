@@ -369,6 +369,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "4")
 	expectMongoDBE2EScalar(mock, "0")
 	expectMongoDBE2EScalar(mock, "5")
+	mock.ExpectQuery("truncate table mongodb_ci.events").WillReturnError(
+		errors.New("invalid input: cannot insert/update/delete from external table"))
+	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
 		require.Len(t, row, 6)
@@ -450,6 +453,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"show-create-redaction-roundtrip",
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
+		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
 		"insert-select-primary-key-targets",

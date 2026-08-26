@@ -36,7 +36,7 @@ func returningFallbackFeature(err error, fallback string) string {
 		return "Iceberg table"
 	}
 	if err.Error() == externalTableUnsupportedDMLMsg ||
-		strings.Contains(err.Error(), "cannot insert/update/delete from external table") {
+		strings.Contains(err.Error(), readOnlyExternalTableDMLMsg) {
 		return "external table"
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {

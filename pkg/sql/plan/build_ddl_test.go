@@ -706,6 +706,45 @@ func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
 	require.Equal(t, []uint64{99}, p.GetDdl().GetTruncateTable().GetForeignTbl())
 }
 
+func TestBuildTruncateMongoDBExternalTableRejectsReadOnlyDML(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["mongo_events"] = &ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "mongo_events",
+	}
+	ctx.tables["mongo_events"] = &TableDef{
+		Name:        "mongo_events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source",
+			Database:   "telemetry",
+			Collection: "events",
+			SchemaMode: sqlmongodb.SchemaExplicit,
+			Conversion: sqlmongodb.ConversionStrict,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "id", Path: "_id", TypeID: int32(types.T_varchar), Width: 64},
+			},
+		}),
+		Cols: []*ColDef{
+			{Name: "id", Typ: Type{Id: int32(types.T_varchar), Width: 64}},
+		},
+	}
+
+	for _, prepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table mongo_events", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, prepare)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			require.Equal(t, "invalid input: "+readOnlyExternalTableDMLMsg, err.Error())
+		})
+	}
+}
+
 func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		t.Context(),

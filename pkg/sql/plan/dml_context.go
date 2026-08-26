@@ -229,7 +229,7 @@ func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, 
 		return newUpdatePlannerRouteError(
 			updatePlannerRejected,
 			updateRouteReasonExternalTable,
-			moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table"),
+			moerr.NewInvalidInput(ctx.GetContext(), readOnlyExternalTableDMLMsg),
 		)
 	case foreignKeyUnsupportedDMLMsg:
 		return newRejectedUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
@@ -277,6 +277,10 @@ const externalTableUnsupportedDMLCause = "external table"
 // externalTableUnsupportedDMLMsg is the full message of that sentinel, as
 // moerr.NewUnsupportedDML formats it ("unsupported DML: %s").
 const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupportedDMLCause
+
+// readOnlyExternalTableDMLMsg is the stable user-facing error shared by every
+// mutation of a read-only external table, including TRUNCATE.
+const readOnlyExternalTableDMLMsg = "cannot insert/update/delete from external table"
 
 // noPkOnDupUpdateCause is the cause bindInsert raises for ON DUPLICATE KEY
 // UPDATE on a table with neither a primary key nor a unique key: the modern
@@ -446,7 +450,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
 			return moerr.NewUnsupportedDML(ctx.GetContext(), externalTableUnsupportedDMLCause)
 		}
-		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+		return moerr.NewInvalidInput(ctx.GetContext(), readOnlyExternalTableDMLMsg)
 	}
 
 	if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
