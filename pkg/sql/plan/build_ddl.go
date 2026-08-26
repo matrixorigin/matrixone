@@ -2310,11 +2310,18 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 // lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
 // batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
+	if err := checkFulltextEngineConflict(indexInfos, existedIndexes, ctx); err != nil {
+		return err
 	}
 	for _, indexInfo := range indexInfos {
+		algo := catalog.MOIndexFullTextAlgo.ToString()
+		if indexInfo.IsV2 {
+			algo = catalog.MoIndexFullText2Algo.ToString()
+		}
+		p, ok := indexplugin.Get(algo)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx(algo + " plugin not registered")
+		}
 		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
 			ctx, indexInfo, colMap, existedIndexes, pkeyName,
 		)
@@ -2323,6 +2330,39 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
+	}
+	return nil
+}
+
+// ftColSetKey makes the fulltext column set order-independent. A classic and a
+// FULLTEXT2 index over the same columns would make MATCH routing depend on
+// catalog enumeration order, so reject that ambiguous state at DDL time.
+func ftColSetKey(cols []string) string {
+	c := append([]string(nil), cols...)
+	slices.Sort(c)
+	return strings.Join(c, "\x00")
+}
+
+func checkFulltextEngineConflict(indexInfos []*tree.FullTextIndex, existedIndexes []*plan.IndexDef, ctx CompilerContext) error {
+	engine := make(map[string]bool)
+	for _, idx := range existedIndexes {
+		v2 := catalog.IsFullText2IndexAlgo(idx.IndexAlgo)
+		if !v2 && !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		engine[ftColSetKey(idx.Parts)] = v2
+	}
+	for _, info := range indexInfos {
+		cols := make([]string, 0, len(info.KeyParts))
+		for _, kp := range info.KeyParts {
+			cols = append(cols, kp.ColName.ColName())
+		}
+		key := ftColSetKey(cols)
+		if prev, ok := engine[key]; ok && prev != info.IsV2 {
+			return moerr.NewInvalidInput(ctx.GetContext(),
+				"cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first")
+		}
+		engine[key] = info.IsV2
 	}
 	return nil
 }
@@ -3512,6 +3552,13 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
 		}
+	case tree.INDEX_CATEGORY_FULLTEXT2:
+		ftIdx = &tree.FullTextIndex{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
+			IsV2:        true,
+		}
 	case tree.INDEX_CATEGORY_SPATIAL:
 		keyType := tree.INDEX_TYPE_RTREE
 		if stmt.IndexOption != nil && stmt.IndexOption.IType != tree.INDEX_TYPE_INVALID {
@@ -3916,6 +3963,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
+	// Index definitions added earlier in this ALTER are visible to duplicate-name
+	// and FULLTEXT/FULLTEXT2 conflict checks, but stay out of tableDef.Indexes
+	// until their hidden tables are actually created by the executor.
+	var addedIdxDefs []*plan.IndexDef
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -4068,7 +4119,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					nameLower := strings.ToLower(idx.IndexName)
 					constrNames[nameLower] = true
 				}
-
 				if err := checkDuplicateConstraint(
 					constrNames,
 					indexName,
@@ -4123,6 +4173,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					nameLower := strings.ToLower(idx.IndexName)
 					constrNames[nameLower] = true
 				}
+				for _, idx := range addedIdxDefs {
+					constrNames[strings.ToLower(idx.IndexName)] = true
+				}
 
 				if err := checkDuplicateConstraint(
 					constrNames,
@@ -4140,16 +4193,21 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				existed := tableDef.Indexes
+				if len(addedIdxDefs) > 0 {
+					existed = append(append([]*plan.IndexDef{}, tableDef.Indexes...), addedIdxDefs...)
+				}
 				if err := buildFullTextIndexTable(
 					indexInfo,
 					[]*tree.FullTextIndex{def},
 					colMap,
-					tableDef.Indexes,
+					existed,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
 					return nil, err
 				}
+				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4267,6 +4325,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// merge + reject happens at compile in Compile.ValidateReindexParams,
 			// reading the options straight off the parse tree.
 			alterTableReIndex.ForceSync = opt.ForceSync
+			alterTableReIndex.Merge = opt.Merge
 
 			name_not_found := true
 			// check index
