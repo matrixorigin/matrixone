@@ -341,6 +341,11 @@ type PrepareStmt struct {
 	hasLagLeadParams      bool
 	paramKinds            []vector.PrepareParamKind
 	paramMetadata         []bool
+	// numericOverloadParamPositions is computed from explicit plan metadata
+	// once per prepared-plan generation.  It identifies ABS arguments whose
+	// runtime integer/decimal domain may require overload rebinding without
+	// rescanning the full plan for every EXECUTE.
+	numericOverloadParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -734,6 +739,19 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
 		return
+	}
+	// Runtime-specialized compiles share the session process (and its borrowed
+	// prepare-parameter vector).  Compile.Release calls Process.Free, which
+	// clears that shared vector.  Preserve it while evicting the previous
+	// semantic-category entry; otherwise a cache miss that replaces an older
+	// category can make the current execution's ParamRef see an empty process.
+	// PrepareStmt.proc is updated by each COM_STMT_EXECUTE and is the shared
+	// session process used to build both the old and replacement runtime compiles.
+	proc := prepareStmt.proc
+	var prepareParams process.PrepareParamsState
+	if proc != nil {
+		prepareParams = proc.DetachPrepareParams()
+		defer proc.RestorePrepareParams(prepareParams)
 	}
 	runtimeCompile.FreeOperator()
 	runtimeCompile.SetIsPrepare(false)

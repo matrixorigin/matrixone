@@ -18,6 +18,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +42,24 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
 		require.NoError(t, err)
 		defer db.Close()
+		_, err = db.ExecContext(ctx, "drop database if exists issue_27294_numeric_db")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "create database issue_27294_numeric_db")
+		require.NoError(t, err)
+		defer func() {
+			_, _ = db.ExecContext(context.Background(), "drop database if exists issue_27294_numeric_db")
+		}()
+		_, err = db.ExecContext(ctx, "use issue_27294_numeric_db")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "drop table if exists issue_27294_numeric_src")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "create table issue_27294_numeric_src (v int)")
+		require.NoError(t, err)
+		defer func() {
+			_, _ = db.ExecContext(context.Background(), "drop table if exists issue_27294_numeric_src")
+		}()
+		_, err = db.ExecContext(ctx, "insert into issue_27294_numeric_src values (1)")
+		require.NoError(t, err)
 
 		sleep, err := db.PrepareContext(ctx, "select sleep(?)")
 		require.NoError(t, err)
@@ -72,9 +92,82 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		wide, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
 		defer wide.Close()
+		wideRows, err := wide.QueryContext(ctx, int64(-9007199254740993))
+		require.NoError(t, err)
+		wideColumns, err := wideRows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, wideColumns, 1)
+		require.Contains(t, strings.ToUpper(wideColumns[0].DatabaseTypeName()), "INT")
 		var exact int64
-		require.NoError(t, wide.QueryRowContext(ctx, int64(-9007199254740993)).Scan(&exact))
+		require.True(t, wideRows.Next())
+		require.NoError(t, wideRows.Scan(&exact))
+		require.NoError(t, wideRows.Err())
+		require.NoError(t, wideRows.Close())
 		require.Equal(t, int64(9007199254740993), exact)
+
+		nestedArithmetic, err := db.PrepareContext(ctx, "select abs(? + 0)")
+		require.NoError(t, err)
+		defer nestedArithmetic.Close()
+		var nestedArithmeticResult int64
+		require.NoError(t, nestedArithmetic.QueryRowContext(
+			ctx, int64(-9007199254740993)).Scan(&nestedArithmeticResult))
+		require.Equal(t, int64(9007199254740993), nestedArithmeticResult)
+
+		nestedControlFlow, err := db.PrepareContext(ctx, "select abs(if(1, ?, 0))")
+		require.NoError(t, err)
+		defer nestedControlFlow.Close()
+		var nestedControlFlowResult int64
+		require.NoError(t, nestedControlFlow.QueryRowContext(
+			ctx, int64(-9007199254740993)).Scan(&nestedControlFlowResult))
+		require.Equal(t, int64(9007199254740993), nestedControlFlowResult)
+
+		nestedCase, err := db.PrepareContext(ctx, "select abs(case when 1 then ? else 0 end)")
+		require.NoError(t, err)
+		defer nestedCase.Close()
+		var nestedCaseResult int64
+		require.NoError(t, nestedCase.QueryRowContext(
+			ctx, int64(-9007199254740993)).Scan(&nestedCaseResult))
+		require.Equal(t, int64(9007199254740993), nestedCaseResult)
+
+		unsigned, err := db.PrepareContext(ctx, "select abs(?)")
+		require.NoError(t, err)
+		defer unsigned.Close()
+		unsignedRows, err := unsigned.QueryContext(ctx, uint64(9007199254740993))
+		require.NoError(t, err)
+		unsignedColumns, err := unsignedRows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, unsignedColumns, 1)
+		require.Contains(t, strings.ToUpper(unsignedColumns[0].DatabaseTypeName()), "INT")
+		var unsignedResult uint64
+		require.True(t, unsignedRows.Next())
+		require.NoError(t, unsignedRows.Scan(&unsignedResult))
+		require.NoError(t, unsignedRows.Err())
+		require.NoError(t, unsignedRows.Close())
+		require.Equal(t, uint64(9007199254740993), unsignedResult)
+
+		minInt, err := db.PrepareContext(ctx, "select abs(?)")
+		require.NoError(t, err)
+		defer minInt.Close()
+		var minIntResult int64
+		require.Error(t, minInt.QueryRowContext(ctx, int64(math.MinInt64)).Scan(&minIntResult),
+			"ABS(MININT64) must retain the native integer overflow contract")
+
+		decimal, err := db.PrepareContext(ctx, "select abs(?)")
+		require.NoError(t, err)
+		defer decimal.Close()
+		const decimalValue = "12345678901234567890123456789012345.6789"
+		decimalRows, err := decimal.QueryContext(ctx, decimalValue)
+		require.NoError(t, err)
+		decimalColumns, err := decimalRows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, decimalColumns, 1)
+		require.Contains(t, strings.ToUpper(decimalColumns[0].DatabaseTypeName()), "DECIMAL")
+		var decimalResult string
+		require.True(t, decimalRows.Next())
+		require.NoError(t, decimalRows.Scan(&decimalResult))
+		require.NoError(t, decimalRows.Err())
+		require.NoError(t, decimalRows.Close())
+		require.Equal(t, decimalValue, decimalResult)
 
 		subquery, err := db.PrepareContext(ctx, "select abs((select ?))")
 		require.NoError(t, err)
@@ -82,5 +175,20 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		var subqueryResult float64
 		require.NoError(t, subquery.QueryRowContext(ctx, float64(-1.5)).Scan(&subqueryResult))
 		require.Equal(t, 1.5, subqueryResult)
+
+		sleepSubquery, err := db.PrepareContext(ctx, "select sleep((select ?))")
+		require.NoError(t, err)
+		defer sleepSubquery.Close()
+		var sleepSubqueryResult int
+		require.NoError(t, sleepSubquery.QueryRowContext(ctx, float64(0.01)).Scan(&sleepSubqueryResult))
+		require.Zero(t, sleepSubqueryResult)
+
+		nestedExact, err := db.PrepareContext(ctx,
+			"select abs((select ? from issue_27294_numeric_src limit 1))")
+		require.NoError(t, err)
+		defer nestedExact.Close()
+		var nestedExactResult int64
+		require.NoError(t, nestedExact.QueryRowContext(ctx, int64(-9007199254740993)).Scan(&nestedExactResult))
+		require.Equal(t, int64(9007199254740993), nestedExactResult)
 	})
 }

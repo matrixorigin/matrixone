@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -985,6 +986,78 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 	}
 
 	return
+}
+
+// PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
+// an ABS argument whose overload was deferred until execution.  This is kept
+// as a plan-introspection helper for tests and diagnostics; execute-time
+// eligibility is cached on PrepareStmt and must not call this walker for every
+// execution.
+func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
+	return len(PreparedPlanNumericFallbackParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanNumericFallbackParamPositions returns the parameter positions
+// whose value supplies a deferred numeric ABS argument.  The result is plan
+// metadata, not an execute-time decision: callers can compute it once when a
+// prepared plan is built and use it to decide whether runtime values must be
+// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// on every ordinary execution.
+func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+			return nil
+		}
+		if pos, ok := preparedNumericFallbackParamPosition(fn.Args[0]); ok {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func preparedNumericFallbackParamPosition(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if expr.PreparedNumericFallback && expr.PreparedNumericParamPos >= 0 {
+		return expr.PreparedNumericParamPos, true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if pos, ok := preparedNumericFallbackParamPosition(arg); ok {
+				return pos, true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if pos, ok := preparedNumericFallbackParamPosition(item); ok {
+				return pos, true
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return preparedNumericFallbackParamPosition(sub.Child)
+	}
+	return 0, false
+}
+
+func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
+	return expr != nil && expr.PreparedNumericFallback
 }
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
@@ -2886,7 +2959,10 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
-	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
+	rule := &decrementParamOrdinalRule{
+		seen:         make(map[*plan.ParamRef]struct{}),
+		seenFallback: make(map[*plan.Expr]struct{}),
+	}
 	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
 	if err := visit.Visit(ctx); err != nil {
 		return err
@@ -3282,6 +3358,27 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	preparePlan *Plan,
 	paramVals []any,
 ) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, true)
+}
+
+// FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time
+// path for a prepared plan whose deferred numeric overload positions were
+// computed when the plan was built.  The caller has already made the
+// eligibility decision, so avoid the legacy numeric-prefix plan walk here.
+func FillValuesOfParamsInPlanWithPreparedNumericOverload(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
+}
+
+func fillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	scanNumericPrefix bool,
+) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
 		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
@@ -3296,7 +3393,10 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
-	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
+	numericPrefixSpecialization := false
+	if scanNumericPrefix {
+		numericPrefixSpecialization = PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
+	}
 	copied := DeepCopyPlan(preparePlan)
 	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
 	switch pp := copied.Plan.(type) {
@@ -4108,6 +4208,12 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.setPreparedPlan(plan0)
+	// Keep the original execute-time values and protocol categories on the
+	// rebinding rule.  The plan parameters above intentionally use their
+	// prepare-time transport literals; overloaded functions such as ABS need
+	// the runtime category to select an exact integer/decimal overload.
+	paramRule.SetParamValues(paramVals)
 	paramRule.inferTextParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamKinds = make(map[int]types.StringConversionKind)

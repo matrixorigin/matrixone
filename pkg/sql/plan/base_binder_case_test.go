@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,6 +28,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedNumericFallbackMetadataSurvivesProtoRoundTrip(t *testing.T) {
+	original := &planpb.Expr{
+		Typ:                                 planpb.Type{Id: int32(types.T_float64)},
+		PreparedNumericFallback:             true,
+		PreparedNumericParamPos:             0,
+		PreparedNumericFallbackSource:       true,
+		PreparedNumericFallbackSourceNodeId: 7,
+		PreparedNumericFallbackSourceColPos: 2,
+	}
+	payload, err := proto.Marshal(original)
+	require.NoError(t, err)
+
+	var restored planpb.Expr
+	require.NoError(t, proto.Unmarshal(payload, &restored))
+	require.True(t, restored.PreparedNumericFallback)
+	require.Equal(t, int32(0), restored.PreparedNumericParamPos)
+	require.True(t, restored.PreparedNumericFallbackSource)
+	require.Equal(t, int32(7), restored.PreparedNumericFallbackSourceNodeId)
+	require.Equal(t, int32(2), restored.PreparedNumericFallbackSourceColPos)
+	require.Zero(t, restored.AuxId,
+		"prepared numeric provenance must not be encoded as an executor memo id")
+}
 
 func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
 	for _, name := range []string{"abs", "sleep"} {
@@ -39,6 +63,8 @@ func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
 			require.NotNil(t, fn)
 			require.Len(t, fn.GetF().Args, 1)
 			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+			require.Zero(t, fn.GetF().Args[0].AuxId,
+				"deferred overload metadata must not consume executor AuxId space")
 			cast := fn.GetF().Args[0].GetF()
 			require.NotNil(t, cast)
 			require.Equal(t, "cast", cast.Func.GetObjName())
@@ -66,11 +92,33 @@ func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
 		require.NotNil(t, fn)
 		require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
 	})
+
+	t.Run("scalar literal keeps native overload", func(t *testing.T) {
+		p, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_abs_scalar_literal from 'select abs((select n_regionkey from nation where n_regionkey = 0))'")
+		require.NoError(t, err)
+
+		fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, "abs")
+		require.NotNil(t, fn)
+		require.NotEqual(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+	})
 }
 
 func TestContainsPreparedParamExprVariants(t *testing.T) {
 	param := tree.NewParamExpr(0)
 	literal := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
+	binder := &baseBinder{sysCtx: context.Background()}
+	hasParam := func(expr tree.Expr) bool {
+		found, err := binder.hasPreparedNumericParamExprs([]tree.Expr{expr}, 0)
+		require.NoError(t, err)
+		return found
+	}
+	function := func(name string, args ...tree.Expr) tree.Expr {
+		return &tree.FuncExpr{
+			Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(name)),
+			Exprs: args,
+		}
+	}
 
 	tests := []struct {
 		name string
@@ -81,45 +129,36 @@ func TestContainsPreparedParamExprVariants(t *testing.T) {
 		{name: "binary", expr: tree.NewBinaryExpr(tree.PLUS, literal, param), want: true},
 		{name: "unary", expr: tree.NewUnaryExpr(tree.UNARY_MINUS, param), want: true},
 		{name: "parenthesized", expr: tree.NewParentExpr(param), want: true},
-		{name: "function", expr: &tree.FuncExpr{Exprs: tree.Exprs{param}}, want: true},
-		{name: "cast", expr: tree.NewCastExpr(param, nil), want: true},
-		{name: "bit cast", expr: tree.NewBitCastExpr(param, nil), want: true},
+		{name: "function", expr: function("abs", param), want: true},
+		{name: "cast", expr: tree.NewCastExpr(param, tree.TYPE_DOUBLE), want: true},
+		{name: "bit cast", expr: tree.NewBitCastExpr(param, tree.TYPE_LONG), want: true},
+		{name: "if condition", expr: function("if", param, literal, literal), want: false},
+		{name: "if result", expr: function("if", literal, param, literal), want: true},
 		{name: "case operand", expr: tree.NewCaseExpr(param, nil, literal), want: false},
 		{name: "case when condition", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(param, literal)}, nil), want: false},
 		{name: "case when value", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal, param)}, nil), want: true},
 		{name: "case else", expr: tree.NewCaseExpr(nil, nil, param), want: true},
 		{name: "tuple", expr: &tree.Tuple{Exprs: tree.Exprs{literal, param}}, want: true},
+		{name: "scalar subquery", expr: tree.NewSubquery(
+			&tree.SelectClause{Exprs: tree.SelectExprs{{Expr: param}}}, false), want: true},
+		{name: "scalar literal subquery", expr: tree.NewSubquery(
+			&tree.SelectClause{Exprs: tree.SelectExprs{{Expr: literal}}}, false), want: false},
+		{name: "exists subquery", expr: tree.NewSubquery(
+			&tree.SelectClause{Exprs: tree.SelectExprs{{Expr: param}}}, true), want: false},
 		{name: "literal", expr: literal, want: false},
 		{name: "empty case", expr: tree.NewCaseExpr(nil, nil, nil), want: false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, containsPreparedParamExpr(tc.expr))
+			require.Equal(t, tc.want, hasParam(tc.expr))
 		})
 	}
-
-	require.True(t, containsPreparedParamExprs(tree.Exprs{literal, param}))
-	require.False(t, containsPreparedParamExprs(tree.Exprs{literal}))
 }
 
 func TestPreparedNumericAstWalkersCoverSelectAndCastShapes(t *testing.T) {
 	param := tree.NewParamExpr(0)
 	literal := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
-	selectClause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: param}}}
-	selectStmt := &tree.Select{Select: selectClause}
-
-	// Scalar subqueries recurse through every supported SELECT wrapper, while
-	// EXISTS deliberately does not contribute a numeric value parameter.
-	require.True(t, containsPreparedParamExpr(tree.NewSubquery(selectClause, false)))
-	require.False(t, containsPreparedParamExpr(tree.NewSubquery(selectClause, true)))
-	require.True(t, containsPreparedParamInSelectStatement(selectStmt))
-	require.True(t, containsPreparedParamInSelectStatement(&tree.ParenSelect{Select: selectStmt}))
-	require.True(t, containsPreparedParamInSelectStatement(&tree.UnionClause{
-		Left: selectClause, Right: selectClause,
-	}))
-	require.True(t, containsPreparedParamInSelectStatement(selectClause))
-	require.False(t, containsPreparedParamInSelectStatement(nil))
 
 	doubleCast := tree.NewCastExpr(param, tree.TYPE_DOUBLE)
 	integerCast := tree.NewCastExpr(param, tree.TYPE_LONG)
@@ -163,12 +202,22 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	}
 
 	deferredArg := functionExpr("cast", paramExpr(0), floatTypeExprForTest())
-	deferredArg.AuxId = preparedNumericFallbackAuxIDBase
+	deferredArg.PreparedNumericFallback = true
+	deferredArg.PreparedNumericParamPos = 0
 	deferredAbs := functionExpr("abs", deferredArg)
 	queryPlan := &Plan{Plan: &Plan_Query{Query: &Query{
 		Steps: []int32{0},
 		Nodes: []*Node{{NodeType: planpb.Node_PROJECT, ProjectList: []*planpb.Expr{deferredAbs}}},
 	}}}
+	require.True(t, PreparedPlanHasDeferredNumericFunction(queryPlan))
+	deferredSubqueryArg := &planpb.Expr{
+		Typ:                     floatType,
+		PreparedNumericFallback: true,
+		PreparedNumericParamPos: 0,
+		Expr:                    &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{Child: deferredArg}},
+	}
+	deferredSubqueryAbs := functionExpr("abs", deferredSubqueryArg)
+	queryPlan.GetQuery().Nodes = []*Node{{NodeType: planpb.Node_PROJECT, ProjectList: []*planpb.Expr{deferredSubqueryAbs}}}
 	require.True(t, PreparedPlanHasDeferredNumericFunction(queryPlan))
 	require.False(t, PreparedPlanHasDeferredNumericFunction(nil))
 	require.False(t, PreparedPlanHasDeferredNumericFunction(&Plan{}))
@@ -178,9 +227,9 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 		}}}},
 	}}))
 
-	// Exercise the ResetParamRefRule's exact integer specialization, including
-	// signed, signed-range unsigned, wide unsigned, invalid, NULL, and missing
-	// protocol-kind values.
+	// Exercise the ResetParamRefRule's exact integer/DECIMAL specialization,
+	// including signed, signed-range unsigned, wide unsigned, invalid, NULL,
+	// and missing protocol-kind values.
 	newLiteralParam := func(value string, isNull bool) *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
 			Isnull: isNull, Value: &planpb.Literal_Sval{Sval: value},
@@ -247,6 +296,52 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, changed)
 
+	decimalCases := []struct {
+		value string
+		want  types.T
+	}{
+		{value: "123456789012.3456", want: types.T_decimal64},
+		{value: "1234567890123456789012345678901234.5678", want: types.T_decimal128},
+		{value: "12345678901234567890123456789012345.6789", want: types.T_decimal256},
+	}
+	for _, decimalCase := range decimalCases {
+		decimalRule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
+			newLiteralParam(decimalCase.value, false),
+		})
+		decimalRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamDecimal})
+		decimal, ok, err := decimalRule.typedDecimalParamExpr(0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, int32(decimalCase.want), decimal.Typ.Id)
+	}
+	decimalRule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
+		newLiteralParam("12345678901234567890123456789012345.6789", false),
+	})
+	decimalRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamDecimal})
+	decimal, ok, err := decimalRule.typedDecimalParamExpr(0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_decimal256), decimal.Typ.Id)
+	require.True(t, decimalRule.allDecimalParamRefs(paramExpr(0)))
+	require.False(t, decimalRule.allDecimalParamRefs(literalExpr("1")))
+	rebound, changed, err = decimalRule.rebindPreparedDecimalExpr(paramExpr(0))
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, int32(types.T_decimal256), rebound.Typ.Id)
+	_, changed, err = decimalRule.rebindPreparedDecimalExpr(nil)
+	require.NoError(t, err)
+	require.False(t, changed)
+	rule = NewResetParamRefRule(context.Background(), []*planpb.Expr{newLiteralParam("7", false)})
+	rule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
+	rebound, changed, err = rule.rebindPreparedIntegerExpr(deferredSubqueryArg)
+	require.NoError(t, err)
+	require.True(t, changed)
+	if child := rebound.GetSub().Child; child.GetF() != nil {
+		require.Equal(t, int64(7), child.GetF().Args[0].GetLit().GetI64Val())
+	} else {
+		require.Equal(t, int64(7), child.GetLit().GetI64Val())
+	}
+
 	// Cover the selective numeric-value walkers used by ABS's CASE/IF forms.
 	ifExpr := functionExpr("if", literalExpr("0"), paramExpr(0), literalExpr("1"))
 	caseExpr := functionExpr("case", paramExpr(0), literalExpr("1"), literalExpr("2"))
@@ -306,12 +401,31 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
 	require.Equal(t, int64(-9007199254740993), fn.GetF().Args[0].GetLit().GetI64Val())
 
+	for _, sql := range []string{
+		"prepare stmt_abs_nested_arithmetic from 'select abs(? + 0)'",
+		"prepare stmt_abs_nested_if from 'select abs(if(1, ?, 0))'",
+		"prepare stmt_abs_nested_case from 'select abs(case when 1 then ? else 0 end)'",
+		"prepare stmt_abs_nested_scalar from 'select abs((select ?))'",
+	} {
+		prepared, err = runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err)
+		filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+		})
+		require.NoError(t, err)
+		fn = findPlanFunctionExpr(filled, "abs")
+		require.NotNil(t, fn)
+		require.Equal(t, int32(types.T_int64), fn.Typ.Id, sql)
+		require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id, sql)
+	}
+
 	prepared, err = runOneStmt(NewMockOptimizer(false), t,
 		"prepare stmt_abs_subquery from 'select abs((select ?))'")
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "abs")
 	require.NotNil(t, fn)
 	require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+	require.True(t, PreparedPlanHasDeferredNumericFunction(prepared.GetDcl().GetPrepare().Plan))
 
 	prepared, err = runOneStmt(NewMockOptimizer(false), t,
 		"prepare stmt_abs_case_condition from 'select abs(case when ? then n_regionkey else n_regionkey end) from nation'")
@@ -342,6 +456,44 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	// An explicit DOUBLE cast is a user-requested precision boundary and must
 	// not be specialized back to an integer overload.
 	require.Equal(t, int32(types.T_float64), fn.Typ.Id)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_decimal from 'select abs(?)'")
+	require.NoError(t, err)
+	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{
+			Value:            "12345678901234567890123456789012345.6789",
+			PrepareParamKind: vector.PrepareParamDecimal,
+		},
+	})
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(filled, "abs")
+	require.NotNil(t, fn)
+	// DECIMAL values must bypass the prepare-time DOUBLE fallback as well;
+	// otherwise high-precision values are rounded before ABS sees them.
+	require.Equal(t, int32(types.T_decimal256), fn.Typ.Id)
+	decimalArg := fn.GetF().Args[0]
+	require.Equal(t, int32(types.T_decimal256), decimalArg.Typ.Id)
+	require.Equal(t, "cast", decimalArg.GetF().Func.GetObjName())
+	require.Equal(t, "12345678901234567890123456789012345.6789", decimalArg.GetF().Args[0].GetLit().GetSval())
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_nested_scalar_round from 'select abs((select round(? + 0) from nation limit 1))'")
+	require.NoError(t, err)
+	queryPlan = prepared.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(queryPlan))
+	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+	})
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(filled, "abs")
+	require.NotNil(t, fn)
+	require.Equal(t, int32(types.T_int64), fn.Typ.Id)
+	round := findPlanFunctionExpr(filled, "round")
+	require.NotNil(t, round, "the scalar subquery projection must remain after rebinding")
+	require.Equal(t, int32(types.T_int64), round.Typ.Id)
+	require.NotNil(t, round.GetF().Args[0].GetF())
+	require.Equal(t, int32(types.T_int64), round.GetF().Args[0].Typ.Id)
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {

@@ -24,6 +24,11 @@ import "timestamp.proto";
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.protosizer_all) = true;
 option (gogoproto.sizer_all) = false;
+// Keep the generated message layout compatible with the checked-in bindings
+// and preserve unknown fields when plans cross mixed-version nodes.
+option (gogoproto.goproto_unrecognized_all) = true;
+option (gogoproto.goproto_sizecache_all) = true;
+option (gogoproto.goproto_unkeyed_all) = true;
 
 message Type {
   int32 id = 1;
@@ -257,6 +262,24 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  // prepared_numeric_fallback marks an expression whose numeric overload was
+  // deferred while a prepared parameter had no execute-time type.  It is
+  // planner metadata, not an executor memo identity (AuxId), and therefore
+  // survives plan copies and RPC serialization explicitly.
+  bool prepared_numeric_fallback = 19;
+  // prepared_numeric_param_pos identifies the parameter that supplies the
+  // deferred numeric value.  A negative value means the expression has no
+  // single source position (for example a malformed/legacy plan); callers
+  // must then fall back to the ordinary replacement path.
+  int32 prepared_numeric_param_pos = 20;
+  // prepared_numeric_fallback_source identifies a scalar-subquery projection
+  // that owns the deferred value.  Flattening can leave the ABS consumer with
+  // only a ColRef, so the executor uses this node/column identity to update
+  // the reference type after rebinding the inner projection.  This is
+  // explicit plan metadata and is deliberately independent of aux_id.
+  bool prepared_numeric_fallback_source = 21;
+  int32 prepared_numeric_fallback_source_node_id = 22;
+  int32 prepared_numeric_fallback_source_col_pos = 23;
 }
 
 message FoldVal {

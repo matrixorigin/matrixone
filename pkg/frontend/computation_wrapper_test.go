@@ -537,6 +537,61 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 113, "select abs(?)")
+	defer prepareStmt.Close()
+
+	value := "12345678901234567890123456789012345.6789"
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+	cw.proc.SetPrepareParamsWithMeta(
+		params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	values, err := preparedParamValues(cw.proc, paramTypes)
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	param, ok := values[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.Equal(t, value, param.Value)
+	require.Equal(t, vector.PrepareParamDecimal, param.PrepareParamKind)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
+	require.Equal(t, int32(39), param.RuntimeType.Width)
+	require.Equal(t, int32(4), param.RuntimeType.Scale)
+
+	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		context.Background(), prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	var abs *plan.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		for _, projection := range node.ProjectList {
+			if projection.GetF() != nil && projection.GetF().Func.GetObjName() == "abs" {
+				abs = projection
+				break
+			}
+		}
+		if abs != nil {
+			break
+		}
+	}
+	require.NotNil(t, abs)
+	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
+	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
+	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
+}
+
 func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 111, "select ?")
@@ -568,6 +623,8 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	}}, IsPrepare: true}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	cw.plan = manualPlan
+	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(manualPlan, 1)
+	require.True(t, prepareStmt.numericPrefixConsumer)
 
 	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.5tail", ""))
 	execCtx.input.isBinaryProtExecute = false
@@ -769,6 +826,9 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	require.True(t, cw.completeRuntimeCacheCandidate(replacement, nil))
+	// Evicting the previous semantic-category compile must not clear the
+	// parameter vector borrowed by the execution that installs its replacement.
+	require.Same(t, thirdParams, cw.proc.GetPrepareParams())
 	require.Same(t, thirdPlan, prepareStmt.runtimePlan)
 	require.Same(t, replacement, prepareStmt.runtimeCompile)
 	require.NotEqual(t, oldKey, prepareStmt.runtimeSpecializationKey)
