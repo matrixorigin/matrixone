@@ -86,37 +86,6 @@ func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
 	require.False(t, op.needsCleanup())
 }
 
-func TestBasicCluster(t *testing.T) {
-	c, err := StartTestCluster(
-		WithCNCount(3),
-		WithPreStart(
-			func(svc ServiceOperator) {
-				if svc.ServiceType() == metadata.ServiceType_CN {
-					svc.Adjust(
-						func(config *ServiceConfig) {
-							config.CN.AutomaticUpgrade = true
-						},
-					)
-				}
-			},
-		),
-	)
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
-	require.NoError(t, err)
-
-	validCNCanWork(t, c, 0)
-	validCNCanWork(t, c, 1)
-	validCNCanWork(t, c, 2)
-
-	cn, err := c.GetCNService(0)
-	require.NoError(t, err)
-	v, err := c.GetService(cn.ServiceID())
-	require.NoError(t, err)
-	require.Equal(t, cn, v)
-}
-
 func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 	timeout := 15 * time.Second
 	clusterValue, err := NewCluster(
@@ -154,8 +123,18 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 	require.Equal(t, timeout, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
 }
 
-func TestSingleCNCluster(t *testing.T) {
-	c, err := NewCluster(WithTesting())
+func TestClusterLifecycleAndCNExpansion(t *testing.T) {
+	c, err := NewCluster(
+		WithTesting(),
+		WithPreStart(func(svc ServiceOperator) {
+			adjustClusterStartupRetryIntervals(svc)
+			if svc.ServiceType() == metadata.ServiceType_CN {
+				svc.Adjust(func(config *ServiceConfig) {
+					config.CN.AutomaticUpgrade = true
+				})
+			}
+		}),
+	)
 	if c != nil {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
@@ -170,65 +149,51 @@ func TestSingleCNCluster(t *testing.T) {
 
 	_, err = c.GetCNService(1)
 	require.Error(t, err)
-}
 
-func TestClusterCanStartNewCNServices(t *testing.T) {
-	c, err := StartTestCluster(
-		WithCNCount(3),
-		WithPreStart(adjustClusterStartupRetryIntervals),
-	)
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
+	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
+	v, err := c.GetService(cn.ServiceID())
+	require.NoError(t, err)
+	require.Equal(t, cn, v)
 
-	validCNCanWork(t, c, 0)
+	require.NoError(t, c.StartNewCNService(2))
 	validCNCanWork(t, c, 1)
 	validCNCanWork(t, c, 2)
 
+	// Preserve the original dynamic-expansion coverage with the generated CN
+	// defaults after the first three CNs have exercised automatic upgrade.
+	c.(*cluster).options.preStart = adjustClusterStartupRetryIntervals
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
+	cn, err = c.GetCNService(3)
+	require.NoError(t, err)
+	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
 }
 
-func TestMultiClusterCanWork(t *testing.T) {
-	new := func() *cluster {
-		value, err := StartTestCluster(
-			WithCNCount(1),
-			WithConcurrentTestClusters(),
-		)
-		if value != nil {
-			t.Cleanup(func() { require.NoError(t, value.Close()) })
-		}
-		require.NoError(t, err)
-		return value.(*cluster)
-	}
-
-	first := new()
-	second := new()
-	require.NotEqual(t, first.ID(), second.ID())
-	require.NotEqual(t, first.options.dataPath, second.options.dataPath)
-	require.NotEqual(t, first.portLease.base, second.portLease.base)
-	validCNCanWork(t, first, 0)
-	validCNCanWork(t, second, 0)
-}
-
-func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
+func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
+	var first Cluster
 	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
-			validCNCanWork(t, c, 0)
+			first = c
 		},
 	)
 
-	c, err := StartTestCluster(
+	second, err := StartTestCluster(
 		WithCNCount(1),
 		WithConcurrentTestClusters(),
 	)
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	if second != nil {
+		t.Cleanup(func() { require.NoError(t, second.Close()) })
 	}
 	require.NoError(t, err)
 
-	validCNCanWork(t, c, 0)
+	firstCluster := first.(*cluster)
+	secondCluster := second.(*cluster)
+	require.NotEqual(t, firstCluster.ID(), secondCluster.ID())
+	require.NotEqual(t, firstCluster.options.dataPath, secondCluster.options.dataPath)
+	require.NotEqual(t, firstCluster.portLease.base, secondCluster.portLease.base)
+	validCNCanWork(t, firstCluster, 0)
+	validCNCanWork(t, secondCluster, 0)
 }
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
