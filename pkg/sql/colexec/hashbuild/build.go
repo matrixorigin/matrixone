@@ -485,7 +485,17 @@ func (hashBuild *HashBuild) build(
 			}
 		}
 
-		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
+		runtimeFilterLimit := int32(-1)
+		if needUniqueVec && !hashBuild.RuntimeFilterSpec.UseMembershipFilter {
+			runtimeFilterLimit = hashBuild.RuntimeFilterSpec.UpperLimit
+		}
+		err := ctr.hashmapBuilder.buildHashmapWithRuntimeFilterLimit(
+			hashBuild.HashOnPK,
+			hashBuild.NeedAllocateSels,
+			needUniqueVec,
+			runtimeFilterLimit,
+			proc,
+		)
 		collectionFallback, _ :=
 			ctr.hashmapBuilder.runtimeFilterFallbackState()
 		rebuildSafe := ctr.hashmapBuilder.RetainedBatchRecoverySafe()
