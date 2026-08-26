@@ -20,6 +20,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// withHostAvail pins the availability source for one test and restores it
+// afterwards. Registered with t.Cleanup so it runs even when a require.*
+// assertion aborts the goroutine.
+func withHostAvail(t *testing.T, avail uint64, measured bool) {
+	t.Helper()
+	prev := hostAvailFn
+	t.Cleanup(func() { hostAvailFn = prev })
+	hostAvailFn = func() (uint64, bool) { return avail, measured }
+}
+
 // HostRowsFitting reads real memory, so assert the contract rather than a figure.
 func TestHostRowsFitting(t *testing.T) {
 	rows, avail, err := HostRowsFitting(1536, 0) // dim 768 f16

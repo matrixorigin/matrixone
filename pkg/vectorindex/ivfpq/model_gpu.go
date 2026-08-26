@@ -47,15 +47,6 @@ import (
 var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
-// reserveHostMemory is indirected for the same reason runSql above is: the claim
-// LoadIndex takes for the ids array is otherwise unobservable from a test. Sizing
-// it from idxcfg.IndexCapacity -- zero on every production load -- meant the claim
-// silently never fired, and no test noticed, because a test that only builds an
-// artifact cannot tell a right-sized claim from no claim at all. Swapping this
-// lets one assert the demand, the count, and the refusal path without squeezing
-// real host memory, which at a fixture's ~2 KB of ids is a race rather than a test.
-var reserveHostMemory = vimemory.ReserveHostMemory
-
 // IvfpqModel wraps a GpuIvfPq index and handles load/save to secondary index tables.
 type IvfpqModel[B, Q cuvs.VectorType] struct {
 	Id     string
@@ -691,50 +682,15 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 
 	// idx.Path lives in HostSpillDir; extract into the same directory so the
 	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
-	// Host admission for the ids array Unpack is about to materialise. load_ids
-	// grows host_ids from ids.bin during Unpack, so the claim has to be taken here
-	// -- before the allocation, after the artifact is on disk.
-	//
-	// Sized from the ARTIFACT, not from config. idxcfg.IndexCapacity is zero on
-	// every search-path load: it is resolved by the build operator and never
-	// written back to algo_params, and ParamsFromTree persists max_index_capacity
-	// only when the user supplied a positive value. Sizing from it would claim
-	// nothing at all.
-	//
-	// PackSizes.Host, not just ids.bin: load_common_components materialises the
-	// quantizer, the deleted bitset AND filter_host_ (the INCLUDE columns) in this
-	// same Unpack, and all four are classified host-resident. Claiming only the ids
-	// under-counted the peak by the whole INCLUDE payload, which for a wide
-	// artifact is the largest of them -- so a big INCLUDE index, or two concurrent
-	// cold loads, could pass admission and still cross the host budget.
-	//
-	// Over-claims by manifest.json and by any component the loader happens to free
-	// again before Unpack returns. That is the direction that cannot under-admit,
-	// and the settle below is immediate, so the over-claim is not held.
-	tarSizes, cerr := cuvs.MeasureTar(idx.Path)
-	if cerr != nil {
-		gi.Destroy()
-		return cerr
-	}
-	var idClaim *vimemory.HostReservation
-	if hostBytes := tarSizes.Host; hostBytes > 0 {
-		var herr error
-		idClaim, herr = reserveHostMemory(uint64(hostBytes), "ivfpq load host components")
-		if herr != nil {
-			gi.Destroy()
-			return herr
-		}
-	}
-	// Covers the error returns below and a panic out of Unpack; the explicit
-	// Settle after it makes this a no-op on the success path.
-	defer idClaim.Settle()
+	// The host components Unpack materialises -- ids, quantizer, deleted bitset
+	// and the INCLUDE columns -- are claimed natively inside load_dir, where the
+	// deserialisation that allocates them happens (index_base.hpp,
+	// claim_host_components).
 
 	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
 		gi.Destroy()
 		return err
 	}
-	// host_ids is materialised and visible to MemoryAvailableIncludingCache now.
-	idClaim.Settle()
 
 	// Replay the event log now that we know the INCLUDE col layout.
 	colMetaJSON := gi.GetFilterColMetaJSON()
@@ -759,23 +715,13 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	idx.IncludeBytesPerRow = includeBytesPerRow
 
 	// Replay CDC deletes onto the freshly-loaded cuvs index.
-	// The FIRST delete materialises id_to_index_ for every row (ensure_id_index),
-	// which no admission has charged for -- ~40 B/row, so ~3.5 GB at 88M. Claim it
-	// only when a delete actually replays, since an index with no deletes never
-	// builds the map at all, and settle once the map exists.
+	// The first delete materialises id_to_index_ for every row, which is claimed
+	// where it happens (index_base.hpp, ensure_id_index).
 	if len(idx.DeletedPkids) > 0 && gi.Len() > 0 {
-		mapClaim, merr := vimemory.ReserveHostMemory(
-			uint64(gi.Len())*vimemory.HostIDMapBytesPerRow, "ivfpq load id-map")
-		if merr != nil {
-			gi.Destroy()
-			return merr
-		}
-		defer mapClaim.Settle()
 		if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
 			gi.Destroy()
 			return err
 		}
-		mapClaim.Settle()
 	}
 
 	idx.Index = gi

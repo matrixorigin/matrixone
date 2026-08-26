@@ -1858,6 +1858,11 @@ public:
     // The index object must have been constructed with the appropriate device list
     // and worker already initialized.
     void load_dir(const std::string& dir, distribution_mode_t target_mode) {
+        // Held for the whole of load_dir: the host components are materialised
+        // by the deserialisation below, and the claim drops on return, once the
+        // availability reading has moved by the same bytes.
+        auto host_claim = this->claim_host_components(dir, "cagra load");
+
         auto m = this->read_manifest(dir, "cagra");
         if (this->dist_mode == DistributionMode_SHARDED && target_mode != DistributionMode_SHARDED)
             throw std::invalid_argument("cannot change dist_mode: index was built as SHARDED");

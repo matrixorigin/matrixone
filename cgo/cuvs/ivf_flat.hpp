@@ -1381,6 +1381,11 @@ public:
 
     // Restore all index state from a directory previously written by save_dir().
     void load_dir(const std::string& dir, distribution_mode_t target_mode) {
+        // Held for the whole of load_dir: the host components are materialised
+        // by the deserialisation below, and the claim drops on return, once the
+        // availability reading has moved by the same bytes.
+        auto host_claim = this->claim_host_components(dir, "ivf_flat load");
+
         auto m = this->read_manifest(dir, "ivf_flat");
         if (this->dist_mode == DistributionMode_SHARDED && target_mode != DistributionMode_SHARDED)
             throw std::invalid_argument("cannot change dist_mode: index was built as SHARDED");

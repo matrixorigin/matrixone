@@ -18,6 +18,8 @@
 
 #include "device_memory.hpp"
 #include "host_memory.hpp"
+
+#include <filesystem>
 #include "index_cost.hpp"
 
 
@@ -1015,6 +1017,48 @@ public:
     // leave a hole in it (see the all-ids-or-all-id-less guard in add_chunk). A
     // hole would zero-fill, and a zero is indistinguishable from a legitimate
     // external id 0.
+    // Host bytes per row of id_to_index_: 24 for the unordered_map node, 8 for
+    // the allocator header, 8 for the bucket slot. Mirrors
+    // memory.HostIDMapBytesPerRow, which is what the Go capacity model charges.
+    static constexpr size_t kIdMapBytesPerRow = 40;
+
+    // The packed components that stay in HOST memory once the index is loaded.
+    // Anything else in the artifact is deserialised onto the device and is the
+    // device governor's business. Mirrors hostResidentComponents in
+    // pkg/cuvs/consolidate.go, which classifies the same names off the tar.
+    static bool is_host_resident_component(const std::string& name) {
+        return name == "ids.bin" || name == "filter_data.bin" ||
+               name == "quantizer.bin" || name == "bitset.bin" ||
+               name == "manifest.json";
+    }
+
+    // Claims the host memory a load is about to materialise out of `dir`.
+    //
+    // The artifact is the authoritative size here: a search-path load has no
+    // capacity to model from (IndexCapacity is resolved by the build operator
+    // and never written back), so sizing from config would claim nothing at all.
+    //
+    // The returned claim is meant to be held for the whole of load_dir and to
+    // drop on scope exit -- by then the components are materialised and the
+    // availability reading has moved by the same amount. Over-claims by
+    // manifest.json and by anything the loader frees again before returning,
+    // which is the direction that cannot under-admit.
+    host_memory_governor::reservation claim_host_components(const std::string& dir,
+                                                            const char* who) {
+        size_t          need = 0;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec) || fec) continue;
+            if (!is_host_resident_component(it->path().filename().string())) continue;
+            const auto n = it->file_size(fec);
+            if (!fec) need += static_cast<size_t>(n);
+        }
+        if (need == 0) return host_memory_governor::reservation();
+        return host_memory_governor::reserve(need, who);
+    }
+
     void ensure_id_index() {
         if (this->id_index_built_) return;
         // Completeness check for the OTHER direction of the all-ids-or-none contract.
@@ -1034,10 +1078,20 @@ public:
                 " rows but ids for only " + std::to_string(this->host_ids.size()) +
                 "; an index is either all-ids or all-id-less, not a mix");
         }
+        // Materialising the map allocates for the WHOLE index at once -- around
+        // 3.5 GB at 88M rows -- on a path where failing to allocate leaves the
+        // index unloadable rather than merely refused. It is claimed here rather
+        // than at load because an index that never has a delete replayed never
+        // builds the map at all.
+        const size_t need = this->host_ids.size() * kIdMapBytesPerRow;
+        host_memory_governor::reservation claim;
+        if (need > 0) claim = host_memory_governor::reserve(need, "id map");
+
         this->id_to_index_.reserve(this->host_ids.size());
         for (uint64_t i = 0; i < this->host_ids.size(); ++i) {
             this->id_to_index_[this->host_ids[i]] = i;
         }
+        claim.release();
         this->id_index_built_ = true;
     }
 

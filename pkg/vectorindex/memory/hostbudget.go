@@ -32,6 +32,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 )
 
 // HostIDBytesPerRow is the HOST cost of the per-row identity bookkeeping every GPU
@@ -61,16 +62,9 @@ import (
 // alone overcommits the host budget.
 const HostIDBytesPerRow = 8
 
-// HostIDMapBytesPerRow is the id_to_index_ cost -- 24 map node + 8 allocator
-// header + 8 bucket slot -- charged ONLY where that map is actually allocated.
-//
-// A build never allocates it: ensure_id_index builds the map on demand and no
-// build path reads it (index_base.hpp), which is why HostIDBytesPerRow above is
-// 8 and not 48. A LOAD can: LoadIndex replays CDC deletes right after Unpack,
-// and the first delete_id materialises the whole map. At 88M rows that is ~3.5 GB
-// appearing on a path that used to charge nothing for it, where an allocation
-// failure leaves the index unloadable rather than merely refused.
-const HostIDMapBytesPerRow = 40
+// hostAvailFn is the availability source, indirected so the budgeting rule is
+// testable without depending on the machine's live memory.
+var hostAvailFn = system.MemoryAvailableIncludingCache
 
 // hostBudgetNumerator/Denominator take 75% of what is actually available. The
 // budget is now derived from an accurate baseline — cgroup limit (regardless of
@@ -132,11 +126,9 @@ func HostRowsFitting(perRowBytes uint64, reservedBytes uint64) (rows int64, avai
 	if perRowBytes == 0 {
 		return 0, 0, nil
 	}
-	// Through hostAvailFn, the same seam ReserveHostMemory uses. Calling
-	// system.MemoryAvailableIncludingCache directly left the package with two
-	// sources of truth for availability, only one of them injectable: the budget
-	// rule could not be tested without depending on the machine's live memory,
-	// and two consecutive calls could legitimately disagree.
+	// Through hostAvailFn rather than system.MemoryAvailableIncludingCache
+	// directly, so the budget rule can be tested without depending on the
+	// machine's live memory.
 	avail, measured := hostAvailFn()
 	if !measured {
 		return 0, 0, nil
