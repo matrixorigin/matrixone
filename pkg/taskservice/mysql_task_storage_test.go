@@ -252,7 +252,7 @@ func TestAsyncTaskInSqlMock(t *testing.T) {
 
 func TestCronTaskInSqlMock(t *testing.T) {
 	storage, mock := newMockStorage(t)
-	mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?)").
+	mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?)"+" on duplicate key update cron_expr=cron_expr").
 		WithArgs("a", 0, []byte(nil), "{}", "mock_cron_expr", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -890,10 +890,6 @@ func TestRemoveDuplicateTasks(t *testing.T) {
 		{Metadata: task.TaskMetadata{ID: "a"}},
 		{Metadata: task.TaskMetadata{ID: "b"}},
 	}
-	cronTasks := []task.CronTask{
-		{Metadata: task.TaskMetadata{ID: "a"}},
-		{Metadata: task.TaskMetadata{ID: "b"}},
-	}
 	daemonTasks := []task.DaemonTask{
 		{Metadata: task.TaskMetadata{ID: "a"}},
 		{Metadata: task.TaskMetadata{ID: "b"}},
@@ -910,19 +906,12 @@ func TestRemoveDuplicateTasks(t *testing.T) {
 	require.Len(t, remainingAsync, 1)
 	require.Equal(t, "b", remainingAsync[0].Metadata.ID)
 
-	remainingCron, err := removeDuplicateCronTasks(dupErr, cronTasks)
-	require.NoError(t, err)
-	require.Len(t, remainingCron, 1)
-	require.Equal(t, "b", remainingCron[0].Metadata.ID)
-
 	remainingDaemon, err := removeDuplicateDaemonTasks(dupErr, daemonTasks)
 	require.NoError(t, err)
 	require.Len(t, remainingDaemon, 1)
 	require.Equal(t, "b", remainingDaemon[0].Metadata.ID)
 
 	_, err = removeDuplicateAsyncTasks(otherErr, asyncTasks)
-	require.Error(t, err)
-	_, err = removeDuplicateCronTasks(otherErr, cronTasks)
 	require.Error(t, err)
 	_, err = removeDuplicateDaemonTasks(otherErr, daemonTasks)
 	require.Error(t, err)
@@ -952,23 +941,46 @@ func TestAddAsyncTaskWithDuplicateEntry(t *testing.T) {
 	require.NoError(t, storage.Close())
 }
 
-func TestAddCronTaskWithDuplicateEntry(t *testing.T) {
-	storage, mock := newMockStorage(t)
+func TestAddCronTaskAtomicallyIgnoresDuplicateMetadata(t *testing.T) {
+	for _, taskMetadataID := range []string{"data_branch_lineage_gc", "mo_table_stats"} {
+		t.Run(taskMetadataID, func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			cronTask := newTestCronTask(taskMetadataID, "0 */5 * * * *")
+			// A zero affected-row count models a concurrent CN winning the unique-key
+			// insert first. The storage must issue one atomic no-op upsert, not receive
+			// a duplicate-key error and retry a second statement.
+			mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?)"+" on duplicate key update cron_expr=cron_expr").
+				WithArgs(
+					cronTask.Metadata.ID,
+					cronTask.Metadata.Executor,
+					cronTask.Metadata.Context,
+					"{}",
+					cronTask.CronExpr,
+					sqlmock.AnyArg(),
+					sqlmock.AnyArg(),
+					sqlmock.AnyArg(),
+					sqlmock.AnyArg(),
+				).
+				WillReturnResult(sqlmock.NewResult(0, 0))
 
-	c1 := newTestCronTask("cron-a", "* * * * * *")
-	c2 := newTestCronTask("cron-b", "* * * * * *")
-	dupErr := &mysqlDriver.MySQLError{
-		Number:  moerr.ER_DUP_ENTRY,
-		Message: "Duplicate entry 'cron-a' for key",
+			affected, err := storage.AddCronTask(context.Background(), cronTask)
+			require.NoError(t, err)
+			require.Zero(t, affected)
+
+			mock.ExpectClose()
+			require.NoError(t, storage.Close())
+		})
 	}
-	mock.ExpectExec(insertCronTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?)").
-		WillReturnError(dupErr)
-	mock.ExpectExec(insertCronTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?)").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+}
 
-	affected, err := storage.AddCronTask(context.Background(), c1, c2)
-	require.NoError(t, err)
-	require.Equal(t, 1, affected)
+func TestAddCronTaskPropagatesSQLFailure(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	cronTask := newTestCronTask("data_branch_lineage_gc", "0 */5 * * * *")
+	mock.ExpectExec(insertCronTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?)" + " on duplicate key update cron_expr=cron_expr").
+		WillReturnError(assert.AnError)
+
+	_, err := storage.AddCronTask(context.Background(), cronTask)
+	require.ErrorIs(t, err, assert.AnError)
 
 	mock.ExpectClose()
 	require.NoError(t, storage.Close())
