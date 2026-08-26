@@ -84,7 +84,6 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		}
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
 
 		assertIDs := func(query string, expected ...int) {
 			t.Helper()
