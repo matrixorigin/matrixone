@@ -35,6 +35,18 @@ const (
 	Cmd_SkipDSN
 )
 
+type SkipCmdVersion uint16
+
+const (
+	// SkipCmdVersionLegacy identifies V2 skip commands written before the
+	// DSN/PSN pair sorter was fixed. Their DSNs are valid, but their PSNs may
+	// have been permuted independently and therefore cannot identify targets.
+	SkipCmdVersionLegacy SkipCmdVersion = iota
+	// SkipCmdVersionDSNPSN identifies skip commands whose sorted DSN and PSN
+	// arrays preserve the original pairs.
+	SkipCmdVersionDSNPSN
+)
+
 var emptyLogEntry = make([]byte, EmptyLogEntrySize)
 var logEntryBuffer = make([]byte, EmptyLogEntrySize)
 var skipCmdBuffer = make([]byte, EmptyLogEntrySize)
@@ -68,6 +80,7 @@ func init() {
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_Normal))
 	e = LogEntry(skipCmdBuffer)
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	e.SetSkipCmdVersion(SkipCmdVersionDSNPSN)
 }
 
 type LogEntryWriter struct {
@@ -264,6 +277,10 @@ func (e LogEntry) GetCmdType() uint16 {
 	return types.DecodeUint16(e[CmdTypeOffset:])
 }
 
+func (e LogEntry) GetSkipCmdVersion() SkipCmdVersion {
+	return SkipCmdVersion(types.DecodeUint16(e[ReservedOffset:]))
+}
+
 func (e LogEntry) GetFooter() LogEntryFooter {
 	footerOffset := e.GetFooterOffset()
 	if footerOffset == 0 {
@@ -309,6 +326,11 @@ func (e LogEntry) SetHeader(
 	copy(e[TypeOffset:], types.EncodeUint16(&typ))
 	copy(e[VersionOffset:], types.EncodeUint16(&version))
 	copy(e[CmdTypeOffset:], types.EncodeUint16(&cmdType))
+}
+
+func (e LogEntry) SetSkipCmdVersion(version SkipCmdVersion) {
+	value := uint16(version)
+	copy(e[ReservedOffset:], types.EncodeUint16(&value))
 }
 
 func (e LogEntry) SetEntryCount(count uint32) {
@@ -459,6 +481,7 @@ func SkipMapToLogEntry(skipMap map[uint64]uint64) LogEntry {
 	skipCmd.Sort()
 	e := NewLogEntry()
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	e.SetSkipCmdVersion(SkipCmdVersionDSNPSN)
 	var footer LogEntryFooter
 	offset, length := e.AppendEntry(skipCmd)
 	footer.AppendEntry(offset, length)

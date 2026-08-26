@@ -131,6 +131,7 @@ func Test_LogEntry2(t *testing.T) {
 	assert.Equal(t, Cmd_SkipDSN, CmdType(e.GetCmdType()))
 	assert.Equal(t, IOET_WALRecord, e.GetType())
 	assert.Equal(t, IOET_WALRecord_CurrVer, e.GetVersion())
+	assert.Equal(t, SkipCmdVersionDSNPSN, e.GetSkipCmdVersion())
 
 	skipCmd := SkipCmd(e.GetEntry(0))
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
@@ -170,6 +171,7 @@ func TestCompatibility2(t *testing.T) {
 	t.Log(old.addr)
 	newEntry, err := DecodeLogEntry(buf, nil)
 	assert.NoError(t, err)
+	assert.Equal(t, SkipCmdVersionDSNPSN, newEntry.GetSkipCmdVersion())
 	skipCmd := SkipCmd(newEntry.GetEntry(0))
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
 	assert.Equal(t, []uint64{2, 3, 4}, skipCmd.GetPSNSlice())

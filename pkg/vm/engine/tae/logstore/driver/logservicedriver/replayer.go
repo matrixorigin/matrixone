@@ -471,7 +471,7 @@ func (r *replayer) Replay(
 		}
 
 		if readDone && r.waitMoreRecords() {
-			for err == nil || err != ErrAllRecordsRead {
+			for err == nil {
 				lastScheduled, err = r.tryScheduleApply(
 					ctx, applyC, lastScheduled, ReadState_InLoopDone,
 				)
@@ -514,7 +514,7 @@ func (r *replayer) Replay(
 		return
 	}
 
-	for err == nil || err != ErrAllRecordsRead {
+	for err == nil {
 		lastScheduled, err = r.tryScheduleApply(
 			ctx, applyC, lastScheduled, ReadState_AllDone,
 		)
@@ -867,6 +867,13 @@ func (r *replayer) readNextBatch(
 
 			// 3. remove the skipped records if the entry is a skip entry
 			if entry.GetCmdType() == uint16(Cmd_SkipDSN) {
+				skipVersion := entry.GetSkipCmdVersion()
+				if skipVersion != SkipCmdVersionLegacy && skipVersion != SkipCmdVersionDSNPSN {
+					err = moerr.NewInternalErrorNoCtxf(
+						"unsupported wal skip command version %d", skipVersion,
+					)
+					return false, err
+				}
 				cmd := SkipCmd(entry.GetEntry(0))
 				skipDSNs := cmd.GetDSNSlice()
 				skipPSNs := cmd.GetPSNSlice()
@@ -876,6 +883,7 @@ func (r *replayer) readNextBatch(
 					zap.Any("skip-psns", skipPSNs),
 					zap.Uint64("psn", psn),
 					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
+					zap.Uint16("skip-version", uint16(skipVersion)),
 					// zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				)
 
@@ -884,12 +892,12 @@ func (r *replayer) readNextBatch(
 					skippedRecord, ok := r.replayedState.pendingRecords.Get(
 						pendingDSNRange{start: dsn},
 					)
-					// Skip commands use the same retrying append path as normal WAL
-					// records, so the command itself may have duplicate physical copies.
-					// Match its complete (DSN, PSN) target: an absent target was already
-					// consumed, while a different PSN means this DSN has since been reused.
-					// Both cases are stale, idempotent no-ops.
-					if !ok || skippedRecord.psn != targetPSN {
+					// Historical V2 writers sorted DSNs while accidentally permuting PSNs,
+					// so legacy commands must retain their original DSN-only semantics.
+					// New commands preserve pairs and require an exact target: an absent
+					// target was already consumed, while a different PSN means this DSN
+					// has since been reused. Both cases are stale, idempotent no-ops.
+					if !ok || (skipVersion == SkipCmdVersionDSNPSN && skippedRecord.psn != targetPSN) {
 						logutil.Info(
 							"Wal-Replay-Stale-Skip-Entry",
 							zap.Uint64("dsn", dsn),
@@ -899,7 +907,7 @@ func (r *replayer) readNextBatch(
 						)
 						continue
 					}
-					// Remove both owners only for the exact target so the skipped copy
+					// Remove both owners for the accepted target so the skipped copy
 					// cannot be scheduled or retained in the read cache.
 					r.replayedState.readCache.removeRecord(skippedRecord.psn)
 					r.replayedState.pendingRecords.Delete(skippedRecord)

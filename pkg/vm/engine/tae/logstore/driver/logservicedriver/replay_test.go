@@ -16,6 +16,8 @@ package logservicedriver
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -830,6 +832,123 @@ func Test_ReplayerDoesNotApplyStaleSkipToReusedDSN(t *testing.T) {
 
 	require.NoError(t, r.Replay(ctx))
 	require.Equal(t, []uint64{1, 2, 3}, appliedDSNs)
+}
+
+func Test_ReplayerReadsLegacyV2SkipCmd(t *testing.T) {
+	// This serialized entry was produced with the old sorter from the logical
+	// pairs (DSN n, PSN 100+n). The DSNs are sorted, but several PSNs moved to
+	// different DSNs. Its zeroed reserved field is the on-disk legacy marker.
+	const legacyV2SkipCmdHex = "e80302000200000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000007e0100000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000000000000080000000000000009000000000000000a000000000000000b000000000000000c000000000000000d000000000000000e000000000000000f00000000000000100000000000000011000000000000001200000000000000130000000000000014000000000000006d000000000000006b00000000000000670000000000000074000000000000006a00000000000000780000000000000068000000000000006e00000000000000700000000000000077000000000000006f00000000000000690000000000000071000000000000007200000000000000730000000000000065000000000000007500000000000000760000000000000066000000000000006c000000000000003e00000040010000"
+
+	fixture, err := hex.DecodeString(legacyV2SkipCmdHex)
+	require.NoError(t, err)
+	legacyEntry, err := DecodeLogEntry(fixture, nil)
+	require.NoError(t, err)
+	require.Equal(t, SkipCmdVersionLegacy, legacyEntry.GetSkipCmdVersion())
+	legacyCmd := SkipCmd(legacyEntry.GetEntry(0))
+	require.Equal(t,
+		[]uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+		legacyCmd.GetDSNSlice(),
+	)
+	require.NotEqual(t,
+		[]uint64{101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120},
+		legacyCmd.GetPSNSlice(),
+	)
+
+	recordSpecs := make([][5]uint64, 0, 21)
+	for dsn := uint64(1); dsn <= 20; dsn++ {
+		recordSpecs = append(recordSpecs,
+			[5]uint64{uint64(Cmd_Normal), 100 + dsn, dsn, dsn, 0},
+		)
+	}
+	recordSpecs = append(recordSpecs, [5]uint64{uint64(Cmd_SkipDSN), 121, 0, 0, 0})
+	mockDriver := newMockDriver(100, recordSpecs, 30)
+	baseUnmarshal := mockUnmarshalLogRecordFactor(mockDriver)
+	var appliedDSNs []uint64
+	r := newReplayer(
+		mockHandleFactory(1, func(e *entry.Entry) {
+			appliedDSNs = append(appliedDSNs, e.DSN)
+		}),
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
+			if record.Lsn == 20 {
+				return legacyEntry
+			}
+			return baseUnmarshal(record)
+		}),
+	)
+
+	require.NoError(t, r.Replay(context.Background()))
+	require.Empty(t, appliedDSNs)
+}
+
+func Test_ReplayerRejectsUnknownSkipCmdVersion(t *testing.T) {
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{{uint64(Cmd_SkipDSN), 1, 0, 0, 0}},
+		30,
+	)
+	unknownVersionEntry := SkipMapToLogEntry(map[uint64]uint64{1: 1})
+	unknownVersionEntry.SetSkipCmdVersion(SkipCmdVersionDSNPSN + 1)
+	r := newReplayer(
+		mockHandleFactory(1, nil),
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(func(logservice.LogRecord) LogEntry {
+			return unknownVersionEntry
+		}),
+	)
+
+	err := r.Replay(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported wal skip command version 2")
+}
+
+func Test_ReplayerStopsAfterAppendSkipCmdError(t *testing.T) {
+	for _, continuous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuous-%t", continuous), func(t *testing.T) {
+			mockDriver := newMockDriver(
+				0,
+				[][5]uint64{
+					{uint64(Cmd_Normal), 1, 1, 1, 0},
+					{uint64(Cmd_Normal), 2, 3, 3, 1},
+				},
+				30,
+			)
+			appendErr := errors.New("append skip command failed")
+			var appendCalls atomic.Int64
+			opts := []ReplayOption{
+				WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+				WithReplayerAppendSkipCmd(func(context.Context, map[uint64]uint64) error {
+					if appendCalls.Add(1) == 1 {
+						return appendErr
+					}
+					// This makes the regression bounded on the old looping code: a
+					// second call is itself a failure because appendErr must be terminal.
+					return ErrAllRecordsRead
+				}),
+			}
+			if continuous {
+				var waitCalls atomic.Int64
+				opts = append(opts, WithReplayerWaitMore(func() bool {
+					return waitCalls.Add(1) <= 2
+				}))
+			}
+			r := newReplayer(
+				mockHandleFactory(1, nil),
+				mockDriver,
+				30,
+				opts...,
+			)
+
+			err := r.Replay(context.Background())
+			require.ErrorIs(t, err, appendErr)
+			require.Equal(t, int64(1), appendCalls.Load())
+		})
+	}
 }
 
 func Test_ReplayerPanicDoesNotHang(t *testing.T) {
