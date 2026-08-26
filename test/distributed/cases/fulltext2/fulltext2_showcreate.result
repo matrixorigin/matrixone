@@ -10,7 +10,7 @@ t1  ¦  CREATE TABLE `t1` (
   `id` bigint NOT NULL,
   `body` text DEFAULT NULL,
   PRIMARY KEY (`id`),
- FULLTEXT2 `ft`(`body`) WITH PARSER ngram max_index_capacity = 2 
+ FULLTEXT2 `ft`(`body`) WITH PARSER ngram max_index_capacity = 2
 )
 create table t2 (id bigint primary key, body text);
 create fulltext2 index ft on t2(body) auto_update = true second 5;
@@ -20,7 +20,7 @@ t2  ¦  CREATE TABLE `t2` (
   `id` bigint NOT NULL,
   `body` text DEFAULT NULL,
   PRIMARY KEY (`id`),
- FULLTEXT2 `ft`(`body`) WITH PARSER ngram auto_update = true  second = 5 
+ FULLTEXT2 `ft`(`body`) WITH PARSER ngram auto_update = true  second = 5
 )
 create table t3 (id bigint primary key, body text);
 create fulltext2 index ft on t3(body) auto_update = true day 1 hour 2;
@@ -30,7 +30,7 @@ t3  ¦  CREATE TABLE `t3` (
   `id` bigint NOT NULL,
   `body` text DEFAULT NULL,
   PRIMARY KEY (`id`),
- FULLTEXT2 `ft`(`body`) WITH PARSER ngram auto_update = true  day = 1  hour = 2 
+ FULLTEXT2 `ft`(`body`) WITH PARSER ngram auto_update = true  day = 1  hour = 2
 )
 create table t4 (
 id bigint NOT NULL,
@@ -44,6 +44,6 @@ t4  ¦  CREATE TABLE `t4` (
   `id` bigint NOT NULL,
   `body` text DEFAULT NULL,
   PRIMARY KEY (`id`),
- FULLTEXT2 `ft`(`body`) WITH PARSER ngram auto_update = true  second = 5 
+ FULLTEXT2 `ft`(`body`) WITH PARSER ngram auto_update = true  second = 5
 )
 drop database ft2_showcreate;
