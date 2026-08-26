@@ -1706,11 +1706,12 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		orderedGroupConcat := hasOrderedGroupConcat(node)
 		orderedSetPercentile := hasOrderedSetPercentile(node)
+		legacyVarianceState := hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
-		if orderedGroupConcat || orderedSetPercentile {
+		if orderedGroupConcat || orderedSetPercentile || legacyVarianceState {
 			ss = c.compileOrderedAggregateSingleStage(node, ss, nodes)
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 			return ss, nil
@@ -6267,6 +6268,19 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 	return false
 }
 
+func hasVarianceAggregate(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch int64(uint64(fn.Func.Obj) & function.DistinctMask) {
+			case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+				aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
@@ -6296,6 +6310,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion17
+}
+
+func (c *Compile) supportsRemoteVarianceAggregates() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion30
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
@@ -6410,7 +6434,8 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
-		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates())
+		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

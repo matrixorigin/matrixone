@@ -1491,14 +1491,16 @@ func (ctr *container) makeAggListWithAllocation(
 			)
 		}
 		singleGroup := ctr.mtyp == H0
-		if ctr.legacyTextMinMax && singleGroup {
-			aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyTextMinMax(
-				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
-				agExpr.GetExtraInformation(), typs...)
-		} else if ctr.legacyTextMinMax {
-			aggList[i], err = aggexec.MakeGroupAggWithLegacyTextMinMax(
-				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
-				agExpr.GetExtraInformation(), typs...)
+		if ctr.legacyTextMinMax || ctr.legacyVarianceState {
+			if singleGroup {
+				aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyRemoteState(
+					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
+					ctr.legacyVarianceState, allocation, agExpr.GetExtraInformation(), typs...)
+			} else {
+				aggList[i], err = aggexec.MakeGroupAggWithLegacyRemoteState(
+					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
+					ctr.legacyVarianceState, allocation, agExpr.GetExtraInformation(), typs...)
+			}
 		} else if singleGroup {
 			aggList[i], err = aggexec.MakeSingleGroupAgg(
 				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
@@ -1540,6 +1542,20 @@ func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion14
+}
+
+func useLegacyVarianceStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion30
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

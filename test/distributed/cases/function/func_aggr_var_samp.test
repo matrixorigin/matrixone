@@ -117,6 +117,9 @@ insert into decimal02 values(-298432432433242412313123321231321313);
 insert into decimal02 values(-34243214324324342321313321321342342343.123143);
 insert into decimal02 values(-0.12813218391321939921391929391293912);
 select * from decimal02;
+-- The converted DECIMAL result overflows.  Its float64 payload is an
+-- implementation detail and may vary with a numerically stable algorithm.
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 select VAR_SAMP(col1) from decimal02;
 drop table decimal02;
 
@@ -173,4 +176,3 @@ select VAR_SAMP(a) from test06;
 drop table test06;
 
 drop database test;
-
