@@ -50,6 +50,11 @@ type Fulltext2Query struct {
 	// values INSIDE the search — so a WHERE on an INCLUDE column needs no second base scan.
 	// nil = none. ANDed with FilterBytes.
 	IncludePredsJSON []byte
+	// ScoreRange is an optional pushed-down relevance interval from an
+	// AND-reachable MATCH score predicate. Out-of-range scored rows are removed
+	// before they cross the TVF/join boundary; the plan keeps its own predicate
+	// for exact SQL semantics.
+	ScoreRange *ScoreRange
 }
 
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
@@ -183,8 +188,8 @@ func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vector
 	} else if k <= 0 {
 		k = int(s.idx.NumDocs())
 	}
-	if len(q.FilterBytes) > 0 || len(q.IncludePredsJSON) > 0 {
-		pf = &prefilter{}
+	if len(q.FilterBytes) > 0 || len(q.IncludePredsJSON) > 0 || q.ScoreRange != nil {
+		pf = &prefilter{scoreRange: q.ScoreRange}
 		if len(q.FilterBytes) > 0 {
 			var filter docfilter.MembershipFilter
 			if filter, err = docfilter.New(q.FilterBytes); err != nil {
@@ -206,10 +211,25 @@ func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vector
 
 // runTopK dispatches the bounded top-k search (ranked bag-of-words vs positional query).
 func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Result, error) {
+	var (
+		results []Result
+		err     error
+	)
 	if q.BagOfWords {
-		return s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+		results, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+	} else {
+		results, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
 	}
-	return s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
+	if err != nil || pf == nil || pf.scoreRange == nil {
+		return results, err
+	}
+	kept := results[:0]
+	for _, result := range results {
+		if pf.scoreRange.contains(result.Score) {
+			kept = append(kept, result)
+		}
+	}
+	return kept, nil
 }
 
 // Search runs the WAND positional query (NL exact-phrase or boolean) and returns

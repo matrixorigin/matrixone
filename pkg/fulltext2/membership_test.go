@@ -133,3 +133,19 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 	require.InDelta(t, s0, scoreOf(filtered, 0), 1e-5,
 		"doc 0's score must be filter-independent (corpus df, not filtered count)")
 }
+
+func TestScoreRangeContains(t *testing.T) {
+	var nilRange *ScoreRange
+	require.True(t, nilRange.contains(0))
+
+	r := &ScoreRange{Min: 1, HasMin: true, MinInclusive: true, Max: 3, HasMax: true}
+	require.True(t, r.contains(1))
+	require.True(t, r.contains(2))
+	require.False(t, r.contains(0.99))
+	require.False(t, r.contains(3), "exclusive upper bound")
+
+	r.MaxInclusive = true
+	require.True(t, r.contains(3))
+	r.MinInclusive = false
+	require.False(t, r.contains(1), "exclusive lower bound")
+}

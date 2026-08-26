@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/bytedance/sonic"
@@ -378,6 +379,22 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 			}
 		}
 	}
+	// Optional score range (argVecs[4], a query const). The planner uses this
+	// slot for an AND-reachable FULLTEXT2 MATCH score comparison. Keep it
+	// positional after includePreds so direct three-argument calls remain valid.
+	var scoreRange *fulltext2.ScoreRange
+	if len(tf.ctr.argVecs) > 4 {
+		if rv := tf.ctr.argVecs[4]; rv != nil && rv.Length() > 0 && !rv.IsNull(0) {
+			if s := rv.GetStringAt(0); len(s) > 0 {
+				var r fulltext2.ScoreRange
+				if err := json.Unmarshal([]byte(s), &r); err != nil {
+					return moerr.NewInternalErrorf(proc.Ctx,
+						"fulltext2_search: invalid score range %q: %v", s, err)
+				}
+				scoreRange = &r
+			}
+		}
+	}
 
 	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
 	q := fulltext2.Fulltext2Query{
@@ -387,6 +404,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		Algo:             fulltext2ScoreAlgo(proc),
 		FilterBytes:      u.filterBytes,
 		IncludePredsJSON: includePreds,
+		ScoreRange:       scoreRange,
 	}
 
 	if u.limit == 0 {
