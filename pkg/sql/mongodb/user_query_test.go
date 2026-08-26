@@ -62,6 +62,20 @@ func TestParseUserQueryPipelineAndPlanRoundTrip(t *testing.T) {
 	require.Equal(t, source, restored.Source)
 }
 
+func TestRedactSQLForDiagnostics(t *testing.T) {
+	for _, sql := range []string{
+		`select * from t where __mo_query = '{"filter":{"password":"super-secret-value"}}'`,
+		`select * from t where __MO_QUERY = '{"pipeline":[{"$match":{"api_key":"super-secret-value"}}]}'`,
+	} {
+		diagnostic := RedactSQLForDiagnostics(sql)
+		require.Equal(t, RedactedQueryDiagnostic, diagnostic)
+		require.NotContains(t, diagnostic, "password")
+		require.NotContains(t, diagnostic, "api_key")
+		require.NotContains(t, diagnostic, "super-secret-value")
+	}
+	require.Equal(t, "select 1", RedactSQLForDiagnostics("select 1"))
+}
+
 func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -39,7 +39,44 @@ const (
 	// MaxUserQueryDepth bounds recursive JSON/BSON validation independently of
 	// the byte limit so adversarial nesting cannot exhaust the planner stack.
 	MaxUserQueryDepth = 100
+	// RedactedQueryDiagnostic is the complete diagnostic representation of a
+	// statement that contains an explicit MongoDB selector. It intentionally
+	// retains neither selector field names nor values.
+	RedactedQueryDiagnostic = "<redacted MongoDB __mo_query statement>"
 )
+
+// RedactSQLForDiagnostics returns a diagnostic-safe SQL representation. The
+// selector is user supplied and may be malformed, so this detects its marker
+// case-insensitively without parsing or formatting the statement.
+func RedactSQLForDiagnostics(sql string) string {
+	if containsASCIIFold(sql, "__mo_query") {
+		return RedactedQueryDiagnostic
+	}
+	return sql
+}
+
+func containsASCIIFold(text, needle string) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(text); i++ {
+		matched := true
+		for j := range len(needle) {
+			got, want := text[i+j], needle[j]
+			if got >= 'A' && got <= 'Z' {
+				got += 'a' - 'A'
+			}
+			if got != want {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
 
 type UserQueryKind int32
 

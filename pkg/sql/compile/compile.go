@@ -137,7 +137,7 @@ func NewCompile(
 	c.db = db
 	c.tenant = tenant
 	c.uid = uid
-	c.sql = sql
+	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.stmt = stmt
 	c.addr = addr
@@ -283,7 +283,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
-	c.sql = sql
+	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.affectRows.Store(0)
 	// Reset reuses an existing logical/physical generation. Reused generations
 	// are deliberately ineligible for LOAD unique-index promotion.
@@ -8956,7 +8956,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 }
 
 func (c *Compile) SetOriginSQL(sql string) {
-	c.originSQL = sql
+	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

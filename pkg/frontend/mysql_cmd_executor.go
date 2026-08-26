@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -357,8 +358,8 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	// session state and statement telemetry retain the SQL text. Redact the
 	// whole statement rather than trying to recognize one SQL expression shape:
 	// invalid, nested, or future selector forms must not become a logging leak.
-	if containsASCIIFold(text, catalog.ExternalQuery) {
-		return "<redacted MongoDB __mo_query statement>"
+	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
+		return diagnostic
 	}
 
 	switch stmt := statement.(type) {
@@ -380,37 +381,10 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	}
 }
 
-// containsASCIIFold reports whether text contains the ASCII identifier needle
-// without allocating a lowercase copy of every statement. SQL identifiers are
-// ASCII here, so Unicode case folding is neither needed nor desirable on this
-// hot statement-recording boundary.
-func containsASCIIFold(text, needle string) bool {
-	if len(needle) == 0 {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(text); i++ {
-		matched := true
-		for j := range needle {
-			ch := text[i+j]
-			if ch >= 'A' && ch <= 'Z' {
-				ch += 'a' - 'A'
-			}
-			if ch != needle[j] {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
-}
-
 // redactStatementErrorForLogging replaces a parser echo of __mo_query before it
 // reaches a client, statement telemetry, or the terminal statement logger.
 func redactStatementErrorForLogging(err error, text string) error {
-	if err == nil || !containsASCIIFold(text, catalog.ExternalQuery) {
+	if err == nil || sqlmongodb.RedactSQLForDiagnostics(text) == text {
 		return err
 	}
 	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
@@ -5813,7 +5787,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if recordErr != nil {
 			return recordErr
 		}
-		if containsASCIIFold(errorInput.getSql(), catalog.ExternalQuery) {
+		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
 			parseErr = diagnosticErr
 		} else if _, ok := parseErr.(*moerr.Error); !ok {
 			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
