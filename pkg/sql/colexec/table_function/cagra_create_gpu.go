@@ -467,7 +467,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			var serr error
 			stagingBytes, serr = cuvs.QuantizerStagingBytes(
 				u.devices[0], uint64(u.idxcfg.CuvsCagra.Dimensions), baseElemBytes(u.baseOid), u.idxcfg.CuvsCagra.QuantizerTrainLimit,
-				uint64(srcRowCount), u.idxcfg.Type)
+				stagingRowBound(srcRowCount, requestedCapacity, rowsFit), u.idxcfg.Type)
 			if serr != nil {
 				// No safe fallback: train_limit is 0 when unset, meaning "the C++
 				// default", so guessing charges nothing for an arena still allocated.

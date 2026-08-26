@@ -100,6 +100,34 @@ public:
         matrixone::device_memory_governor::kBudgetPercent;
     virtual size_t budget_percent() const { return kDefaultBudgetPercent; }
 
+    // kShardAlignRows mirrors index_base.hpp's split: rows_per_shard is rounded
+    // DOWN to a multiple of 32 (bitset words are sliced per shard), and the LAST
+    // shard absorbs the remainder -- so the last shard is the biggest one.
+    static constexpr int64_t kShardAlignRows = 32;
+
+    // sharded_aggregate turns "rows one card can hold" into a table-wide capacity
+    // that survives that split.
+    //
+    // min_rows * distinct does NOT: with 4 cards holding 1001 rows each it
+    // advertises 4004, which splits as (4004/4)&~31 = 992 three times and 1028 on
+    // the last card -- 27 rows more than the card the figure was derived from.
+    // The build then sizes its claim from the real shard and is refused at exactly
+    // the capacity this function advertised. CAGRA's 128-row training minimum does
+    // not catch it either, since 992 clears that comfortably.
+    //
+    // Aligning FIRST makes every shard equal: (m*N)/N == m and m is already a
+    // multiple of 32, so the last shard takes no remainder and no card is handed
+    // more than min_rows.
+    static int64_t sharded_aggregate(int64_t min_rows, int distinct) {
+        const int64_t aligned = min_rows & ~(kShardAlignRows - 1);
+        // Below one aligned shard there is no split that fits, but returning 0
+        // would read as "not measured" and silently disable the VRAM bound
+        // instead of refusing. Leave the unaligned figure and let the per-shard
+        // k-means check reject it with a message that says why.
+        if (aligned <= 0) return min_rows * distinct;
+        return aligned * distinct;
+    }
+
     // rows_fitting: how many rows fit across a device set.
     //
     // Sized from the SMALLEST participating card, because heterogeneous free
@@ -169,7 +197,7 @@ public:
         if (out_min_device) *out_min_device = min_dev;
         if (out_min_free) *out_min_free = min_free;
         if (dist_mode == DistributionMode_SHARDED && distinct > 1) {
-            return min_rows * distinct;
+            return sharded_aggregate(min_rows, distinct);
         }
         return min_rows;
     }

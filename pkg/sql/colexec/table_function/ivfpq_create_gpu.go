@@ -523,7 +523,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			var serr error
 			stagingBytes, serr = cuvs.QuantizerStagingBytes(
 				u.devices[0], dim, baseElemBytes(u.baseOid), u.idxcfg.CuvsIvfpq.QuantizerTrainLimit,
-				uint64(srcRowCount), u.idxcfg.Type)
+				stagingRowBound(srcRowCount, requestedCapacity, rowsFit), u.idxcfg.Type)
 			if serr != nil {
 				// No safe fallback: train_limit is 0 when unset, meaning "the C++
 				// default", so guessing charges nothing for an arena still allocated.

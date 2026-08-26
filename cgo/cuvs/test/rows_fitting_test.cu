@@ -223,3 +223,40 @@ TEST(IndexCost, RowsFittingShimRestoresTheDeviceOnSuccess) {
     ASSERT_EQ(before, current_device());
     ASSERT_EQ(cudaSuccess, cudaSetDevice(0));
 }
+
+// The SHARDED aggregate has to survive the split it feeds. index_base.hpp cuts
+// rows_per_shard = (total/N) & ~31 and gives the LAST shard the remainder, so a
+// naive min_rows*distinct advertises a capacity whose last shard exceeds the
+// card the figure came from -- and the build is then refused at exactly the
+// capacity that was advertised.
+TEST(IndexCost, ShardedAggregateSurvivesThe32RowAlignment) {
+    // The reported case: four cards holding 1001 rows each.
+    // 4*1001 = 4004 -> 992/992/992/1028, and 1028 > 1001.
+    const int64_t aggregate = ivf_pq_cost::sharded_aggregate(1001, 4);
+    ASSERT_EQ(aggregate, (int64_t)3968);  // (1001 & ~31) * 4
+
+    // Replay the native split on whatever we advertise and check every shard.
+    auto worst_shard = [](int64_t total, int n) {
+        const int64_t per = (total / n) & ~(int64_t)31;
+        const int64_t last = total - per * (n - 1);
+        return last > per ? last : per;  // the last shard absorbs the remainder
+    };
+    ASSERT_TRUE(worst_shard(aggregate, 4) <= 1001);
+    ASSERT_EQ(worst_shard(aggregate, 4), (int64_t)992);
+    // ...and the old figure is exactly what it would have failed on.
+    ASSERT_TRUE(worst_shard(1001 * 4, 4) > 1001);
+
+    // A sweep: no advertised capacity may hand any card more than it can hold.
+    for (int64_t m = 32; m <= 5000; m += 7) {
+        for (int n = 2; n <= 8; ++n) {
+            const int64_t agg = ivf_pq_cost::sharded_aggregate(m, n);
+            ASSERT_TRUE(worst_shard(agg, n) <= m);
+        }
+    }
+
+    // Below one aligned shard there is no split that fits. Returning 0 would read
+    // as "not measured" and disable the bound, so the unaligned figure stands and
+    // the per-shard k-means check refuses it instead.
+    ASSERT_EQ(ivf_pq_cost::sharded_aggregate(31, 4), (int64_t)124);
+    ASSERT_TRUE(ivf_pq_cost::sharded_aggregate(31, 4) > 0);
+}
