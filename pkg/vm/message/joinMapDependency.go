@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,7 +41,9 @@ const (
 // fresh moerr clone through AsMoErr so a caller cannot mutate the value seen by
 // another broadcast consumer.
 type JoinMapBuildError struct {
-	err *moerr.Error
+	err             *moerr.Error
+	wasCancellation bool
+	wasDeadline     bool
 }
 
 var _ error = new(JoinMapBuildError)
@@ -56,7 +59,29 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if !errors.As(err, &me) {
 		me = moerr.NewInternalErrorNoCtx(err.Error())
 	}
-	return &JoinMapBuildError{err: cloneMoErr(me)}
+	return &JoinMapBuildError{
+		err:             cloneMoErr(me),
+		wasCancellation: isPureContextError(err, context.Canceled),
+		wasDeadline:     isPureContextError(err, context.DeadlineExceeded),
+	}
+}
+
+func isPureContextError(err, target error) bool {
+	if err == target {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		return len(causes) == 1 && isPureContextError(causes[0], target)
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return isPureContextError(cause, target)
+	}
+	return false
+}
+
+func (e *JoinMapBuildError) IsCancellation() bool {
+	return e != nil && (e.wasCancellation || e.wasDeadline)
 }
 
 func cloneMoErr(src *moerr.Error) *moerr.Error {

@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"os"
 	"strconv"
@@ -656,14 +657,7 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return JoinMapResult{}, err
 		}
 		if ctxDone {
-			// The pipeline context is canceled when a sibling reports the
-			// statement's primary error.  Return its cause instead of the
-			// generic context.Err(), otherwise a failed dependency can mask
-			// the original execution error as "context canceled".
-			if cause := context.Cause(ctx); cause != nil {
-				return JoinMapResult{}, cause
-			}
-			return JoinMapResult{}, nil
+			return JoinMapResult{}, resolveJoinMapCancellation(ctx, ctx.Err())
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -683,6 +677,11 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			}
 			jm := result.JoinMap()
 			if result.IsBuildError() {
+				if result.BuildError().IsCancellation() {
+					if err := resolveJoinMapCancellation(ctx, result.Err()); err != result.Err() {
+						return JoinMapResult{}, err
+					}
+				}
 				return result, nil
 			}
 			if jm == nil {
@@ -694,6 +693,26 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return result, nil
 		}
 	}
+}
+
+// resolveJoinMapCancellation applies the same precedence regardless of
+// whether cancellation is observed before or after the producer's terminal
+// message. Query deadlines remain classifiable as DeadlineExceeded; a
+// pipeline-local cancellation may instead carry the sibling's substantive
+// cause.
+func resolveJoinMapCancellation(ctx context.Context, err error) error {
+	if ctx == nil || ctx.Err() == nil {
+		return err
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if cause := context.Cause(ctx); cause != nil &&
+		!errors.Is(cause, context.Canceled) &&
+		!errors.Is(cause, context.DeadlineExceeded) {
+		return cause
+	}
+	return err
 }
 
 // SendJoinMapResult publishes one terminal dependency value without waiting

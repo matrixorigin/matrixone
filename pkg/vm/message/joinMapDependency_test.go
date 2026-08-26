@@ -157,6 +157,30 @@ func TestReceiveJoinMapResultReturnsCancellationCause(t *testing.T) {
 	}
 }
 
+func TestReceiveJoinMapResultMessageCancellationReturnsPipelineCause(t *testing.T) {
+	mb := NewMessageBoard()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
+	cancel(primaryErr)
+
+	SendJoinMapResult(NewJoinMapBuildErrorResult(context.Canceled), 44, false, 0, mb)
+	_, err := ReceiveJoinMapResult(44, false, 0, mb, ctx)
+	require.ErrorIs(t, err, primaryErr)
+	var got *moerr.Error
+	require.ErrorAs(t, err, &got)
+}
+
+func TestReceiveJoinMapResultTimeoutPreservesDeadline(t *testing.T) {
+	mb := NewMessageBoard()
+	diagnostic := moerr.NewErrFKNoReferencedRow2(context.Background())
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Millisecond, diagnostic)
+	defer cancel()
+
+	_, err := ReceiveJoinMapResult(45, false, 0, mb, ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, diagnostic)
+}
+
 func TestFinalizeRuntimeFilterOnBuildErrorPasses(t *testing.T) {
 	mb := NewMessageBoard()
 	spec := &plan.RuntimeFilterSpec{Tag: 99}
