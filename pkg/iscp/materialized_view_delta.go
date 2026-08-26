@@ -84,8 +84,14 @@ func decodeIncrementalDescription(encoded string) (*incrementalDescription, erro
 	if err := json.Unmarshal(b, &desc); err != nil {
 		return nil, fmt.Errorf("invalid materialized view incremental specification: %w", err)
 	}
+	if desc.Version == 0 {
+		desc.Version = 1
+	}
+	if desc.Version < 1 || desc.Version > 2 {
+		return nil, fmt.Errorf("unsupported materialized view incremental specification version %d", desc.Version)
+	}
 	if desc.SourceAlias == "" || len(desc.SourceColumns) == 0 || len(desc.Groups) == 0 ||
-		len(desc.Aggregates) == 0 || desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
+		desc.RowCountColumn == "" || len(desc.StateColumns) == 0 {
 		return nil, fmt.Errorf("incomplete materialized view incremental specification")
 	}
 	for _, group := range desc.Groups {
@@ -110,6 +116,14 @@ func decodeIncrementalDescription(encoded string) (*incrementalDescription, erro
 		case "avg":
 			if agg.InputExpression == "" || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
 				return nil, fmt.Errorf("incremental AVG requires input and state")
+			}
+		case "min", "max":
+			if agg.InputExpression == "" {
+				return nil, fmt.Errorf("incremental %s requires an input", strings.ToUpper(agg.Kind))
+			}
+		case "count_distinct":
+			if desc.Version < 2 || desc.StateTable == "" || agg.InputExpression == "" || agg.StateIndex <= 0 {
+				return nil, fmt.Errorf("incremental COUNT(DISTINCT) requires versioned auxiliary state")
 			}
 		default:
 			return nil, fmt.Errorf("incremental aggregate %q is not supported", agg.Kind)
@@ -153,6 +167,9 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 			if err != nil {
 				return err
 			}
+			if err = resetMaterializedViewAffectedGroups(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc); err != nil {
+				return err
+			}
 
 			for {
 				data := r.Next()
@@ -181,11 +198,9 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					rows = append(rows, materializedViewSignedRow{values: row.Values, sign: 1})
 				}
 				if len(deletes) > 0 {
-					rowids := make([]types.Rowid, len(deletes))
-					for i := range deletes {
-						rowids[i] = deletes[i].RowID
-					}
-					oldRows, readErr := reader.ReadRowsByRowID(refreshCtx, rowids, from.GetFromTS(), desc.SourceColumns, nil)
+					oldRows, readErr := readMaterializedViewDeletedRows(
+						refreshCtx, reader, deletes, from.GetFromTS(), desc.SourceColumns,
+					)
 					if readErr != nil {
 						data.Done()
 						return readErr
@@ -204,7 +219,16 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 				}
 				for start := 0; start < len(rows); start += materializedViewDeltaBatchRows {
 					end := min(start+materializedViewDeltaBatchRows, len(rows))
-					if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, rows[start:end]); err != nil {
+					chunk := rows[start:end]
+					if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, chunk); err != nil {
+						data.Done()
+						return err
+					}
+					if err := applyMaterializedViewDistinctDeltas(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, chunk); err != nil {
+						data.Done()
+						return err
+					}
+					if err := recordMaterializedViewAffectedGroups(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, chunk); err != nil {
 						data.Done()
 						return err
 					}
@@ -216,6 +240,15 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 					break
 				}
 			}
+			boundary, ok := r.(iterationBoundaryRetriever)
+			if !ok {
+				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
+			}
+			if err = recomputeMaterializedViewAffectedGroups(
+				refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, boundary.GetToTS(),
+			); err != nil {
+				return err
+			}
 			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
 		})
 	if err == nil {
@@ -223,6 +256,54 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 		metricv2.ISCPMaterializedViewRows.WithLabelValues("delete").Add(float64(deleteRows))
 	}
 	return drained, err
+}
+
+// readMaterializedViewDeletedRows reads each row immediately before its own
+// tombstone commit. Reading every delete at the iteration's fromTS is invalid
+// when a row was inserted (or updated more than once) inside the same tail
+// interval, because that row did not exist at fromTS yet.
+func readMaterializedViewDeletedRows(
+	ctx context.Context,
+	reader engine.RowIDReader,
+	deletes []materializedViewChangeRow,
+	from types.TS,
+	columns []string,
+) ([][]any, error) {
+	type snapshotGroup struct {
+		indices []int
+		rowids  []types.Rowid
+	}
+	groups := make(map[types.TS]*snapshotGroup)
+	order := make([]types.TS, 0)
+	for i := range deletes {
+		snapshot := from
+		if !deletes[i].CommitTS.IsEmpty() {
+			snapshot = deletes[i].CommitTS.Prev()
+		}
+		group := groups[snapshot]
+		if group == nil {
+			group = &snapshotGroup{}
+			groups[snapshot] = group
+			order = append(order, snapshot)
+		}
+		group.indices = append(group.indices, i)
+		group.rowids = append(group.rowids, deletes[i].RowID)
+	}
+	result := make([][]any, len(deletes))
+	for _, snapshot := range order {
+		group := groups[snapshot]
+		rows, err := reader.ReadRowsByRowID(ctx, group.rowids, snapshot, columns, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) != len(group.indices) {
+			return nil, fmt.Errorf("rowid lookup returned %d rows for %d deletes", len(rows), len(group.indices))
+		}
+		for i := range rows {
+			result[group.indices[i]] = rows[i]
+		}
+	}
+	return result, nil
 }
 
 func materializedViewSourceColumnTypes(tableDef *planpb.TableDef, columns []string) ([]*types.Type, error) {
@@ -382,6 +463,15 @@ func materializedViewDeltaUpsertSets(desc *incrementalDescription) []string {
 				fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE (coalesce(%s,0) + coalesce(%s,0)) / (%s + %s) END", out, stateCount, value(agg.StateCountColumn), stateSum, value(agg.StateSumColumn), stateCount, value(agg.StateCountColumn)),
 				fmt.Sprintf("%s = coalesce(%s,0) + coalesce(%s,0)", stateSum, stateSum, value(agg.StateSumColumn)),
 				fmt.Sprintf("%s = %s + %s", stateCount, stateCount, value(agg.StateCountColumn)))
+		case "min":
+			sets = append(sets, fmt.Sprintf("%s = CASE WHEN %s IS NULL THEN %s WHEN %s IS NULL THEN %s ELSE least(%s,%s) END",
+				out, out, value(agg.OutputColumn), value(agg.OutputColumn), out, out, value(agg.OutputColumn)))
+		case "max":
+			sets = append(sets, fmt.Sprintf("%s = CASE WHEN %s IS NULL THEN %s WHEN %s IS NULL THEN %s ELSE greatest(%s,%s) END",
+				out, out, value(agg.OutputColumn), value(agg.OutputColumn), out, out, value(agg.OutputColumn)))
+		case "count_distinct":
+			// Exact distinct transitions are applied against the auxiliary state
+			// after the ordinary row-count delta has materialized missing groups.
 		}
 	}
 	rowCount := sqlquote.Ident(desc.RowCountColumn)
@@ -411,6 +501,281 @@ func applyMaterializedViewDeltaRows(
 	return applyMaterializedViewDeltaRows(ctx, service, txn, info, desc, sourceTypes, rows[middle:])
 }
 
+func materializedViewHasDistinctState(desc *incrementalDescription) bool {
+	if desc == nil || desc.StateTable == "" {
+		return false
+	}
+	for _, agg := range desc.Aggregates {
+		if agg.Kind == "count_distinct" {
+			return true
+		}
+	}
+	return false
+}
+
+func materializedViewNeedsAffectedGroups(desc *incrementalDescription) bool {
+	if desc == nil || desc.StateTable == "" {
+		return false
+	}
+	for _, agg := range desc.Aggregates {
+		if agg.Kind == "min" || agg.Kind == "max" || agg.Kind == "count_distinct" {
+			return true
+		}
+	}
+	return false
+}
+
+func materializedViewHasAuxiliaryState(desc *incrementalDescription) bool {
+	return materializedViewHasDistinctState(desc) || materializedViewNeedsAffectedGroups(desc)
+}
+
+func ensureMaterializedViewStateTable(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+) error {
+	if !materializedViewHasAuxiliaryState(desc) {
+		return nil
+	}
+	sql := fmt.Sprintf(
+		"CREATE TABLE IF NOT EXISTS %s (aggregate_index INT NOT NULL, group_key VARBINARY(65535) NOT NULL, value_key VARBINARY(65535) NOT NULL, ref_count BIGINT NOT NULL, PRIMARY KEY (aggregate_index, group_key, value_key)) COMMENT = 'matrixone materialized view state'",
+		sqlquote.QualifiedIdent(info.DBName, desc.StateTable),
+	)
+	return execMaterializedViewDeltaAndClose(ctx, sql, service, txn)
+}
+
+func resetMaterializedViewAffectedGroups(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+) error {
+	if !materializedViewNeedsAffectedGroups(desc) {
+		return nil
+	}
+	return execMaterializedViewDeltaAndClose(ctx,
+		fmt.Sprintf("DELETE FROM %s WHERE aggregate_index = 0", sqlquote.QualifiedIdent(info.DBName, desc.StateTable)),
+		service, txn)
+}
+
+func recordMaterializedViewAffectedGroups(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+	sourceTypes []*types.Type,
+	rows []materializedViewSignedRow,
+) error {
+	if !materializedViewNeedsAffectedGroups(desc) || len(rows) == 0 {
+		return nil
+	}
+	hasDelete := false
+	for _, row := range rows {
+		if row.sign < 0 {
+			hasDelete = true
+			break
+		}
+	}
+	if !hasDelete {
+		return nil
+	}
+	sourceCTE, err := materializedViewDeltaSourceCTE(ctx, desc, sourceTypes, rows)
+	if err != nil {
+		return err
+	}
+	groups := make([]string, len(desc.Groups))
+	for i := range desc.Groups {
+		groups[i] = desc.Groups[i].Expression
+	}
+	where := "__mo_sign < 0"
+	if desc.Filter != "" {
+		where += " AND (" + desc.Filter + ")"
+	}
+	state := sqlquote.QualifiedIdent(info.DBName, desc.StateTable)
+	sql := fmt.Sprintf(
+		"WITH %s INSERT INTO %s (aggregate_index,group_key,value_key,ref_count) SELECT 0,CAST(serial_full(%s) AS VARBINARY(65535)),CAST('' AS VARBINARY(65535)),1 FROM src AS %s WHERE %s GROUP BY %s ON DUPLICATE KEY UPDATE ref_count = ref_count",
+		sourceCTE, state, strings.Join(groups, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groups, ","))
+	return execMaterializedViewDeltaAndClose(ctx, sql, service, txn)
+}
+
+func recomputeMaterializedViewAffectedGroups(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+	boundary types.TS,
+) error {
+	if !materializedViewNeedsAffectedGroups(desc) {
+		return nil
+	}
+	state := sqlquote.QualifiedIdent(info.DBName, desc.StateTable)
+	target := sqlquote.QualifiedIdent(info.DBName, info.TableName)
+	if err := execMaterializedViewDeltaAndClose(ctx,
+		fmt.Sprintf("DELETE t FROM %s AS t JOIN %s AS s ON t.%s = s.group_key WHERE s.aggregate_index = 0",
+			target, state, sqlquote.Ident(desc.GroupKeyColumn)), service, txn); err != nil {
+		return err
+	}
+	refreshSQL, err := materializedViewRefreshAtSources(info.RefreshSQL, info.SourceTableInfos(), boundary)
+	if err != nil {
+		return err
+	}
+	targetColumns := append(append([]string(nil), info.Columns...), desc.StateColumns...)
+	quoted := make([]string, len(targetColumns))
+	selected := make([]string, len(targetColumns))
+	for i := range targetColumns {
+		quoted[i] = sqlquote.Ident(targetColumns[i])
+		selected[i] = "r." + quoted[i]
+	}
+	insert := fmt.Sprintf(
+		"INSERT INTO %s (%s) SELECT %s FROM (%s) AS r JOIN %s AS s ON r.%s = s.group_key WHERE s.aggregate_index = 0",
+		target, strings.Join(quoted, ","), strings.Join(selected, ","), refreshSQL, state, sqlquote.Ident(desc.GroupKeyColumn))
+	if err = execMaterializedViewDeltaAndClose(ctx, insert, service, txn); err != nil {
+		return err
+	}
+	return resetMaterializedViewAffectedGroups(ctx, service, txn, info, desc)
+}
+
+func materializedViewDistinctDeltaCTE(
+	ctx context.Context,
+	desc *incrementalDescription,
+	agg incrementalAggregate,
+	sourceTypes []*types.Type,
+	rows []materializedViewSignedRow,
+) (string, error) {
+	sourceCTE, err := materializedViewDeltaSourceCTE(ctx, desc, sourceTypes, rows)
+	if err != nil {
+		return "", err
+	}
+	groups := make([]string, len(desc.Groups))
+	for i := range desc.Groups {
+		groups[i] = desc.Groups[i].Expression
+	}
+	where := fmt.Sprintf("(%s) IS NOT NULL", agg.InputExpression)
+	if desc.Filter != "" {
+		where = "(" + desc.Filter + ") AND " + where
+	}
+	cte := fmt.Sprintf(
+		"WITH %s, distinct_delta AS (SELECT %d AS aggregate_index, CAST(serial_full(%s) AS VARBINARY(65535)) AS group_key, CAST(serial_full(%s) AS VARBINARY(65535)) AS value_key, sum(__mo_sign) AS ref_delta FROM src AS %s WHERE %s GROUP BY %s,%s)",
+		sourceCTE,
+		agg.StateIndex,
+		strings.Join(groups, ","),
+		agg.InputExpression,
+		sqlquote.Ident(desc.SourceAlias),
+		where,
+		strings.Join(groups, ","),
+		agg.InputExpression,
+	)
+	if len(cte) > materializedViewDeltaMaxSQL {
+		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
+	}
+	return cte, nil
+}
+
+func applyMaterializedViewDistinctDeltas(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+	sourceTypes []*types.Type,
+	rows []materializedViewSignedRow,
+) error {
+	if !materializedViewHasDistinctState(desc) || len(rows) == 0 {
+		return nil
+	}
+	state := sqlquote.QualifiedIdent(info.DBName, desc.StateTable)
+	target := sqlquote.QualifiedIdent(info.DBName, info.TableName)
+	for _, agg := range desc.Aggregates {
+		if agg.Kind != "count_distinct" {
+			continue
+		}
+		cte, err := materializedViewDistinctDeltaCTE(ctx, desc, agg, sourceTypes, rows)
+		if err != nil {
+			return err
+		}
+		for _, sql := range materializedViewDistinctDeltaStatements(desc, agg, cte, state, target) {
+			if err = execMaterializedViewDeltaAndClose(ctx, sql, service, txn); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func materializedViewDistinctDeltaStatements(
+	desc *incrementalDescription,
+	agg incrementalAggregate,
+	cte, state, target string,
+) []string {
+	return []string{
+		fmt.Sprintf(
+			"%s, visible_delta AS (SELECT d.group_key, sum(CASE WHEN coalesce(s.ref_count,0) = 0 AND d.ref_delta > 0 THEN 1 WHEN coalesce(s.ref_count,0) > 0 AND coalesce(s.ref_count,0) + d.ref_delta <= 0 THEN -1 ELSE 0 END) AS value_delta FROM distinct_delta AS d LEFT JOIN %s AS s ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key GROUP BY d.group_key) UPDATE %s AS t JOIN visible_delta AS d ON t.%s = d.group_key SET t.%s = t.%s + d.value_delta",
+			cte, state, target, sqlquote.Ident(desc.GroupKeyColumn), sqlquote.Ident(agg.OutputColumn), sqlquote.Ident(agg.OutputColumn)),
+		fmt.Sprintf(
+			"%s UPDATE %s AS s JOIN distinct_delta AS d ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key SET s.ref_count = s.ref_count + d.ref_delta",
+			cte, state),
+		fmt.Sprintf(
+			"%s INSERT INTO %s (aggregate_index,group_key,value_key,ref_count) SELECT d.aggregate_index,d.group_key,d.value_key,d.ref_delta FROM distinct_delta AS d LEFT JOIN %s AS s ON s.aggregate_index = d.aggregate_index AND s.group_key = d.group_key AND s.value_key = d.value_key WHERE s.aggregate_index IS NULL AND d.ref_delta > 0",
+			cte, state, state),
+		fmt.Sprintf("DELETE FROM %s WHERE aggregate_index = %d AND ref_count <= 0", state, agg.StateIndex),
+	}
+}
+
+func rebuildMaterializedViewDistinctState(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+	boundary types.TS,
+) error {
+	if !materializedViewHasDistinctState(desc) {
+		return nil
+	}
+	state := sqlquote.QualifiedIdent(info.DBName, desc.StateTable)
+	if err := execMaterializedViewDeltaAndClose(ctx, "DELETE FROM "+state+" WHERE aggregate_index > 0", service, txn); err != nil {
+		return err
+	}
+	groups := make([]string, len(desc.Groups))
+	for i := range desc.Groups {
+		groups[i] = desc.Groups[i].Expression
+	}
+	for _, agg := range desc.Aggregates {
+		if agg.Kind != "count_distinct" {
+			continue
+		}
+		where := fmt.Sprintf("(%s) IS NOT NULL", agg.InputExpression)
+		if desc.Filter != "" {
+			where = "(" + desc.Filter + ") AND " + where
+		}
+		query := fmt.Sprintf(
+			"SELECT %d, CAST(serial_full(%s) AS VARBINARY(65535)), CAST(serial_full(%s) AS VARBINARY(65535)), count(*) FROM %s AS %s WHERE %s GROUP BY %s,%s",
+			agg.StateIndex,
+			strings.Join(groups, ","),
+			agg.InputExpression,
+			info.SourceSQL,
+			sqlquote.Ident(desc.SourceAlias),
+			where,
+			strings.Join(groups, ","),
+			agg.InputExpression,
+		)
+		atBoundary, err := materializedViewRefreshAtSources(query, info.SourceTableInfos(), boundary)
+		if err != nil {
+			return err
+		}
+		insert := fmt.Sprintf("INSERT INTO %s (aggregate_index,group_key,value_key,ref_count) %s", state, atBoundary)
+		if err = execMaterializedViewDeltaAndClose(ctx, insert, service, txn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func execMaterializedViewDeltaAndClose(
 	ctx context.Context,
 	sql string,
@@ -425,6 +790,61 @@ func execMaterializedViewDeltaAndClose(
 }
 
 func materializedViewDeltaCTE(
+	ctx context.Context,
+	desc *incrementalDescription,
+	sourceTypes []*types.Type,
+	rows []materializedViewSignedRow,
+) (string, error) {
+	sourceCTE, err := materializedViewDeltaSourceCTE(ctx, desc, sourceTypes, rows)
+	if err != nil {
+		return "", err
+	}
+
+	projection := make([]string, 0, len(desc.Groups)+len(desc.Aggregates)*2+1)
+	groupBy := make([]string, 0, len(desc.Groups))
+	for i, group := range desc.Groups {
+		projection = append(projection, fmt.Sprintf("%s AS %s", group.Expression, materializedViewDeltaGroupAlias(i)))
+		groupBy = append(groupBy, group.Expression)
+	}
+	projection = append(projection, "sum(__mo_sign) AS __mo_row_delta")
+	for i, agg := range desc.Aggregates {
+		countAlias := materializedViewDeltaCountAlias(i)
+		sumAlias := materializedViewDeltaSumAlias(i)
+		switch agg.Kind {
+		case "count_star":
+			projection = append(projection, fmt.Sprintf("sum(__mo_sign) AS %s", countAlias))
+		case "count_column":
+			projection = append(projection, fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
+		case "sum":
+			projection = append(projection,
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign * (%s) END) AS %s", agg.InputExpression, agg.InputExpression, sumAlias),
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
+		case "avg":
+			projection = append(projection,
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign * (%s) END) AS %s", agg.InputExpression, agg.InputExpression, sumAlias),
+				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
+		case "min":
+			projection = append(projection, fmt.Sprintf("min(CASE WHEN __mo_sign > 0 THEN (%s) ELSE NULL END) AS %s", agg.InputExpression, sumAlias))
+		case "max":
+			projection = append(projection, fmt.Sprintf("max(CASE WHEN __mo_sign > 0 THEN (%s) ELSE NULL END) AS %s", agg.InputExpression, sumAlias))
+		case "count_distinct":
+			// Its value delta depends on the persisted old refcount, so it is
+			// computed by applyMaterializedViewDistinctDeltas.
+		}
+	}
+	where := ""
+	if desc.Filter != "" {
+		where = " WHERE (" + desc.Filter + ")"
+	}
+	cte := fmt.Sprintf("WITH %s, delta AS (SELECT %s FROM src AS %s%s GROUP BY %s)",
+		sourceCTE, strings.Join(projection, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groupBy, ","))
+	if len(cte) > materializedViewDeltaMaxSQL {
+		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
+	}
+	return cte, nil
+}
+
+func materializedViewDeltaSourceCTE(
 	ctx context.Context,
 	desc *incrementalDescription,
 	sourceTypes []*types.Type,
@@ -470,37 +890,7 @@ func materializedViewDeltaCTE(
 	}
 	columns = append(columns, fmt.Sprintf("CAST(column_%d AS BIGINT) AS __mo_sign", len(desc.SourceColumns)))
 
-	projection := make([]string, 0, len(desc.Groups)+len(desc.Aggregates)*2+1)
-	groupBy := make([]string, 0, len(desc.Groups))
-	for i, group := range desc.Groups {
-		projection = append(projection, fmt.Sprintf("%s AS %s", group.Expression, materializedViewDeltaGroupAlias(i)))
-		groupBy = append(groupBy, group.Expression)
-	}
-	projection = append(projection, "sum(__mo_sign) AS __mo_row_delta")
-	for i, agg := range desc.Aggregates {
-		countAlias := materializedViewDeltaCountAlias(i)
-		sumAlias := materializedViewDeltaSumAlias(i)
-		switch agg.Kind {
-		case "count_star":
-			projection = append(projection, fmt.Sprintf("sum(__mo_sign) AS %s", countAlias))
-		case "count_column":
-			projection = append(projection, fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
-		case "sum":
-			projection = append(projection,
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign * (%s) END) AS %s", agg.InputExpression, agg.InputExpression, sumAlias),
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
-		case "avg":
-			projection = append(projection,
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign * (%s) END) AS %s", agg.InputExpression, agg.InputExpression, sumAlias),
-				fmt.Sprintf("sum(CASE WHEN (%s) IS NULL THEN 0 ELSE __mo_sign END) AS %s", agg.InputExpression, countAlias))
-		}
-	}
-	where := ""
-	if desc.Filter != "" {
-		where = " WHERE (" + desc.Filter + ")"
-	}
-	cte := fmt.Sprintf("WITH src AS (SELECT %s FROM (VALUES %s) AS __mo_mv_values), delta AS (SELECT %s FROM src AS %s%s GROUP BY %s)",
-		strings.Join(columns, ","), string(values), strings.Join(projection, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groupBy, ","))
+	cte := fmt.Sprintf("src AS (SELECT %s FROM (VALUES %s) AS __mo_mv_values)", strings.Join(columns, ","), string(values))
 	if len(cte) > materializedViewDeltaMaxSQL {
 		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
 	}
@@ -566,6 +956,13 @@ func materializedViewDeltaUpdateSets(desc *incrementalDescription, targetAlias, 
 				fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE (coalesce(%s,0) + coalesce(%s,0)) / (%s + %s) END", out, stateCount, countDelta, stateSum, sumDelta, stateCount, countDelta),
 				fmt.Sprintf("%s = coalesce(%s,0) + coalesce(%s,0)", stateSum, stateSum, sumDelta),
 				fmt.Sprintf("%s = %s + %s", stateCount, stateCount, countDelta))
+		case "min":
+			sets = append(sets, fmt.Sprintf("%s = CASE WHEN %s IS NULL THEN %s WHEN %s IS NULL THEN %s ELSE least(%s,%s) END",
+				out, out, sumDelta, sumDelta, out, out, sumDelta))
+		case "max":
+			sets = append(sets, fmt.Sprintf("%s = CASE WHEN %s IS NULL THEN %s WHEN %s IS NULL THEN %s ELSE greatest(%s,%s) END",
+				out, out, sumDelta, sumDelta, out, out, sumDelta))
+		case "count_distinct":
 		}
 	}
 	rowCount := targetAlias + "." + sqlquote.Ident(desc.RowCountColumn)
@@ -607,6 +1004,10 @@ func materializedViewDeltaInsertProjection(desc *incrementalDescription, deltaAl
 			values = append(values, fmt.Sprintf("CASE WHEN %s = 0 THEN NULL ELSE %s / %s END", countDelta, sumDelta, countDelta))
 			columns = append(columns, sqlquote.Ident(agg.StateSumColumn), sqlquote.Ident(agg.StateCountColumn))
 			values = append(values, sumDelta, countDelta)
+		case "min", "max":
+			values = append(values, sumDelta)
+		case "count_distinct":
+			values = append(values, "CAST(0 AS BIGINT)")
 		}
 	}
 	columns = append(columns, sqlquote.Ident(desc.RowCountColumn))

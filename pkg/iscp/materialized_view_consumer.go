@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -59,6 +60,7 @@ type incrementalAggregate struct {
 	OutputColumn     string `json:"output_column"`
 	StateSumColumn   string `json:"state_sum_column,omitempty"`
 	StateCountColumn string `json:"state_count_column,omitempty"`
+	StateIndex       int    `json:"state_index,omitempty"`
 }
 
 type incrementalGroup struct {
@@ -68,6 +70,8 @@ type incrementalGroup struct {
 }
 
 type incrementalDescription struct {
+	Version        int                    `json:"version,omitempty"`
+	Strategy       string                 `json:"strategy,omitempty"`
 	SourceAlias    string                 `json:"source_alias"`
 	SourceColumns  []string               `json:"source_columns"`
 	Filter         string                 `json:"filter,omitempty"`
@@ -76,11 +80,13 @@ type incrementalDescription struct {
 	GroupKeyColumn string                 `json:"group_key_column,omitempty"`
 	RowCountColumn string                 `json:"row_count_column"`
 	StateColumns   []string               `json:"state_columns"`
+	StateTable     string                 `json:"state_table,omitempty"`
 }
 
 type materializedViewChangeRow struct {
-	Values map[string]any
-	RowID  types.Rowid
+	Values   map[string]any
+	RowID    types.Rowid
+	CommitTS types.TS
 }
 
 var _ Consumer = (*MaterializedViewConsumer)(nil)
@@ -191,6 +197,22 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 					return decodeErr
 				}
 			}
+			boundary, ok := r.(iterationBoundaryRetriever)
+			if !ok {
+				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
+			}
+			if incrementalDesc != nil {
+				if err := ensureMaterializedViewStateTable(
+					refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, incrementalDesc,
+				); err != nil {
+					return err
+				}
+				if err := rebuildMaterializedViewDistinctState(
+					refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, incrementalDesc, boundary.GetToTS(),
+				); err != nil {
+					return err
+				}
+			}
 			// Keep this as a row DELETE. A predicate is required because a
 			// predicate-free DELETE is optimized to TRUNCATE, which replaces the
 			// physical relation and unregisters the source ISCP job as a side effect.
@@ -204,10 +226,6 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 				return err
 			}
 			res.Close()
-			boundary, ok := r.(iterationBoundaryRetriever)
-			if !ok {
-				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
-			}
 			refreshSQL, err := materializedViewRefreshAtSources(c.info.RefreshSQL, c.info.SourceTableInfos(), boundary.GetToTS())
 			if err != nil {
 				return err
@@ -259,7 +277,19 @@ func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materialize
 			if !ok {
 				return nil, fmt.Errorf("materialized view delete batch does not retain rowid")
 			}
-			rows = append(rows, materializedViewChangeRow{RowID: rowid})
+			row := materializedViewChangeRow{RowID: rowid}
+			for i, attr := range item.Src.Attrs {
+				if i < len(values) && (strings.EqualFold(attr, objectio.DefaultCommitTS_Attr) ||
+					strings.EqualFold(attr, "commit_ts") || strings.EqualFold(attr, "__mo_commit_ts")) {
+					var commitOK bool
+					row.CommitTS, commitOK = values[i].(types.TS)
+					if !commitOK {
+						return nil, fmt.Errorf("materialized view delete batch has invalid commit timestamp %T", values[i])
+					}
+					break
+				}
+			}
+			rows = append(rows, row)
 			continue
 		}
 		row := materializedViewChangeRow{Values: make(map[string]any)}

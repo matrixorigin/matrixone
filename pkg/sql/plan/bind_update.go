@@ -334,7 +334,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		return 0, err
 	}
 	for _, tableDef := range dmlCtx.tableDefs {
-		if IsMaterializedViewTableDef(tableDef) && builder.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) && builder.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update materialized view")
 		}
 	}

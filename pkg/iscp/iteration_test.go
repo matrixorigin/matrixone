@@ -143,6 +143,35 @@ func TestAtomicBatchRetainsRowsWithDistinctRowIDs(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestMaterializedViewDeleteRowsRetainCommitTS(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	var block types.Blockid
+	rowid := types.NewRowid(&block, 7)
+	commitTS := types.BuildTS(20, 3)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowid, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], commitTS, false, mp))
+	bat.SetRowCount(1)
+	atomicBat := NewAtomicBatch(mp)
+	defer atomicBat.Close()
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 2, 1)
+	rows, err := materializedViewRowsFromBatch(atomicBat, false)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, rowid, rows[0].RowID)
+	require.Equal(t, commitTS, rows[0].CommitTS)
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
+
 type iscpLogBatch struct {
 	jobNames   []string
 	jobIDs     []uint64

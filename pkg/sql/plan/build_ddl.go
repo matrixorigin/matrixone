@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -1562,7 +1563,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		if len(sources) == 1 {
 			var stateCols []*ColDef
 			var stateRefreshSQL string
-			incrementalSpec, stateCols, stateRefreshSQL = buildMaterializedViewIncrementalPlan(stmt.AsSource, createView.TableDef.Cols)
+			incrementalSpec, stateCols, stateRefreshSQL = buildMaterializedViewIncrementalPlan(
+				stmt.AsSource,
+				createView.TableDef.Cols,
+				materializedViewStateTableName(createView.Database, string(viewName)),
+			)
 			if incrementalSpec != "" {
 				for _, col := range stateCols {
 					col.ColId = uint64(len(createView.TableDef.Cols))
@@ -1670,6 +1675,9 @@ func validateMaterializedViewSourceTable(ctx CompilerContext, dbName, tableName 
 	if IsMaterializedViewTableDef(def) {
 		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use materialized view %s.%s as source", dbName, tableName)
 	}
+	if IsMaterializedViewStateTableDef(def) {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use internal materialized view state %s.%s as source", dbName, tableName)
+	}
 	if def.IsTemporary || def.TableType == catalog.SystemTemporaryTable {
 		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use temporary table %s.%s as source", dbName, tableName)
 	}
@@ -1727,6 +1735,36 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	return false
 }
 
+// IsMaterializedViewStateTableDef identifies a consumer-owned auxiliary
+// relation. It must follow the owning MV lifecycle and cannot be mutated or
+// dropped through ordinary user SQL.
+func IsMaterializedViewStateTableDef(def *plan.TableDef) bool {
+	if def == nil {
+		return false
+	}
+	// The lightweight TableDef used by INSERT/UPDATE/DELETE binding may omit
+	// relation properties and CREATE SQL. State relations live in a reserved,
+	// hash-suffixed namespace so the name remains the cross-path identity anchor.
+	if strings.HasPrefix(strings.ToLower(def.GetName()), "__mo_mv_state_") {
+		return true
+	}
+	if strings.Contains(strings.ToLower(def.GetCreatesql()), materializedViewStateMarkerComment) {
+		return true
+	}
+	for _, item := range def.GetDefs() {
+		props := item.GetProperties()
+		if props == nil {
+			continue
+		}
+		for _, prop := range props.GetProperties() {
+			if prop.GetKey() == catalog.SystemRelAttr_Comment && strings.EqualFold(prop.GetValue(), materializedViewStateMarkerComment) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // CanWriteMaterializedViewHiddenColumns is true only for SQL issued by the MV
 // consumer. State columns remain hidden and unavailable to ordinary user DML.
 func CanWriteMaterializedViewHiddenColumns(ctx context.Context, def *plan.TableDef) bool {
@@ -1773,6 +1811,12 @@ func ValidateMaterializedViewSources(ctx CompilerContext, def *plan.TableDef) er
 }
 
 const materializedViewMarkerComment = "matrixone materialized view"
+const materializedViewStateMarkerComment = "matrixone materialized view state"
+
+func materializedViewStateTableName(dbName, viewName string) string {
+	digest := sha256.Sum256([]byte(strings.ToLower(dbName) + "\x00" + strings.ToLower(viewName)))
+	return fmt.Sprintf("__mo_mv_state_%x", digest[:8])
+}
 
 type materializedViewIncrementalAggregate struct {
 	Kind             string `json:"kind"`
@@ -1780,6 +1824,7 @@ type materializedViewIncrementalAggregate struct {
 	OutputColumn     string `json:"output_column"`
 	StateSumColumn   string `json:"state_sum_column,omitempty"`
 	StateCountColumn string `json:"state_count_column,omitempty"`
+	StateIndex       int    `json:"state_index,omitempty"`
 }
 
 type materializedViewIncrementalGroup struct {
@@ -1789,6 +1834,8 @@ type materializedViewIncrementalGroup struct {
 }
 
 type materializedViewIncrementalDescription struct {
+	Version        int                                    `json:"version,omitempty"`
+	Strategy       string                                 `json:"strategy,omitempty"`
 	SourceAlias    string                                 `json:"source_alias"`
 	SourceColumns  []string                               `json:"source_columns"`
 	Filter         string                                 `json:"filter,omitempty"`
@@ -1797,6 +1844,7 @@ type materializedViewIncrementalDescription struct {
 	GroupKeyColumn string                                 `json:"group_key_column,omitempty"`
 	RowCountColumn string                                 `json:"row_count_column"`
 	StateColumns   []string                               `json:"state_columns"`
+	StateTable     string                                 `json:"state_table,omitempty"`
 }
 
 func materializedViewRefreshSQL(stmt *tree.Select) string {
@@ -2410,6 +2458,10 @@ func buildCreateTable(
 	isPrepareStmt bool,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
+	if strings.HasPrefix(strings.ToLower(tableName), "__mo_mv_state_") &&
+		ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "table name %s is reserved for materialized view state", tableName)
+	}
 	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
 		return nil, err
 	}
@@ -5181,6 +5233,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
+	}
+	if IsMaterializedViewStateTableDef(tableDef) && !defines.IsInternalExecutor(ctx.GetContext()) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view internal state must be dropped with its materialized view")
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err

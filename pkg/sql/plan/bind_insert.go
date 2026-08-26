@@ -63,6 +63,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if targetDB == "" {
 		targetDB = builder.compCtx.DefaultDatabase()
 	}
+	tableDef := dmlCtx.tableDefs[0]
+	internalMVState := strings.HasPrefix(strings.ToLower(targetTable), "__mo_mv_state_")
+	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef) || internalMVState) &&
+		builder.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into materialized view")
+	}
 	dmlCtx.targetDBName = targetDB
 	dmlCtx.targetTableName = targetTable
 	if err = validateInsertColumnQualifiers(
@@ -98,7 +104,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// table and regular indexes). Their computed 1:N maintenance is appended after
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
-	tableDef := dmlCtx.tableDefs[0]
 	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
 		return 0, err
 	}

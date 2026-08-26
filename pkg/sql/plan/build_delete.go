@@ -41,7 +41,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		return nil, err
 	}
 	for _, tableDef := range tblInfo.tableDefs {
-		if IsMaterializedViewTableDef(tableDef) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+		if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
 			return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "delete from materialized view")
 		}
 	}

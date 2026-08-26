@@ -3881,6 +3881,28 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		if err = DeleteMaterializedViewTask(c, qry.Database, qry.Table); err != nil {
 			return err
 		}
+		stateTable, stateErr := materializedViewStateTableFromDef(qry.GetTableDef())
+		if stateErr != nil {
+			return stateErr
+		}
+		if stateTable != "" {
+			var stateRel engine.Relation
+			if stateRel, stateErr = dbSource.Relation(c.proc.Ctx, stateTable, nil); stateErr != nil {
+				if !moerr.IsMoErrCode(stateErr, moerr.ErrNoSuchTable) {
+					return stateErr
+				}
+			} else {
+				if !plan2.IsMaterializedViewStateTableDef(stateRel.GetTableDef(c.proc.Ctx)) {
+					return moerr.NewInternalErrorf(c.proc.Ctx, "materialized view state relation %s has invalid identity", stateTable)
+				}
+				if stateErr = lockMoTable(c, dbName, stateTable, lock.LockMode_Exclusive); stateErr != nil {
+					return stateErr
+				}
+				if stateErr = dbSource.Delete(c.proc.Ctx, stateTable); stateErr != nil {
+					return stateErr
+				}
+			}
+		}
 	}
 
 	// delete cdc task of the vector and fulltext index here
@@ -4076,6 +4098,39 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		tblID,
 		c.proc.GetTxnOperator(),
 	)
+}
+
+func materializedViewStateTableFromDef(def *plan.TableDef) (string, error) {
+	if def == nil {
+		return "", nil
+	}
+	var encoded string
+	for _, item := range def.GetDefs() {
+		props := item.GetProperties()
+		if props == nil {
+			continue
+		}
+		for _, prop := range props.GetProperties() {
+			if prop.GetKey() == "mv_incremental_spec" {
+				encoded = prop.GetValue()
+				break
+			}
+		}
+	}
+	if encoded == "" {
+		return "", nil
+	}
+	b, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification: %v", err)
+	}
+	var spec struct {
+		StateTable string `json:"state_table"`
+	}
+	if err = json.Unmarshal(b, &spec); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("invalid materialized view incremental specification: %v", err)
+	}
+	return spec.StateTable, nil
 }
 
 func (s *Scope) CreateSequence(c *Compile) error {

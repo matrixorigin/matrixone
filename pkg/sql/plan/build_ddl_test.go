@@ -1357,6 +1357,58 @@ func TestIsMaterializedViewTableDefUsesPersistedCreateSQL(t *testing.T) {
 	}))
 }
 
+func TestIsMaterializedViewStateTableDefUsesReservedIdentity(t *testing.T) {
+	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "__mo_mv_state_0123456789abcdef"}))
+	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+		Name: "state", Createsql: "create table state (a int) comment = 'matrixone materialized view state'",
+	}))
+	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "user_state"}))
+}
+
+func TestCreateTableRejectsMaterializedViewStateReservedTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t, "create table tpch.__mo_mv_state_0123456789abcdef (a bigint)")
+	require.ErrorContains(t, err, "reserved for materialized view state")
+}
+
+func TestDropMaterializedViewStateAllowsInternalDatabaseCleanup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	name := "__mo_mv_state_0123456789abcdef"
+	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424241}
+	mock.ctxt.tables[name] = &plan.TableDef{Name: name}
+	_, err := runOneStmt(mock, t, "drop table tpch."+name)
+	require.ErrorContains(t, err, "must be dropped with its materialized view")
+
+	mock.ctxt.SetContext(context.WithValue(context.Background(), defines.InternalExecutorKey{}, true))
+	_, err = runOneStmt(mock, t, "drop table tpch."+name)
+	require.NoError(t, err)
+}
+
+func TestInsertRejectsMaterializedViewStateReservedTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	name := "__mo_mv_state_0123456789abcdef"
+	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424242}
+	mock.ctxt.tables[name] = &plan.TableDef{
+		Name: name,
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	_, err := runOneStmt(mock, t, "insert into tpch."+name+" values (1)")
+	require.ErrorContains(t, err, "materialized view internal state")
+}
+
+func TestInsertRejectsMaterializedViewTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	name := "mv_events"
+	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424243}
+	mock.ctxt.tables[name] = &plan.TableDef{
+		Name:      name,
+		Createsql: "create materialized view mv_events as select 1 as a",
+		Cols:      []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	_, err := runOneStmt(mock, t, "insert into tpch."+name+" values (1)")
+	require.ErrorContains(t, err, "insert into materialized view")
+}
+
 func TestValidateMaterializedViewSources(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	mv := &plan.TableDef{
@@ -1423,6 +1475,9 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 		{name: "direct aggregate", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
 		{name: "where", query: "select service, count(*) requests, sum(bytes) bytes_sum from events where status = 500 group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
 		{name: "time bucket avg conditional", query: "select service, date_trunc('minute', event_ts) minute, count(*) requests, sum(case when status >= 500 then 1 else 0 end) errors, avg(duration) avg_duration from events where region = 'us' group by service, date_trunc('minute', event_ts)", outputs: []string{"service", "minute", "requests", "errors", "avg_duration"}, eligible: true},
+		{name: "min max", query: "select service, min(duration) min_duration, max(duration) max_duration from events group by service", outputs: []string{"service", "min_duration", "max_duration"}, eligible: true},
+		{name: "count distinct", query: "select service, count(distinct trace_id) traces from events group by service", outputs: []string{"service", "traces"}, eligible: true},
+		{name: "select distinct rows", query: "select distinct service, region from events", outputs: []string{"service", "region"}, eligible: true},
 		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}},
 		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
 		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
@@ -1435,7 +1490,7 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 			for i, name := range tc.outputs {
 				outputCols[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_float64)}}
 			}
-			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols)
+			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols, "__state")
 			require.Equal(t, tc.eligible, spec != "")
 			if !tc.eligible {
 				require.Empty(t, stateCols)
@@ -1448,6 +1503,7 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 			require.NoError(t, json.Unmarshal(decoded, &desc))
 			require.NotEmpty(t, desc.RowCountColumn)
 			require.Contains(t, refreshSQL, "count(*)")
+			require.Equal(t, 2, desc.Version)
 			if tc.name == "time bucket avg conditional" {
 				require.Equal(t, "region = 'us'", desc.Filter)
 				require.Len(t, desc.Groups, 2)
@@ -1455,6 +1511,26 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				require.Equal(t, "avg", desc.Aggregates[2].Kind)
 				require.Contains(t, refreshSQL, "sum(duration)")
 				require.Contains(t, refreshSQL, "count(duration)")
+			}
+			if tc.name == "min max" {
+				require.Equal(t, "hybrid-affected-group", desc.Strategy)
+				require.Equal(t, "__state", desc.StateTable)
+				require.Equal(t, "min", desc.Aggregates[0].Kind)
+				require.Equal(t, "max", desc.Aggregates[1].Kind)
+			}
+			if tc.name == "count distinct" {
+				require.Equal(t, "__state", desc.StateTable)
+				require.Equal(t, "count_distinct", desc.Aggregates[0].Kind)
+				require.Positive(t, desc.Aggregates[0].StateIndex)
+			}
+			if tc.name == "select distinct rows" {
+				require.Empty(t, desc.StateTable)
+				require.Empty(t, desc.Aggregates)
+				require.Contains(t, strings.ToLower(refreshSQL), "group by service, region")
+				require.NotContains(t, strings.ToLower(refreshSQL), "select distinct")
+			}
+			if tc.name == "direct aggregate" {
+				require.Empty(t, desc.StateTable)
 			}
 			for _, stateCol := range stateCols {
 				require.Contains(t, refreshSQL, "as "+stateCol.Name)

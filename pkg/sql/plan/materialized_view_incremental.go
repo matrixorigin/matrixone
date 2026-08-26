@@ -33,14 +33,22 @@ import (
 // be evaluated over a bounded VALUES batch by the normal SQL engine. Expressions
 // outside this subset deliberately leave IncrementalSpec empty so the consumer
 // performs a snapshot-consistent full refresh instead.
-func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDef) (string, []*ColDef, string) {
+func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDef, stateTable ...string) (string, []*ColDef, string) {
 	if stmt == nil || stmt.With != nil || stmt.TimeWindow != nil || stmt.Limit != nil || stmt.RankOption != nil {
 		return "", nil, ""
 	}
 	clause, ok := stmt.Select.(*tree.SelectClause)
-	if !ok || clause.Distinct || clause.Having != nil || clause.GroupBy == nil ||
-		clause.GroupBy.Cube || clause.GroupBy.Rollup || clause.GroupBy.GroupingSets || clause.GroupBy.Apart ||
+	if !ok || clause.Having != nil ||
 		clause.From == nil || len(clause.From.Tables) != 1 || len(clause.Exprs) != len(outputCols) {
+		return "", nil, ""
+	}
+	selectDistinct := clause.Distinct
+	if selectDistinct {
+		if clause.GroupBy != nil {
+			return "", nil, ""
+		}
+	} else if clause.GroupBy == nil || clause.GroupBy.Cube || clause.GroupBy.Rollup ||
+		clause.GroupBy.GroupingSets || clause.GroupBy.Apart {
 		return "", nil, ""
 	}
 	source := materializedViewSourceTable(clause.From.Tables[0])
@@ -55,7 +63,17 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 	collector := &materializedViewIncrementalColumnCollector{}
 	groups := make([]materializedViewIncrementalGroup, 0)
 	groupBySQL := make(map[string]int)
-	for _, exprs := range clause.GroupBy.GroupByExprsList {
+	groupExprLists := []tree.Exprs(nil)
+	if selectDistinct {
+		distinctExprs := make(tree.Exprs, len(clause.Exprs))
+		for i := range clause.Exprs {
+			distinctExprs[i] = clause.Exprs[i].Expr
+		}
+		groupExprLists = []tree.Exprs{distinctExprs}
+	} else {
+		groupExprLists = clause.GroupBy.GroupByExprsList
+	}
+	for _, exprs := range groupExprLists {
 		for _, expr := range exprs {
 			if !materializedViewIncrementalScalarSupported(expr) || !collector.collect(expr) {
 				return "", nil, ""
@@ -70,10 +88,13 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 	}
 
 	spec := materializedViewIncrementalDescription{
+		Version:        2,
+		Strategy:       "direct-delta",
 		SourceAlias:    sourceAlias,
 		Groups:         groups,
 		RowCountColumn: materializedViewUniqueStateColumn(outputCols, "__mo_mv_row_count"),
 	}
+	needsAuxiliaryState := false
 	if clause.Where != nil {
 		if !materializedViewIncrementalScalarSupported(clause.Where.Expr) || !collector.collect(clause.Where.Expr) {
 			return "", nil, ""
@@ -96,16 +117,28 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 			spec.Groups[groupIdx].NotNullable = outputCols[i].Typ.NotNullable
 			continue
 		}
+		if selectDistinct {
+			return "", nil, ""
+		}
 		fn, ok := selectExpr.Expr.(*tree.FuncExpr)
-		if !ok || fn.Type == tree.FUNC_TYPE_DISTINCT || fn.WindowSpec != nil || len(fn.OrderBy) != 0 {
+		if !ok || fn.WindowSpec != nil || len(fn.OrderBy) != 0 {
 			return "", nil, ""
 		}
 		name := materializedViewIncrementalFunctionName(fn)
-		if name != "count" && name != "sum" && name != "avg" {
+		if name != "count" && name != "sum" && name != "avg" && name != "min" && name != "max" {
 			return "", nil, ""
 		}
 		agg := materializedViewIncrementalAggregate{Kind: name, OutputColumn: outputName}
-		if name == "count" && (len(fn.Exprs) == 0 || len(fn.Exprs) == 1 && isMaterializedViewStar(fn.Exprs[0])) {
+		if fn.Type == tree.FUNC_TYPE_DISTINCT {
+			if name != "count" || len(fn.Exprs) != 1 || !materializedViewIncrementalScalarSupported(fn.Exprs[0]) || !collector.collect(fn.Exprs[0]) {
+				return "", nil, ""
+			}
+			agg.Kind = "count_distinct"
+			agg.StateIndex = len(spec.Aggregates) + 1
+			agg.InputExpression = materializedViewIncrementalExprSQL(fn.Exprs[0])
+			spec.Strategy = "hybrid-state"
+			needsAuxiliaryState = true
+		} else if name == "count" && (len(fn.Exprs) == 0 || len(fn.Exprs) == 1 && isMaterializedViewStar(fn.Exprs[0])) {
 			agg.Kind = "count_star"
 		} else {
 			if len(fn.Exprs) != 1 || !materializedViewIncrementalScalarSupported(fn.Exprs[0]) || !collector.collect(fn.Exprs[0]) {
@@ -116,7 +149,11 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 				agg.Kind = "count_column"
 			}
 		}
-		if name == "avg" {
+		if agg.Kind == "count_distinct" {
+			// The visible value is initialized by the normal snapshot query. Tail
+			// maintenance stores exact value multiplicities in the auxiliary state
+			// table and updates this column only on 0<->1 transitions.
+		} else if name == "avg" {
 			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_sum_%d", i))
 			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_count_%d", i))
 			stateCols = append(stateCols,
@@ -131,6 +168,10 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
 			stateExprs = append(stateExprs, "sum("+agg.InputExpression+")", "count("+agg.InputExpression+")")
 		}
+		if name == "min" || name == "max" {
+			spec.Strategy = "hybrid-affected-group"
+			needsAuxiliaryState = true
+		}
 		spec.Aggregates = append(spec.Aggregates, agg)
 	}
 	for _, group := range spec.Groups {
@@ -138,8 +179,11 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 			return "", nil, ""
 		}
 	}
-	if len(spec.Aggregates) == 0 {
+	if len(spec.Aggregates) == 0 && !selectDistinct {
 		return "", nil, ""
+	}
+	if needsAuxiliaryState && len(stateTable) > 0 {
+		spec.StateTable = stateTable[0]
 	}
 	spec.GroupKeyColumn = materializedViewUniqueStateColumn(outputCols, "__mo_mv_group_key")
 	stateCols = append(stateCols, materializedViewStateColumn(spec.GroupKeyColumn, Type{
@@ -156,7 +200,7 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 	for i := range stateCols {
 		spec.StateColumns[i] = stateCols[i].Name
 	}
-	stateRefreshSQL, ok := materializedViewRefreshSQLWithState(stmt, stateExprs, spec.StateColumns)
+	stateRefreshSQL, ok := materializedViewRefreshSQLWithStateForMode(stmt, stateExprs, spec.StateColumns, selectDistinct, groupExprLists)
 	if !ok {
 		return "", nil, ""
 	}
@@ -165,6 +209,29 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 		return "", nil, ""
 	}
 	return base64.StdEncoding.EncodeToString(b), stateCols, stateRefreshSQL
+}
+
+func materializedViewRefreshSQLWithStateForMode(
+	stmt *tree.Select,
+	expressions, aliases []string,
+	selectDistinct bool,
+	groupExprLists []tree.Exprs,
+) (string, bool) {
+	if !selectDistinct {
+		return materializedViewRefreshSQLWithState(stmt, expressions, aliases)
+	}
+	clause, ok := stmt.Select.(*tree.SelectClause)
+	if !ok {
+		return "", false
+	}
+	originalDistinct, originalGroupBy := clause.Distinct, clause.GroupBy
+	clause.Distinct = false
+	clause.GroupBy = &tree.GroupByClause{GroupByExprsList: groupExprLists}
+	defer func() {
+		clause.Distinct = originalDistinct
+		clause.GroupBy = originalGroupBy
+	}()
+	return materializedViewRefreshSQLWithState(stmt, expressions, aliases)
 }
 
 func materializedViewIncrementalExprSQL(expr tree.Expr) string {

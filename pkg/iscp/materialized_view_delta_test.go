@@ -15,6 +15,7 @@
 package iscp
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,13 +24,38 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+type recordingMVRowIDReader struct {
+	snapshots [][]types.TS
+}
+
+func (r *recordingMVRowIDReader) ReadRowsByRowID(
+	_ context.Context,
+	rowids []types.Rowid,
+	snapshot types.TS,
+	_ []string,
+	_ *mpool.MPool,
+) ([][]any, error) {
+	call := make([]types.TS, len(rowids))
+	rows := make([][]any, len(rowids))
+	for i := range rowids {
+		call[i] = snapshot
+		rows[i] = []any{int64(rowids[i].GetRowOffset())}
+	}
+	r.snapshots = append(r.snapshots, call)
+	return rows, nil
+}
+
+var _ engine.RowIDReader = (*recordingMVRowIDReader)(nil)
 
 func TestMaterializedViewSourceColumnTypesPreservesTemporalPrecision(t *testing.T) {
 	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
@@ -41,6 +67,22 @@ func TestMaterializedViewSourceColumnTypesPreservesTemporalPrecision(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, int32(6), got[0].Scale)
 	require.Equal(t, int32(0), got[1].Scale)
+}
+
+func TestReadMaterializedViewDeletedRowsUsesPreCommitSnapshot(t *testing.T) {
+	var block types.Blockid
+	commitA := types.BuildTS(20, 3)
+	commitB := types.BuildTS(30, 1)
+	deletes := []materializedViewChangeRow{
+		{RowID: types.NewRowid(&block, 1), CommitTS: commitA},
+		{RowID: types.NewRowid(&block, 2), CommitTS: commitB},
+		{RowID: types.NewRowid(&block, 3), CommitTS: commitA},
+	}
+	reader := &recordingMVRowIDReader{}
+	rows, err := readMaterializedViewDeletedRows(t.Context(), reader, deletes, types.BuildTS(10, 0), []string{"id"})
+	require.NoError(t, err)
+	require.Equal(t, [][]any{{int64(1)}, {int64(2)}, {int64(3)}}, rows)
+	require.Equal(t, [][]types.TS{{commitA.Prev(), commitA.Prev()}, {commitB.Prev()}}, reader.snapshots)
 }
 
 func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
@@ -121,6 +163,34 @@ func TestMaterializedViewDeltaExecOptionsAdvanceStatementBoundary(t *testing.T) 
 		"successive delta DML must finalize preceding workspace writes as separate statements")
 }
 
+func TestDecodeIncrementalDescriptionVersionAndDistinctState(t *testing.T) {
+	base := incrementalDescription{
+		Version: 2, SourceAlias: "e", SourceColumns: []string{"service", "trace_id"},
+		Groups: []incrementalGroup{{Expression: "e.service", OutputColumn: "service"}},
+		Aggregates: []incrementalAggregate{{
+			Kind: "count_distinct", InputExpression: "e.trace_id", OutputColumn: "traces", StateIndex: 1,
+		}},
+		RowCountColumn: "__rows", StateColumns: []string{"__rows"}, StateTable: "__state",
+	}
+	encode := func(desc incrementalDescription) string {
+		b, err := json.Marshal(desc)
+		require.NoError(t, err)
+		return base64.StdEncoding.EncodeToString(b)
+	}
+	_, err := decodeIncrementalDescription(encode(base))
+	require.NoError(t, err)
+
+	missingState := base
+	missingState.StateTable = ""
+	_, err = decodeIncrementalDescription(encode(missingState))
+	require.ErrorContains(t, err, "versioned auxiliary state")
+
+	future := base
+	future.Version = 3
+	_, err = decodeIncrementalDescription(encode(future))
+	require.ErrorContains(t, err, "unsupported materialized view incremental specification version")
+}
+
 func TestMaterializedViewDeltaJoinUsesEqualityForNonNullableGroups(t *testing.T) {
 	desc := &incrementalDescription{Groups: []incrementalGroup{
 		{OutputColumn: "service", NotNullable: true},
@@ -145,4 +215,47 @@ func TestMaterializedViewDeltaCTEReportsOversizedRows(t *testing.T) {
 	}})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errMaterializedViewDeltaSQLTooLarge))
+}
+
+func TestMaterializedViewAdvancedDeltaSQLIsReparseable(t *testing.T) {
+	desc := &incrementalDescription{
+		Version: 2, Strategy: "hybrid-state", SourceAlias: "e",
+		SourceColumns: []string{"duration", "service", "trace_id"},
+		Groups:        []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
+		Aggregates: []incrementalAggregate{
+			{Kind: "min", InputExpression: "e.duration", OutputColumn: "min_duration"},
+			{Kind: "max", InputExpression: "e.duration", OutputColumn: "max_duration"},
+			{Kind: "count_distinct", InputExpression: "e.trace_id", OutputColumn: "traces", StateIndex: 3},
+		},
+		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+		StateColumns: []string{"__row_count", "__group_key"}, StateTable: "__state",
+	}
+	intType, varcharType := types.T_int64.ToType(), types.T_varchar.ToType()
+	rows := []materializedViewSignedRow{
+		{values: map[string]any{"duration": int64(10), "service": []byte("api"), "trace_id": []byte("t1")}, sign: 1},
+		{values: map[string]any{"duration": int64(5), "service": []byte("api"), "trace_id": []byte("t1")}, sign: -1},
+	}
+	typesByColumn := []*types.Type{&intType, &varcharType, &varcharType}
+	cte, err := materializedViewDeltaCTE(t.Context(), desc, typesByColumn, rows)
+	require.NoError(t, err)
+	require.Contains(t, cte, "min(CASE WHEN __mo_sign > 0")
+	require.Contains(t, cte, "max(CASE WHEN __mo_sign > 0")
+	columns, values := materializedViewDeltaInsertProjection(desc, "d")
+	upsert := fmt.Sprintf("%s INSERT INTO %s (%s) SELECT %s FROM delta AS d ON DUPLICATE KEY UPDATE %s",
+		cte, sqlquote.QualifiedIdent("obs", "mv"), strings.Join(columns, ","), strings.Join(values, ","), strings.Join(materializedViewDeltaUpsertSets(desc), ","))
+
+	distinctCTE, err := materializedViewDistinctDeltaCTE(t.Context(), desc, desc.Aggregates[2], typesByColumn, rows)
+	require.NoError(t, err)
+	statements := append([]string{upsert}, materializedViewDistinctDeltaStatements(
+		desc, desc.Aggregates[2], distinctCTE,
+		sqlquote.QualifiedIdent("obs", "__state"), sqlquote.QualifiedIdent("obs", "mv"))...)
+	statements = append(statements,
+		"CREATE TABLE IF NOT EXISTS `obs`.`__state` (aggregate_index INT NOT NULL, group_key VARBINARY(65535) NOT NULL, value_key VARBINARY(65535) NOT NULL, ref_count BIGINT NOT NULL, PRIMARY KEY (aggregate_index, group_key, value_key)) COMMENT = 'matrixone materialized view state'",
+		"DELETE t FROM `obs`.`mv` AS t JOIN `obs`.`__state` AS s ON t.`__group_key` = s.group_key WHERE s.aggregate_index = 0",
+	)
+	for _, sql := range statements {
+		stmt, parseErr := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, parseErr, sql)
+		stmt.Free()
+	}
 }

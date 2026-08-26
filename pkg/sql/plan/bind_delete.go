@@ -75,7 +75,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	if err = validateDeleteTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
 		return 0, err
 	}
-	if IsMaterializedViewTableDef(dmlCtx.tableDefs[0]) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+	if (IsMaterializedViewTableDef(dmlCtx.tableDefs[0]) || IsMaterializedViewStateTableDef(dmlCtx.tableDefs[0])) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from materialized view")
 	}
 	if stmt.HasReturning() {
