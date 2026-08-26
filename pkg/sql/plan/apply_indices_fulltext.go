@@ -1530,27 +1530,37 @@ func collectDrivingFullText2Matches(expr *plan.Expr, out []*plan.Expr) []*plan.E
 			out = collectDrivingFullText2Matches(arg, out)
 		}
 		return out
-	case ">", ">=":
+	case ">", ">=", "<", "<=":
 		if len(fn.Args) != 2 {
 			return out
 		}
+		op := fn.Func.ObjName
 		matchSide, constSide := fn.Args[0], fn.Args[1]
 		if monotoneWrappedFullTextMatch(matchSide) == nil {
-			// Reverse form: c < score / c <= score.
+			// Reverse form: c < score / c <= score. The other two
+			// constant-left forms are upper bounds and cannot drive an
+			// INNER JOIN because non-matching rows have score zero.
 			matchSide, constSide = fn.Args[1], fn.Args[0]
+			switch op {
+			case "<":
+				op = ">"
+			case "<=":
+				op = ">="
+			default:
+				return out
+			}
 		}
-		if monotoneWrappedFullTextMatch(matchSide) == nil {
+		matchExpr := monotoneWrappedFullTextMatch(matchSide)
+		if matchExpr == nil {
 			return out
 		}
 		v, ok := constValueAsFloat(constSide)
 		if !ok || v < 0 {
 			return out
 		}
-		if fn.Func.ObjName == ">=" && v == 0 {
-			return out
+		if op == ">" || (op == ">=" && v > 0) {
+			return append(out, matchExpr)
 		}
-		return append(out, monotoneWrappedFullTextMatch(matchSide))
-	case "<", "<=":
 		// Upper-bound-only MATCH cannot establish membership, so it is only lifted when a
 		// separate bare MATCH already supplies the stream.
 		return out

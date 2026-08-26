@@ -39,14 +39,14 @@ import (
 func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 	w, ok := c.sqlWriter.(*Fulltext2SqlWriter)
 	if !ok {
-		errch <- moerr.NewInternalError(ctx, "fulltext2 iscp Run: unexpected writer type")
+		reportIndexConsumerErr(errch, moerr.NewInternalError(ctx, "fulltext2 iscp Run: unexpected writer type"))
 		return
 	}
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
 	tokenize, err := fulltext2.CdcTokenizer(w.cfg.Parser)
 	if err != nil {
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return
 	}
 	var bopts []fulltext2.BuildOpt
@@ -64,7 +64,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	}
 	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, w.postingCap, spillDir, tokenize, bopts...)
 	if err != nil {
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return
 	}
 	defer tb.Cleanup()
@@ -75,15 +75,16 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	for {
 		select {
 		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e := <-errch:
-			errch <- e
+			reportIndexConsumerErr(errch, e)
 			return
 		case blob, ok := <-c.sqlBufSendCh:
 			if !ok {
 				segs, ferr := tb.Finish()
 				if ferr != nil {
-					errch <- ferr
+					reportIndexConsumerErr(errch, ferr)
 					return
 				}
 				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
@@ -117,7 +118,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						return nil
 					})
 				if err != nil {
-					errch <- err
+					reportIndexConsumerErr(errch, err)
 					return
 				}
 				// Evict the cached search index so the next query reloads tag=0 + the
@@ -136,12 +137,12 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 
 			cdc, derr := fulltext2.DecodeCdc(blob)
 			if derr != nil {
-				errch <- derr
+				reportIndexConsumerErr(errch, derr)
 				return
 			}
 			nevents += len(cdc.Events)
 			if aerr := tb.AddBatch(cdc); aerr != nil {
-				errch <- aerr
+				reportIndexConsumerErr(errch, aerr)
 				return
 			}
 		}

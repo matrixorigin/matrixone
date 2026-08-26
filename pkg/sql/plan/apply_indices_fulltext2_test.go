@@ -358,6 +358,8 @@ func TestFulltext2DrivingMatchAndLiteralGuards(t *testing.T) {
 
 	require.Len(t, collectDrivingFullText2Matches(fulltext2ComparisonExpr(">", matchExpr, value), nil), 1)
 	require.Len(t, collectDrivingFullText2Matches(fulltext2ComparisonExpr(">=", matchExpr, value), nil), 1)
+	require.Len(t, collectDrivingFullText2Matches(fulltext2ComparisonExpr("<", value, matchExpr), nil), 1)
+	require.Len(t, collectDrivingFullText2Matches(fulltext2ComparisonExpr("<=", value, matchExpr), nil), 1)
 	require.Len(t, collectDrivingFullText2Matches(fulltext2ComparisonExpr("and",
 		fulltext2ComparisonExpr(">", matchExpr, value),
 		fulltext2ComparisonExpr(">=", matchExpr, value)), nil), 2)
@@ -365,6 +367,8 @@ func TestFulltext2DrivingMatchAndLiteralGuards(t *testing.T) {
 		fulltext2ComparisonExpr(">=", matchExpr, makePlan2Float64ConstExprWithType(0)),
 		fulltext2ComparisonExpr(">", matchExpr, makePlan2Float64ConstExprWithType(-1)),
 		fulltext2ComparisonExpr("<", matchExpr, value),
+		fulltext2ComparisonExpr(">", value, matchExpr),
+		fulltext2ComparisonExpr(">=", value, matchExpr),
 		fulltext2ComparisonExpr(">", matchExpr, makePlan2StringConstExprWithType("0.5")),
 		fulltext2ComparisonExpr(">", makePlan2StringConstExprWithType("0.5"), value),
 	} {
