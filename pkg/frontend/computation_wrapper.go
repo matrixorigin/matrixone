@@ -1165,6 +1165,13 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if !binaryExecute && executionPlan.GetQuery() != nil {
+		runtimeNumericPrefixCandidate = plan2.PreparedPlanNeedsNumericPrefixSpecialization(
+			executionPlan, cwft.paramVals)
+		if runtimeNumericPrefixCandidate {
+			retainPreparedRuntimeParamRefs(cwft.paramVals)
+		}
+	}
 	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
@@ -1188,7 +1195,7 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
-	cacheableRuntimeQuery := binaryExecute && runtimeNumericPrefixCandidate && executionPlan.GetQuery() != nil &&
+	cacheableRuntimeQuery := runtimeNumericPrefixCandidate && executionPlan.GetQuery() != nil &&
 		preparedRuntimeCacheSupports(cwft.paramVals)
 	if cacheableRuntimeQuery {
 		runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
@@ -1268,6 +1275,17 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func retainPreparedRuntimeParamRefs(paramVals []any) {
+	for i, value := range paramVals {
+		param, ok := value.(plan2.ParamValue)
+		if !ok {
+			continue
+		}
+		param.RetainParamRef = true
+		paramVals[i] = param
+	}
 }
 
 func preparedRuntimeCacheSupports(paramVals []any) bool {

@@ -597,8 +597,24 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, paramValue.IsBinaryProtocol)
 	require.True(t, paramValue.EnableNumericPrefix)
+	require.True(t, paramValue.RetainParamRef)
+	require.Same(t, runtimePlan, prepareStmt.runtimePlan)
+	require.NotEmpty(t, prepareStmt.runtimeSpecializationKey)
 
-	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	// Complete the first execution's compile installation, then prove that an
+	// equivalent SQL EXECUTE category reuses both bounded cache entries instead
+	// of deep-copying and recompiling the plan again.
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.runtimeCompile = runtimeCompile
+	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.50tail", ""))
+	retComp, secondRuntimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, runtimePlan, secondRuntimePlan)
+
+	projectNode := secondRuntimePlan.GetQuery().Nodes[secondRuntimePlan.GetQuery().Steps[len(secondRuntimePlan.GetQuery().Steps)-1]]
 	project := projectNode.ProjectList[0]
 	require.True(t, types.T(project.Typ.Id).IsDecimal(), project.String())
 	requiresV26, scanErr := plan.RequiresMORPCVersion30NumericPrefix(project)
