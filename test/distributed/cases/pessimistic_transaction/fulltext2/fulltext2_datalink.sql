@@ -16,10 +16,19 @@ create stage ft2stage URL='file://$resources/fulltext/';
 -- chinese.pdf contains '慢慢地'.
 create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
 insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
+
+-- dl2 is independent of dl. Start both initial CDC builds together; dl2 is not
+-- searched until after its update, preserving the cache-safety contract below.
+create table dl2 (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
+insert into dl2 values (0, 'stage://ft2stage/mo.pdf');
 set @dl_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl') limit 1);
+set @dl2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl2') limit 1);
 set @wait_dl_initial_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 0 as dl_ready from `', database(), '`.`', @dl_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'select ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @dl_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1) as dl_ready, ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @dl2_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1) as dl2_ready'
 );
 prepare wait_dl_initial from @wait_dl_initial_sql;
 -- @wait_expect(2, 120)
@@ -38,17 +47,6 @@ select id from dl where match(fpath) against('mo');
 -- consumer, so a pre-update MATCH could pin a stale snapshot on multi-CN (see
 -- fulltext2_async). Updating the datalink must replace the old content terms with the
 -- new file's terms.
-create table dl2 (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
-insert into dl2 values (0, 'stage://ft2stage/mo.pdf');
-set @dl2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl2') limit 1);
-set @wait_dl2_initial_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 0 as dl2_ready from `', database(), '`.`', @dl2_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
-);
-prepare wait_dl2_initial from @wait_dl2_initial_sql;
--- @wait_expect(2, 120)
-execute wait_dl2_initial;
-deallocate prepare wait_dl2_initial;
 set @capture_dl2_tail_sql = concat(
     'select coalesce(max(chunk_id), -1) into @dl2_tail_before_update from `', database(), '`.`', @dl2_ft2,
     '` where index_id = ''cdc_tail'' and tag = 1'

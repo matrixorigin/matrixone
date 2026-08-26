@@ -195,9 +195,6 @@ create pitr pitr01 for account range 1 'h';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 pitr01    2024-12-25 16:34:56    2024-12-25 16:34:56    account    acc02    *    *    1    h
-select sleep(1);
-sleep(1)
-0
 alter pitr pitr01 range 1 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT

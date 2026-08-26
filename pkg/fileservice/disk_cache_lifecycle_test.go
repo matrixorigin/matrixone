@@ -890,11 +890,17 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	// Canceling a queued finalizer only cleans its temporary artifact; it must
 	// not claim that a previous disk-write failure recovered.
 	cache.writeFailures.failed.Store(true)
+	locker := installNotifyingDiskCacheLocker(cache)
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	cache.Close(closeCtx)
 	require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
+	// A timed-out Close starts the background drain but does not join it. Wait
+	// for the queued finalizer to release its path explicitly before inspecting
+	// the cleanup result; the first finalizer is still blocked in file.Sync, so
+	// this unlock can only come from the queued finalizer's doneUpdate path.
+	requireDiskCacheUnlock(t, locker)
 	require.False(t, cache.isUpdating(queuedPath))
 	require.True(t, cache.writeFailures.failed.Load())
 	_, err := os.Stat(queuedPath)

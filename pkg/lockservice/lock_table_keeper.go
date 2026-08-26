@@ -143,23 +143,10 @@ func jitterKeeperInterval(interval time.Duration) time.Duration {
 }
 
 func collectKeepRemoteLockBinds(
-	serviceID string,
-	groupTables *lockTableHolders,
+	service *service,
 	scratch []pb.LockTable,
 ) []pb.LockTable {
-	oldLen := len(scratch)
-	binds := scratch[:0]
-	groupTables.iter(func(_ uint64, v lockTable) bool {
-		bind := v.getBind()
-		if bind.ServiceID != serviceID {
-			binds = append(binds, bind)
-		}
-		return true
-	})
-	if len(binds) < oldLen {
-		clear(scratch[len(binds):oldLen])
-	}
-	return binds
+	return service.collectRemoteLockBinds(scratch)
 }
 
 func prepareKeepRemoteLockPeers(
@@ -241,7 +228,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		result keepResult
 	}
 
-	allBinds := collectKeepRemoteLockBinds(k.serviceID, k.groupTables, binds)
+	allBinds := collectKeepRemoteLockBinds(k.service, binds)
 	futures = futures[:0]
 	peers := prepareKeepRemoteLockPeers(allBinds, k.keepRemoteLockPeerScratch)
 	k.keepRemoteLockPeerScratch = peers

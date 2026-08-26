@@ -216,6 +216,11 @@ type index struct {
 	parts      []string
 	cols       []col
 	tableExist bool
+	// indexAlgo / indexAlgoTableType / indexAlgoParams describe an irregular
+	// (fulltext / ivfflat / ...) index; empty for a regular B-tree index.
+	indexAlgo          string
+	indexAlgoTableType string
+	indexAlgoParams    string
 }
 
 // NewEmptyCompilerContext for test create/drop statement
@@ -257,6 +262,8 @@ type Schema struct {
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
 	tableType string
+	// autoIncrs names the user AUTO_INCREMENT columns of the table.
+	autoIncrs []string
 	// onUpdateCols maps column index → ON UPDATE expression string (e.g. "current_timestamp()").
 	// When non-empty, the ColDef.OnUpdate.Expr will be set to a non-nil expression.
 	onUpdateCols map[int]string
@@ -1453,6 +1460,59 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 4,
 	}
 
+	// A table with a fulltext index: an irregular index whose maintenance is a
+	// separate 1:N sub-plan (tokenize + insert into the index table), so DML
+	// planners must capture it before the regular insert helpers strip it.
+	// A table with a user AUTO_INCREMENT column, for the merged multi-insert
+	// guard: clauses must agree on whether the value is generated.
+	constraintTestSchema["auto_t"] = &Schema{
+		tblId: 88960,
+		cols: []col{
+			{"seq", types.T_int32, false, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:       []int{0},
+		autoIncrs: []string{"seq"},
+		outcnt:    4,
+	}
+
+	constraintTestSchema["docs_ft"] = &Schema{
+		tblId: 88950,
+		cols: []col{
+			{"id", types.T_int32, false, 32, 0},
+			{"body", types.T_varchar, true, 200, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "ft_body",
+				tableName: catalog.FullTextIndexTableNamePrefix + "docs_ft_body",
+				parts:     []string{"body"},
+				cols: []col{
+					{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
+					{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
+					{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
+				},
+				tableExist: true,
+				indexAlgo:  catalog.MOIndexFullTextAlgo.ToString(),
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.FullTextIndexTableNamePrefix+"docs_ft_body"] = &Schema{
+		tblId: 88951,
+		cols: []col{
+			{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
+			{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
+			{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:       []int{0, 1},
+		tableType: catalog.SystemIndexRel,
+	}
+
 	// Table with ON UPDATE CURRENT_TIMESTAMP column for testing
 	// no-op FILTER exclusion of implicit auto-update columns.
 	constraintTestSchema["t_on_update"] = &Schema{
@@ -1770,6 +1830,13 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 			for idx, col := range table.cols {
 				isFakePK := col.Name == catalog.FakePrimaryKeyColName
+				isAutoIncr := false
+				for _, name := range table.autoIncrs {
+					if strings.EqualFold(name, col.Name) {
+						isAutoIncr = true
+						break
+					}
+				}
 				colDef := &ColDef{
 					ColId: uint64(idx),
 					Typ: plan.Type{
@@ -1777,7 +1844,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
-						AutoIncr:    isFakePK,
+						AutoIncr:    isFakePK || isAutoIncr,
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,
@@ -1872,11 +1939,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			if table.idxs != nil {
 				for i, idx := range table.idxs {
 					indexdef := &plan.IndexDef{
-						IndexName:      idx.indexName,
-						Parts:          idx.parts,
-						Unique:         idx.unique,
-						IndexTableName: idx.tableName,
-						TableExist:     true,
+						IndexName:          idx.indexName,
+						Parts:              idx.parts,
+						Unique:             idx.unique,
+						IndexTableName:     idx.tableName,
+						TableExist:         true,
+						IndexAlgo:          idx.indexAlgo,
+						IndexAlgoTableType: idx.indexAlgoTableType,
+						IndexAlgoParams:    idx.indexAlgoParams,
 					}
 					tableDef.Indexes[i] = indexdef
 				}
