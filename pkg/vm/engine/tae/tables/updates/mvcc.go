@@ -188,8 +188,16 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 ) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
 	txns := make([]txnif.TxnReader, 0)
 	for _, node := range n.appends.MVCC {
-		if in, _ := node.PreparedIn(start, end); in && node.GetTxn() != nil {
-			txns = append(txns, node.GetTxn())
+		txn := node.GetTxn()
+		if txn == nil {
+			continue
+		}
+		// A txn gets its prepare timestamp before AppendNode.PrepareCommit
+		// copies it into the node. Use the txn timestamp here so a range scan
+		// cannot miss that preparing window without waiting for it to close.
+		prepare := txn.GetPrepareTS()
+		if prepare.GE(&start) && prepare.LE(&end) {
+			txns = append(txns, txn)
 		}
 	}
 	if len(txns) != 0 {

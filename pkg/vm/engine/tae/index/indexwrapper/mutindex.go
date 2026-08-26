@@ -254,14 +254,22 @@ func (idx *MutIndex) Contains(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		if len(rows) != 1 {
-			panic("logic err: tombstones doesn't have duplicate rows")
+		// Concurrent deletes may temporarily add more than one tombstone for the
+		// same rowid. Walk from the newest candidate to the oldest and ignore
+		// candidates whose append node is aborted or still has UncommitTS; the
+		// caller reports both cases as index.ErrNotFound. A prepared conflicting
+		// candidate still propagates its write-write conflict.
+		for i := len(rows) - 1; i >= 0; i-- {
+			err = skipFn(rows[i])
+			if err == index.ErrNotFound {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			containers.UpdateValue(keys, uint32(offset), nil, true, mp)
+			return nil
 		}
-		err = skipFn(rows[0])
-		if err != nil {
-			return err
-		}
-		containers.UpdateValue(keys, uint32(offset), nil, true, mp)
 		return nil
 	}
 	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
