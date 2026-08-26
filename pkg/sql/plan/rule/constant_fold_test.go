@@ -105,6 +105,61 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 }
 
+func TestPreparedConstantFoldKeepsExactDecimalBelowImplicitFloatCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := context.Background()
+	stringType := types.New(types.T_varchar, 64, 0)
+	decimalType := types.New(types.T_decimal128, 38, 10)
+	floatType := types.T_float64.ToType()
+
+	explicit, err := function.GetFunctionByNameWithOverload(
+		ctx, "cast", []types.Type{stringType, decimalType}, 1)
+	require.NoError(t, err)
+	makeExplicitDecimal := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(decimalType.Oid), Width: decimalType.Width, Scale: decimalType.Scale},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: explicit.GetEncodedOverloadID(), ObjName: "cast"},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{Id: int32(stringType.Oid), Width: stringType.Width},
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+							Value: &plan.Literal_Sval{Sval: "9007199254740992.0000000002"},
+						}},
+					},
+					{
+						Typ: plan.Type{
+							Id: int32(decimalType.Oid), Width: decimalType.Width, Scale: decimalType.Scale,
+						},
+						Expr: &plan.Expr_T{T: &plan.TargetType{}},
+					},
+				},
+			}},
+		}
+	}
+	implicit, err := function.GetFunctionByNameWithOverload(
+		ctx, "cast", []types.Type{decimalType, floatType}, 0)
+	require.NoError(t, err)
+	makeOuter := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(floatType.Oid)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: implicit.GetEncodedOverloadID(), ObjName: "cast"},
+				Args: []*plan.Expr{
+					makeExplicitDecimal(),
+					{Typ: plan.Type{Id: int32(floatType.Oid)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				},
+			}},
+		}
+	}
+
+	prepared := NewConstantFold(true).constantFold(makeOuter(), proc)
+	require.NotNil(t, prepared.GetF())
+	require.NotNil(t, prepared.GetF().Args[0].GetF(), "explicit DECIMAL source must remain recoverable")
+	require.NotNil(t, NewConstantFold(false).constantFold(makeOuter(), proc).GetLit(),
+		"ordinary non-prepared constant folding remains unchanged")
+}
+
 func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.T_bool.ToType()

@@ -1,3 +1,18 @@
+SELECT REGEXP_LIKE('', '^$') AS like_control;
+like_control
+1
+SELECT REGEXP_INSTR('', '^$') AS default_pos_match;
+default_pos_match
+1
+SELECT REGEXP_INSTR('', 'x') AS default_pos_no_match;
+default_pos_no_match
+0
+SELECT REGEXP_INSTR('', '^$', 1) AS explicit_pos_match;
+explicit_pos_match
+1
+SELECT REGEXP_INSTR('', 'x', 1) AS explicit_pos_no_match;
+explicit_pos_no_match
+0
 SELECT REGEXP_INSTR('Cat', 'at') Result;
 result
 2

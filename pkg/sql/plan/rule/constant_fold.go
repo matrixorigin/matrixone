@@ -198,6 +198,13 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if f.IsRealTimeRelated() && r.isPrepared {
 		return expr
 	}
+	if r.isPrepared && IsImplicitFloatCastOfExplicitDecimalConstant(expr) {
+		// A parameterized parent can be rebound from FLOAT to DECIMAL at execute
+		// time. Keep the exact explicit DECIMAL source available underneath the
+		// provisional binder cast; folding it to FLOAT here irreversibly loses
+		// digits before execute-time common-type specialization can run.
+		return expr
+	}
 	isVec := false
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
@@ -317,6 +324,32 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	expr.Expr = ec
 
 	return expr
+}
+
+// IsImplicitFloatCastOfExplicitDecimalConstant reports the narrow binder cast
+// whose exact source must survive until a parameterized parent is rebound.
+func IsImplicitFloatCastOfExplicitDecimalConstant(expr *plan.Expr) bool {
+	if expr == nil || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 0 {
+		return false
+	}
+	source := fn.Args[0]
+	if source == nil || !types.T(source.Typ.Id).IsDecimal() || !IsConstant(source, false) {
+		return false
+	}
+	sourceFn := source.GetF()
+	if sourceFn == nil || sourceFn.Func == nil || sourceFn.Func.GetObjName() != "cast" {
+		return false
+	}
+	_, sourceOverload := function.DecodeOverloadID(sourceFn.Func.GetObj())
+	return sourceOverload != 0
 }
 
 // PreserveFoldedLiteralStringDomain keeps a binder-inserted cast transparent to

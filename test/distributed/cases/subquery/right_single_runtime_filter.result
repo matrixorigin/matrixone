@@ -10,6 +10,20 @@ insert into small_lookup values
 (2, 5000, 49999),
 (3, 30000, 0),
 (4, null, 0);
+explain select s.id, (select b.v from big_pk b where b.id = s.lookup_id) as scalar_v
+from small_lookup s
+order by s.id;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: s.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: RIGHT SINGLE  𝄀
+              Join Cond: (b.id = s.lookup_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on right_single_rf.big_pk [ForceOneCN]  𝄀
+                    Runtime Filter Probe: b.id  𝄀
+              ->  Table Scan on right_single_rf.small_lookup [ForceOneCN]
 select s.id, (select b.v from big_pk b where b.id = s.lookup_id) as scalar_v
 from small_lookup s
 order by s.id;
