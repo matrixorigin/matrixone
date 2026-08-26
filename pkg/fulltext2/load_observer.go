@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"encoding/json"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -98,6 +99,7 @@ func emitLoadEvent(event LoadEvent) {
 }
 
 type loadTrace struct {
+	mu    sync.Mutex
 	event LoadEvent
 	start time.Time
 	phase phaseTimes
@@ -120,42 +122,56 @@ func newLoadTrace(index string, reason LoadMissReason) *loadTrace {
 
 func (t *loadTrace) addInternalSQL(d time.Duration) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.phase.internalSQL += d
 	}
 }
 
 func (t *loadTrace) addTempWrite(d time.Duration) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.phase.tempWrite += d
 	}
 }
 
 func (t *loadTrace) addMmap(d time.Duration) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.phase.mmap += d
 	}
 }
 
 func (t *loadTrace) addChecksum(d time.Duration) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.phase.checksum += d
 	}
 }
 
 func (t *loadTrace) addBaseBytes(n int64) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.event.BaseBytes += n
 	}
 }
 
 func (t *loadTrace) addTailBytes(n int64) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.event.TailBytes += n
 	}
 }
 
 func (t *loadTrace) setGeneration(base, tail int64) {
 	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		t.event.BaseGeneration = base
 		t.event.TailGeneration = tail
 	}
@@ -165,6 +181,7 @@ func (t *loadTrace) finish(err error, canceled bool, waiters int64) {
 	if t == nil || !t.ended.CompareAndSwap(false, true) {
 		return
 	}
+	t.mu.Lock()
 	t.event.InternalSQLTimeMicros = t.phase.internalSQL.Microseconds()
 	t.event.TempFileWriteMicros = t.phase.tempWrite.Microseconds()
 	t.event.MmapMicros = t.phase.mmap.Microseconds()
@@ -174,5 +191,7 @@ func (t *loadTrace) finish(err error, canceled bool, waiters int64) {
 	t.event.LoadError = err != nil && !canceled
 	t.event.LoadCancel = canceled
 	t.event.LoadSuccess = err == nil && !canceled
-	emitLoadEvent(t.event)
+	event := t.event
+	t.mu.Unlock()
+	emitLoadEvent(event)
 }

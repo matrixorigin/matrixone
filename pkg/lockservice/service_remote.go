@@ -444,11 +444,7 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) &&
-		bind.ServiceID == s.serviceID &&
-		!admission.consume(bind) {
-		s.incRef(bind.Group, bind.Table)
-	}
+	s.acquireTxnBindRef(txn, bind, &admission)
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -503,8 +499,17 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
+	// Discovery routes ForwardLock by the stable CN UUID, so an in-flight
+	// request can reach a newer process after the forwarding CN restarts. Only
+	// the exact incarnation named by the mirror transaction may own its locks.
+	// Reject a stale target before admitting the operation or creating any txn
+	// and bind state; the caller will roll back the now-ownerless transaction.
+	if req.Lock.Options.ForwardTo != s.serviceID {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
 		return
@@ -565,10 +570,13 @@ func (s *service) handleForwardLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
-	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
+	// ForwardTo is the transaction's lock service. The forwarding CN only
+	// executes a mirror of that transaction, so bind lifetime belongs here, not
+	// to the RPC caller. Treat the transaction as local: local owner binds need
+	// no remote heartbeat, while a third-party owner is covered by this service's
+	// ordinary remoteBindRefs and released by Unlock on ForwardTo.
 	txn, txnGeneration := s.activeTxnHolder.getActiveTxnWithGeneration(
-		req.Lock.TxnID, true, req.Lock.ServiceID)
+		req.Lock.TxnID, true, "")
 	txn.Lock()
 	if txn.generation != txnGeneration || !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
@@ -595,11 +603,7 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) &&
-		bind.ServiceID == s.serviceID &&
-		!admission.consume(bind) {
-		s.incRef(bind.Group, bind.Table)
-	}
+	s.acquireTxnBindRef(txn, bind, &admission)
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()

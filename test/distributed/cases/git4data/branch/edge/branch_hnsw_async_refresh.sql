@@ -13,20 +13,32 @@ create table merge_base (id bigint primary key, v vecf32(3));
 insert into merge_base values (1, '[1,1,1]'), (2, '[4,4,4]');
 create index ix_merge using hnsw on merge_base(v)
   op_type 'vector_l2_ops' max_index_capacity 1000;
-select add_fault_point('fj/cdc/executor', ':::', 'echo', 0, 'processInitSQLNewTxn');
-data branch create table merge_leaf from merge_base;
 
 create table plain_base (id bigint primary key, v vecf32(3));
 insert into plain_base values (1, '[1,1,1]'), (2, '[4,4,4]');
 data branch create table plain_leaf from plain_base;
 
+-- PICK exercises the same table-branch creation edge independently. Prepare
+-- both bases before freezing their leaf workers so one release can cover both.
+create table pick_base (id bigint primary key, v vecf32(3));
+insert into pick_base values (1, '[1,1,1]'), (2, '[4,4,4]');
+create index ix_pick using hnsw on pick_base(v)
+  op_type 'vector_l2_ops' max_index_capacity 1000;
+
+select add_fault_point('fj/cdc/executor', ':::', 'echo', 0, 'processInitSQLNewTxn');
+data branch create table merge_leaf from merge_base;
+data branch create table pick_leaf from pick_base;
+
 update merge_leaf set v = '[10,10,10]' where id = 1;
 insert into merge_leaf values (4, '[0,0,0]');
 update plain_leaf set v = '[10,10,10]' where id = 1;
 insert into plain_leaf values (4, '[0,0,0]');
+update pick_leaf set v = '[10,10,10]' where id = 1;
+insert into pick_leaf values (4, '[0,0,0]');
 
 data branch diff merge_leaf against merge_base output count;
 data branch diff plain_leaf against plain_base output count;
+data branch diff pick_leaf against pick_base output count;
 
 -- Capture the branch catalog version only after its DML. The fault above
 -- prevents the asynchronous InitSQL from rewriting the catalog before this
@@ -35,16 +47,25 @@ set @merge_leaf_version = (
   select rel_version from mo_catalog.mo_tables
   where reldatabase = database() and relname = 'merge_leaf'
 );
+set @pick_leaf_version = (
+  select rel_version from mo_catalog.mo_tables
+  where reldatabase = database() and relname = 'pick_leaf'
+);
 -- disable/enable broadcasts to every CN, releasing the worker regardless of
 -- which CN owns this ISCP job and resetting the fault map for the next case.
 select disable_fault_injection();
 select enable_fault_injection();
 
--- Observe the exact catalog rewrite that used to replace the creation CTS.
+-- Observe both exact catalog rewrites that used to replace the creation CTS.
+-- Neither completed worker may mask the other one.
 -- @wait_expect(1, 30)
-select count(*) from mo_catalog.mo_tables
-where reldatabase = database() and relname = 'merge_leaf'
-  and rel_version > @merge_leaf_version;
+select
+  (select count(*) from mo_catalog.mo_tables
+   where reldatabase = database() and relname = 'merge_leaf'
+     and rel_version > @merge_leaf_version) as merge_leaf_rewritten,
+  (select count(*) from mo_catalog.mo_tables
+   where reldatabase = database() and relname = 'pick_leaf'
+     and rel_version > @pick_leaf_version) as pick_leaf_rewritten;
 
 data branch diff merge_leaf against merge_base output count;
 data branch diff plain_leaf against plain_base output count;
@@ -57,27 +78,6 @@ where id = 4 and l2_distance(v, '[0,0,0]') = 0;
 
 -- PICK must use the same stable creation boundary while applying only the
 -- requested updated and inserted keys.
-create table pick_base (id bigint primary key, v vecf32(3));
-insert into pick_base values (1, '[1,1,1]'), (2, '[4,4,4]');
-create index ix_pick using hnsw on pick_base(v)
-  op_type 'vector_l2_ops' max_index_capacity 1000;
-select add_fault_point('fj/cdc/executor', ':::', 'echo', 0, 'processInitSQLNewTxn');
-data branch create table pick_leaf from pick_base;
-update pick_leaf set v = '[10,10,10]' where id = 1;
-insert into pick_leaf values (4, '[0,0,0]');
-data branch diff pick_leaf against pick_base output count;
-set @pick_leaf_version = (
-  select rel_version from mo_catalog.mo_tables
-  where reldatabase = database() and relname = 'pick_leaf'
-);
-select disable_fault_injection();
-select enable_fault_injection();
-
--- @wait_expect(1, 30)
-select count(*) from mo_catalog.mo_tables
-where reldatabase = database() and relname = 'pick_leaf'
-  and rel_version > @pick_leaf_version;
-
 data branch diff pick_leaf against pick_base output count;
 data branch pick pick_leaf into pick_base keys(1, 4);
 select id from pick_base order by id;

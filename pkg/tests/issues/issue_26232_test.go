@@ -101,6 +101,15 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			defer cleanupCancel()
 			execSQLMaybe(t, cleanupCtx, dbConn, "drop database if exists "+db)
 		}()
+		infoDefaults := issue26232InformationSchemaDefaults(t, ctx, dbConn, db)
+		defaultFor := func(table, column string) sql.NullString {
+			key := issue26232ColumnKey{table: table, column: column}
+			value, ok := infoDefaults[key]
+			require.Truef(t, ok, "missing information_schema default for %s.%s", table, column)
+			return value
+		}
+		sourceDescDefaults := issue26232DescDefaults(t, ctx, dbConn, db+".v_source_t")
+		ctasDescDefaults := issue26232DescDefaults(t, ctx, dbConn, db+".ctas_view")
 
 		for _, test := range []struct {
 			viewName  string
@@ -122,11 +131,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{viewName: "v_source_t", column: "priority", wantValue: "'medium'"},
 			{viewName: "v_source_t", column: "flags", wantValue: "'a'"},
 		} {
-			var got sql.NullString
-			require.NoError(t, dbConn.QueryRowContext(ctx,
-				"select column_default from information_schema.columns "+
-					"where table_schema = ? and table_name = ? and column_name = ?",
-				db, test.viewName, test.column).Scan(&got), test.viewName+"."+test.column)
+			got := defaultFor(test.viewName, test.column)
 			require.True(t, got.Valid, test.viewName+"."+test.column)
 			require.Equal(t, test.wantValue, got.String, test.viewName+"."+test.column)
 		}
@@ -135,22 +140,16 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"v_constant", "v_function", "v_arithmetic", "v_aggregate",
 			"v_union", "v_union_all", "v_recursive",
 		} {
-			var got sql.NullString
-			require.NoError(t, dbConn.QueryRowContext(ctx,
-				"select column_default from information_schema.columns "+
-					"where table_schema = ? and table_name = ? and column_name = 'qty'",
-				db, viewName).Scan(&got), viewName)
+			got := defaultFor(viewName, "qty")
 			require.False(t, got.Valid, viewName)
 		}
 
-		var nullableDefault sql.NullString
-		require.NoError(t, dbConn.QueryRowContext(ctx,
-			"select column_default from information_schema.columns "+
-				"where table_schema = ? and table_name = 'v_source_t' and column_name = 'nullable_col'",
-			db).Scan(&nullableDefault))
+		nullableDefault := defaultFor("v_source_t", "nullable_col")
 		require.False(t, nullableDefault.Valid)
 
-		require.Equal(t, "7", descColumnDefault(t, ctx, dbConn, db+".v_source_t", "qty").String)
+		sourceQtyDefault, ok := sourceDescDefaults["qty"]
+		require.True(t, ok, "v_source_t.qty")
+		require.Equal(t, "7", sourceQtyDefault.String)
 		var viewName, viewSQL, charset, collation string
 		require.NoError(t, dbConn.QueryRowContext(ctx, "show create view "+db+".v_source_t").
 			Scan(&viewName, &viewSQL, &charset, &collation))
@@ -186,14 +185,11 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "nullable_expr", wantInfo: sql.NullString{String: "(uuid())", Valid: true}, wantDesc: sql.NullString{String: "(uuid())", Valid: true}},
 			{column: "expr_col", wantInfo: sql.NullString{String: "(uuid())", Valid: true}, wantDesc: sql.NullString{String: "(uuid())", Valid: true}},
 		} {
-			var infoDefault sql.NullString
-			require.NoError(t, dbConn.QueryRowContext(ctx,
-				"select column_default from information_schema.columns "+
-					"where table_schema = ? and table_name = 'ctas_view' and column_name = ?",
-				db, test.column).Scan(&infoDefault), test.column)
+			infoDefault := defaultFor("ctas_view", test.column)
 			require.Equal(t, test.wantInfo, infoDefault, test.column)
-			require.Equal(t, test.wantDesc,
-				descColumnDefault(t, ctx, dbConn, db+".ctas_view", test.column), test.column)
+			descDefault, ok := ctasDescDefaults[test.column]
+			require.True(t, ok, test.column)
+			require.Equal(t, test.wantDesc, descDefault, test.column)
 		}
 
 		for _, column := range []string{
@@ -201,18 +197,13 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"date_expr", "datetime_expr", "timestamp_expr", "time_expr", "year_expr",
 			"nullable_int_expr", "nullable_varchar_expr",
 		} {
-			var viewDefault, ctasDefault sql.NullString
-			require.NoError(t, dbConn.QueryRowContext(ctx,
-				"select column_default from information_schema.columns "+
-					"where table_schema = ? and table_name = 'v_source_t' and column_name = ?",
-				db, column).Scan(&viewDefault), column)
-			require.NoError(t, dbConn.QueryRowContext(ctx,
-				"select column_default from information_schema.columns "+
-					"where table_schema = ? and table_name = 'ctas_view' and column_name = ?",
-				db, column).Scan(&ctasDefault), column)
+			viewDefault := defaultFor("v_source_t", column)
+			ctasDefault := defaultFor("ctas_view", column)
 			require.True(t, viewDefault.Valid, column)
 			require.Equal(t, viewDefault, ctasDefault, column)
-			require.Equal(t, ctasDefault, descColumnDefault(t, ctx, dbConn, db+".ctas_view", column), column)
+			descDefault, ok := ctasDescDefaults[column]
+			require.True(t, ok, column)
+			require.Equal(t, ctasDefault, descDefault, column)
 		}
 
 		var tableName, createTableSQL string
@@ -323,22 +314,50 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 	})
 }
 
-func descColumnDefault(
-	t *testing.T, ctx context.Context, dbConn *sql.DB, tableName, columnName string,
-) sql.NullString {
+type issue26232ColumnKey struct {
+	table  string
+	column string
+}
+
+func issue26232InformationSchemaDefaults(
+	t *testing.T, ctx context.Context, dbConn *sql.DB, database string,
+) map[issue26232ColumnKey]sql.NullString {
+	t.Helper()
+	rows, err := dbConn.QueryContext(ctx,
+		"select table_name, column_name, column_default from information_schema.columns where table_schema = ?",
+		database)
+	require.NoError(t, err)
+	defer rows.Close()
+	defaults := make(map[issue26232ColumnKey]sql.NullString)
+	for rows.Next() {
+		var table, column string
+		var defaultValue sql.NullString
+		require.NoError(t, rows.Scan(&table, &column, &defaultValue))
+		key := issue26232ColumnKey{table: table, column: column}
+		require.NotContains(t, defaults, key)
+		defaults[key] = defaultValue
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, defaults)
+	return defaults
+}
+
+func issue26232DescDefaults(
+	t *testing.T, ctx context.Context, dbConn *sql.DB, tableName string,
+) map[string]sql.NullString {
 	t.Helper()
 	rows, err := dbConn.QueryContext(ctx, "desc "+tableName)
 	require.NoError(t, err)
 	defer rows.Close()
+	defaults := make(map[string]sql.NullString)
 	for rows.Next() {
 		var field, typ, nullable, key, extra, comment string
 		var defaultValue sql.NullString
 		require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
-		if field == columnName {
-			return defaultValue
-		}
+		require.NotContains(t, defaults, field)
+		defaults[field] = defaultValue
 	}
 	require.NoError(t, rows.Err())
-	require.FailNow(t, "column not found in DESC", tableName+"."+columnName)
-	return sql.NullString{}
+	require.NotEmpty(t, defaults)
+	return defaults
 }

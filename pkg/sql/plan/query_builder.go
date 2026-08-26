@@ -3598,6 +3598,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	sinkColRef := make(map[[2]int32]int)
 
 	builder.parseOptimizeHints()
+	if builder.sqlCalcFoundRows {
+		if builder.optimizerHints == nil {
+			builder.optimizerHints = &OptimizerHints{}
+		}
+		// Preserve the complete input stream for FOUND_ROWS(); this hint is
+		// internal and overrides global limit-pushdown settings for this query.
+		builder.optimizerHints.pushDownLimitToScan = 1
+		builder.optimizerHints.pushDownTopThroughLeftJoin = 1
+	}
 	for i, rootID := range builder.qry.Steps {
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
@@ -5340,6 +5349,23 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	if astTimeWindow != nil && astTimeWindow.Fill != nil {
+		fillMode := astTimeWindow.Fill.Mode
+		if fillMode != tree.FillNone && fillMode != tree.FillNull {
+			finalFillCols := collectTimeWindowFillCols(ctx)
+			if fillMode == tree.FillLinear {
+				if err = builder.validateLinearFillTypes(finalFillCols); err != nil {
+					return
+				}
+			}
+			if len(finalFillCols) != len(fillCols) {
+				fillType, fillVals, fillCols, err = builder.bindTimeWindowFill(ctx, projectionBinder, astTimeWindow)
+				if err != nil {
+					return
+				}
+			}
+		}
+	}
 	if len(boundOrderBys) > 0 && len(viewRawProjects) > 0 {
 		ctx.mysqlSpecialRawProjectPositions = make(map[int32]int32, len(viewRawProjects))
 		for visiblePos, rawExpr := range viewRawProjects {
@@ -5381,6 +5407,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	var preWindowHavingList []*plan.Expr
+	var postTimeWindowHavingList []*plan.Expr
 	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
 		preWindowHavingList, _ = splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
 	}
@@ -5443,7 +5470,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	} else if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
-		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
+		if nodeID, postTimeWindowHavingList, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
 		}
 	} else if len(boundHavingList) > 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 {
@@ -5481,6 +5508,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astTimeWindow,
 		); err != nil {
 			return
+		}
+		if len(postTimeWindowHavingList) > 0 {
+			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, postTimeWindowHavingList); err != nil {
+				return
+			}
+			// Keep HAVING-only time-window aggregates through FILL. The filter
+			// references the aggregate after the FILL node; allowing pushdown to
+			// the TIME_WINDOW node makes FILL prune the matching positional slot.
+			builder.qry.Nodes[nodeID].FilterIsBarrier = true
 		}
 	}
 
@@ -8296,64 +8332,154 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 
-	if astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode != tree.FillNone && astTimeWindow.Fill.Mode != tree.FillNull {
-		switch astTimeWindow.Fill.Mode {
-		case tree.FillPrev:
-			fillType = plan.Node_PREV
-		case tree.FillNext:
-			fillType = plan.Node_NEXT
-		case tree.FillValue:
-			fillType = plan.Node_VALUE
-		case tree.FillLinear:
-			fillType = plan.Node_LINEAR
-		}
+	if fillType, fillVals, fillCols, err = builder.bindTimeWindowFill(ctx, projectionBinder, astTimeWindow); err != nil {
+		return
+	}
+	return
+}
 
-		var v, castedExpr *Expr
+func (builder *QueryBuilder) bindTimeWindowFill(
+	ctx *BindContext,
+	projectionBinder *ProjectionBinder,
+	astTimeWindow *tree.TimeWindow,
+) (
+	fillType plan.Node_FillType,
+	fillVals, fillCols []*Expr,
+	err error,
+) {
+	timeAstCount := len(ctx.timeAsts)
+	defer func() {
+		ctx.timeAsts = ctx.timeAsts[:timeAstCount]
+	}()
+
+	if astTimeWindow == nil || astTimeWindow.Fill == nil ||
+		astTimeWindow.Fill.Mode == tree.FillNone || astTimeWindow.Fill.Mode == tree.FillNull {
+		return
+	}
+
+	switch astTimeWindow.Fill.Mode {
+	case tree.FillPrev:
+		fillType = plan.Node_PREV
+	case tree.FillNext:
+		fillType = plan.Node_NEXT
+	case tree.FillValue:
+		fillType = plan.Node_VALUE
+	case tree.FillLinear:
+		fillType = plan.Node_LINEAR
+	}
+
+	var v, castedExpr *Expr
+	if astTimeWindow.Fill.Val != nil {
+		if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+			return
+		}
+	}
+
+	for _, t := range ctx.times {
+		if isTimeWindowFillBoundary(t) {
+			continue
+		}
 		if astTimeWindow.Fill.Val != nil {
-			if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+			if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
 				return
 			}
+			fillVals = append(fillVals, castedExpr)
+		}
+		fillCols = append(fillCols, t)
+	}
+
+	if astTimeWindow.Fill.Mode == tree.FillLinear {
+		if err = builder.validateLinearFillTypes(fillCols); err != nil {
+			return
 		}
 
-		for _, t := range ctx.times {
-			if e, ok := t.Expr.(*plan.Expr_Col); ok {
-				if e.Col.Name == TimeWindowStart || e.Col.Name == TimeWindowEnd {
+		// Binders record every AST occurrence in timeAsts, while
+		// timeByAst/times keep one entry per unique time-window aggregate. ORDER BY
+		// may mention an aggregate already selected, so align the linear expression
+		// inputs by the unique time column position rather than by occurrence count.
+		astsByTimeCol := make(map[int32]tree.Expr, len(ctx.timeAsts))
+		for _, timeAst := range ctx.timeAsts {
+			colPos, ok := ctx.timeByAst[windowExprAstKey(timeAst)]
+			if ok {
+				if _, exists := astsByTimeCol[colPos]; !exists {
+					astsByTimeCol[colPos] = timeAst
+				}
+			}
+		}
+		linearTimeAsts := make([]tree.Expr, 0, len(fillCols))
+		if len(astsByTimeCol) == 0 {
+			// Keep the direct bindTimeWindow unit-test context, which supplies
+			// fill columns without the projection metadata used by full queries.
+			linearTimeAsts = append(linearTimeAsts, ctx.timeAsts...)
+		} else {
+			for colPos, time := range ctx.times {
+				if isTimeWindowFillBoundary(time) {
 					continue
 				}
-			}
-			if astTimeWindow.Fill.Val != nil {
-				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
+				timeAst, ok := astsByTimeCol[int32(colPos)]
+				if !ok {
+					err = moerr.NewInternalErrorf(builder.GetContext(), "linear fill AST missing for time column %d", colPos)
 					return
 				}
-				fillVals = append(fillVals, castedExpr)
+				linearTimeAsts = append(linearTimeAsts, timeAst)
 			}
-			fillCols = append(fillCols, t)
 		}
 
-		if astTimeWindow.Fill.Mode == tree.FillLinear {
-			for i, timeAst := range ctx.timeAsts {
-				b := &tree.BinaryExpr{
-					Op: tree.DIV,
-					Left: &tree.ParenExpr{
-						Expr: &tree.BinaryExpr{
-							Op:    tree.PLUS,
-							Left:  timeAst,
-							Right: timeAst,
-						},
+		for i, timeAst := range linearTimeAsts {
+			b := &tree.BinaryExpr{
+				Op: tree.DIV,
+				Left: &tree.ParenExpr{
+					Expr: &tree.BinaryExpr{
+						Op:    tree.PLUS,
+						Left:  timeAst,
+						Right: timeAst,
 					},
-					Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
-				}
-				if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
-					return
-				}
-				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
-					return
-				}
-				fillVals = append(fillVals, castedExpr)
+				},
+				Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
 			}
+			if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
+				return
+			}
+			if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
+				return
+			}
+			fillVals = append(fillVals, castedExpr)
 		}
 	}
 	return
+}
+
+func isTimeWindowFillBoundary(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	return col != nil && (col.Name == TimeWindowStart || col.Name == TimeWindowEnd)
+}
+
+func collectTimeWindowFillCols(ctx *BindContext) []*Expr {
+	fillCols := make([]*Expr, 0, len(ctx.times))
+	for _, expr := range ctx.times {
+		if isTimeWindowFillBoundary(expr) {
+			continue
+		}
+		fillCols = append(fillCols, expr)
+	}
+	return fillCols
+}
+
+func (builder *QueryBuilder) validateLinearFillTypes(fillCols []*Expr) error {
+	for _, fillCol := range fillCols {
+		fillColType := makeTypeByPlan2Type(fillCol.Typ)
+		if !fillColType.IsNumeric() {
+			return moerr.NewNotSupportedf(
+				builder.GetContext(),
+				"FILL(LINEAR) does not support aggregate result type %s",
+				fillColType.String(),
+			)
+		}
+	}
+	return nil
 }
 
 // inferGapFillBounds recognizes only the exact half-open predicate shape used
@@ -9458,7 +9584,7 @@ func (builder *QueryBuilder) appendAggNode(
 	nodeID int32,
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
-) (newNodeID int32, err error) {
+) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
@@ -9482,6 +9608,9 @@ func (builder *QueryBuilder) appendAggNode(
 	}
 
 	preWindowHavingList, _ := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	if ctx.timeTag > 0 {
+		preWindowHavingList, postTimeWindowHavingList = splitTimeWindowDependentHavingFilters(preWindowHavingList, ctx.timeTag)
+	}
 	if len(preWindowHavingList) > 0 {
 		var newFilterList []*plan.Expr
 		var expr *plan.Expr
@@ -9527,6 +9656,19 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support time window in recursive cte")
 		return
+	}
+	if fillType == plan.Node_LINEAR {
+		realAggCount := len(collectTimeWindowFillCols(ctx))
+		if len(fillCols) != realAggCount || len(fillVals) != realAggCount {
+			err = moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"linear fill layout mismatch: aggregates=%d fill columns=%d fill values=%d",
+				realAggCount,
+				len(fillCols),
+				len(fillVals),
+			)
+			return
+		}
 	}
 
 	// A GROUP BY alongside the window puts extra keys in ctx.groups next to the
@@ -9684,6 +9826,27 @@ func splitWindowDependentHavingFilters(boundHavingList []*plan.Expr, windowTag i
 	}
 
 	return preWindow, postWindow
+}
+
+func splitTimeWindowDependentHavingFilters(boundHavingList []*plan.Expr, timeTag int32) (preWindow []*plan.Expr, postTimeWindow []*plan.Expr) {
+	if len(boundHavingList) == 0 {
+		return nil, nil
+	}
+	if timeTag <= 0 {
+		return boundHavingList, nil
+	}
+
+	preWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	postTimeWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		if containsTag(cond, timeTag) {
+			postTimeWindow = append(postTimeWindow, cond)
+			continue
+		}
+		preWindow = append(preWindow, cond)
+	}
+
+	return preWindow, postTimeWindow
 }
 
 func (builder *QueryBuilder) appendProjectionNode(
@@ -11203,9 +11366,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, err
 					}
 					externType = plan.ExternType_MONGODB_TB
-					if builder.isPrepareStatement {
-						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
-					}
 				} else {
 					cfg, isDataStream, err := IsDataStreamTableDef(builder.GetContext(), tableDef)
 					if err != nil {

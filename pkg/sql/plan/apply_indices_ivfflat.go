@@ -641,8 +641,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		remainingFilters = append(remainingFilters, expr)
 	}
 	// Multi-round search may stop on a candidate count only when the index scan has
-	// observed every filter. Keep residual predicates on the exact membership
-	// pre-filter path and use the legacy single-round IVF search.
+	// observed every filter. Keep residual predicates on the membership-filter
+	// topology and use the bounded, legacy-compatible single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
 	canIndexOnly := boundaryProj != nil &&
@@ -660,7 +660,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// unchanged in the reusable plan; execution binding derives any candidate
 	// over-fetch budget after prepared parameters are available.
 	outerResultNeedExpr := DeepCopyExpr(limit)
-	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter
+	// Both post mode and membership pre mode can discard vector candidates
+	// after the bounded index search. Give either path the same tapered
+	// candidate budget while preserving the semantic outer LIMIT.
+	postFilterOverFetch := len(remainingFilters) > 0
 
 	firstRoundLimit := uint64(0)
 	var firstRoundLimitExpr *plan.Expr
