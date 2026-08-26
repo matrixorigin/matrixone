@@ -260,6 +260,8 @@ func TestStorageTopKEligibility(t *testing.T) {
 
 	sqlproc.IvfHasMembershipFilter = true
 	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	sqlproc.IvfMembershipFilter = []byte{1}
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
 	sqlproc.IvfHasMembershipFilter = false
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
 		LowerBoundType: plan.BoundType_INCLUSIVE,
@@ -1256,7 +1258,7 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 	require.NoError(t, searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}))
 }
 
-func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
+func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
@@ -1270,12 +1272,27 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(77), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(0), false, mp))
 			require.NoError(t, vector.AppendArray(bat.Vecs[2], []float32{0, 0}, false, mp))
-			bat.SetRowCount(1)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(77), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+			require.NoError(t, vector.AppendArray(bat.Vecs[2], []float32{10, 10}, false, mp))
+			bat.SetRowCount(2)
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
 			require.False(t, req.PostFilterTopOnly)
+			require.NotEmpty(t, req.FilterHint.MembershipFilterBytes)
+			filterFn := req.Filter.GetF()
+			require.NotNil(t, filterFn)
+			require.Equal(t, function.PrefixInFunctionName, filterFn.Func.ObjName)
+			prefixes := new(vector.Vector)
+			require.NoError(t, prefixes.UnmarshalBinary(filterFn.Args[1].GetVec().Data))
+			require.Equal(t, 1, prefixes.Length(), "nprobe=1 must not expand to every centroid")
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt64(77)
+			packer.EncodeInt64(0)
+			require.Equal(t, packer.Bytes(), prefixes.GetBytesAt(0))
 			bat := batch.NewWithSize(7)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -1310,7 +1327,7 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 		OrigFuncName: metric.DistFn_L2Distance,
 	}
 	idxcfg := vectorindex.IndexConfig{}
-	idxcfg.Ivfflat.Lists = 1
+	idxcfg.Ivfflat.Lists = 2
 	idxcfg.Ivfflat.Version = 77
 	idxcfg.Ivfflat.Dimensions = 2
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -1323,6 +1340,16 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 		IncludeColumns:     []string{"payload"},
 		IncludeColumnTypes: []int32{int32(types.T_int32)},
 	}
+	membershipVec := vector.NewVec(types.T_int64.ToType())
+	defer membershipVec.Free(mp)
+	membershipValues := make([]int64, exactPkFilterThreshold+1)
+	for i := range membershipValues {
+		membershipValues[i] = int64(i + 1)
+	}
+	require.NoError(t, vector.AppendFixedList(membershipVec, membershipValues, nil, mp))
+	membership, err := membershipVec.MarshalBinary()
+	require.NoError(t, err)
+	sqlproc.IvfHasMembershipFilter = true
 	r := &planReader{
 		spec: &plan.VectorIndexScan{
 			InitialProbeCount: 1,
@@ -1331,8 +1358,10 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 			SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 		},
 		req: searchplugin.Request{
-			ResultLimit:     2,
-			CandidateBudget: 12,
+			ResultLimit:         2,
+			CandidateBudget:     12,
+			MembershipFilter:    membership,
+			HasMembershipFilter: true,
 			Identity: searchplugin.ScanIdentity{
 				PartitionCount: 2,
 				PartitionIndex: 1,

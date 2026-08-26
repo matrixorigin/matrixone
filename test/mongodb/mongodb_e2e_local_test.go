@@ -18,9 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -49,6 +51,296 @@ func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
 	}
 }
 
+func TestMongoDBLocalE2EPortPlanUsesOneReservedBlock(t *testing.T) {
+	for range 5 {
+		ports, output, err := runMongoDBPortPlan(t, nil)
+		require.NoError(t, err, output)
+
+		base := ports["LOG_PORT_BASE"]
+		require.GreaterOrEqual(t, base, 1)
+		require.LessOrEqual(t, base+79, 65535)
+		require.Equal(t, base, ports["LOG_RAFT_PORT"])
+		require.Equal(t, base+1, ports["LOG_SERVICE_PORT"])
+		require.Equal(t, base+2, ports["LOG_GOSSIP_PORT"])
+		require.Equal(t, base+24, ports["TN_PORT_BASE"])
+		require.Equal(t, base+48, ports["CN_PORT_BASE"])
+		require.Equal(t, base+72, ports["MO_PORT"])
+		require.Equal(t, base+73, ports["STATUS_PORT"])
+
+		for name, port := range ports {
+			require.GreaterOrEqualf(t, port, base, "%s is below the reserved block", name)
+			require.LessOrEqualf(t, port, base+79, "%s is above the reserved block", name)
+		}
+
+		ranges := []struct {
+			name       string
+			start, end int
+		}{
+			{name: "LogService", start: base, end: base + 2},
+			{name: "TN", start: ports["TN_PORT_BASE"], end: ports["TN_PORT_BASE"] + 20},
+			{name: "CN", start: ports["CN_PORT_BASE"], end: ports["CN_PORT_BASE"] + 20},
+			{name: "frontend", start: ports["MO_PORT"], end: ports["MO_PORT"]},
+			{name: "status", start: ports["STATUS_PORT"], end: ports["STATUS_PORT"]},
+		}
+		for left := range ranges {
+			for right := left + 1; right < len(ranges); right++ {
+				require.Truef(t,
+					ranges[left].end < ranges[right].start || ranges[right].end < ranges[left].start,
+					"%s range %d-%d overlaps %s range %d-%d",
+					ranges[left].name, ranges[left].start, ranges[left].end,
+					ranges[right].name, ranges[right].start, ranges[right].end,
+				)
+			}
+		}
+	}
+}
+
+func TestMongoDBLocalE2EPortPlanValidatesOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		overrides map[string]string
+		want      string
+	}{
+		{
+			name:      "frontend above TCP range",
+			overrides: map[string]string{"MO_MONGODB_FRONTEND_PORT": "65536"},
+			want:      "MO_MONGODB_FRONTEND_PORT must be between 1 and 65535",
+		},
+		{
+			name:      "status below TCP range",
+			overrides: map[string]string{"MO_MONGODB_STATUS_PORT": "0"},
+			want:      "MO_MONGODB_STATUS_PORT must be between 1 and 65535",
+		},
+		{
+			name:      "port block exceeds TCP range",
+			overrides: map[string]string{"MO_MONGODB_LOG_PORT_BASE": "65457"},
+			want:      "MO_MONGODB_LOG_PORT_BASE must leave room for the 80-port block",
+		},
+		{
+			name: "frontend overlaps LogService",
+			overrides: map[string]string{
+				"MO_MONGODB_LOG_PORT_BASE": "40000",
+				"MO_MONGODB_FRONTEND_PORT": "40000",
+			},
+			want: "LogService overlaps frontend",
+		},
+		{
+			name: "frontend overlaps status",
+			overrides: map[string]string{
+				"MO_MONGODB_LOG_PORT_BASE": "40000",
+				"MO_MONGODB_FRONTEND_PORT": "40072",
+				"MO_MONGODB_STATUS_PORT":   "40072",
+			},
+			want: "frontend overlaps status",
+		},
+		{
+			name: "frontend outside reserved block",
+			overrides: map[string]string{
+				"MO_MONGODB_LOG_PORT_BASE": "40000",
+				"MO_MONGODB_FRONTEND_PORT": "50000",
+			},
+			want: "MO_MONGODB_FRONTEND_PORT must be inside the reserved 80-port block",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, output, err := runMongoDBPortPlan(t, test.overrides)
+			require.Error(t, err)
+			require.Contains(t, output, test.want)
+		})
+	}
+}
+
+func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
+	ports, output, err := runMongoDBPortPlan(t, nil)
+	require.NoError(t, err, output)
+	base := strconv.Itoa(ports["LOG_PORT_BASE"])
+	temporaryDirectory := t.TempDir()
+	firstTempDirectory := filepath.Join(temporaryDirectory, "first-tmp")
+	secondTempDirectory := filepath.Join(temporaryDirectory, "second-tmp")
+	require.NoError(t, os.MkdirAll(firstTempDirectory, 0o700))
+	require.NoError(t, os.MkdirAll(secondTempDirectory, 0o700))
+	readyFile := filepath.Join(firstTempDirectory, "port-plan-ready")
+
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
+	command.Dir = repoRoot
+	command.Env = mongoDBPortPlanEnv(map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE":          base,
+		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "2",
+		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
+		"TMPDIR":                            firstTempDirectory,
+	})
+	outputFile, err := os.CreateTemp(t.TempDir(), "port-plan-output")
+	require.NoError(t, err)
+	command.Stdout = outputFile
+	command.Stderr = outputFile
+	t.Cleanup(func() { _ = outputFile.Close() })
+	require.NoError(t, command.Start())
+	finished := false
+	t.Cleanup(func() {
+		if !finished && command.Process != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+
+	waitForMongoDBPortPlanReady(t, readyFile)
+
+	_, output, err = runMongoDBPortPlan(t, map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE": base,
+		"TMPDIR":                   secondTempDirectory,
+	})
+	require.Error(t, err)
+	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased")
+
+	waitErr := command.Wait()
+	finished = true
+	require.NoError(t, outputFile.Close())
+	commandOutput, err := os.ReadFile(outputFile.Name())
+	require.NoError(t, err)
+	require.NoError(t, waitErr, string(commandOutput))
+}
+
+func TestMongoDBLocalE2EPortPlanReleasesLeaseAfterParentDeath(t *testing.T) {
+	ports, output, err := runMongoDBPortPlan(t, nil)
+	require.NoError(t, err, output)
+	base := strconv.Itoa(ports["LOG_PORT_BASE"])
+	temporaryDirectory := t.TempDir()
+	readyFile := filepath.Join(temporaryDirectory, "port-plan-ready")
+	leaseDirectory := filepath.Join(temporaryDirectory, "leases")
+	outputFile := filepath.Join(temporaryDirectory, "port-plan-output")
+
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
+	command.Dir = repoRoot
+	command.Env = mongoDBPortPlanEnv(map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE":          base,
+		"MO_MONGODB_PORT_LEASE_DIR":         leaseDirectory,
+		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "60",
+		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
+	})
+	commandOutput, err := os.Create(outputFile)
+	require.NoError(t, err)
+	command.Stdout = commandOutput
+	command.Stderr = commandOutput
+	finished := false
+	t.Cleanup(func() {
+		if !finished && command.Process != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		_ = commandOutput.Close()
+		killMongoDBLeaseHolders(t, filepath.Join(leaseDirectory, base+".lock"))
+	})
+	require.NoError(t, command.Start())
+
+	waitForMongoDBPortPlanReady(t, readyFile)
+	require.NoError(t, command.Process.Kill())
+	require.Error(t, command.Wait())
+	finished = true
+
+	deadline := time.Now().Add(3 * time.Second)
+	lastOutput := ""
+	for time.Now().Before(deadline) {
+		_, output, err = runMongoDBPortPlan(t, map[string]string{
+			"MO_MONGODB_LOG_PORT_BASE":  base,
+			"MO_MONGODB_PORT_LEASE_DIR": leaseDirectory,
+		})
+		if err == nil {
+			return
+		}
+		lastOutput = output
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("port lease remained after parent death: %s", lastOutput)
+}
+
+func waitForMongoDBPortPlanReady(t *testing.T, readyFile string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		contents, err := os.ReadFile(readyFile)
+		if err == nil && string(contents) == "ready\n" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	contents, err := os.ReadFile(readyFile)
+	require.NoError(t, err, "port-plan did not become ready")
+	require.Equal(t, "ready\n", string(contents))
+}
+
+func killMongoDBLeaseHolders(t *testing.T, leaseFile string) {
+	t.Helper()
+	output, err := exec.Command("pgrep", "-f", leaseFile).Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Fields(string(output)) {
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		process, err := os.FindProcess(pid)
+		if err == nil {
+			_ = process.Kill()
+		}
+	}
+}
+
+func runMongoDBPortPlan(t *testing.T, overrides map[string]string) (map[string]int, string, error) {
+	t.Helper()
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
+	command.Dir = repoRoot
+	command.Env = mongoDBPortPlanEnv(overrides)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, string(output), err
+	}
+
+	ports := make(map[string]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, string(output), fmt.Errorf("unexpected MongoDB port-plan output line %q", line)
+		}
+		port, err := strconv.Atoi(value)
+		if err != nil {
+			return nil, string(output), fmt.Errorf("parse MongoDB port-plan %s: %w", name, err)
+		}
+		if _, exists := ports[name]; exists {
+			return nil, string(output), fmt.Errorf("duplicate MongoDB port-plan value %q", name)
+		}
+		ports[name] = port
+	}
+	for _, name := range []string{
+		"LOG_PORT_BASE", "LOG_RAFT_PORT", "LOG_SERVICE_PORT", "LOG_GOSSIP_PORT",
+		"TN_PORT_BASE", "CN_PORT_BASE", "MO_PORT", "STATUS_PORT",
+	} {
+		if _, exists := ports[name]; !exists {
+			return nil, string(output), fmt.Errorf("MongoDB port-plan omitted %s", name)
+		}
+	}
+	return ports, string(output), nil
+}
+
+func mongoDBPortPlanEnv(overrides map[string]string) []string {
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "MO_MONGODB_") || name == "LC_ALL" {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment, "LC_ALL=C")
+	for name, value := range overrides {
+		environment = append(environment, name+"="+value)
+	}
+	return environment
+}
+
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	previous, err := os.Getwd()
@@ -60,7 +352,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 8 {
+	for range 9 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -71,7 +363,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
-	expectMongoDBE2EScalar(mock, `"text"`)
+	expectMongoDBE2EScalar(mock, "text")
 	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "4")
@@ -85,9 +377,37 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	prepared := mock.ExpectPrepare("select count")
+	prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("3"))
+	prepared.ExpectQuery().WithArgs(int64(19)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
+	prepared.ExpectQuery().WithArgs(int64(29)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("1"))
+	mock.ExpectExec("prepare mongo_pruned_no_params").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "4")
+	expectMongoDBE2EScalar(mock, "4")
+	mock.ExpectExec("deallocate prepare mongo_pruned_no_params").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("set @mongo_measurement = 13").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectExec("set @mongo_measurement = 19").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "2")
+	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "1")
+	mock.ExpectExec("create table mongodb_ci.events_composite_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("insert into mongodb_ci.events_composite_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMongoDBE2EScalar(mock, "1")
+	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnError(errors.New("duplicate entry"))
+	expectMongoDBE2EScalar(mock, "1")
+	mock.ExpectExec("set time_zone").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("select id,date_format\\(d.*order by id").WillReturnRows(sqlmock.NewRows([]string{"id", "d", "t"}).
+		AddRow("a", "2026-03-08 01:59:59.123000", "2026-03-08 01:59:59.123000").
+		AddRow("b", "2026-03-08 03:00:00.456000", "2026-03-08 03:00:00.456000").
+		AddRow("c", "2026-11-01 01:59:59.789000", "2026-11-01 01:59:59.789000").
+		AddRow("d", "2026-11-01 02:00:00.012000", "2026-11-01 02:00:00.012000"))
 	expectMongoDBE2EScalar(mock, "1")
 	mock.ExpectQuery("select payload_1").WillReturnError(errors.New("MongoDB decoded batch byte limit exceeded"))
 	// A pre-canceled context is rejected by database/sql before it reaches the
@@ -131,7 +451,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
-		"insert-select-primary-key-target",
+		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"insert-select-primary-key-targets",
+		"date-format-order-by",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
 		"multi-batch-cancel-recovery",
@@ -161,7 +483,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
 
 			db, mock := newMongoDBE2ESQLMock(t)
-			for range 8 {
+			for range 9 {
 				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 			mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -170,7 +492,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
-			expectMongoDBE2EScalar(mock, `"text"`)
+			expectMongoDBE2EScalar(mock, "text")
 			if tc.failedQuery == "json_contains" {
 				expectMongoDBE2EScalar(mock, "2")
 			}
@@ -184,6 +506,17 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 }
 
 func TestMongoDBPrimaryKeyInsertSelect(t *testing.T) {
+	prepareSuccessfulTargets := func(mock sqlmock.Sqlmock) {
+		mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_insert_target").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("1"))
+		mock.ExpectExec("create table mongodb_ci.events_composite_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("insert into mongodb_ci.events_composite_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_composite_insert_target").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("1"))
+	}
+
 	tests := []struct {
 		name    string
 		prepare func(sqlmock.Sqlmock)
@@ -195,7 +528,7 @@ func TestMongoDBPrimaryKeyInsertSelect(t *testing.T) {
 				mock.ExpectExec("create table mongodb_ci.events_insert_target").
 					WillReturnError(errors.New("catalog unavailable"))
 			},
-			wantErr: "create primary-key insert target: catalog unavailable",
+			wantErr: "create single primary key target: catalog unavailable",
 		},
 		{
 			name: "insert select fails",
@@ -204,7 +537,7 @@ func TestMongoDBPrimaryKeyInsertSelect(t *testing.T) {
 				mock.ExpectExec("insert into mongodb_ci.events_insert_target").
 					WillReturnError(errors.New("source scan failed"))
 			},
-			wantErr: "insert-select into primary-key target: source scan failed",
+			wantErr: "insert-select into single primary key target: source scan failed",
 		},
 		{
 			name: "inserted row count is validated",
@@ -217,13 +550,37 @@ func TestMongoDBPrimaryKeyInsertSelect(t *testing.T) {
 			wantErr: "expected \"1\"",
 		},
 		{
-			name: "single source row is inserted",
+			name: "both primary key layouts and duplicate rejection succeed",
 			prepare: func(mock sqlmock.Sqlmock) {
-				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
-				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+				prepareSuccessfulTargets(mock)
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnError(errors.New("duplicate entry"))
 				mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_insert_target").
 					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("1"))
 			},
+		},
+		{
+			name: "duplicate insert unexpectedly succeeds",
+			prepare: func(mock sqlmock.Sqlmock) {
+				prepareSuccessfulTargets(mock)
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+			},
+			wantErr: "duplicate insert-select into primary-key target unexpectedly succeeded",
+		},
+		{
+			name: "duplicate insert times out",
+			prepare: func(mock sqlmock.Sqlmock) {
+				prepareSuccessfulTargets(mock)
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnError(context.DeadlineExceeded)
+			},
+			wantErr: "duplicate insert-select into primary-key target timed out",
+		},
+		{
+			name: "duplicate insert returns non duplicate error",
+			prepare: func(mock sqlmock.Sqlmock) {
+				prepareSuccessfulTargets(mock)
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnError(errors.New("connection reset"))
+			},
+			wantErr: "duplicate insert-select into primary-key target returned unexpected error",
 		},
 	}
 
@@ -290,6 +647,14 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.ErrorContains(t, expectRows(t.Context(), db, "row-error", nil), "getMore failed")
 		mock.ExpectQuery("mismatch").WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c", "d", "e", "f"}))
 		require.ErrorContains(t, expectRows(t.Context(), db, "mismatch", [][]string{{"expected"}}), "fixture result mismatch")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("row comparison supports temporal projection width", func(t *testing.T) {
+		db, mock := newMongoDBE2ESQLMock(t)
+		mock.ExpectQuery("temporal-width").WillReturnRows(sqlmock.NewRows([]string{"id", "d", "t"}).
+			AddRow("a", "2026-03-08 01:59:59.123000", "2026-03-08 01:59:59.123000"))
+		require.NoError(t, expectRows(t.Context(), db, "temporal-width", [][]string{{"a", "2026-03-08 01:59:59.123000", "2026-03-08 01:59:59.123000"}}))
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -371,6 +736,84 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		mock.ExpectQuery("denied-statement").WillReturnError(errors.New("do not have privilege to execute the statement"))
 		require.NoError(t, expectStatementRejected(t.Context(), db, "denied-statement", "PRIVILEGE"))
 		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("prepared MongoDB scan failures", func(t *testing.T) {
+		t.Run("prepare", func(t *testing.T) {
+			db, mock := newMongoDBE2ESQLMock(t)
+			mock.ExpectPrepare("select count").WillReturnError(errors.New("prepare failed"))
+			require.ErrorContains(t, verifyPreparedMongoDBScan(t.Context(), db), "prepare MongoDB scan")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		for _, tc := range []struct {
+			name  string
+			setup func(*sqlmock.ExpectedPrepare)
+			want  string
+		}{
+			{
+				name: "execute",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnError(errors.New("execute failed"))
+				},
+				want: "execute prepared MongoDB scan",
+			},
+			{
+				name: "metadata",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"value"}).AddRow("3"))
+				},
+				want: "result metadata mismatch",
+			},
+			{
+				name: "empty result",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}))
+				},
+				want: "returned no rows",
+			},
+			{
+				name: "row error",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("3").RowError(0, errors.New("read failed")))
+				},
+				want: "read prepared MongoDB result",
+			},
+			{
+				name: "scan",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow(nil))
+				},
+				want: "scan prepared MongoDB result",
+			},
+			{
+				name: "value mismatch",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
+				},
+				want: "expected \"3\", got \"2\"",
+			},
+			{
+				name: "multiple aggregate rows",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("3").AddRow("3"))
+				},
+				want: "aggregate returned more than one row",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock := newMongoDBE2ESQLMock(t)
+				tc.setup(mock.ExpectPrepare("select count"))
+				require.ErrorContains(t, verifyPreparedMongoDBScan(t.Context(), db), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
 	})
 
 	t.Run("redaction and report", func(t *testing.T) {

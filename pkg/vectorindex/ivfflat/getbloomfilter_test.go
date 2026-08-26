@@ -95,3 +95,44 @@ func TestGetBloomFilter_ExactPk(t *testing.T) {
 	require.NotEmpty(t, sqlproc.ExactPkFilter)
 	require.Empty(t, sqlproc.IvfMembershipFilter)
 }
+
+func TestExactRelationMembershipScanThreshold(t *testing.T) {
+	makeSQLProc := func(t *testing.T, rows int) *sqlexec.SqlProcess {
+		t.Helper()
+		proc := testutil.NewProc(t)
+		t.Cleanup(proc.Free)
+		vec := vector.NewVec(types.T_int64.ToType())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		for row := range rows {
+			require.NoError(t, vector.AppendFixed(vec, int64(row+1), false, proc.Mp()))
+		}
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.RelationScanner = &scriptedRelationScanner{t: t}
+		sqlproc.IvfHasMembershipFilter = true
+		sqlproc.IvfRuntimeFilterData = data
+		return sqlproc
+	}
+
+	exact, empty, err := exactRelationMembershipScan(makeSQLProc(t, exactPkFilterThreshold))
+	require.NoError(t, err)
+	require.True(t, exact)
+	require.False(t, empty)
+
+	exact, empty, err = exactRelationMembershipScan(makeSQLProc(t, exactPkFilterThreshold+1))
+	require.NoError(t, err)
+	require.False(t, exact)
+	require.False(t, empty)
+
+	sqlproc := makeSQLProc(t, 1)
+	sqlproc.IvfRuntimeFilterData = nil
+	exact, empty, err = exactRelationMembershipScan(sqlproc)
+	require.NoError(t, err)
+	require.False(t, exact)
+	require.True(t, empty)
+
+	sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
+	_, _, err = exactRelationMembershipScan(sqlproc)
+	require.Error(t, err)
+}
