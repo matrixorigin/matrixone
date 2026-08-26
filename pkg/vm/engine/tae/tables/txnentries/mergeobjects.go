@@ -247,6 +247,7 @@ func NewLifecycleRewriteObjectsEntry(
 		maxDeltaBlocks:       maxDeltaBlocks,
 		deltaBlocks:          make(map[types.Blockid]struct{}),
 		delTbls:              make(map[types.Objectid]map[uint16]struct{}),
+		transferredDels:      make(transferredDeleteSet),
 	}
 	if entry.rt.BigDeleteHinter.HasBigDelAfter(
 		entry.relation.ID(),
