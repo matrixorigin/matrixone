@@ -59,18 +59,25 @@ lost at a consumer boundary.
 
 ### Binding and error contract
 
-`buildNamedWindowPlan` is the first owner of query-block window resolution. It
-validates the per-block count before expansion, resolves declarations by ordered
-DFS, and expands inherited fields without mutating a shared declaration. The
-resolver returns stable `moerr` constructors for missing names, circularity,
-partitioning/frame/order conflicts, duplicate names, and the limit. Inline
-references use the same inheritance helper and pass the child display name
-(`\`<unnamed window>\`` for an inline clause) and base display name separately.
+`QueryBuilder` owns the production query-block lifecycle.  During select
+construction, `query_builder.go` first calls `validateQueryBlockWindowCount`,
+then calls `expandNamedWindowReferences`.  The expansion phase calls
+`resolveNamedWindowDefinitions`, which resolves the ordered declarations by
+DFS and expands inherited fields into a cloned query tree without mutating a
+shared declaration.  The ordered slice selects the diagnostic order; the map
+is lookup-only.  The resolver returns stable `moerr` constructors for missing
+names, circularity, partitioning/frame/order conflicts, duplicate names, and
+the limit. Inline references use the same inheritance helper and pass the
+child display name (`\`<unnamed window>\`` for an inline clause) and base display
+name separately.
 
-Validation-only binding also walks every named declaration. Its parameter
+Later in the same query-builder flow, `validateNamedWindowDefinitions` performs
+the distinct validation-only bind of every named declaration. Its parameter
 positions are merged into the real query metadata so an unused declaration
 still has the prepared-statement arity required by the protocol. Reusing one
-declaration does not duplicate its markers.
+declaration does not duplicate its markers. This validation-only phase is not
+the resolver or expansion owner: it preserves semantic validation and parameter
+metadata for declarations that are not reached by a window function.
 
 ### Scope, complexity, and lifecycle
 
@@ -112,8 +119,10 @@ compatibility over accepting an ambiguous extension.
 | 127 cap and inline occurrence counting | planner boundary tests, including nested-select control | 127 declarations accepted and 128 rejected |
 
 The BVT uses a four-row table in its own database, deterministic ordering, no
-sleeps, and same-instance cleanup. It is run twice against a ready test-owned
-service to prove that its database teardown does not leave catalog residue.
+sleeps, and explicit database teardown. Acceptance requires normal-comparison
+execution against a ready test-owned service, verification of the teardown
+postcondition, then a second execution against that same service; the two-run
+record is validation evidence rather than a property asserted by this document.
 Existing focused parser, planner, frontend, and `moerr` tests remain the
 cheapest white-box proofs; the BVT supplies the independent frontend/SQL oracle.
 
