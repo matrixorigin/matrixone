@@ -20,7 +20,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -335,14 +337,39 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 			))
 			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			require.Equal(t, []int32{0}, PreparedLagLeadParamPositions(prepare.Plan))
 
 			originalTypes := preparedEffectiveParamTypes(t, prepare)
 			require.Equal(t, int32(types.T_int64), originalTypes[0].Id)
 
-			filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(1)})
-			require.NoError(t, err)
-			require.NotSame(t, prepare.Plan, filled)
-			require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+			for _, valid := range []any{
+				int64(0),
+				int64(1),
+				false,
+				true,
+				ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamBoolean},
+				ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean},
+				ParamValue{Value: "9223372036854775807", PrepareParamKind: vector.PrepareParamInteger},
+			} {
+				filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{valid})
+				require.NoError(t, err)
+				require.NotSame(t, prepare.Plan, filled)
+				require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+			}
+
+			for _, invalid := range []any{
+				int64(-1),
+				nil,
+				float64(-1.5),
+				ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger},
+				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamFloat},
+				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamDecimal},
+				ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamBoolean},
+			} {
+				_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{invalid})
+				require.Error(t, err)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+			}
 		})
 	}
 }

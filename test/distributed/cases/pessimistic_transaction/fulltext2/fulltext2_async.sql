@@ -1,8 +1,8 @@
 -- fulltext2 CDC (always-async) — ported from pessimistic_transaction/fulltext
 -- (fulltext_async). fulltext2 is AlwaysAsync (no ASYNC keyword): the inline index
 -- builds an empty tag=0 base at CREATE, then post-create INSERT/UPDATE/DELETE flow
--- into the tag=1 CdcTail via ISCP CDC. sleep() waits for CDC to settle, then MATCH
--- reflects the mutations.
+-- into the tag=1 CdcTail via ISCP CDC. Poll that durable tail before MATCH so the
+-- test waits only as long as needed and cannot silently search before CDC settles.
 
 -- CREATE FULLTEXT2 INDEX is gated behind experimental_fulltext2_index (default off).
 set experimental_fulltext2_index = 1;
@@ -24,8 +24,32 @@ create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary 
 
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4'), ('id4', 4, 'bright red null', NULL);
 
--- wait for the initial CDC sync of src and src2
-select sleep(30);
+-- Wait for the initial CDC sync of src and src2. Do not poll MATCH: an early
+-- MATCH can pin a stale per-CN cache. A cdc_tail chunk is the durable readiness
+-- signal produced in the same transaction that advances the CDC watermark.
+set @src_ft2_index = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+    limit 1
+);
+set @src2_ft2_index = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src2')
+    limit 1
+);
+set @wait_initial_ft2_sql = concat(
+    'select ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1) as src_ready, ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src2_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1) as src2_ready'
+);
+prepare wait_initial_ft2 from @wait_initial_ft2_sql;
+-- @wait_expect(2, 120)
+execute wait_initial_ft2;
+deallocate prepare wait_initial_ft2;
 
 -- src's initial-sync state is verified via src2 below (a never-re-mutated table).
 -- src itself is deliberately NOT searched here: fulltext2's per-CN index cache is
@@ -40,9 +64,40 @@ select id1, id2 from src2 where match(body, title) against('red') order by id1;
 show create table src2;
 
 -- post-create UPDATE + DELETE flow through CDC too
+set @capture_src_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_tail from @capture_src_tail_sql;
+execute capture_src_tail;
+deallocate prepare capture_src_tail;
 update src set body = 'color is green' where id = 0;
+set @wait_src_mutation_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @src_tail_before_mutation,
+    ' as src_update_ready from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_mutation from @wait_src_mutation_sql;
+-- @wait_expect(2, 120)
+execute wait_src_mutation;
+deallocate prepare wait_src_mutation;
+set @capture_src_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_tail from @capture_src_tail_sql;
+execute capture_src_tail;
+deallocate prepare capture_src_tail;
 delete from src where id = 3;
-select sleep(30);
+set @wait_src_mutation_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @src_tail_before_mutation,
+    ' as src_delete_ready from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_mutation from @wait_src_mutation_sql;
+-- @wait_expect(2, 120)
+execute wait_src_mutation;
+deallocate prepare wait_src_mutation;
 
 -- doc 0's old text (red) is superseded, doc 3 is deleted -> 'red' now empty.
 -- This is src's FIRST MATCH, so its per-CN cache loads the fresh post-update index.
