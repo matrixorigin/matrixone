@@ -40,11 +40,11 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 
 func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 	c, err := embed.StartTestCluster(embed.WithCNCount(1))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
 	require.NotNil(t, c)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -57,6 +57,7 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 	execSQLRequire(t, ctx, db, "set role moadmin")
+	require.NoError(t, waitSystemBootstrap(ctx, db))
 
 	const (
 		sourceDB       = "issue_26111_source"
