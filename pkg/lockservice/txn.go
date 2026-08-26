@@ -35,6 +35,8 @@ var (
 	parallelUnlockTables = 2
 )
 
+const maxRemoteUnlockBatchSize = 64
+
 type tableLockHolder struct {
 	tableKeys  map[uint64]*cowSlice
 	tableBinds map[uint64]pb.LockTable
@@ -58,6 +60,10 @@ type tableLockHolderExtra struct {
 	// suppress that table-level txnID unlock merely because every retained probe
 	// key belongs to its singleton Shared cache.
 	remoteUnlockRequired map[uint64]struct{}
+	// batchUnlockTables records successful locks whose physical owner explicitly
+	// advertised the bounded multi-table unlock protocol. Unknown lock outcomes
+	// deliberately stay on the legacy table-scoped cleanup path.
+	batchUnlockTables map[uint64]struct{}
 	// uncertainLockKeys contains rows recorded only because a remote Lock
 	// response failed. They remain in tableKeys for conservative cleanup, but
 	// do not prove that this transaction holds the row for deadlock detection.
@@ -92,6 +98,13 @@ func (h *tableLockHolder) remoteUnlockRequiredTables() map[uint64]struct{} {
 	return h.extra.remoteUnlockRequired
 }
 
+func (h *tableLockHolder) batchUnlockSupportedTables() map[uint64]struct{} {
+	if h.extra == nil {
+		return nil
+	}
+	return h.extra.batchUnlockTables
+}
+
 func (h *tableLockHolder) uncertainLockKeys() map[uint64]map[string]struct{} {
 	if h.extra == nil {
 		return nil
@@ -104,6 +117,7 @@ func (h *tableLockHolder) clearExtraIfEmpty() {
 		len(h.extra.nonCoarsenableTables) == 0 &&
 		len(h.extra.ownerLocalWaitSnapshots) == 0 &&
 		len(h.extra.remoteUnlockRequired) == 0 &&
+		len(h.extra.batchUnlockTables) == 0 &&
 		len(h.extra.uncertainLockKeys) == 0 {
 		h.extra = nil
 	}
@@ -455,6 +469,35 @@ func (txn *activeTxn) isRemoteUnlockRequiredLocked(group uint32, table uint64) b
 	}
 	_, required := h.remoteUnlockRequiredTables()[table]
 	return required
+}
+
+func (txn *activeTxn) setBatchUnlockSupportedLocked(
+	group uint32,
+	table uint64,
+	supported bool,
+) {
+	h := txn.getHoldLocksLocked(group)
+	if !supported {
+		if h.extra != nil {
+			delete(h.extra.batchUnlockTables, table)
+			h.clearExtraIfEmpty()
+		}
+		return
+	}
+	extra := h.ensureExtra()
+	if extra.batchUnlockTables == nil {
+		extra.batchUnlockTables = make(map[uint64]struct{})
+	}
+	extra.batchUnlockTables[table] = struct{}{}
+}
+
+func (txn *activeTxn) isBatchUnlockSupportedLocked(group uint32, table uint64) bool {
+	h, ok := txn.lockHolders[group]
+	if !ok {
+		return false
+	}
+	_, supported := h.batchUnlockSupportedTables()[table]
+	return supported
 }
 
 func (txn *activeTxn) markOwnerLocalWaitSnapshotLocked(group uint32, table uint64) {
@@ -1164,6 +1207,7 @@ func (txn *activeTxn) removeClosedLockTable(
 	if h.extra != nil {
 		delete(h.extra.nonCoarsenableTables, table)
 		delete(h.extra.remoteUnlockRequired, table)
+		delete(h.extra.batchUnlockTables, table)
 		delete(h.extra.ownerLocalWaitSnapshots, table)
 		delete(h.extra.uncertainLockKeys, table)
 		h.clearExtraIfEmpty()
