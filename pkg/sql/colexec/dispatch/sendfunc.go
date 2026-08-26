@@ -65,7 +65,7 @@ func explicitTextRemoteWireEnabled(proc *process.Process) bool {
 }
 
 func stringSourceRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion30
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion31
 }
 
 func remoteBatchWireVersion(proc *process.Process) int64 {

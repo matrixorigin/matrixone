@@ -817,7 +817,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion29)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
 	require.NoError(t, receiver.sendBatch(bat))
 	decodedWithoutSources := batch.NewOffHeapEmpty()
 	defer decodedWithoutSources.Clean(mp)
@@ -829,7 +829,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion31)
 	require.NoError(t, receiver.sendBatch(bat))
 	decodedWithSources := batch.NewOffHeapEmpty()
 	defer decodedWithSources.Clean(mp)
