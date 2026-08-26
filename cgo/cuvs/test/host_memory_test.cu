@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "host_memory.hpp"
+#include "ivf_pq.hpp"
 #include "test_framework.hpp"
 
 #include <atomic>
@@ -193,4 +194,80 @@ TEST(HostMemoryGovernor, LiveReserveRoundTrips) {
         ASSERT_EQ(host_memory_governor::reserved_bytes(), claim.bytes());
     }
     require_ledger_empty("the live claim going out of scope");
+}
+
+// --- the WIRING, not just the ledger ------------------------------------------
+//
+// The tests above prove the governor's rules. These prove the build path is
+// actually wired to it, which is a separate failure: a claim silently dropped
+// from allocate_host_capacity leaves every rule above passing and every index
+// admitted, and the Go tests that used to cover the equivalent claim were
+// removed when the claim moved into C++.
+
+// A construction must leave the ledger where it found it. The claim covers the
+// capacity buffers only until they are allocated; holding it past the
+// constructor would charge a concurrent build for the whole life of this index.
+TEST(HostMemoryGovernor, IndexConstructionReleasesItsClaim) {
+    require_ledger_empty("the start of the construction test");
+
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists               = 4;
+    std::vector<int> devices = {0};
+    {
+        matrixone::gpu_ivf_pq_t<float, float> index(/*total_count=*/1000, /*dimension=*/32,
+                                         DistanceType_L2Expanded, bp, devices, 1,
+                                         DistributionMode_SINGLE_GPU);
+        // Still inside the index's lifetime: the buffers exist and are visible in
+        // the availability reading, so the LEDGER must already be clear.
+        ASSERT_EQ(host_memory_governor::reserved_bytes(), (size_t)0);
+    }
+    require_ledger_empty("the index going out of scope");
+}
+
+// ...and the claim must actually be consulted. With the ledger already holding
+// all but a sliver of the budget, a construction that needs more than the sliver
+// has to be refused -- if the claim were dropped, this would silently succeed.
+TEST(HostMemoryGovernor, IndexConstructionIsRefusedWhenTheLedgerIsFull) {
+    require_ledger_empty("the start of the refusal test");
+
+    const matrixone::host_available_t avail = matrixone::host_available_bytes();
+    if (!avail.measured) {
+        TEST_LOG("skipped: host availability is unreadable here, so admission is "
+                 "disabled by design and there is nothing to refuse");
+        return;
+    }
+    const size_t budget = host_memory_governor::budget_bytes(
+        static_cast<size_t>(avail.bytes));
+    const size_t sliver = 16u << 20;  // 16 MiB
+    if (budget <= sliver) {
+        TEST_LOG("skipped: host budget is smaller than the sliver this test leaves free");
+        return;
+    }
+
+    // dim 128 f32 + 8 bytes of id per row = 520 B/row; 100k rows is ~52 MB, well
+    // clear of the sliver, so the refusal is not a rounding accident.
+    const uint64_t rows = 100000;
+    const uint32_t dim  = 128;
+    ASSERT_TRUE((size_t)rows * (dim * sizeof(float) + sizeof(int64_t)) > sliver);
+
+    auto hog = host_memory_governor::reserve_against(avail, budget - sliver, "hog");
+    ASSERT_EQ(host_memory_governor::reserved_bytes(), budget - sliver);
+
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists               = 4;
+    std::vector<int> devices = {0};
+
+    bool refused = false;
+    try {
+        matrixone::gpu_ivf_pq_t<float, float> index(rows, dim, DistanceType_L2Expanded, bp, devices, 1,
+                                         DistributionMode_SINGLE_GPU);
+    } catch (const std::exception&) {
+        refused = true;
+    }
+    ASSERT_TRUE(refused);
+
+    // A refused construction must claim nothing: only the hog is on the ledger.
+    ASSERT_EQ(host_memory_governor::reserved_bytes(), budget - sliver);
+    hog.release();
+    require_ledger_empty("releasing the hog");
 }

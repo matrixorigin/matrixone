@@ -1529,7 +1529,7 @@ public:
                       sizeof(B);
         }
         if (grow_ids) {
-            growth += (static_cast<size_t>(ids_rows) - staging_ids_.capacity()) * sizeof(int64_t);
+            growth += (static_cast<size_t>(ids_rows) - staging_ids_.capacity()) * sizeof(IdT);
         }
         host_memory_governor::reservation staging_claim;
         if (growth > 0) staging_claim = host_memory_governor::reserve(growth, "quantizer staging");
