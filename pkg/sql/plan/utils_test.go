@@ -539,10 +539,12 @@ func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
 	require.NoError(t, err)
 	queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
 	require.True(t, PreparedPlanHasDirectResultParams(queryPlan))
+	require.Equal(t, []int32{0}, PreparedPlanDirectResultParamPositions(queryPlan))
 
 	functionPrepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt2 from 'select abs(?)'")
 	require.NoError(t, err)
 	require.False(t, PreparedPlanHasDirectResultParams(functionPrepared.GetDcl().GetPrepare().GetPlan()))
+	require.Empty(t, PreparedPlanDirectResultParamPositions(functionPrepared.GetDcl().GetPrepare().GetPlan()))
 
 	filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
 		ParamValue{
@@ -564,6 +566,7 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 		value     string
 		wantOK    bool
 		wantType  types.T
+		wantWidth int32
 		wantScale int32
 	}{
 		{name: "empty", value: "", wantType: types.T_any},
@@ -575,11 +578,10 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 		{name: "unsigned maximum", value: "18446744073709551615", wantOK: true, wantType: types.T_uint64},
 		{name: "signed overflow", value: "-9223372036854775809", wantType: types.T_any},
 		{name: "unsigned overflow", value: "18446744073709551616", wantType: types.T_any},
-		{name: "decimal64", value: "12.3400", wantOK: true, wantType: types.T_decimal64, wantScale: 4},
-		{name: "leading decimal point", value: ".5", wantOK: true, wantType: types.T_decimal64, wantScale: 1},
-		{name: "trailing decimal point", value: "12.", wantOK: true, wantType: types.T_decimal64},
-		{name: "exponent", value: "1.25e+3", wantOK: true, wantType: types.T_decimal128, wantScale: 18},
-		{name: "decimal256", value: "1234567890123456789012345678901234567890123456789012345678901234567890123456.1", wantOK: true, wantType: types.T_decimal256, wantScale: 1},
+		{name: "decimal64", value: "12.3400", wantOK: true, wantType: types.T_decimal64, wantWidth: 6, wantScale: 4},
+		{name: "leading decimal point", value: ".5", wantOK: true, wantType: types.T_decimal64, wantWidth: 1, wantScale: 1},
+		{name: "trailing decimal point", value: "12.", wantOK: true, wantType: types.T_decimal64, wantWidth: 2},
+		{name: "positive exponent", value: "1.25e+3", wantOK: true, wantType: types.T_decimal64, wantWidth: 4},
 		{name: "bad exponent", value: "1e+", wantType: types.T_any},
 		{name: "bad decimal", value: "1.2.3", wantType: types.T_any},
 		{name: "bad numeric", value: "12x", wantType: types.T_any},
@@ -592,6 +594,29 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 				return
 			}
 			require.Equal(t, test.wantType, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		value     string
+		wantType  types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "integral wire decimal", value: "123", wantType: types.T_decimal64, wantWidth: 3},
+		{name: "wide wire decimal", value: "123456789012345678901234567890", wantType: types.T_decimal128, wantWidth: 30},
+		{name: "small exponent wire decimal", value: "1e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
+		{name: "large exponent wire decimal", value: "1e+37", wantType: types.T_decimal128, wantWidth: 38},
+		{name: "decimal256 boundary", value: "123456789012345678901234567890123456789012345678901234567890123456789012345.1", wantType: types.T_decimal256, wantWidth: 76, wantScale: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedDecimalRuntimeType(test.value)
+			require.True(t, ok)
+			require.Equal(t, test.wantType, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
 			require.Equal(t, test.wantScale, got.Scale)
 		})
 	}
@@ -631,9 +656,17 @@ func TestPreparedRuntimeParamExprMaterializesProtocolTypes(t *testing.T) {
 		{name: "float64", value: "1.25", runtimeTyp: types.T_float64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Dval); return l != nil && ok }},
 		{name: "float64 cast fallback", value: "bad", runtimeTyp: types.T_float64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
 		{name: "decimal64", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 integral wire value", value: "123", runtimeTyp: types.New(types.T_decimal64, 3, 0), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal64Val)
+			return l != nil && ok && v.Decimal64Val.A == 123
+		}},
 		{name: "decimal64 inferred", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
 		{name: "decimal64 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
 		{name: "decimal128", value: "12.34", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 negative exponent", value: "1e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal128Val)
+			return l != nil && ok && v.Decimal128Val.A == 1 && v.Decimal128Val.B == 0
+		}},
 		{name: "decimal128 inferred", value: "123456789012345678901234567890123456.12", runtimeTyp: types.New(types.T_decimal128, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
 		{name: "decimal128 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
 		{name: "decimal256 cast", value: "12.34", runtimeTyp: types.New(types.T_decimal256, 20, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
@@ -681,6 +714,25 @@ func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, PreparedPlanHasDirectResultParams(test.plan))
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "order by pass through", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
+		{name: "distinct pass through", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
+		{name: "union branch", sql: "prepare direct_union from 'select ? as result union all select 1'", want: []int32{0}},
+		{name: "nested parameter is not direct", sql: "prepare direct_nested from 'select ? as direct_value, abs(?) as nested_value'", want: []int32{0}},
+		{name: "numeric function only", sql: "prepare direct_abs from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			got := PreparedPlanDirectResultParamPositions(prepared.GetDcl().GetPrepare().GetPlan())
+			require.Equal(t, test.want, got)
 		})
 	}
 }

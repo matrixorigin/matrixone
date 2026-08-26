@@ -749,7 +749,11 @@ func binaryProtocolPrepareParamType(
 	case defines.MYSQL_TYPE_DOUBLE:
 		return types.T_float64.ToType(), true
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		if typ, ok := plan2.PreparedRuntimeTypeFromString(string(value)); ok && typ.IsDecimal() {
+		// The wire descriptor identifies DECIMAL even when its textual value has
+		// no decimal point (for example "123"). Do not route that value through
+		// the generic string classifier, which quite correctly calls it INT64
+		// for ordinary string parameters but would lose the DECIMAL domain here.
+		if typ, ok := plan2.PreparedDecimalRuntimeType(string(value)); ok {
 			return typ, true
 		}
 		return types.New(types.T_decimal128, 38, 18), true
@@ -999,11 +1003,11 @@ func initExecuteStmtParamWithResolverInSession(
 	// cached compile and avoid the per-execute type-inference regression from
 	// the original broad specialization fix.
 	runtimeSpecialized := false
-	if execCtx.input != nil && execCtx.input.isBinaryProtExecute &&
-		plan2.PreparedPlanHasDirectResultParams(executionPlan) {
+	directResultPositions := plan2.PreparedPlanDirectResultParamPositions(executionPlan)
+	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(directResultPositions) > 0 {
 		var specialized bool
 		cwft.paramVals, specialized, err = preparedParamValuesWithRuntimeTypes(
-			cwft.proc, prepareStmt.ParamTypes)
+			cwft.proc, prepareStmt.ParamTypes, directResultPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -1229,6 +1233,7 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 func preparedParamValuesWithRuntimeTypes(
 	proc *process.Process,
 	paramTypes []byte,
+	directResultPositions []int32,
 ) ([]any, bool, error) {
 	values, err := preparedParamValues(proc)
 	if err != nil {
@@ -1238,8 +1243,17 @@ func preparedParamValuesWithRuntimeTypes(
 	if params == nil {
 		return values, false, nil
 	}
+	directPositions := make(map[int32]struct{}, len(directResultPositions))
+	for _, position := range directResultPositions {
+		if position >= 0 {
+			directPositions[position] = struct{}{}
+		}
+	}
 	specialized := false
 	for i := 0; i < params.Length(); i++ {
+		if _, ok := directPositions[int32(i)]; !ok {
+			continue
+		}
 		if i*2+1 >= len(paramTypes) {
 			continue
 		}

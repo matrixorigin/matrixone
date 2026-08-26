@@ -3284,42 +3284,133 @@ func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
 }
 
-// PreparedPlanHasDirectResultParams reports whether the visible result
-// projection contains a parameter marker as a direct expression.  Such a
-// marker is special for the binary protocol: its execute-time numeric domain
-// is also the result-column domain, so the parameterized prepare plan cannot
-// safely be reused when the client supplies a numeric protocol type.
-//
-// Keep this check limited to the final SELECT projection.  Parameters used by
-// predicates, joins, DML, or nested expressions continue to use the normal
-// cached prepared-plan path and do not pay execute-time type specialization.
+// PreparedPlanHasDirectResultParams reports whether a visible result column
+// is ultimately sourced from a direct parameter marker. Such a marker is
+// special for the binary protocol: its execute-time numeric domain is also
+// the result-column domain, so the parameterized prepare plan cannot safely
+// be reused when the client supplies a numeric protocol type.
 func PreparedPlanHasDirectResultParams(preparePlan *Plan) bool {
+	return len(PreparedPlanDirectResultParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanDirectResultParamPositions returns the zero-based parameter
+// positions that flow directly into the visible SELECT projection. Optimizer
+// passes commonly insert PROJECT/SORT/AGG nodes above the original marker, so
+// inspecting only the final node misses shapes such as ORDER BY, DISTINCT,
+// and UNION. The walk follows projection ColRefs through those pass-through
+// nodes while deliberately ignoring parameters nested in result expressions.
+func PreparedPlanDirectResultParamPositions(preparePlan *Plan) []int32 {
+	positions := make(map[int32]struct{})
 	if preparePlan == nil {
-		return false
+		return nil
 	}
 	query := preparePlan.GetQuery()
 	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) == 0 {
-		return false
+		return nil
 	}
 	rootStep := len(query.Steps) - 1
 	if query.HasReturning {
 		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
-			return false
+			return nil
 		}
 		rootStep = int(query.ReturningStep)
 	}
-	nodeID := query.Steps[rootStep]
-	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
-		return false
+	rootID := query.Steps[rootStep]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
+		return nil
+	}
+	seen := make(map[directResultTraceKey]struct{})
+	for colPos := range query.Nodes[rootID].ProjectList {
+		collectDirectResultParamPositions(query, rootID, int32(colPos), positions, seen)
+	}
+	result := make([]int32, 0, len(positions))
+	if len(positions) == 0 {
+		return nil
+	}
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+type directResultTraceKey struct {
+	nodeID int32
+	colPos int32
+}
+
+func collectDirectResultParamPositions(
+	query *plan.Query,
+	nodeID, colPos int32,
+	positions map[int32]struct{},
+	seen map[directResultTraceKey]struct{},
+) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return
 	}
 	node := query.Nodes[nodeID]
 	if node == nil {
+		return
+	}
+	key := directResultTraceKey{nodeID: nodeID, colPos: colPos}
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+
+	if int(colPos) < len(node.ProjectList) {
+		expr := node.ProjectList[colPos]
+		if expr == nil {
+			return
+		}
+		if collectDirectResultParamFromExpr(expr, positions) {
+			return
+		}
+		if col := expr.GetCol(); col != nil {
+			childColPos := col.ColPos
+			switch node.NodeType {
+			case plan.Node_UNION, plan.Node_UNION_ALL,
+				plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+				plan.Node_MINUS, plan.Node_MINUS_ALL:
+				// Set operations expose the corresponding output from every
+				// branch. A marker in either branch changes the visible domain.
+				for _, childID := range node.Children {
+					collectDirectResultParamPositions(query, childID, childColPos, positions, seen)
+				}
+				return
+			}
+			if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+				collectDirectResultParamPositions(query, node.Children[col.RelPos], childColPos, positions, seen)
+				return
+			}
+			if len(node.Children) == 1 {
+				collectDirectResultParamPositions(query, node.Children[0], childColPos, positions, seen)
+			}
+		}
+		return
+	}
+
+	// A few physical pass-through nodes carry no projection of their own.
+	// Preserve the output ordinal while traversing a single child.
+	if len(node.Children) == 1 {
+		collectDirectResultParamPositions(query, node.Children[0], colPos, positions, seen)
+	}
+}
+
+func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) bool {
+	if expr == nil {
 		return false
 	}
-	for _, expr := range node.ProjectList {
-		if expr != nil && expr.GetP() != nil {
-			return true
-		}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return true
+	}
+	// Set-operation branches may add a projection cast to reconcile the
+	// branch types. The parameter remains a direct result source beneath that
+	// unary cast and must still participate in execute-time metadata selection.
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
+		return collectDirectResultParamFromExpr(fn.Args[0], positions)
 	}
 	return false
 }
@@ -3473,6 +3564,14 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 	return types.T_uint64.ToType(), true
 }
 
+// PreparedDecimalRuntimeType derives the smallest supported decimal domain
+// from a complete decimal lexeme. It is used when the binary protocol already
+// identifies the parameter as DECIMAL, including integral-looking values such
+// as "123" that the generic classifier would otherwise call INT64.
+func PreparedDecimalRuntimeType(value string) (types.Type, bool) {
+	return preparedDecimalType(value)
+}
+
 func preparedDecimalType(value string) (types.Type, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -3484,38 +3583,68 @@ func preparedDecimalType(value string) (types.Type, bool) {
 	if value == "" {
 		return types.Type{}, false
 	}
-	if strings.ContainsAny(value, "eE") {
-		parts := strings.FieldsFunc(value, func(r rune) bool { return r == 'e' || r == 'E' })
-		if len(parts) != 2 || !isDecimalMantissa(parts[0]) || !isDecimalExponent(parts[1]) {
+	mantissa := value
+	exponent := int64(0)
+	if exponentPos := strings.IndexAny(value, "eE"); exponentPos >= 0 {
+		mantissa = value[:exponentPos]
+		exponentText := value[exponentPos+1:]
+		if strings.ContainsAny(exponentText, "eE") || !isDecimalExponent(exponentText) {
 			return types.Type{}, false
 		}
-		return types.New(types.T_decimal128, 38, 18), true
+		var err error
+		exponent, err = strconv.ParseInt(exponentText, 10, 64)
+		if err != nil {
+			return types.Type{}, false
+		}
 	}
-	parts := strings.SplitN(value, ".", 2)
-	if !isDecimalMantissa(value) {
+	if !isDecimalMantissa(mantissa) {
 		return types.Type{}, false
 	}
-	integral := strings.TrimLeft(parts[0], "0")
-	if integral == "" {
-		integral = "0"
-	}
-	scale := int32(0)
+	parts := strings.SplitN(mantissa, ".", 2)
+	integerPart := parts[0]
+	fractionalPart := ""
 	if len(parts) == 2 {
-		scale = int32(len(parts[1]))
+		fractionalPart = parts[1]
 	}
-	width := int32(len(integral)) + scale
-	if width < 1 {
-		width = 1
+	digits := integerPart + fractionalPart
+	trimmedDigits := strings.TrimLeft(digits, "0")
+	if trimmedDigits == "" {
+		// Zero has no significant exponent or scale. Keeping the smallest
+		// representable domain also avoids overflowing while examining an
+		// otherwise harmless value such as 0e-9223372036854775808.
+		return types.New(types.T_decimal64, 1, 0), true
 	}
-	if width < scale {
-		width = scale
+	leadingZeroes := len(digits) - len(trimmedDigits)
+	digits = trimmedDigits
+	// point is the number of significant digits to the left of the decimal
+	// point. It may be negative for values smaller than one.
+	pointBase := int64(len(integerPart)) - int64(leadingZeroes)
+	if (exponent > 0 && pointBase > math.MaxInt64-exponent) ||
+		(exponent < 0 && pointBase < math.MinInt64-exponent) {
+		return types.Type{}, false
 	}
-	if width > types.T_decimal256.ToType().Width {
-		width = types.T_decimal256.ToType().Width
+	point := pointBase + exponent
+	digitCount := int64(len(digits))
+	var width64, scale64 int64
+	if point >= digitCount {
+		// A positive exponent appends zeroes to the unscaled value.
+		width64 = point
+		scale64 = 0
+	} else {
+		scale64 = digitCount - point
+		width64 = digitCount
+		if scale64 > width64 {
+			// With no integral digits, DECIMAL precision equals the scale,
+			// e.g. .5 -> DECIMAL(1,1), 1e-30 -> DECIMAL(30,30).
+			width64 = scale64
+		}
 	}
-	if scale > width {
-		scale = width
+	const maxDecimalPrecision int64 = 76
+	if width64 < 1 || scale64 < 0 || scale64 > width64 || width64 > maxDecimalPrecision {
+		return types.Type{}, false
 	}
+	width := int32(width64)
+	scale := int32(scale64)
 	switch {
 	case width <= types.T_decimal64.ToType().Width:
 		return types.New(types.T_decimal64, width, scale), true

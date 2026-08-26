@@ -334,6 +334,8 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		isUnsigned bool
 		value      string
 		wantOID    types.T
+		wantWidth  int32
+		wantScale  int32
 		wantOK     bool
 	}{
 		{name: "tiny signed", mysqlType: defines.MYSQL_TYPE_TINY, value: "1", wantOID: types.T_int8, wantOK: true},
@@ -349,8 +351,11 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		{name: "year", mysqlType: defines.MYSQL_TYPE_YEAR, value: "2026", wantOID: types.T_year, wantOK: true},
 		{name: "float", mysqlType: defines.MYSQL_TYPE_FLOAT, value: "1.25", wantOID: types.T_float32, wantOK: true},
 		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, value: "1.25", wantOID: types.T_float64, wantOK: true},
-		{name: "decimal", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "1.25", wantOID: types.T_decimal64, wantOK: true},
-		{name: "newdecimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "1.25", wantOID: types.T_decimal64, wantOK: true},
+		{name: "decimal", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "1.25", wantOID: types.T_decimal64, wantWidth: 3, wantScale: 2, wantOK: true},
+		{name: "newdecimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "1.25", wantOID: types.T_decimal64, wantWidth: 3, wantScale: 2, wantOK: true},
+		{name: "integral decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "123", wantOID: types.T_decimal64, wantWidth: 3, wantOK: true},
+		{name: "wide integral decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "123456789012345678901234567890", wantOID: types.T_decimal128, wantWidth: 30, wantOK: true},
+		{name: "small exponent decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "1e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
 		{name: "decimal fallback", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "not-decimal", wantOID: types.T_decimal128, wantOK: true},
 		{name: "null", mysqlType: defines.MYSQL_TYPE_NULL, wantOID: types.T_any, wantOK: false},
 		{name: "text", mysqlType: defines.MYSQL_TYPE_VAR_STRING, value: "1", wantOID: types.T_text, wantOK: false},
@@ -361,6 +366,10 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 				test.mysqlType, test.isUnsigned, []byte(test.value))
 			require.Equal(t, test.wantOK, ok)
 			require.Equal(t, test.wantOID, got.Oid)
+			if test.wantWidth != 0 {
+				require.Equal(t, test.wantWidth, got.Width)
+				require.Equal(t, test.wantScale, got.Scale)
+			}
 		})
 	}
 }
@@ -392,7 +401,7 @@ func TestPreparedParamValuesWithRuntimeTypes(t *testing.T) {
 		byte(defines.MYSQL_TYPE_DOUBLE), 0,
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 		byte(defines.MYSQL_TYPE_NULL), 0,
-	})
+	}, []int32{0, 1, 2, 3, 4})
 	require.NoError(t, err)
 	require.True(t, specialized)
 	require.Len(t, values, 5)
@@ -409,13 +418,25 @@ func TestPreparedParamValuesWithRuntimeTypes(t *testing.T) {
 	fifth := values[4].(plan2.ParamValue)
 	require.False(t, fifth.HasRuntimeType)
 
-	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, []byte{byte(defines.MYSQL_TYPE_TINY), 0})
+	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, []byte{byte(defines.MYSQL_TYPE_TINY), 0}, []int32{0})
 	require.NoError(t, err)
 	require.True(t, specialized)
 	require.Len(t, values, 5)
+	require.True(t, values[0].(plan2.ParamValue).HasRuntimeType)
+	require.False(t, values[1].(plan2.ParamValue).HasRuntimeType)
+	require.False(t, values[2].(plan2.ParamValue).HasRuntimeType)
+
+	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_LONG), 0,
+	}, []int32{0})
+	require.NoError(t, err)
+	require.False(t, specialized)
+	require.False(t, values[0].(plan2.ParamValue).HasRuntimeType)
+	require.False(t, values[1].(plan2.ParamValue).HasRuntimeType)
 
 	cw.proc.SetPrepareParams(nil)
-	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, nil)
+	values, specialized, err = preparedParamValuesWithRuntimeTypes(cw.proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.Nil(t, values)
