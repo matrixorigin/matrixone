@@ -73,5 +73,37 @@ func TestForeachIncrementalObjectUsesGroupBounds(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, []byte{2, 3, 9, 10}, markers)
+	// Every appendable create entry at or before to is visited because an old
+	// appendable object can contain an append prepared in the incremental range.
+	require.Equal(t, []byte{1, 2, 3, 9, 10}, markers)
+}
+
+func TestForeachIncrementalObjectDropStartsAfterFrom(t *testing.T) {
+	cata := catalog.MockCatalog(nil)
+	db := catalog.MockDBEntryWithAccInfo(0, 1)
+	table := catalog.MockTableEntryWithDB(db, 2)
+
+	for _, deletedAt := range []int64{2, 3, 4, 5} {
+		created := catalog.MockCreatedObjectEntry2List(
+			table, cata, false, types.BuildTS(2, 0),
+		)
+		catalog.MockDroppedObjectEntry2List(created, types.BuildTS(deletedAt, 0))
+	}
+
+	it := table.MakeDataObjectIt()
+	defer it.Release()
+	var deletedAt []types.TS
+	err := foreachIncrementalObject(
+		&it,
+		types.BuildTS(2, 0),
+		types.BuildTS(4, 0),
+		func(entry *catalog.ObjectEntry) error {
+			deletedAt = append(deletedAt, entry.DeletedAt)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	// DeletedAt == from is excluded; DeletedAt < to is no longer visible at to;
+	// the scan continues through the group and keeps entries deleted at/after to.
+	require.Equal(t, []types.TS{types.BuildTS(4, 0), types.BuildTS(5, 0)}, deletedAt)
 }

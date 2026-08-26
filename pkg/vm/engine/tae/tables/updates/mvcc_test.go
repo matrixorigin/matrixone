@@ -16,18 +16,39 @@ package updates
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type waitTrackingTxn struct {
+	txnif.AsyncTxn
+	waited      chan struct{}
+	release     chan struct{}
+	waitOnce    sync.Once
+	releaseOnce sync.Once
+}
+
+func (txn *waitTrackingTxn) GetTxnState(wait bool) txnif.TxnState {
+	if wait {
+		txn.waitOnce.Do(func() { close(txn.waited) })
+		<-txn.release
+	}
+	return txn.AsyncTxn.GetTxnState(false)
+}
 
 func TestMutationControllerAppend(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -205,4 +226,63 @@ func TestAppendMVCCRollbackKeepsPhysicalHole(t *testing.T) {
 	assert.True(t, node.IsAborted())
 	assert.Same(t, node, h.GetAppendNodeByRowLocked(2))
 	assert.Equal(t, uint32(4), h.GetTotalRow())
+}
+
+func TestCollectAppendWaitsForTxnPrepareTS(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	h := NewAppendMVCCHandle(obj)
+
+	prepareTS := types.BuildTS(10, 0)
+	txn := &waitTrackingTxn{
+		AsyncTxn: mockTxn(),
+		waited:   make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	releaseTxn := func() { txn.releaseOnce.Do(func() { close(txn.release) }) }
+	defer releaseTxn()
+	txn.AsyncTxn.(*txnbase.Txn).PrepareTS = prepareTS
+	node, _ := h.AddAppendNodeLocked(txn, 0, 1)
+	require.Equal(t, txnif.UncommitTS, node.Prepare)
+
+	type collectResult struct {
+		selection index.RowSelection
+		commits   containers.Vector
+		aborts    containers.Vector
+	}
+	done := make(chan collectResult, 1)
+	mp := mpool.MustNewZero()
+	go func() {
+		h.RLock()
+		selection, commits, aborts := h.CollectAppendLocked(
+			prepareTS.Prev(), prepareTS, mp,
+		)
+		h.RUnlock()
+		done <- collectResult{selection, commits, aborts}
+	}()
+
+	select {
+	case <-txn.waited:
+	case <-time.After(time.Second):
+		t.Fatal("range scan did not wait on the transaction prepare timestamp")
+	}
+	h.Lock()
+	node.Prepare = prepareTS
+	node.End = prepareTS
+	node.Txn = nil
+	h.Unlock()
+	releaseTxn()
+
+	result := <-done
+	defer result.commits.Close()
+	defer result.aborts.Close()
+	require.Equal(t, uint32(1), result.selection.MaxRow)
+	require.Equal(t, 1, result.commits.Length())
+	require.Equal(t, 1, result.aborts.Length())
 }

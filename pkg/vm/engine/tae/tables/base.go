@@ -149,6 +149,42 @@ func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	x := obj.appendMVCC.GetLatestAppendPrepareTSLocked()
 	return x.GT(&startts)
 }
+
+func (obj *baseObject) WaitAppendCommittingBefore(ts types.TS, reader txnif.TxnReader) bool {
+	// Pin the memory node before touching append MVCC. Once the object is
+	// upgraded, the persisted node owns visibility and closing the old memory
+	// node releases all in-memory AppendNodes.
+	node := obj.PinNode()
+	defer node.Unref()
+	if node.IsPersisted() {
+		return false
+	}
+
+	var txns []txnif.TxnReader
+	obj.RLock()
+	obj.appendMVCC.CollectUncommittedANodesPreparedBeforeLocked(
+		ts,
+		func(node *updates.AppendNode) {
+			// A transaction must never wait for an AppendNode it created itself.
+			// This also protects callers added after the current PrePrepare path,
+			// where the transaction is still active and NeedWaitCommitting already
+			// excludes it.
+			if node.IsSameTxn(reader) {
+				return
+			}
+			txns = append(txns, node.GetTxn())
+		},
+	)
+	obj.RUnlock()
+
+	// Applying commit or rollback needs the object lock. Never wait while
+	// holding it, otherwise this reader can block the transaction it waits for.
+	for _, txn := range txns {
+		txn.GetTxnState(true)
+	}
+	return len(txns) != 0
+}
+
 func (obj *baseObject) GetFs() fileservice.FileService { return obj.rt.Fs }
 func (obj *baseObject) GetID() *common.ID              { return obj.meta.Load().AsCommonID() }
 

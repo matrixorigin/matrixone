@@ -16,6 +16,7 @@ package tables
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -25,8 +26,8 @@ import (
 type dataTable struct {
 	appendMu   sync.Mutex
 	meta       *catalog.TableEntry
-	aObj       *aobject
-	aTombstone *aobject
+	aObj       atomic.Pointer[aobject]
+	aTombstone atomic.Pointer[aobject]
 	rt         *dbutils.Runtime
 }
 
@@ -41,21 +42,20 @@ func newTable(meta *catalog.TableEntry, rt *dbutils.Runtime) *dataTable {
 }
 
 func (table *dataTable) GetHandle(isTombstone bool) data.TableHandle {
-	// Object selection is serialized by appendMu and resolved from catalog by
-	// tableHandle.GetAppender. Do not seed a txn-local handle from a cache that
-	// may point at an older full object.
-	return newHandle(table, nil, isTombstone)
+	if isTombstone {
+		return newHandle(table, table.aTombstone.Load(), true)
+	}
+	return newHandle(table, table.aObj.Load(), false)
 }
 
 func (table *dataTable) ApplyHandle(h data.TableHandle, isTombstone bool) {
 	handle := h.(*tableHandle)
-	if handle.object == nil || !handle.object.IsAppendable() {
+	if handle.object == nil {
 		return
 	}
 	if isTombstone {
-		table.aTombstone = handle.object
+		table.aTombstone.Store(handle.object)
 	} else {
-		table.aObj = handle.object
+		table.aObj.Store(handle.object)
 	}
-
 }

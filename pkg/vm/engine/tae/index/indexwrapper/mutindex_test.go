@@ -16,6 +16,7 @@ package indexwrapper
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,4 +156,71 @@ func TestGetDuplicatedRowsWindow(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
+	idx := NewMutIndex(types.T_Rowid.ToType())
+	objID := types.NewObjectid()
+	blkID := types.NewBlockidWithObjectID(&objID, 0)
+	rowID := types.NewRowid(&blkID, 42)
+
+	indexedKeys := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer indexedKeys.Close()
+	for i := 0; i < 3; i++ {
+		indexedKeys.Append(rowID, false)
+	}
+	require.NoError(t, idx.BatchUpsert(indexedKeys.GetDownstreamVector(), 0))
+
+	query := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer query.Close()
+	query.Append(rowID, false)
+	err := idx.Contains(
+		context.Background(),
+		query.GetDownstreamVector(),
+		nil,
+		&blkID,
+		func(row uint32) error {
+			if row > 0 {
+				return index.ErrNotFound
+			}
+			return nil
+		},
+		common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.True(t, query.IsNull(0))
+
+	allSkipped := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer allSkipped.Close()
+	allSkipped.Append(rowID, false)
+	err = idx.Contains(
+		context.Background(),
+		allSkipped.GetDownstreamVector(),
+		nil,
+		&blkID,
+		func(uint32) error { return index.ErrNotFound },
+		common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.False(t, allSkipped.IsNull(0))
+
+	conflicting := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer conflicting.Close()
+	conflicting.Append(rowID, false)
+	conflictErr := errors.New("prepared tombstone conflict")
+	err = idx.Contains(
+		context.Background(),
+		conflicting.GetDownstreamVector(),
+		nil,
+		&blkID,
+		func(row uint32) error {
+			if row == 2 {
+				return index.ErrNotFound
+			}
+			return conflictErr
+		},
+		common.DefaultAllocator,
+	)
+	require.ErrorIs(t, err, conflictErr)
+	require.False(t, conflicting.IsNull(0))
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -90,6 +91,20 @@ func TestValidatePersistedCommitTSVectors(t *testing.T) {
 	}
 }
 
+func TestCompactAbortRowsRemapsDeletes(t *testing.T) {
+	bat := containers.MockBatch([]types.Type{types.T_int32.ToType()}, 6, -1, nil)
+	defer bat.Close()
+	// Rows 0, 1, 3, and 4 are aborted append holes. Row 2 is a committed row
+	// deleted by a tombstone; row 5 remains visible.
+	bat.Deletes = nulls.Build(6, 0, 1, 2, 3, 4)
+	abortRows := nulls.Build(6, 0, 1, 3, 4)
+
+	compactAbortRows(bat, abortRows)
+
+	require.Equal(t, 2, bat.Length())
+	require.Equal(t, []uint64{0}, bat.Deletes.ToArray())
+}
+
 func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
@@ -145,6 +160,49 @@ func TestGetActiveRow(t *testing.T) {
 	// owner for point lookup or snapshot dedup.
 	an2.Prepare = txnif.UncommitTS
 	require.ErrorIs(t, mnode.checkConflictLocked(nil)(1), index.ErrNotFound)
+}
+
+func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+
+	mvcc := updates.NewAppendMVCCHandle(obj)
+	base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+	base.meta.Store(obj)
+	mnode := newMemoryNode(base, false)
+	node := NewNode(mnode)
+	node.Ref()
+	base.node.Store(node)
+	defer node.Unref()
+
+	startTS := types.BuildTS(1, 0)
+	prepareTS := types.BuildTS(2, 0)
+	txn := &txnbase.Txn{
+		TxnCtx: txnbase.NewTxnCtx(
+			common.NewTxnIDAllocator().Alloc(),
+			startTS,
+			types.TS{},
+		),
+	}
+	txn.Lock()
+	require.NoError(t, txn.ToPreparingLocked(prepareTS))
+	txn.Unlock()
+	appendNode, _ := mvcc.AddAppendNodeLocked(txn, 0, 1)
+	require.NoError(t, appendNode.PrepareCommit())
+
+	// The transaction is still preparing. Without the same-txn guard this call
+	// waits on its own DoneCond forever.
+	base.WaitAppendCommittingBefore(types.MaxTs(), txn)
 }
 
 func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
