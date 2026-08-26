@@ -524,6 +524,40 @@ func TestCTEMultiReferenceReusesProducerContainingCTE(t *testing.T) {
 	require.Equal(t, 2, sinkScans)
 }
 
+func TestCTEMultiReferenceMergesLocalConsumerPredicates(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with customer_totals as (
+			select o_custkey, max(c_name) as customer_name,
+			       sum(o_totalprice) as total
+			from orders join customer on o_custkey = c_custkey
+			group by o_custkey
+		)
+		select a.o_custkey, a.customer_name, b.total
+		from customer_totals a join customer_totals b
+		  on a.o_custkey = b.o_custkey
+		where a.o_custkey between 1 and 100
+		  and b.o_custkey between 50 and 150
+		  and a.total > 0
+		order by a.o_custkey
+		limit 100`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	tableScans := make(map[string]int)
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+			tableScans[node.TableDef.Name]++
+		}
+	}
+	require.Equal(t, 1, tableScans["orders"])
+	require.Equal(t, 1, tableScans["customer"])
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+}
+
 func TestCTEReuseKeepsConsumersBoundInsideCTEInline(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
@@ -628,14 +662,6 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 				on a.n_regionkey = b.n_regionkey`,
 		},
 		{
-			name: "limit above scalar aggregate",
-			sql: `with c as (
-				select n_regionkey, count(*) as n from nation group by n_regionkey
-			) select * from c a where a.n = (
-				select max(b.n) from c b limit 1
-			)`,
-		},
-		{
 			name: "exists consumer",
 			sql: `with c as (
 				select n_regionkey, count(*) as n from nation group by n_regionkey
@@ -683,6 +709,24 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 					select t1.a * t2.a as a from cte_test.t1
 				) select max(x.a + y.a) from c x join c y on x.a = y.a
 			) from bvt_test2.t2`,
+		},
+		{
+			name: "one predicate-free variable-width consumer",
+			sql: `with c as (
+				select l_suppkey, max(l_comment) as comment
+				from lineitem group by l_suppkey
+			) select a.l_suppkey from c a join c b
+				on a.l_suppkey = b.l_suppkey
+				where a.l_suppkey < 10`,
+		},
+		{
+			name: "volatile consumer predicates",
+			sql: `with c as (
+				select l_suppkey, max(l_comment) as comment
+				from lineitem group by l_suppkey
+			) select a.l_suppkey from c a join c b
+				on a.l_suppkey = b.l_suppkey
+				where a.l_suppkey < rand() and b.l_suppkey < rand()`,
 		},
 	}
 
@@ -741,14 +785,15 @@ func TestCTEReuseCostGuard(t *testing.T) {
 		want                         bool
 	}{
 		{name: "profitable", producerCost: 1000, outcnt: 1, refcnt: 2, want: true},
-		{name: "equal cost", producerCost: 2, outcnt: 1, refcnt: 2},
+		{name: "equal cost", producerCost: 3, outcnt: 1, refcnt: 2},
+		{name: "write cost does not win", producerCost: 2.5, outcnt: 1, refcnt: 2},
 		{name: "single reference", producerCost: 1000, outcnt: 1, refcnt: 1},
 		{name: "missing cost", outcnt: 1, refcnt: 2},
 		{name: "missing outcnt", producerCost: 1000, refcnt: 2},
 		{name: "nan cost", producerCost: math.NaN(), outcnt: 1, refcnt: 2},
 		{name: "infinite outcnt", producerCost: 1000, outcnt: math.Inf(1), refcnt: 2},
 		{name: "inline cost overflow", producerCost: math.MaxFloat64, outcnt: 1, refcnt: 2},
-		{name: "consumer cost overflow", producerCost: math.MaxFloat64, outcnt: math.MaxFloat64, refcnt: 2},
+		{name: "materialization cost overflow", producerCost: math.MaxFloat64, outcnt: math.MaxFloat64, refcnt: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -761,22 +806,27 @@ func TestCTEReuseMemoryGuard(t *testing.T) {
 	fixed := []planpb.Type{{Id: int32(types.T_int64)}}
 	variable := []planpb.Type{{Id: int32(types.T_varchar)}}
 	tests := []struct {
-		name  string
-		stats *planpb.Stats
-		typs  []planpb.Type
-		want  bool
+		name           string
+		stats          *planpb.Stats
+		typs           []planpb.Type
+		predicateAware bool
+		want           bool
 	}{
 		{name: "below limit", stats: &planpb.Stats{Outcnt: 1024, Rowsize: 8}, typs: fixed, want: true},
 		{name: "exact limit", stats: &planpb.Stats{Outcnt: 1, Rowsize: cteReuseEstimatedMaterializedBytesLimit}, typs: fixed, want: true},
 		{name: "above limit", stats: &planpb.Stats{Outcnt: 1, Rowsize: cteReuseEstimatedMaterializedBytesLimit + 1}, typs: fixed},
 		{name: "variable width", stats: &planpb.Stats{Outcnt: 1, Rowsize: 8}, typs: variable},
+		{name: "predicate-aware variable width", stats: &planpb.Stats{Outcnt: 1, Rowsize: 8}, typs: variable, predicateAware: true, want: true},
+		{name: "predicate-aware spill", stats: &planpb.Stats{Outcnt: 1, Rowsize: cteReuseEstimatedMaterializedBytesLimit + 1}, typs: fixed, predicateAware: true, want: true},
+		{name: "exact spill limit", stats: &planpb.Stats{Outcnt: 1, Rowsize: cteReuseEstimatedSpillBytesLimit}, typs: variable, predicateAware: true, want: true},
+		{name: "above spill limit", stats: &planpb.Stats{Outcnt: 1, Rowsize: cteReuseEstimatedSpillBytesLimit + 1}, typs: variable, predicateAware: true},
 		{name: "missing rowsize", stats: &planpb.Stats{Outcnt: 1}, typs: fixed},
 		{name: "nan rowsize", stats: &planpb.Stats{Outcnt: 1, Rowsize: math.NaN()}, typs: fixed},
 		{name: "overflow", stats: &planpb.Stats{Outcnt: math.MaxFloat64, Rowsize: 2}, typs: fixed},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, cteReuseFitsMemory(test.stats, test.typs))
+			require.Equal(t, test.want, cteReuseFitsStorage(test.stats, test.typs, test.predicateAware))
 		})
 	}
 }

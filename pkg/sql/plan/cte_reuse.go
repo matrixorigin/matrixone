@@ -23,7 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 )
 
-const cteReuseEstimatedMaterializedBytesLimit = float64(32 * mpool.MB)
+const (
+	cteReuseEstimatedMaterializedBytesLimit = float64(32 * mpool.MB)
+	// Predicate-aware reuse may deliberately trade repeated base-table work for
+	// a bounded materialized spill. The execution owner still admits every byte
+	// against the statement/CN spill budget; this planner ceiling only prevents
+	// a bad estimate from selecting an unbounded shared spool.
+	cteReuseEstimatedSpillBytesLimit = float64(8 * mpool.GB)
+)
 
 // reuseMultiReferenceCTEs converts profitable, full-drain references to one
 // producer step and one SINK_SCAN per consumer. All uncertain shapes keep the
@@ -34,12 +41,13 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 	}
 
 	for _, cteRef := range builder.cteRefs {
-		if !builder.canReuseCTE(cteRef, rootID) {
+		producerRootID, ok := builder.reusableCTEProducer(cteRef, rootID)
+		if !ok {
 			continue
 		}
 
 		producer := cteRef.occurrences[0]
-		sinkID := appendSinkNodeWithTag(builder, producer.ctx, producer.rootID, producer.rootTag)
+		sinkID := appendSinkNodeWithTag(builder, producer.ctx, producerRootID, producer.rootTag)
 		builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
 		sourceStep := builder.appendStep(sinkID)
 
@@ -52,9 +60,9 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 	return rootID
 }
 
-func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
+func (builder *QueryBuilder) reusableCTEProducer(cteRef *CTERef, rootID int32) (int32, bool) {
 	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
-		return false
+		return 0, false
 	}
 
 	first := cteRef.occurrences[0]
@@ -62,14 +70,14 @@ func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
 	for _, occurrence := range cteRef.occurrences {
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
-			return false
+			return 0, false
 		}
 		allOccurrencesAreCurrentRoleClosures = allOccurrencesAreCurrentRoleClosures &&
 			builder.cteSubtreeIsCurrentRoleClosure(occurrence.rootID, make(map[int32]bool))
 	}
 
 	if cteRef.hasNestedUse && !allOccurrencesAreCurrentRoleClosures {
-		return false
+		return 0, false
 	}
 	if allOccurrencesAreCurrentRoleClosures {
 		// This exemption is deliberately limited to the one-column closure
@@ -78,36 +86,67 @@ func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
 		// save its internal SQL work. A scan, join, filter, aggregate, variable-
 		// width projection, or any other surrounding operation must use the
 		// ordinary full-drain, memory, and profitability guards below.
-		return builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
+		return first.rootID, builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
 	}
 	if !builder.cteConsumersFullyDrain(rootID, cteRef.occurrences) {
-		return false
+		return 0, false
 	}
 
-	ReCalcNodeStats(first.rootID, builder, true, false, true)
-	stats := builder.qry.Nodes[first.rootID].Stats
-	producerCost := builder.cteProducerCost(first.rootID, make(map[int32]bool))
+	producerRootID := first.rootID
+	sharedPredicate, predicateAware := builder.cteSharedConsumerPredicate(rootID, cteRef.occurrences)
+	discardProducerFilter := func() {
+		if !predicateAware || producerRootID != int32(len(builder.qry.Nodes)-1) {
+			return
+		}
+		builder.qry.Nodes = builder.qry.Nodes[:producerRootID]
+		builder.ctxByNode = builder.ctxByNode[:producerRootID]
+	}
+	if predicateAware {
+		producerRootID = builder.appendNode(&planpb.Node{
+			NodeType:   planpb.Node_FILTER,
+			Children:   []int32{producerRootID},
+			FilterList: []*planpb.Expr{sharedPredicate},
+		}, first.ctx)
+	}
+
+	ReCalcNodeStats(producerRootID, builder, true, false, true)
+	stats := builder.qry.Nodes[producerRootID].Stats
+	producerCost := builder.cteProducerCost(producerRootID, make(map[int32]bool))
 	if stats == nil || stats.Cost <= 0 || producerCost <= 0 ||
 		!finitePositive(stats.Cost) || !finitePositive(producerCost) ||
-		!cteReuseFitsMemory(stats, first.types) {
-		return false
+		!cteReuseFitsStorage(stats, first.types, predicateAware) {
+		discardProducerFilter()
+		return 0, false
 	}
 
 	refCount := float64(len(cteRef.occurrences))
-	return cteReuseIsProfitable(producerCost, stats.Outcnt, refCount)
+	if !cteReuseIsProfitable(producerCost, stats.Outcnt, refCount) {
+		discardProducerFilter()
+		return 0, false
+	}
+	return producerRootID, true
 }
 
-func cteReuseFitsMemory(stats *planpb.Stats, outputTypes []planpb.Type) bool {
+func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, predicateAware bool) bool {
 	if stats == nil || !finitePositive(stats.Outcnt) || !finitePositive(stats.Rowsize) {
 		return false
 	}
+	estimatedBytes := stats.Outcnt * stats.Rowsize
+	if !finitePositive(estimatedBytes) {
+		return false
+	}
+
+	fixedWidth := true
 	for i := range outputTypes {
 		if !types.T(outputTypes[i].Id).IsFixedLen() {
-			return false
+			fixedWidth = false
+			break
 		}
 	}
-	estimatedBytes := stats.Outcnt * stats.Rowsize
-	return finitePositive(estimatedBytes) && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit
+	if fixedWidth && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit {
+		return true
+	}
+	return predicateAware && estimatedBytes <= cteReuseEstimatedSpillBytesLimit
 }
 
 func finitePositive(value float64) bool {
@@ -121,9 +160,12 @@ func cteReuseIsProfitable(producerCost, producerOutcnt, referenceCount float64) 
 		return false
 	}
 	inlineCost := referenceCount * producerCost
-	consumerCost := referenceCount * producerOutcnt
-	sharedCost := producerCost + consumerCost
-	if !finitePositive(inlineCost) || !finitePositive(consumerCost) || !finitePositive(sharedCost) {
+	// A shared spool pays once to write every producer row and once per
+	// consumer to read it. Counting the write is especially important for a
+	// predicate-aware producer that may cross the in-memory boundary and spill.
+	materializationCost := (referenceCount + 1) * producerOutcnt
+	sharedCost := producerCost + materializationCost
+	if !finitePositive(inlineCost) || !finitePositive(materializationCost) || !finitePositive(sharedCost) {
 		return false
 	}
 	return sharedCost < inlineCost
@@ -333,12 +375,15 @@ func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []
 			}
 			seen[path] = true
 			node := builder.qry.Nodes[path.nodeID]
-			if node.Limit != nil || node.Offset != nil {
-				return false
-			}
 			if node.NodeType == planpb.Node_AGG || node.NodeType == planpb.Node_SORT ||
 				node.NodeType == planpb.Node_DISTINCT || node.NodeType == planpb.Node_WINDOW {
 				path.drained = true
+			}
+			// LIMIT/OFFSET can stop a consumer early only before an operator that
+			// must read its complete input. A Top-N SORT or an aggregate still
+			// drains its CTE input even when its own output is limited.
+			if !path.drained && (node.Limit != nil || node.Offset != nil) {
+				return false
 			}
 			if !path.drained && (node.NodeType == planpb.Node_APPLY ||
 				node.NodeType == planpb.Node_JOIN && (node.JoinType == planpb.Node_SEMI ||
@@ -352,6 +397,189 @@ func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []
 		}
 	}
 	return true
+}
+
+// cteSharedConsumerPredicate returns a safe superset predicate for one shared
+// producer. Every occurrence must have a deterministic predicate that depends
+// only on that occurrence's output. The original consumer predicates remain in
+// place, so SQL three-valued logic is preserved: if a row can pass consumer i,
+// it necessarily passes P1 OR ... OR Pn at the producer.
+func (builder *QueryBuilder) cteSharedConsumerPredicate(
+	rootID int32,
+	occurrences []cteOccurrence,
+) (*planpb.Expr, bool) {
+	parents := make(map[int32][]int32)
+	reachable := make(map[int32]bool)
+	builder.collectCTEParents(rootID, parents, reachable)
+
+	localPredicates := make([][]*planpb.Expr, len(occurrences))
+	commonColumns := make(map[int32]bool)
+	for i, occurrence := range occurrences {
+		if !reachable[occurrence.rootID] {
+			return nil, false
+		}
+		localPredicates[i] = builder.cteOccurrenceLocalPredicates(occurrence, parents)
+		constrainedColumns := make(map[int32]bool)
+		for _, predicate := range localPredicates[i] {
+			if colPos, ok := ctePredicateSingleOutputColumn(predicate, occurrence.rootTag); ok {
+				constrainedColumns[colPos] = true
+			}
+		}
+		if len(constrainedColumns) == 0 {
+			return nil, false
+		}
+		if i == 0 {
+			for colPos := range constrainedColumns {
+				commonColumns[colPos] = true
+			}
+		} else {
+			for colPos := range commonColumns {
+				if !constrainedColumns[colPos] {
+					delete(commonColumns, colPos)
+				}
+			}
+		}
+	}
+	if len(commonColumns) == 0 {
+		return nil, false
+	}
+
+	disjuncts := make([]*planpb.Expr, 0, len(occurrences))
+	producerTag := occurrences[0].rootTag
+	for i, occurrence := range occurrences {
+		predicates := make([]*planpb.Expr, 0, len(localPredicates[i]))
+		for _, predicate := range localPredicates[i] {
+			colPos, ok := ctePredicateSingleOutputColumn(predicate, occurrence.rootTag)
+			if !ok || !commonColumns[colPos] {
+				continue
+			}
+			predicate = DeepCopyExpr(predicate)
+			replaceColRefTag(predicate, occurrence.rootTag, producerTag)
+			predicates = append(predicates, predicate)
+		}
+		conjunct, ok := builder.combineCTEPredicates("and", predicates)
+		if !ok {
+			return nil, false
+		}
+		disjuncts = append(disjuncts, conjunct)
+	}
+
+	return builder.combineCTEPredicates("or", disjuncts)
+}
+
+// ctePredicateSingleOutputColumn identifies routing predicates such as
+// channel='web', year=2025 or key BETWEEN 1 AND 10. Requiring the same output
+// column to be constrained by every consumer keeps optional predicates (for
+// example a HAVING condition used by only half of the consumers) out of the
+// shared producer, where they can otherwise block deeper pushdown.
+func ctePredicateSingleOutputColumn(expr *planpb.Expr, tag int32) (int32, bool) {
+	var colPos int32
+	found := false
+	var visit func(*planpb.Expr) bool
+	visit = func(current *planpb.Expr) bool {
+		if current == nil {
+			return true
+		}
+		switch item := current.Expr.(type) {
+		case *planpb.Expr_Col:
+			if item.Col.RelPos != tag {
+				return false
+			}
+			if !found {
+				colPos = item.Col.ColPos
+				found = true
+				return true
+			}
+			return colPos == item.Col.ColPos
+		case *planpb.Expr_F:
+			for _, arg := range item.F.Args {
+				if !visit(arg) {
+					return false
+				}
+			}
+		case *planpb.Expr_List:
+			for _, value := range item.List.List {
+				if !visit(value) {
+					return false
+				}
+			}
+		case *planpb.Expr_Corr, *planpb.Expr_Sub, *planpb.Expr_W:
+			return false
+		}
+		return true
+	}
+	return colPos, visit(expr) && found
+}
+
+// cteOccurrenceLocalPredicates walks only through operators across which a
+// selection on one input can safely move. It intentionally ignores predicates
+// involving another CTE occurrence; those are join semantics, not producer
+// bounds. CTE occurrences are trees before reuse, but the parent walk keeps a
+// visited set to fail closed if a future binder introduces a DAG here.
+func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
+	occurrence cteOccurrence,
+	parents map[int32][]int32,
+) []*planpb.Expr {
+	tagSet := map[int32]bool{occurrence.rootTag: true}
+	predicates := make([]*planpb.Expr, 0, 2)
+	queue := append([]int32(nil), parents[occurrence.rootID]...)
+	seen := make(map[int32]bool)
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		if seen[nodeID] {
+			return nil
+		}
+		seen[nodeID] = true
+		node := builder.qry.Nodes[nodeID]
+
+		var candidates []*planpb.Expr
+		switch node.NodeType {
+		case planpb.Node_FILTER:
+			if node.FilterIsBarrier || node.Limit != nil || node.Offset != nil {
+				continue
+			}
+			candidates = node.FilterList
+		case planpb.Node_JOIN:
+			if node.JoinType != planpb.Node_INNER || node.Limit != nil || node.Offset != nil {
+				continue
+			}
+			candidates = append(candidates, node.OnList...)
+			candidates = append(candidates, node.FilterList...)
+		default:
+			continue
+		}
+
+		for _, predicate := range candidates {
+			if predicate == nil || !containsTag(predicate, occurrence.rootTag) ||
+				!containsOnlyTags(predicate, tagSet) || !exprCanRemoveProject(predicate) {
+				continue
+			}
+			predicates = append(predicates, predicate)
+		}
+		queue = append(queue, parents[nodeID]...)
+	}
+	return predicates
+}
+
+func (builder *QueryBuilder) combineCTEPredicates(
+	name string,
+	predicates []*planpb.Expr,
+) (*planpb.Expr, bool) {
+	if len(predicates) == 0 {
+		return nil, false
+	}
+	combined := predicates[0]
+	for i := 1; i < len(predicates); i++ {
+		var err error
+		combined, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(), name, []*planpb.Expr{combined, predicates[i]},
+		)
+		if err != nil {
+			return nil, false
+		}
+	}
+	return combined, true
 }
 
 func (builder *QueryBuilder) collectCTEParents(nodeID int32, parents map[int32][]int32, seen map[int32]bool) {

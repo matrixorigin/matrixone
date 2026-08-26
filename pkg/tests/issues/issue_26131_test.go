@@ -60,6 +60,23 @@ where s_suppkey = supplier_no
   and total_revenue = (select max(total_revenue) from revenue0)
 order by s_suppkey`
 
+const predicateAwareSharedCTE = `
+with supplier_totals as (
+    select l_suppkey,
+           max(l_comment) as comment,
+           sum(l_extendedprice) as total
+    from lineitem
+    group by l_suppkey
+)
+select a.l_suppkey, a.comment, a.total, b.total
+from supplier_totals a join supplier_totals b
+  on a.l_suppkey = b.l_suppkey
+where a.l_suppkey between 1 and 42
+  and b.l_suppkey between 1 and 100
+  and a.total > 0
+order by a.l_suppkey
+limit 10`
+
 func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -82,13 +99,13 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create database "+database)
 		execSQLRequire(t, ctx, db, "use "+database)
 		execSQLRequire(t, ctx, db, "create table supplier (s_suppkey int primary key, s_name varchar(32))")
-		execSQLRequire(t, ctx, db, "create table lineitem (l_suppkey int, l_extendedprice decimal(15,2), l_discount decimal(15,2), l_shipdate date)")
+		execSQLRequire(t, ctx, db, "create table lineitem (l_suppkey int, l_extendedprice decimal(15,2), l_discount decimal(15,2), l_shipdate date, l_comment varchar(32))")
 		execSQLRequire(t, ctx, db, "insert into supplier values (1, 'supplier-1'), (42, 'supplier-42')")
 		// Two rows per group preserve real SUM accumulation. The shared-CTE
 		// topology is asserted from EXPLAIN below and does not depend on volume.
 		execSQLRequire(t, ctx, db, `insert into lineitem values
-			(1, 1, 0, '1995-12-15'), (1, 1, 0, '1995-12-15'),
-			(42, 2, 0, '1995-12-15'), (42, 2, 0, '1995-12-15')`)
+			(1, -1, 0, '1995-12-15', 'supplier-1-a'), (1, -1, 0, '1995-12-15', 'supplier-1-b'),
+			(42, 2, 0, '1995-12-15', 'supplier-42-a'), (42, 2, 0, '1995-12-15', 'supplier-42-b')`)
 		execSQLRequire(t, ctx, db, "analyze table supplier, lineitem")
 
 		planText := explainSQL(t, ctx, db, "explain "+issue26131Q15)
@@ -129,6 +146,28 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.False(t, nestedRows.Next())
 		require.NoError(t, nestedRows.Err())
 		require.NoError(t, nestedRows.Close())
+
+		predicatePlanText := explainSQL(t, ctx, db, "explain "+predicateAwareSharedCTE)
+		require.Equal(t, 1, strings.Count(predicatePlanText, ".lineitem"),
+			"consumer predicates must bound one variable-width CTE producer:\n%s", predicatePlanText)
+		require.Equal(t, 2, strings.Count(predicatePlanText, "Sink Scan"),
+			"both filtered consumers must read the shared producer:\n%s", predicatePlanText)
+		require.Contains(t, predicatePlanText, "l_suppkey BETWEEN 1 AND 42 or lineitem.l_suppkey BETWEEN 1 AND 100",
+			"the producer must retain the union of both consumer predicates:\n%s", predicatePlanText)
+
+		predicateRows, err := db.QueryContext(ctx, predicateAwareSharedCTE)
+		require.NoError(t, err)
+		defer predicateRows.Close()
+		require.True(t, predicateRows.Next())
+		var leftRevenue, rightRevenue float64
+		require.NoError(t, predicateRows.Scan(&supplierKey, &supplierName, &leftRevenue, &rightRevenue))
+		require.Equal(t, 42, supplierKey)
+		require.Equal(t, "supplier-42-b", supplierName)
+		require.Equal(t, 4.0, leftRevenue)
+		require.Equal(t, 4.0, rightRevenue)
+		require.False(t, predicateRows.Next())
+		require.NoError(t, predicateRows.Err())
+		require.NoError(t, predicateRows.Close())
 	})
 }
 
