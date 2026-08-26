@@ -96,7 +96,10 @@ TEST(DeviceMemoryGovernor, SecondClaimSeesTheFirst) {
     // The whole point: an in-flight claim is invisible to cudaMemGetInfo, so it
     // must be visible through the ledger instead. Claim ~all of the budget,
     // then verify a second claim of the same size is refused.
-    const size_t budget = free_now() / 10 * 6;
+    // Through the governor's own budget_bytes, not a restated fraction: this
+    // test hard-coded 6/10 and silently stopped testing anything when the
+    // default moved to kBudgetPercent -- both claims below started fitting.
+    const size_t budget = device_memory_governor::budget_bytes(free_now(), 0);
     const size_t half   = budget / 2 + (1u << 20);  // just over half the budget
 
     auto first = device_memory_governor::reserve(half, "first");
@@ -125,7 +128,10 @@ TEST(DeviceMemoryGovernor, ConcurrentClaimsNeverExceedTheBudget) {
     // The check-and-claim is a CAS, so N threads racing for a budget that fits
     // only K of them must admit at most K. Without the CAS every thread reads
     // the same ledger value and they all pass.
-    const size_t budget = free_now() / 10 * 6;
+    // Through the governor's own budget_bytes, not a restated fraction: this
+    // test hard-coded 6/10 and silently stopped testing anything when the
+    // default moved to kBudgetPercent -- both claims below started fitting.
+    const size_t budget = device_memory_governor::budget_bytes(free_now(), 0);
     const int    kThreads = 16;
     const size_t each   = budget / 4 + (1u << 20);   // only 3 can fit
     const size_t cap    = budget;
