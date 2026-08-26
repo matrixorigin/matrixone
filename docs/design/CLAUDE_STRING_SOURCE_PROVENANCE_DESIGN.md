@@ -141,40 +141,40 @@ Group/aggregate outer preflight 必须覆盖：new row、existing row、loser、
 
 明确接受标准：1024-row INT64 `BenchmarkUnionBatchNoMetadata` 与无本功能基线同机同模式中位数比值不高于 2.0，且 0 allocation；uniform scalar 相对 source-free 当前实现不高于 2.0。任何超过阈值的变化阻塞合并。mixed benchmark 用于监控线性斜率和重复扫描，不与 source-free 阈值比较。
 
-## 7. MORPC v30/v31 兼容、降级与回滚
+## 7. MORPC v31/v32 兼容、降级与回滚
 
 ### 7.1 Capability ownership
 
-- MORPC v29 归属 FOUND_ROWS connection migration state。
-- MORPC v30 归属 prepared numeric-prefix common-type cast，不代表独立 StringSource capability。
-- MORPC v31 是第一个声明独立 StringSource batch/process/group-state transport 的版本。
-- sender 和 remote-result receiver 必须使用同一个 v31 gate；未知 service/version fail closed。
+- MORPC v30 归属 prepared numeric-prefix common-type cast。
+- MORPC v31 归属 batched multi-table remote transaction unlock，不代表独立 StringSource capability。
+- MORPC v32 是第一个声明独立 StringSource batch/process/group-state transport 的版本。
+- sender 和 remote-result receiver 必须使用同一个 v32 gate；未知 service/version fail closed。
 
 ### 7.2 混合版本矩阵
 
 | Sender / receiver capability | 行为 |
 |---|---|
-| 双方 >= v31 | 编码并恢复 StringSource；非法值拒绝 |
-| 任一方仅 v30 | 丢弃 source-only metadata，不写 v31 trailer；numeric-prefix v30 行为保持不变 |
+| 双方 >= v32 | 编码并恢复 StringSource；非法值拒绝 |
+| 任一方仅 v31 | 丢弃 source-only metadata，不写 v32 trailer；remote-unlock v31 行为保持不变 |
 | 老 peer 且存在旧 prepared metadata incompatibility | 继续按旧 gate 拒绝，不能因 source downgrade 放宽 |
 | local/spill codec | 使用显式 local framing；reader 对版本、row count 和 enum 严格验证 |
 
 ### 7.3 Rollback
 
-实现 rollback 不需要 catalog migration：停用/回退到 v30 peer 时 sender 不发送 v31 source metadata，远端安全退化为 `Expression`，SQL value bytes、NULL 和 row count 不改变。回滚损失的是不可见 provenance 精度，不产生无法读取的持久化数据。恢复 v31 后仅新传输值重新具有精确来源；不尝试反推历史来源。
+实现 rollback 不需要 catalog migration：停用/回退到 v31 peer 时 sender 不发送 v32 source metadata，远端安全退化为 `Expression`，SQL value bytes、NULL 和 row count 不改变。回滚损失的是不可见 provenance 精度，不产生无法读取的持久化数据。恢复 v32 后仅新传输值重新具有精确来源；不尝试反推历史来源。
 
 Planner protobuf 新字段使用 backward-compatible default/offset encoding：旧 payload 的零值保持原有 Expression 语义；旧 reader 忽略未知字段。生成文件必须由 protobuf tooling 产生。
 
 ## 8. Rollout、fallback 与可观测性
 
 1. 先以 typed UT 和 local codec 验证五类来源、NULL、mixed、invalid、reuse；
-2. 再启用 v31 sender/receiver capability，混合版本矩阵作为 merge gate；
+2. 再启用 v32 sender/receiver capability，混合版本矩阵作为 merge gate；
 3. BVT 只证明 SQL 路径可达、bytes/NULL/row count 不回退；来源精度由 typed oracle 证明；
 4. benchmark 阈值阻止 source-free 热路径回退。
 
-无需用户配置。安全 fallback 是协商至 v30 并丢弃 source-only metadata。诊断依赖 deterministic decode error、MORPC negotiated version、现有 allocation-account telemetry 以及对应 typed test；不在 per-row 热路径增加日志或高基数指标。
+无需用户配置。安全 fallback 是协商至 v31 并丢弃 source-only metadata。诊断依赖 deterministic decode error、MORPC negotiated version、现有 allocation-account telemetry 以及对应 typed test；不在 per-row 热路径增加日志或高基数指标。
 
-若上线后发现来源 metadata 引发 correctness 或性能问题，可先将 remote capability gate 回退到 v30，保留本地来源语义；若本地也需回滚，则回退该实现 commit。由于无 catalog/on-disk migration，rollback 不需要数据修复。
+若上线后发现来源 metadata 引发 correctness 或性能问题，可先将 remote capability gate 回退到 v31，保留本地来源语义；若本地也需回滚，则回退该实现 commit。由于无 catalog/on-disk migration，rollback 不需要数据修复。
 
 ## 9. 安全与隔离
 
@@ -189,7 +189,7 @@ StringSource 是内部枚举，不包含用户文本、secret、地址或 tenant
 | sort/shuffle/compact/reset | row-transform 与 lifecycle UT |
 | publication atomicity | reject-next-allocation、future row、existing row、reverse-order UT |
 | group/aggregate commit | Group/MergeGroup spill/retry + aggregate fill/merge UT |
-| codec compatibility | v30 negative、v31 positive、invalid/reuse、buffered/streaming UT |
+| codec compatibility | v31 negative、v32 positive、invalid/reuse、buffered/streaming UT |
 | public SQL reachability | StringSource provenance BVT；bytes/NULL/row-count oracle |
 | hot path | no-metadata/uniform/mixed benchmarks，0 alloc 与阈值检查 |
 | generated protobuf | generator output、build/vet/round-trip UT |
@@ -198,13 +198,13 @@ BVT 不作为内部 source 的直接 oracle，因为现有 SQL 函数不读取�
 
 ## 11. 风险、权衡与决策记录
 
-1. **v30 peer 会丢失来源精度**：接受；peer 不具备 StringSource capability，保留 SQL value 与 numeric-prefix v30 行为优先。旧 prepared incompatibility 仍拒绝。
+1. **v31 peer 会丢失来源精度**：接受；peer 不具备 StringSource capability，保留 SQL value 与 remote-unlock v31 行为优先。旧 prepared incompatibility 仍拒绝。
 2. **mixed row 增加 1 byte/row**：接受；仅 mixed vector 按需付费，受 row capacity 和 allocation account 约束。
 3. **Expression 同时表示真实 Expression owner 与 conservative mixed merge**：接受；该枚举是 owner category，不提供贡献者集合审计。
 4. **BVT 不能直接观察内部来源**：接受；typed owner oracle 与 public bytes/NULL reachability 分工，避免新增用户 API。
 5. **不增加 feature flag**：接受；wire 已 capability-gated，本地表示 backward compatible，额外配置会引入双语义状态和长期维护成本。
 
-无阻塞开放问题。若审批者改变 v30 downgrade、merge rule、sidecar bound 或性能阈值，必须先更新本文并重新进行受影响设计审批，再调整实现。
+无阻塞开放问题。若审批者改变 v31 downgrade、merge rule、sidecar bound 或性能阈值，必须先更新本文并重新进行受影响设计审批，再调整实现。
 
 ## 12. 设计审批与实现符合性
 
@@ -215,7 +215,7 @@ BVT 不作为内部 source 的直接 oracle，因为现有 SQL 函数不读取�
 - 独立来源轴及 selected/merge rule；
 - scalar + on-demand sidecar owner/bound；
 - commit 前 admission 与 retain/finalize 生命周期；
-- MORPC v30/v31 mixed-version、downgrade 与 rollback；
+- MORPC v31/v32 mixed-version、downgrade 与 rollback；
 - source-free/uniform 性能 acceptance threshold；
 - rollout、fallback、observability 和验证矩阵。
 

@@ -66,8 +66,9 @@ const (
 	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
 	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
-	MORPCVersion31     int64 = 31 // independent prepared-parameter string source
-	MORPCLatestVersion       = MORPCVersion31
+	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
+	MORPCVersion32     int64 = 32 // independent prepared-parameter string source
+	MORPCLatestVersion       = MORPCVersion32
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
