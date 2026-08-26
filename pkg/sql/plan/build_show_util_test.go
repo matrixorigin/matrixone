@@ -96,7 +96,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				KEY IDX_RoundId (ROUND_ID),
 				KEY IDX_UserId_EndTime (USER_ID,END_TIME)
 				)`,
-			want: "CREATE TABLE `t_log` (\n  `LOG_ID` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `ROUND_ID` bigint unsigned NOT NULL,\n  `USER_ID` int unsigned NOT NULL,\n  `USER_IP` int unsigned DEFAULT NULL,\n  `END_TIME` datetime NOT NULL,\n  `USER_TYPE` int DEFAULT NULL,\n  `APP_ID` int DEFAULT NULL,\n  PRIMARY KEY (`LOG_ID`,`END_TIME`),\n  KEY `idx_endtime` (`END_TIME`),\n  KEY `idx_roundid` (`ROUND_ID`),\n  KEY `idx_userid_endtime` (`USER_ID`,`END_TIME`)\n)",
+			want: "CREATE TABLE `t_log` (\n  `LOG_ID` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `ROUND_ID` bigint unsigned NOT NULL,\n  `USER_ID` int unsigned NOT NULL,\n  `USER_IP` int unsigned DEFAULT NULL,\n  `END_TIME` datetime NOT NULL,\n  `USER_TYPE` int DEFAULT NULL,\n  `APP_ID` int DEFAULT NULL,\n  PRIMARY KEY (`LOG_ID`,`END_TIME`),\n  KEY `IDX_EndTime` (`END_TIME`),\n  KEY `IDX_RoundId` (`ROUND_ID`),\n  KEY `IDX_UserId_EndTime` (`USER_ID`,`END_TIME`)\n)",
 		},
 		{
 			name: "test5",
@@ -288,7 +288,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.False(t, visibility["uq_invisible"])
 
 	got, _, err := constructCreateTableSQL(
-		&mock.ctxt, tableDef, nil, true, nil, true,
+		&mock.ctxt, tableDef, nil, true, nil, true, nil,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
@@ -1101,11 +1101,20 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 }
 
 func TestFormatColTypeTinyText(t *testing.T) {
-	require.Equal(t, "TINYTEXT", FormatColType(plan.Type{
-		Id:    int32(types.T_text),
-		Width: types.MaxTinyTextLen,
-	}))
-	require.Equal(t, "TEXT", FormatColType(plan.Type{Id: int32(types.T_text)}))
+	for _, tc := range []struct {
+		width int32
+		want  string
+	}{
+		{types.MaxTinyTextLen, "TINYTEXT"},
+		{types.MaxMediumTextLen, "MEDIUMTEXT"},
+		{types.MaxLongTextLen, "LONGTEXT"},
+		{0, "TEXT"},
+	} {
+		require.Equal(t, tc.want, FormatColType(plan.Type{
+			Id:    int32(types.T_text),
+			Width: tc.width,
+		}))
+	}
 }
 
 func TestFormatColTypeArrayMetadata(t *testing.T) {

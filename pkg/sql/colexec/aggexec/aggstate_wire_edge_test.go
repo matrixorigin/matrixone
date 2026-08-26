@@ -57,6 +57,13 @@ func TestAccountedAggregateStableAndSpillWireRejectTruncation(t *testing.T) {
 				return buildFixedVec(t, mp, types.T_int64.ToType(), []int64{9, 1, 5, 8})
 			},
 		},
+		{
+			name: "append-only-median", id: AggIdOfMedian,
+			param: types.T_int64.ToType(),
+			build: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+				return buildFixedVec(t, mp, types.T_int64.ToType(), []int64{9, 1, 5, 8})
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -3,13 +3,13 @@ show table_number from mo_task;
 5
 show table_number from information_schema;
 ➤ Number of tables in information_schema[-5,64,0]  𝄀
-25
+26
 show table_number from mysql;
 ➤ Number of tables in mysql[-5,64,0]  𝄀
 6
 show table_number from mo_catalog;
-Number of tables in mo_catalog
-63
+➤ Number of tables in mo_catalog[-5,64,0]  𝄀
+65
 show table_number from system;
 [unknown result because it is related to issue#23182]
 use mo_task;
@@ -344,13 +344,13 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 ➤ Number of tables in information_schema[-5,64,0]  𝄀
-25
+26
 show table_number from mysql;
 ➤ Number of tables in mysql[-5,64,0]  𝄀
 6
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-41
+43
 show table_number from system_metrics;
 ➤ Number of tables in system_metrics[-5,64,0]  𝄀
 11

@@ -961,6 +961,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return stats, err
+	}
 
 	// check if the pitr exists
 	tenantInfo := ses.GetTenantInfo()
@@ -1094,6 +1097,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			); rtnErr != nil {
 				return rtnErr
 			}
+			if rtnErr = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
+				return rtnErr
+			}
 
 			// check account exists or not
 			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
@@ -1110,6 +1116,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				isNeedToCleanToDatabase,
 			)
 			if rtnErr != nil {
+				return rtnErr
+			}
+			if rtnErr = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
 				return rtnErr
 			}
 
@@ -1165,18 +1174,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		); err != nil {
 			return stats, err
 		}
-		if err = rejectLifecycleArchiveRestoreScope(
-			ctx,
-			bh,
-			lifecycleArchiveRestoreScope{
-				level:             restoreLevel,
-				accountID:         tenantInfo.GetTenantID(),
-				databaseName:      dbName,
-				tableName:         tblName,
-				rejectTTLBindings: restoreLevel == tree.RESTORELEVELACCOUNT,
-			},
-			"RESTORE PITR",
-		); err != nil {
+	}
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
 			return stats, err
 		}
 	}
@@ -1270,6 +1270,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			tenantInfo.GetTenantID(),
 			tenantInfo.GetTenantID(),
 		); err != nil {
+			return
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID()); err != nil {
 			return
 		}
 	}

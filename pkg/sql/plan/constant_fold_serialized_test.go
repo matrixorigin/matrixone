@@ -316,6 +316,143 @@ func TestConstantFoldPreservesSerializedListProvenance(t *testing.T) {
 	require.True(t, folded.GetVec().GetIsSerialized())
 }
 
+func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binaryType := planpb.Type{
+		Id:      int32(types.T_varbinary),
+		Charset: uint32(types.CharsetBinary),
+	}
+	literal := func(form planpb.StringLiteralForm) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: binaryType,
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value:       &planpb.Literal_Sval{Sval: "same-bytes"},
+				LiteralForm: form,
+			}},
+		}
+	}
+	crossDomainList := &planpb.Expr{
+		Typ: binaryType,
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			literal(planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+			literal(planpb.StringLiteralForm_STRING_LITERAL_NONE),
+		}}},
+	}
+
+	required, err := planpb.RequiresMORPCVersion23StringProvenance(crossDomainList)
+	require.NoError(t, err)
+	require.True(t, required)
+
+	foldWithRule := func() *planpb.Expr {
+		node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(crossDomainList)}}
+		rule.NewConstantFold(false).Apply(node, nil, proc)
+		return node.ProjectList[0]
+	}
+	foldWithPublicAPI := func() *planpb.Expr {
+		folded, foldErr := ConstantFold(
+			batch.EmptyForConstFoldBatch, DeepCopyExpr(crossDomainList), proc, false, true,
+		)
+		require.NoError(t, foldErr)
+		return folded
+	}
+
+	for name, folded := range map[string]*planpb.Expr{
+		"rule":   foldWithRule(),
+		"public": foldWithPublicAPI(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NotNil(t, folded.GetList(),
+				"LiteralVec cannot encode per-item runtime string domains")
+			requiredAfterFold, requireErr := planpb.RequiresMORPCVersion23StringProvenance(folded)
+			require.NoError(t, requireErr)
+			require.True(t, requiredAfterFold)
+
+			result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+				proc, folded, []*batch.Batch{batch.EmptyForConstFoldBatch},
+			)
+			require.NoError(t, evalErr)
+			defer free()
+			require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
+			require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(1))
+		})
+	}
+
+	textType := planpb.Type{Id: int32(types.T_varchar)}
+	ordinaryList := &planpb.Expr{
+		Typ: textType,
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{
+			Typ: textType,
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value:       &planpb.Literal_Sval{Sval: "ordinary"},
+				LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
+			}},
+		}}}},
+	}
+	foldedControl, err := ConstantFold(
+		batch.EmptyForConstFoldBatch, ordinaryList, proc, false, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, foldedControl.GetVec(), "same-domain list keeps the existing fold fast path")
+}
+
+func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantDomain types.RuntimeStringDomain
+		wantFold   bool
+	}{
+		{name: "if text to binary", sql: "select if(true, 'selected', cast('fallback' as varbinary))", wantDomain: types.RuntimeStringText, wantFold: true},
+		{name: "case runtime control", sql: "select case when true then 'selected' else cast('fallback' as varbinary) end", wantDomain: types.RuntimeStringText},
+		{name: "coalesce binary to text", sql: "select coalesce(_binary'selected', cast('fallback' as char))", wantDomain: types.RuntimeStringBinary, wantFold: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
+			require.NoError(t, err)
+			pl, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			require.NotEmpty(t, query.Steps)
+			root := query.Nodes[query.Steps[len(query.Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			expr := root.ProjectList[0]
+
+			foldWithRule := func() *planpb.Expr {
+				node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(expr)}}
+				rule.NewConstantFold(false).Apply(node, nil, ctx.GetProcess())
+				return node.ProjectList[0]
+			}
+			foldWithPublicAPI := func() *planpb.Expr {
+				folded, foldErr := ConstantFold(
+					batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), ctx.GetProcess(), false, true)
+				require.NoError(t, foldErr)
+				return folded
+			}
+
+			for name, folded := range map[string]*planpb.Expr{
+				"rule":   foldWithRule(),
+				"public": foldWithPublicAPI(),
+			} {
+				t.Run(name, func(t *testing.T) {
+					if test.wantFold {
+						require.NotNil(t, folded.GetLit())
+					} else {
+						require.NotNil(t, folded.GetF())
+					}
+					result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+						ctx.GetProcess(), folded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+					require.NoError(t, evalErr)
+					defer free()
+					require.Equal(t, "selected", result.GetStringAt(0))
+					require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
+				})
+			}
+		})
+	}
+}
+
 func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {
 	var found *planpb.Expr
 	var visit func(*planpb.Expr)

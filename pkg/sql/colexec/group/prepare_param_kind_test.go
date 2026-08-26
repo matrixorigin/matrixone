@@ -209,6 +209,61 @@ func TestPrepareParamKindTrailerV1ScalarRoundTrip(t *testing.T) {
 	require.True(t, seen)
 }
 
+func TestPrepareParamKindTrailerV4UniformTextUsesScalarEncoding(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte("selected"), 65536, mp)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	}
+	var states aggexec.PrepareParamKindStates
+	states.Reset(aggs)
+	source, err := newPrepareParamKindRowsSource(vec, nil)
+	require.NoError(t, err)
+	require.Zero(t, source.rowCount)
+	require.True(t, source.summary.textString)
+
+	var encoded bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &encoded, aggs, &states,
+		[]prepareParamKindRowsSource{source}))
+	require.Equal(t, prepareParamKindTrailerDomainVersion, encoded.Bytes()[3])
+	require.Less(t, encoded.Len(), 64)
+
+	var decoded aggexec.PrepareParamKindStates
+	decoded.Reset(aggs)
+	summaries, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(encoded.Bytes()), 1, &decoded,
+		[]prepareParamKindRowsTarget{{expectedRows: -1}}, mp, true, true)
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	require.True(t, summaries[0].textString)
+	require.False(t, summaries[0].rows)
+}
+
+func TestPrepareParamKindDomainTrailerRequiresExplicitTextCapability(t *testing.T) {
+	var encoded bytes.Buffer
+	encoded.Write([]byte{prepareParamKindTrailerMagic0, prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2, prepareParamKindTrailerDomainVersion})
+	nAggs := int32(1)
+	encoded.Write(types.EncodeInt32(&nAggs))
+	encoded.WriteByte(0)
+	encoded.WriteByte(byte(types.RuntimeStringText))
+	var states aggexec.PrepareParamKindStates
+	states.Reset([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	})
+	_, err := readPrepareParamKindTrailer(context.Background(), bytes.NewReader(encoded.Bytes()),
+		1, &states, nil, mpool.MustNewZero(), true)
+	require.ErrorContains(t, err, "MORPCVersion23")
+}
+
 func TestPrepareParamKindTrailerV2StreamsSelectedRowsForMultipleAggregates(t *testing.T) {
 	mp := mpool.MustNewZero()
 	sourceA := makePrepareParamKindVectorForTest(t, mp, []vector.PrepareParamKind{

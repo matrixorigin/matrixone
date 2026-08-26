@@ -16,10 +16,13 @@ package function
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -210,6 +213,161 @@ func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_bool.ToType(), false, []bool{tc.expected}, []bool{false}),
 				tc.fn,
+			)
+
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
+func Test_BuiltIn_DynamicRegexpPatternCacheOwnsKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name       string
+		resultType types.Type
+		want       func(string) any
+		fn         func(*opBuiltInRegexp) fEvalFn
+	}{
+		{
+			name:       "regexp_instr",
+			resultType: types.T_int64.ToType(),
+			want:       func(string) any { return []int64{1} },
+			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegexpInstr },
+		},
+		{
+			name:       "regexp_substr",
+			resultType: types.T_varchar.ToType(),
+			want:       func(s string) any { return []string{s} },
+			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegexpSubstr },
+		},
+		{
+			name:       "regexp_operator",
+			resultType: types.T_bool.ToType(),
+			want:       func(string) any { return []bool{true} },
+			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegMatch },
+		},
+		{
+			name:       "regexp_like_control",
+			resultType: types.T_bool.ToType(),
+			want:       func(string) any { return []bool{true} },
+			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegexpLike },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := newOpBuiltInRegexp()
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"aaaa"}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"aaaa"}, nil),
+				},
+				NewFunctionTestResult(tc.resultType, false, tc.want("aaaa"), nil),
+				tc.fn(op),
+			)
+
+			pattern, _ := vector.GenerateFunctionStrParameter(tcc.parameters[1]).GetStrValue(0)
+			collision := findRegexpCacheHashCollision(t, op.regMap.mp, pattern)
+			copy(pattern, "aaaa")
+
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+
+			subject, _ := vector.GenerateFunctionStrParameter(tcc.parameters[0]).GetStrValue(0)
+			copy(subject, collision)
+			copy(pattern, collision)
+			tcc.expected.wanted = tc.want(collision)
+
+			succeed, errInfo = tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
+// findRegexpCacheHashCollision simulates a vector buffer being reused for the
+// next data block. It finds another four-byte pattern whose map hash metadata
+// collides with "aaaa", making a borrowed, mutated map key deterministically
+// retrieve the regexp compiled for the preceding block.
+func findRegexpCacheHashCollision(t *testing.T, cache map[string]*regexp.Regexp, pattern []byte) string {
+	t.Helper()
+	require.Equal(t, "aaaa", string(pattern))
+
+	// Keep one stable entry in the map: Go may randomize a map's hash seed when
+	// its last entry is deleted, which would invalidate the collision found here.
+	cache["sentinel"] = regexp.MustCompile("sentinel")
+	key := functionUtil.QuickBytesToStr(pattern)
+	cache[key] = regexp.MustCompile(key)
+	for value := 1; value < 26*26*26*26; value++ {
+		n := value
+		for i := len(pattern) - 1; i >= 0; i-- {
+			pattern[i] = byte('a' + n%26)
+			n /= 26
+		}
+
+		candidate := functionUtil.QuickBytesToStr(pattern)
+		if cached, ok := cache[candidate]; ok && !cached.MatchString(candidate) {
+			delete(cache, candidate)
+			require.Len(t, cache, 1)
+			return string(pattern)
+		}
+	}
+
+	t.Fatal("failed to find regexp cache hash collision")
+	return ""
+}
+
+func Test_BuiltIn_LikeUTF8Underscore(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		pattern  string
+		values   []string
+		expected []bool
+	}{
+		{
+			name:     "single underscore",
+			pattern:  "_",
+			values:   []string{"A", "é", "中", "🙂", "ab", ""},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "leading underscore",
+			pattern:  "_tail",
+			values:   []string{"Atail", "étail", "中tail", "🙂tail", "abtail", "tail"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "trailing underscore",
+			pattern:  "head_",
+			values:   []string{"headA", "headé", "head中", "head🙂", "headab", "head"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "percent then trailing underscore",
+			pattern:  "%tail_",
+			values:   []string{"tailA", "prefixtailé", "tail中", "prefixtail🙂", "tail", "tailab"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+		{
+			name:     "leading underscore then percent",
+			pattern:  "_head%",
+			values:   []string{"Ahead", "éheadtail", "中head", "🙂headtail", "head", "abhead"},
+			expected: []bool{true, true, true, true, false, false},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), tc.values, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.pattern}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, tc.expected, nil),
+				newOpBuiltInRegexp().likeFn,
 			)
 
 			succeed, errInfo := tcc.Run()

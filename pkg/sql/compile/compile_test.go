@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -59,6 +61,7 @@ import (
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -83,6 +86,17 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered.GroupBy = nil
 	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	require.False(t, hasOrderedGroupConcat(ordered))
+}
+
+func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatile := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: randFn.GetEncodedOverloadID(), ObjName: "rand",
+	}}}}
+	stable := plan2.MakePlan2Int64ConstExprWithType(1)
+
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -366,6 +380,195 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	for _, owner := range owners {
 		require.True(t, owner.released)
 	}
+}
+
+func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	remote := newScope(Remote)
+	remote.NodeInfo = engine.Node{Addr: "remote-cn:6001", Mcpu: 1}
+	remote.Proc = c.proc.NewNoContextChildProc(0)
+	remote.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{remote}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	resultScope := compiled[0]
+	require.Equal(t, Merge, resultScope.Magic)
+	require.Equal(t, c.addr, resultScope.NodeInfo.Addr)
+	require.Equal(t, vm.Output, resultScope.RootOp.OpType())
+	require.Equal(t, vm.Merge, resultScope.RootOp.GetOperatorBase().GetChildren(0).OpType())
+	require.Len(t, resultScope.PreScopes, 1)
+
+	remote = resultScope.PreScopes[0]
+	require.Equal(t, Remote, remote.Magic)
+	require.Equal(t, vm.Connector, remote.RootOp.OpType())
+	require.Equal(t, vm.Projection, remote.RootOp.GetOperatorBase().GetChildren(0).OpType())
+
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(remote)
+	require.False(t, withoutOutput)
+	require.Equal(t, vm.Projection, encodedScope.RootOp.OpType())
+	_, err = encodeScope(encodedScope)
+	require.NoError(t, err)
+}
+
+func TestCompileStepsReusesSingleScopeExecutingOnCurrentCNForOutput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	local := newScope(Remote)
+	local.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	local.Proc = c.proc.NewNoContextChildProc(0)
+	local.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{local}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	require.Same(t, local, compiled[0])
+	require.Empty(t, compiled[0].PreScopes)
+	require.Equal(t, vm.Output, compiled[0].RootOp.OpType())
+	require.Equal(t, vm.Projection, compiled[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
+}
+
+func TestSQLCalcFoundRowsOwnsPreparedSQLSelectLimit(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	proc := c.proc
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return uint64(1), nil
+		}
+		return nil, nil
+	})
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.isPrepare = true
+	input := newLazyUnionAllLeaf(c, nil)
+	nestedLimit := &plan.Node{
+		NodeId:   1,
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(5),
+	}
+	query := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_PROJECT, Children: []int32{1}},
+			nestedLimit,
+		},
+	}
+	// The nested LIMIT must not block the dynamic top-level sql_select_limit
+	// added below for each prepared execution.
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(query)
+	require.Nil(t, c.foundRowsOwnerNode)
+
+	result, err := c.compileSteps(query, []*Scope{input}, 0)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, c.foundRowsOwnerNode)
+
+	foundOwner := false
+	require.NoError(t, vm.HandleAllOp(result[0].RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if limitArg, ok := op.(*limitop.Limit); ok && limitArg.IsFoundRowsOwner() {
+			foundOwner = true
+		}
+		return nil
+	}))
+	require.True(t, foundOwner)
+	require.NotSame(t, nestedLimit, c.foundRowsOwnerNode)
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestPreparedSQLSelectLimitDrainsAboveFoundRowsOffsetOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	proc := c.proc
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return uint64(1), nil
+		}
+		return nil, nil
+	})
+
+	stmts, err := mysql.Parse(proc.Ctx,
+		"select sql_calc_found_rows id from t order by id offset 2", 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	c.stmt = stmts[0]
+	c.isPrepare = true
+
+	offsetNode := &plan.Node{
+		NodeId:   0,
+		NodeType: plan.Node_SORT,
+		Offset:   plan2.MakePlan2Uint64ConstExprWithType(2),
+	}
+	query := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes:               []*plan.Node{offsetNode},
+	}
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(query)
+	require.Same(t, offsetNode, c.foundRowsOwnerNode)
+
+	input := newLazyUnionAllLeaf(c, nil)
+	withOffset := c.compileOffset(offsetNode, []*Scope{input})
+	result, err := c.compileSteps(query, withOffset, 0)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Same(t, offsetNode, c.foundRowsOwnerNode)
+
+	var dynamicLimit *limitop.Limit
+	var countingOffset *offsetop.Offset
+	var inspectScopes func([]*Scope)
+	inspectScopes = func(scopes []*Scope) {
+		for _, scope := range scopes {
+			_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				switch arg := op.(type) {
+				case *limitop.Limit:
+					dynamicLimit = arg
+				case *offsetop.Offset:
+					countingOffset = arg
+				}
+				return nil
+			})
+			inspectScopes(scope.PreScopes)
+		}
+	}
+	inspectScopes(result)
+
+	require.NotNil(t, dynamicLimit)
+	require.False(t, dynamicLimit.IsFoundRowsOwner())
+	require.True(t, dynamicLimit.DrainsForFoundRows())
+	require.NotNil(t, countingOffset)
+	require.True(t, countingOffset.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
 }
 
 func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
@@ -1017,8 +1220,7 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "remote fragment stop remains secondary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}},
-		{name: "remote fragment stop does not mask producer error", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote query cancellation remains primary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, want: context.Canceled},
 		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
 		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
 		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
@@ -1030,9 +1232,7 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := preferPrimaryScopeResult(tt.current, tt.candidate)
 			got, _ = got.resolveCancelCause()
-			if tt.want == nil {
-				require.NoError(t, got.err)
-			} else if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
+			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
 				require.ErrorIs(t, got.err, tt.want)
 			} else {
 				require.Same(t, tt.want, got.err)
@@ -1769,6 +1969,81 @@ func TestCompileJoinGroupsExternalSinkScanOwner(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileMergeGroupDistinctTopology(t *testing.T) {
+	var containsGroup func(vm.Operator) bool
+	containsGroup = func(op vm.Operator) bool {
+		if _, ok := op.(*group.Group); ok {
+			return true
+		}
+		for _, child := range op.GetOperatorBase().Children {
+			if containsGroup(child) {
+				return true
+			}
+		}
+		return false
+	}
+	makeAgg := func(name string, id int32, distinct bool, arg *plan.Expr) *plan.Expr {
+		encoded := function.EncodeOverloadID(id, 0)
+		if distinct {
+			encoded = int64(uint64(encoded) | uint64(function.Distinct))
+		}
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: encoded, ObjName: name},
+				Args: []*plan.Expr{arg},
+			}},
+		}
+	}
+
+	t.Run("mixed count distinct uses local parallel groups", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{
+			makeAgg("count", function.COUNT, false, arg),
+			makeAgg("count", function.COUNT, true, arg),
+		}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.False(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.True(t, containsGroup(scope.RootOp),
+				"each input worker should aggregate before MergeGroup")
+		}
+	})
+
+	t.Run("unsupported distinct keeps one group", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{makeAgg("avg", function.AVG, true, arg)}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.True(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.False(t, containsGroup(scope.RootOp))
+		}
+		require.Len(t, result[0].PreScopes, 1)
+		require.True(t, containsGroup(result[0].PreScopes[0].RootOp),
+			"non-mergeable DISTINCT states must share one Group operator")
+	})
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {

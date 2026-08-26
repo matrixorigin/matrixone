@@ -1,51 +1,291 @@
 SELECT MINUTE('15:30:45') AS result1;
-invalid argument parse timestamp, bad value 15:30:45
+➤ result1[-6,8,0]  𝄀
+30
 SELECT MINUTE('15:30:45') AS time_with_minutes;
-invalid argument parse timestamp, bad value 15:30:45
+➤ time_with_minutes[-6,8,0]  𝄀
+30
 SELECT MINUTE('00:00:00') AS zero_minutes;
-invalid argument parse timestamp, bad value 00:00:00
+➤ zero_minutes[-6,8,0]  𝄀
+0
 SELECT MINUTE('23:59:59') AS max_minutes;
-invalid argument parse timestamp, bad value 23:59:59
+➤ max_minutes[-6,8,0]  𝄀
+59
 SELECT MINUTE('12:34:56') AS various_minutes;
-invalid argument parse timestamp, bad value 12:34:56
+➤ various_minutes[-6,8,0]  𝄀
+34
 SELECT MINUTE('2024-12-20 15:30:45') AS datetime_with_minutes;
-datetime_with_minutes
+➤ datetime_with_minutes[-6,8,0]  𝄀
 30
 SELECT MINUTE('2024-12-20 00:00:00') AS datetime_zero;
-datetime_zero
+➤ datetime_zero[-6,8,0]  𝄀
 0
 SELECT MINUTE('2024-12-20 23:59:59') AS datetime_max;
-datetime_max
+➤ datetime_max[-6,8,0]  𝄀
 59
 SELECT MINUTE(TIMESTAMP('2024-12-20 15:30:45')) AS timestamp_with_minutes;
-timestamp_with_minutes
+➤ timestamp_with_minutes[-6,8,0]  𝄀
 30
 SELECT MINUTE(NULL) AS null_input;
-null_input
+➤ null_input[-6,8,0]  𝄀
 null
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
 SELECT t, MINUTE(t) AS minute FROM t1;
-t    minute
-15:30:45    30
-00:00:00    0
-23:59:59    59
-12:34:56    34
+➤ t[92,64,0]  ¦  minute[-6,8,0]  𝄀
+15:30:45  ¦  30  𝄀
+00:00:00  ¦  0  𝄀
+23:59:59  ¦  59  𝄀
+12:34:56  ¦  34
 DROP TABLE t1;
 CREATE TABLE t1(dt DATETIME);
 INSERT INTO t1 VALUES ('2024-12-20 15:30:45'), ('2024-12-20 00:00:00'), ('2024-12-20 23:59:59');
 SELECT dt, MINUTE(dt) AS minute FROM t1;
-dt    minute
-2024-12-20 15:30:45    30
-2024-12-20 00:00:00    0
-2024-12-20 23:59:59    59
+➤ dt[93,64,0]  ¦  minute[-6,8,0]  𝄀
+2024-12-20 15:30:45  ¦  30  𝄀
+2024-12-20 00:00:00  ¦  0  𝄀
+2024-12-20 23:59:59  ¦  59
 DROP TABLE t1;
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
 SELECT * FROM t1 WHERE MINUTE(t) > 30;
-t
-23:59:59
+➤ t[92,64,0]  𝄀
+23:59:59  𝄀
 12:34:56
 DROP TABLE t1;
 SELECT MINUTE('15:30:45') AS result1, MINUTE('15:00:45') AS result2, MINUTE('15:59:45') AS result3;
-invalid argument parse timestamp, bad value 15:30:45
+➤ result1[-6,8,0]  ¦  result2[-6,8,0]  ¦  result3[-6,8,0]  𝄀
+30  ¦  0  ¦  59
+SELECT MINUTE(CAST('12:30:00' AS VARCHAR)) AS varchar_minute,
+MINUTE(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_minute,
+MINUTE(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_minute,
+MINUTE(CAST(NULL AS VARCHAR)) AS varchar_null_minute;
+➤ varchar_minute[-6,8,0]  ¦  varchar_extended_minute[-6,8,0]  ¦  varchar_datetime_minute[-6,8,0]  ¦  varchar_null_minute[-6,8,0]  𝄀
+30  ¦  59  ¦  30  ¦  null
+SELECT MINUTE('2024-12-20') AS date_string_minute,
+MINUTE(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_minute;
+➤ date_string_minute[-6,8,0]  ¦  tomorrow_datetime_minute[-6,8,0]  𝄀
+20  ¦  2
+SELECT MINUTE(CAST('   ' AS CHAR)) AS char_spaces_minute,
+MINUTE(CAST('\t' AS VARCHAR)) AS varchar_tab_minute,
+MINUTE(CAST('   ' AS TEXT)) AS text_spaces_minute;
+➤ char_spaces_minute[-6,8,0]  ¦  varchar_tab_minute[-6,8,0]  ¦  text_spaces_minute[-6,8,0]  𝄀
+null  ¦  null  ¦  null
+SELECT MINUTE('241220153045') AS compact_datetime_minute,
+MINUTE('15:30:45abc') AS trailing_time_minute,
+MINUTE('2024-12-20 15:30:45abc') AS trailing_datetime_minute,
+MINUTE('2024-12-20foo') AS malformed_datetime_minute;
+➤ compact_datetime_minute[-6,8,0]  ¦  trailing_time_minute[-6,8,0]  ¦  trailing_datetime_minute[-6,8,0]  ¦  malformed_datetime_minute[-6,8,0]  𝄀
+30  ¦  30  ¦  30  ¦  20
+SELECT MINUTE('12:34:56.789012') AS fractional_time_minute,
+MINUTE('2 03:04:05.9') AS day_fractional_time_minute,
+MINUTE('-12:34:56.789012') AS negative_fractional_time_minute,
+MINUTE('-2 03:04:05.9') AS negative_day_fractional_time_minute,
+MINUTE('839:00:00') AS overflow_time_minute,
+MINUTE('-839:00:00') AS negative_overflow_time_minute,
+MINUTE('12:60:00') AS invalid_minute_minute,
+MINUTE('12:34:60') AS invalid_second_minute,
+MINUTE('123045.987654') AS compact_time_minute,
+MINUTE('20241220153045.999999') AS compact_datetime_fractional_minute,
+MINUTE('20241220156045') AS invalid_compact_datetime_minute,
+MINUTE('2024-12-20') AS date_only_time_minute,
+MINUTE('2024-12-20T15:30:45.123456') AS t_datetime_minute,
+MINUTE('  12:34:56  ') AS trimmed_time_minute,
+MINUTE('foo12:34:56') AS malformed_time_minute;
+➤ fractional_time_minute[-6,8,0]  ¦  day_fractional_time_minute[-6,8,0]  ¦  negative_fractional_time_minute[-6,8,0]  ¦  negative_day_fractional_time_minute[-6,8,0]  ¦  overflow_time_minute[-6,8,0]  ¦  negative_overflow_time_minute[-6,8,0]  ¦  invalid_minute_minute[-6,8,0]  ¦  invalid_second_minute[-6,8,0]  ¦  compact_time_minute[-6,8,0]  ¦  compact_datetime_fractional_minute[-6,8,0]  ¦  invalid_compact_datetime_minute[-6,8,0]  ¦  date_only_time_minute[-6,8,0]  ¦  t_datetime_minute[-6,8,0]  ¦  trimmed_time_minute[-6,8,0]  ¦  malformed_time_minute[-6,8,0]  𝄀
+34  ¦  4  ¦  34  ¦  4  ¦  59  ¦  59  ¦  null  ¦  null  ¦  30  ¦  30  ¦  null  ¦  20  ¦  20  ¦  34  ¦  null
+SELECT MINUTE('-2024-12-20 15:30:45') AS negative_datetime_minute,
+MINUTE('-20241220153045') AS negative_compact_datetime_minute,
+MINUTE('20240230010203') AS invalid_calendar_compact_datetime_minute,
+MINUTE('2 30:00:00') AS extended_day_time_minute,
+MINUTE('60') AS invalid_compact_second_minute;
+➤ negative_datetime_minute[-6,8,0]  ¦  negative_compact_datetime_minute[-6,8,0]  ¦  invalid_calendar_compact_datetime_minute[-6,8,0]  ¦  extended_day_time_minute[-6,8,0]  ¦  invalid_compact_second_minute[-6,8,0]  𝄀
+30  ¦  30  ¦  null  ¦  0  ¦  null
+SELECT MINUTE('24-12-20 15:30:45') AS two_digit_year_minute,
+MINUTE('2000:01:01 12:34:56') AS colon_datetime_minute,
+MINUTE('1998-01-01 00:00:009') AS wide_second_datetime_minute,
+MINUTE('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_minute,
+MINUTE('2001-11-00 01:02:03') AS incomplete_datetime_minute,
+MINUTE('99999990000') AS uint32_overflow_minute,
+MINUTE('- 12:34:56') AS signed_space_time_minute,
+MINUTE('12:34:56.') AS trailing_dot_time_minute;
+➤ two_digit_year_minute[-6,8,0]  ¦  colon_datetime_minute[-6,8,0]  ¦  wide_second_datetime_minute[-6,8,0]  ¦  invalid_wide_second_datetime_minute[-6,8,0]  ¦  incomplete_datetime_minute[-6,8,0]  ¦  uint32_overflow_minute[-6,8,0]  ¦  signed_space_time_minute[-6,8,0]  ¦  trailing_dot_time_minute[-6,8,0]  𝄀
+30  ¦  34  ¦  0  ¦  null  ¦  2  ¦  null  ¦  34  ¦  34
+SELECT MINUTE('0000-01-01 12:34:56') AS zero_year_datetime_minute,
+MINUTE('2024-00-01 11:22:33') AS zero_month_datetime_minute,
+MINUTE('2024-01-00 10:20:30') AS zero_day_datetime_minute,
+MINUTE('0000-00-00 09:08:07') AS zero_date_datetime_minute,
+MINUTE('2024-12-20T15:30:45.123456') AS iso_t_datetime_minute;
+➤ zero_year_datetime_minute[-6,8,0]  ¦  zero_month_datetime_minute[-6,8,0]  ¦  zero_day_datetime_minute[-6,8,0]  ¦  zero_date_datetime_minute[-6,8,0]  ¦  iso_t_datetime_minute[-6,8,0]  𝄀
+34  ¦  22  ¦  20  ¦  8  ¦  20
+SELECT MINUTE('2024-12-20 12:34') AS minute_datetime_minute,
+MINUTE('0000-02-28 12:34:56') AS valid_zero_year_february_minute,
+MINUTE('0000-02-29 12:34:56') AS invalid_zero_year_leap_day_minute,
+MINUTE('0000-02-31 12:34:56') AS invalid_zero_year_february_minute,
+MINUTE('0000-04-31 12:34:56') AS invalid_zero_year_april_minute,
+MINUTE('1900-02-29 12:34:56') AS invalid_nonleap_datetime_minute,
+MINUTE('2000-02-29 01:02:03') AS leap_datetime_minute;
+➤ minute_datetime_minute[-6,8,0]  ¦  valid_zero_year_february_minute[-6,8,0]  ¦  invalid_zero_year_leap_day_minute[-6,8,0]  ¦  invalid_zero_year_february_minute[-6,8,0]  ¦  invalid_zero_year_april_minute[-6,8,0]  ¦  invalid_nonleap_datetime_minute[-6,8,0]  ¦  leap_datetime_minute[-6,8,0]  𝄀
+34  ¦  34  ¦  null  ¦  null  ¦  null  ¦  null  ¦  2
+SELECT MINUTE('20241220153045') AS compact_14_minute,
+MINUTE('241220153045') AS compact_12_minute,
+MINUTE('202412201530451') AS compact_14_extra_digit_minute,
+MINUTE('2412201530451') AS compact_12_extra_digit_minute,
+MINUTE('20241220153045abc') AS compact_14_alpha_suffix_minute,
+MINUTE('241220153045abc') AS compact_12_alpha_suffix_minute;
+➤ compact_14_minute[-6,8,0]  ¦  compact_12_minute[-6,8,0]  ¦  compact_14_extra_digit_minute[-6,8,0]  ¦  compact_12_extra_digit_minute[-6,8,0]  ¦  compact_14_alpha_suffix_minute[-6,8,0]  ¦  compact_12_alpha_suffix_minute[-6,8,0]  𝄀
+30  ¦  30  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT MINUTE('20241220153045.123abc') AS compact_14_fraction_text_minute,
+MINUTE('20241220153045.') AS compact_14_empty_fraction_minute,
+MINUTE('241220153045.123abc') AS compact_12_fraction_text_minute,
+MINUTE('241220153045.') AS compact_12_empty_fraction_minute,
+MINUTE('20241220153045.-') AS compact_14_negative_fraction_minute,
+MINUTE('20241220153045.+') AS compact_14_positive_fraction_minute,
+MINUTE('241220153045.-') AS compact_12_negative_fraction_minute,
+MINUTE('241220153045.+') AS compact_12_positive_fraction_minute,
+MINUTE('20241220153045.123-') AS compact_14_fraction_negative_suffix_minute,
+MINUTE('20241220153045.123+') AS compact_14_fraction_positive_suffix_minute,
+MINUTE('241220153045.123-') AS compact_12_fraction_negative_suffix_minute,
+MINUTE('241220153045.123+') AS compact_12_fraction_positive_suffix_minute,
+MINUTE('20241220153045.123abc-') AS compact_14_fraction_text_negative_suffix_minute,
+MINUTE('241220153045.123abc+') AS compact_12_fraction_text_positive_suffix_minute;
+➤ compact_14_fraction_text_minute[-6,8,0]  ¦  compact_14_empty_fraction_minute[-6,8,0]  ¦  compact_12_fraction_text_minute[-6,8,0]  ¦  compact_12_empty_fraction_minute[-6,8,0]  ¦  compact_14_negative_fraction_minute[-6,8,0]  ¦  compact_14_positive_fraction_minute[-6,8,0]  ¦  compact_12_negative_fraction_minute[-6,8,0]  ¦  compact_12_positive_fraction_minute[-6,8,0]  ¦  compact_14_fraction_negative_suffix_minute[-6,8,0]  ¦  compact_14_fraction_positive_suffix_minute[-6,8,0]  ¦  compact_12_fraction_negative_suffix_minute[-6,8,0]  ¦  compact_12_fraction_positive_suffix_minute[-6,8,0]  ¦  compact_14_fraction_text_negative_suffix_minute[-6,8,0]  ¦  compact_12_fraction_text_positive_suffix_minute[-6,8,0]  𝄀
+30  ¦  30  ¦  30  ¦  30  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  30  ¦  30
+SELECT MINUTE('12:') AS trailing_colon_minute,
+MINUTE(':34') AS leading_colon_minute,
+MINUTE('12:34:56-') AS trailing_dash_minute,
+MINUTE('12:34:56..') AS trailing_dots_minute,
+MINUTE('123:') AS compact_3_trailing_colon_minute,
+MINUTE('1234:') AS compact_4_trailing_colon_minute,
+MINUTE('12345:') AS compact_5_trailing_colon_minute,
+MINUTE('123456:') AS compact_6_trailing_colon_minute;
+➤ trailing_colon_minute[-6,8,0]  ¦  leading_colon_minute[-6,8,0]  ¦  trailing_dash_minute[-6,8,0]  ¦  trailing_dots_minute[-6,8,0]  ¦  compact_3_trailing_colon_minute[-6,8,0]  ¦  compact_4_trailing_colon_minute[-6,8,0]  ¦  compact_5_trailing_colon_minute[-6,8,0]  ¦  compact_6_trailing_colon_minute[-6,8,0]  𝄀
+0  ¦  34  ¦  34  ¦  34  ¦  1  ¦  12  ¦  23  ¦  34
+SELECT MINUTE(':34:56') AS leading_colon_with_seconds_minute,
+MINUTE('12:34:') AS trailing_second_colon_minute,
+MINUTE('12::56') AS empty_minute_minute,
+MINUTE('12:34:56:') AS fourth_field_colon_minute,
+MINUTE('12-.abc') AS compact_prefix_before_fraction_minute;
+➤ leading_colon_with_seconds_minute[-6,8,0]  ¦  trailing_second_colon_minute[-6,8,0]  ¦  empty_minute_minute[-6,8,0]  ¦  fourth_field_colon_minute[-6,8,0]  ¦  compact_prefix_before_fraction_minute[-6,8,0]  𝄀
+34  ¦  34  ¦  0  ¦  34  ¦  0
+CREATE TABLE time_extract_prefix_boundaries(v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_prefix_boundaries VALUES
+('12-34', '12-34', '12-34'),
+('1234-56', '1234-56', '1234-56'),
+('1 02', '1 02', '1 02'),
+('1 02:', '1 02:', '1 02:'),
+('1 02-34', '1 02-34', '1 02-34'),
+('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
+('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
+('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
+('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
+('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
+('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34'),
+('2024-12-20 12/34/56', '2024-12-20 12/34/56', '2024-12-20 12/34/56'),
+('2024@12@20 12@34@56', '2024@12@20 12@34@56', '2024@12@20 12@34@56'),
+('2024-12-20\t12:34:56', '2024-12-20\t12:34:56', '2024-12-20\t12:34:56'),
+('1\t02:34:56', '1\t02:34:56', '1\t02:34:56'),
+('12:34 56', '12:34 56', '12:34 56'),
+('1 02:34 56', '1 02:34 56', '1 02:34 56'),
+('1 02 34', '1 02 34', '1 02 34'),
+('2024--12--20 12:34:56', '2024--12--20 12:34:56', '2024--12--20 12:34:56'),
+('2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56'),
+('2024-12-20 -12:34:56', '2024-12-20 -12:34:56', '2024-12-20 -12:34:56'),
+('2024-12-20 +12:34:56', '2024-12-20 +12:34:56', '2024-12-20 +12:34:56'),
+('2024-12-20 12:34 56', '2024-12-20 12:34 56', '2024-12-20 12:34 56'),
+('2024-12-20 12 34', '2024-12-20 12 34', '2024-12-20 12 34');
+SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_prefix_boundaries;
+➤ MINUTE(v)[-6,8,0]  ¦  MINUTE(c)[-6,8,0]  ¦  MINUTE(t)[-6,8,0]  𝄀
+0  ¦  0  ¦  0  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+56  ¦  56  ¦  56  𝄀
+20  ¦  20  ¦  20  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+0  ¦  0  ¦  0  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+20  ¦  20  ¦  20  𝄀
+20  ¦  20  ¦  20
+DROP TABLE time_extract_prefix_boundaries;
+CREATE TABLE time_extract_ambiguous_prefix_ownership(v VARCHAR(40), c CHAR(40), t TEXT);
+INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
+('1 2', '1 2', '1 2'),
+('1 02', '1 02', '1 02'),
+('12:34:56', '12:34:56', '12:34:56'),
+('12:34:56 78', '12:34:56 78', '12:34:56 78'),
+('1-2-3 4:5:6', '1-2-3 4:5:6', '1-2-3 4:5:6'),
+('12345:', '12345:', '12345:'),
+('12345-1-1 1:2:3', '12345-1-1 1:2:3', '12345-1-1 1:2:3'),
+('-12:34', '-12:34', '-12:34'),
+('--12:34', '--12:34', '--12:34'),
+('2024-12-20 +12:34', '2024-12-20 +12:34', '2024-12-20 +12:34'),
+('2024-12-20 ++12:34', '2024-12-20 ++12:34', '2024-12-20 ++12:34'),
+('2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc'),
+('2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc'),
+('2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc'),
+('1 2:3', '1 2:3', '1 2:3'),
+('1 2:3:4', '1 2:3:4', '1 2:3:4'),
+('12 3', '12 3', '12 3'),
+('12 3:4', '12 3:4', '12 3:4'),
+('12 3:4:5', '12 3:4:5', '12 3:4:5'),
+('12-2-3 4:5:6', '12-2-3 4:5:6', '12-2-3 4:5:6'),
+('123-2-3 4:5:6', '123-2-3 4:5:6', '123-2-3 4:5:6'),
+('1234-2-3 4:5:6', '1234-2-3 4:5:6', '1234-2-3 4:5:6'),
+('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+('1-2-3 12:34:56', '1-2-3 12:34:56', '1-2-3 12:34:56'),
+('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56'),
+('2024-12-20 12:34:56+', '2024-12-20 12:34:56+', '2024-12-20 12:34:56+'),
+('2024-12-20 12:34:56-', '2024-12-20 12:34:56-', '2024-12-20 12:34:56-');
+SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_ambiguous_prefix_ownership;
+➤ MINUTE(v)[-6,8,0]  ¦  MINUTE(c)[-6,8,0]  ¦  MINUTE(t)[-6,8,0]  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+0  ¦  0  ¦  0  𝄀
+23  ¦  23  ¦  23  𝄀
+null  ¦  null  ¦  null  𝄀
+34  ¦  34  ¦  34  𝄀
+null  ¦  null  ¦  null  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+20  ¦  20  ¦  20  𝄀
+20  ¦  20  ¦  20  𝄀
+3  ¦  3  ¦  3  𝄀
+3  ¦  3  ¦  3  𝄀
+0  ¦  0  ¦  0  𝄀
+4  ¦  4  ¦  4  𝄀
+4  ¦  4  ¦  4  𝄀
+5  ¦  5  ¦  5  𝄀
+5  ¦  5  ¦  5  𝄀
+5  ¦  5  ¦  5  𝄀
+0  ¦  0  ¦  0  𝄀
+2  ¦  2  ¦  2  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
+20  ¦  20  ¦  20  𝄀
+20  ¦  20  ¦  20
+DROP TABLE time_extract_ambiguous_prefix_ownership;
+SELECT MINUTE('123:34:56 78') AS unpadded_123_minute,
+MINUTE('123:34:56 78 ') AS padded_123_minute,
+MINUTE('\t123:34:56 78\t') AS tab_padded_123_minute,
+MINUTE('838:59:59 78') AS unpadded_838_minute,
+MINUTE('838:59:59 78 ') AS padded_838_minute,
+MINUTE('\t838:59:59 78\t') AS tab_padded_838_minute;
+➤ unpadded_123_minute[-6,8,0]  ¦  padded_123_minute[-6,8,0]  ¦  tab_padded_123_minute[-6,8,0]  ¦  unpadded_838_minute[-6,8,0]  ¦  padded_838_minute[-6,8,0]  ¦  tab_padded_838_minute[-6,8,0]  𝄀
+null  ¦  34  ¦  34  ¦  null  ¦  59  ¦  59
