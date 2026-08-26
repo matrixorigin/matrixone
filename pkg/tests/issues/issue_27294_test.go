@@ -68,5 +68,19 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.NoError(t, abs.QueryRowContext(ctx, test.value).Scan(&result))
 			require.Equal(t, test.want, result)
 		}
+
+		wide, err := db.PrepareContext(ctx, "select abs(?)")
+		require.NoError(t, err)
+		defer wide.Close()
+		var exact int64
+		require.NoError(t, wide.QueryRowContext(ctx, int64(-9007199254740993)).Scan(&exact))
+		require.Equal(t, int64(9007199254740993), exact)
+
+		subquery, err := db.PrepareContext(ctx, "select abs((select ?))")
+		require.NoError(t, err)
+		defer subquery.Close()
+		var subqueryResult float64
+		require.NoError(t, subquery.QueryRowContext(ctx, float64(-1.5)).Scan(&subqueryResult))
+		require.Equal(t, 1.5, subqueryResult)
 	})
 }

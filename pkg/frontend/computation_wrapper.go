@@ -948,6 +948,25 @@ func initExecuteStmtParamWithResolverInSession(
 	if err := normalizePreparedOffsetBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
+	// ABS/SLEEP plans use a DOUBLE fallback during PREPARE because the marker
+	// has no concrete SQL type yet.  ABS must retain exact BIGINT semantics at
+	// EXECUTE time, so materialize this narrow class with the actual parameter
+	// values and compile the rebound plan instead of reusing the prepare-time
+	// topology.  The cached prepared plan remains untouched for the next
+	// execution.
+	executionPlan := preparePlan.Plan
+	forceNumericRebind := plan2.PreparedPlanHasDeferredNumericFunction(executionPlan)
+	if forceNumericRebind {
+		executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, executionPlan, cwft.paramVals)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		// The rebound expression can change the result category from the
+		// prepare-time DOUBLE fallback to BIGINT/UNSIGNED.  Do not reuse the
+		// stale COM_STMT column-definition bytes for this execution; the result
+		// columns derived from executionPlan carry the matching wire type.
+		execCtx.prepareColDef = nil
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling or Sirius intent must be evaluated for this execution,
 	// so neither can reuse a native topology compiled under prepare-time defaults.
@@ -958,10 +977,10 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
-	if plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
+	if forceNumericRebind || plan2.PreparedPlanHasPaginationParams(executionPlan) {
 		// The cached compile was built from the prepare-time parameter types and
-		// cannot execute a plan whose pagination values must be rebound for this
-		// execution.
+		// cannot execute a plan whose pagination or numeric overload values must
+		// be rebound for this execution.
 		retComp = nil
 	}
 	if executionSes.IsBackgroundSession() {
@@ -980,7 +999,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
-	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
 func normalizePreparedOffsetBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {

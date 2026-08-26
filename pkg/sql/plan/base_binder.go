@@ -2778,8 +2778,8 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	// Resolve ambiguous scalar numeric overloads while the statement is being
 	// prepared. The parameter itself remains a ParamRef under the DOUBLE cast;
-	// execution only supplies the value vector and can therefore reuse the
-	// cached compile without rebuilding the plan for each parameter type.
+	// ABS records this fallback so execution can rebind integer protocol values
+	// exactly, while SLEEP keeps the stable DOUBLE domain for the cached plan.
 	if b.builder != nil && b.builder.isPrepareStatement {
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			containsPreparedParamExprs(astExpr.Exprs) &&
@@ -2855,6 +2855,17 @@ func containsPreparedParamExpr(expr tree.Expr) bool {
 	switch e := expr.(type) {
 	case *tree.ParamExpr:
 		return true
+	case *tree.Subquery:
+		// Subqueries are not part of the tree.Expr visitor (their Accept
+		// method is intentionally unsupported), so walk the scalar SELECT
+		// shape explicitly.  A parameter in the projected value must keep the
+		// outer numeric overload deferred, just like a direct parameter.
+		// EXISTS is a boolean control-flow predicate; its inner parameters do
+		// not contribute to the numeric value consumed by ABS/SLEEP.
+		if e.Exists {
+			return false
+		}
+		return containsPreparedParamInSelectStatement(e.Select)
 	case *tree.BinaryExpr:
 		return containsPreparedParamExpr(e.Left) || containsPreparedParamExpr(e.Right)
 	case *tree.UnaryExpr:
@@ -2862,23 +2873,57 @@ func containsPreparedParamExpr(expr tree.Expr) bool {
 	case *tree.ParenExpr:
 		return containsPreparedParamExpr(e.Expr)
 	case *tree.FuncExpr:
+		name := strings.ToLower(numericAstFunctionName(e))
+		if indexes, ok := numericFunctionResultArgs(name, len(e.Exprs)); ok {
+			for _, index := range indexes {
+				if index >= 0 && index < len(e.Exprs) && containsPreparedParamExpr(e.Exprs[index]) {
+					return true
+				}
+			}
+			return false
+		}
 		return containsPreparedParamExprs(e.Exprs)
 	case *tree.CastExpr:
 		return containsPreparedParamExpr(e.Expr)
 	case *tree.BitCastExpr:
 		return containsPreparedParamExpr(e.Expr)
 	case *tree.CaseExpr:
-		if e.Expr != nil && containsPreparedParamExpr(e.Expr) {
-			return true
-		}
 		for _, when := range e.Whens {
-			if when != nil && (containsPreparedParamExpr(when.Cond) || containsPreparedParamExpr(when.Val)) {
+			// CASE conditions are boolean control flow, not part of the
+			// numeric value selected by ABS/SLEEP.  A parameter used only as a
+			// condition must not force an ordinary BIGINT result branch through
+			// the deferred DOUBLE context.
+			if when != nil && containsPreparedParamExpr(when.Val) {
 				return true
 			}
 		}
 		return e.Else != nil && containsPreparedParamExpr(e.Else)
 	case *tree.Tuple:
 		return containsPreparedParamExprs(e.Exprs)
+	default:
+		return false
+	}
+}
+
+func containsPreparedParamInSelectStatement(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		if containsPreparedParamInSelectStatement(stmt.Select) {
+			return true
+		}
+		return false
+	case *tree.ParenSelect:
+		return containsPreparedParamInSelectStatement(stmt.Select)
+	case *tree.UnionClause:
+		return containsPreparedParamInSelectStatement(stmt.Left) ||
+			containsPreparedParamInSelectStatement(stmt.Right)
+	case *tree.SelectClause:
+		for _, item := range stmt.Exprs {
+			if containsPreparedParamExpr(item.Expr) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -2893,9 +2938,10 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 	// prepared parameter has TEXT transport type at PREPARE time, so letting
 	// the generic overload resolver choose an integer cast makes valid binary
 	// executions such as ABS(-1.5) and SLEEP(0.01) fail before the function can
-	// see the value. Use DOUBLE as the stable deferred domain; integer values
-	// are losslessly accepted by this domain and no execute-time plan rebuild is
-	// required.
+	// see the value. Use DOUBLE as the deferred prepare-time domain. ABS marks
+	// that fallback so execution can restore an exact integer overload when the
+	// protocol reports an integer parameter; explicit user DOUBLE casts remain
+	// ordinary DOUBLE expressions.
 	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sleep")) {
 		typ := types.T_float64.ToType()
 		target := makePlan2Type(&typ)
@@ -2910,6 +2956,116 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 		return &target, true
 	}
 	return nil, false
+}
+
+// preparedNumericFallbackAuxIDBase marks the temporary DOUBLE domain
+// introduced for an ambiguous prepared ABS argument. The parameter position is
+// added to the base so two distinct markers in one statement cannot collapse
+// into one expression during prepared-plan parameter collection. Negative
+// AuxId values are planner local and survive DeepCopyPlan, while normal
+// execution AuxId assignment later replaces them before evaluation.
+const preparedNumericFallbackAuxIDBase int32 = -2147483647
+
+func markPreparedNumericFallback(expr *plan.Expr) {
+	if expr != nil {
+		expr.AuxId = preparedNumericFallbackAuxIDBase
+		if pos, ok := firstPlanParamPosition(expr); ok && pos >= 0 && pos < 1_000_000 {
+			expr.AuxId += pos
+		}
+	}
+}
+
+func firstPlanParamPosition(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if pos, ok := firstPlanParamPosition(arg); ok {
+				return pos, true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if pos, ok := firstPlanParamPosition(item); ok {
+				return pos, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func containsExplicitFloatCast(expr tree.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *tree.CastExpr:
+		if typ, ok := e.Type.(*tree.T); ok {
+			switch defines.MysqlType(typ.InternalType.Oid) {
+			case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
+				return true
+			}
+		}
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.BitCastExpr:
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.BinaryExpr:
+		return containsExplicitFloatCast(e.Left) || containsExplicitFloatCast(e.Right)
+	case *tree.UnaryExpr:
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.ParenExpr:
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.FuncExpr:
+		return containsExplicitFloatCasts(e.Exprs)
+	case *tree.CaseExpr:
+		if containsExplicitFloatCast(e.Expr) {
+			return true
+		}
+		for _, when := range e.Whens {
+			if when != nil && (containsExplicitFloatCast(when.Cond) || containsExplicitFloatCast(when.Val)) {
+				return true
+			}
+		}
+		return containsExplicitFloatCast(e.Else)
+	case *tree.Tuple:
+		return containsExplicitFloatCasts(e.Exprs)
+	case *tree.Subquery:
+		return containsExplicitFloatCastInSelect(e.Select)
+	default:
+		return false
+	}
+}
+
+func containsExplicitFloatCasts(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if containsExplicitFloatCast(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return containsExplicitFloatCastInSelect(stmt.Select)
+	case *tree.ParenSelect:
+		return containsExplicitFloatCastInSelect(stmt.Select)
+	case *tree.UnionClause:
+		return containsExplicitFloatCastInSelect(stmt.Left) || containsExplicitFloatCastInSelect(stmt.Right)
+	case *tree.SelectClause:
+		for _, item := range stmt.Exprs {
+			if containsExplicitFloatCast(item.Expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
@@ -2931,6 +3087,9 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
+	}
+	if strings.EqualFold(name, "abs") && !containsExplicitFloatCast(astArgs[0]) {
+		markPreparedNumericFallback(arg)
 	}
 	return bindFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -83,8 +84,8 @@ func TestContainsPreparedParamExprVariants(t *testing.T) {
 		{name: "function", expr: &tree.FuncExpr{Exprs: tree.Exprs{param}}, want: true},
 		{name: "cast", expr: tree.NewCastExpr(param, nil), want: true},
 		{name: "bit cast", expr: tree.NewBitCastExpr(param, nil), want: true},
-		{name: "case operand", expr: tree.NewCaseExpr(param, nil, literal), want: true},
-		{name: "case when condition", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(param, literal)}, nil), want: true},
+		{name: "case operand", expr: tree.NewCaseExpr(param, nil, literal), want: false},
+		{name: "case when condition", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(param, literal)}, nil), want: false},
 		{name: "case when value", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal, param)}, nil), want: true},
 		{name: "case else", expr: tree.NewCaseExpr(nil, nil, param), want: true},
 		{name: "tuple", expr: &tree.Tuple{Exprs: tree.Exprs{literal, param}}, want: true},
@@ -100,6 +101,61 @@ func TestContainsPreparedParamExprVariants(t *testing.T) {
 
 	require.True(t, containsPreparedParamExprs(tree.Exprs{literal, param}))
 	require.False(t, containsPreparedParamExprs(tree.Exprs{literal}))
+}
+
+func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T) {
+	ctx := context.Background()
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_exact from 'select abs(?)'")
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().Plan
+	filled, err := FillValuesOfParamsInPlan(ctx, queryPlan, []any{
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+	})
+	require.NoError(t, err)
+	fn := findPlanFunctionExpr(filled, "abs")
+	require.NotNil(t, fn)
+	require.Equal(t, int32(types.T_int64), fn.Typ.Id)
+	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
+	require.Equal(t, int64(-9007199254740993), fn.GetF().Args[0].GetLit().GetI64Val())
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_subquery from 'select abs((select ?))'")
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "abs")
+	require.NotNil(t, fn)
+	require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_case_condition from 'select abs(case when ? then n_regionkey else n_regionkey end) from nation'")
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "abs")
+	require.NotNil(t, fn)
+	// The marker only controls CASE flow. It must not force the BIGINT result
+	// branches through the deferred DOUBLE overload.
+	require.NotEqual(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_if_condition from 'select abs(if(?, n_regionkey, n_regionkey)) from nation'")
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "abs")
+	require.NotNil(t, fn)
+	require.NotEqual(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_explicit_double from 'select abs(cast(? as double))'")
+	require.NoError(t, err)
+	queryPlan = prepared.GetDcl().GetPrepare().Plan
+	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
+		ParamValue{Value: "9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+	})
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(filled, "abs")
+	require.NotNil(t, fn)
+	// An explicit DOUBLE cast is a user-requested precision boundary and must
+	// not be specialized back to an integer overload.
+	require.Equal(t, int32(types.T_float64), fn.Typ.Id)
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {

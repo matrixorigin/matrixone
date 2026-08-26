@@ -17,9 +17,13 @@ package plan
 import (
 	"bytes"
 	"context"
+	"math"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -392,6 +396,7 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 type ResetParamRefRule struct {
 	ctx                  context.Context
 	params               []*Expr
+	paramKinds           []vector.PrepareParamKind
 	exprMemo             map[*plan.Expr]*plan.Expr
 	validateFunctionArgs func(string, []*Expr) error
 }
@@ -401,6 +406,15 @@ func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRul
 		ctx:    ctx,
 		params: params,
 	}
+}
+
+// SetParamKinds supplies the protocol type category observed for each
+// prepared value.  The ordinary replacement path intentionally keeps
+// parameters as text literals, but deferred numeric overloads can use this
+// metadata to specialize an exact integer value without changing the typing
+// of unrelated prepared expressions.
+func (rule *ResetParamRefRule) SetParamKinds(kinds []vector.PrepareParamKind) {
+	rule.paramKinds = kinds
 }
 
 func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
@@ -437,6 +451,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		originalArgs := append([]*plan.Expr(nil), exprImpl.F.Args...)
+		var originalAbsArg *plan.Expr
+		var hasPreparedAbsParam bool
+		if strings.EqualFold(exprImpl.F.Func.GetObjName(), "abs") && len(originalArgs) == 1 {
+			originalAbsArg = DeepCopyExpr(originalArgs[0])
+			_, hasPreparedAbsParam = preparedNumericValueParamPosition(originalAbsArg)
+		}
 		if rule.validateFunctionArgs != nil {
 			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
 				return nil, err
@@ -450,6 +471,39 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
 			if err != nil {
 				return nil, err
+			}
+		}
+
+		// The prepare-time ABS(?) plan uses a DOUBLE cast so both integer and
+		// fractional executions are accepted.  A binary integer value must not
+		// pass through that cast: DOUBLE cannot represent all BIGINT values.
+		// Rebind only the direct numeric-value path (not a CASE condition or
+		// another control-flow parameter) and leave all other functions on their
+		// existing replacement path.
+		if hasPreparedAbsParam {
+			_, fallbackOK := preparedNumericFallbackSource(exprImpl.F.Args[0])
+			allInteger := rule.allIntegerParamRefs(originalAbsArg)
+			if fallbackOK && allInteger {
+				source, ok := preparedNumericFallbackSource(originalAbsArg)
+				if !ok {
+					return e, nil
+				}
+				reboundSource, changed, bindErr := rule.rebindPreparedIntegerExpr(source)
+				if bindErr != nil {
+					return nil, bindErr
+				}
+				if !changed {
+					return e, nil
+				}
+				rewritten, bindErr := BindFuncExprImplByPlanExpr(rule.ctx, "abs", []*plan.Expr{reboundSource})
+				if bindErr != nil {
+					return nil, bindErr
+				}
+				if rewrittenFn := rewritten.GetF(); rewrittenFn != nil {
+					rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
+					rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
+				}
+				return rewritten, nil
 			}
 		}
 
@@ -468,6 +522,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
 				rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
 			}
+			rewritten.AuxId = e.AuxId
 			return rewritten, nil
 		}
 		return e, nil
@@ -492,6 +547,191 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func preparedNumericValueParamPosition(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return 0, false
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
+		for _, index := range indexes {
+			if index >= 0 && index < len(fn.Args) {
+				if pos, found := preparedNumericValueParamPosition(fn.Args[index]); found {
+					return pos, true
+				}
+			}
+		}
+		return 0, false
+	}
+	if name == "case" {
+		for index, arg := range fn.Args {
+			if !numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
+				continue
+			}
+			if pos, ok := preparedNumericValueParamPosition(arg); ok {
+				return pos, true
+			}
+		}
+		return 0, false
+	}
+	for _, arg := range fn.Args {
+		if pos, ok := preparedNumericValueParamPosition(arg); ok {
+			return pos, true
+		}
+	}
+	return 0, false
+}
+
+func (rule *ResetParamRefRule) allIntegerParamRefs(expr *plan.Expr) bool {
+	positions := make(map[int32]struct{})
+	collectNumericValueParamPositions(expr, positions)
+	if len(positions) == 0 {
+		return false
+	}
+	for pos := range positions {
+		if pos < 0 || int(pos) >= len(rule.paramKinds) ||
+			rule.paramKinds[pos] != vector.PrepareParamInteger {
+			return false
+		}
+	}
+	return true
+}
+
+func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
+			for _, index := range indexes {
+				if index >= 0 && index < len(fn.Args) {
+					collectNumericValueParamPositions(fn.Args[index], positions)
+				}
+			}
+			return
+		}
+		if name == "case" {
+			for index, arg := range fn.Args {
+				if numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
+					collectNumericValueParamPositions(arg, positions)
+				}
+			}
+			return
+		}
+		for _, arg := range fn.Args {
+			collectNumericValueParamPositions(arg, positions)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectNumericValueParamPositions(item, positions)
+		}
+	}
+}
+
+func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*plan.Expr, bool, error) {
+	if expr == nil {
+		return nil, false, nil
+	}
+	if param := expr.GetP(); param != nil {
+		typed, ok := rule.typedIntegerParamExpr(param.Pos)
+		if !ok {
+			return expr, false, nil
+		}
+		return typed, true, nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		args := make([]*plan.Expr, len(fn.Args))
+		changed := false
+		for i, arg := range fn.Args {
+			rebound, argChanged, err := rule.rebindPreparedIntegerExpr(arg)
+			if err != nil {
+				return nil, false, err
+			}
+			args[i] = rebound
+			changed = changed || argChanged
+		}
+		if !changed {
+			return expr, false, nil
+		}
+		rebound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.GetObjName(), args)
+		if err != nil {
+			return nil, false, err
+		}
+		if reboundFn := rebound.GetF(); reboundFn != nil {
+			reboundFn.AggConfig = bytes.Clone(fn.AggConfig)
+			reboundFn.AggConfigType = fn.AggConfigType
+		}
+		return rebound, true, nil
+	}
+	if list := expr.GetList(); list != nil {
+		copied := DeepCopyExpr(expr)
+		changed := false
+		for i, item := range copied.GetList().List {
+			rebound, itemChanged, err := rule.rebindPreparedIntegerExpr(item)
+			if err != nil {
+				return nil, false, err
+			}
+			copied.GetList().List[i] = rebound
+			changed = changed || itemChanged
+		}
+		return copied, changed, nil
+	}
+	return expr, false, nil
+}
+
+func preparedNumericFallbackSource(expr *plan.Expr) (*plan.Expr, bool) {
+	if !isPreparedNumericFallbackExpr(expr) {
+		return nil, false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
+		return fn.Args[0], true
+	}
+	return expr, true
+}
+
+func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*plan.Expr, bool) {
+	if pos < 0 || int(pos) >= len(rule.params) || int(pos) >= len(rule.paramKinds) ||
+		rule.paramKinds[pos] != vector.PrepareParamInteger {
+		return nil, false
+	}
+	lit := rule.params[pos].GetLit()
+	if lit == nil || lit.GetIsnull() {
+		return nil, false
+	}
+	sval := lit.GetSval()
+	if sval == "" {
+		return nil, false
+	}
+	if strings.HasPrefix(sval, "-") {
+		value, err := strconv.ParseInt(sval, 10, 64)
+		if err != nil {
+			return nil, false
+		}
+		return makePlan2Int64ConstExprWithType(value), true
+	}
+	value, err := strconv.ParseUint(sval, 10, 64)
+	if err != nil {
+		return nil, false
+	}
+	if value <= uint64(math.MaxInt64) {
+		return makePlan2Int64ConstExprWithType(int64(value)), true
+	}
+	return makePlan2Uint64ConstExprWithType(value), true
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

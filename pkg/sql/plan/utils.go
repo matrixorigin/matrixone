@@ -3488,6 +3488,92 @@ type ParamValue struct {
 	PrepareParamKind vector.PrepareParamKind
 }
 
+// PreparedPlanHasDeferredNumericFunction reports whether a prepared query
+// contains an ABS numeric overload whose argument still includes
+// a parameter marker.  Such a plan is deliberately rebound from the concrete
+// execution value: the prepare-time DOUBLE fallback cannot represent every
+// integer exactly, and a cached compile would otherwise retain that lossy
+// cast for all executions.
+func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return false
+	}
+	rule := &deferredNumericFunctionRule{}
+	if err := NewVisitPlan(preparePlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
+		return false
+	}
+	return rule.found
+}
+
+type deferredNumericFunctionRule struct {
+	found bool
+}
+
+func (rule *deferredNumericFunctionRule) MatchNode(_ *Node) bool  { return false }
+func (rule *deferredNumericFunctionRule) IsApplyExpr() bool       { return true }
+func (rule *deferredNumericFunctionRule) ApplyNode(_ *Node) error { return nil }
+func (rule *deferredNumericFunctionRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	if containsDeferredNumericFunction(expr) {
+		rule.found = true
+	}
+	return expr, nil
+}
+
+func containsDeferredNumericFunction(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name == "abs" && len(fn.Args) == 1 && isPreparedNumericFallbackExpr(fn.Args[0]) && planExprContainsParam(fn.Args[0]) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsDeferredNumericFunction(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if containsDeferredNumericFunction(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPreparedNumericFallbackExpr(expr *Expr) bool {
+	return expr != nil && expr.AuxId >= preparedNumericFallbackAuxIDBase &&
+		expr.AuxId < preparedNumericFallbackAuxIDBase+1_000_000 &&
+		expr.Typ.Id == int32(types.T_float64)
+}
+
+func planExprContainsParam(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if planExprContainsParam(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if planExprContainsParam(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 	if param := expr.GetP(); param != nil {
 		return param.Pos, true
@@ -3578,11 +3664,13 @@ func isNonNegativePreparedInteger(value any) bool {
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
+	paramKinds := make([]vector.PrepareParamKind, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			paramKinds[i] = param.PrepareParamKind
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3605,6 +3693,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.SetParamKinds(paramKinds)
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
 		if name != "nth_value" || len(args) != 2 {
 			return nil
