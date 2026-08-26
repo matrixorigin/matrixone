@@ -45,8 +45,8 @@ const (
 	MORPCVersion7      int64 = 7  // structured CHECK constraint metadata and enforcement
 	MORPCVersion8      int64 = 8  // versioned exact runtime-filter key contract
 	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
-	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
-	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
+	MORPCVersion10     int64 = 10 // bounded Sorted64 membership-filter wire format
+	MORPCVersion11     int64 = 11 // persisted appendable-object abort metadata
 	MORPCVersion12     int64 = 12 // prepared-parameter provenance in remote process metadata and aggregate trailers
 	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
 	MORPCVersion14     int64 = 14 // utf8mb4 text MIN/MAX collation semantics
@@ -65,7 +65,8 @@ const (
 	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
 	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
-	MORPCLatestVersion       = MORPCVersion29
+	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
+	MORPCLatestVersion       = MORPCVersion30
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
