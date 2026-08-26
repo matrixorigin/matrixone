@@ -96,6 +96,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
+	pb.Method_BatchUnlock:                  defines.MORPCVersion30,
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
 	pb.Method_GetLockHolder:                defines.MORPCVersion2,
 	pb.Method_GetWaitingList:               defines.MORPCVersion1,
@@ -127,6 +128,19 @@ func supportsLockProtocolV28(serviceID string) bool {
 	}
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion28
+}
+
+func supportsLockProtocolV30(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion30
 }
 
 func (s *service) initRemote() {
@@ -324,6 +338,8 @@ func (s *service) initRemoteHandler() {
 		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
 		s.handleRemoteUnlock)
+	s.remote.server.RegisterMethodHandler(pb.Method_BatchUnlock,
+		s.handleRemoteBatchUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
 		s.handleRemoteGetLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetLockHolder,
@@ -488,6 +504,8 @@ func (s *service) handleRemoteLock(
 			resp.Lock.Result = result
 			resp.Lock.TxnWaitingListOnLockTableSupported =
 				err == nil && supportsLockProtocolV28(s.cfg.ServiceID)
+			resp.Lock.BatchUnlockSupported =
+				err == nil && supportsLockProtocolV30(s.cfg.ServiceID)
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
 	handlerOwnsAdmission = !completion.transferToCallbackIfPending()
@@ -676,6 +694,22 @@ func (s *service) handleRemoteUnlock(
 		req.Unlock.TxnID,
 		req.Unlock.CommitTS,
 		req.Unlock.Mutations...,
+	)
+	writeResponse(s.logger, cancel, resp, err, cs)
+}
+
+func (s *service) handleRemoteBatchUnlock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	err := s.unlockRemoteLockTables(
+		ctx,
+		req.BatchUnlock.LockTables,
+		req.BatchUnlock.TxnID,
+		req.BatchUnlock.CommitTS,
 	)
 	writeResponse(s.logger, cancel, resp, err, cs)
 }

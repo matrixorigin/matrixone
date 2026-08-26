@@ -65,7 +65,8 @@ const (
 	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
 	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
-	MORPCLatestVersion       = MORPCVersion29
+	MORPCVersion30     int64 = 30 // batched multi-table remote transaction unlock
+	MORPCLatestVersion       = MORPCVersion30
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
