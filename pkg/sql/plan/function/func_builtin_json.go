@@ -52,12 +52,14 @@ func normalizeJsonComparisonParam(
 	from := vector.GenerateFunctionStrParameter(parameters[0])
 	to := vector.MustFunctionResult[types.Varlena](result)
 	resultVector := to.GetResultVector()
+	paramType := parameters[0].GetPrepareParamType()
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		if err := to.AppendMultiBytes(nil, true, length); err != nil {
 			return err
 		}
 		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
+		resultVector.SetPrepareParamType(paramType)
 		return nil
 	}
 
@@ -81,6 +83,7 @@ func normalizeJsonComparisonParam(
 			}
 		}
 		resultVector.SetPrepareParamKind(kind)
+		resultVector.SetPrepareParamType(paramType)
 		return nil
 	}
 
@@ -134,6 +137,7 @@ func normalizeJsonComparisonParam(
 	} else if err := resultVector.SetPrepareParamKindsWithMP(kinds, proc.Mp()); err != nil {
 		return err
 	}
+	resultVector.SetPrepareParamType(paramType)
 	return nil
 }
 

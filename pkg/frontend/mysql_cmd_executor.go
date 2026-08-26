@@ -2732,22 +2732,25 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                originSQL,
+		compile:            comp,
+		PreparePlan:        preparePlan,
+		PrepareStmt:        saveStmt,
+		NativeMode:         owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet: true,
+		remapDb:            maps.Clone(execCtx.remapDb),
+		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:   owner.GetTempTableVersion(),
+		ddlVersion:         owner.getDDLVersion(),
+		cloneSQL:           cloneSQL,
+		protocolVersion:    protocolVersion,
+		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			prepareControl.Plan),
+		jsonComparisonParamPositionsSet: true,
+		getFromSendLongData:             make(map[int]struct{}),
+		schedulingSQLMode:               schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)

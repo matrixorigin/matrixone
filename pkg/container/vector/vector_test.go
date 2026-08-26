@@ -5450,6 +5450,38 @@ func TestPreflightSetPrepareParamKindAtPreservesLogicalRows(t *testing.T) {
 	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(2))
 }
 
+func TestPrepareParamTypeIsScalarAndClearedOnReset(t *testing.T) {
+	vec := NewVec(types.T_text.ToType())
+	vec.SetPrepareParamKind(PrepareParamInteger)
+	vec.SetPrepareParamType(types.T_int16)
+	require.Equal(t, types.T_int16, vec.GetPrepareParamType())
+
+	vec.ResetWithSameType()
+	require.Equal(t, types.T_any, vec.GetPrepareParamType())
+	require.False(t, vec.HasPrepareParamKind())
+}
+
+func TestPrepareParamKindForType(t *testing.T) {
+	for _, test := range []struct {
+		typ  types.T
+		kind PrepareParamKind
+		ok   bool
+	}{
+		{types.T_bool, PrepareParamNone, false},
+		{types.T_int64, PrepareParamInteger, true},
+		{types.T_uint32, PrepareParamInteger, true},
+		{types.T_float32, PrepareParamFloat, true},
+		{types.T_float64, PrepareParamNone, false},
+		{types.T_decimal128, PrepareParamNone, false},
+		{types.T_text, PrepareParamNone, false},
+		{types.T_timestamp, PrepareParamNone, false},
+	} {
+		kind, ok := PrepareParamKindForType(test.typ)
+		require.Equal(t, test.kind, kind)
+		require.Equal(t, test.ok, ok)
+	}
+}
+
 func TestPreflightSetPrepareParamKindAtFutureLength(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int64.ToType())

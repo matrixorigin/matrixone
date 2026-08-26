@@ -601,6 +601,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
 		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		expr.vec.SetPrepareParamType(proc.GetPrepareParamType(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
 		expr.vec.SetLength(rowCount)

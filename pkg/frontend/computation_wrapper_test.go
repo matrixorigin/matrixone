@@ -298,6 +298,57 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 114, "select json_extract('18446744073709551615', '$') = ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	require.Equal(t, []int32{0},
+		plan2.PreparedJSONComparisonParamPositions(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan))
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamInteger, cw.proc.GetPrepareParamKind(0))
+	require.True(t, prepareStmt.jsonComparisonParamPositionsSet)
+	require.Equal(t, []int32{0}, prepareStmt.jsonComparisonParamPositions)
+
+	require.NoError(t, vector.SetStringAt(
+		prepareStmt.params, 0, "16777216", cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float32, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
+}
+
+func TestInitExecuteStmtParamDoesNotAddTypedMetadataToUnrelatedParams(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 115, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, types.T_any, cw.proc.GetPrepareParamType(0))
+	require.Equal(t, vector.PrepareParamInteger, cw.proc.GetPrepareParamKind(0))
+	require.True(t, prepareStmt.jsonComparisonParamPositionsSet)
+	require.Empty(t, prepareStmt.jsonComparisonParamPositions)
+}
+
 func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
 	binaryParam := func(value string, mysqlType defines.MysqlType) func(
 		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
@@ -455,6 +506,40 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	}
 }
 
+func TestBinaryProtocolPrepareParamType(t *testing.T) {
+	for _, test := range []struct {
+		mysqlType  defines.MysqlType
+		isUnsigned bool
+		value      string
+		want       types.T
+	}{
+		{defines.MYSQL_TYPE_NULL, false, "", types.T_any},
+		{defines.MYSQL_TYPE_TINY, false, "1", types.T_any},
+		{defines.MYSQL_TYPE_TINY, false, "2", types.T_int8},
+		{defines.MYSQL_TYPE_TINY, true, "1", types.T_uint8},
+		{defines.MYSQL_TYPE_SHORT, false, "1", types.T_int16},
+		{defines.MYSQL_TYPE_SHORT, true, "1", types.T_uint16},
+		{defines.MYSQL_TYPE_LONG, false, "1", types.T_int32},
+		{defines.MYSQL_TYPE_INT24, true, "1", types.T_uint32},
+		{defines.MYSQL_TYPE_LONGLONG, false, "1", types.T_int64},
+		{defines.MYSQL_TYPE_LONGLONG, true, "1", types.T_uint64},
+		{defines.MYSQL_TYPE_FLOAT, false, "1.5", types.T_float32},
+		{defines.MYSQL_TYPE_DOUBLE, false, "1.5", types.T_any},
+		{defines.MYSQL_TYPE_NEWDECIMAL, false, "1.5", types.T_any},
+		{defines.MYSQL_TYPE_BIT, false, "1", types.T_any},
+		{defines.MYSQL_TYPE_YEAR, false, "2024", types.T_any},
+		{defines.MYSQL_TYPE_VAR_STRING, false, "1", types.T_any},
+		{defines.MYSQL_TYPE_BLOB, false, "1", types.T_any},
+		{defines.MYSQL_TYPE_JSON, false, "1", types.T_any},
+		{defines.MYSQL_TYPE_TIMESTAMP, false, "1", types.T_any},
+	} {
+		require.Equal(t, test.want,
+			binaryProtocolPrepareParamType(
+				test.mysqlType, test.isUnsigned, []byte(test.value)),
+			"type %v unsigned %t value %q", test.mysqlType, test.isUnsigned, test.value)
+	}
+}
+
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T
@@ -551,7 +636,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
+	params, _, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args, nil)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -648,7 +733,8 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cw.proc, args)
+	params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+		cw.proc, args, []int32{0, 1, 2})
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
@@ -658,6 +744,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		vector.PrepareParamInteger,
 		vector.PrepareParamNone,
 	}, paramKinds)
+	require.Equal(t, []types.T{types.T_int64, types.T_int64, types.T_any}, paramTypes)
 	require.Equal(t, []any{
 		plan2.ParamValue{Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
 		plan2.ParamValue{Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
@@ -666,6 +753,22 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
 	require.Equal(t, "session-binary", params.GetStringAt(2))
+}
+
+func TestBuildExecuteUserParamsAllocatesTypesOnlyWhenNeeded(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 116)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVar("boolean_value", true, "", false))
+
+	params, _, _, _, paramTypes, err := buildExecuteUserParams(
+		cw.proc,
+		[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "boolean_value"}}}},
+		[]int32{0},
+	)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+	require.Nil(t, paramTypes,
+		"the common JSON/BOOL path must not allocate unused exact-type metadata")
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

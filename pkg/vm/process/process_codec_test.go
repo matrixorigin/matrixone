@@ -307,6 +307,74 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	require.Error(t, err, "invalid packed kind bits must be rejected")
 }
 
+func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.SetPrepareParamsWithTypedMeta(
+		proc.GetPrepareParams(),
+		[]bool{false, false},
+		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamFloat},
+		[]types.T{types.T_int64, types.T_float32},
+		[]bool{false, true},
+	)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	_, err := PrepareParamMetadataForRemote(
+		"", proc.GetPrepareParams().Length(), proc.Base.prepareParamsIsBin)
+	require.ErrorContains(t, err, "protocol version 30",
+		"typed metadata must be rejected before the older kind gate can strip it")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	mismatchedMetadata := prepareParamMetadataWithTypes(
+		proc.GetPrepareParams(), nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone},
+		[]types.T{types.T_int64, types.T_any})
+	_, err = PrepareParamMetadataForRemote("", 2, mismatchedMetadata)
+	require.ErrorContains(t, err, "does not match kind")
+
+	invalidTypeMetadata := prepareParamMetadataWithTypes(
+		proc.GetPrepareParams(), nil, nil, []types.T{types.T(255), types.T_any})
+	_, err = PrepareParamMetadataForRemote("", 2, invalidTypeMetadata)
+	require.ErrorContains(t, err, "invalid prepare parameter type")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion29)
+	_, err = proc.BuildProcessInfo("select ?, ?")
+	require.ErrorContains(t, err, "protocol version 30")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	info, err := proc.BuildProcessInfo("select ?, ?")
+	require.NoError(t, err)
+	require.Len(t, info.PrepareParams.IsBin, 24)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion29)
+	_, err = svc.Decode(context.Background(), info)
+	require.ErrorContains(t, err, "protocol version 30")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	decoded, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	defer decoded.Free()
+	require.Equal(t, types.T_int64, decoded.GetPrepareParamType(0))
+	require.Equal(t, types.T_float32, decoded.GetPrepareParamType(1))
+	require.Equal(t, vector.PrepareParamInteger, decoded.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamFloat, decoded.GetPrepareParamKind(1))
+	require.True(t, decoded.GetPrepareParamIsBinaryString(1))
+}
+
 func TestBinaryStringPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)

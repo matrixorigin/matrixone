@@ -334,6 +334,11 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// jsonComparisonParamPositions caches the direct prepared parameters whose
+	// concrete SQL type affects JSON equality. Plan traversal belongs on the
+	// prepare/rebuild path, not on every execution of a cached statement.
+	jsonComparisonParamPositions    []int32
+	jsonComparisonParamPositionsSet bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode

@@ -167,6 +167,15 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		require.False(t, prepared)
 		require.NoError(t, stmt.Close())
 
+		stmt, err = db.PrepareContext(ctx,
+			`select json_extract('18446744073709551615', '$') = ?`)
+		require.NoError(t, err)
+		require.Error(t, db.QueryRowContext(ctx,
+			`select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed)`).Scan(new(bool)))
+		require.Error(t, stmt.QueryRowContext(ctx, int64(9223372036854775807)).Scan(new(bool)),
+			"prepared BIGINT must retain the direct JSON-to-BIGINT overflow error")
+		require.NoError(t, stmt.Close())
+
 		for _, query := range []string{
 			`select json_extract(json_object('v', json_object('nested', true)), '$.v') = ?`,
 			`select json_extract(json_object('v', json_array(true)), '$.v') = ?`,
@@ -186,5 +195,27 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		assertIDs("execute issue_27529_p using @issue_27529_b", 1)
 		execSQLRequire(t, ctx, db, "set @issue_27529_b = false")
 		assertIDs("execute issue_27529_p using @issue_27529_b", 2)
+
+		var directRounded bool
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('16777217', '$') = cast(16777216 as float)`).Scan(&directRounded))
+		require.True(t, directRounded)
+
+		execSQLRequire(t, ctx, db,
+			`prepare issue_27529_float from "select json_extract('16777217', '$') = ?"`)
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_float")
+		execSQLRequire(t, ctx, db, "set @issue_27529_float = cast(16777216 as float)")
+		var rounded bool
+		require.NoError(t,
+			db.QueryRowContext(ctx, "execute issue_27529_float using @issue_27529_float").Scan(&rounded))
+		require.True(t, rounded)
+
+		execSQLRequire(t, ctx, db,
+			`prepare issue_27529_signed from "select json_extract('18446744073709551615', '$') = ?"`)
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_signed")
+		execSQLRequire(t, ctx, db,
+			"set @issue_27529_signed = cast(9223372036854775807 as signed)")
+		_, err = db.ExecContext(ctx, "execute issue_27529_signed using @issue_27529_signed")
+		require.Error(t, err)
 	})
 }

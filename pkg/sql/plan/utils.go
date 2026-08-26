@@ -3391,6 +3391,85 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedJSONComparisonParamPositions returns the direct parameter markers
+// whose runtime SQL type controls a JSON equality comparison. The hidden
+// adapter remains in a cacheable generic plan; execution metadata supplies the
+// concrete type for only these positions.
+func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	rule := &preparedJSONComparisonParamRule{
+		positions: make(map[int32]struct{}),
+		seen:      make(map[*plan.Expr]struct{}),
+	}
+	queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
+	_ = NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background())
+	_ = visitMissingNodeExprs(query, query.Steps, []VisitPlanRule{rule})
+
+	positions := make([]int32, 0, len(rule.positions))
+	for position := range rule.positions {
+		positions = append(positions, position)
+	}
+	slices.Sort(positions)
+	return positions
+}
+
+type preparedJSONComparisonParamRule struct {
+	positions map[int32]struct{}
+	seen      map[*plan.Expr]struct{}
+}
+
+func (rule *preparedJSONComparisonParamRule) MatchNode(*Node) bool { return false }
+func (rule *preparedJSONComparisonParamRule) IsApplyExpr() bool    { return true }
+func (rule *preparedJSONComparisonParamRule) ApplyNode(*Node) error {
+	return nil
+}
+
+func (rule *preparedJSONComparisonParamRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if _, ok := rule.seen[expr]; ok {
+		return expr, nil
+	}
+	rule.seen[expr] = struct{}{}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
+			len(impl.F.Args) == 1 {
+			if param := impl.F.Args[0].GetP(); param != nil {
+				rule.positions[param.Pos] = struct{}{}
+			}
+		}
+		for _, arg := range impl.F.Args {
+			if _, err := rule.ApplyExpr(arg); err != nil {
+				return nil, err
+			}
+		}
+	case *plan.Expr_W:
+		if _, err := applyWindowExpr(expr, rule.ApplyExpr); err != nil {
+			return nil, err
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if _, err := rule.ApplyExpr(item); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return expr, nil
+}
+
 func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {
 	positions := make(map[int32]struct{})
 	if preparePlan == nil {

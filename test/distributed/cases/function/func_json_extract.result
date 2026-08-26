@@ -715,6 +715,22 @@ execute json_bool_compare_stmt using @json_bool_compare_param;
 id
 2
 deallocate prepare json_bool_compare_stmt;
+select json_extract('16777217', '$') = cast(16777216 as float) as direct_rounded_equal;
+direct_rounded_equal
+1
+prepare json_float_compare_stmt from 'select json_extract(''16777217'', ''$'') = ? as rounded_equal';
+set @json_float_compare_param = cast(16777216 as float);
+execute json_float_compare_stmt using @json_float_compare_param;
+rounded_equal
+1
+deallocate prepare json_float_compare_stmt;
+select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed);
+invalid argument operator cast, bad value [JSON -> BIGINT]
+prepare json_signed_compare_stmt from 'select json_extract(''18446744073709551615'', ''$'') = ?';
+set @json_signed_compare_param = cast(9223372036854775807 as signed);
+execute json_signed_compare_stmt using @json_signed_compare_param;
+invalid argument operator cast, bad value [JSON -> BIGINT]
+deallocate prepare json_signed_compare_stmt;
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 json_extract(json_array(cast(0.00 as decimal(10, 2))), $[0]) = true    json_extract(json_array(cast(1.20 as decimal(10, 2))), $[0]) = true
 0    1

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -716,6 +717,73 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+func binaryProtocolPrepareParamType(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value []byte,
+) types.T {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_NULL:
+		// NULL is handled before scalar coercion and has no concrete comparison
+		// domain. Avoid forcing an otherwise unnecessary v30 remote metadata path.
+		return types.T_any
+	case defines.MYSQL_TYPE_TINY:
+		if binaryProtocolPrepareParamKind(mysqlType, isUnsigned, value) == vector.PrepareParamBoolean {
+			// Boolean already has a distinct conversion category.
+			return types.T_any
+		}
+		if isUnsigned {
+			return types.T_uint8
+		}
+		return types.T_int8
+	case defines.MYSQL_TYPE_SHORT:
+		if isUnsigned {
+			return types.T_uint16
+		}
+		return types.T_int16
+	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+		if isUnsigned {
+			return types.T_uint32
+		}
+		return types.T_int32
+	case defines.MYSQL_TYPE_LONGLONG:
+		if isUnsigned {
+			return types.T_uint64
+		}
+		return types.T_int64
+	case defines.MYSQL_TYPE_FLOAT:
+		return types.T_float32
+	case defines.MYSQL_TYPE_DOUBLE:
+		// FLOAT64 is the existing floating-category comparison domain.
+		return types.T_any
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		// JSON/DECIMAL comparison already resolves through FLOAT64.
+		return types.T_any
+	case defines.MYSQL_TYPE_BIT, defines.MYSQL_TYPE_YEAR:
+		// The ordinary JSON equality resolver has no BIT/YEAR target row. Keep
+		// the established integer-category behavior until that public contract
+		// is defined instead of inventing a new prepared-only coercion.
+		return types.T_any
+	default:
+		// Unsupported MySQL types keep the established category-only behavior.
+		// Calling their text transport shape a concrete SQL type would add an
+		// unnecessary protocol dependency without preserving typed-literal parity.
+		return types.T_any
+	}
+}
+
+func preparedJSONComparisonParamPositions(
+	prepareStmt *PrepareStmt,
+	preparePlan *plan.Plan,
+) []int32 {
+	if !prepareStmt.jsonComparisonParamPositionsSet {
+		prepareStmt.jsonComparisonParamPositions =
+			plan2.PreparedJSONComparisonParamPositions(preparePlan)
+		prepareStmt.jsonComparisonParamPositionsSet = true
+	}
+	return prepareStmt.jsonComparisonParamPositions
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -841,6 +909,9 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.jsonComparisonParamPositions =
+			plan2.PreparedJSONComparisonParamPositions(newPreparePlan.Plan)
+		prepareStmt.jsonComparisonParamPositionsSet = true
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -897,12 +968,15 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	numParams := len(preparePlan.ParamTypes)
 	cwft.paramVals = nil
+	jsonComparisonParamPositions := preparedJSONComparisonParamPositions(
+		prepareStmt, preparePlan.Plan)
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
 		var kinds []vector.PrepareParamKind
+		var paramTypes []types.T
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
@@ -914,8 +988,20 @@ func initExecuteStmtParamWithResolverInSession(
 				}
 				kinds[i] = kind
 			}
+			if _, relevant := slices.BinarySearch(jsonComparisonParamPositions, int32(i)); relevant {
+				paramType := binaryProtocolPrepareParamType(
+					mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+				if paramType != types.T_any {
+					if paramTypes == nil {
+						paramTypes = make([]types.T, paramCount)
+					}
+					paramTypes[i] = paramType
+				}
+			}
 		}
-		if kinds == nil {
+		if paramTypes != nil {
+			cwft.proc.SetPrepareParamsWithTypedMeta(prepareStmt.params, nil, kinds, paramTypes)
+		} else if kinds == nil {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		} else {
 			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
@@ -928,11 +1014,17 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+			cwft.proc, execPlan.Args, jsonComparisonParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+		if paramTypes != nil {
+			cwft.proc.SetOwnedPrepareParamsWithTypedMeta(
+				params, paramIsBin, paramKinds, paramTypes)
+		} else {
+			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+		}
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -1146,11 +1238,13 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
+	typedPositions []int32,
 ) (
 	params *vector.Vector,
 	paramVals []any,
 	paramIsBin []bool,
 	paramKinds []vector.PrepareParamKind,
+	paramTypes []types.T,
 	err error,
 ) {
 	params = vector.NewVec(types.T_text.ToType())
@@ -1185,6 +1279,15 @@ func buildExecuteUserParams(
 		} else {
 			paramKinds[i] = prepareParamKindFromValue(param)
 		}
+		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
+			paramType := prepareParamTypeFromExecuteArg(arg, param)
+			if paramType != types.T_any {
+				if paramTypes == nil {
+					paramTypes = make([]types.T, len(args))
+				}
+				paramTypes[i] = paramType
+			}
+		}
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
@@ -1196,6 +1299,27 @@ func buildExecuteUserParams(
 		}
 	}
 	return
+}
+
+func prepareParamTypeFromExecuteArg(arg *plan.Expr, value any) types.T {
+	if arg != nil {
+		oid := types.T(arg.GetTyp().Id)
+		switch oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+			types.T_float32:
+			return oid
+		}
+	}
+	inferred := types.T(inferUserDefinedVarType(value).Id)
+	switch inferred {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32:
+		return inferred
+	default:
+		return types.T_any
+	}
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

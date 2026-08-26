@@ -57,6 +57,22 @@ const (
 	PrepareParamBoolean = types.StringConversionBoolean
 )
 
+// PrepareParamKindForType maps the concrete prepared SQL types whose semantics
+// cannot be recovered from their coarse conversion domain. Keeping this
+// mapping beside the kind definition prevents the process codec and comparison
+// executor from drifting.
+func PrepareParamKindForType(typ types.T) (PrepareParamKind, bool) {
+	switch typ {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return PrepareParamInteger, true
+	case types.T_float32:
+		return PrepareParamFloat, true
+	default:
+		return PrepareParamNone, false
+	}
+}
+
 // MergePrepareParamKinds folds two observed source categories.  Equal
 // categories are idempotent; a conflict conservatively becomes ordinary
 // string conversion.  This is intentionally commutative and associative so
@@ -94,6 +110,12 @@ type Vector struct {
 	// FIXME: Bad design! Will be deleted soon.
 	isBin            bool
 	prepareParamKind PrepareParamKind
+	// prepareParamType keeps the concrete SQL type of a direct prepared
+	// parameter independently from its coarse string-conversion category. It is
+	// scalar because one ParamRef resolves to one value for an execution; the
+	// JSON comparison adapter consumes it before values can be materialized or
+	// merged with other rows.
+	prepareParamType types.T
 	// prepareParamKindSeen distinguishes an observed string/byte source
 	// (kind None) from an empty vector that has not contributed a value yet.
 	// It is local lineage state and is not part of the vector wire format.
@@ -621,6 +643,21 @@ func (v *Vector) SetPrepareParamKind(kind PrepareParamKind) {
 	v.releasePrepareParamKinds()
 }
 
+// GetPrepareParamType returns the concrete SQL type attached to a direct
+// prepared parameter, or T_any when no exact type is available.
+func (v *Vector) GetPrepareParamType() types.T {
+	if v == nil {
+		return types.T_any
+	}
+	return v.prepareParamType
+}
+
+// SetPrepareParamType attaches the concrete SQL type of a direct prepared
+// parameter. T_any clears the optional metadata.
+func (v *Vector) SetPrepareParamType(typ types.T) {
+	v.prepareParamType = typ
+}
+
 // GetPrepareParamKindAt returns the source category for one logical row.
 // Constants use their single physical value for every logical row. The scalar
 // field remains the common fast path; heterogeneous vectors consult the
@@ -1109,6 +1146,7 @@ func (v *Vector) PreflightSetPrepareParamKindsAtLength(
 func (v *Vector) resetPrepareParamKind() {
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = false
+	v.prepareParamType = types.T_any
 	v.releasePrepareParamKinds()
 }
 

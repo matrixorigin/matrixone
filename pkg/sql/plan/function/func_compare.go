@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"strconv"
 
@@ -53,12 +54,23 @@ func comparePreparedJSON(
 	}
 	jsonVector := parameters[jsonPos]
 	paramVector := parameters[paramPos]
+	paramType := paramVector.GetPrepareParamType()
 	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 	resultNulls := result.GetResultVector().GetNulls()
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		nulls.AddRange(resultNulls, 0, uint64(length))
 		return nil
+	}
+	if paramType != types.T_any {
+		expectedKind, ok := vector.PrepareParamKindForType(paramType)
+		if !ok || expectedKind != paramVector.GetPrepareParamKind() {
+			return moerr.NewInternalErrorf(
+				proc.Ctx,
+				"prepared parameter type %s does not match conversion kind %d",
+				paramType.String(), paramVector.GetPrepareParamKind(),
+			)
+		}
 	}
 
 	var (
@@ -118,8 +130,16 @@ func comparePreparedJSON(
 			continue
 		}
 
-		comparison, coercedJSONNull, coercedParamNull, err := comparePreparedJSONScalars(
-			proc, jsonValue, paramValue, paramVector.GetPrepareParamKindAt(row))
+		var comparison int
+		var coercedJSONNull, coercedParamNull bool
+		var err error
+		if paramType == types.T_any {
+			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalars(
+				proc, jsonValue, paramValue, paramVector.GetPrepareParamKindAt(row))
+		} else {
+			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalarsAsType(
+				proc, jsonValue, paramValue, paramType)
+		}
 		if err != nil {
 			return err
 		}
@@ -234,6 +254,120 @@ func comparePreparedJSONScalars(
 	default:
 		return 0, false, false, moerr.NewInternalErrorf(proc.Ctx, "unsupported prepared parameter kind %d", kind)
 	}
+}
+
+func comparePreparedJSONScalarsAsType(
+	proc *process.Process,
+	jsonValue bytejson.ByteJson,
+	paramValue bytejson.ByteJson,
+	paramType types.T,
+) (comparison int, jsonNull bool, paramNull bool, err error) {
+	switch paramType {
+	case types.T_int8:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt8, math.MaxInt8, paramType)
+	case types.T_int16:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt16, math.MaxInt16, paramType)
+	case types.T_int32:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt32, math.MaxInt32, paramType)
+	case types.T_int64:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt64, math.MaxInt64, paramType)
+
+	case types.T_uint8:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint8, paramType)
+	case types.T_uint16:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint16, paramType)
+	case types.T_uint32:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint32, paramType)
+	case types.T_uint64:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint64, paramType)
+
+	case types.T_float32:
+		left, leftNull, leftErr := preparedJSONFloatScalar(proc.Ctx, jsonValue, paramType)
+		if leftErr != nil {
+			return 0, false, false, leftErr
+		}
+		right, rightNull, rightErr := preparedJSONFloatScalar(proc.Ctx, paramValue, paramType)
+		if rightErr != nil {
+			return 0, false, false, rightErr
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		return compareFloat64Total(left, right), false, false, nil
+
+	}
+
+	return 0, false, false, moerr.NewInternalErrorf(
+		proc.Ctx, "unsupported prepared parameter type %s", paramType.String())
+}
+
+func comparePreparedJSONSignedScalars(
+	ctx context.Context,
+	leftValue bytejson.ByteJson,
+	rightValue bytejson.ByteJson,
+	minValue int64,
+	maxValue int64,
+	paramType types.T,
+) (comparison int, leftNull bool, rightNull bool, err error) {
+	left, leftNull, leftOK := jsonToInt64Scalar(leftValue)
+	if !leftOK || (!leftNull && (left < minValue || left > maxValue)) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	right, rightNull, rightOK := jsonToInt64Scalar(rightValue)
+	if !rightOK || (!rightNull && (right < minValue || right > maxValue)) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	if leftNull || rightNull {
+		return 0, leftNull, rightNull, nil
+	}
+	return compareInt64(left, right), false, false, nil
+}
+
+func comparePreparedJSONUnsignedScalars(
+	ctx context.Context,
+	leftValue bytejson.ByteJson,
+	rightValue bytejson.ByteJson,
+	maxValue uint64,
+	paramType types.T,
+) (comparison int, leftNull bool, rightNull bool, err error) {
+	left, leftNull, leftOK := jsonToUint64Scalar(leftValue)
+	if !leftOK || (!leftNull && left > maxValue) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	right, rightNull, rightOK := jsonToUint64Scalar(rightValue)
+	if !rightOK || (!rightNull && right > maxValue) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	if leftNull || rightNull {
+		return 0, leftNull, rightNull, nil
+	}
+	return compareUint64(left, right), false, false, nil
+}
+
+func preparedJSONFloatScalar(
+	ctx context.Context,
+	value bytejson.ByteJson,
+	paramType types.T,
+) (float64, bool, error) {
+	result, isNull, ok := jsonToScalar(value)
+	if !ok {
+		return 0, false, jsonCastErr(ctx, paramType)
+	}
+	if isNull {
+		return 0, true, nil
+	}
+	if result < -math.MaxFloat32 || result > math.MaxFloat32 {
+		return 0, false, jsonCastErr(ctx, paramType)
+	}
+	return float64(float32(result)), false, nil
 }
 
 type preparedJSONIntegerValue struct {
