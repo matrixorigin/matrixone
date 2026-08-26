@@ -152,6 +152,7 @@ func (s *Segment) decodeSegment(data []byte) error {
 		return err
 	}
 	s.dict = dict
+	s.ownedBytes = int64(len(data))
 	// s.N is set by decodeDocmap (loaded segments have pks==nil, so len(s.pks) is 0).
 	return nil
 }
