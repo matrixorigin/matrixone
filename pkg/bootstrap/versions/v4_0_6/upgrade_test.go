@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 19)
+	require.Len(t, tenantUpgEntries, 23)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -126,6 +126,83 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, collationApplicability.UpgSql)
 	require.Contains(t, strings.ToLower(collationApplicability.PreSql),
 		"drop view if exists information_schema.collation_character_set_applicability")
+
+	metadataViews := []struct {
+		name             string
+		ddl              string
+		requiredProtocol int64
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL,
+			requiredProtocol: defines.MORPCVersion16},
+	}
+	for i, view := range metadataViews {
+		entry := tenantUpgEntries[19+i]
+		require.Equal(t, sysview.InformationDBConst, entry.Schema)
+		require.Equal(t, view.name, entry.TableName)
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Equal(t, view.ddl, entry.UpgSql)
+		require.Equal(t, view.requiredProtocol, entry.RequiredProtocolVersion)
+		require.Contains(t, strings.ToLower(entry.PreSql),
+			"drop view if exists information_schema."+strings.ToLower(view.name))
+	}
+}
+
+func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
+	views := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+	}
+	checkErr := errors.New("check metadata view definition failed")
+
+	for _, view := range views {
+		for _, state := range []struct {
+			name       string
+			exists     bool
+			definition string
+			checkErr   error
+			want       bool
+		}{
+			{name: "current", exists: true, definition: view.ddl, want: true},
+			{name: "old", exists: true, definition: "old view definition"},
+			{name: "missing", definition: view.ddl},
+			{name: "error", checkErr: checkErr},
+		} {
+			t.Run(view.name+"/"+state.name, func(t *testing.T) {
+				oldCheck := versions.CheckViewDefinition
+				versions.CheckViewDefinition = func(
+					txn executor.TxnExecutor,
+					accountID uint32,
+					schema string,
+					viewName string,
+				) (bool, string, error) {
+					require.Nil(t, txn)
+					require.Equal(t, uint32(42), accountID)
+					require.Equal(t, sysview.InformationDBConst, schema)
+					require.Equal(t, view.name, viewName)
+					return state.exists, state.definition, state.checkErr
+				}
+				defer func() { versions.CheckViewDefinition = oldCheck }()
+
+				entry := upgradeInformationSchemaMetadataVisibilityView(view.name, view.ddl)
+				ok, err := entry.CheckFunc(nil, 42)
+				if state.checkErr != nil {
+					require.ErrorIs(t, err, state.checkErr)
+					require.False(t, ok)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, state.want, ok)
+			})
+		}
+	}
 }
 
 func TestInformationSchemaCollationsUpgradeCheckIsExact(t *testing.T) {
@@ -161,7 +238,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 19)
+	require.Len(t, tenantUpgEntries, 23)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -535,6 +612,10 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
 				return true, sysview.InformationSchemaColumnsDDL, nil
+			case "TABLES":
+				return true, sysview.InformationSchemaTablesDDL, nil
+			case "STATISTICS":
+				return true, sysview.InformationSchemaStatisticsDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}

@@ -50,6 +50,53 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
+	tests := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "tables", ddl: InformationSchemaTablesDDL},
+		{name: "columns", ddl: InformationSchemaColumnsDDL},
+		{name: "statistics", ddl: InformationSchemaStatisticsDDL},
+		{name: "table constraints", ddl: InformationSchemaTableConstraintsDDL},
+		{name: "legacy table constraints", ddl: InformationSchemaTableConstraintsLegacyDDL},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, expected := range []string{
+				"WITH RECURSIVE __mo_active_roles(role_id)",
+				"SELECT cast(role_id AS bigint) FROM mo_catalog.mo_role WHERE role_name = current_role()",
+				"JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id",
+				"__mo_visible_tables AS",
+				"tbl.account_id = current_account_id()",
+				"tbl.owner IN (SELECT role_id FROM __mo_active_roles)",
+				"db.owner = ar.role_id",
+				"rp.obj_type IN ('table','view')",
+				"rp.privilege_level = '*.*'",
+				"rp.privilege_level IN ('d.*','*')",
+				"rp.privilege_level IN ('d.t','t')",
+				"rp.privilege_name IN ('show tables','database all','database ownership')",
+			} {
+				assert.Contains(t, test.ddl, expected)
+			}
+			assert.NotContains(t, test.ddl, "SELECT tbl.*")
+
+			statements, err := mysql.Parse(context.Background(), test.ddl, 1)
+			assert.NoError(t, err)
+			for _, statement := range statements {
+				statement.Free()
+			}
+		})
+	}
+
+	assert.Contains(t, InformationSchemaTablesDDL, "FROM __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaColumnsDDL, "join __mo_visible_tables mt")
+	assert.Contains(t, InformationSchemaStatisticsDDL, "join `__mo_visible_tables` `tbl`")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables check_tbl")
+}
+
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))

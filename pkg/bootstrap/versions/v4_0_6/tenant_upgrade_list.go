@@ -47,6 +47,28 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
+	upgradeInformationSchemaMetadataVisibilityView("TABLES", sysview.InformationSchemaTablesDDL),
+	upgradeInformationSchemaMetadataVisibilityView("COLUMNS", sysview.InformationSchemaColumnsDDL),
+	upgradeInformationSchemaMetadataVisibilityView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+	upgradeInformationSchemaMetadataVisibilityTableConstraints(),
+}
+
+func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: viewName,
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    viewDDL,
+		CheckFunc: checkViewDefinition(viewName, viewDDL),
+		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+	}
+}
+
+func upgradeInformationSchemaMetadataVisibilityTableConstraints() versions.UpgradeEntry {
+	entry := upgradeInformationSchemaMetadataVisibilityView(
+		"TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL)
+	entry.RequiredProtocolVersion = defines.MORPCVersion16
+	return entry
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed

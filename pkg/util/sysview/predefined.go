@@ -153,6 +153,34 @@ var (
 		)`
 )
 
+// informationSchemaMetadataVisibilityCTE limits user-object metadata to the
+// objects visible to the session's single active role and its inherited roles.
+// System schemas remain universally visible for MySQL/tooling compatibility.
+func informationSchemaMetadataVisibilityCTE() string {
+	return "WITH RECURSIVE __mo_active_roles(role_id) AS (" +
+		"SELECT cast(role_id AS bigint) FROM mo_catalog.mo_role WHERE role_name = current_role() " +
+		"UNION " +
+		"SELECT cast(rg.granted_id AS bigint) FROM mo_catalog.mo_role_grant rg " +
+		"JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id), " +
+		"__mo_visible_tables AS (" +
+		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
+		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
+		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
+		"WHERE tbl.account_id = current_account_id() AND (" +
+		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
+		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_database db JOIN __mo_active_roles ar ON db.owner = ar.role_id " +
+		"WHERE db.dat_id = tbl.reldatabase_id) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
+		"WHERE (rp.obj_type IN ('table','view') AND (" +
+		"(rp.privilege_level = '*.*' AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = tbl.reldatabase_id) " +
+		"OR (rp.privilege_level IN ('d.t','t') AND rp.obj_id = tbl.rel_logical_id))) " +
+		"OR (rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
+		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level = 'd' AND rp.obj_id = tbl.reldatabase_id)))))) "
+}
+
 // `information_schema` database
 // They are all Tenant level system tables/system views
 var (
@@ -172,7 +200,7 @@ var (
 		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
 		"FROM mo_catalog.mo_foreign_keys fk"
 
-	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
+	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS "+informationSchemaMetadataVisibilityCTE()+"select "+
 		"'def' as TABLE_CATALOG,"+
 		"mc.att_database as TABLE_SCHEMA,"+
 		"mc.att_relname AS TABLE_NAME,"+
@@ -201,7 +229,7 @@ var (
 		"cast(case when mc.attr_has_generated = 1 then ifnull(cast(mo_show_visible_bin(mc.attr_generated, 5) as varchar(500)), '') else '' end as varchar(500)) as GENERATION_EXPRESSION,"+
 		"(case when upper(mo_show_visible_bin(mc.atttyp,3)) like '%% SRID %%' "+
 		" then cast(split_part(upper(mo_show_visible_bin(mc.atttyp,3)), ' SRID ', 2) as bigint) else NULL end) as SRS_ID "+
-		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
+		"from mo_catalog.mo_columns mc join __mo_visible_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
 		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
 		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
@@ -283,7 +311,7 @@ var (
 		"DATABASE_COLLATION varchar(64)" +
 		")"
 
-	InformationSchemaTablesDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLES AS "+
+	InformationSchemaTablesDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLES AS "+informationSchemaMetadataVisibilityCTE()+
 		"SELECT 'def' AS TABLE_CATALOG,"+
 		"reldatabase AS TABLE_SCHEMA,"+
 		"relname AS TABLE_NAME,"+
@@ -309,7 +337,7 @@ var (
 		"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
-		"FROM mo_catalog.mo_tables tbl "+
+		"FROM __mo_visible_tables tbl "+
 		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
@@ -382,7 +410,7 @@ var (
 		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
-	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+
+	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
 		"`tbl`.`relname` AS `TABLE_NAME`,"+
@@ -402,7 +430,7 @@ var (
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`,"+
 		"NULL AS `EXPRESSION` "+
 		"from (`mo_catalog`.`mo_indexes` `idx` "+
-		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
+		"join `__mo_visible_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` "+
 		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) "+
 		"where `tbl`.`account_id` = current_account_id() and %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
@@ -550,7 +578,7 @@ var (
 		"SELECT COLLATION_NAME, CHARACTER_SET_NAME " +
 		"FROM information_schema.COLLATIONS"
 
-	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS "+informationSchemaMetadataVisibilityCTE()+"SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
 		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
 		"idx.name AS CONSTRAINT_NAME, "+
@@ -559,7 +587,7 @@ var (
 		"idx.type AS CONSTRAINT_TYPE, "+
 		"'YES' AS ENFORCED "+
 		"FROM mo_catalog.mo_indexes idx "+
-		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"join __mo_visible_tables tbl on idx.table_id = tbl.rel_id "+
 		"where %s UNION ALL "+
 		"SELECT cc.constraint_catalog AS CONSTRAINT_CATALOG, "+
 		"cc.constraint_schema AS CONSTRAINT_SCHEMA, "+
@@ -568,9 +596,10 @@ var (
 		"cc.table_name AS TABLE_NAME, "+
 		"cc.constraint_type AS CONSTRAINT_TYPE, "+
 		"cc.enforced AS ENFORCED "+
-		"FROM mo_check_constraints() cc", catalog.NonTemporaryTableSQLPredicate("tbl"))
+		"FROM mo_check_constraints() cc "+
+		"join __mo_visible_tables check_tbl ON cc.constraint_schema = check_tbl.reldatabase AND cc.table_name = check_tbl.relname", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
-	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS "+informationSchemaMetadataVisibilityCTE()+"SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
 		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
 		"idx.name AS CONSTRAINT_NAME, "+
@@ -579,7 +608,7 @@ var (
 		"idx.type AS CONSTRAINT_TYPE, "+
 		"'YES' AS ENFORCED "+
 		"FROM mo_catalog.mo_indexes idx "+
-		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"join __mo_visible_tables tbl on idx.table_id = tbl.rel_id "+
 		"where %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
