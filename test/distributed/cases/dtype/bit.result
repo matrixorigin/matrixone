@@ -235,3 +235,20 @@ select * from t1;
 5  ¦  5  𝄀
 1023  ¦  1023  𝄀
 6  ¦  6
+DROP TABLE IF EXISTS prepared_bit_null;
+CREATE TABLE prepared_bit_null (id INT PRIMARY KEY, b1 BIT(1), b8 BIT(8), b64 BIT(64));
+PREPARE prepared_bit_insert FROM 'INSERT INTO prepared_bit_null VALUES (?, ?, ?, ?)';
+SET @id = 1, @b1 = NULL, @b8 = NULL, @b64 = NULL;
+EXECUTE prepared_bit_insert USING @id, @b1, @b8, @b64;
+SET @id = 2, @b1 = 1, @b8 = 165, @b64 = 9223372036854775808;
+EXECUTE prepared_bit_insert USING @id, @b1, @b8, @b64;
+SET @id = 3, @b1 = NULL, @b8 = NULL, @b64 = NULL;
+EXECUTE prepared_bit_insert USING @id, @b1, @b8, @b64;
+SELECT id, b1 IS NULL, b8 IS NULL, b64 IS NULL, HEX(b1), HEX(b8), HEX(b64)
+FROM prepared_bit_null ORDER BY id;
+➤ id[4,32,0]  ¦  b1 is null[-7,1,0]  ¦  b8 is null[-7,1,0]  ¦  b64 is null[-7,1,0]  ¦  HEX(b1)[12,65535,0]  ¦  HEX(b8)[12,65535,0]  ¦  HEX(b64)[12,65535,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  0  ¦  0  ¦  0  ¦  1  ¦  A5  ¦  8000000000000000  𝄀
+3  ¦  1  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null
+DEALLOCATE PREPARE prepared_bit_insert;
+DROP TABLE prepared_bit_null;
