@@ -313,3 +313,32 @@ set session group_concat_max_len = 5;
 select group_concat(s order by s separator '') from group_concat_max_len_01;
 set session group_concat_max_len = 1024;
 drop table group_concat_max_len_01;
+
+-- regression for issue #27589: supported wide and binary types must serialize
+-- consistently instead of failing in the group_concat payload writer
+drop table if exists group_concat_extended_types;
+create table group_concat_extended_types (
+    id int primary key,
+    control_text varchar(16),
+    control_decimal decimal(38,4),
+    d256 decimal(40,4),
+    y year,
+    u uuid,
+    g geometry,
+    g32 geometry32
+);
+insert into group_concat_extended_types values
+    (1, 'a', 1.2500, 123456789012345678901234567890123456.5678, 2024,
+     '00000000-0000-0000-0000-000000000001', st_geomfromtext('POINT(1 2)'),
+     cast(st_geomfromtext('POINT(3 4)') as geometry32)),
+    (2, 'b', 2.5000, 223456789012345678901234567890123456.5678, 2025,
+     '00000000-0000-0000-0000-000000000002', st_geomfromtext('POINT(5 6)'),
+     cast(st_geomfromtext('POINT(7 8)') as geometry32));
+select group_concat(control_text order by id separator '|') from group_concat_extended_types;
+select group_concat(control_decimal order by id separator '|') from group_concat_extended_types;
+select group_concat(d256 order by id separator '|') from group_concat_extended_types;
+select group_concat(y order by id separator '|') from group_concat_extended_types;
+select group_concat(u order by id separator '|') from group_concat_extended_types;
+select hex(group_concat(g order by id separator '|')) from group_concat_extended_types;
+select hex(group_concat(g32 order by id separator '|')) from group_concat_extended_types;
+drop table group_concat_extended_types;

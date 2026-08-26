@@ -373,3 +373,43 @@ group_concat(s, ,order by s)
 aabbc
 set session group_concat_max_len = 1024;
 drop table group_concat_max_len_01;
+drop table if exists group_concat_extended_types;
+create table group_concat_extended_types (
+id int primary key,
+control_text varchar(16),
+control_decimal decimal(38,4),
+d256 decimal(40,4),
+y year,
+u uuid,
+g geometry,
+g32 geometry32
+);
+insert into group_concat_extended_types values
+(1, 'a', 1.2500, 123456789012345678901234567890123456.5678, 2024,
+'00000000-0000-0000-0000-000000000001', st_geomfromtext('POINT(1 2)'),
+cast(st_geomfromtext('POINT(3 4)') as geometry32)),
+(2, 'b', 2.5000, 223456789012345678901234567890123456.5678, 2025,
+'00000000-0000-0000-0000-000000000002', st_geomfromtext('POINT(5 6)'),
+cast(st_geomfromtext('POINT(7 8)') as geometry32));
+select group_concat(control_text order by id separator '|') from group_concat_extended_types;
+group_concat(control_text, |,order by id)
+a|b
+select group_concat(control_decimal order by id separator '|') from group_concat_extended_types;
+group_concat(control_decimal, |,order by id)
+1.2500|2.5000
+select group_concat(d256 order by id separator '|') from group_concat_extended_types;
+group_concat(d256, |,order by id)
+123456789012345678901234567890123456.5678|223456789012345678901234567890123456.5678
+select group_concat(y order by id separator '|') from group_concat_extended_types;
+group_concat(y, |,order by id)
+2024|2025
+select group_concat(u order by id separator '|') from group_concat_extended_types;
+group_concat(u, |,order by id)
+00000000-0000-0000-0000-000000000001|00000000-0000-0000-0000-000000000002
+select hex(group_concat(g order by id separator '|')) from group_concat_extended_types;
+hex(group_concat(g, |,order by id))
+0101000000000000000000F03F00000000000000407C010100000000000000000014400000000000001840
+select hex(group_concat(g32 order by id separator '|')) from group_concat_extended_types;
+hex(group_concat(g32, |,order by id))
+010100000000004040000080407C01010000000000E04000000041
+drop table group_concat_extended_types;
