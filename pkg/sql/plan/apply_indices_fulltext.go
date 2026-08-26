@@ -996,9 +996,10 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	// ---- All guards passed: build the covered plan. From here on we mutate. ----
 	ctx := builder.ctxByNode[nodeID]
 
-	// Remove the MATCH filter from the base scan (it is fully served by the TVF now). This is
-	// the last filter standing (residual is empty), so FilterList becomes empty.
-	scanNode.FilterList = append(scanNode.FilterList[:filterids[0]], scanNode.FilterList[filterids[0]+1:]...)
+	// The MATCH and every non-MATCH filter were consumed by the TVF prefilter. Drop the
+	// source filters together; the base scan is removed from the covered plan, so retaining
+	// the peeled predicates here would neither filter the TVF nor preserve their semantics.
+	scanNode.FilterList = nil
 
 	cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
 	if cfgErr != nil {
@@ -1622,8 +1623,8 @@ func (builder *QueryBuilder) getWrappedFullText2Matches(projNode, scanNode *plan
 			}
 		}
 	}
-	var exprs []*plan.Expr
-	var defs []*plan.IndexDef
+	exprs := make([]*plan.Expr, 0, len(candidates))
+	defs := make([]*plan.IndexDef, 0, len(candidates))
 	for _, candidate := range candidates {
 		fn := candidate.GetF()
 		if fn == nil || len(fn.Args) < 2 {
