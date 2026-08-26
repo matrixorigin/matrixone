@@ -1199,6 +1199,13 @@ func canonicalMedianWithinGroupAstKey(
 	astExpr tree.Expr,
 ) (string, bool) {
 	normalized := cloneTreeExpr(astExpr)
+	// The regular qualifier intentionally leaves a few predicate wrappers
+	// (for example IS TRUE/IS FALSE) opaque.  Its recursive ParenExpr case
+	// also returns the child only to its immediate caller, so a no-op
+	// parenthesis below one of those wrappers survives into the formatted key.
+	// The real binder removes these parentheses before binding; do the same on
+	// the detached comparison tree, without relying on qualifier coverage.
+	normalized = stripMedianNoopParens(normalized)
 	valid := true
 	canonicalizeMedianAstValue(
 		reflect.ValueOf(normalized),
@@ -1208,6 +1215,125 @@ func canonicalMedianWithinGroupAstKey(
 		make(map[treeClonePointer]struct{}),
 	)
 	return canonicalMedianNodeKey(normalized), valid
+}
+
+var medianParenExprType = reflect.TypeOf((*tree.ParenExpr)(nil))
+
+// stripMedianNoopParens removes parser ParenExpr wrappers from a detached
+// comparison tree.  It uses reflection because the parser has many expression
+// nodes and several of them intentionally do not share a common child field.
+// Interface-valued child fields are replaced with the unwrapped expression;
+// nested scalar subqueries are traversed as data and are not bound here.
+//
+// This is deliberately only a parenthesis rewrite.  It does not simplify
+// operators or literals, so precedence and expression identity remain encoded
+// by the AST shape and normal formatter.
+func stripMedianNoopParens(expr tree.Expr) tree.Expr {
+	if expr == nil {
+		return nil
+	}
+	normalized := stripMedianNoopParensValue(
+		reflect.ValueOf(expr), make(map[treeClonePointer]struct{}),
+	)
+	if !normalized.IsValid() {
+		return nil
+	}
+	if normalized.Kind() == reflect.Interface {
+		if normalized.IsNil() {
+			return nil
+		}
+		normalized = normalized.Elem()
+	}
+	if !normalized.IsValid() || !normalized.CanInterface() {
+		return expr
+	}
+	result, ok := normalized.Interface().(tree.Expr)
+	if !ok {
+		return expr
+	}
+	return result
+}
+
+func stripMedianNoopParensValue(
+	value reflect.Value,
+	visited map[treeClonePointer]struct{},
+) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return value
+		}
+		normalized := stripMedianNoopParensValue(value.Elem(), visited)
+		if value.CanSet() && normalized.IsValid() &&
+			normalized.Type().AssignableTo(value.Type()) {
+			value.Set(normalized)
+			return value
+		}
+		return normalized
+
+	case reflect.Pointer:
+		if value.IsNil() {
+			return value
+		}
+		if value.Type() == medianParenExprType {
+			return stripMedianNoopParensValue(
+				reflect.ValueOf(value.Interface().(*tree.ParenExpr).Expr), visited,
+			)
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: value.Pointer()}
+		if _, seen := visited[key]; seen {
+			return value
+		}
+		visited[key] = struct{}{}
+		if value.Elem().Kind() == reflect.Struct {
+			stripMedianNoopParensStruct(value.Elem(), visited)
+		}
+		return value
+
+	case reflect.Struct:
+		stripMedianNoopParensStruct(value, visited)
+		return value
+
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			field := value.Index(i)
+			if !field.CanSet() {
+				continue
+			}
+			normalized := stripMedianNoopParensValue(field, visited)
+			if normalized.IsValid() && normalized.Type().AssignableTo(field.Type()) {
+				field.Set(normalized)
+			}
+		}
+		return value
+	}
+
+	return value
+}
+
+func stripMedianNoopParensStruct(
+	value reflect.Value,
+	visited map[treeClonePointer]struct{},
+) {
+	valueType := value.Type()
+	for i := 0; i < value.NumField(); i++ {
+		fieldInfo := valueType.Field(i)
+		if fieldInfo.PkgPath != "" {
+			continue
+		}
+		field := value.Field(i)
+		if !field.CanSet() {
+			continue
+		}
+		normalized := stripMedianNoopParensValue(field, visited)
+		if normalized.IsValid() && normalized.Type().AssignableTo(field.Type()) {
+			field.Set(normalized)
+		}
+	}
 }
 
 func lookupGroupByAst(ctx *BindContext, astExpr tree.Expr, astKey string) (int32, bool) {
