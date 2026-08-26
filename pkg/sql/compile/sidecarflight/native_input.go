@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,6 +45,10 @@ type NativeInput struct {
 	finished    bool
 	notNeeded   bool
 	terminalErr error
+	// retired is the success-valued terminal signal published by result EOF.
+	// It is independent from mu so EOF can interrupt a DoPut acknowledgement
+	// wait before the producer has another frame to send.
+	retired atomic.Bool
 
 	// cancelMu is intentionally independent from mu. Send and Finish hold mu
 	// while waiting for a sidecar acknowledgement; Abort must be able to cancel
@@ -123,13 +128,16 @@ func (n *NativeInput) Start(ctx context.Context) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.notNeeded {
+	if n.retired.Load() || n.notNeeded {
 		return nil
 	}
 	if n.finished || n.terminalErr != nil {
 		return errors.Join(internalErrorf("sidecar flight: native input is terminal"), n.terminalErr)
 	}
 	if err := n.open(ctx); err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = err
 		return err
 	}
@@ -142,13 +150,16 @@ func (n *NativeInput) Send(ctx context.Context, bat *batch.Batch, mp *mpool.MPoo
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.notNeeded {
+	if n.retired.Load() || n.notNeeded {
 		return nil
 	}
 	if n.finished || n.terminalErr != nil {
 		return errors.Join(internalErrorf("sidecar flight: native input is terminal"), n.terminalErr)
 	}
 	if err := n.open(ctx); err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = err
 		return err
 	}
@@ -186,11 +197,17 @@ func (n *NativeInput) sendPayloadLocked(payload []byte) error {
 	n.sequence++
 	frame := marshalNativeBatchFrame(n.sequence, payload)
 	if err := n.stream.SendMsg(&flightData{AppMetadata: frame}); err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = internalErrorf("sidecar flight: send native input batch: %w", err)
 		return n.terminalErr
 	}
 	ack, err := n.recvAck()
 	if err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = err
 		return err
 	}
@@ -209,6 +226,9 @@ func (n *NativeInput) sendPayloadLocked(payload []byte) error {
 		}
 		var trailing flightPutResult
 		if err = n.stream.RecvMsg(&trailing); err != io.EOF {
+			if n.retired.Load() {
+				return nil
+			}
 			n.terminalErr = internalErrorf("sidecar flight: native input not-needed stream has trailing results: %w", err)
 			return n.terminalErr
 		}
@@ -267,7 +287,7 @@ func (n *NativeInput) sendSplitLocked(source *batch.Batch, limit uint64, mp *mpo
 		if err = n.sendPayloadLocked(payload); err != nil {
 			return err
 		}
-		if n.notNeeded {
+		if n.retired.Load() || n.notNeeded {
 			return nil
 		}
 		start = best
@@ -307,6 +327,9 @@ func (n *NativeInput) Finish(ctx context.Context) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.retired.Load() {
+		return nil
+	}
 	if n.finished {
 		return n.terminalErr
 	}
@@ -315,17 +338,26 @@ func (n *NativeInput) Finish(ctx context.Context) error {
 		return n.terminalErr
 	}
 	if err := n.open(ctx); err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = err
 		n.finished = true
 		return err
 	}
 	if err := n.stream.CloseSend(); err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = internalErrorf("sidecar flight: close native input: %w", err)
 		n.finished = true
 		return n.terminalErr
 	}
 	ack, err := n.recvAck()
 	if err != nil {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = err
 		n.finished = true
 		return err
@@ -338,6 +370,9 @@ func (n *NativeInput) Finish(ctx context.Context) error {
 	}
 	var trailing flightPutResult
 	if err = n.stream.RecvMsg(&trailing); err != io.EOF {
+		if n.retired.Load() {
+			return nil
+		}
 		n.terminalErr = internalErrorf("sidecar flight: native input stream has trailing results: %w", err)
 		n.finished = true
 		return n.terminalErr
@@ -346,6 +381,18 @@ func (n *NativeInput) Finish(ctx context.Context) error {
 	n.finished = true
 	n.cancelStream()
 	return nil
+}
+
+// Retire publishes successful result-side EOF to the producer and interrupts
+// any blocked DoPut operation. Unlike Abort it does not manufacture a query
+// error: the sidecar has already produced the complete result and no longer
+// consumes this input.
+func (n *NativeInput) Retire() {
+	if n == nil {
+		return
+	}
+	n.retired.Store(true)
+	n.cancelStream()
 }
 
 func (n *NativeInput) recvAck() (*uploadInputAck, error) {
@@ -365,11 +412,17 @@ func (n *NativeInput) Abort(cause error) {
 		return
 	}
 	n.cancelStream()
+	if n.retired.Load() {
+		return
+	}
 	if cause == nil {
 		cause = context.Canceled
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.retired.Load() {
+		return
+	}
 	if n.terminalErr == nil {
 		n.terminalErr = cause
 	}
@@ -404,6 +457,9 @@ func (n *NativeInput) Err() error {
 func (n *NativeInput) NotNeeded() bool {
 	if n == nil {
 		return false
+	}
+	if n.retired.Load() {
+		return true
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()

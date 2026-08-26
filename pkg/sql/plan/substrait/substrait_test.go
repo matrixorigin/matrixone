@@ -172,11 +172,25 @@ func TestNativeInputTypeRejectsSemanticOnlyUint32Mapping(t *testing.T) {
 	}
 }
 
-func TestExportRejectsUint32NativeStreamBeforeBinding(t *testing.T) {
+func TestUint32CandidateKeepsDirectTaeReadAndRejectsOnlyStreamRead(t *testing.T) {
 	query := scanQuery()
 	query.Nodes[0].TableDef.Cols[0].Typ = planpb.Type{Id: int32(types.T_uint32)}
 
-	_, err := Export(query)
+	candidate, err := Export(query)
+	require.NoError(t, err)
+	direct, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	var exported spb.Plan
+	require.NoError(t, proto.Unmarshal(direct, &exported))
+	require.NotNil(t, exported.Relations[0].GetRoot().Input.GetRead().BaseSchema.Struct.Types[0].GetI64(),
+		"the direct TaeRead contract keeps the intentional uint32-to-i64 widening")
+
+	_, err = candidate.StreamReads()
+	require.True(t, IsNotEligible(err))
+	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
+	_, err = candidate.BuildWithBindings(map[int32]ReadBinding{0: {
+		TypeURL: StreamReadTypeURL, Value: []byte{1},
+	}})
 	require.True(t, IsNotEligible(err))
 	require.ErrorContains(t, err, "unsupported native input type INT UNSIGNED")
 }

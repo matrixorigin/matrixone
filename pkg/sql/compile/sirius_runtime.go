@@ -33,6 +33,8 @@ import (
 // resolver ownership through the process default runtime.
 const SiriusRuntimeKey = "sql-compile-sirius-runtime"
 
+var errSiriusResultComplete = errors.New("substrait: Sirius result stream completed")
+
 type siriusOffloadContextKey struct{}
 
 type siriusOffloadMode uint8
@@ -371,7 +373,15 @@ func (c *Compile) runSiriusStreamRead(
 	}()
 
 	resultErr := owner.execution.Run(runCtx, c.proc.Mp(), c.counterSet, c.fill)
-	if resultErr != nil {
+	if resultErr == nil {
+		// Result EOF is authoritative success. Retire the local producer even if
+		// the sidecar pruned an input before its first batch; NativeInput.Retire
+		// has already interrupted any blocked DoPut acknowledgement.
+		cancel(errSiriusResultComplete)
+		if c.proc != nil && c.proc.Cancel != nil {
+			c.proc.Cancel(errSiriusResultComplete)
+		}
+	} else {
 		cancel(resultErr)
 		if c.proc != nil && c.proc.Cancel != nil {
 			c.proc.Cancel(resultErr)
@@ -382,6 +392,31 @@ func (c *Compile) runSiriusStreamRead(
 	for _, input := range owner.inputs {
 		producerErr = errors.Join(producerErr, input.Err())
 	}
+	if resultErr == nil && context.Cause(ctx) == nil && isOnlySiriusResultCompletion(producerErr) {
+		producerErr = nil
+	}
 	runErr := errors.Join(resultErr, producerErr)
 	return errors.Join(runErr, owner.finish(ctx, runErr == nil))
+}
+
+func isOnlySiriusResultCompletion(err error) bool {
+	if err == nil {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isOnlySiriusResultCompletion(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return isOnlySiriusResultCompletion(wrapped)
+	}
+	return errors.Is(err, errSiriusResultComplete) || errors.Is(err, context.Canceled)
 }

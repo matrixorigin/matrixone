@@ -47,7 +47,10 @@ func (c *Compile) CompileSiriusStreamRead(
 	if err != nil {
 		return nil, err
 	}
-	reads := candidate.Reads()
+	reads, err := candidate.StreamReads()
+	if err != nil {
+		return nil, err
+	}
 	if len(reads) == 0 || len(reads) > 16 || len(queryID) != 16 || ttl <= 0 {
 		return nil, substrait.NotEligible(substrait.EligibilityPlanShape, "streamed read count or identity is unsupported")
 	}

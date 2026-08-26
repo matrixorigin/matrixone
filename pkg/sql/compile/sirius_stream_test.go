@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -246,6 +248,18 @@ func TestSiriusStreamCompileRejectsMissingScanAndRuntime(t *testing.T) {
 	)
 	require.False(t, offloaded)
 	require.True(t, substrait.IsNotEligible(err))
+}
+
+func TestSiriusResultCompletionErrorClassification(t *testing.T) {
+	require.True(t, isOnlySiriusResultCompletion(nil))
+	require.True(t, isOnlySiriusResultCompletion(errSiriusResultComplete))
+	require.True(t, isOnlySiriusResultCompletion(errors.Join(
+		fmt.Errorf("wrapped: %w", errSiriusResultComplete), context.Canceled,
+	)))
+	require.False(t, isOnlySiriusResultCompletion(errors.New("producer failed")))
+	require.False(t, isOnlySiriusResultCompletion(errors.Join(
+		errSiriusResultComplete, errors.New("producer failed"),
+	)))
 }
 
 func TestCompileSiriusStreamScopesReleasesTreeWhenInputRegistrationFails(t *testing.T) {
