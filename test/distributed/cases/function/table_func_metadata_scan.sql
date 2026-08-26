@@ -18,7 +18,8 @@ insert into t select * from t;
 select count(*) from t;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-select sleep(1);
+-- @wait_expect(1, 10)
+select sum(rows_cnt) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts <= NOW();
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts = "0-0";
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 0;
@@ -61,7 +62,7 @@ insert into t values(1, 1);
 select count(*) from t;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-select sleep(1);
+-- @wait_expect(1, 10)
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select sum(a) from t;
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'b') g;

@@ -33,9 +33,6 @@ select mo_ctl('dn', 'flush', 'd1.t2');
   ]
 }
 
-select Sleep(1);
-➤ Sleep(1)[-6,8,0]  𝄀
-0
 set @shuffle_t1_stats = '{"table_cnt":5000000,"block_number":640,"accurate_object_number":40,"approx_object_number":40,"ndv_map":{"c1":5000000,"c2":5000000,"c3":5000000},"min_val_map":{"c1":1,"c2":1,"c3":1},"max_val_map":{"c1":5000000,"c2":5000000,"c3":5000000},"shuffle_range_map":{"c1":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c2":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c3":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]}}}';
 set @shuffle_t2_stats = '{"table_cnt":4000000,"block_number":520,"accurate_object_number":33,"approx_object_number":33,"ndv_map":{"c1":4000000,"c2":4000000,"c3":4000000},"min_val_map":{"c1":1,"c2":1,"c3":1},"max_val_map":{"c1":4000000,"c2":4000000,"c3":4000000},"shuffle_range_map":{"c1":{"overlap":0.1,"uniform":1,"result":[1,1000000,2000000,3000000,4000000]},"c2":{"overlap":0.1,"uniform":1,"result":[1,1000000,2000000,3000000,4000000]},"c3":{"overlap":0.1,"uniform":1,"result":[1,1000000,2000000,3000000,4000000]}}}';
 select table_cnt from table_stats(
@@ -124,13 +121,9 @@ Project  𝄀
 select count(*) from t1,t2 where t1.c2=t2.c2;
 ➤ count(*)[-5,64,0]  𝄀
 80000
-explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
-[unknown result because it is related to issue#19733]
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 ➤ count(*)[-5,64,0]  𝄀
 9999
-explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
-[unknown result because it is related to issue#19733]
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 ➤ count(*)[-5,64,0]  𝄀
 29999
@@ -166,8 +159,6 @@ select count(*) from t1 group by c2 limit 5;
 1  𝄀
 1  𝄀
 1
-explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
-[unknown result because it is related to issue#19733]
 select table_cnt from table_stats('d1.t1', 'patch', @shuffle_t1_stats) g;
 ➤ table_cnt[8,53,31]  𝄀
 5000000.0
@@ -190,8 +181,6 @@ Project  𝄀
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 ➤ count(*)[-5,64,0]  𝄀
 78000
-explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
-[unknown result because it is related to issue#19733]
 select table_cnt from table_stats('d1.t1', 'patch', @shuffle_t1_stats) g;
 ➤ table_cnt[8,53,31]  𝄀
 5000000.0
@@ -214,8 +203,6 @@ Project  𝄀
 select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 ➤ count(*)[-5,64,0]  𝄀
 86001
-explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
-[unknown result because it is related to issue#19733]
 select table_cnt from table_stats('d1.t1', 'patch', @shuffle_t1_stats) g;
 ➤ table_cnt[8,53,31]  𝄀
 5000000.0
@@ -240,13 +227,9 @@ Project  𝄀
 select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 ➤ count(*)[-5,64,0]  𝄀
 4198
-explain select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
-[unknown result because it is related to issue#19733]
 select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 ➤ count(*)[-5,64,0]  𝄀
 3999
-explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
-[unknown result because it is related to issue#19733]
 select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -385,8 +368,6 @@ select mo_ctl('dn', 'flush', 'd1.t3');
   ]
 }
 
-explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
-[unknown result because it is related to issue#19733]
 select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 ➤ count(*)[-5,64,0]  𝄀
 599
@@ -396,8 +377,6 @@ select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 w
 select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
 ➤ count(*)[-5,64,0]  𝄀
 1999
-explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
-[unknown result because it is related to issue#19733]
 select table_cnt from table_stats('d1.t1', 'patch', @shuffle_t1_stats) g;
 ➤ table_cnt[8,53,31]  𝄀
 5000000.0

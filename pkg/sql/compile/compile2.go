@@ -717,6 +717,8 @@ func rewriteAutoModeToPre(stmt tree.Statement) bool {
 		return rewriteAutoModeToPre(s.Statement)
 	case *tree.Insert:
 		return rewriteAutoModeInSelect(s.Rows)
+	case *tree.MultiInsert:
+		return rewriteAutoModeInSelect(s.Source)
 	case *tree.Replace:
 		return rewriteAutoModeInSelect(s.Rows)
 	default:
@@ -752,6 +754,8 @@ func forceModePre(stmt tree.Statement) bool {
 		return forceModePre(s.Statement)
 	case *tree.Insert:
 		sel = s.Rows
+	case *tree.MultiInsert:
+		sel = s.Source
 	case *tree.Replace:
 		sel = s.Rows
 	default:
