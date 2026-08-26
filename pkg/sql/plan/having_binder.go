@@ -347,51 +347,25 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}, nil
 }
 
-// bindMedianWithinGroupAgg accepts the SQL-standard spelling of MEDIAN as an
-// ordered-set aggregate while reusing the existing median executor. MEDIAN is
-// defined over its value expression, so accepting a different ORDER BY key
-// would silently change the meaning of the query; require the key to match the
-// value expression and let the regular median binder perform type checking.
+// bindMedianWithinGroupAgg accepts MatrixOne's ordered-set MEDIAN extension and
+// reuses the existing median executor. As with other ordered-set aggregates,
+// the aggregated input comes from WITHIN GROUP's ORDER BY expression; MEDIAN
+// has no direct argument in this form.
 func (b *HavingBinder) bindMedianWithinGroupAgg(
 	funcName string,
 	astExpr *tree.FuncExpr,
 	depth int32,
 	isRoot bool,
 ) (*plan.Expr, error) {
-	if len(astExpr.Exprs) != 1 {
+	if len(astExpr.Exprs) != 0 {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one value expression", funcName)
+			"%s WITHIN GROUP does not accept a direct argument", funcName)
 	}
 	if len(astExpr.OrderBy) != 1 || astExpr.OrderBy[0] == nil || astExpr.OrderBy[0].Expr == nil {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
 			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
 	}
-	// Compare canonical source expressions before binding them. Qualifying
-	// cloned expressions preserves normal column identity (for example, a
-	// becomes bind_select.a) without allocating identity-bearing subquery
-	// nodes. Comparing bound plans would reject two identical scalar subqueries
-	// because each bind creates a fresh plan node ID.
-	valueAst := cloneTreeExpr(astExpr.Exprs[0])
-	orderAst := cloneTreeExpr(astExpr.OrderBy[0].Expr)
-	if b.ctx != nil {
-		var err error
-		valueAst, err = b.ctx.qualifyColumnNames(valueAst, NoAlias)
-		if err != nil {
-			return nil, err
-		}
-		orderAst, err = b.ctx.qualifyColumnNames(orderAst, NoAlias)
-		if err != nil {
-			return nil, err
-		}
-	}
-	valueKey, valueValid := canonicalMedianWithinGroupAstKey(b.ctx, b.builder, valueAst)
-	orderKey, orderValid := canonicalMedianWithinGroupAstKey(b.ctx, b.builder, orderAst)
-	if !valueValid || !orderValid || valueKey != orderKey {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires the WITHIN GROUP ORDER BY expression to match its value expression", funcName)
-	}
-
-	value, err := b.BindExpr(astExpr.Exprs[0], depth, isRoot)
+	value, err := b.BindExpr(astExpr.OrderBy[0].Expr, depth, isRoot)
 	if err != nil {
 		return nil, err
 	}
