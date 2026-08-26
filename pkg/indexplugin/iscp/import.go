@@ -38,6 +38,7 @@ package iscp
 
 import (
 	_ "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/iscp"
+	_ "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/iscp"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/iscp"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/iscp"
 )
