@@ -33,7 +33,7 @@ import (
 // resolver ownership through the process default runtime.
 const SiriusRuntimeKey = "sql-compile-sirius-runtime"
 
-var errSiriusResultComplete = errors.New("substrait: Sirius result stream completed")
+var errSiriusResultComplete = moerr.NewInternalErrorNoCtx("substrait: Sirius result stream completed")
 
 type siriusOffloadContextKey struct{}
 
