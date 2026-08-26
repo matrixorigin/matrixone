@@ -117,18 +117,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 
 	cache.Cache.Remove(storageDef.IndexTableName)
 
-	// delete old data first
-	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
-	if err != nil {
-		return err
-	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
-			return err
-		}
-	}
-
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -143,6 +132,13 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// otherwise survive at its old watermark and replay historical
 		// events on top of the freshly built state. forceSync (ALTER
 		// REINDEX … FORCE_SYNC) takes this branch even for an async index.
+		//
+		// NOTE: the old-data DELETE is NOT issued here — the hnsw_create TVF
+		// owns clear+rebuild so it can read the pre-rebuild MAX(timestamp)
+		// BEFORE clearing and floor the new generation strictly above it
+		// (monotonic across a rebuild under a skewed/backward clock; see
+		// hnsw.BuildTimestamp / HnswSearch.IsStale). The TVF clears even when
+		// nothing is built, so a REBUILD to zero docs still empties the index.
 		sqls, err := genBuildSQL(ctx, indexDefs)
 		if err != nil {
 			return err
@@ -159,6 +155,18 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			indexName, sinkerType, true, "", originalTableDef)
 	}
 
+	// async: the CDC job rebuilds from the full log, so clear the old index
+	// data here first (the sync branch above defers this to the TVF).
+	delsqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
+	if err != nil {
+		return err
+	}
+	for _, sql := range delsqls {
+		if err = ctx.RunSql(sql); err != nil {
+			return err
+		}
+	}
+
 	// async: drop any existing CDC task, register a new one consuming the
 	// full log from the table's creation timestamp.
 	if err := ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
@@ -171,7 +179,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 // HandleReindex: same code path as create, but honors forceSync so an
 // ALTER REINDEX … FORCE_SYNC (e.g. restore's RestoreTable) rebuilds an
 // always-async HNSW index synchronously instead of deferring to CDC.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 
