@@ -480,6 +480,48 @@ func TestNativeInputAbortCancelsBlockedAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestNativeInputRetireCancelsBlockedAcknowledgementWithoutError(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+		doPutBatch: make(chan struct{}), blockDoPutAck: make(chan struct{}),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 128, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	require.NoError(t, input.Start(context.Background()))
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	sendDone := make(chan error, 1)
+	go func() { sendDone <- input.Send(context.Background(), bat, mp) }()
+	select {
+	case <-server.doPutBatch:
+	case <-time.After(time.Second):
+		t.Fatal("native input batch did not reach the server")
+	}
+	input.Retire()
+	select {
+	case sendErr := <-sendDone:
+		require.NoError(t, sendErr)
+	case <-time.After(time.Second):
+		t.Fatal("successful retirement did not release the blocked acknowledgement")
+	}
+	require.True(t, input.NotNeeded())
+	require.NoError(t, input.Err())
+}
+
 func TestNativeInputSplitsOversizedBatchesWithinNegotiatedLimit(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
@@ -568,6 +610,45 @@ func TestCleanupAfterResultEOFStillJoinsNativeInputs(t *testing.T) {
 	require.NoError(t, execution.Cleanup(context.Background()))
 	require.ErrorIs(t, input.Err(), context.Canceled)
 	require.Equal(t, int32(1), server.cancels.Load())
+}
+
+func TestResultEOFRetiresInputBeforeItsFirstBatch(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	require.NoError(t, input.Start(context.Background()))
+
+	mp := mpool.MustNewZero()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- execution.Run(context.Background(), mp, nil,
+			func(*batch.Batch, *perfcounter.CounterSet) error { return nil })
+	}()
+	select {
+	case runErr := <-runDone:
+		require.NoError(t, runErr)
+	case <-time.After(time.Second):
+		t.Fatal("result EOF waited for an input batch that the sidecar did not need")
+	}
+	require.True(t, input.NotNeeded())
+	require.NoError(t, input.Finish(context.Background()))
+	require.NoError(t, input.Err())
+	require.Zero(t, server.doPutBatches.Load())
+
+	require.NoError(t, execution.CleanupAfterRun(context.Background(), nil))
+	require.Equal(t, int32(1), server.cancels.Load(),
+		"streamed success must join the server-side DoPut handler before cleanup")
 }
 
 func TestPrepareCancelsByIdempotencyWhenTicketIsUnknown(t *testing.T) {

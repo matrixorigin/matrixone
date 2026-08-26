@@ -73,6 +73,10 @@ type Read struct {
 	Schema        []byte // deterministic Substrait NamedStruct bytes
 	StreamSchema  []byte
 	StreamNames   []string
+	// streamErr records a physical MO input type which the native StreamRead
+	// wire cannot represent. It must not make the semantic TaeRead candidate
+	// ineligible: direct TAE decoding has its own, wider type contract.
+	streamErr error
 }
 
 // ColumnMapping binds one exported ordinal to the physical TAE column used at
@@ -92,6 +96,21 @@ func (c *Candidate) Reads() []Read {
 		result[i].Columns = append([]ColumnMapping(nil), result[i].Columns...)
 	}
 	return result
+}
+
+// StreamReads returns the validated one-pass native input contract. A plan can
+// remain eligible for direct TaeRead while being ineligible for StreamRead
+// when its semantic Substrait type is wider than its unchanged MO vector type.
+func (c *Candidate) StreamReads() ([]Read, error) {
+	if c == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: nil candidate")
+	}
+	for _, read := range c.reads {
+		if read.streamErr != nil {
+			return nil, read.streamErr
+		}
+	}
+	return c.Reads(), nil
 }
 
 // OutputTypes returns the MatrixOne result contract corresponding to the
@@ -185,8 +204,13 @@ func (c *Candidate) BuildWithBindings(bindings map[int32]ReadBinding) ([]byte, e
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead or StreamRead", read.NodeID)
 		}
-		if binding.TypeURL == StreamReadTypeURL && !bytes.Equal(binding.Schema, read.StreamSchema) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d stream schema differs from the validated scan", read.NodeID)
+		if binding.TypeURL == StreamReadTypeURL {
+			if read.streamErr != nil {
+				return nil, read.streamErr
+			}
+			if !bytes.Equal(binding.Schema, read.StreamSchema) {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d stream schema differs from the validated scan", read.NodeID)
+			}
 		}
 	}
 	e := exporter{query: c.query, readValues: make(map[int32][]byte), readBindings: bindings, streamReads: make(map[int32]bool), expectedTypeURLs: make(map[string]bool)}
@@ -654,13 +678,13 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 			if typeErr != nil {
 				return nil, typeErr
 			}
-			streamSchema, streamNames, schemaErr := namedStructFromTypes(streamTypes)
-			if schemaErr != nil {
-				return nil, schemaErr
+			streamSchema, streamNames, streamErr := namedStructFromTypes(streamTypes)
+			var streamSchemaBytes []byte
+			if streamErr == nil {
+				streamSchemaBytes, streamErr = proto.MarshalOptions{Deterministic: true}.Marshal(streamSchema)
 			}
-			streamSchemaBytes, schemaErr := proto.MarshalOptions{Deterministic: true}.Marshal(streamSchema)
-			if schemaErr != nil {
-				return nil, schemaErr
+			if streamErr != nil && !IsNotEligible(streamErr) {
+				return nil, streamErr
 			}
 			e.readIndexes[n.NodeId] = len(e.reads)
 			e.reads = append(e.reads, Read{
@@ -673,6 +697,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 				Schema:        schemaBytes,
 				StreamSchema:  streamSchemaBytes,
 				StreamNames:   streamNames,
+				streamErr:     streamErr,
 			})
 		}
 	}
@@ -1272,7 +1297,7 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		if hidden {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
 		}
-		typ, err := nativeInputType(&c.Typ)
+		typ, err := substraitType(&c.Typ)
 		if err != nil {
 			if IsNotEligible(err) {
 				return nil, err
@@ -1307,10 +1332,11 @@ func namedStructFromTypes(typesIn []planpb.Type) (*spb.NamedStruct, []string, er
 	}}, names, nil
 }
 
-// nativeInputType is the physical MO input contract, not the semantic
+// nativeInputType is the StreamRead physical MO input contract, not the semantic
 // Substrait result contract. Keep the allow-list explicit: substraitType may
 // map a logical result to a wider signed type (currently uint32 to i64), while
-// TaeRead and StreamRead start from an unconverted MO physical type.
+// StreamRead sends the original MO vector without conversion. Direct TaeRead
+// keeps using substraitType because Sirius performs its own physical decoding.
 func nativeInputType(t *planpb.Type) (*spb.Type, error) {
 	if t == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing native input type")

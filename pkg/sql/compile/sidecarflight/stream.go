@@ -161,8 +161,12 @@ func (e *Execution) finishSuccess() error {
 		e.mu.Unlock()
 		return internalErrorf("sidecar flight: execution was cancelled while finishing")
 	}
+	inputs := slices.Clone(e.inputs)
 	e.quiesced = true
 	e.mu.Unlock()
+	for _, input := range inputs {
+		input.Retire()
+	}
 	return nil
 }
 
@@ -227,17 +231,16 @@ func (e *Execution) CancelAndJoin(ctx context.Context) error {
 }
 
 // CleanupAfterRun preserves the cancellation-before-lease-release ordering.
-// Successful EOF is already quiescent; every other terminal path requires the
-// explicit cancel-and-join acknowledgement.
+// Direct successful EOF is already quiescent. Streamed successful EOF also
+// retires local producers, but still requires CancelExecution to join the
+// server-side DoPut handlers before leases are released.
 func (e *Execution) CleanupAfterRun(ctx context.Context, runErr error) error {
 	if e == nil {
 		return runErr
 	}
-	if runErr != nil {
-		if err := e.CancelAndJoin(ctx); err != nil {
-			e.runtime.scheduleReconciliation(e)
-			return errors.Join(runErr, err)
-		}
+	if err := e.CancelAndJoin(ctx); err != nil {
+		e.runtime.scheduleReconciliation(e)
+		return errors.Join(runErr, err)
 	}
 	releaseErr := e.releaseLeases(ctx)
 	if releaseErr != nil {
