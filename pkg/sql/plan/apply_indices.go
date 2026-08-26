@@ -615,7 +615,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
-			// apply fulltext indices when fulltext_match exists
+			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 {
 				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
 					filterids, filter_ftidxs, colRefCnt, idxColMap)
@@ -627,7 +627,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
-			// apply fulltext indices when fulltext_match exists
+			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(projids) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
 					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
