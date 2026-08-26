@@ -87,7 +87,21 @@ func CgroupMemoryLimit() uint64 {
 		return limit
 	}
 	limit, err := cgroup.GetMemLimit(pid)
-	if err != nil || limit <= 0 {
+	if err != nil {
+		return 0
+	}
+	return normalizeCgroupLimit(limit)
+}
+
+// normalizeCgroupLimit maps a raw cgroup limit onto "0 means no bound".
+//
+// The gosigar fallback above returns v1's unlimited sentinel verbatim -- its own
+// tests assert a limit of 9223372036854771712 -- so filtering the sentinel only
+// inside the hierarchy walk left this path still reporting ~9.2 EB as a real
+// limit, and MemoryAvailableIncludingCache's second tier still derived a budget
+// from it.
+func normalizeCgroupLimit(limit int64) uint64 {
+	if limit <= 0 || uint64(limit) >= cgroupV1Unlimited {
 		return 0
 	}
 	return uint64(limit)

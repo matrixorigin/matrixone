@@ -458,3 +458,18 @@ func TestMinHierarchicalHeadroom_V1UnlimitedSentinel(t *testing.T) {
 	require.Zero(t, minHierarchicalLimit(child, root, "memory.limit_in_bytes"),
 		"unlimited v1 must not surface as a colossal limit")
 }
+
+// The hierarchy walk is not the only way the v1 sentinel reaches a caller:
+// CgroupMemoryLimit falls back to gosigar, which returns the sentinel verbatim
+// (its own tests assert 9223372036854771712). Filtering it in only one of the
+// two paths left MemoryAvailableIncludingCache's second tier still deriving a
+// budget from ~9.2 EB.
+func TestNormalizeCgroupLimit(t *testing.T) {
+	require.Zero(t, normalizeCgroupLimit(0), "no limit")
+	require.Zero(t, normalizeCgroupLimit(-1), "error sentinel")
+	require.Zero(t, normalizeCgroupLimit(int64(cgroupV1Unlimited)), "v1 PAGE_COUNTER_MAX")
+	require.Zero(t, normalizeCgroupLimit(1<<63-1), "bare LONG_MAX")
+	require.Equal(t, uint64(4<<30), normalizeCgroupLimit(4<<30), "a real limit survives")
+	require.Equal(t, uint64(cgroupV1Unlimited-1), normalizeCgroupLimit(int64(cgroupV1Unlimited)-1),
+		"just below the sentinel is still a real limit")
+}
