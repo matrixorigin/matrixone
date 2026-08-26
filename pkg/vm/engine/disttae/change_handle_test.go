@@ -448,7 +448,7 @@ func TestLoadCheckpointEntries(t *testing.T) {
 			Entries: []*cmd_util.CheckpointEntryResp{{
 				Start: &start, End: &end,
 				EntryType: int32(checkpoint.ET_Incremental),
-				Location1: "location-1", Location2: "location-2",
+				Location1: []byte("location-1"), Location2: []byte("location-2"),
 			}},
 		}, nil
 	}
