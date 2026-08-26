@@ -884,6 +884,58 @@ func Test_ReplayerReadsLegacyV2SkipCmd(t *testing.T) {
 	require.Empty(t, appliedDSNs)
 }
 
+func Test_ReplayerDoesNotApplyDuplicateLegacySkipToReusedDSN(t *testing.T) {
+	// This serialized V2 command has the legacy zero version marker and targets
+	// (DSN 3, PSN 2). Replaying a later physical copy of the same command must
+	// not remove a new record that reused DSN 3 at PSN 4.
+	const legacyV2SkipCmdHex = "e80302000200000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000004e000000030000000000000002000000000000003e00000010000000"
+
+	fixture, err := hex.DecodeString(legacyV2SkipCmdHex)
+	require.NoError(t, err)
+	legacyEntry, err := DecodeLogEntry(fixture, nil)
+	require.NoError(t, err)
+	require.Equal(t, SkipCmdVersionLegacy, legacyEntry.GetSkipCmdVersion())
+	legacyCmd := SkipCmd(legacyEntry.GetEntry(0))
+	require.Equal(t, []uint64{3}, legacyCmd.GetDSNSlice())
+	require.Equal(t, []uint64{2}, legacyCmd.GetPSNSlice())
+
+	for _, readBatchSize := range []int{1, 30} {
+		t.Run(fmt.Sprintf("read-batch-size-%d", readBatchSize), func(t *testing.T) {
+			mockDriver := newMockDriver(
+				0,
+				[][5]uint64{
+					{uint64(Cmd_Normal), 1, 1, 1, 0},
+					{uint64(Cmd_Normal), 2, 3, 3, 0},
+					{uint64(Cmd_SkipDSN), 3, 0, 0, 0},
+					{uint64(Cmd_Normal), 4, 3, 3, 0},
+					{uint64(Cmd_SkipDSN), 5, 0, 0, 0},
+					{uint64(Cmd_Normal), 6, 2, 2, 1},
+				},
+				30,
+			)
+			baseUnmarshal := mockUnmarshalLogRecordFactor(mockDriver)
+			var appliedDSNs []uint64
+			r := newReplayer(
+				mockHandleFactory(1, func(e *entry.Entry) {
+					appliedDSNs = append(appliedDSNs, e.DSN)
+				}),
+				mockDriver,
+				readBatchSize,
+				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+				WithReplayerUnmarshalLogRecord(func(record logservice.LogRecord) LogEntry {
+					if record.Lsn == 2 || record.Lsn == 4 {
+						return legacyEntry
+					}
+					return baseUnmarshal(record)
+				}),
+			)
+
+			require.NoError(t, r.Replay(context.Background()))
+			require.Equal(t, []uint64{1, 2, 3}, appliedDSNs)
+		})
+	}
+}
+
 func Test_ReplayerRejectsUnknownSkipCmdVersion(t *testing.T) {
 	mockDriver := newMockDriver(
 		0,

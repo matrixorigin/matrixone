@@ -877,6 +877,13 @@ func (r *replayer) readNextBatch(
 				cmd := SkipCmd(entry.GetEntry(0))
 				skipDSNs := cmd.GetDSNSlice()
 				skipPSNs := cmd.GetPSNSlice()
+				var legacyPSNs map[uint64]struct{}
+				if skipVersion == SkipCmdVersionLegacy {
+					legacyPSNs = make(map[uint64]struct{}, len(skipPSNs))
+					for _, skipPSN := range skipPSNs {
+						legacyPSNs[skipPSN] = struct{}{}
+					}
+				}
 				logutil.Info(
 					"Wal-Read-Skip-Entry",
 					zap.Any("skip-dsns", skipDSNs),
@@ -892,12 +899,21 @@ func (r *replayer) readNextBatch(
 					skippedRecord, ok := r.replayedState.pendingRecords.Get(
 						pendingDSNRange{start: dsn},
 					)
-					// Historical V2 writers sorted DSNs while accidentally permuting PSNs,
-					// so legacy commands must retain their original DSN-only semantics.
-					// New commands preserve pairs and require an exact target: an absent
-					// target was already consumed, while a different PSN means this DSN
-					// has since been reused. Both cases are stale, idempotent no-ops.
-					if !ok || (skipVersion == SkipCmdVersionDSNPSN && skippedRecord.psn != targetPSN) {
+					// Historical V2 sorting could permute the PSNs among the sorted DSNs,
+					// but it preserved the PSN set. Membership therefore accepts every
+					// original legacy target without letting a delayed duplicate delete a
+					// later record that reused the same DSN. New commands preserve pairs
+					// and can require an exact target. In either format, an absent or
+					// mismatched target is a stale, idempotent no-op.
+					matchesTarget := ok
+					if matchesTarget {
+						if skipVersion == SkipCmdVersionLegacy {
+							_, matchesTarget = legacyPSNs[skippedRecord.psn]
+						} else {
+							matchesTarget = skippedRecord.psn == targetPSN
+						}
+					}
+					if !matchesTarget {
 						logutil.Info(
 							"Wal-Replay-Stale-Skip-Entry",
 							zap.Uint64("dsn", dsn),

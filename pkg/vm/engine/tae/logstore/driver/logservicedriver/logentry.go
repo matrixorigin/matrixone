@@ -40,7 +40,8 @@ type SkipCmdVersion uint16
 const (
 	// SkipCmdVersionLegacy identifies V2 skip commands written before the
 	// DSN/PSN pair sorter was fixed. Their DSNs are valid, but their PSNs may
-	// have been permuted independently and therefore cannot identify targets.
+	// have been permuted independently. The individual pairs are unreliable,
+	// while the DSN and PSN sets remain valid.
 	SkipCmdVersionLegacy SkipCmdVersion = iota
 	// SkipCmdVersionDSNPSN identifies skip commands whose sorted DSN and PSN
 	// arrays preserve the original pairs.
