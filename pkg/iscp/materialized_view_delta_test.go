@@ -25,10 +25,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMaterializedViewSourceColumnTypesPreservesTemporalPrecision(t *testing.T) {
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "event_time", Typ: planpb.Type{Id: int32(types.T_datetime), Scale: 0}},
+		{Name: "duration", Typ: planpb.Type{Id: int32(types.T_int64), Scale: 0}},
+	}}
+
+	got, err := materializedViewSourceColumnTypes(tableDef, []string{"event_time", "duration"})
+	require.NoError(t, err)
+	require.Equal(t, int32(6), got[0].Scale)
+	require.Equal(t, int32(0), got[1].Scale)
+}
 
 func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
 	desc := &incrementalDescription{
@@ -45,7 +58,7 @@ func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
 		},
 		RowCountColumn: "__row_count",
 	}
-	floatType, datetimeType := types.T_float64.ToType(), types.T_datetime.ToType()
+	floatType, datetimeType := types.T_float64.ToType(), types.T_datetime.ToTypeWithScale(6)
 	regionType, serviceType, statusType := types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()
 	columnTypes := []*types.Type{&floatType, &datetimeType, &regionType, &serviceType, &statusType}
 	rows := []materializedViewSignedRow{
@@ -56,6 +69,7 @@ func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, strings.Count(cte, "ROW("))
 	require.Contains(t, cte, "CAST(10 AS DOUBLE)")
+	require.Contains(t, cte, "AS DATETIME(6)")
 	require.Contains(t, cte, "date_trunc('minute', e.event_ts)")
 	require.Contains(t, cte, "case when e.status >= 500 then 1 else 0 end")
 	require.NotContains(t, cte, "select count(*) from")

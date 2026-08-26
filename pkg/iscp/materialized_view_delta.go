@@ -231,7 +231,19 @@ func materializedViewSourceColumnTypes(tableDef *planpb.TableDef, columns []stri
 		if col.Hidden || strings.EqualFold(col.Name, catalog.Row_ID) {
 			continue
 		}
-		byName[strings.ToLower(col.Name)] = &types.Type{Oid: types.T(col.Typ.Id), Width: col.Typ.Width, Scale: col.Typ.Scale}
+		typ := &types.Type{Oid: types.T(col.Typ.Id), Width: col.Typ.Width, Scale: col.Typ.Scale}
+		// Delta rows carry the already-stored temporal value. Preserve its full
+		// internal microsecond precision in the generated VALUES CTE even when a
+		// relation or change-batch descriptor reports a lower scale. Casting a
+		// value such as 12:34:59.9 to DATETIME(0) rounds it into the next minute
+		// and makes date_trunc grouping diverge from a scan of the source table.
+		// Values from genuinely lower-scale columns have already been rounded at
+		// source-table write time, so widening this transport type is lossless.
+		switch typ.Oid {
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			typ.Scale = 6
+		}
+		byName[strings.ToLower(col.Name)] = typ
 	}
 	result := make([]*types.Type, len(columns))
 	for i, column := range columns {
@@ -443,7 +455,7 @@ func materializedViewDeltaCTE(
 				return "", err
 			}
 			values = append(values, " AS "...)
-			values = append(values, sourceTypes[colIdx].DescString()...)
+			values = append(values, materializedViewDeltaSQLType(sourceTypes[colIdx])...)
 			values = append(values, ')')
 		}
 		values = append(values, ',')
@@ -454,7 +466,7 @@ func materializedViewDeltaCTE(
 	}
 	columns := make([]string, 0, len(desc.SourceColumns)+1)
 	for i, column := range desc.SourceColumns {
-		columns = append(columns, fmt.Sprintf("CAST(column_%d AS %s) AS %s", i, sourceTypes[i].DescString(), sqlquote.Ident(column)))
+		columns = append(columns, fmt.Sprintf("CAST(column_%d AS %s) AS %s", i, materializedViewDeltaSQLType(sourceTypes[i]), sqlquote.Ident(column)))
 	}
 	columns = append(columns, fmt.Sprintf("CAST(column_%d AS BIGINT) AS __mo_sign", len(desc.SourceColumns)))
 
@@ -493,6 +505,15 @@ func materializedViewDeltaCTE(
 		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
 	}
 	return cte, nil
+}
+
+func materializedViewDeltaSQLType(typ *types.Type) string {
+	switch typ.Oid {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		return fmt.Sprintf("%s(%d)", typ.Oid.String(), typ.Scale)
+	default:
+		return typ.DescString()
+	}
 }
 
 func materializedViewDeltaGroupAlias(i int) string { return fmt.Sprintf("__mo_g_%d", i) }
