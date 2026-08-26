@@ -120,13 +120,14 @@ compatibility over accepting an ambiguous extension.
 
 The BVT uses a four-row table in its own database, deterministic ordering, no
 sleeps, entry cleanup with `DROP DATABASE IF EXISTS`, and final database
-teardown. Normal-comparison execution against a ready test-owned service is the
-acceptance evidence. A separate same-instance repeat is not a feature
-requirement: the entry cleanup makes a fresh invocation independent of residue,
-while the final `DROP DATABASE` is the deterministic teardown boundary covered
-by the normal comparison. Existing focused parser, planner, frontend, and
-`moerr` tests remain the cheapest white-box proofs; the BVT supplies the
-independent frontend/SQL oracle.
+teardown followed by an empty `SHOW DATABASES LIKE` postcondition. Acceptance
+requires normal-comparison execution twice against the same ready test-owned
+service. The second invocation proves that the complete SQL path remains
+independent of the first run's catalog state; the explicit empty lookup proves
+that the first run's final teardown completed rather than being masked by its
+entry cleanup. Existing focused parser, planner, frontend, and `moerr` tests
+remain the cheapest white-box proofs; the BVT supplies the independent
+frontend/SQL oracle.
 
 ## Rollout and review record
 
