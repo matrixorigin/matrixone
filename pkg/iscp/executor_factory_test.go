@@ -38,6 +38,7 @@ func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
 		},
 		"",
 		nil,
+		nil,
 	)
 
 	for range 2 {

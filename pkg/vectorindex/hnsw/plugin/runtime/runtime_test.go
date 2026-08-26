@@ -31,6 +31,12 @@ func TestHnswHiddenTableTypes(t *testing.T) {
 	require.Contains(t, got, catalog.Hnsw_TblType_Storage)
 }
 
+// TestHnswIsVectorIndex pins the vector-KIND capability (the counterpart of the
+// fulltext-family plugins' false): indexplugin.IsVectorIndexAlgo delegates to it.
+func TestHnswIsVectorIndex(t *testing.T) {
+	require.True(t, CatalogHooks{}.IsVectorIndex())
+}
+
 func TestHnswShouldTruncateHiddenTable(t *testing.T) {
 	require.True(t, CatalogHooks{}.ShouldTruncateHiddenTable("anything"))
 }

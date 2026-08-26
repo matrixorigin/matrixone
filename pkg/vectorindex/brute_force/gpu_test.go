@@ -201,3 +201,9 @@ func TestGpuSearchFloat32(t *testing.T) {
 		})
 	}
 }
+
+// TestSearchIntoUnsupportedGpu covers the SearchInto stubs on the GPU brute-force impls.
+func TestSearchIntoUnsupportedGpu(t *testing.T) {
+	require.ErrorContains(t, (&GpuAdhocBruteForceIndex[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+	require.ErrorContains(t, (&GpuBruteForceIndex[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}
