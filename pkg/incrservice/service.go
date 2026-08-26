@@ -17,7 +17,6 @@ package incrservice
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -37,7 +36,7 @@ import (
 
 var (
 	lazyDeleteInterval                    = time.Second * 10
-	errCommittedTableCacheBuildSuperseded = errors.New("committed table cache build superseded")
+	errCommittedTableCacheBuildSuperseded = moerr.NewInternalErrorNoCtx("committed table cache build superseded")
 )
 
 type privateResetKey struct {
