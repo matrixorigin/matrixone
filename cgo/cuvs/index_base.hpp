@@ -1328,6 +1328,7 @@ public:
     // Called under the staging lock inside a submit_main task, so a device is
     // current; a cudaMemGetInfo failure throws rather than guessing (see
     // cap_train_rows_to_gpu_mem).
+    //
     // Measured ONCE per index and reused. The builders stage one row per call,
     // so measuring per chunk would mean a cudaMemGetInfo driver call per row --
     // and, on a device too small for the requested sample, one "train sample
@@ -1355,13 +1356,14 @@ public:
         return limit;
     }
 
-    // Thin wrapper over matrixone::rows_fitting_gpu_mem, which owns the 60%-of-free-VRAM
-    // rule shared with the index-build capacity bound. It throws rather than falling back
+    // Thin wrapper over matrixone::rows_fitting_gpu_mem, which owns the
+    // fraction-of-free-VRAM rule shared with the index-build capacity bound. It throws rather than falling back
     // to the requested count: this runs inside a submit_main task, so a device is current
     // by construction and a cudaMemGetInfo failure means the context is already broken
     // (sticky launch error, device reset). Returning requested_rows would send an
     // unchecked upload into a dead context and surface the real fault later as an opaque
     // allocation failure inside train().
+    //
     // Re-caps the training sample at FLUSH, against the free VRAM that actually
     // matters by then. Must use the index's own fraction: the upload claim in
     // train_quantizer_from_host reserves at budget_percent(), so re-capping at the
@@ -1373,19 +1375,6 @@ public:
             this->budget_percent());
     }
 
-
-
-    // Append `count` rows to the staging arenas and record the span describing
-    // them. Caller holds mutex_ and has already clamped `count` to the room left
-    // under the staging bound.
-    //
-    // The merge below is what keeps staging_spans_ from becoming per-row
-    // metadata: two consecutive calls that both append (offset -1) and agree
-    // about ids are indistinguishable from one larger append, so the last span
-    // is extended rather than a new one pushed. Its four conditions are each
-    // load-bearing — offsets must both be "append", ids-ness must match (or the
-    // merged span would claim ids it does not have, or hide ids it does), and
-    // the rows must be physically adjacent in staging_data_.
     // build_preallocate: everything a BUILD allocates up front, so it lands inside
     // the window the Go-side build claim already covers.
     //
@@ -1443,6 +1432,17 @@ public:
         return bound < 1 ? 1 : bound;
     }
 
+    // Append `count` rows to the staging arenas and record the span describing
+    // them. Caller holds mutex_ and has already clamped `count` to the room left
+    // under the staging bound.
+    //
+    // The merge below is what keeps staging_spans_ from becoming per-row
+    // metadata: two consecutive calls that both append (offset -1) and agree
+    // about ids are indistinguishable from one larger append, so the last span
+    // is extended rather than a new one pushed. Its four conditions are each
+    // load-bearing — offsets must both be "append", ids-ness must match (or the
+    // merged span would claim ids it does not have, or hide ids it does), and
+    // the rows must be physically adjacent in staging_data_.
     // NOTE: the row-count parameter is deliberately NOT named `count` — that is
     // the member holding this index's constructor row count, and shadowing it
     // here silently sized the arena to the incoming chunk (1 row in production)
