@@ -28,8 +28,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-const nativeBatchFrameHeaderBytes = 24
-
 var putStream = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
 
 // NativeInput is one single-use, acknowledged MO-batch stream for a StreamRead.
@@ -186,12 +184,7 @@ func (n *NativeInput) Send(ctx context.Context, bat *batch.Batch, mp *mpool.MPoo
 
 func (n *NativeInput) sendPayloadLocked(payload []byte) error {
 	n.sequence++
-	frame := make([]byte, nativeBatchFrameHeaderBytes+len(payload))
-	copy(frame[:4], "MOB1")
-	binary.LittleEndian.PutUint16(frame[4:6], 1)
-	binary.LittleEndian.PutUint64(frame[8:16], n.sequence)
-	binary.LittleEndian.PutUint64(frame[16:24], uint64(len(payload)))
-	copy(frame[nativeBatchFrameHeaderBytes:], payload)
+	frame := marshalNativeBatchFrame(n.sequence, payload)
 	if err := n.stream.SendMsg(&flightData{AppMetadata: frame}); err != nil {
 		n.terminalErr = internalErrorf("sidecar flight: send native input batch: %w", err)
 		return n.terminalErr

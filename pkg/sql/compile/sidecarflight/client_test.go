@@ -57,6 +57,22 @@ import (
 
 type testFlightService interface{}
 
+// These one-byte sentinels keep older test setup concise. GetFlightInfo now
+// replaces schema with the request's negotiated native schema, and DoGet uses
+// body only as the signal to emit the native result fixture.
+const (
+	fixtureSchemaHex = "00"
+	fixtureHeaderHex = "00"
+	fixtureBodyHex   = "00"
+)
+
+func mustHex(t *testing.T, value string) []byte {
+	t.Helper()
+	decoded, err := hex.DecodeString(value)
+	require.NoError(t, err)
+	return decoded
+}
+
 type testFlightServer struct {
 	schema              []byte
 	header              []byte
@@ -782,9 +798,8 @@ func TestContextCancellationReachesSidecarWhileWriterIsBlocked(t *testing.T) {
 }
 
 func TestExecutionRejectsMalformedStreamsAndDuplicateClaims(t *testing.T) {
-	schemaWire := mustHex(t, fixtureSchemaHex)
 	typesOut, headings := fixtureOutputShape()
-	schema, err := ParseSchema(schemaWire, typesOut, headings)
+	schema, schemaWire, err := newNativeResultSchema(typesOut, headings)
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name     string
@@ -792,12 +807,12 @@ func TestExecutionRejectsMalformedStreamsAndDuplicateClaims(t *testing.T) {
 		maximum  uint64
 		want     string
 	}{
-		{name: "missing schema", messages: []*flightData{}, maximum: 1 << 20, want: "before its schema"},
-		{name: "empty header", messages: []*flightData{{}}, maximum: 1 << 20, want: "malformed or oversized"},
-		{name: "schema body", messages: []*flightData{{DataHeader: schemaWire, DataBody: []byte{1}}}, maximum: 1 << 20, want: "schema message contains a body"},
-		{name: "schema mismatch", messages: []*flightData{{DataHeader: append([]byte(nil), schemaWire[:len(schemaWire)-1]...)}}, maximum: 1 << 20, want: "stream schema"},
-		{name: "oversized body", messages: []*flightData{{DataHeader: schemaWire}, {DataHeader: []byte{1}, DataBody: []byte{1, 2}}}, maximum: 1, want: "malformed or oversized"},
-		{name: "invalid batch", messages: []*flightData{{DataHeader: schemaWire}, {DataHeader: []byte{1}}}, maximum: 1 << 20, want: "decode record batch"},
+		{name: "missing schema", messages: []*flightData{}, maximum: 1 << 20, want: "before its Flight transport schema"},
+		{name: "empty frame", messages: []*flightData{{}}, maximum: 1 << 20, want: "malformed Flight transport schema"},
+		{name: "schema body", messages: []*flightData{{DataHeader: []byte{1}, DataBody: []byte{1}}}, maximum: 1 << 20, want: "malformed Flight transport schema"},
+		{name: "schema metadata", messages: []*flightData{{AppMetadata: schemaWire}}, maximum: 1 << 20, want: "malformed Flight transport schema"},
+		{name: "oversized frame", messages: []*flightData{{DataHeader: []byte{1}}, {DataHeader: make([]byte, nativeBatchFrameHeaderBytes+2)}}, maximum: 1, want: "malformed or oversized"},
+		{name: "invalid batch", messages: []*flightData{{DataHeader: []byte{1}}, {DataHeader: marshalNativeBatchFrame(1, []byte{1})}}, maximum: 1 << 20, want: "decode MO native result batch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := &testFlightServer{
@@ -845,6 +860,57 @@ func fixtureOutputShape() ([]planpb.Type, []string) {
 	}, []string{"b", "i8", "i16", "i32", "i64", "f32", "f64", "s", "d64", "d128", "date", "u32_transport"}
 }
 
+func fixtureNativeResultPayload() []byte {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(12)
+	typesOut, _ := fixtureOutputShape()
+	for i := range typesOut {
+		typ := types.T(typesOut[i].Id).ToType()
+		typ.Width = typesOut[i].Width
+		typ.Scale = typesOut[i].Scale
+		typ.Charset = uint8(typesOut[i].Charset)
+		typ.SetNotNull(typesOut[i].NotNullable)
+		bat.Vecs[i] = vector.NewVec(typ)
+	}
+	must := func(err error) {
+		if err != nil {
+			panic(err)
+		}
+	}
+	must(vector.AppendFixed(bat.Vecs[0], true, false, mp))
+	must(vector.AppendFixed(bat.Vecs[0], false, true, mp))
+	must(vector.AppendFixed(bat.Vecs[1], int8(-8), false, mp))
+	must(vector.AppendFixed(bat.Vecs[1], int8(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[2], int16(-16), false, mp))
+	must(vector.AppendFixed(bat.Vecs[2], int16(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[3], int32(-32), false, mp))
+	must(vector.AppendFixed(bat.Vecs[3], int32(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[4], int64(-64), false, mp))
+	must(vector.AppendFixed(bat.Vecs[4], int64(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[5], float32(1.25), false, mp))
+	must(vector.AppendFixed(bat.Vecs[5], float32(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[6], 2.5, false, mp))
+	must(vector.AppendFixed(bat.Vecs[6], float64(0), true, mp))
+	must(vector.AppendBytes(bat.Vecs[7], []byte("tpch"), false, mp))
+	must(vector.AppendBytes(bat.Vecs[7], nil, true, mp))
+	must(vector.AppendFixed(bat.Vecs[8], types.Decimal64(^uint64(12344)), false, mp))
+	must(vector.AppendFixed(bat.Vecs[8], types.Decimal64(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[9], types.Decimal128{B0_63: 7, B64_127: 1}, false, mp))
+	must(vector.AppendFixed(bat.Vecs[9], types.Decimal128{}, true, mp))
+	must(vector.AppendFixed(bat.Vecs[10], types.DaysFromUnixEpochToDate(1), false, mp))
+	must(vector.AppendFixed(bat.Vecs[10], types.Date(0), true, mp))
+	must(vector.AppendFixed(bat.Vecs[11], uint32(42), false, mp))
+	must(vector.AppendFixed(bat.Vecs[11], uint32(0), true, mp))
+	bat.SetRowCount(2)
+	payload, err := bat.MarshalBinary()
+	bat.Clean(mp)
+	must(err)
+	if mp.CurrNB() != 0 {
+		panic("native result fixture leaked its memory pool")
+	}
+	return payload
+}
+
 func testFlightConnection(t *testing.T, implementation *testFlightServer) *grpc.ClientConn {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
@@ -879,7 +945,7 @@ func testGetFlightInfo(service any, ctx context.Context, decode func(any) error,
 	if request.Type != commandDescriptor || len(request.Path) != 0 || proto.Unmarshal(request.Cmd, command) != nil ||
 		command.ProtocolVersion != protocolVersion || command.SubstraitVersion != substraitVersion ||
 		len(command.CapabilityHash) != sha256.Size || command.MaxBatchBytes == 0 || command.DeadlineUnixMS == 0 ||
-		command.MaxInputBatchBytes == 0 ||
+		command.MaxInputBatchBytes == 0 || len(command.ResultSchema) == 0 ||
 		len(command.Plan) == 0 || len(command.QueryID) != 16 || len(command.IdempotencyKey) != sha256.Size || command.AccountID == nil {
 		return nil, status.Error(codes.InvalidArgument, "malformed ExecuteSubstrait command")
 	}
@@ -896,6 +962,9 @@ func testGetFlightInfo(service any, ctx context.Context, decode func(any) error,
 	}
 	if server.badInfo {
 		return &flightInfo{Schema: server.schema, AppMetadata: server.hash}, nil
+	}
+	if !bytes.Equal(server.schema, []byte("bad")) {
+		server.schema = bytes.Clone(command.ResultSchema)
 	}
 	return &flightInfo{Schema: server.schema, Endpoint: []*flightEndpoint{{
 		Ticket: &flightTicket{Ticket: server.ticket}, Locations: server.locations,
@@ -926,10 +995,13 @@ func testDoGet(service any, stream grpc.ServerStream) error {
 		}
 		return nil
 	}
-	if err := stream.SendMsg(&flightData{DataHeader: server.schema}); err != nil {
+	if err := stream.SendMsg(&flightData{DataHeader: []byte{1}}); err != nil {
 		return err
 	}
-	return stream.SendMsg(&flightData{DataHeader: server.header, DataBody: server.body})
+	if len(server.body) == 0 {
+		return nil
+	}
+	return stream.SendMsg(&flightData{DataHeader: marshalNativeBatchFrame(1, fixtureNativeResultPayload())})
 }
 
 func testDoPut(service any, stream grpc.ServerStream) error {

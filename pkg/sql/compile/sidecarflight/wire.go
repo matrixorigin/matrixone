@@ -125,6 +125,7 @@ type executeSubstraitRequest struct {
 	IdempotencyKey     []byte  `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3"`
 	AccountID          *uint64 `protobuf:"varint,9,opt,name=account_id,json=accountId,proto3,oneof"`
 	MaxInputBatchBytes uint64  `protobuf:"varint,10,opt,name=max_input_batch_bytes,json=maxInputBatchBytes,proto3"`
+	ResultSchema       []byte  `protobuf:"bytes,11,opt,name=result_schema,json=resultSchema,proto3"`
 }
 
 func (m *executeSubstraitRequest) Reset() { *m = executeSubstraitRequest{} }
