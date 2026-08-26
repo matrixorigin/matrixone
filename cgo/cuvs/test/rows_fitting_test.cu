@@ -21,10 +21,12 @@
 // device, and the constraint that is easiest to get wrong: the answer must be
 // taken ONCE, before anything has been allocated.
 
+#include "helper.h"
 #include "index_cost.hpp"
 #include "test_framework.hpp"
 
 #include <cuda_runtime.h>
+#include <cstdlib>
 #include <vector>
 
 using matrixone::cagra_cost;
@@ -161,4 +163,63 @@ TEST(IndexCost, AnswerMustBeTakenBeforeAnythingIsAllocated) {
     // would make every successive one smaller instead of sharing one capacity.
     ASSERT_TRUE(free_after < free_before);
     ASSERT_TRUE(rows_after < rows_before);
+}
+
+// The C shim Go calls, exercised for the property Go cannot assert: the current
+// device is per THREAD, and CGo dispatches onto arbitrary threads from a shared
+// pool, so a Go test would need runtime.LockOSThread to make three calls share a
+// thread -- a configuration production never creates. Here the round trip is a
+// plain same-thread cudaGetDevice.
+//
+// The FAILURE path is the one asserted, because it is the one reachable on a
+// single-GPU box (a bogus ordinal makes cudaSetDevice fail after the rebind
+// decision is already made) and the one where a missing restore is easiest to
+// reintroduce -- an early return past the cleanup.
+TEST(IndexCost, RowsFittingShimRestoresTheDeviceWhenItFails) {
+    const int before = current_device();
+
+    int count = 0;
+    ASSERT_EQ(cudaSuccess, cudaGetDeviceCount(&count));
+    const int bogus = count + 8;  // never a valid ordinal
+
+    int64_t  rows = 0;
+    uint64_t free_bytes = 0;
+    char*    errmsg = nullptr;
+    const int rc = gpu_rows_fitting_free_mem(bogus, 12, &rows, &free_bytes, 0, &errmsg);
+
+    ASSERT_EQ(-1, rc);
+    ASSERT_TRUE(errmsg != nullptr);
+    std::free(errmsg);
+
+    // The caller's binding must survive a failed probe.
+    ASSERT_EQ(before, current_device());
+    // ...and the failure must not be left latched for whatever runs next.
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+}
+
+// The success path can only rebind where there is a second device to rebind to.
+TEST(IndexCost, RowsFittingShimRestoresTheDeviceOnSuccess) {
+    int count = 0;
+    ASSERT_EQ(cudaSuccess, cudaGetDeviceCount(&count));
+    if (count < 2) {
+        TEST_LOG("skipped: needs 2+ GPUs to make the shim actually rebind "
+                 "(with one device prev == requested and there is nothing to restore)");
+        return;
+    }
+
+    ASSERT_EQ(cudaSuccess, cudaSetDevice(1));
+    const int before = current_device();
+    ASSERT_EQ(1, before);
+
+    int64_t  rows = 0;
+    uint64_t free_bytes = 0;
+    char*    errmsg = nullptr;
+    const int rc = gpu_rows_fitting_free_mem(0, 12, &rows, &free_bytes, 0, &errmsg);
+
+    ASSERT_EQ(0, rc);
+    ASSERT_TRUE(errmsg == nullptr);
+    ASSERT_TRUE(rows > 0);
+
+    ASSERT_EQ(before, current_device());
+    ASSERT_EQ(cudaSuccess, cudaSetDevice(0));
 }

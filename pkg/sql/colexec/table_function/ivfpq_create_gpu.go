@@ -163,8 +163,13 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 		// This algorithm's own fraction, read from its cost class, so the gate
 		// admits against exactly what the build was sized and claimed with -- and
 		// against the same value the load gate uses, since both come from BudgetFor.
+		// Narrowed the same way PerDeviceBytes above narrowed its attribution:
+		// a SINGLE_GPU index only ever occupies devices[0], and this gate is
+		// PERMANENT, so a smaller second card would reject the build for good.
+		participants := vimemory.DeviceParticipants(u.devices,
+			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			u.devices, uint64(perDev), cuvs.BudgetFor(u.idxcfg.Type),
+			participants, uint64(perDev), cuvs.BudgetFor(u.idxcfg.Type),
 		); aerr != nil {
 			return aerr
 		}

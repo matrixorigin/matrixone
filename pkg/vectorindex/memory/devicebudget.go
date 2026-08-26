@@ -98,6 +98,29 @@ func ShardRank(name string) int {
 	return n
 }
 
+// DeviceParticipants narrows a device list to the cards an index of this mode
+// actually uses.
+//
+// SINGLE_GPU runs on devices[0] alone -- the native constructors do the same
+// narrowing (worker_devices = {devices[0]}), so every other enumerated card is a
+// bystander that holds none of the index. Charging them anyway lets an unrelated
+// GPU veto the index: with cards [0,1] and a 500-byte SINGLE demand, ceilings
+// {0:1000, 1:100} refuse on device 1, which would never have been touched. On the
+// permanent CREATE gate that refusal is not even transient -- a smaller second
+// card rejects the build for good.
+//
+// REPLICATED genuinely puts the whole index on every device, and SHARDED spreads
+// ranks across them, so both keep the full list.
+//
+// singleGPU rather than a mode enum so this package stays free of the index
+// config types; callers already hold the mode.
+func DeviceParticipants(devices []int, singleGPU bool) []int {
+	if singleGPU && len(devices) > 1 {
+		return devices[:1]
+	}
+	return devices
+}
+
 // PeakDeviceBytes reduces per-sub-index component sizes to what the BUSIEST single
 // device must hold.
 //

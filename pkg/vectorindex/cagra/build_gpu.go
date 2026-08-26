@@ -288,7 +288,12 @@ func (b *CagraBuild[B, Q]) PerDeviceBytes() int64 {
 			comps = append(comps, idx.DeviceComponentBytes)
 		}
 	}
-	return memory.PeakDeviceBytes(b.devices, comps)
+	// Only the devices this index actually occupies: a SINGLE_GPU index lives on
+	// devices[0] alone, and charging its bytes to the other cards lets one of
+	// them refuse a build it would never hold. See memory.DeviceParticipants.
+	participants := memory.DeviceParticipants(b.devices,
+		b.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	return memory.PeakDeviceBytes(participants, comps)
 }
 
 func (b *CagraBuild[B, Q]) Destroy() error {

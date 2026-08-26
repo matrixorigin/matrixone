@@ -565,8 +565,12 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		// retry, and is the same situational answer the single check gave at its
 		// own sample point. On the final pass measured == len(indexes), so this is
 		// also the complete gate; there is no separate check after the loop.
+		// Only the devices this index occupies: a SINGLE_GPU index loads onto
+		// devices[0] alone, so a busy or smaller second card must not veto it.
+		participants := memory.DeviceParticipants(s.Devices,
+			s.Idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
 		if err := memory.DeviceAggregateFitsFree(
-			s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)),
+			participants, uint64(memory.PeakDeviceBytes(participants, comps)),
 			len(comps), len(indexes), budget,
 		); err != nil {
 			return nil, err

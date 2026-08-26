@@ -414,3 +414,53 @@ func TestRefusalNeverPrintsZeroForNonZeroBytes(t *testing.T) {
 	require.NotContains(t, err.Error(), "0 MB")
 	require.Contains(t, err.Error(), "900 bytes")
 }
+
+// A SINGLE_GPU index occupies devices[0] alone, so the cards it never touches
+// must not be able to refuse it. The counterexample is small on purpose: cards
+// [0,1] with ceilings {0:1000, 1:100} and a 500-byte demand. The native loader
+// would only ever touch device 0, where it fits.
+//
+// This matters most on the HARDWARE gate, which is permanent: before the fix a
+// smaller second card rejected such a build for good, and the operator's only
+// escape was to shrink an index that already fit the card it would run on.
+func TestDeviceParticipants_SingleGpuIgnoresBystanderCards(t *testing.T) {
+	devices := []int{0, 1}
+	ceilings := map[int]uint64{0: 1000, 1: 100}
+	budget := fakeBudget{
+		maxAdm: func(dev int) (uint64, error) { return ceilings[dev], nil },
+		rows: func(dev int, perRow uint64) (int64, uint64, error) {
+			return int64(ceilings[dev]), ceilings[dev], nil
+		},
+	}
+
+	single := DeviceParticipants(devices, true)
+	require.Equal(t, []int{0}, single, "SINGLE_GPU runs on devices[0] alone")
+
+	require.NoError(t, DeviceAggregateFitsHardware(single, 500, budget),
+		"device 1 holds none of a SINGLE_GPU index and must not veto it")
+	require.NoError(t, DeviceAggregateFitsFree(single, 500, 1, 1, budget),
+		"the situational gate must narrow the same way")
+
+	// The narrowing must not become a way to smuggle an oversized index past the
+	// gate: device 0's own ceiling still binds.
+	require.Error(t, DeviceAggregateFitsHardware(single, 1001, budget),
+		"the participating device's own ceiling must still refuse")
+
+	// REPLICATED really does put the whole index on every card, and SHARDED
+	// spreads ranks across them, so neither narrows -- device 1 must still refuse.
+	both := DeviceParticipants(devices, false)
+	require.Equal(t, devices, both)
+	require.Error(t, DeviceAggregateFitsHardware(both, 500, budget),
+		"a non-SINGLE index does occupy device 1, which cannot hold it")
+}
+
+// PeakDeviceBytes attributes a non-shard component to every device it is given,
+// so it has to be fed the same narrowed list as the gate. Feeding it the full
+// list is what turned a bystander card into a veto.
+func TestPeakDeviceBytes_NarrowedListDropsBystanders(t *testing.T) {
+	comps := []map[string]int64{{"index.bin": 500}}
+	require.Equal(t, int64(500), PeakDeviceBytes([]int{0, 1}, comps),
+		"a whole-index component is charged to each device given")
+	require.Equal(t, int64(500), PeakDeviceBytes(DeviceParticipants([]int{0, 1}, true), comps),
+		"narrowing changes who is charged, not how much the one card holds")
+}
