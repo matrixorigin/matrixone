@@ -384,7 +384,11 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				execCtx.proc.SetLastInsertID(ses.GetLastInsertID())
 			}
 		case *tree.CreateDatabase:
-			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			// CREATE DATABASE publishes one affected row only after the engine
+			// creates the database; IF NOT EXISTS no-ops stay at zero.
+			if execCtx.runResult != nil && execCtx.runResult.AffectRows != 0 {
+				_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			}
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {

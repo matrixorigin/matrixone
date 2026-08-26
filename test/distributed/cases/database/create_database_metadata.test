@@ -1,0 +1,54 @@
+--- @metacmp(false)
+
+drop database if exists create_database_metadata_noop;
+create database create_database_metadata_noop;
+select row_count();
+select count(*) as compatibility_rows
+from mo_catalog.mo_mysql_compatibility_mode
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+select count(*) as compatibility_rows
+from mo_catalog.mo_variables
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+
+create database if not exists create_database_metadata_noop;
+select row_count();
+create database if not exists create_database_metadata_noop;
+select row_count();
+select count(*) as compatibility_rows
+from mo_catalog.mo_mysql_compatibility_mode
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+select count(*) as compatibility_rows
+from mo_catalog.mo_variables
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+
+create database create_database_metadata_noop;
+select count(*) as compatibility_rows
+from mo_catalog.mo_mysql_compatibility_mode
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+select count(*) as compatibility_rows
+from mo_catalog.mo_variables
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+
+drop database create_database_metadata_noop;
+select count(*) as compatibility_rows
+from mo_catalog.mo_mysql_compatibility_mode
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
+select count(*) as compatibility_rows
+from mo_catalog.mo_variables
+where account_id = 0
+  and dat_name = 'create_database_metadata_noop'
+  and variable_name = 'version_compatibility';
