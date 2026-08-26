@@ -152,12 +152,8 @@ drop table t1;
 # exponent-scaled variance state: finite STDDEV and finite three-row VAR_POP
 CREATE TABLE t_stddev_scaled(value DOUBLE);
 INSERT INTO t_stddev_scaled VALUES (1e200),(-1e200);
-SELECT STDDEV_POP(value) = 1e200 AS resident_ok,
-       STDDEV_POP(DISTINCT value) = 1e200 AS distinct_ok,
-       STDDEV_SAMP(value) > 1.4142e200 AND STDDEV_SAMP(value) < 1.4143e200 AS sample_ok
-FROM t_stddev_scaled;
+SELECT STDDEV_POP(value) = 1e200 AS resident_ok, STDDEV_POP(DISTINCT value) = 1e200 AS distinct_ok, STDDEV_SAMP(value) > 1.4142e200 AND STDDEV_SAMP(value) < 1.4143e200 AS sample_ok FROM t_stddev_scaled;
 TRUNCATE TABLE t_stddev_scaled;
 INSERT INTO t_stddev_scaled VALUES (0),(2e154),(1e154);
-SELECT VAR_POP(value) > 6.66e307 AND VAR_POP(value) < 6.67e307 AS finite_var_ok
-FROM t_stddev_scaled;
+SELECT VAR_POP(value) > 6.66e307 AND VAR_POP(value) < 6.67e307 AS finite_var_ok FROM t_stddev_scaled;
 DROP TABLE t_stddev_scaled;
