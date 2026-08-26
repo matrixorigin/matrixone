@@ -40,7 +40,7 @@ type nativeResultSchema struct {
 
 func (m *nativeResultSchema) Reset()         { *m = nativeResultSchema{} }
 func (m *nativeResultSchema) String() string { return proto.CompactTextString(m) }
-func (*nativeResultSchema) ProtoMessage()    {}
+func (m *nativeResultSchema) ProtoMessage()  {}
 
 type nativeResultColumn struct {
 	Name        string `protobuf:"bytes,1,opt,name=name,proto3"`
@@ -53,7 +53,7 @@ type nativeResultColumn struct {
 
 func (m *nativeResultColumn) Reset()         { *m = nativeResultColumn{} }
 func (m *nativeResultColumn) String() string { return proto.CompactTextString(m) }
-func (*nativeResultColumn) ProtoMessage()    {}
+func (m *nativeResultColumn) ProtoMessage()  {}
 
 func newNativeResultSchema(expected []planpb.Type, headings []string) (*nativeResultSchema, []byte, error) {
 	if len(expected) == 0 || len(expected) > maxNativeResultColumns || len(headings) != len(expected) {
@@ -187,6 +187,9 @@ func (s *nativeResultSchema) decodeBatch(payload []byte, mp *mpool.MPool) (resul
 		vec := result.Vecs[i]
 		if vec == nil {
 			return nil, internalErrorf("sidecar flight: MO native result column %d is nil", i)
+		}
+		if !vec.IsFlat() {
+			return nil, internalErrorf("sidecar flight: MO native result column %d is not flat", i)
 		}
 		actual := vec.GetType()
 		expectedSize := types.T(column.Oid).ToType().Size

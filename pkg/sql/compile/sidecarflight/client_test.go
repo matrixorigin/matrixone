@@ -612,6 +612,50 @@ func TestCleanupAfterResultEOFStillJoinsNativeInputs(t *testing.T) {
 	require.Equal(t, int32(1), server.cancels.Load())
 }
 
+func TestExecutionRejectsCompressedNativeResultBeforeFill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	payload := func() []byte {
+		vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+		require.NoError(t, err)
+		vec.SetLength(1 << 30)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(1 << 30)
+		defer bat.Clean(mp)
+		payload, err := bat.MarshalBinary()
+		require.NoError(t, err)
+		require.Less(t, len(payload), 1024)
+		return payload
+	}()
+
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+		streamMessages: []*flightData{
+			{DataHeader: []byte{1}},
+			{DataHeader: marshalNativeBatchFrame(1, payload)},
+		},
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	execution, err := runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"),
+		[]planpb.Type{{Id: int32(types.T_int64)}}, []string{"v"}, testFlightDeadline(), testFlightRelease,
+	)
+	require.NoError(t, err)
+	fillCalls := 0
+	err = execution.Run(context.Background(), mp, nil, func(*batch.Batch, *perfcounter.CounterSet) error {
+		fillCalls++
+		return nil
+	})
+	require.ErrorContains(t, err, "is not flat")
+	require.Zero(t, fillCalls)
+	require.Equal(t, int64(0), mp.CurrNB())
+	require.NoError(t, execution.Cleanup(context.Background()))
+}
+
 func TestResultEOFRetiresInputBeforeItsFirstBatch(t *testing.T) {
 	server := &testFlightServer{
 		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -72,4 +73,58 @@ func TestNativeResultCodecRejectsFramesAndSchemaMismatch(t *testing.T) {
 	_, err = schema.decodeBatch(wrongSize, mp)
 	require.ErrorContains(t, err, "invalid vector type size")
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestNativeResultCodecRejectsNonFlatVectors(t *testing.T) {
+	schema := &nativeResultSchema{
+		Version: nativeResultSchemaVersion,
+		Columns: []*nativeResultColumn{{Name: "v", Oid: uint32(types.T_int64)}},
+	}
+
+	for _, tc := range []struct {
+		name string
+		rows int
+		make func(*testing.T, *mpool.MPool) *vector.Vector
+	}{
+		{
+			name: "constant billion-row broadcast",
+			rows: 1 << 30,
+			make: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+				vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+				require.NoError(t, err)
+				vec.SetLength(1 << 30)
+				return vec
+			},
+		},
+		{
+			name: "dictionary class",
+			rows: 1,
+			make: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+				vec := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(vec, int64(7), false, mp))
+				vec.SetClass(vector.DIST)
+				return vec
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			payload := func() []byte {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = tc.make(t, mp)
+				bat.SetRowCount(tc.rows)
+				defer bat.Clean(mp)
+				payload, err := bat.MarshalBinary()
+				require.NoError(t, err)
+				if tc.rows > 1 {
+					require.Less(t, len(payload), 1024, "constant logical work must remain compressed on the wire")
+				}
+				return payload
+			}()
+
+			_, err := schema.decodeBatch(payload, mp)
+			require.ErrorContains(t, err, "is not flat")
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
 }

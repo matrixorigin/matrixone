@@ -3243,6 +3243,11 @@ func (v *Vector) IsConst() bool {
 	return v.class == CONSTANT
 }
 
+// IsFlat reports whether the vector stores one physical value per logical row.
+func (v *Vector) IsFlat() bool {
+	return v.class == FLAT
+}
+
 func (v *Vector) IsGrouping() bool {
 	return v.length > 0 &&
 		v.length == v.gsp.Count() &&
