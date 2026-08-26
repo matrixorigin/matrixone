@@ -548,7 +548,7 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		participants := memory.DeviceParticipants(s.Devices,
 			s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
 		if err := memory.DeviceAggregateFitsFree(
-			participants, uint64(memory.PeakDeviceBytes(participants, comps)),
+			memory.PerDeviceDemand(participants, comps),
 			len(comps), len(indexes), budget,
 		); err != nil {
 			return nil, err

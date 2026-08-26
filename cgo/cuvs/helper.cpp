@@ -250,6 +250,20 @@ int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const 
     return requested_rows;
 }
 
+// The one list. Adding a component here is what makes BOTH governors account
+// for it: load_dir claims the host-resident ones, and everything else is
+// charged to the device by exclusion on the Go side.
+static const char* const kHostResidentComponents[] = {
+    "ids.bin", "filter_data.bin", "quantizer.bin", "bitset.bin", "manifest.json",
+};
+
+bool is_host_resident_component(const std::string& name) {
+    for (const char* n : kHostResidentComponents) {
+        if (name == n) return true;
+    }
+    return false;
+}
+
 } // namespace matrixone
 
 extern "C" {
@@ -377,6 +391,20 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // resident footprint exceeds it can never be searched on this GPU no matter what
 // else is evicted, which makes it the honest basis for refusing a build outright
 // rather than deferring the failure to a query.
+const char* gpu_host_resident_components(void) {
+    // Built once, then handed out as a stable pointer: Go reads it a single time
+    // behind a sync.Once, so there is nothing to free and no lifetime to manage.
+    static const std::string joined = [] {
+        std::string out;
+        for (const char* n : matrixone::kHostResidentComponents) {
+            if (!out.empty()) out += ",";
+            out += n;
+        }
+        return out;
+    }();
+    return joined.c_str();
+}
+
 uint64_t gpu_quantizer_staging_bytes(int device_id, uint64_t dim, uint64_t elem_size,
                                      uint64_t train_limit, uint64_t max_rows,
                                      uint64_t budget_percent, void* errmsg) {

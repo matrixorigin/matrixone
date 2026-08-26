@@ -23,6 +23,7 @@ package cuvs
 import "C"
 import (
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -381,6 +382,48 @@ func QuantizerStagingBytes(deviceID int, dim, elemSize, trainLimit, maxRows uint
 	}
 	return uint64(n), nil
 }
+
+// hostResidentComponents are the packed components that live in HOST memory when
+// an index loads, not on the device: host_ids, the INCLUDE-column filter store,
+// the scalar-quantizer min/max, the deleted bitset, and the manifest itself.
+// Everything else -- index.bin, shard_N.bin -- is deserialized onto the GPU.
+//
+// Anything NOT listed counts as device-resident. That default is deliberate: a
+// component added later and not classified will over-state device demand, which
+// over-refuses, rather than under-state it and let a build through that cannot
+// be loaded.
+//
+// The list is READ from the C++ that owns it (helper.cpp,
+// kHostResidentComponents) rather than restated here, because the same list
+// decides both governors -- the host claim in load_dir sums the host-resident
+// files, and the device gates sum everything else by exclusion. With a copy on
+// each side, a new component was charged twice or not at all depending on which
+// copy someone remembered to update.
+//
+// Read once behind a sync.Once: the classification is asked per file per
+// sub-index, which is far too hot for a cgo call each time.
+var (
+	hostResidentOnce sync.Once
+	hostResidentSet  map[string]bool
+)
+
+func hostResidentComponents() map[string]bool {
+	hostResidentOnce.Do(func() {
+		// Static storage owned by the library: not ours to free.
+		raw := C.GoString(C.gpu_host_resident_components())
+		hostResidentSet = make(map[string]bool)
+		for _, n := range strings.Split(raw, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				hostResidentSet[n] = true
+			}
+		}
+	})
+	return hostResidentSet
+}
+
+// IsHostResidentComponent reports whether a packed component stays in host
+// memory rather than being deserialized onto the GPU.
+func IsHostResidentComponent(name string) bool { return hostResidentComponents()[name] }
 
 // DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
 // not what is currently free.

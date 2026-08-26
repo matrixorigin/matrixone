@@ -63,10 +63,10 @@ type cagraBuilder interface {
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
 	ToInsertSql(ts int64) ([]string, error)
-	// PerDeviceBytes is what ONE device must hold to serve this index, valid after
+	// DeviceDemand is what EACH device must hold to serve this index, valid after
 	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
-	PerDeviceBytes() int64
+	DeviceDemand() map[int]int64
 	Destroy() error
 }
 
@@ -147,17 +147,17 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	//
 	// Placed after ToInsertSql (which packs and stamps the sizes) and before the
 	// statements are executed, so a refusal persists nothing.
-	if perDev := u.builder.PerDeviceBytes(); perDev > 0 {
+	if demand := u.builder.DeviceDemand(); len(demand) > 0 {
 		// This algorithm's own fraction, read from its cost class, so the gate
 		// admits against exactly what the build was sized and claimed with -- and
 		// against the same value the load gate uses, since both come from BudgetFor.
-		// Narrowed the same way PerDeviceBytes above narrowed its attribution:
-		// a SINGLE_GPU index only ever occupies devices[0], and this gate is
-		// PERMANENT, so a smaller second card would reject the build for good.
-		participants := vimemory.DeviceParticipants(u.devices,
-			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+		// DeviceDemand has already narrowed to the participating devices and
+		// attributed per device, which both matter here because this gate is
+		// PERMANENT: charging a SINGLE_GPU index to a bystander card, or one
+		// shard's bytes to the card holding a different shard, rejects the build
+		// for good.
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			participants, uint64(perDev), cuvs.BudgetFor(u.idxcfg.Type),
+			demand, cuvs.BudgetFor(u.idxcfg.Type),
 		); aerr != nil {
 			return aerr
 		}

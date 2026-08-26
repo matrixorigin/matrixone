@@ -250,8 +250,11 @@ public:
         auto&  slot     = reserved(device_id);
         size_t inflight = slot.load(std::memory_order_relaxed);
         for (;;) {
-            if (inflight + need_bytes > budget) {
-                const size_t left = budget > inflight ? budget - inflight : 0;
+            // Subtract rather than add: inflight + need_bytes can wrap size_t,
+            // and a wrapped sum compares SMALL, so the overflow would admit the
+            // one claim least able to be honoured.
+            const size_t left = budget > inflight ? budget - inflight : 0;
+            if (need_bytes > left) {
                 throw std::runtime_error(
                     std::string(who) + ": needs " + std::to_string(need_bytes) +
                     " bytes of VRAM on device " + std::to_string(device_id) + " but only " +

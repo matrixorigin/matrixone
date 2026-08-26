@@ -32,28 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-// hostResidentComponents are the packed components that live in HOST memory when
-// an index loads, not on the device: host_ids, the INCLUDE-column filter store,
-// the scalar-quantizer min/max, the deleted bitset, and the manifest itself.
-// Everything else -- index.bin, shard_N.bin -- is deserialized onto the GPU.
-//
-// Anything NOT listed here counts as device-resident. That default is deliberate:
-// a component added later and not classified will over-state device demand, which
-// over-refuses, rather than under-state it and let a build through that cannot be
-// loaded.
-var hostResidentComponents = map[string]bool{
-	"ids.bin":         true,
-	"filter_data.bin": true,
-	"quantizer.bin":   true,
-	"bitset.bin":      true,
-	"manifest.json":   true,
-}
-
-// IsHostResidentComponent reports whether a packed component stays in host
-// memory rather than being deserialized onto the GPU. Unknown names are treated
-// as device-resident; see hostResidentComponents.
-func IsHostResidentComponent(name string) bool { return hostResidentComponents[name] }
-
 // MeasureTar is the tar counterpart of MeasureComponents: same PackSizes, same
 // host/device classification, read from a packed archive instead of the component
 // directory it was built from.
@@ -106,7 +84,7 @@ func MeasureTar(tarPath string) (PackSizes, error) {
 		name := filepath.Base(hdr.Name)
 		out.Files[name] = hdr.Size
 		out.Total += hdr.Size
-		if hostResidentComponents[name] {
+		if IsHostResidentComponent(name) {
 			out.Host += hdr.Size
 		} else {
 			out.Device += hdr.Size
@@ -151,7 +129,7 @@ func MeasureComponents(dirPath string) (PackSizes, error) {
 		sz := fi.Size()
 		out.Files[f.Name()] = sz
 		out.Total += sz
-		if hostResidentComponents[f.Name()] {
+		if IsHostResidentComponent(f.Name()) {
 			out.Host += sz
 		} else {
 			out.Device += sz

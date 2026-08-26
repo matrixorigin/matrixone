@@ -227,6 +227,22 @@ inline uint64_t quantizer_staging_rows(size_t per_train_row, uint64_t train_limi
     return static_cast<uint64_t>(rows < 1 ? 1 : rows);
 }
 
+// ---------------------------------------------------------------------------
+// Packed component classification -- ONE list, shared with Go.
+//
+// A component either stays in host memory when the index is loaded or is
+// deserialised onto the device, and the two governors divide the artifact on
+// exactly that line: the host claim in load_dir sums the host-resident files,
+// and the device gates sum everything else BY EXCLUSION. The same list decides
+// both, so a name present in one copy and missing from the other is either
+// charged twice or not at all.
+//
+// It lives here, beside quantizer_staging_rows, for the same reason that one
+// does: this header is where Go comes to ask the question rather than
+// reimplement it.
+// ---------------------------------------------------------------------------
+bool is_host_resident_component(const std::string& name);
+
 } // namespace matrixone
 #endif
 
@@ -239,6 +255,14 @@ extern "C" {
     int gpu_get_next_device_id();
     void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
 // Pinned memory management
+// gpu_host_resident_components hands Go the SAME list matrixone::
+// is_host_resident_component uses, comma-separated, so the Go side classifies
+// packed components without keeping a second literal in sync by hand.
+//
+// Points at static storage owned by the library: do not free it, and treat it
+// as valid for the life of the process.
+const char* gpu_host_resident_components(void);
+
 // gpu_rows_fitting_free_mem exposes rows_fitting_gpu_mem to Go. It makes device_id current
 // first: cudaMemGetInfo reports the CURRENT device, and the Go caller runs on an arbitrary
 // thread with no device bound. Returns 0 on success, -1 on failure (errmsg set).

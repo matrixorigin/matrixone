@@ -171,7 +171,13 @@ public:
         auto&  slot     = reserved();
         size_t inflight = slot.load(std::memory_order_relaxed);
         for (;;) {
-            if (inflight + need_bytes > budget) {
+            // Subtract rather than add: inflight + need_bytes can wrap size_t,
+            // and a wrapped sum compares SMALL, so the overflow would admit the
+            // one claim least able to be honoured. inflight can legitimately
+            // exceed budget when availability drops under existing claims, hence
+            // the clamp rather than a bare subtraction.
+            const size_t headroom = budget > inflight ? budget - inflight : 0;
+            if (need_bytes > headroom) {
                 throw std::runtime_error(
                     std::string(who) + ": host memory admission refused: " +
                     std::to_string(need_bytes) + " bytes requested, " +

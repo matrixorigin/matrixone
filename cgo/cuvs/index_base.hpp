@@ -17,6 +17,7 @@
 #pragma once
 
 #include "device_memory.hpp"
+#include "helper.h"
 #include "host_memory.hpp"
 
 #include <filesystem>
@@ -1022,16 +1023,6 @@ public:
     // memory.HostIDMapBytesPerRow, which is what the Go capacity model charges.
     static constexpr size_t kIdMapBytesPerRow = 40;
 
-    // The packed components that stay in HOST memory once the index is loaded.
-    // Anything else in the artifact is deserialised onto the device and is the
-    // device governor's business. Mirrors hostResidentComponents in
-    // pkg/cuvs/consolidate.go, which classifies the same names off the tar.
-    static bool is_host_resident_component(const std::string& name) {
-        return name == "ids.bin" || name == "filter_data.bin" ||
-               name == "quantizer.bin" || name == "bitset.bin" ||
-               name == "manifest.json";
-    }
-
     // Claims the host memory a load is about to materialise out of `dir`.
     //
     // The artifact is the authoritative size here: a search-path load has no
@@ -1051,7 +1042,8 @@ public:
              it.increment(ec)) {
             std::error_code fec;
             if (!it->is_regular_file(fec) || fec) continue;
-            if (!is_host_resident_component(it->path().filename().string())) continue;
+            if (!matrixone::is_host_resident_component(it->path().filename().string()))
+                continue;
             const auto n = it->file_size(fec);
             if (!fec) need += static_cast<size_t>(n);
         }
@@ -1083,6 +1075,11 @@ public:
         // index unloadable rather than merely refused. It is claimed here rather
         // than at load because an index that never has a delete replayed never
         // builds the map at all.
+        //
+        // Under delete_id's mutex_, and reserve() reads /proc (~39us on the dev
+        // box). id_index_built_ makes this once per index, not once per delete,
+        // so hoisting the sample into delete_id would turn one sample into one
+        // per deleted row.
         const size_t need = this->host_ids.size() * kIdMapBytesPerRow;
         host_memory_governor::reservation claim;
         if (need > 0) claim = host_memory_governor::reserve(need, "id map");
@@ -1516,6 +1513,14 @@ public:
         // Claim what the growth ADDS, not what the arenas will hold: most calls
         // fit the existing capacity and add nothing. One claim covers both
         // arenas so a growth is admitted or refused as a unit.
+        //
+        // This runs under the caller's mutex_, and reserve() reads /proc and the
+        // cgroup files -- measured at ~39us per call on the dev box. It is taken
+        // only when the arenas actually grow, and growth is geometric toward the
+        // bound, so a whole build pays it a handful of times rather than once per
+        // staged row. Sampling before the lock instead would mean sampling on
+        // EVERY call, which is the far worse trade: production stages one row per
+        // call.
         //
         // Held across the inserts below rather than released at the reserve:
         // reserve() leaves the new pages unfaulted, and the inserts are what

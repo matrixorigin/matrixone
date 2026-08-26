@@ -152,15 +152,25 @@ func TestShardedArtifactFeedsThePreflight(t *testing.T) {
 		require.Equal(t, biggest, memory.PeakDeviceBytes([]int{0, 1, 2, 3}, comps),
 			"distinct cards each hold one shard, so the peak is the largest shard")
 
-		// And the reduction is what the gate is actually fed, so the sharded index
-		// must be admissible against a budget that holds the biggest shard alone.
-		require.NoError(t, memory.DeviceAggregateFitsFree(
-			[]int{0, 1, 2, 3}, uint64(biggest), 1, 1, testBudget{
-				rows: func(int, uint64) (int64, uint64, error) { return biggest, uint64(biggest), nil },
-			}))
-		require.Error(t, memory.DeviceAggregateFitsFree(
-			[]int{0, 1, 2, 3}, uint64(biggest), 1, 1, testBudget{
-				rows: func(int, uint64) (int64, uint64, error) { return biggest - 1, uint64(biggest), nil },
-			}))
+		// And the attribution is what the gate is actually fed, so the sharded
+		// index must be admissible against a budget that holds the biggest shard
+		// alone -- each card is judged on the shard it received.
+		demand := memory.PerDeviceDemand([]int{0, 1, 2, 3}, comps)
+		require.NoError(t, memory.DeviceAggregateFitsFree(demand, 1, 1, testBudget{
+			rows: func(int, uint64) (int64, uint64, error) { return biggest, uint64(biggest), nil },
+		}))
+		require.Error(t, memory.DeviceAggregateFitsFree(demand, 1, 1, testBudget{
+			rows: func(int, uint64) (int64, uint64, error) { return biggest - 1, uint64(biggest), nil },
+		}))
+
+		// A card is judged on ITS shard, not the biggest one. Give every card a
+		// ceiling that holds only what it actually received: the old reduction
+		// tested the largest shard against each of them and refused the smaller
+		// cards for bytes they were never given.
+		require.NoError(t, memory.DeviceAggregateFitsFree(demand, 1, 1, testBudget{
+			rows: func(dev int, _ uint64) (int64, uint64, error) {
+				return demand[dev], uint64(demand[dev]), nil
+			},
+		}))
 	})
 }

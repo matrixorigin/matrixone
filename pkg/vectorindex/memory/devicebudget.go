@@ -16,6 +16,7 @@ package memory
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -142,9 +143,9 @@ func DeviceParticipants(devices []int, singleGPU bool) []int {
 // A shard rank with no matching device entry is charged to devices[0] rather than
 // dropped: silently ignoring a component would under-state demand, which is the
 // direction that admits an index that cannot load.
-func PeakDeviceBytes(devices []int, perSubIndex []map[string]int64) int64 {
+func PerDeviceDemand(devices []int, perSubIndex []map[string]int64) map[int]int64 {
 	if len(devices) == 0 || len(perSubIndex) == 0 {
-		return 0
+		return nil
 	}
 	perDev := make(map[int]int64, len(devices))
 	for _, comps := range perSubIndex {
@@ -166,8 +167,18 @@ func PeakDeviceBytes(devices []int, perSubIndex []map[string]int64) int64 {
 			}
 		}
 	}
+	return perDev
+}
+
+// PeakDeviceBytes is what the BUSIEST single device must hold -- the max of
+// PerDeviceDemand.
+//
+// A reporting figure, not an admission one: the gates compare each device against
+// its own share, because the busiest device's number says nothing about whether a
+// different, smaller card can hold what IT was given.
+func PeakDeviceBytes(devices []int, perSubIndex []map[string]int64) int64 {
 	var peak int64
-	for _, v := range perDev {
+	for _, v := range PerDeviceDemand(devices, perSubIndex) {
 		if v > peak {
 			peak = v
 		}
@@ -226,9 +237,11 @@ type DeviceBudget interface {
 // was derived from (total or free) for the refusal message.
 type deviceCeiling func(dev int) (ceiling, observed uint64, err error)
 
-// deviceOverBudget names the device that could not hold the demand.
+// deviceOverBudget names the device that could not hold its share, and how much
+// that share was -- which is per device, not the aggregate peak.
 type deviceOverBudget struct {
 	dev               int
+	need              uint64
 	ceiling, observed uint64
 }
 
@@ -239,8 +252,13 @@ type deviceMeasureFailure struct {
 }
 
 // deviceAggregateExceeds is the ONE comparison both aggregate gates make: walk the
-// distinct physical devices, ask each for its ceiling, and report the first that
-// cannot hold need. Returns (nil, nil) when every device can.
+// devices that actually hold something, ask each for its ceiling, and report the
+// first that cannot hold ITS OWN share. Returns (nil, nil) when every device can.
+//
+// Per device, not one peak against every card. Collapsing to a max and testing
+// that against each ceiling refuses a device for bytes another device holds --
+// harmless where the split is even, wrong as soon as it is not, and permanent on
+// the CREATE gate.
 //
 // Factored out because the two gates differ ONLY in which pool they measure and
 // how they word the refusal -- the iteration, the DeviceDistinct aliasing rule and
@@ -253,15 +271,30 @@ type deviceMeasureFailure struct {
 // mode flag would trade duplicated logic for a function that is half message
 // selection, which is worse.
 func deviceAggregateExceeds(
-	devices []int, need uint64, ceilingOf deviceCeiling,
+	demand map[int]int64, ceilingOf deviceCeiling,
 ) (*deviceOverBudget, *deviceMeasureFailure) {
-	for _, dev := range DeviceDistinct(devices) {
+	// Sorted, so which device a refusal names is reproducible when more than one
+	// is over. Map order would make the message -- and any test asserting it --
+	// vary between runs on identical input.
+	devs := make([]int, 0, len(demand))
+	for dev := range demand {
+		devs = append(devs, dev)
+	}
+	sort.Ints(devs)
+
+	for _, dev := range devs {
+		need := demand[dev]
+		if need <= 0 {
+			continue
+		}
 		ceiling, observed, err := ceilingOf(dev)
 		if err != nil {
 			return nil, &deviceMeasureFailure{dev: dev, cause: err}
 		}
-		if need > ceiling {
-			return &deviceOverBudget{dev: dev, ceiling: ceiling, observed: observed}, nil
+		if uint64(need) > ceiling {
+			return &deviceOverBudget{
+				dev: dev, need: uint64(need), ceiling: ceiling, observed: observed,
+			}, nil
 		}
 	}
 	return nil, nil
@@ -299,9 +332,9 @@ func deviceAggregateExceeds(
 // their fix from it, and the untouched sub-indexes only make it larger. Pass
 // measured == total for a complete aggregate.
 func DeviceAggregateFitsFree(
-	devices []int, perDeviceBytes uint64, measured, total int, budget DeviceBudget,
+	demand map[int]int64, measured, total int, budget DeviceBudget,
 ) error {
-	if perDeviceBytes == 0 || len(devices) == 0 || budget == nil {
+	if len(demand) == 0 || budget == nil {
 		return nil
 	}
 	// "needs N MB" for the whole index; "needs at least N MB" while sub-indexes
@@ -318,7 +351,7 @@ func DeviceAggregateFitsFree(
 	// not duplicated here. Do NOT ask whether N rows of N bytes fit and test for
 	// zero: that function clamps its result to a minimum of 1, so any predicate
 	// built on it is silently always-true.
-	over, unmeasured := deviceAggregateExceeds(devices, perDeviceBytes, func(dev int) (uint64, uint64, error) {
+	over, unmeasured := deviceAggregateExceeds(demand, func(dev int) (uint64, uint64, error) {
 		rows, free, ferr := budget.RowsFitting(dev, 1)
 		// A negative row count means the C++ could not size anything; treat it as a
 		// zero ceiling so the refusal quotes 0 rather than the huge number an
@@ -331,7 +364,7 @@ func DeviceAggregateFitsFree(
 	if unmeasured != nil {
 		return moerr.NewInternalErrorNoCtxf(
 			"vector index load: cannot measure device %d to admit %d bytes: %v",
-			unmeasured.dev, perDeviceBytes, unmeasured.cause)
+			unmeasured.dev, demand[unmeasured.dev], unmeasured.cause)
 	}
 	if over != nil {
 		return moerr.NewInternalErrorNoCtxf(
@@ -339,7 +372,7 @@ func DeviceAggregateFitsFree(
 				"but only %s may be claimed there right now (%s free), because a query "+
 				"reads every sub-index at once. Evict cached indexes, or retry when the device "+
 				"is quieter",
-			atLeast, mib(perDeviceBytes), over.dev, scope, mib(over.ceiling), mib(over.observed))
+			atLeast, mib(over.need), over.dev, scope, mib(over.ceiling), mib(over.observed))
 	}
 	return nil
 }
@@ -358,11 +391,11 @@ func DeviceAggregateFitsFree(
 // turns a deferred, confusing failure into an immediate, actionable one -- without
 // the false positives a free-memory or modelled-cost predicate produces.
 //
-// perDeviceBytes is what ONE device must hold (cuvs builder PerDeviceBytes): the
-// sum over sub-indexes of the largest device-resident component in each. It is
-// already per-device, so there is no distribution-mode attribution here -- under
-// SHARDED the caller has taken the biggest shard rather than an even division,
-// which would under-state it.
+// demand is what EACH device must hold (memory.PerDeviceDemand), keyed by device.
+// Per device rather than one peak, because the peak is the busiest card's number
+// and says nothing about whether a different, smaller card can hold its own
+// share: under SHARDED with uneven cards, testing the largest shard against every
+// ceiling refuses a device for bytes it was never given.
 //
 // The threshold is the budget fraction of TOTAL, not total itself: the
 // per-deserialize claims in C++ admit against that fraction of FREE, and free
@@ -370,12 +403,12 @@ func DeviceAggregateFitsFree(
 // however idle the card. Comparing against raw total would leave that band
 // committing artifacts whose every query fails.
 func DeviceAggregateFitsHardware(
-	devices []int, perDeviceBytes uint64, budget DeviceBudget,
+	demand map[int]int64, budget DeviceBudget,
 ) error {
-	if perDeviceBytes == 0 || len(devices) == 0 || budget == nil {
+	if len(demand) == 0 || budget == nil {
 		return nil
 	}
-	over, unmeasured := deviceAggregateExceeds(devices, perDeviceBytes, func(dev int) (uint64, uint64, error) {
+	over, unmeasured := deviceAggregateExceeds(demand, func(dev int) (uint64, uint64, error) {
 		total, terr := budget.MaxAdmissible(dev)
 		// The ceiling IS the reading here: there is no second figure to quote, the
 		// way free memory accompanies a situational refusal.
@@ -386,7 +419,7 @@ func DeviceAggregateFitsHardware(
 		// that may be unsearchable.
 		return moerr.NewInternalErrorNoCtxf(
 			"vector index build: cannot read the admissible VRAM of device %d to validate a %d byte index: %v",
-			unmeasured.dev, perDeviceBytes, unmeasured.cause)
+			unmeasured.dev, demand[unmeasured.dev], unmeasured.cause)
 	}
 	if over != nil {
 		return moerr.NewInvalidInputNoCtxf(
@@ -395,7 +428,7 @@ func DeviceAggregateFitsHardware(
 				"query reads all sub-indexes at once, so rotation cannot help and this "+
 				"index could never be queried on this GPU. Rebuild with a narrower storage "+
 				"type (QUANTIZATION), index fewer rows, or use a GPU with more memory",
-			mib(perDeviceBytes), over.dev, mib(over.ceiling))
+			mib(over.need), over.dev, mib(over.ceiling))
 	}
 	return nil
 }

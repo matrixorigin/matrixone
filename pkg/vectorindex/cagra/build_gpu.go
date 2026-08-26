@@ -270,8 +270,8 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 }
 
 // Destroy frees all GPU memory and removes any temporary files.
-// PerDeviceBytes is how many GPU-resident bytes the BUSIEST single device must
-// hold to serve this index.
+// DeviceDemand is how many GPU-resident bytes EACH device must hold to serve
+// this index, keyed by device.
 //
 // Delegated to memory.PeakDeviceBytes because the reduction depends on the device
 // list, not just the sizes: with distinct cards each holds one shard per
@@ -281,7 +281,7 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 //
 // Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
 // reach the GPU. Valid only after ToInsertSql, which packs and stamps the sizes.
-func (b *CagraBuild[B, Q]) PerDeviceBytes() int64 {
+func (b *CagraBuild[B, Q]) DeviceDemand() map[int]int64 {
 	comps := make([]map[string]int64, 0, len(b.indexes))
 	for _, idx := range b.indexes {
 		if len(idx.DeviceComponentBytes) > 0 {
@@ -293,7 +293,7 @@ func (b *CagraBuild[B, Q]) PerDeviceBytes() int64 {
 	// them refuse a build it would never hold. See memory.DeviceParticipants.
 	participants := memory.DeviceParticipants(b.devices,
 		b.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
-	return memory.PeakDeviceBytes(participants, comps)
+	return memory.PerDeviceDemand(participants, comps)
 }
 
 func (b *CagraBuild[B, Q]) Destroy() error {

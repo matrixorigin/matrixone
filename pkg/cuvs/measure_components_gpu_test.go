@@ -142,3 +142,23 @@ func TestMeasureTarMatchesMeasureComponents(t *testing.T) {
 		require.Error(t, err, "a silent zero would size the load claim to nothing")
 	})
 }
+
+// The classification has ONE owner now (helper.cpp, kHostResidentComponents) and
+// Go reads it across the cgo boundary. This proves the plumbing -- a truncated or
+// mis-split list would silently reclassify components, and reclassifying is how a
+// component gets charged to both governors or to neither.
+func TestHostResidentComponentsComeFromCpp(t *testing.T) {
+	for _, name := range []string{
+		"ids.bin", "filter_data.bin", "quantizer.bin", "bitset.bin", "manifest.json",
+	} {
+		require.True(t, IsHostResidentComponent(name), "%s must be host-resident", name)
+	}
+	// Device-resident by exclusion, which is the deliberate default for anything
+	// the list does not name.
+	for _, name := range []string{"index.bin", "shard_0.bin", "shard_7.bin", ""} {
+		require.False(t, IsHostResidentComponent(name), "%q must not be host-resident", name)
+	}
+	// The set is exactly those five: an extra entry would mean the split picked up
+	// stray whitespace or a trailing separator.
+	require.Len(t, hostResidentComponents(), 5)
+}
