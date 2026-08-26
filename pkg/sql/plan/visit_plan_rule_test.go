@@ -1458,6 +1458,7 @@ func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
 		{name: "double range overflow", value: "1e309", target: int32Type, want: true},
 		{name: "int64 double precision loss", value: "9007199254740993", target: int64Type, want: true},
 		{name: "int64 exactly representable", value: "9007199254740992", target: int64Type, want: false},
+		{name: "fraction rounds to integral double", value: "9007199254740992.5", target: int64Type, want: true},
 		{name: "int64 exponent precision loss", value: "9007199254740993e0", target: int64Type, want: true},
 		{name: "floating target", value: "0.9", target: float64Type, want: false},
 		{name: "decimal target uses common double domain", value: "9007199254740993", target: decimalType, want: true},

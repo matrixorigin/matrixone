@@ -322,6 +322,17 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
 		require.Equal(t, int64(2), matched)
 
+		// A fractional text prefix can round to an integral DOUBLE at the edge
+		// of DOUBLE's exact-integer range. It must stay in the common DOUBLE
+		// comparison domain; narrowing it back to BIGINT would select only the
+		// lower adjacent key instead of both keys that MySQL compares equal.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.bigint_precision set status = 0")
+		_, err = bigintPrecisionStmt.ExecContext(ctx, "9007199254740992.5")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
+		require.Equal(t, int64(2), matched)
+
 		// DECIMAL/text comparison has the same common DOUBLE domain. Casting the
 		// text through DOUBLE and then back to DECIMAL changes this value to
 		// 9007199254740992 and incorrectly produces no match.

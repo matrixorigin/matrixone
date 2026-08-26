@@ -775,28 +775,28 @@ func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) b
 	switch types.T(target.Id) {
 	case types.T_int8:
 		return math.Trunc(numeric) != numeric || numeric < math.MinInt8 || numeric > math.MaxInt8 ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_int16:
 		return math.Trunc(numeric) != numeric || numeric < math.MinInt16 || numeric > math.MaxInt16 ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_int32:
 		return math.Trunc(numeric) != numeric || numeric < math.MinInt32 || numeric > math.MaxInt32 ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_int64:
 		return math.Trunc(numeric) != numeric || numeric < -math.Exp2(63) || numeric >= math.Exp2(63) ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_uint8:
 		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint8 ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_uint16:
 		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint16 ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_uint32:
 		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint32 ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_uint64:
 		return math.Trunc(numeric) != numeric || numeric < 0 || numeric >= math.Exp2(64) ||
-			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		// MySQL compares a DECIMAL value with a string in the approximate DOUBLE
 		// domain. Casting the converted text back to DECIMAL can change the value
@@ -807,22 +807,19 @@ func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) b
 	}
 }
 
-// preparedComparisonTextLosesIntegerPrecision reports whether ParseFloat
-// changed an integral decimal prefix. Comparing the float64 values directly
-// cannot detect this: converting the exact int64 to float64 repeats the same
-// rounding. A high-precision parse preserves the decimal integer for an exact
-// comparison with the integer represented by the runtime DOUBLE.
-func preparedComparisonTextLosesIntegerPrecision(prefix string, numeric float64) bool {
-	exact, _, err := big.ParseFloat(prefix, 10, 256, big.ToNearestEven)
-	if err != nil {
+// preparedComparisonTextLosesDoublePrecision reports whether converting the
+// original numeric prefix to the runtime DOUBLE changed its value. Comparing
+// only the truncated integer parts misses fractional prefixes that round to an
+// integral DOUBLE (for example, 9007199254740992.5). Keep the original prefix
+// as an exact rational so both integer and fractional precision loss is
+// detected before the value is narrowed into an integral column domain.
+func preparedComparisonTextLosesDoublePrecision(prefix string, numeric float64) bool {
+	exact, ok := new(big.Rat).SetString(prefix)
+	if !ok {
 		return false
 	}
-	exactInt, exactAccuracy := exact.Int(nil)
-	if exactAccuracy != big.Exact {
-		return false
-	}
-	numericInt, numericAccuracy := new(big.Float).SetFloat64(numeric).Int(nil)
-	return numericAccuracy == big.Exact && exactInt.Cmp(numericInt) != 0
+	runtime, accuracy := new(big.Float).SetFloat64(numeric).Rat(nil)
+	return accuracy != big.Exact || exact.Cmp(runtime) != 0
 }
 
 func preparedExprFunctionObj(expr *plan.Expr) int64 {
