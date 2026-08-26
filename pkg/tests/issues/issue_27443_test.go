@@ -305,6 +305,38 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(0), status)
 
+		// Text values above DOUBLE's exact-integer range must keep the filter in
+		// the common DOUBLE domain. Narrowing the converted value back to BIGINT
+		// would silently select only 9007199254740992 instead of both adjacent
+		// values, which compare equal after MySQL's string/numeric conversion.
+		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.bigint_precision (id bigint primary key, status int)")
+		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.bigint_precision values (9007199254740992, 0), (9007199254740993, 0)")
+		bigintPrecisionStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.bigint_precision set status = 24 where id = ?")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, bigintPrecisionStmt.Close()) }()
+		_, err = bigintPrecisionStmt.ExecContext(ctx, "9007199254740993")
+		require.NoError(t, err)
+		var matched int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
+		require.Equal(t, int64(2), matched)
+
+		// DECIMAL/text comparison has the same common DOUBLE domain. Casting the
+		// text through DOUBLE and then back to DECIMAL changes this value to
+		// 9007199254740992 and incorrectly produces no match.
+		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.decimal_precision (id decimal(38,0) primary key, status int)")
+		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.decimal_precision values (9007199254740993, 0)")
+		decimalPrecisionStmt, err := db.PrepareContext(ctx,
+			"update `"+dbName+"`.decimal_precision set status = 25 where id = ?")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, decimalPrecisionStmt.Close()) }()
+		_, err = decimalPrecisionStmt.ExecContext(ctx, "9007199254740993")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select status from `"+dbName+"`.decimal_precision where id = 9007199254740993").Scan(&status))
+		require.Equal(t, int64(25), status)
+
 		// Multi-operand numeric predicates must use the same conversion while
 		// retaining the indexed column side. This covers the index rewrite paths
 		// for IN and BETWEEN in addition to direct equality.

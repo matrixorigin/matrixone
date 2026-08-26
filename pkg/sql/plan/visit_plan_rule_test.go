@@ -1439,9 +1439,11 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 
 func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
 	int32Source := types.T_int32.ToType()
+	int64Source := types.T_int64.ToType()
 	float64Source := types.T_float64.ToType()
 	decimalSource := types.T_decimal128.ToType()
 	int32Type := makePlan2Type(&int32Source)
+	int64Type := makePlan2Type(&int64Source)
 	float64Type := makePlan2Type(&float64Source)
 	decimalType := makePlan2Type(&decimalSource)
 	for _, test := range []struct {
@@ -1454,14 +1456,31 @@ func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
 		{name: "fractional integer comparison", value: "0.9", target: int32Type, want: true},
 		{name: "integer range overflow", value: "2147483648", target: int32Type, want: true},
 		{name: "double range overflow", value: "1e309", target: int32Type, want: true},
+		{name: "int64 double precision loss", value: "9007199254740993", target: int64Type, want: true},
+		{name: "int64 exactly representable", value: "9007199254740992", target: int64Type, want: false},
+		{name: "int64 exponent precision loss", value: "9007199254740993e0", target: int64Type, want: true},
 		{name: "floating target", value: "0.9", target: float64Type, want: false},
-		{name: "decimal target keeps its domain", value: "1", target: decimalType, want: false},
+		{name: "decimal target uses common double domain", value: "9007199254740993", target: decimalType, want: true},
 		{name: "missing prefix coerces zero", value: "foo", target: int32Type, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, preparedComparisonTextNeedsDoubleFallback(test.value, test.target))
 		})
 	}
+}
+
+func TestPreparedRuntimeTextComparisonUnknownTypeIsNotNumeric(t *testing.T) {
+	rule := &preparedRuntimeTextComparisonScanRule{}
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: 999},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}
+	require.NotPanics(t, func() {
+		require.False(t, rule.exprHasNumericDomain(expr))
+	})
 }
 
 func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {

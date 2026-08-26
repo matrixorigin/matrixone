@@ -3606,9 +3606,9 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 		// expression itself unchanged; the text marker is rebound to the
 		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
 		// preserved without relying on the stale prepare-time integer cast.
-		return types.T(expr.Typ.Id).ToType().IsNumeric()
+		return (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric()
 	}
-	if types.T(expr.Typ.Id).ToType().IsNumeric() {
+	if (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric() {
 		return true
 	}
 	if list := expr.GetList(); list != nil {

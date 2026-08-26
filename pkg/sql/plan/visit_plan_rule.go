@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
@@ -425,15 +426,12 @@ type ResetParamRefRule struct {
 	// with an engine DOUBLE cast before rebinding any enclosing function so
 	// nested expressions, IN, and BETWEEN share MySQL numeric-string semantics.
 	numericComparisonTextParamPositions map[int]bool
-	// numericComparisonTextOverflowExprs records DOUBLE fallback expressions
-	// for text values whose numeric prefix is outside DOUBLE's finite range.
-	// The filter can safely compare the clamped DOUBLE value, but a LOCK_OP key
-	// expression must retain the primary-key type; using the DOUBLE fallback
-	// there would make the lock executor read a vector with the wrong physical
-	// type. Such a value cannot match an integral primary key, so the lock
-	// expression is replaced by a typed NULL (the filter still performs the
-	// conversion).
-	numericComparisonTextOverflowExprs map[*Expr]struct{}
+	// numericComparisonTextFallbackExprs records expressions that must remain in
+	// the common DOUBLE comparison domain. A LOCK_OP key expression must retain
+	// the primary-key physical type, so these expressions are replaced there by
+	// a typed NULL while the scan filter performs the conversion and selects the
+	// rows that the normal row-lock path must lock.
+	numericComparisonTextFallbackExprs map[*Expr]struct{}
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -488,13 +486,12 @@ func (rule *ResetParamRefRule) PreserveAssignmentCast(e *plan.Expr) bool {
 	return ok
 }
 
-// NormalizePreparedLockRows keeps an overflowing text comparison out of the
-// lock executor's typed primary-key fetch path.  The corresponding scan
-// filter remains responsible for the MySQL DOUBLE conversion and warning;
-// NULL here simply means that no primary-key row can be locked for a value
-// outside the primary-key domain.
+// NormalizePreparedLockRows keeps a DOUBLE-domain text comparison out of the
+// lock executor's typed primary-key fetch path. The corresponding scan filter
+// remains responsible for MySQL conversion and row selection; NULL disables
+// only this unsafe parameter-derived pre-lock key.
 func (rule *ResetParamRefRule) NormalizePreparedLockRows(rewritten *Expr, target plan.Type) *Expr {
-	if _, ok := rule.numericComparisonTextOverflowExprs[rewritten]; !ok {
+	if _, ok := rule.numericComparisonTextFallbackExprs[rewritten]; !ok {
 		return rewritten
 	}
 	target.NotNullable = false
@@ -656,11 +653,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rule.params[implicitComparisonCastPos] != nil {
 			if literal := rule.params[implicitComparisonCastPos].GetLit(); literal != nil &&
 				preparedComparisonTextNeedsDoubleFallback(literal.GetSval(), originalTyp) {
-				// The native column domain cannot represent an overflowing DOUBLE
-				// prefix. Keep the comparison in DOUBLE space for this value so it
-				// becomes a normal no-match/diagnostic rather than an integer-cast
-				// error. Ordinary prefixes still use the column-domain cast and keep
-				// the indexed column side untouched.
+				// Keep the comparison in DOUBLE space when narrowing the converted
+				// text into the column domain would change MySQL's numeric comparison
+				// result. Ordinary exactly representable integer prefixes still use
+				// the column-domain cast and keep the indexed column side untouched.
 				numericType := preparedNumericComparisonTextType()
 				fallback, castErr := makePlan2CastExpr(
 					rule.ctx,
@@ -670,10 +666,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				if castErr != nil {
 					return nil, castErr
 				}
-				if rule.numericComparisonTextOverflowExprs == nil {
-					rule.numericComparisonTextOverflowExprs = make(map[*Expr]struct{})
+				if rule.numericComparisonTextFallbackExprs == nil {
+					rule.numericComparisonTextFallbackExprs = make(map[*Expr]struct{})
 				}
-				rule.numericComparisonTextOverflowExprs[fallback] = struct{}{}
+				rule.numericComparisonTextFallbackExprs[fallback] = struct{}{}
 				rule.specialized = true
 				return fallback, nil
 			}
@@ -778,24 +774,55 @@ func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) b
 	// of an overflowing integer cast.
 	switch types.T(target.Id) {
 	case types.T_int8:
-		return math.Trunc(numeric) != numeric || numeric < math.MinInt8 || numeric > math.MaxInt8
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt8 || numeric > math.MaxInt8 ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_int16:
-		return math.Trunc(numeric) != numeric || numeric < math.MinInt16 || numeric > math.MaxInt16
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt16 || numeric > math.MaxInt16 ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_int32:
-		return math.Trunc(numeric) != numeric || numeric < math.MinInt32 || numeric > math.MaxInt32
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt32 || numeric > math.MaxInt32 ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_int64:
-		return math.Trunc(numeric) != numeric || numeric < -math.Exp2(63) || numeric >= math.Exp2(63)
+		return math.Trunc(numeric) != numeric || numeric < -math.Exp2(63) || numeric >= math.Exp2(63) ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_uint8:
-		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint8
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint8 ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_uint16:
-		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint16
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint16 ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_uint32:
-		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint32
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint32 ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
 	case types.T_uint64:
-		return math.Trunc(numeric) != numeric || numeric < 0 || numeric >= math.Exp2(64)
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric >= math.Exp2(64) ||
+			preparedComparisonTextLosesIntegerPrecision(prefix, numeric)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		// MySQL compares a DECIMAL value with a string in the approximate DOUBLE
+		// domain. Casting the converted text back to DECIMAL can change the value
+		// first (for example, 9007199254740993 becomes 9007199254740992).
+		return true
 	default:
 		return false
 	}
+}
+
+// preparedComparisonTextLosesIntegerPrecision reports whether ParseFloat
+// changed an integral decimal prefix. Comparing the float64 values directly
+// cannot detect this: converting the exact int64 to float64 repeats the same
+// rounding. A high-precision parse preserves the decimal integer for an exact
+// comparison with the integer represented by the runtime DOUBLE.
+func preparedComparisonTextLosesIntegerPrecision(prefix string, numeric float64) bool {
+	exact, _, err := big.ParseFloat(prefix, 10, 256, big.ToNearestEven)
+	if err != nil {
+		return false
+	}
+	exactInt, exactAccuracy := exact.Int(nil)
+	if exactAccuracy != big.Exact {
+		return false
+	}
+	numericInt, numericAccuracy := new(big.Float).SetFloat64(numeric).Int(nil)
+	return numericAccuracy == big.Exact && exactInt.Cmp(numericInt) != 0
 }
 
 func preparedExprFunctionObj(expr *plan.Expr) int64 {
