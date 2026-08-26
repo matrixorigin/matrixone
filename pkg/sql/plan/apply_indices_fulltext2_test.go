@@ -421,7 +421,7 @@ func TestFulltext2WrappedMatchDiscovery(t *testing.T) {
 	classicBuilder, _, classicProject, classicScan, _ := newFulltext2CoveredFixture(t, false, false)
 	classicScan.TableDef.Indexes[0].IndexAlgo = catalog.MOIndexFullTextAlgo.ToString()
 	classicMatch := ft2TestMatch("classic", 0, classicScan.BindingTags[0], "body")
-	classicProject.ProjectList = []*plan.Expr{&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+	classicProject.ProjectList = []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{ObjName: "round"},
 		Args: []*plan.Expr{ft2TestExpr(classicMatch)},
 	}}}}

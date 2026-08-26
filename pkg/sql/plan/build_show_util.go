@@ -302,7 +302,7 @@ func constructCreateTableSQL(
 						if err != nil {
 							return "", nil, err
 						}
-						indexStr += paramStr
+						indexStr += strings.TrimRight(paramStr, " ")
 					} else {
 						val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
 						// ignore err != nil --> value not found
