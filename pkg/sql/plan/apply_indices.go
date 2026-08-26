@@ -614,11 +614,12 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// agg node and scan node present
 			// get the list of filter that is fulltext_match func
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullText2Matches(nil, scanNode, filterids, nil)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 {
+			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
-					filterids, filter_ftidxs, colRefCnt, idxColMap)
+					filterids, filter_ftidxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		} else {
 			// get the list of project that is fulltext_match func
@@ -626,11 +627,13 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 
 			// get the list of filter that is fulltext_match func
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullText2Matches(projNode, scanNode, filterids, projids)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 || len(projids) > 0 {
+			if len(filterids) > 0 || len(projids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
-					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+					filterids, filter_ftidxs, projids, proj_ftidxs, wrappedFTExprs, wrappedFTIdxs,
+					colRefCnt, idxColMap)
 			}
 		}
 	}
@@ -1389,7 +1392,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	if aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
-		if len(filterids) > 0 {
+		wrapped, _ := builder.getWrappedFullText2Matches(nil, scanNode, filterids, nil)
+		if len(filterids) > 0 || len(wrapped) > 0 {
 			return []int32{scanNode.NodeId}
 		}
 		return nil
@@ -1397,7 +1401,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	projids, _ := builder.getFullTextMatchFromProject(projNode, scanNode)
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
-	if len(filterids) > 0 || len(projids) > 0 {
+	wrapped, _ := builder.getWrappedFullText2Matches(projNode, scanNode, filterids, projids)
+	if len(filterids) > 0 || len(projids) > 0 || len(wrapped) > 0 {
 		return []int32{scanNode.NodeId}
 	}
 	return nil

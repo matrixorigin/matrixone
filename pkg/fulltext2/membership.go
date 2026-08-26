@@ -94,6 +94,49 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 type prefilter struct {
 	docFilter docfilter.MembershipFilter
 	include   []compiledIncludePred
+	// scoreRange is the pushed-down relevance interval. Unlike the membership
+	// filters above it cannot prune before scoring; it is applied at the point a
+	// scored document becomes a result (streamSink or runTopK).
+	scoreRange *ScoreRange
+}
+
+// ScoreRange is a relevance interval pushed into a FULLTEXT2 search. Both ends
+// are optional and retain SQL comparison inclusivity. The planner widens bounds
+// outward in float32 space before passing them here, so this filter cannot drop
+// a row that the SQL predicate would keep.
+type ScoreRange struct {
+	Min          float32 `json:"min,omitempty"`
+	Max          float32 `json:"max,omitempty"`
+	HasMin       bool    `json:"has_min,omitempty"`
+	HasMax       bool    `json:"has_max,omitempty"`
+	MinInclusive bool    `json:"min_inc,omitempty"`
+	MaxInclusive bool    `json:"max_inc,omitempty"`
+}
+
+// contains reports whether score is inside r. A nil range allows every score.
+func (r *ScoreRange) contains(score float32) bool {
+	if r == nil {
+		return true
+	}
+	if r.HasMin {
+		if r.MinInclusive {
+			if score < r.Min {
+				return false
+			}
+		} else if score <= r.Min {
+			return false
+		}
+	}
+	if r.HasMax {
+		if r.MaxInclusive {
+			if score > r.Max {
+				return false
+			}
+		} else if score >= r.Max {
+			return false
+		}
+	}
+	return true
 }
 
 // mkAllow returns a per-segment WHERE-prefilter Membership over seg's ords (the docfilter
