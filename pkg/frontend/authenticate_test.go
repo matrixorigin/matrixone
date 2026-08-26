@@ -11536,6 +11536,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			// Verify that "begin;" was executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeTrue)
+			requireAccountOwnedMetadataCleanup(t, bh, 1)
 		})
 
 		// Test case 2: inTransaction=true (restore scenario - uses existing transaction)
@@ -11605,8 +11606,25 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			// Verify that "begin;" was NOT executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
+			requireAccountOwnedMetadataCleanup(t, bh, 1)
 		})
 	})
+}
+
+func requireAccountOwnedMetadataCleanup(t *testing.T, bh *backgroundExecTestWithHistory, accountID int64) {
+	t.Helper()
+	for _, expectedSQL := range getSqlForDeleteAccountOwnedMetadata(accountID) {
+		found := false
+		for i, executedSQL := range bh.executedSqls {
+			if executedSQL != expectedSQL {
+				continue
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], expectedSQL)
+			found = true
+			break
+		}
+		require.True(t, found, expectedSQL)
+	}
 }
 
 // backgroundExecTestWithHistory extends backgroundExecTest to track SQL execution history

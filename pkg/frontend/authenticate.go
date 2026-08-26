@@ -1295,7 +1295,9 @@ const (
 
 	lockMoAccountNameFormat = `select account_name from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
 
-	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
+	deletePitrFromMoPitrFormat          = `delete from mo_catalog.mo_pitr where create_account = %d;`
+	deleteBranchMetadataByCreatorFormat = `delete from mo_catalog.mo_branch_metadata where creator = %d;`
+	deleteFeatureLimitByAccountIDFormat = `delete from mo_catalog.mo_feature_limit where account_id = %d;`
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
@@ -1778,6 +1780,13 @@ func getSqlForLockMoAccountNameFormat(ctx context.Context, account string) (stri
 
 func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
 	return fmt.Sprintf(deletePitrFromMoPitrFormat, accountId)
+}
+
+func getSqlForDeleteAccountOwnedMetadata(accountID int64) []string {
+	return []string{
+		fmt.Sprintf(deleteBranchMetadataByCreatorFormat, accountID),
+		fmt.Sprintf(deleteFeatureLimitByAccountIDFormat, accountID),
+	}
 }
 
 func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
@@ -4325,6 +4334,17 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		for clusterTable := range clusterTables {
 			sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
 			bh.ClearExecResultSet()
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
+		// These tables are physically global but retain account-owned rows under
+		// semantic ownership columns, so they are not covered by the generic
+		// cluster-table cleanup above.
+		for _, sql = range getSqlForDeleteAccountOwnedMetadata(accountId) {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
