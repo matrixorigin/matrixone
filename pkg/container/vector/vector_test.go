@@ -6207,6 +6207,21 @@ func BenchmarkCopyPreallocatedNullVectorReverseFill(b *testing.B) {
 	}
 }
 
+func TestUnionBatchNoSelectionDoesNotPublishStringSourceMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	destination := NewVec(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	defer source.Free(mp)
+	require.NoError(t, AppendFixed(destination, int64(1), false, mp))
+	require.NoError(t, AppendFixed(source, int64(2), false, mp))
+	require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+
+	require.NoError(t, destination.UnionBatch(source, 0, 1, []uint8{0}, mp))
+	require.Equal(t, 1, destination.Length())
+	require.False(t, destination.HasStringSourceMetadata())
+}
+
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())
@@ -6234,6 +6249,52 @@ func BenchmarkUnionBatchNoMetadata(b *testing.B) {
 	for i := 0; i < 1024; i++ {
 		require.NoError(b, AppendFixed(source, int64(i), false, mp))
 	}
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnionBatchUniformStringSource(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+	}
+	require.NoError(b, source.SetStringSource(types.StringSourceLiteral))
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnionBatchMixedStringSources(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	sources := make([]types.StringSource, 1024)
+	for i := range sources {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+		if i%2 == 0 {
+			sources[i] = types.StringSourceLiteral
+		} else {
+			sources[i] = types.StringSourceCOMStmt
+		}
+	}
+	require.NoError(b, source.SetStringSourcesWithMP(sources, mp))
 	destination := NewVec(types.T_int64.ToType())
 	defer destination.Free(mp)
 	b.ReportAllocs()

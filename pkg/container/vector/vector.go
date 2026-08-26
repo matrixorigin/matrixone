@@ -2127,7 +2127,11 @@ func (s *stringSourceAppendSummary) observe(source types.StringSource) {
 
 func summarizeStringSourceSelection[T int32 | int64](w *Vector, sels []T) stringSourceAppendSummary {
 	var summary stringSourceAppendSummary
-	if w == nil {
+	if w == nil || len(sels) == 0 {
+		return summary
+	}
+	if w.stringSources == nil {
+		summary.observe(w.stringSource)
 		return summary
 	}
 	for _, sel := range sels {
@@ -2139,14 +2143,22 @@ func summarizeStringSourceSelection[T int32 | int64](w *Vector, sels []T) string
 func summarizeStringSourceOne(w *Vector, sel int64) stringSourceAppendSummary {
 	var summary stringSourceAppendSummary
 	if w != nil {
-		summary.observe(w.GetStringSourceAt(int(sel)))
+		if w.stringSources == nil {
+			summary.observe(w.stringSource)
+		} else {
+			summary.observe(w.GetStringSourceAt(int(sel)))
+		}
 	}
 	return summary
 }
 
 func summarizeStringSourceBatch(w *Vector, offset int64, cnt int, flags []uint8) stringSourceAppendSummary {
 	var summary stringSourceAppendSummary
-	if w == nil {
+	if w == nil || cnt <= 0 {
+		return summary
+	}
+	if w.stringSources == nil {
+		summary.observe(w.stringSource)
 		return summary
 	}
 	for i := 0; i < cnt; i++ {
@@ -2156,6 +2168,42 @@ func summarizeStringSourceBatch(w *Vector, offset int64, cnt int, flags []uint8)
 		summary.observe(w.GetStringSourceAt(int(offset) + i))
 	}
 	return summary
+}
+
+func preflightStringSourceSelectionAppend[T int32 | int64](
+	v *Vector,
+	finalLength int,
+	w *Vector,
+	sels []T,
+	mp *mpool.MPool,
+) error {
+	if !v.HasStringSourceMetadata() && !w.HasStringSourceMetadata() {
+		return nil
+	}
+	if v.stringSources != nil {
+		return v.preExtendStringSources(finalLength, mp)
+	}
+	return v.preflightStringSourceAppend(
+		finalLength, summarizeStringSourceSelection(w, sels), mp)
+}
+
+func (v *Vector) preflightStringSourceBatchAppend(
+	finalLength int,
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	mp *mpool.MPool,
+) error {
+	if finalLength <= v.length ||
+		!v.HasStringSourceMetadata() && !w.HasStringSourceMetadata() {
+		return nil
+	}
+	if v.stringSources != nil {
+		return v.preExtendStringSources(finalLength, mp)
+	}
+	return v.preflightStringSourceAppend(
+		finalLength, summarizeStringSourceBatch(w, offset, cnt, flags), mp)
 }
 
 func (v *Vector) preflightStringSourceAppend(
@@ -2440,8 +2488,8 @@ func (v *Vector) PreflightUnionPrepareParamKinds(
 	sels []int64,
 	mp *mpool.MPool,
 ) error {
-	if err := v.preflightStringSourceAppend(
-		v.length+len(sels), summarizeStringSourceSelection(w, sels), mp); err != nil {
+	if err := preflightStringSourceSelectionAppend(
+		v, v.length+len(sels), w, sels, mp); err != nil {
 		return err
 	}
 	v.RetainStringSourcePreflight()
@@ -2493,8 +2541,8 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		return moerr.NewInternalErrorNoCtxf(
 			"invalid prepared parameter append length %d below %d", finalLength, v.length)
 	}
-	if err := v.preflightStringSourceAppend(
-		finalLength, summarizeStringSourceBatch(w, offset, cnt, flags), mp); err != nil {
+	if err := v.preflightStringSourceBatchAppend(
+		finalLength, w, offset, cnt, flags, mp); err != nil {
 		return err
 	}
 	v.RetainStringSourcePreflight()
@@ -2527,14 +2575,44 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 	return nil
 }
 
+func (v *Vector) propagateUniformStringSource(
+	oldLength int,
+	source types.StringSource,
+) error {
+	if oldLength >= v.length {
+		return nil
+	}
+	if v.stringSources != nil {
+		fillSlice(v.stringSources, oldLength, v.length, source)
+		return nil
+	}
+	if oldLength == 0 {
+		return v.SetStringSource(source)
+	}
+	if v.stringSource == source {
+		return nil
+	}
+	// A mixed scalar append must have admitted a sidecar before length
+	// publication. Never turn a missed preflight into a fallible allocation here.
+	return mpool.ErrAllocationAccountInvariant
+}
+
 func (v *Vector) propagatePrepareParamKindsAll(w *Vector, oldLength int, mp *mpool.MPool) error {
 	if w == nil || w.length == 0 {
 		return nil
 	}
-	for row := 0; row < w.length; row++ {
-		if err := v.appendStringSourceAt(
-			oldLength+row, oldLength, w.GetStringSourceAt(row), mp); err != nil {
+	if !v.HasStringSourceMetadata() && !w.HasStringSourceMetadata() {
+		// Preserve the metadata-free bulk-copy path.
+	} else if w.stringSources == nil {
+		if err := v.propagateUniformStringSource(oldLength, w.stringSource); err != nil {
 			return err
+		}
+	} else {
+		for row := 0; row < w.length; row++ {
+			if err := v.appendStringSourceAt(
+				oldLength+row, oldLength, w.GetStringSourceAt(row), mp); err != nil {
+				return err
+			}
 		}
 	}
 	if w.prepareParamKinds == nil {
@@ -2570,19 +2648,28 @@ func (v *Vector) propagatePrepareParamKindsBatch(
 		return nil
 	}
 	output := oldLength
-	for i := 0; i < cnt; i++ {
-		if flags != nil && flags[i] == 0 {
-			continue
-		}
-		row := int(offset) + i
-		source := w.GetStringSourceAt(row)
-		if stringSourceOverrides != nil {
-			source = stringSourceOverrides[i]
-		}
-		if err := v.appendStringSourceAt(output, oldLength, source, mp); err != nil {
+	if stringSourceOverrides == nil &&
+		!v.HasStringSourceMetadata() && !w.HasStringSourceMetadata() {
+		// Preserve the metadata-free bulk-copy path.
+	} else if w.stringSources == nil && stringSourceOverrides == nil {
+		if err := v.propagateUniformStringSource(oldLength, w.stringSource); err != nil {
 			return err
 		}
-		output++
+	} else {
+		for i := 0; i < cnt; i++ {
+			if flags != nil && flags[i] == 0 {
+				continue
+			}
+			row := int(offset) + i
+			source := w.GetStringSourceAt(row)
+			if stringSourceOverrides != nil {
+				source = stringSourceOverrides[i]
+			}
+			if err := v.appendStringSourceAt(output, oldLength, source, mp); err != nil {
+				return err
+			}
+			output++
+		}
 	}
 	if w.prepareParamKinds == nil && v.prepareParamKinds == nil &&
 		prepareParamRangeHasValue(w, int(offset), cnt, flags) {
@@ -2624,10 +2711,18 @@ func propagatePrepareParamKindsSelection[T int32 | int64](
 	sels []T,
 	mp *mpool.MPool,
 ) error {
-	for i, sel := range sels {
-		if err := v.appendStringSourceAt(
-			oldLength+i, oldLength, w.GetStringSourceAt(int(sel)), mp); err != nil {
+	if !v.HasStringSourceMetadata() && !w.HasStringSourceMetadata() {
+		// Preserve the metadata-free bulk-copy path.
+	} else if w.stringSources == nil {
+		if err := v.propagateUniformStringSource(oldLength, w.stringSource); err != nil {
 			return err
+		}
+	} else {
+		for i, sel := range sels {
+			if err := v.appendStringSourceAt(
+				oldLength+i, oldLength, w.GetStringSourceAt(int(sel)), mp); err != nil {
+				return err
+			}
 		}
 	}
 	if w.prepareParamKinds == nil && v.prepareParamKinds == nil {
@@ -6414,10 +6509,8 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		); err != nil {
 			return err
 		}
-		if err := v.preflightStringSourceAppend(
-			oldLength+w.length,
-			summarizeStringSourceBatch(w, 0, w.length, nil),
-			mp,
+		if err := v.preflightStringSourceBatchAppend(
+			oldLength+w.length, w, 0, w.length, nil, mp,
 		); err != nil {
 			return err
 		}
@@ -7926,10 +8019,8 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	); err != nil {
 		return err
 	}
-	if err := v.preflightStringSourceAppend(
-		v.length+len(sels),
-		summarizeStringSourceSelection(w, sels),
-		mp,
+	if err := preflightStringSourceSelectionAppend(
+		v, v.length+len(sels), w, sels, mp,
 	); err != nil {
 		return err
 	}
