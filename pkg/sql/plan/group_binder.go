@@ -605,6 +605,11 @@ func canonicalizeMedianAstValue(
 						if database == "" {
 							database = ctx.defaultDatabase
 						}
+						if database == "" && builder != nil && builder.compCtx != nil {
+							// Root bind contexts do not copy the session default
+							// database. Mirror databaseIsValid's final fallback.
+							database = builder.compCtx.DefaultDatabase()
+						}
 						if strings.EqualFold(database, "information_schema") ||
 							strings.EqualFold(database, "mysql") {
 							// These compatibility schemas are resolved

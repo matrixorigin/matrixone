@@ -40,11 +40,19 @@ func findAggregateByName(query *planpb.Query, name string) *planpb.Function {
 
 type medianLowerCaseTableNamesContext struct {
 	*MockCompilerContext
-	lower int64
+	lower           int64
+	defaultDatabase string
 }
 
 func (c *medianLowerCaseTableNamesContext) GetLowerCaseTableNames() int64 {
 	return c.lower
+}
+
+func (c *medianLowerCaseTableNamesContext) DefaultDatabase() string {
+	if c.defaultDatabase != "" {
+		return c.defaultDatabase
+	}
+	return c.MockCompilerContext.DefaultDatabase()
 }
 
 func TestMedianSetOrderReferenceMarkerPreservesCaseSensitiveKeys(t *testing.T) {
@@ -121,16 +129,25 @@ func TestBuildMedianWithinGroupRespectsLowerCaseTableNames(t *testing.T) {
 	const systemSchemaMixedCase = `select median((select version from information_schema.tables limit 1))
   within group (order by (select version from INFORMATION_SCHEMA.TABLES limit 1))
   from select_test.bind_select`
+	const defaultInformationSchemaMixedCase = `select median((select version from tables limit 1))
+  within group (order by (select version from TABLES limit 1))
+  from select_test.bind_select`
+	const defaultMySQLMixedCase = `select median((select a from bind_select limit 1))
+  within group (order by (select a from BIND_SELECT limit 1))
+  from select_test.bind_select`
 
 	for _, test := range []struct {
-		name    string
-		lower   int64
-		sql     string
-		wantErr bool
+		name            string
+		lower           int64
+		defaultDatabase string
+		sql             string
+		wantErr         bool
 	}{
 		{name: "mode 0 same spelling", lower: 0, sql: sameCase},
 		{name: "mode 0 preserves case", lower: 0, sql: mixedCase, wantErr: true},
 		{name: "mode 0 folds compatibility schemas", lower: 0, sql: systemSchemaMixedCase},
+		{name: "mode 0 folds unqualified information schema tables", lower: 0, defaultDatabase: "information_schema", sql: defaultInformationSchemaMixedCase},
+		{name: "mode 0 folds unqualified mysql tables", lower: 0, defaultDatabase: "mysql", sql: defaultMySQLMixedCase},
 		{name: "mode 1 folds case", lower: 1, sql: mixedCase},
 		{name: "mode 2 compares case insensitively", lower: 2, sql: mixedCase},
 	} {
@@ -138,7 +155,9 @@ func TestBuildMedianWithinGroupRespectsLowerCaseTableNames(t *testing.T) {
 			ctx := &medianLowerCaseTableNamesContext{
 				MockCompilerContext: NewMockCompilerContext(true),
 				lower:               test.lower,
+				defaultDatabase:     test.defaultDatabase,
 			}
+			ctx.dbs["mysql"] = true
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, test.lower)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
@@ -148,6 +167,45 @@ func TestBuildMedianWithinGroupRespectsLowerCaseTableNames(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+
+	for _, test := range []struct {
+		name            string
+		defaultDatabase string
+		queries         []string
+	}{
+		{
+			name:            "information schema ordinary controls",
+			defaultDatabase: "information_schema",
+			queries: []string{
+				"select median((select version from tables limit 1)) from select_test.bind_select",
+				"select median((select version from TABLES limit 1)) from select_test.bind_select",
+			},
+		},
+		{
+			name:            "mysql ordinary controls",
+			defaultDatabase: "mysql",
+			queries: []string{
+				"select median((select a from bind_select limit 1)) from select_test.bind_select",
+				"select median((select a from BIND_SELECT limit 1)) from select_test.bind_select",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := &medianLowerCaseTableNamesContext{
+				MockCompilerContext: NewMockCompilerContext(true),
+				lower:               0,
+				defaultDatabase:     test.defaultDatabase,
+			}
+			ctx.dbs["mysql"] = true
+			for _, sql := range test.queries {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 0)
+				require.NoError(t, err)
+				_, err = BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				require.NoError(t, err)
+			}
 		})
 	}
 
