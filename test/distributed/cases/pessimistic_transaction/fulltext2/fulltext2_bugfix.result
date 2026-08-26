@@ -1,0 +1,60 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_bugfix;
+create database ft2_bugfix;
+use ft2_bugfix;
+create table pk_dt (id datetime primary key, body text);
+create fulltext2 index ftidx on pk_dt(body);
+insert into pk_dt values ('2020-01-02 03:04:05','alpha beta'), ('2021-06-07 08:09:10','beta gamma');
+create table pk_dec (id decimal(18,4) primary key, body text);
+create fulltext2 index ftidx on pk_dec(body);
+insert into pk_dec values (123.4567,'alpha beta'), (890.1234,'beta gamma');
+create table j1 (id bigint primary key, doc json);
+create fulltext2 index ftidx on j1(doc) with parser json;
+insert into j1 values (1,'{"title":"quantum physics","tag":"science"}'), (2,'{"title":"cooking recipes","tag":"food"}');
+create table j2 (id bigint primary key, a json, b json);
+create fulltext2 index ftidx on j2(a,b) with parser json;
+insert into j2 values (1,'{"x":"hello world"}','{"y":"foo bar"}'), (2,'{"x":"lorem ipsum"}','{"y":"dolor sit"}');
+select sleep(45);
+sleep(45)
+0
+select id from pk_dt where match(body) against('beta') order by id;
+id
+2020-01-02 03:04:05
+2021-06-07 08:09:10
+select id from pk_dt where match(body) against('gamma') order by id;
+id
+2021-06-07 08:09:10
+select id from pk_dec where match(body) against('beta') order by id;
+id
+123.4567
+890.1234
+select id from j1 where match(doc) against('quantum') order by id;
+id
+1
+select id from j1 where match(doc) against('food') order by id;
+id
+2
+select id from j2 where match(a,b) against('hello') order by id;
+id
+1
+select id from j2 where match(a,b) against('bar') order by id;
+id
+1
+select id from j2 where match(a,b) against('dolor') order by id;
+id
+2
+create table reb (id bigint primary key, body text);
+create fulltext2 index ftidx on reb(body);
+insert into reb values (1,'stale zebra'),(2,'stale zebra');
+select sleep(45);
+sleep(45)
+0
+select count(*) from reb where match(body) against('zebra');
+count(*)
+2
+delete from reb;
+alter table reb alter reindex ftidx fulltext2;
+select count(*) from reb where match(body) against('zebra');
+count(*)
+0
+drop database ft2_bugfix;

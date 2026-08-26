@@ -52,10 +52,6 @@ func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt ve
 	return nil
 }
 
-func (m *MockSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
-	return nil
-}
-
 type MockAnySearch struct {
 	Idxcfg vectorindex.IndexConfig
 	Tblcfg vectorindex.IndexTableConfig
@@ -78,10 +74,6 @@ func (m *MockAnySearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt
 	return nil
 }
 
-func (m *MockAnySearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
-	return nil
-}
-
 // Load Error
 type MockSearchLoadError struct {
 	Idxcfg vectorindex.IndexConfig
@@ -101,10 +93,6 @@ func (m *MockSearchLoadError) Load(*sqlexec.SqlProcess) error {
 }
 
 func (m *MockSearchLoadError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
-	return nil
-}
-
-func (m *MockSearchLoadError) UpdateConfig(newalgo VectorIndexSearchIf) error {
 	return nil
 }
 
@@ -530,4 +518,24 @@ func TestCacheReuseKeepsRuntimeConfigQueryScoped(t *testing.T) {
 	require.Equal(t, []string{"category"}, cachedAlgo.searchCalls[1].RequestedIncludeColumns)
 	require.Empty(t, cachedAlgo.searchCalls[1].PushdownFilterSQL)
 	require.Equal(t, uint(2), cachedAlgo.searchCalls[1].SearchCursor.Round)
+}
+
+func (m *MockSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockAnySearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockSearchLoadError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockSearchSearchError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockRuntimeSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
 }

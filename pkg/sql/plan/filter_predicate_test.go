@@ -89,7 +89,7 @@ func fnExpr(name string, args ...*plan.Expr) *plan.Expr {
 // Tests -------------------------------------------------------------------
 
 func TestBuildFilterPredicateJSON_NoFilters(t *testing.T) {
-	js, ser, res, err := buildFilterPredicateJSON(nil, newFilterTestScanNode(), []string{"price", "cat"}, "")
+	js, ser, res, err := buildFilterPredicateJSON(nil, newFilterTestScanNode(), []string{"price", "cat"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -98,7 +98,7 @@ func TestBuildFilterPredicateJSON_NoFilters(t *testing.T) {
 
 func TestBuildFilterPredicateJSON_NoIncludeColumns(t *testing.T) {
 	filters := []*plan.Expr{fnExpr("=", colExpr("price", 1, types.T_float32), f32Lit(5))}
-	js, ser, res, err := buildFilterPredicateJSON(filters, newFilterTestScanNode(), nil, "")
+	js, ser, res, err := buildFilterPredicateJSON(filters, newFilterTestScanNode(), nil, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -107,7 +107,7 @@ func TestBuildFilterPredicateJSON_NoIncludeColumns(t *testing.T) {
 
 func TestBuildFilterPredicateJSON_NilScanNode(t *testing.T) {
 	filters := []*plan.Expr{fnExpr("=", colExpr("price", 1, types.T_float32), f32Lit(5))}
-	js, ser, res, err := buildFilterPredicateJSON(filters, nil, []string{"price"}, "")
+	js, ser, res, err := buildFilterPredicateJSON(filters, nil, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -132,7 +132,7 @@ func TestBuildFilterPredicateJSON_AllComparisonOps(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.op, func(t *testing.T) {
 			filters := []*plan.Expr{fnExpr(tc.op, colExpr("price", 1, types.T_float32), i64Lit(5))}
-			js, ser, res, err := buildFilterPredicateJSON(filters, scan, []string{"price", "cat"}, "")
+			js, ser, res, err := buildFilterPredicateJSON(filters, scan, []string{"price", "cat"}, "", false)
 			require.NoError(t, err)
 			require.JSONEq(t, tc.wantStr, js, "op=%s", tc.op)
 			require.Len(t, ser, 1)
@@ -145,7 +145,7 @@ func TestBuildFilterPredicateJSON_FlippedComparison(t *testing.T) {
 	// 5 < price  →  price > 5  (op flipped, column on left in the JSON)
 	scan := newFilterTestScanNode()
 	filters := []*plan.Expr{fnExpr("<", i64Lit(5), colExpr("price", 1, types.T_float32))}
-	js, ser, res, err := buildFilterPredicateJSON(filters, scan, []string{"price"}, "")
+	js, ser, res, err := buildFilterPredicateJSON(filters, scan, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":0,"op":">","val":5}]`, js)
 	require.Len(t, ser, 1)
@@ -159,7 +159,7 @@ func TestBuildFilterPredicateJSON_AndDecomposition(t *testing.T) {
 	right := fnExpr("=", colExpr("cat", 2, types.T_int64), i64Lit(10))
 	andExpr := fnExpr("and", left, right)
 
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{andExpr}, scan, []string{"price", "cat"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{andExpr}, scan, []string{"price", "cat"}, "", false)
 	require.NoError(t, err)
 	require.JSONEq(t,
 		`[{"col":0,"op":">=","val":5},{"col":1,"op":"=","val":10}]`, js)
@@ -176,7 +176,7 @@ func TestBuildFilterPredicateJSON_AndWithUnserializableArm(t *testing.T) {
 	bad := fnExpr("=", colExpr("other", 3, types.T_int64), i64Lit(7))
 	andExpr := fnExpr("and", good, bad)
 
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{andExpr}, scan, []string{"price", "cat"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{andExpr}, scan, []string{"price", "cat"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -186,7 +186,7 @@ func TestBuildFilterPredicateJSON_AndWithUnserializableArm(t *testing.T) {
 func TestBuildFilterPredicateJSON_Between(t *testing.T) {
 	scan := newFilterTestScanNode()
 	bw := fnExpr("between", colExpr("price", 1, types.T_float32), i64Lit(1), i64Lit(10))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{bw}, scan, []string{"price"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{bw}, scan, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":0,"op":"between","lo":1,"hi":10}]`, js)
 	require.Len(t, ser, 1)
@@ -199,11 +199,63 @@ func TestBuildFilterPredicateJSON_InWithFlatArgs(t *testing.T) {
 	in := fnExpr("in",
 		colExpr("cat", 2, types.T_int64),
 		i64Lit(100), i64Lit(200), i64Lit(300))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{in}, scan, []string{"price", "cat"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{in}, scan, []string{"price", "cat"}, "", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":1,"op":"in","vals":[100,200,300]}]`, js)
 	require.Len(t, ser, 1)
 	require.Empty(t, res)
+}
+
+// TestBuildFilterPredicateJSON_StringPeel: fulltext2 (allowStrings=true) peels VARCHAR
+// predicates — =, IN, and prefix_eq (a pure-prefix LIKE) — because it stores the actual
+// value and byte-compares it (== MO's byte-exact varchar compare). The vector plugins
+// (allowStrings=false) hash strings, so the SAME predicates stay residual.
+func TestBuildFilterPredicateJSON_StringPeel(t *testing.T) {
+	scan := &plan.Node{
+		BindingTags: []int32{testScanTag},
+		TableDef: &plan.TableDef{Name: "docs", Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "status", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		}},
+	}
+	inc := []string{"status"}
+
+	eq := fnExpr("=", colExpr("status", 1, types.T_varchar), sLit("active"))
+	in := fnExpr("in", colExpr("status", 1, types.T_varchar), sLit("active"), sLit("archived"))
+	pe := fnExpr("prefix_eq", colExpr("status", 1, types.T_varchar), sLit("act"))
+
+	// allowStrings=true: all three peel into the TVF predicate JSON.
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want string
+	}{
+		{"eq", eq, `[{"col":0,"op":"=","val":"active"}]`},
+		{"in", in, `[{"col":0,"op":"in","vals":["active","archived"]}]`},
+		{"prefix", pe, `[{"col":0,"op":"prefix","val":"act"}]`},
+	} {
+		t.Run(tc.name+"_peeled", func(t *testing.T) {
+			js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{tc.expr}, scan, inc, "", true)
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, js)
+			require.Len(t, ser, 1)
+			require.Empty(t, res)
+		})
+	}
+
+	// allowStrings=false (vector plugins): every string predicate stays residual.
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{{"eq", eq}, {"in", in}, {"prefix", pe}} {
+		t.Run(tc.name+"_residual_when_hashed", func(t *testing.T) {
+			js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{tc.expr}, scan, inc, "", false)
+			require.NoError(t, err)
+			require.Empty(t, js)
+			require.Empty(t, ser)
+			require.Equal(t, []*plan.Expr{tc.expr}, res)
+		})
+	}
 }
 
 func TestBuildFilterPredicateJSON_InWithExprList(t *testing.T) {
@@ -216,7 +268,7 @@ func TestBuildFilterPredicateJSON_InWithExprList(t *testing.T) {
 		}}},
 	}
 	in := fnExpr("in", colExpr("cat", 2, types.T_int64), listExpr)
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{in}, scan, []string{"price", "cat"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{in}, scan, []string{"price", "cat"}, "", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":1,"op":"in","vals":[1,2]}]`, js)
 	require.Len(t, ser, 1)
@@ -237,7 +289,7 @@ func TestBuildFilterPredicateJSON_IsNullVariants(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.fnName, func(t *testing.T) {
 			f := fnExpr(tc.fnName, colExpr("price", 1, types.T_float32))
-			js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "")
+			js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "", false)
 			require.NoError(t, err)
 			require.JSONEq(t, `[{"col":0,"op":"`+tc.wantOp+`"}]`, js)
 			require.Len(t, ser, 1)
@@ -256,7 +308,7 @@ func TestBuildFilterPredicateJSON_MixedIncludeAndResidual(t *testing.T) {
 
 	js, ser, res, err := buildFilterPredicateJSON(
 		[]*plan.Expr{peelable1, residualOne, peelable2},
-		scan, []string{"price", "cat"}, "")
+		scan, []string{"price", "cat"}, "", false)
 	require.NoError(t, err)
 	require.JSONEq(t,
 		`[{"col":0,"op":"<=","val":100},{"col":1,"op":"=","val":5}]`, js)
@@ -270,7 +322,7 @@ func TestBuildFilterPredicateJSON_StringLiteralFallsThrough(t *testing.T) {
 	// interpret against a hashed column.
 	scan := newFilterTestScanNode()
 	f := fnExpr("=", colExpr("price", 1, types.T_float32), sLit("xyz"))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -281,7 +333,7 @@ func TestBuildFilterPredicateJSON_UnsupportedOpFallsThrough(t *testing.T) {
 	// LIKE isn't on the C++ op_from_string list — stays residual.
 	scan := newFilterTestScanNode()
 	f := fnExpr("like", colExpr("price", 1, types.T_float32), sLit("5%"))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -292,7 +344,7 @@ func TestBuildFilterPredicateJSON_ColumnNotInIncludeList(t *testing.T) {
 	// price is INCLUDE but the predicate references "other" which is not.
 	scan := newFilterTestScanNode()
 	f := fnExpr("=", colExpr("other", 3, types.T_int64), i64Lit(7))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -306,7 +358,7 @@ func TestBuildFilterPredicateJSON_PKComparison(t *testing.T) {
 	// emitting col=-1 (sentinel that wraps to kHostIdColIdx on the C++ side).
 	scan := newFilterTestScanNode()
 	f := fnExpr(">=", colExpr("id", 0, types.T_int64), i64Lit(100))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, nil, "id")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, nil, "id", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":-1,"op":">=","val":100}]`, js)
 	require.Len(t, ser, 1)
@@ -318,7 +370,7 @@ func TestBuildFilterPredicateJSON_PKIn(t *testing.T) {
 	scan := newFilterTestScanNode()
 	in := fnExpr("in", colExpr("id", 0, types.T_int64),
 		i64Lit(1), i64Lit(2), i64Lit(3))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{in}, scan, nil, "id")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{in}, scan, nil, "id", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":-1,"op":"in","vals":[1,2,3]}]`, js)
 	require.Len(t, ser, 1)
@@ -328,7 +380,7 @@ func TestBuildFilterPredicateJSON_PKIn(t *testing.T) {
 func TestBuildFilterPredicateJSON_PKBetween(t *testing.T) {
 	scan := newFilterTestScanNode()
 	bw := fnExpr("between", colExpr("id", 0, types.T_int64), i64Lit(10), i64Lit(20))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{bw}, scan, nil, "id")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{bw}, scan, nil, "id", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":-1,"op":"between","lo":10,"hi":20}]`, js)
 	require.Len(t, ser, 1)
@@ -341,7 +393,7 @@ func TestBuildFilterPredicateJSON_PKAndIncludeMixed(t *testing.T) {
 	pkF := fnExpr("=", colExpr("id", 0, types.T_int64), i64Lit(50))
 	incF := fnExpr("<", colExpr("price", 1, types.T_float32), i64Lit(10))
 	js, ser, res, err := buildFilterPredicateJSON(
-		[]*plan.Expr{pkF, incF}, scan, []string{"price", "cat"}, "id")
+		[]*plan.Expr{pkF, incF}, scan, []string{"price", "cat"}, "id", false)
 	require.NoError(t, err)
 	require.JSONEq(t,
 		`[{"col":-1,"op":"=","val":50},{"col":0,"op":"<","val":10}]`, js)
@@ -355,7 +407,7 @@ func TestBuildFilterPredicateJSON_PKDisabledWhenNameEmpty(t *testing.T) {
 	scan := newFilterTestScanNode()
 	f := fnExpr("=", colExpr("id", 0, types.T_int64), i64Lit(50))
 	js, ser, res, err := buildFilterPredicateJSON(
-		[]*plan.Expr{f}, scan, []string{"price"}, "")
+		[]*plan.Expr{f}, scan, []string{"price"}, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -371,7 +423,7 @@ func TestBuildFilterPredicateJSON_PKTakesPrecedenceOverIncludeList(t *testing.T)
 	scan := newFilterTestScanNode()
 	f := fnExpr("=", colExpr("id", 0, types.T_int64), i64Lit(7))
 	js, ser, res, err := buildFilterPredicateJSON(
-		[]*plan.Expr{f}, scan, []string{"id", "price"}, "id")
+		[]*plan.Expr{f}, scan, []string{"id", "price"}, "id", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":-1,"op":"=","val":7}]`, js)
 	require.Len(t, ser, 1)
@@ -383,7 +435,7 @@ func TestBuildFilterPredicateJSON_PKIsNotNull(t *testing.T) {
 	// short-circuits (PKs are non-nullable). We still emit the predicate.
 	scan := newFilterTestScanNode()
 	f := fnExpr("is_not_null", colExpr("id", 0, types.T_int64))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, nil, "id")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, nil, "id", false)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"col":-1,"op":"is_not_null"}]`, js)
 	require.Len(t, ser, 1)
@@ -395,7 +447,7 @@ func TestBuildFilterPredicateJSON_PKVarcharLiteralFallsThrough(t *testing.T) {
 	// residual (no regression vs today).
 	scan := newFilterTestScanNode()
 	f := fnExpr("=", colExpr("id", 0, types.T_int64), sLit("abc"))
-	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, nil, "id")
+	js, ser, res, err := buildFilterPredicateJSON([]*plan.Expr{f}, scan, nil, "id", false)
 	require.NoError(t, err)
 	require.Equal(t, "", js)
 	require.Empty(t, ser)
@@ -456,7 +508,7 @@ func TestFilterLiteralToJSONValue_AllNumericTypes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v, ok := filterLiteralToJSONValue(tc.lit)
+			v, ok := filterLiteralToJSONValue(tc.lit, false)
 			require.True(t, ok)
 			require.Equal(t, tc.want, v)
 		})
@@ -464,17 +516,17 @@ func TestFilterLiteralToJSONValue_AllNumericTypes(t *testing.T) {
 }
 
 func TestFilterLiteralToJSONValue_NilOrNull(t *testing.T) {
-	v, ok := filterLiteralToJSONValue(nil)
+	v, ok := filterLiteralToJSONValue(nil, false)
 	require.False(t, ok)
 	require.Nil(t, v)
 
-	v, ok = filterLiteralToJSONValue(&plan.Literal{Isnull: true})
+	v, ok = filterLiteralToJSONValue(&plan.Literal{Isnull: true}, false)
 	require.False(t, ok)
 	require.Nil(t, v)
 }
 
 func TestFilterLiteralToJSONValue_StringFallsThrough(t *testing.T) {
-	v, ok := filterLiteralToJSONValue(&plan.Literal{Value: &plan.Literal_Sval{Sval: "x"}})
+	v, ok := filterLiteralToJSONValue(&plan.Literal{Value: &plan.Literal_Sval{Sval: "x"}}, false)
 	require.False(t, ok)
 	require.Nil(t, v)
 }
