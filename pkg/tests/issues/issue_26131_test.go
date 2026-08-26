@@ -65,24 +65,31 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "use "+database)
 		execSQLRequire(t, ctx, db, "create table supplier (s_suppkey int primary key, s_name varchar(32))")
 		execSQLRequire(t, ctx, db, "create table lineitem (l_suppkey int, l_extendedprice decimal(15,2), l_discount decimal(15,2), l_shipdate date)")
-		execSQLRequire(t, ctx, db, "insert into supplier select result, concat('supplier-', cast(result as char)) from generate_series(1,100) g")
-		execSQLRequire(t, ctx, db, "insert into lineitem select mod(result - 1, 100) + 1, if(mod(result - 1, 100) + 1 = 42, 2, 1), 0, '1995-12-15' from generate_series(1,100000) g")
+		execSQLRequire(t, ctx, db, "insert into supplier values (1, 'supplier-1'), (42, 'supplier-42')")
+		// Two rows per group preserve real SUM accumulation. The shared-CTE
+		// topology is asserted from EXPLAIN below and does not depend on volume.
+		execSQLRequire(t, ctx, db, `insert into lineitem values
+			(1, 1, 0, '1995-12-15'), (1, 1, 0, '1995-12-15'),
+			(42, 2, 0, '1995-12-15'), (42, 2, 0, '1995-12-15')`)
 		execSQLRequire(t, ctx, db, "analyze table supplier, lineitem")
 
 		planText := explainSQL(t, ctx, db, "explain "+issue26131Q15)
-		require.GreaterOrEqual(t, strings.Count(planText, "Sink Scan"), 2,
-			"the real plan must route both the join and scalar MAX consumers through the shared CTE")
+		require.Equal(t, 1, strings.Count(planText, ".lineitem"),
+			"the shared CTE must have exactly one lineitem producer:\n%s", planText)
+		require.Equal(t, 2, strings.Count(planText, "Sink Scan"),
+			"the join and scalar MAX must be the only shared-CTE consumers:\n%s", planText)
 
 		rows, err := db.QueryContext(ctx, issue26131Q15)
 		require.NoError(t, err)
 		defer rows.Close()
 		require.True(t, rows.Next())
 		var supplierKey int
-		var supplierName, revenue string
+		var supplierName string
+		var revenue float64
 		require.NoError(t, rows.Scan(&supplierKey, &supplierName, &revenue))
 		require.Equal(t, 42, supplierKey)
 		require.Equal(t, "supplier-42", supplierName)
-		require.NotEmpty(t, revenue)
+		require.Equal(t, 4.0, revenue)
 		require.False(t, rows.Next(), "both consumers must drain to one terminal result")
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())

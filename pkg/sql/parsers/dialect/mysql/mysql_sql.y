@@ -120,6 +120,9 @@ func sqlTaskInt64(v any) int64 {
     datastreamOption *tree.DataStreamOption
     datastreamOptions tree.DataStreamOptions
     datastreamTableParam *tree.DataStreamTableParam
+    kafkaTableParam *tree.KafkaTableParam
+    kafkaTableOptions tree.KafkaTableOptions
+    kafkaTableOption *tree.KafkaTableOption
     foreignTableOption tree.ForeignTableOption
     foreignTableOptions tree.ForeignTableOptions
     foreignTableParam *tree.ForeignTableParam
@@ -179,6 +182,10 @@ func sqlTaskInt64(v any) int64 {
     selectOption uint64
 
     insert *tree.Insert
+    multiInsertTarget *tree.MultiInsertTarget
+    multiInsertTargets []*tree.MultiInsertTarget
+    multiInsertWhen *tree.MultiInsertWhen
+    multiInsertWhens []*tree.MultiInsertWhen
     insertPartition *tree.InsertPartitionClause
     partitionValues tree.PartitionValues
     replace *tree.Replace
@@ -367,6 +374,7 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
+%nonassoc LOWER_THAN_LPAREN
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
@@ -599,7 +607,7 @@ func sqlTaskInt64(v any) int64 {
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
-%token <str> DATASTREAM ESQL
+%token <str> DATASTREAM ESQL KAFKA
 
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
@@ -761,6 +769,9 @@ func sqlTaskInt64(v any) int64 {
 %type <datastreamOption> datastream_option
 %type <str> datastream_option_key datastream_option_value
 %type <foreignTableParam> foreign_table_param
+%type <kafkaTableParam> kafka_table_param
+%type <kafkaTableOptions> kafka_option_list_opt kafka_option_list
+%type <kafkaTableOption> kafka_option
 %type <foreignTableOptions> foreign_option_list_opt foreign_option_list
 %type <foreignTableOption> foreign_option
 %type <str> foreign_engine_kind
@@ -903,6 +914,11 @@ func sqlTaskInt64(v any) int64 {
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
+%type <statement> multi_insert_stmt
+%type <multiInsertTarget> multi_insert_into
+%type <multiInsertTargets> multi_insert_into_list multi_insert_else_opt
+%type <multiInsertWhen> multi_insert_when
+%type <multiInsertWhens> multi_insert_when_list
 %type <replace> replace_data
 %type <rowsExprs> values_list
 %type <str> name_datetime_scale braces_opt name_braces
@@ -5962,6 +5978,94 @@ insert_stmt:
         }
         $$ = $2
     }
+|   multi_insert_stmt
+|   with_clause multi_insert_stmt
+    {
+        $2.(*tree.MultiInsert).With = $1
+        $$ = $2
+    }
+
+// Snowflake-style multi-table INSERT. The source query must not start with
+// '(' unless the preceding INTO clause carries a column list, because the
+// grammar cannot tell a parenthesized subquery from an INTO column list.
+multi_insert_stmt:
+    INSERT ALL multi_insert_into_list select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{Targets: $3, Source: $4}
+    }
+|   INSERT ALL multi_insert_when_list multi_insert_else_opt select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{Whens: $3, Else: $4, Source: $5}
+    }
+|   INSERT FIRST multi_insert_when_list multi_insert_else_opt select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = &tree.MultiInsert{First: true, Whens: $3, Else: $4, Source: $5}
+    }
+
+multi_insert_when_list:
+    multi_insert_when
+    {
+        $$ = []*tree.MultiInsertWhen{$1}
+    }
+|   multi_insert_when_list multi_insert_when
+    {
+        $$ = append($1, $2)
+    }
+
+multi_insert_when:
+    WHEN expression THEN multi_insert_into_list
+    {
+        $$ = &tree.MultiInsertWhen{Cond: $2, Targets: $4}
+    }
+
+multi_insert_else_opt:
+    {
+        $$ = nil
+    }
+|   ELSE multi_insert_into_list
+    {
+        $$ = $2
+    }
+
+multi_insert_into_list:
+    multi_insert_into
+    {
+        $$ = []*tree.MultiInsertTarget{$1}
+    }
+|   multi_insert_into_list multi_insert_into
+    {
+        $$ = append($1, $2)
+    }
+
+multi_insert_into:
+    INTO table_name %prec LOWER_THAN_LPAREN
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2}
+    }
+|   INTO table_name VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Values: $5}
+    }
+|   INTO table_name '(' insert_column_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Columns: $4.Identifiers, ColumnNames: $4.Names}
+    }
+|   INTO table_name '(' insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MultiInsertTarget{Table: $2, Columns: $4.Identifiers, ColumnNames: $4.Names, Values: $8}
+    }
 
 insert_no_with_stmt:
     INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt returning_clause_opt
@@ -9363,7 +9467,7 @@ create_index_stmt:
             io = tree.NewIndexOption()
             io.IType = tree.INDEX_TYPE_INVALID
 	    }
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
         var IndexCat = $2
@@ -10275,6 +10379,15 @@ create_table_stmt:
         t.ForeignParam = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' kafka_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.KafkaParam = $9
+        $$ = t
+    }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
     {
         t := tree.NewCreateTable()
@@ -11141,6 +11254,37 @@ foreign_table_param:
         $$ = tree.NewForeignTableParam($3, $4)
     }
 
+kafka_table_param:
+    ENGINE equal_opt KAFKA kafka_option_list_opt
+    {
+        $$ = tree.NewKafkaTableParam($4)
+    }
+
+kafka_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' kafka_option_list ')'
+    {
+        $$ = $3
+    }
+
+kafka_option_list:
+    kafka_option
+    {
+        $$ = tree.KafkaTableOptions{$1}
+    }
+|   kafka_option_list ',' kafka_option
+    {
+        $$ = append($1, $3)
+    }
+
+kafka_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewKafkaTableOption(tree.Identifier($1), $3)
+    }
+
 foreign_engine_kind:
     ESQL
     {
@@ -11806,7 +11950,7 @@ constraint_elem:
     {
         var IfNotExists = $3
         var KeyParts = $6
-        var Name = $4
+        var Name = tree.NewCStr($4, 1).Compare()
         var Refer = $8
         var Empty = true
         $$ = tree.NewForeignKey(
@@ -11862,7 +12006,7 @@ index_name_and_type_opt:
 |   ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.Compare()
+        $$[0] = $1.Origin()
         $$[1] = $3
     }
 
@@ -11890,7 +12034,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.Compare()
+		$$ = $1.Origin()
 	}
 
 column_def:
@@ -15725,6 +15869,7 @@ non_reserved_keyword:
 |   MONGODB_CONVERT
 |   DATASTREAM
 |   ESQL
+|   KAFKA
 |   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION

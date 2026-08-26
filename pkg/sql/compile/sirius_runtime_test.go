@@ -156,6 +156,7 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.True(t, siriusStatementEligible(&tree.Select{}))
 	require.False(t, siriusStatementEligible(&tree.Select{IsPerform: true}))
 	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))
+	require.False(t, siriusStatementEligible(sqlCalcFoundRowsTestStatement()))
 	require.False(t, siriusStatementEligible(nil))
 
 	requested := WithSiriusOffload(context.Background())

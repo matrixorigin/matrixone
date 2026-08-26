@@ -2,9 +2,7 @@
 create snapshot snapshot_01 for cluster;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_02 for account default_1;
-select sleep(1);
 create snapshot snapshot_03 for account default_1;
-select sleep(1);
 create snapshot snapshot_04 for account default_1;
 -- @ignore:1
 show snapshots;
@@ -21,9 +19,7 @@ DROP SNAPSHOT snapshot_04;
 
 -- @session:id=1&user=default_1:admin&password=111111
 create snapshot snapshot_05 for account default_1;
-select sleep(1);
 create snapshot snapshot_06 for account default_1;
-select sleep(1);
 create snapshot snapshot_07 for account default_1;
 -- @ignore:1
 show snapshots;
@@ -40,7 +36,6 @@ drop account default_1;
 create snapshot snapshot_08 for account default_1;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_09 for account default_1;
-select sleep(1);
 create snapshot snapshot_09 for account default_1;
 create account default_2 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_10 for account default_2;

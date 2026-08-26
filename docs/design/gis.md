@@ -20,7 +20,7 @@ Create table (g GEOMETRY(Type='point', SRID=4326));
 Create table (g GEOMETRY('point', 4326));
 ```
 
-Will create a geometry column g, whith type point, SRID 4326.  If not specified, type default to 0 (generic) and 
+Will create a geometry column g, with type point, SRID 4326.  If not specified, type default to 0 (generic) and 
 srid default to 0 (planar).  Use SQL type scale to store type, precision to store srid.   
 
 Also create aliased types of GEOMETRY, 

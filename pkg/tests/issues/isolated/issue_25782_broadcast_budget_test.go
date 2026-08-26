@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -35,7 +36,11 @@ import (
 
 const (
 	issue25782QueryBudget = int64(1 << 20)
-	issue25782BuildRows   = int64(200_000)
+	// Eight full two-BIGINT batches contain exactly 1 MiB of vector data.
+	// Hash cells and vector metadata therefore make the resident broadcast
+	// build exceed the 1 MiB hard budget without an oversized fixture. A small
+	// tail also retains non-full-batch ingestion behavior from the old fixture.
+	issue25782BuildRows = int64(colexec.DefaultBatchSize*8 + colexec.DefaultBatchSize/16)
 )
 
 // TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget proves the
