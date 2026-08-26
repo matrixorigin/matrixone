@@ -120,6 +120,12 @@ wrapped correlated scalar projection cannot be safely decorrelated is not yet im
 select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d = a limit 1) as derived_agg_eq_mixed from t1;
 -- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
 wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when d > 0 then a else 0 end from t2 where d = a group by d limit 1) as grouped_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select (select case when t1.a > 0 then t1.a else 0 end from t2 limit 1) from t2 as outer_t2 limit 1) as deep_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
 delete from t1 where (select case when d > 0 then a else 0 end from t2 where d = a limit 1) >= 0;
 -- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
 wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented

@@ -685,12 +685,19 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	subID int32,
 	ctx *BindContext,
 ) (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
-	if len(ctx.results) != 1 || len(ctx.projects) == 0 || len(ctx.aggregates) > 0 || len(ctx.groups) > 0 ||
-		!hasCorrCol(ctx.projects[0]) || !allCorrColsAtDepthOne(ctx.projects[0]) {
+	if len(ctx.projects) == 0 || !hasCorrCol(ctx.projects[0]) {
 		return subID, nil, nil, false, nil, scalarProjectionNotApplicable
 	}
 	unsafe := func() (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
 		return subID, nil, nil, false, nil, scalarProjectionUnsafe
+	}
+	if len(ctx.results) != 1 || len(ctx.groups) > 0 || !allCorrColsAtDepthOne(ctx.projects[0]) {
+		return unsafe()
+	}
+	// Ungrouped scalar aggregates have a dedicated decorrelation path that
+	// already reconstructs their final projection after the join.
+	if len(ctx.aggregates) > 0 {
+		return subID, nil, nil, false, nil, scalarProjectionNotApplicable
 	}
 	if containsVolatileFunction(ctx.projects[0]) || !builder.casePreservesType(ctx.projects[0]) {
 		return unsafe()

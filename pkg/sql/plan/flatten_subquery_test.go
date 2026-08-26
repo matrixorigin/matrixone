@@ -2296,6 +2296,20 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 		          WHERE r.d = n.n_regionkey
 		          LIMIT 1)
 		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          GROUP BY r.r_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                          FROM region r
+		                          LIMIT 1)
+		           FROM region r2
+		          LIMIT 1)
+		   FROM nation n`,
 		`DELETE FROM nation n
 		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
 		           FROM region r
@@ -2322,14 +2336,22 @@ func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T
 	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
 	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
-		SELECT n.n_nationkey,
-		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
-		          FROM region r
-		         WHERE r.r_regionkey = n.n_regionkey)
-		  FROM nation n`)
-	require.NoError(t, err)
-	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey)
+		   FROM nation n`,
+	} {
+		logicPlan, planErr := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, planErr)
+		assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	}
 }
 
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
