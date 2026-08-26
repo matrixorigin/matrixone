@@ -30,9 +30,9 @@ select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
   ]
 }
 
-select sleep(1);
-➤ sleep(1)[-6,8,0]  𝄀
-0
+select sum(rows_cnt) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+➤ sum(rows_cnt)[3,38,0]  𝄀
+8192
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts <= NOW();
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -46,17 +46,32 @@ select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cre
 invalid argument operator >, bad value [TRANSACTION TIMESTAMP DECIMAL64]
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as float) > 9.9;
 invalid argument operator cast, bad value [TRANSACTION TIMESTAMP FLOAT]
-select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as TIMESTAMP) <= NOW();
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as TIMESTAMP) = ts_to_time(create_ts, 0);
 ➤ count(*)[-5,64,0]  𝄀
 5
-select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts) <= NOW();
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts) = cast(create_ts as TIMESTAMP(6));
 ➤ count(*)[-5,64,0]  𝄀
 5
-select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, 2) <= NOW();
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, 2) = cast(create_ts as TIMESTAMP(2));
 ➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(1) <= NOW();
 invalid argument function ts_to_time, bad value [BIGINT]
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, null) is null;
+➤ count(*)[-5,64,0]  𝄀
+5
+set @metadata_scan_saved_time_zone = @@time_zone;
+set time_zone = '+08:00';
+set @metadata_scan_function_epoch = (select min(unix_timestamp(ts_to_time(create_ts))) from metadata_scan('table_func_metadata_scan.t', '*') g);
+set @metadata_scan_cast_epoch = (select min(unix_timestamp(cast(create_ts as timestamp(6)))) from metadata_scan('table_func_metadata_scan.t', '*') g);
+set time_zone = '-05:00';
+select min(unix_timestamp(ts_to_time(create_ts))) = @metadata_scan_function_epoch from metadata_scan('table_func_metadata_scan.t', '*') g;
+➤ min(unix_timestamp(ts_to_time(create_ts))) = @metadata_scan_function_epoch[-7,1,0]  𝄀
+1
+select min(unix_timestamp(cast(create_ts as timestamp(6)))) = @metadata_scan_cast_epoch from metadata_scan('table_func_metadata_scan.t', '*') g;
+➤ min(unix_timestamp(cast(create_ts as timestamp(6)))) = @metadata_scan_cast_epoch[-7,1,0]  𝄀
+1
+set time_zone = @metadata_scan_saved_time_zone;
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -136,9 +151,6 @@ select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
   ]
 }
 
-select sleep(1);
-➤ sleep(1)[-6,8,0]  𝄀
-0
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 ➤ bit_cast(sum as bigint)[-5,64,0]  𝄀
 2147483648

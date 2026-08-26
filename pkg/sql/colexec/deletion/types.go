@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -96,6 +97,16 @@ type Deletion struct {
 	Nbucket      uint32
 
 	vm.OperatorBase
+}
+
+func newDeletionTombstoneWriter(
+	proc *process.Process,
+	fs fileservice.FileService,
+	pkType types.Type,
+) *colexec.CNS3Writer {
+	return colexec.NewCNS3TombstoneWriterForService(
+		proc.GetService(), proc.Mp(), fs, pkType, -1,
+	)
 }
 
 func (deletion *Deletion) GetOperatorBase() *vm.OperatorBase {
@@ -262,7 +273,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1)
+				s3writer = newDeletionTombstoneWriter(proc, fs, pkType)
 			}
 
 			if err = s3writer.Write(proc.Ctx, bat); err != nil {

@@ -1,6 +1,26 @@
 SELECT COUNT(NULL);
 ➤ COUNT(null)[-5,64,0]  𝄀
 0
+CREATE TABLE count_null_repro (n INT NOT NULL);
+INSERT INTO count_null_repro VALUES (1), (2), (3), (4), (5), (6), (7);
+SELECT COUNT(NULL) FROM count_null_repro;
+➤ COUNT(null)[-5,64,0]  𝄀
+0
+SELECT COUNT(CAST(NULL AS SIGNED)) FROM count_null_repro;
+➤ COUNT(CAST(NULL AS SIGNED))[-5,64,0]  𝄀
+0
+SELECT COUNT(1), COUNT(*) FROM count_null_repro;
+➤ COUNT(1)[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+7  ¦  7
+SELECT COUNT(NULL), COUNT(*) FROM count_null_repro;
+➤ COUNT(null)[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+0  ¦  7
+DROP TABLE count_null_repro;
+CREATE TABLE count_null_empty (n INT NOT NULL);
+SELECT COUNT(NULL), COUNT(*) FROM count_null_empty;
+➤ COUNT(null)[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+0  ¦  0
+DROP TABLE count_null_empty;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");

@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -2120,6 +2123,266 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	}
 }
 
+func TestWrappedCorrelatedScalarProjectionIsEvaluatedAfterJoin(t *testing.T) {
+	for _, projection := range []string{
+		"n.n_regionkey + 1",
+		"cast(n.n_regionkey as signed)",
+		"coalesce(n.n_regionkey, 0)",
+		"if(n.n_regionkey > 0, n.n_regionkey, 0)",
+		"case when n.n_regionkey > 0 then n.n_regionkey else 0 end",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+			SELECT n.n_nationkey,
+			       (SELECT `+projection+`
+			          FROM region r
+			         WHERE r.r_regionkey > n.n_regionkey
+			         LIMIT 1)
+			  FROM nation n`)
+		require.NoError(t, err, projection)
+		assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	}
+
+	_, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT rand() + n.n_regionkey
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+}
+
+func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	assertReachablePlanHasNoCorrelatedExpr(t, query)
+	var leftJoin, boundedPartition, perOuterWindow bool
+	for _, node := range reachableFlattenSubqueryNodes(query) {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
+			leftJoin = true
+		}
+		if node.NodeType == plan.Node_PARTITION {
+			limit, literal := getLiteralUint64(node.Limit)
+			if literal && limit == 1 && node.PartitionByCount == 1 && len(node.OrderBy) == 2 {
+				boundedPartition = true
+			}
+		}
+		if node.NodeType == plan.Node_WINDOW && len(node.WinSpecList) == 1 {
+			window := node.WinSpecList[0].GetW()
+			if window != nil && window.Name == "row_number" && len(window.PartitionBy) == 1 &&
+				len(window.OrderBy) == 1 {
+				perOuterWindow = true
+			}
+		}
+	}
+	require.True(t, leftJoin)
+	require.True(t, boundedPartition)
+	require.True(t, perOuterWindow)
+
+	preparedStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`, 1)
+	require.NoError(t, parseErr)
+	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+
+	_, err = runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM (SELECT n_nationkey, n_regionkey FROM nation) n`)
+	require.ErrorContains(t, err, "outer input without a stable row identity")
+
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT max(r_regionkey) AS d FROM region) r
+		          WHERE r.d > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT r_name, max(r_regionkey) AS d FROM region GROUP BY r_name) r
+		          WHERE r.d > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+		require.NotContains(t, err.Error(), "Column remapping failed")
+	}
+
+	for _, sql := range []string{
+		`SELECT n.n_regionkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n
+		  GROUP BY n.n_regionkey`,
+		`SELECT n.n_regionkey
+		   FROM nation n
+		  GROUP BY n.n_regionkey
+		 HAVING (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1) >= 0`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "outer input without a stable row identity")
+	}
+
+	for _, sql := range []string{
+		`DELETE FROM nation n
+		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1) >= 0`,
+		`UPDATE nation n
+		    SET n_regionkey = (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                           FROM region r
+		                          WHERE r.r_regionkey > n.n_regionkey
+		                          LIMIT 1)`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+	}
+}
+
+func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          ORDER BY r.r_name
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT DISTINCT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1 OFFSET 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN rand() > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT max(r_regionkey) AS d FROM region) r
+		          WHERE r.d = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          GROUP BY r.r_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                          FROM region r
+		                          LIMIT 1)
+		           FROM region r2
+		          LIMIT 1)
+		   FROM nation n`,
+		`DELETE FROM nation n
+		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1) >= 0`,
+		`UPDATE nation n
+		    SET n_regionkey = (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                           FROM region r
+		                          WHERE r.r_regionkey = n.n_regionkey
+		                          LIMIT 1)`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+	}
+
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          LIMIT 1 OFFSET 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT DISTINCT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		         HAVING count(*) > 0)
+		   FROM nation n`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated aggregate projection cannot be safely decorrelated")
+	}
+
+	preparedStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey = n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`, 1)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey)
+		   FROM nation n`,
+	} {
+		logicPlan, planErr := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, planErr)
+		assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	}
+}
+
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
@@ -2140,7 +2403,7 @@ func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	}
 }
 
-func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
+func TestNormalizeCorrelatedScalarProjectionFallsBack(t *testing.T) {
 	const (
 		projectTag int32 = 10
 		outerTag   int32 = 20
@@ -2267,12 +2530,14 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 				projects:   tt.projects,
 			}
 
-			nodeID, match, outerResult, existential :=
-				builder.normalizeDirectCorrelatedScalarProjection(tt.subID, ctx)
+			nodeID, match, outerResult, existential, perOuterOrderKey, status :=
+				builder.normalizeCorrelatedScalarProjection(tt.subID, ctx)
 			require.Equal(t, tt.subID, nodeID)
 			require.Nil(t, match)
 			require.Nil(t, outerResult)
 			require.False(t, existential)
+			require.Nil(t, perOuterOrderKey)
+			require.NotEqual(t, scalarProjectionNormalized, status)
 		})
 	}
 }

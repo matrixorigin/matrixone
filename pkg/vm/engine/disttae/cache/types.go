@@ -74,8 +74,10 @@ type CatalogCache struct {
 		ts timestamp.Timestamp
 	}
 	//tables and database is safe to be read concurrently.
-	tables    *tableCache
-	databases *databaseCache
+	tables                 *tableCache
+	databases              *databaseCache
+	tableQueryProbePool    sync.Pool
+	databaseQueryProbePool sync.Pool
 }
 
 // database cache:

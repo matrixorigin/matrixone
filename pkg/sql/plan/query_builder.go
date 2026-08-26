@@ -147,6 +147,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		setBitmapByDisplayNode:   make(map[[2]int32]int32),
 		indexHintOwnerByNode:     make(map[int32]int32),
 		userWindowNodes:          make(map[int32]struct{}),
+		internalTopNWindows:      make(map[int32]struct{}),
 		partitionTopNWindowNodes: make(map[int32]struct{}),
 		nextBindTag:              0,
 		mysqlCompatible:          mysqlCompatible,
@@ -12341,6 +12342,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, nil)
 		case "current_account":
 			nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, nil)
+		case "change_watermark":
+			nodeId, err = builder.buildChangeWatermark(tbl, ctx, exprs, nil)
+		case "table_changes":
+			nodeId, err = builder.buildTableChanges(tbl, ctx, exprs, nil)
 		case "metadata_scan":
 			nodeId = builder.buildMetadataScan(tbl, ctx, exprs, nil)
 		case "processlist", "mo_sessions":
