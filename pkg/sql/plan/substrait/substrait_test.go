@@ -553,7 +553,7 @@ func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 }
 
 func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
-	require.Equal(t, "cf5b91ce5ad2c29a952df10905d025ee143e0481f9eb2f28e6d129b81d673dc1", hex.EncodeToString(CapabilityHash[:]))
+	require.Equal(t, "e72e3c64e9519fb2824c7773ea40564a2c76e7ec36e46560d7c6de7d1444fc11", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
@@ -588,6 +588,15 @@ func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
 	require.Equal(t, "subtract", scalarFunctionName(plan, subtract.FunctionReference))
 	require.Len(t, subtract.Arguments, 2)
 	require.NotNil(t, subtract.Arguments[0].GetValue().GetLiteral().GetDecimal())
+}
+
+func TestCharSubstringResultUsesTPCHStringFamily(t *testing.T) {
+	charType := planpb.Type{Id: int32(types.T_char), Width: 15}
+	integerType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	args := []*planpb.Expr{{Typ: charType}, {Typ: integerType}, {Typ: integerType}}
+	// CHAR is intentionally transported as Substrait string/VARCHAR and
+	// restored to the negotiated MatrixOne physical result type.
+	require.NoError(t, validateScalarSignature("substring", &charType, args))
 }
 
 func TestFetchAcceptsBoundUint64AndPreservesAbsentCount(t *testing.T) {

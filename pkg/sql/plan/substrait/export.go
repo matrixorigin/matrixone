@@ -2053,7 +2053,7 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "substring":
-		if types.T(out.Id) != types.T_varchar || len(args) != 3 || !isTPCHStringType(types.T(args[0].Typ.Id)) || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
+		if !isTPCHStringType(types.T(out.Id)) || len(args) != 3 || !isTPCHStringType(types.T(args[0].Typ.Id)) || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
 			return notEligiblef(EligibilityExpression, "unsupported substring signature")
 		}
 	}

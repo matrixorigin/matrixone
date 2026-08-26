@@ -84,35 +84,50 @@ func (e *Execution) Run(
 	if err = stream.CloseSend(); err != nil {
 		return internalErrorf("sidecar flight: close ticket request: %w", err)
 	}
-	seenSchema := false
+	var sequence uint64
+	seenTransportSchema := false
 	for {
 		data := new(flightData)
 		err = stream.RecvMsg(data)
 		if err == io.EOF {
-			if !seenSchema {
-				return internalErrorf("sidecar flight: stream ended before its schema")
+			if !seenTransportSchema {
+				return internalErrorf("sidecar flight: stream ended before its Flight transport schema")
 			}
 			return e.finishSuccess()
 		}
 		if err != nil {
 			return internalErrorf("sidecar flight: receive result: %w", err)
 		}
-		if len(data.DataHeader) == 0 || uint64(len(data.DataBody)) > e.runtime.config.MaxBatchBytes {
-			return internalErrorf("sidecar flight: malformed or oversized FlightData")
-		}
-		if !seenSchema {
-			if len(data.DataBody) != 0 {
-				return internalErrorf("sidecar flight: schema message contains a body")
+		if !seenTransportSchema {
+			if data.Descriptor != nil || len(data.DataHeader) == 0 || len(data.DataHeader) > maxNativeResultSchemaBytes ||
+				len(data.DataBody) != 0 || len(data.AppMetadata) != 0 {
+				return internalErrorf("sidecar flight: malformed Flight transport schema")
 			}
-			if err = e.schema.validateStreamSchema(data.DataHeader); err != nil {
-				return internalErrorf("sidecar flight: stream schema: %w", err)
-			}
-			seenSchema = true
+			seenTransportSchema = true
 			continue
 		}
-		bat, decodeErr := e.schema.decodeRecordBatch(data.DataHeader, data.DataBody, e.runtime.config.MaxBatchBytes, mp)
+		if data.Descriptor != nil || len(data.DataHeader) == 0 || len(data.DataBody) != 0 || len(data.AppMetadata) != 0 ||
+			uint64(len(data.DataHeader)) > e.runtime.config.MaxBatchBytes+nativeBatchFrameHeaderBytes {
+			return internalErrorf(
+				"sidecar flight: malformed or oversized MO native result frame: descriptor=%t header=%d body=%d metadata=%d",
+				data.Descriptor != nil, len(data.DataHeader), len(data.DataBody), len(data.AppMetadata),
+			)
+		}
+		frameSequence, payload, frameErr := unmarshalNativeBatchFrame(data.DataHeader, e.runtime.config.MaxBatchBytes)
+		if frameErr != nil {
+			return frameErr
+		}
+		if frameSequence != sequence+1 {
+			return internalErrorf("sidecar flight: non-contiguous MO native result sequence")
+		}
+		sequence = frameSequence
+		bat, decodeErr := e.schema.decodeBatch(payload, mp)
 		if decodeErr != nil {
-			return internalErrorf("sidecar flight: decode record batch: %w", decodeErr)
+			return decodeErr
+		}
+		bat.Attrs = make([]string, len(e.schema.Columns))
+		for i := range e.schema.Columns {
+			bat.Attrs[i] = e.schema.Columns[i].Name
 		}
 		fillErr := func() error {
 			defer bat.Clean(mp)

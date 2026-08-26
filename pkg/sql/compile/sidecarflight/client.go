@@ -42,7 +42,7 @@ const (
 	doActionMethod           = flightService + "DoAction"
 	commandDescriptor        = int32(2)
 	ticketBytes              = 32
-	protocolVersion          = uint32(4)
+	protocolVersion          = uint32(5)
 	substraitVersion         = "0.78.0"
 	maxNativeInputBatchBytes = uint64(4 << 20)
 	maxNativeInputs          = 16
@@ -92,7 +92,7 @@ type Execution struct {
 	runtime        *Runtime
 	ticket         []byte
 	idempotencyKey []byte
-	schema         *Schema
+	schema         *nativeResultSchema
 	deadline       time.Time
 	release        func(context.Context) error
 
@@ -207,6 +207,17 @@ func (r *Runtime) Prepare(
 		primary := internalErrorf("sidecar flight: lease-safe execution deadline is required")
 		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
+	r.mu.Lock()
+	stopped := r.stopped
+	r.mu.Unlock()
+	if stopped {
+		primary := internalErrorf("sidecar flight: runtime is stopping")
+		return nil, r.failBeforeVisibility(ctx, primary, release)
+	}
+	schema, schemaWire, err := newNativeResultSchema(outputTypes, headings)
+	if err != nil {
+		return nil, r.failBeforeVisibility(ctx, err, release)
+	}
 	now := time.Now()
 	deadline := now.Add(r.config.RequestTimeout)
 	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
@@ -248,6 +259,7 @@ func (r *Runtime) Prepare(
 		QueryID: append([]byte(nil), queryID...), IdempotencyKey: idempotencyKey[:],
 		AccountID:          proto.Uint64(accountID),
 		MaxInputBatchBytes: min(maxNativeInputBatchBytes, r.config.MaxBatchBytes),
+		ResultSchema:       schemaWire,
 	}
 	command, err := proto.Marshal(request)
 	if err != nil {
@@ -280,8 +292,7 @@ func (r *Runtime) Prepare(
 		return nil, r.failPreparation(
 			internalErrorf("sidecar flight: response capability hash mismatch"), ticket, idempotencyKey[:], release, deadline)
 	}
-	schema, err := ParseSchema(info.Schema, outputTypes, headings)
-	if err != nil {
+	if err = schema.validateWire(info.Schema); err != nil {
 		return nil, r.failPreparation(
 			internalErrorf("sidecar flight: validate schema: %w", err), ticket, idempotencyKey[:], release, deadline)
 	}
