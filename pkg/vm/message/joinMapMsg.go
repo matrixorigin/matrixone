@@ -656,8 +656,12 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return JoinMapResult{}, err
 		}
 		if ctxDone {
-			if err := ctx.Err(); err != nil {
-				return JoinMapResult{}, err
+			// The pipeline context is canceled when a sibling reports the
+			// statement's primary error.  Return its cause instead of the
+			// generic context.Err(), otherwise a failed dependency can mask
+			// the original execution error as "context canceled".
+			if cause := context.Cause(ctx); cause != nil {
+				return JoinMapResult{}, cause
 			}
 			return JoinMapResult{}, nil
 		}

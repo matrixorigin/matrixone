@@ -123,6 +123,40 @@ func TestReceiveJoinMapResultBroadcastsOneImmutableBuildError(t *testing.T) {
 	}
 }
 
+func TestReceiveJoinMapResultReturnsCancellationCause(t *testing.T) {
+	mb := NewMessageBoard()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := ReceiveJoinMapResult(43, false, 0, mb, ctx)
+		resultCh <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mb.rwMutex.RLock()
+		waiters := len(mb.waiters)
+		mb.rwMutex.RUnlock()
+		if waiters == 1 {
+			break
+		}
+		require.Less(t, time.Now(), deadline)
+		runtime.Gosched()
+	}
+
+	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
+	cancel(primaryErr)
+
+	select {
+	case err := <-resultCh:
+		require.ErrorIs(t, err, primaryErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReceiveJoinMapResult did not return after cancellation")
+	}
+}
+
 func TestFinalizeRuntimeFilterOnBuildErrorPasses(t *testing.T) {
 	mb := NewMessageBoard()
 	spec := &plan.RuntimeFilterSpec{Tag: 99}
