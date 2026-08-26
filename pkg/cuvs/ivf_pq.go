@@ -33,6 +33,14 @@ import (
 
 // GpuIvfPq represents the C++ gpu_ivf_pq_t object.
 type GpuIvfPq[B, Q VectorType] struct {
+	// startMode is what this index was CONSTRUCTED for, read by Start(). It is a
+	// property of the index's purpose, not of one call, so it is set once here
+	// rather than passed to Start -- an index built for loading cannot then be
+	// started as a build.
+	//
+	// SEARCH is the default: the neutral, allocate-nothing behaviour. Only a
+	// caller that means to ingest asks for BUILD.
+	startMode                StartMode
 	cIvfPq                   C.gpu_ivf_pq_c
 	dimension                uint32
 	nthread                  uint32
@@ -135,6 +143,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 	}
 
 	return &GpuIvfPq[B, Q]{
+		startMode: StartSearch,
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -143,6 +152,23 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 }
 
 // NewGpuIvfPqEmpty creates a new GpuIvfPq instance with pre-allocated buffer but no data yet.
+// NewGpuIvfPqEmptyForBuild constructs an index that will INGEST rows, so Start() does the
+// build path's up-front allocation -- today the int8/uint8 quantizer staging
+// arena, inside the window the host build claim covers.
+//
+// NewGpuIvfPqEmpty constructs for SEARCH. The distinction is set here rather than at
+// Start() because it is a property of what the index is for: an index built for
+// loading cannot then be started as a build.
+func NewGpuIvfPqEmptyForBuild[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
+	gi, err := NewGpuIvfPqEmpty[B, Q](totalCount, dimension, metric, bp, devices, nthread, mode)
+	if err != nil {
+		return nil, err
+	}
+	gi.startMode = StartBuild
+	return gi, nil
+}
+
 func NewGpuIvfPqEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
@@ -193,6 +219,7 @@ func NewGpuIvfPqEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metr
 	}
 
 	return &GpuIvfPq[B, Q]{
+		startMode: StartSearch,
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -391,6 +418,7 @@ func NewGpuIvfPqFromFile[B, Q VectorType](filename string, dimension uint32, met
 	}
 
 	return &GpuIvfPq[B, Q]{
+		startMode: StartSearch,
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -456,7 +484,8 @@ func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfPq for loading")
 	}
 
-	C.gpu_ivf_pq_start(cIvfPq, unsafe.Pointer(&errmsg))
+	// Constructed for LOADING: deserialising ingests no raw rows.
+	C.gpu_ivf_pq_start(cIvfPq, C.int(StartSearch), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -476,6 +505,7 @@ func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 	}
 
 	return &GpuIvfPq[B, Q]{
+		startMode: StartSearch,
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -518,7 +548,7 @@ func (gi *GpuIvfPq[B, Q]) Start() error {
 	}
 
 	var errmsg *C.char
-	C.gpu_ivf_pq_start(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_start(gi.cIvfPq, C.int(gi.startMode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

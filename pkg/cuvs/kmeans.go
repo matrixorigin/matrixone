@@ -84,7 +84,7 @@ func (gk *GpuKMeans[T]) Start() error {
 		return moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_kmeans_start(gk.cKMeans, unsafe.Pointer(&errmsg))
+	C.gpu_kmeans_start(gk.cKMeans, C.int(StartNone), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

@@ -377,6 +377,20 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // resident footprint exceeds it can never be searched on this GPU no matter what
 // else is evicted, which makes it the honest basis for refusing a build outright
 // rather than deferring the failure to a query.
+uint64_t gpu_quantizer_staging_bytes(int device_id, uint64_t dim, uint64_t elem_size,
+                                     uint64_t train_limit, uint64_t max_rows,
+                                     uint64_t budget_percent, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    if (dim == 0 || elem_size == 0) return 0;
+    const uint64_t per_train_row = dim * elem_size;
+    uint64_t rows = gpu_quantizer_staging_rows(device_id, per_train_row, train_limit,
+                                               budget_percent, errmsg);
+    if (rows == 0) return 0;
+    // staging_bound_rows(): the arena never exceeds the rows that exist.
+    if (max_rows > 0 && max_rows < rows) rows = max_rows;
+    return rows * per_train_row;
+}
+
 uint64_t gpu_quantizer_staging_rows(int device_id, uint64_t per_train_row,
                                     uint64_t train_limit, uint64_t budget_percent,
                                     void* errmsg) {

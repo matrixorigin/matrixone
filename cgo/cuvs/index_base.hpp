@@ -310,6 +310,24 @@ inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
 
 // Effective top-k for the cuVS call: clamp the caller's requested limit to
 // the shard / index row count. Pure host-side; raft-free.
+// What an index is being started FOR. Each mode owns the allocations that mode
+// makes up front, so they land inside whatever admission window the caller holds.
+// BIT FLAGS, so an index that is both ingested and queried can say so:
+// INDEX_START_SEARCH | INDEX_START_BUILD. Dispatch is by mask, never equality, so
+// a combined mode runs both branches.
+//
+// 0 is NONE on purpose: a caller that has not thought about the mode, or a C
+// caller passing a default-initialised value, gets no pre-allocation rather than
+// the wrong one. Allocating is always the opt-in.
+//
+// (If BUILD should IMPLY search, define it as SEARCH|2 -- the mask dispatch below
+// needs no change.)
+enum index_start_mode_t {
+    INDEX_START_NONE   = 0,       // no up-front allocation; grow on demand
+    INDEX_START_SEARCH = 1u << 0, // deserialise + query: stages nothing today
+    INDEX_START_BUILD  = 1u << 1, // ingest + build: pre-allocates the staging arena
+};
+
 inline uint32_t clamp_k_to_index_size(uint32_t limit, uint64_t shard_sz) {
     return static_cast<uint32_t>(
         std::min<uint64_t>(static_cast<uint64_t>(limit), shard_sz));
@@ -1067,7 +1085,15 @@ public:
         }
     }
 
-    virtual void start() {}
+    // start() takes the caller's INTENT, so each mode's up-front work happens
+    // without a separate opt-in call the caller can forget. That is not
+    // hypothetical: build_preallocate() began life as an opt-in method, every
+    // existing test opted out by simply not calling it, and the production path
+    // became the only untested one. A required parameter makes the compiler
+    // revisit every call site instead.
+    virtual void start(index_start_mode_t mode = INDEX_START_NONE) {
+        (void)mode;
+    }
     virtual void build() {}
 
     // Common management methods
@@ -1336,9 +1362,15 @@ public:
     // (sticky launch error, device reset). Returning requested_rows would send an
     // unchecked upload into a dead context and surface the real fault later as an opaque
     // allocation failure inside train().
+    // Re-caps the training sample at FLUSH, against the free VRAM that actually
+    // matters by then. Must use the index's own fraction: the upload claim in
+    // train_quantizer_from_host reserves at budget_percent(), so re-capping at the
+    // governor default would retain a sample the very next reservation refuses --
+    // 75% here against IVF-PQ's 65% there. Same defect the trainset probe had.
     int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
         return matrixone::cap_rows_to_gpu_mem(
-            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer");
+            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer",
+            this->budget_percent());
     }
 
 
@@ -1354,6 +1386,55 @@ public:
     // load-bearing — offsets must both be "append", ids-ness must match (or the
     // merged span would claim ids it does not have, or hide ids it does), and
     // the rows must be physically adjacent in staging_data_.
+    // build_preallocate: everything a BUILD allocates up front, so it lands inside
+    // the window the Go-side build claim already covers.
+    //
+    // Today that is the int8/uint8 staging arena. Called explicitly by the build
+    // path after start(), never from start() itself -- a cold load calls start()
+    // too, and would otherwise allocate an arena it never writes to.
+    //
+    // It used to grow during ingest instead, minutes after that claim settled.
+    // The bytes were subtracted from the planning budget, which stops a build
+    // overcommitting against ITSELF, but a concurrent build measuring live
+    // availability saw nothing -- the arena did not exist yet -- and planned
+    // against memory that was already spoken for. Allocating here lets one claim
+    // cover it with the right lifetime: taken before, settled once taken.
+    //
+    // resize()+clear(), not reserve(): reserve() obtains the allocation but leaves
+    // the pages unfaulted, and MemoryAvailableIncludingCache only moves when a page
+    // is touched -- so settling the claim would leave the bytes counted nowhere,
+    // in neither the ledger nor availability. clear() keeps the capacity and puts
+    // size back to 0, which is what the append path expects. Same idiom the
+    // constructor uses for flattened_host_dataset.
+    //
+    // Sized by the same staging_bound_rows()/staging_row_limit() the ingest path
+    // uses, so the reservation and the growth cannot disagree; the memoised limit
+    // is simply fixed here, measured before the index has allocated anything.
+    //
+    // Why not start(): a cold load calls start() too, and deserialising ingests no
+    // raw float rows, so the arena would never be written to. It would also be at
+    // its MAXIMUM there -- idxcfg.IndexCapacity is 0 on every search-path load, so
+    // count is 0, staging_bound_rows' capacity clamp does not engage, and the full
+    // stage_limit stands: ~293 MiB at dim 768 from an f32 base, on every load, and
+    // outside the load's host claim.
+    void build_preallocate() {
+        if constexpr (sizeof(T) == 1) {
+            uint64_t job_id = this->worker->submit_main(
+                [this](raft_handle_wrapper_t&) -> std::any {
+                    const uint64_t bound = staging_bound_rows(staging_row_limit());
+                    const size_t elems = static_cast<size_t>(bound) * this->dimension;
+                    if (elems > 0) {
+                        std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                        this->staging_data_.resize(elems);
+                        this->staging_data_.clear();
+                    }
+                    return std::any();
+                });
+            auto res = this->worker->wait(job_id).get();
+            if (res.error) std::rethrow_exception(res.error);
+        }
+    }
+
     // Upper bound on rows this index can ever stage: the staging bound, further
     // capped by the index's capacity (staging beyond capacity is impossible).
     uint64_t staging_bound_rows(uint64_t stage_limit) const {

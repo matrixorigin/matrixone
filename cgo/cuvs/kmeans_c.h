@@ -40,7 +40,10 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
 void gpu_kmeans_destroy(gpu_kmeans_c kmeans_c, void* errmsg);
 
 // Starts the worker and initializes resources
-void gpu_kmeans_start(gpu_kmeans_c kmeans_c, void* errmsg);
+// mode is index_start_mode_t: INDEX_START_BUILD or INDEX_START_SEARCH. Required,
+// so every caller states what the index is for and the mode's up-front
+// allocations happen without a separate call that can be forgotten.
+void gpu_kmeans_start(gpu_kmeans_c kmeans_c, int mode, void* errmsg);
 
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_kmeans_train_quantizer(gpu_kmeans_c kmeans_c, const float* train_data, uint64_t n_samples, void* errmsg);

@@ -199,10 +199,10 @@ void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg) {
     }
 }
 
-void gpu_ivf_flat_start(gpu_ivf_flat_c index_c, void* errmsg) {
+void gpu_ivf_flat_start(gpu_ivf_flat_c index_c, int mode, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        ivf_flat_dispatch(static_cast<gpu_ivf_flat_any_t*>(index_c), [](auto* idx) { idx->start(); });
+        ivf_flat_dispatch(static_cast<gpu_ivf_flat_any_t*>(index_c), [mode](auto* idx) { idx->start(static_cast<matrixone::index_start_mode_t>(mode)); });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_start", e.what());
     } catch (...) {
@@ -325,6 +325,7 @@ void gpu_ivf_flat_set_batch_window(gpu_ivf_flat_c index_c, int64_t window_us, vo
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_set_batch_window", "unknown C++ exception");
     }
 }
+
 
 void gpu_ivf_flat_set_dynb_conservative_dispatch(gpu_ivf_flat_c index_c, bool enable, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;

@@ -315,7 +315,7 @@ public:
         this->current_offset_ = 0;
     }
 
-    void start() override {
+    void start(index_start_mode_t mode = INDEX_START_NONE) override {
         auto init_fn = [&](raft_handle_wrapper_t&) -> std::any {
             return std::any();
         };
@@ -323,6 +323,11 @@ public:
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);
+        // Mask, not equality: a combined mode runs every branch that applies.
+        // SEARCH stages nothing today; the branch exists so adding one has a home.
+        if (static_cast<unsigned>(mode) & static_cast<unsigned>(INDEX_START_BUILD)) {
+            this->build_preallocate();
+        }
     }
 
     void build() override {

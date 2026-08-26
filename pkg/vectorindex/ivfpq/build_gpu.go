@@ -65,6 +65,17 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	// claim is taken, which keeps direct API users and tests as they were.
 	hostBytesPerRow uint64
 
+	// stagingBytes is the host cost of the int8/uint8 quantizer's raw training
+	// arena, supplied by the create TVF. NOT per-row: the arena is
+	// min(train limit, device cap, source rows) of dim*sizeof(base), independent
+	// of how many rows this sub-index holds.
+	//
+	// It joins the claim below rather than getting one of its own because the
+	// native start() now reserves the arena up front, inside the same window --
+	// so one claim covers every byte, taken before the allocation and settled once
+	// it has been taken.
+	stagingBytes uint64
+
 	count int64
 	idBuf [1]int64
 
@@ -324,6 +335,13 @@ func (b *IvfpqBuild[B, Q]) GetIndexes() []*IvfpqModel[B, Q] {
 
 // SetHostBytesPerRow records the per-row host cost used to claim host memory
 // around each sub-index's eager capacity-sized allocation.
+// SetStagingBytes hands the builder the int8/uint8 quantizer staging arena's host
+// cost, which the native start() reserves up front. 0 (every non-narrow storage
+// type) adds nothing to the claim.
+func (b *IvfpqBuild[B, Q]) SetStagingBytes(n uint64) {
+	b.stagingBytes = n
+}
+
 func (b *IvfpqBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
 	b.hostBytesPerRow = perRow
 }
@@ -354,5 +372,13 @@ func (b *IvfpqBuild[B, Q]) reserveBuildHost(rows int64) (*memory.HostReservation
 	if b.hostBytesPerRow == 0 || rows <= 0 {
 		return nil, nil
 	}
-	return memory.ReserveHostMemory(uint64(rows)*b.hostBytesPerRow, "ivfpq build")
+	// The quantizer staging arena is part of the same claim. It used to be
+	// subtracted from this build's own budget and nothing more, which protects a
+	// build from itself but tells a peer nothing -- and the arena was allocated
+	// during ingest, long after this claim settled, so a concurrent build measuring
+	// live availability saw bytes that were already spoken for. The native start()
+	// now reserves the arena inside this window, so one claim covers it with the
+	// right lifetime.
+	need := uint64(rows)*b.hostBytesPerRow + b.stagingBytes
+	return memory.ReserveHostMemory(need, "ivfpq build")
 }

@@ -356,32 +356,53 @@ func DeviceMaxAdmissible(deviceID int, budgetPercent uint64) (uint64, error) {
 	return uint64(maxAdm), nil
 }
 
-// QuantizerStagingRows reports how many rows the int8/uint8 quantizer will stage
-// on a device, by calling the same C++ the index itself uses.
+// QuantizerStagingBytes reports the HOST bytes the int8/uint8 staging arena will
+// occupy, from the same C++ expression prereserve_staging_arena() allocates.
 //
-// The staging sample is HOST memory live at the same time as the capacity
-// allocation, so the create path must charge it against the host budget before
-// deriving capacity. Computing min(trainLimit, deviceCap) in Go would be a second
-// implementation of matrixone::quantizer_staging_rows -- including its default and
-// its clamps -- so it asks instead.
+// The build claim has to cover the arena, and the arena is allocated inside
+// start(); asking here rather than recomputing min(limit, device cap, rows) in Go
+// is what keeps the claim and the allocation from disagreeing.
 //
-// perTrainRow is dim * sizeof(BASE element): the sample retains raw base rows, not
-// the storage type. trainLimit 0 means the C++ default.
-func QuantizerStagingRows(deviceID int, perTrainRow, trainLimit uint64, indexType string) (uint64, error) {
-	if perTrainRow == 0 {
+// deviceID should be the PRIMARY gpu -- the arena is reserved under submit_main.
+// maxRows caps it by the rows that exist; pass the source row count, an upper
+// bound on the capacity the planner has not derived yet.
+func QuantizerStagingBytes(deviceID int, dim, elemSize, trainLimit, maxRows uint64, indexType string) (uint64, error) {
+	if dim == 0 || elemSize == 0 {
 		return 0, nil
 	}
 	var errmsg *C.char
-	rows := C.gpu_quantizer_staging_rows(
-		C.int(deviceID), C.uint64_t(perTrainRow), C.uint64_t(trainLimit),
-		C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
+	n := C.gpu_quantizer_staging_bytes(
+		C.int(deviceID), C.uint64_t(dim), C.uint64_t(elemSize), C.uint64_t(trainLimit),
+		C.uint64_t(maxRows), C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
-	return uint64(rows), nil
+	return uint64(n), nil
 }
+
+// StartMode is what an index is being started FOR. Each mode owns the allocations
+// that mode makes up front, so they land inside whatever admission window the
+// caller is holding.
+//
+// Required rather than optional: the staging pre-allocation began as an opt-in
+// method, every existing test opted out by not calling it, and the production
+// path became the only untested one. A required argument makes the compiler
+// revisit every call site.
+type StartMode int
+
+// Bit flags, so an index that is both ingested and queried can say so:
+// StartSearch|StartBuild. C++ dispatches by mask, never equality.
+const (
+	// StartNone is 0 on purpose -- a caller that has not thought about the mode
+	// gets no pre-allocation rather than the wrong one.
+	StartNone StartMode = 0
+	// StartSearch: deserialise and query. Stages nothing today.
+	StartSearch StartMode = 1 << 0
+	// StartBuild: ingest and build. Pre-allocates the int8/uint8 staging arena.
+	StartBuild StartMode = 1 << 1
+)
 
 // DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
 // not what is currently free.

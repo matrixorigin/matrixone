@@ -167,7 +167,7 @@ func (idx *IvfpqModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if buildMode == cuvs.Replicated {
 		buildMode = cuvs.SingleGpu
 	}
-	gi, err := cuvs.NewGpuIvfPqEmpty[B, Q](
+	gi, err := cuvs.NewGpuIvfPqEmptyForBuild[B, Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,

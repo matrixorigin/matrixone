@@ -281,6 +281,18 @@ uint64_t gpu_quantizer_staging_rows(int device_id, uint64_t per_train_row,
                                     uint64_t train_limit, uint64_t budget_percent,
                                     void* errmsg);
 
+// gpu_quantizer_staging_bytes reports the HOST bytes the int8/uint8 staging arena
+// will occupy -- the same expression prereserve_staging_arena() allocates, so the
+// build claim and the allocation cannot disagree.
+//
+// max_rows caps it the way staging_bound_rows() does with this->count; pass the
+// source row count, which is an upper bound on the capacity the planner has not
+// derived yet. device_id should be the PRIMARY gpu: the arena is reserved under
+// submit_main, so that is the device its size is measured against.
+uint64_t gpu_quantizer_staging_bytes(int device_id, uint64_t dim, uint64_t elem_size,
+                                     uint64_t train_limit, uint64_t max_rows,
+                                     uint64_t budget_percent, void* errmsg);
+
 // gpu_device_total_mem reports a device's TOTAL VRAM in bytes -- hardware
 // capacity, NOT free memory. Free is a moving target; total is a property of the
 // card, so an index whose resident footprint exceeds it can never be searched

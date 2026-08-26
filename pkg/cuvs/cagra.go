@@ -35,6 +35,14 @@ import (
 
 // GpuCagra represents the C++ gpu_cagra_t object.
 type GpuCagra[B, Q VectorType] struct {
+	// startMode is what this index was CONSTRUCTED for, read by Start(). It is a
+	// property of the index's purpose, not of one call, so it is set once here
+	// rather than passed to Start -- an index built for loading cannot then be
+	// started as a build.
+	//
+	// SEARCH is the default: the neutral, allocate-nothing behaviour. Only a
+	// caller that means to ingest asks for BUILD.
+	startMode                StartMode
 	cCagra                   C.gpu_cagra_c
 	dimension                uint32
 	nthread                  uint32
@@ -135,6 +143,7 @@ func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 	}
 
 	return &GpuCagra[B, Q]{
+		startMode: StartSearch,
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -193,6 +202,7 @@ func NewGpuCagraFromFile[B, Q VectorType](filename string, dimension uint32, met
 	}
 
 	return &GpuCagra[B, Q]{
+		startMode: StartSearch,
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -256,7 +266,8 @@ func NewGpuCagraFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuCagra for loading")
 	}
 
-	C.gpu_cagra_start(cCagra, unsafe.Pointer(&errmsg))
+	// Constructed for LOADING: deserialising ingests no raw rows.
+	C.gpu_cagra_start(cCagra, C.int(StartSearch), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -276,6 +287,7 @@ func NewGpuCagraFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 	}
 
 	return &GpuCagra[B, Q]{
+		startMode: StartSearch,
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -318,7 +330,7 @@ func (gi *GpuCagra[B, Q]) Start() error {
 	}
 
 	var errmsg *C.char
-	C.gpu_cagra_start(gi.cCagra, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_start(gi.cCagra, C.int(gi.startMode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -343,6 +355,23 @@ func (gi *GpuCagra[B, Q]) Build() error {
 }
 
 // NewGpuCagraEmpty creates a new GpuCagra instance with pre-allocated buffer but no data yet.
+// NewGpuCagraEmptyForBuild constructs an index that will INGEST rows, so Start() does the
+// build path's up-front allocation -- today the int8/uint8 quantizer staging
+// arena, inside the window the host build claim covers.
+//
+// NewGpuCagraEmpty constructs for SEARCH. The distinction is set here rather than at
+// Start() because it is a property of what the index is for: an index built for
+// loading cannot then be started as a build.
+func NewGpuCagraEmptyForBuild[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[B, Q], error) {
+	gi, err := NewGpuCagraEmpty[B, Q](totalCount, dimension, metric, bp, devices, nthread, mode)
+	if err != nil {
+		return nil, err
+	}
+	gi.startMode = StartBuild
+	return gi, nil
+}
+
 func NewGpuCagraEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
 	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[B, Q], error) {
 	if len(devices) == 0 {
@@ -391,6 +420,7 @@ func NewGpuCagraEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metr
 	}
 
 	return &GpuCagra[B, Q]{
+		startMode: StartSearch,
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -1056,6 +1086,7 @@ func MergeGpuCagra[B, Q VectorType](indices []*GpuCagra[B, Q], nthread uint32, d
 	}
 
 	return &GpuCagra[B, Q]{
+		startMode: StartSearch,
 		cCagra:    cCagra,
 		dimension: indices[0].dimension,
 		nthread:   nthread,

@@ -33,6 +33,14 @@ import (
 
 // GpuIvfFlat represents the C++ gpu_ivf_flat_t object.
 type GpuIvfFlat[B, Q VectorType] struct {
+	// startMode is what this index was CONSTRUCTED for, read by Start(). It is a
+	// property of the index's purpose, not of one call, so it is set once here
+	// rather than passed to Start -- an index built for loading cannot then be
+	// started as a build.
+	//
+	// SEARCH is the default: the neutral, allocate-nothing behaviour. Only a
+	// caller that means to ingest asks for BUILD.
+	startMode                StartMode
 	cIvfFlat                 C.gpu_ivf_flat_c
 	dimension                uint32
 	nthread                  uint32
@@ -135,6 +143,7 @@ func NewGpuIvfFlat[B, Q VectorType](dataset []Q, count uint64, dimension uint32,
 	}
 
 	return &GpuIvfFlat[B, Q]{
+		startMode: StartSearch,
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -192,6 +201,7 @@ func NewGpuIvfFlatFromFile[B, Q VectorType](filename string, dimension uint32, m
 	}
 
 	return &GpuIvfFlat[B, Q]{
+		startMode: StartSearch,
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -254,7 +264,8 @@ func NewGpuIvfFlatFromDataDirectory[B, Q VectorType](dir string, dimension uint3
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfFlat for loading")
 	}
 
-	C.gpu_ivf_flat_start(cIvfFlat, unsafe.Pointer(&errmsg))
+	// Constructed for LOADING: deserialising ingests no raw rows.
+	C.gpu_ivf_flat_start(cIvfFlat, C.int(StartSearch), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -274,6 +285,7 @@ func NewGpuIvfFlatFromDataDirectory[B, Q VectorType](dir string, dimension uint3
 	}
 
 	return &GpuIvfFlat[B, Q]{
+		startMode: StartSearch,
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -316,7 +328,7 @@ func (gi *GpuIvfFlat[B, Q]) Start() error {
 	}
 
 	var errmsg *C.char
-	C.gpu_ivf_flat_start(gi.cIvfFlat, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_flat_start(gi.cIvfFlat, C.int(gi.startMode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -388,6 +400,7 @@ func NewGpuIvfFlatEmpty[B, Q VectorType](totalCount uint64, dimension uint32, me
 	}
 
 	return &GpuIvfFlat[B, Q]{
+		startMode: StartSearch,
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,

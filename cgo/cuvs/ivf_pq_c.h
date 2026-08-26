@@ -85,6 +85,7 @@ void gpu_ivf_pq_quantize_query(gpu_ivf_pq_c index_c, const void* base_data, uint
 void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const void* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg);
+
 void gpu_ivf_pq_set_dynb_conservative_dispatch(gpu_ivf_pq_c index_c, bool enable, void* errmsg);
 
 void gpu_ivf_pq_set_quantizer(gpu_ivf_pq_c index_c, float min, float max, void* errmsg);
@@ -94,7 +95,10 @@ void gpu_ivf_pq_get_quantizer(gpu_ivf_pq_c index_c, float* min, float* max, void
 void gpu_ivf_pq_destroy(gpu_ivf_pq_c index_c, void* errmsg);
 
 // Start function (initializes worker and resources)
-void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, void* errmsg);
+// mode is index_start_mode_t: INDEX_START_BUILD or INDEX_START_SEARCH. Required,
+// so every caller states what the index is for and the mode's up-front
+// allocations happen without a separate call that can be forgotten.
+void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, int mode, void* errmsg);
 
 // Build function (actually triggers the build/load logic)
 void gpu_ivf_pq_build(gpu_ivf_pq_c index_c, void* errmsg);
