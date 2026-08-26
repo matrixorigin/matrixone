@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -270,4 +271,55 @@ TEST(HostMemoryGovernor, IndexConstructionIsRefusedWhenTheLedgerIsFull) {
     ASSERT_EQ(host_memory_governor::reserved_bytes(), budget - sliver);
     hog.release();
     require_ledger_empty("releasing the hog");
+}
+
+
+// The staging arena grows geometrically, so a growth holds roughly twice what is
+// in use, and stage_rows_locked now materialises that whole span before dropping
+// the claim (index_base.hpp) -- otherwise the unfaulted slack is charged to
+// nobody and a later call consumes it without claiming at all.
+//
+// Two builders growing their arenas at the same time must not both be admitted
+// when only one growth fits. Barrier-synchronised so both are inside the
+// check-and-claim together rather than serialised by luck.
+TEST(HostMemoryGovernor, TwoConcurrentStagingGrowthsCannotBothPass) {
+    require_ledger_empty("the start of the two-builder test");
+
+    const matrixone::host_available_t avail = matrixone::host_available_bytes();
+    if (!avail.measured) {
+        TEST_LOG("skipped: host availability unreadable, admission is disabled by design");
+        return;
+    }
+    const size_t budget = host_memory_governor::budget_bytes(static_cast<size_t>(avail.bytes));
+    const size_t each   = budget / 2 + (1u << 20);  // two of these cannot both fit
+    if (budget <= (1u << 20)) {
+        TEST_LOG("skipped: host budget too small to split");
+        return;
+    }
+
+    std::atomic<int>         admitted{0};
+    std::atomic<int>         ready{0};
+    std::atomic<bool>        go{false};
+    std::vector<std::thread> ts;
+    std::vector<host_memory_governor::reservation> claims(2);
+
+    for (int i = 0; i < 2; ++i) {
+        ts.emplace_back([&, i] {
+            ready.fetch_add(1);
+            while (!go.load()) { /* spin to the barrier */ }
+            try {
+                claims[i] = host_memory_governor::reserve_against(avail, each, "grow");
+                admitted.fetch_add(1);
+            } catch (const std::exception&) {
+                // refused: expected for the loser
+            }
+        });
+    }
+    while (ready.load() < 2) { /* wait for both to arrive */ }
+    go.store(true);
+    for (auto& t : ts) t.join();
+
+    ASSERT_EQ(admitted.load(), 1);  // exactly one, never both
+    for (auto& c : claims) c.release();
+    require_ledger_empty("the two-builder test");
 }

@@ -1522,12 +1522,22 @@ public:
         // EVERY call, which is the far worse trade: production stages one row per
         // call.
         //
-        // Held across the inserts below rather than released at the reserve:
-        // reserve() leaves the new pages unfaulted, and the inserts are what
-        // charge them to the availability reading the next caller will see.
-        // The geometric slack beyond `need` stays unfaulted until a later call
-        // uses it; it is bounded by staging_bound_rows, so at most one doubling
-        // of the arena is briefly accounted in neither place.
+        // Held across the growth AND the inserts, and the growth MATERIALISES the
+        // whole span before the claim is released.
+        //
+        // A bare reserve() would leave the geometric slack beyond `need`
+        // allocated but unfaulted, and cgroup usage only moves on fault. The
+        // claim covering that slack was then released against memory the kernel
+        // had not charged, and every later call that fits inside the slack takes
+        // no claim at all (grow_data is false) while faulting it. Two builders
+        // could each pass a growth admission, release having touched only their
+        // current rows, and then consume their unclaimed slack concurrently.
+        //
+        // resize-then-restore is the same idiom allocate_host_capacity uses:
+        // resize() value-initialises, which faults every page, and shrinking the
+        // size afterwards keeps the capacity. So by the time the claim drops, the
+        // bytes it stood for are charged to the availability the next caller
+        // reads, and no byte of the arena is accounted in neither place.
         size_t growth = 0;
         if (grow_data) {
             growth += (static_cast<size_t>(data_rows) * dimension - staging_data_.capacity()) *
@@ -1539,8 +1549,16 @@ public:
         host_memory_governor::reservation staging_claim;
         if (growth > 0) staging_claim = host_memory_governor::reserve(growth, "quantizer staging");
 
-        if (grow_data) staging_data_.reserve(static_cast<size_t>(data_rows) * dimension);
-        if (grow_ids) staging_ids_.reserve(static_cast<size_t>(ids_rows));
+        if (grow_data) {
+            const size_t keep = staging_data_.size();
+            staging_data_.resize(static_cast<size_t>(data_rows) * dimension);
+            staging_data_.resize(keep);
+        }
+        if (grow_ids) {
+            const size_t keep = staging_ids_.size();
+            staging_ids_.resize(static_cast<size_t>(ids_rows));
+            staging_ids_.resize(keep);
+        }
 
         const uint64_t start_row = pending_total_count_;
         const uint64_t ids_start = staging_ids_.size();
