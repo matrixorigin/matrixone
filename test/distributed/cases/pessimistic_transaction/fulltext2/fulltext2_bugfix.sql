@@ -34,18 +34,26 @@ create table j2 (id bigint primary key, a json, b json);
 create fulltext2 index ftidx on j2(a,b) with parser json;
 insert into j2 values (1,'{"x":"hello world"}','{"y":"foo bar"}'), (2,'{"x":"lorem ipsum"}','{"y":"dolor sit"}');
 
+-- #6 is independent of #1/#3/#4. Start its initial CDC build now so all five
+-- writers share one readiness barrier; no table is searched before it is ready.
+create table reb (id bigint primary key, body text);
+create fulltext2 index ftidx on reb(body);
+insert into reb values (1,'stale zebra'),(2,'stale zebra');
+
 -- Wait for every table's committed CDC tail. One completed table is not enough:
 -- each independent writer must persist a chunk before its semantic checks run.
 set @pk_dt_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_dt') limit 1);
 set @pk_dec_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_dec') limit 1);
 set @j1_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j1') limit 1);
 set @j2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j2') limit 1);
+set @reb_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'reb') limit 1);
 set @wait_bugfix_initial_sql = concat(
     'select ',
     '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @pk_dt_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as pk_dt_ready, ',
     '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @pk_dec_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as pk_dec_ready, ',
     '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j1_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j1_ready, ',
-    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j2_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j2_ready'
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j2_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j2_ready, ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @reb_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as reb_ready'
 );
 prepare wait_bugfix_initial from @wait_bugfix_initial_sql;
 -- @wait_expect(2, 120)
@@ -67,18 +75,6 @@ select id from j2 where match(a,b) against('bar') order by id;
 select id from j2 where match(a,b) against('dolor') order by id;
 
 -- #6: REBUILD over an emptied table must not serve the stale (deleted) base
-create table reb (id bigint primary key, body text);
-create fulltext2 index ftidx on reb(body);
-insert into reb values (1,'stale zebra'),(2,'stale zebra');
-set @reb_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'reb') limit 1);
-set @wait_reb_initial_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 0 as reb_ready from `', database(), '`.`', @reb_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
-);
-prepare wait_reb_initial from @wait_reb_initial_sql;
--- @wait_expect(2, 120)
-execute wait_reb_initial;
-deallocate prepare wait_reb_initial;
 -- both rows searchable before the rebuild
 select count(*) from reb where match(body) against('zebra');
 -- empty the table, then REBUILD (rebuilds the base from the now-empty source)
