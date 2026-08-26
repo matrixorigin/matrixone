@@ -1430,6 +1430,137 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
 }
 
+func TestSessionTempTableMigrationSnapshot(t *testing.T) {
+	ses := &Session{
+		tempTables:          make(map[string]string),
+		tempTablesRev:       make(map[string]string),
+		tempTableIdentities: make(map[string]tempTableIdentity),
+	}
+	ses.AddTempTable(
+		"db.with.dot", "alias.with.dot",
+		"__mo_tmp_source_db_with_dot_alias_with_dot",
+	)
+	ses.AddTempIndexTable(
+		"db.with.dot", "__mo_index_hidden",
+		"__mo_tmp_source_db_with_dot___mo_index_hidden",
+	)
+
+	snapshot := ses.snapshotTempTables()
+	require.Equal(t, []*query.MigrateTempTable{{
+		Database:     "db.with.dot",
+		Alias:        "alias.with.dot",
+		PhysicalName: "__mo_tmp_source_db_with_dot_alias_with_dot",
+	}}, snapshot)
+}
+
+func TestMigrateTempTablesClonesIntoTargetOwnership(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:          make(map[string]string),
+			tempTablesRev:       make(map[string]string),
+			tempTableIdentities: make(map[string]tempTableIdentity),
+		}
+	}
+	table := &query.MigrateTempTable{
+		Database:     "db.with.dot",
+		Alias:        "alias.with.dot",
+		PhysicalName: "__mo_tmp_source_db_alias",
+	}
+
+	t.Run("success removes borrowed source and keeps cloned destination", func(t *testing.T) {
+		ses := newSession()
+		committed := false
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(sql string) error {
+				if sql == "COMMIT" {
+					committed = true
+					return nil
+				}
+				require.Equal(t,
+					"CREATE TEMPORARY TABLE "+
+						sqlquote.QualifiedIdent(table.Database, table.Alias)+" CLONE "+
+						sqlquote.QualifiedIdent(table.Database, "__mo_migrate_source_0"),
+					sql)
+				source, ok := ses.GetTempTable(table.Database, "__mo_migrate_source_0")
+				require.True(t, ok)
+				require.Equal(t, table.PhysicalName, source)
+				ses.AddTempTable(table.Database, table.Alias, "__mo_tmp_target_db_alias")
+				return nil
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, committed)
+		_, ok := ses.GetTempTable(table.Database, "__mo_migrate_source_0")
+		require.False(t, ok)
+		target, ok := ses.GetTempTable(table.Database, table.Alias)
+		require.True(t, ok)
+		require.Equal(t, "__mo_tmp_target_db_alias", target)
+	})
+
+	t.Run("failure removes borrowed source without claiming it", func(t *testing.T) {
+		ses := newSession()
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(string) error { return moerr.NewInternalErrorNoCtx("clone failed") },
+		)
+		require.ErrorContains(t, err, "clone failed")
+		require.Empty(t, ses.tempTables)
+		require.Empty(t, ses.tempTablesRev)
+		require.Empty(t, ses.tempTableIdentities)
+	})
+
+	t.Run("commit failure leaves only target-owned clone", func(t *testing.T) {
+		ses := newSession()
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(sql string) error {
+				if sql == "COMMIT" {
+					return moerr.NewInternalErrorNoCtx("commit failed")
+				}
+				ses.AddTempTable(table.Database, table.Alias, "__mo_tmp_target_db_alias")
+				return nil
+			},
+		)
+		require.ErrorContains(t, err, "commit failed")
+		require.Len(t, ses.tempTables, 1)
+		target, ok := ses.GetTempTable(table.Database, table.Alias)
+		require.True(t, ok)
+		require.Equal(t, "__mo_tmp_target_db_alias", target)
+	})
+
+	t.Run("invalid clone ownership cannot claim source physical table", func(t *testing.T) {
+		ses := newSession()
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(string) error {
+				ses.AddTempTable(table.Database, table.Alias, table.PhysicalName)
+				return nil
+			},
+		)
+		require.ErrorContains(t, err, "was not cloned into the target session")
+		require.Empty(t, ses.tempTables)
+		require.Empty(t, ses.tempTablesRev)
+		require.Empty(t, ses.tempTableIdentities)
+	})
+
+	t.Run("rejects malformed and duplicate snapshots before duplicate clone", func(t *testing.T) {
+		ses := newSession()
+		calls := 0
+		err := migrateTempTables(
+			context.Background(), ses,
+			[]*query.MigrateTempTable{table, table},
+			func(string) error {
+				calls++
+				ses.AddTempTable(table.Database, table.Alias, "__mo_tmp_target_db_alias")
+				return nil
+			},
+		)
+		require.ErrorContains(t, err, "duplicate temporary-table migration entry")
+		require.Zero(t, calls)
+	})
+}
+
 func TestSessionTempTableTransactionJournal(t *testing.T) {
 	newSession := func() *Session {
 		return &Session{
@@ -1437,6 +1568,19 @@ func TestSessionTempTableTransactionJournal(t *testing.T) {
 			tempTablesRev: make(map[string]string),
 		}
 	}
+
+	t.Run("statement rollback restores migration identity", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "visible", "__mo_tmp_real_visible", "", "")
+		ses.addTempIndexTable("db", "visible", "__mo_tmp_real_visible", "txn", "stmt")
+		require.Empty(t, ses.snapshotTempTables())
+
+		ses.rollbackTempTableStatement("txn", "stmt")
+
+		require.Equal(t, []*query.MigrateTempTable{{
+			Database: "db", Alias: "visible", PhysicalName: "__mo_tmp_real_visible",
+		}}, ses.snapshotTempTables())
+	})
 
 	t.Run("statement rollback restores only that statement", func(t *testing.T) {
 		ses := newSession()

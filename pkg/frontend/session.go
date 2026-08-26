@@ -21,6 +21,7 @@ import (
 	"math"
 	"net"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,6 +176,12 @@ type Session struct {
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
 	tempTablesRev map[string]string
+	// tempTableIdentities preserves the database and alias as separate values.
+	// The legacy tempTables key is intentionally kept for lookup compatibility,
+	// but it cannot be split safely when quoted identifiers contain dots. Index
+	// table aliases are marked internal so connection migration clones only the
+	// user-visible table; cloning that table recreates its hidden index tables.
+	tempTableIdentities map[string]tempTableIdentity
 	// tempTableVersion changes whenever the session's temporary-table name
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
@@ -368,7 +375,14 @@ type Session struct {
 
 type tempTableAliasState struct {
 	realName string
+	identity tempTableIdentity
 	exists   bool
+}
+
+type tempTableIdentity struct {
+	dbName   string
+	alias    string
+	internal bool
 }
 
 type tempTableTxnJournal struct {
@@ -624,15 +638,45 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 // AddTempTable adds the temporary table to the session
 func (ses *Session) AddTempTable(dbName, alias, realName string) {
 	txnKey, stmtKey := tempTableMutationKeys(ses)
-	ses.addTempTable(dbName, alias, realName, txnKey, stmtKey)
+	ses.addTempTableWithIdentity(dbName, alias, realName, false, txnKey, stmtKey)
 }
 
 func (ses *Session) addTempTable(dbName, alias, realName, txnKey, stmtKey string) {
+	ses.addTempTableWithIdentity(dbName, alias, realName, false, txnKey, stmtKey)
+}
+
+// AddTempIndexTable records a hidden physical index table owned by a temporary
+// table. It remains resolvable and participates in session cleanup, but the
+// parent table's CLONE recreates it during connection migration.
+func (ses *Session) AddTempIndexTable(dbName, alias, realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.addTempTableWithIdentity(dbName, alias, realName, true, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempIndexTable(dbName, alias, realName, txnKey, stmtKey string) {
+	ses.addTempTableWithIdentity(dbName, alias, realName, true, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempTableWithIdentity(
+	dbName, alias, realName string,
+	internal bool,
+	txnKey, stmtKey string,
+) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
+	if ses.tempTableIdentities == nil {
+		ses.tempTableIdentities = make(map[string]tempTableIdentity)
+	}
+	identity := tempTableIdentity{
+		dbName: dbName, alias: alias, internal: internal,
+	}
 	if oldRealName, ok := ses.tempTables[key]; ok {
 		if oldRealName == realName {
+			if ses.tempTableIdentityLocked(key) != identity {
+				ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+				ses.tempTableIdentities[key] = identity
+			}
 			return
 		}
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
@@ -642,7 +686,42 @@ func (ses *Session) addTempTable(dbName, alias, realName, txnKey, stmtKey string
 	}
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
+	ses.tempTableIdentities[key] = identity
 	ses.tempTableVersion++
+}
+
+func (ses *Session) tempTableIdentityLocked(key string) tempTableIdentity {
+	if identity, ok := ses.tempTableIdentities[key]; ok {
+		return identity
+	}
+	dbName, alias, ok := strings.Cut(key, ".")
+	if !ok {
+		return tempTableIdentity{alias: key}
+	}
+	return tempTableIdentity{dbName: dbName, alias: alias}
+}
+
+func (ses *Session) snapshotTempTables() []*query.MigrateTempTable {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	keys := make([]string, 0, len(ses.tempTables))
+	for key := range ses.tempTables {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]*query.MigrateTempTable, 0, len(keys))
+	for _, key := range keys {
+		identity := ses.tempTableIdentityLocked(key)
+		if identity.internal {
+			continue
+		}
+		result = append(result, &query.MigrateTempTable{
+			Database:     identity.dbName,
+			Alias:        identity.alias,
+			PhysicalName: ses.tempTables[key],
+		})
+	}
+	return result
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -683,6 +762,7 @@ func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, key)
 		ses.tempTableVersion++
 	}
 }
@@ -700,6 +780,7 @@ func (ses *Session) removeTempTableByRealName(realName, txnKey, stmtKey string) 
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, alias)
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, alias)
 		ses.tempTableVersion++
 	}
 }
@@ -721,7 +802,11 @@ func (ses *Session) recordTempTableMutationLocked(txnKey, stmtKey, alias string)
 	}
 	state := tempTableAliasState{}
 	if realName, ok := ses.tempTables[alias]; ok {
-		state = tempTableAliasState{realName: realName, exists: true}
+		state = tempTableAliasState{
+			realName: realName,
+			identity: ses.tempTableIdentityLocked(alias),
+			exists:   true,
+		}
 	}
 	if _, ok := journal.before[alias]; !ok {
 		journal.before[alias] = state
@@ -784,7 +869,9 @@ func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAli
 	changed := false
 	for alias, state := range before {
 		current, exists := ses.tempTables[alias]
-		if exists == state.exists && (!exists || current == state.realName) {
+		currentIdentity := ses.tempTableIdentityLocked(alias)
+		if exists == state.exists && (!exists ||
+			(current == state.realName && currentIdentity == state.identity)) {
 			continue
 		}
 		changed = true
@@ -792,9 +879,14 @@ func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAli
 			delete(ses.tempTablesRev, current)
 		}
 		delete(ses.tempTables, alias)
+		delete(ses.tempTableIdentities, alias)
 		if state.exists {
+			if ses.tempTableIdentities == nil {
+				ses.tempTableIdentities = make(map[string]tempTableIdentity)
+			}
 			ses.tempTables[alias] = state.realName
 			ses.tempTablesRev[state.realName] = alias
+			ses.tempTableIdentities[alias] = state.identity
 		}
 	}
 	if changed {
@@ -1283,6 +1375,7 @@ func NewSession(
 	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
+	ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -1354,14 +1447,14 @@ func (ses *Session) Close() {
 	var tenant *TenantInfo
 	ses.mu.Lock()
 	for key, realName := range ses.tempTables {
-		if db, _, ok := strings.Cut(key, "."); ok {
-			tempTables = append(tempTables, tempTableEntry{dbName: db, realName: realName})
-		} else {
-			tempTables = append(tempTables, tempTableEntry{realName: realName})
-		}
+		identity := ses.tempTableIdentityLocked(key)
+		tempTables = append(tempTables, tempTableEntry{
+			dbName: identity.dbName, realName: realName,
+		})
 	}
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
+	ses.tempTableIdentities = nil
 	ses.tempTableTxnJournals = nil
 	tenant = ses.tenant
 	ses.mu.Unlock()
@@ -3104,6 +3197,88 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
+type migrateTempTableExec func(sql string) error
+
+func migrateTempTables(
+	ctx context.Context,
+	ses *Session,
+	tables []*query.MigrateTempTable,
+	exec migrateTempTableExec,
+) error {
+	seen := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if table == nil || table.Database == "" || table.Alias == "" ||
+			table.PhysicalName == "" || !defines.IsTempTableName(table.PhysicalName) {
+			return moerr.NewInternalError(ctx, "invalid temporary-table migration snapshot")
+		}
+		key := table.Database + "\x00" + table.Alias
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorf(ctx,
+				"duplicate temporary-table migration entry for %s.%s",
+				table.Database, table.Alias)
+		}
+		seen[key] = struct{}{}
+	}
+
+	for i, table := range tables {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		// Resolve the source physical relation through a short, internal alias.
+		// The destination uses its original logical alias and therefore receives
+		// a physical name owned by the target session. The temporary source alias
+		// is always removed before this function returns, so a failed migration
+		// can close the target without dropping the source session's table.
+		sourceAlias := fmt.Sprintf("__mo_migrate_source_%d", i)
+		for suffix := 0; ; suffix++ {
+			_, exists := ses.GetTempTable(table.Database, sourceAlias)
+			if !exists && sourceAlias != table.Alias {
+				break
+			}
+			sourceAlias = fmt.Sprintf("__mo_migrate_source_%d_%d", i, suffix+1)
+		}
+		ses.addTempTableWithIdentity(
+			table.Database, sourceAlias, table.PhysicalName, true, "", "")
+		sql := "CREATE TEMPORARY TABLE " +
+			sqlquote.QualifiedIdent(table.Database, table.Alias) + " CLONE " +
+			sqlquote.QualifiedIdent(table.Database, sourceAlias)
+		err := func() error {
+			defer ses.removeTempTable(table.Database, sourceAlias, "", "")
+			return exec(sql)
+		}()
+		if err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+		targetName, ok := ses.GetTempTable(table.Database, table.Alias)
+		if !ok || targetName == table.PhysicalName {
+			if ok {
+				// Never let target-session cleanup claim the source physical
+				// relation, even if a faulty clone path registered it directly.
+				ses.removeTempTable(table.Database, table.Alias, "", "")
+			}
+			return moerr.NewInternalErrorf(ctx,
+				"temporary table %s.%s was not cloned into the target session",
+				table.Database, table.Alias)
+		}
+	}
+	if len(tables) > 0 {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		// Raw compatibility replay may already have restored autocommit=0 on
+		// the target. Migration is admitted only at a client transaction
+		// boundary, so commit the internal clone batch and leave the restored
+		// autocommit mode with no target-only transaction in progress.
+		if err := exec("COMMIT"); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+	}
+	return nil
+}
+
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
@@ -3188,6 +3363,29 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		var err error
 		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
 		if err != nil {
+			return err
+		}
+	}
+	if len(req.TempTables) > 0 {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion33 {
+			return moerr.NewInternalError(ctx,
+				"temporary-table migration requires protocol version 33")
+		}
+		// Clone before typed system-variable restoration. migrateTempTables also
+		// commits explicitly because Proxy compatibility replay may already have
+		// restored autocommit=0 on the target.
+		if err := migrateTempTables(
+			migrationCtx,
+			ses,
+			req.TempTables,
+			func(sql string) error {
+				tempExecCtx := &ExecCtx{
+					reqCtx: migrationCtx, inMigration: true, ses: ses,
+				}
+				defer tempExecCtx.Close()
+				return doComQuery(ses, tempExecCtx, &UserInput{sql: sql})
+			},
+		); err != nil {
 			return err
 		}
 	}

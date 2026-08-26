@@ -2684,7 +2684,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		for alias, realName := range tempIndexNameMap {
 			// Register temp index aliases after DDL succeeds, so failed
 			// CREATE INDEX does not leave stale session mappings.
-			tempTableSession.AddTempTable(qry.Database, alias, realName)
+			if indexSession, ok := tempTableSession.(interface {
+				AddTempIndexTable(dbName, alias, realName string)
+			}); ok {
+				indexSession.AddTempIndexTable(qry.Database, alias, realName)
+			} else {
+				tempTableSession.AddTempTable(qry.Database, alias, realName)
+			}
 		}
 	}
 	{

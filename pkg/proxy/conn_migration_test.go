@@ -107,11 +107,15 @@ func runTestWithQueryServiceHandlers(
 				if req.MigrateConnFromRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
+				if !req.MigrateConnFromRequest.TempTableMigrationSupported {
+					return moerr.NewInternalError(ctx, "missing temporary-table migration capability")
+				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
 					DB:                            "d1",
 					LastAffectedRows:              7,
 					FoundRows:                     11,
 					UserLevelLockReleaseSupported: true,
+					TempTableStateExported:        true,
 				}
 				return nil
 			}, false)
@@ -173,6 +177,28 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.Equal(t, int64(7), resp.LastAffectedRows)
 		assert.Equal(t, uint64(11), resp.FoundRows)
 	})
+}
+
+func TestMigrateConnFromRejectsCNWithoutTempTableSnapshotSupport(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"", nil, 0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil),
+	)
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	queryClient := &migrationUserLockQueryClient{omitTempTableState: true}
+	ccc.queryClient = queryClient
+	ccc.moCluster = cluster
+
+	_, err := ccc.migrateConnFromContext(context.Background(), "pipe")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Equal(t, 1, queryClient.releaseCount)
 }
 
 func TestQueryServiceMigrateTo(t *testing.T) {
@@ -296,6 +322,62 @@ func TestQueryServiceMigrateToAllowsZeroFoundRowsForPreV22Target(t *testing.T) {
 
 		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
 		assert.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	tables := []*pb.MigrateTempTable{{
+		Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
+	}}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.Equal(t, tables, migration.TempTables)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			TempTables: tables,
+		}))
+		assert.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV30Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			TempTables: []*pb.MigrateTempTable{{
+				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
+			}},
+		})
+		assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v30 target")
+		assert.Empty(t, sc.statements)
 	})
 }
 
@@ -713,6 +795,7 @@ type migrationUserLockQueryClient struct {
 	migrateToPrepareStmts         []*pb.PrepareStmt
 	migrateFromErr                error
 	preparedStmtLongDataChecked   bool
+	omitTempTableState            bool
 	releaseCount                  int
 }
 
@@ -732,6 +815,7 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 			UserLevelLocks:                c.userLevelLocks,
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
 			PreparedStmtLongDataChecked:   c.preparedStmtLongDataChecked,
+			TempTableStateExported:        !c.omitTempTableState,
 		}}, nil
 	case pb.CmdMethod_MigrateConnTo:
 		c.migrateToPrepareStmts = append(

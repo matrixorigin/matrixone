@@ -40,7 +40,8 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
-		ConnID: c.connID,
+		ConnID:                      c.connID,
+		TempTableMigrationSupported: true,
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
@@ -62,6 +63,12 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
 		c.tun.rejectPendingLongDataReconciliation()
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if !r.TempTableStateExported {
+		// An older CN cannot distinguish an empty temporary-table snapshot from
+		// omitted session state. Refuse the transfer instead of risking silent
+		// table loss during a rolling upgrade.
 		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if c.tun != nil {
@@ -99,7 +106,7 @@ func (c *clientConn) migrateConnToContext(
 		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
-	if typedMigration || info.FoundRows != 0 {
+	if typedMigration || info.FoundRows != 0 || len(info.TempTables) > 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 		if addr == "" {
 			return moerr.NewInternalError(ctx, "cannot get query service address")
@@ -112,6 +119,10 @@ func (c *clientConn) migrateConnToContext(
 		if info.FoundRows != 0 && targetProtocol < defines.MORPCVersion29 {
 			return moerr.NewInternalError(ctx,
 				"cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
+		}
+		if len(info.TempTables) > 0 && targetProtocol < defines.MORPCVersion33 {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate temporary tables to a pre-v33 target")
 		}
 		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
 			return moerr.NewInternalError(ctx,
@@ -196,6 +207,7 @@ func (c *clientConn) migrateConnToContext(
 		SystemVariablesExported:   false,
 		UserDefinedVarsReplayable: info.UserDefinedVarsReplayable,
 		SystemVariablesReplayable: info.SystemVariablesReplayable,
+		TempTables:                info.TempTables,
 	}
 	if typedMigrationSupported {
 		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars

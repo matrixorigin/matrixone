@@ -1566,6 +1566,16 @@ func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
 	}
 }
 
+func (backSes *backSession) AddTempIndexTable(dbName, alias, realName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.addTempIndexTable(dbName, alias, realName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) RemoveTempTableByRealName(realName string) {
 	if backSes == nil {
 		return
