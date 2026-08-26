@@ -834,13 +834,13 @@ func TestSortedMembershipFilterProtocolGate(t *testing.T) {
 	})
 
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion11)
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
 	require.True(t, localProtocolEnablesSortedMembershipFilter(sid))
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 }
 
@@ -1121,9 +1121,18 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			},
 		},
 		{
-			name: "unavailable build statistics are not an exact size bound",
+			name: "unavailable build statistics do not localize a naturally multi-CN query",
 			mutate: func(builder *QueryBuilder) {
 				builder.qry.Nodes[1].Stats = DefaultStats()
+				builder.qry.Nodes[0].Stats.Cost = float64(costThresholdForOneCN + 1)
+				builder.qry.Nodes[0].Stats.BlockNum = int32(BlockThresholdForOneCN + 1)
+			},
+		},
+		{
+			name: "forced multi-CN execution keeps unavailable build statistics on fallback",
+			mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[1].Stats = DefaultStats()
+				builder.optimizerHints = &OptimizerHints{execType: 3}
 			},
 		},
 		{
@@ -1151,6 +1160,20 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
 		})
 	}
+
+	t.Run("unavailable build statistics use bounded runtime fallback when query is already local", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder.qry.Nodes[1].Stats = DefaultStats()
+		require.NotEqual(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+
+		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
+
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Len(t, builder.qry.Nodes[0].RuntimeFilterProbeList, 1)
+		require.True(t, builder.qry.Nodes[0].Stats.ForceOneCN)
+		require.True(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+	})
 
 	t.Run("leading cluster key remains prunable with non-PK row filtering", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)

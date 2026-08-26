@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/btree"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -42,6 +43,12 @@ const (
 const (
 	DefaultPollTruncateInterval = time.Second * 5
 )
+
+type pendingDSNRange struct {
+	start uint64
+	end   uint64
+	psn   uint64
+}
 
 type ReplayOption func(*replayer)
 
@@ -198,9 +205,11 @@ type replayer struct {
 	waitMoreRecords func() bool
 
 	replayedState struct {
-		// DSN->PSN mapping
-		dsn2PSNMap map[uint64]uint64
-		readCache  readCache
+		// Pending records are ordered by their start DSN. Requiring the ranges
+		// in this tree to be disjoint makes the next record schedulable by an
+		// exact lookup while allowing overlap checks against only its neighbors.
+		pendingRecords *btree.BTreeG[pendingDSNRange]
+		readCache      readCache
 
 		// the DSN is monotonically continuously increasing and the corresponding
 		// PSN may not be monotonically increasing due to the concurrent write.
@@ -255,7 +264,9 @@ func newReplayer(
 		readBatchSize: readBatchSize,
 	}
 	r.replayedState.readCache = newReadCache()
-	r.replayedState.dsn2PSNMap = make(map[uint64]uint64)
+	r.replayedState.pendingRecords = btree.NewG(32, func(a, b pendingDSNRange) bool {
+		return a.start < b.start
+	})
 	r.waterMarks.dsnScheduled = math.MaxUint64
 	r.waterMarks.minDSN = math.MaxUint64
 	for _, opt := range opts {
@@ -326,10 +337,50 @@ func (r *replayer) exportFields(level int) []zap.Field {
 	}
 	if level > 1 {
 		ret = append(ret,
-			zap.Any("dsn-psn-map", r.replayedState.dsn2PSNMap),
+			zap.Any("dsn-psn-map", r.pendingDSNToPSNMap()),
 		)
 	}
 	return ret
+}
+
+func (r *replayer) pendingDSNToPSNMap() map[uint64]uint64 {
+	pending := make(map[uint64]uint64, r.replayedState.pendingRecords.Len())
+	r.replayedState.pendingRecords.Ascend(func(record pendingDSNRange) bool {
+		pending[record.start] = record.psn
+		return true
+	})
+	return pending
+}
+
+func (r *replayer) findPendingOverlap(current pendingDSNRange) (pendingDSNRange, bool) {
+	var (
+		overlap pendingDSNRange
+		found   bool
+	)
+	r.replayedState.pendingRecords.DescendLessOrEqual(
+		current,
+		func(record pendingDSNRange) bool {
+			if record.end >= current.start {
+				overlap = record
+				found = true
+			}
+			return false
+		},
+	)
+	if found {
+		return overlap, true
+	}
+	r.replayedState.pendingRecords.AscendGreaterOrEqual(
+		current,
+		func(record pendingDSNRange) bool {
+			if record.start <= current.end {
+				overlap = record
+				found = true
+			}
+			return false
+		},
+	)
+	return overlap, found
 }
 
 func (r *replayer) initReadWatermarks(ctx context.Context) (err error) {
@@ -349,9 +400,16 @@ func (r *replayer) Replay(
 		readDone      bool
 		resultC       = make(chan error, 1)
 		applyC        = make(chan *entry.Entry, 20)
+		applyCClosed  bool
 		lastScheduled *entry.Entry
 		errMsg        string
 	)
+	closeApplyC := func() {
+		if !applyCClosed {
+			close(applyC)
+			applyCClosed = true
+		}
+	}
 	defer func() {
 		fields := r.exportFields(0)
 		logger := logutil.Info
@@ -381,12 +439,15 @@ func (r *replayer) Replay(
 	)
 
 	wg.Add(2)
+	ctx2, cancel := context.WithCancel(ctx)
 	// a dedicated goroutine to replay entries from the applyC
 	go r.streamApplying(ctx, applyC, resultC, &wg)
-	ctx2, cancel := context.WithCancel(ctx)
 	go r.pollTruncateLoop(ctx2, &wg)
 
 	defer func() {
+		// Replay is the only owner that closes applyC. Closing it here also
+		// releases streamApplying when the read path unwinds through a panic.
+		closeApplyC()
 		cancel()
 		wg.Wait()
 	}()
@@ -396,7 +457,7 @@ func (r *replayer) Replay(
 		select {
 		case <-ctx.Done():
 			err = context.Cause(ctx)
-			close(applyC)
+			closeApplyC()
 			logutil.Error(
 				"Wal-Replay-Context-Done",
 				zap.Error(err),
@@ -410,7 +471,7 @@ func (r *replayer) Replay(
 		}
 
 		if readDone && r.waitMoreRecords() {
-			for err == nil || err != ErrAllRecordsRead {
+			for err == nil {
 				lastScheduled, err = r.tryScheduleApply(
 					ctx, applyC, lastScheduled, ReadState_InLoopDone,
 				)
@@ -420,7 +481,7 @@ func (r *replayer) Replay(
 			}
 			if err != nil {
 				errMsg = fmt.Sprintf("read loop schedule apply error: %v", err)
-				close(applyC)
+				closeApplyC()
 				return
 			}
 			time.Sleep(waitTime)
@@ -449,11 +510,11 @@ func (r *replayer) Replay(
 
 	if err != nil {
 		errMsg = fmt.Sprintf("read and schedule error in loop: %v", err)
-		close(applyC)
+		closeApplyC()
 		return
 	}
 
-	for err == nil || err != ErrAllRecordsRead {
+	for err == nil {
 		lastScheduled, err = r.tryScheduleApply(
 			ctx, applyC, lastScheduled, ReadState_AllDone,
 		)
@@ -465,7 +526,7 @@ func (r *replayer) Replay(
 
 	if err != nil {
 		errMsg = fmt.Sprintf("schedule apply error: %v", err)
-		close(applyC)
+		closeApplyC()
 		return
 	}
 
@@ -475,7 +536,7 @@ func (r *replayer) Replay(
 		lastScheduled.WaitDone()
 	}
 
-	close(applyC)
+	closeApplyC()
 
 	// wait for the replay to finish
 	if applyErr := <-resultC; applyErr != nil {
@@ -501,11 +562,12 @@ func (r *replayer) tryScheduleApply(
 	}
 
 	dsn := r.waterMarks.dsnScheduled + 1
-	psn, ok := r.replayedState.dsn2PSNMap[dsn]
+	pendingRecord, ok := r.replayedState.pendingRecords.Get(pendingDSNRange{start: dsn})
+	psn := pendingRecord.psn
 	// logutil.Infof("DEBUG-1: dsn %d, psn %d, ok %v, %v", dsn, psn, ok, r.waterMarks.dsnScheduled)
 
 	// Senario 1 [dsn not found]:
-	// dsn is not found in the dsn2PSNMap, which means the record
+	// dsn is not found in pendingRecords, which means the record
 	// with the dsn has not been read from the backend
 	if !ok {
 		appliedLSNCount := r.stats.appliedLSNCount.Load()
@@ -547,14 +609,14 @@ func (r *replayer) tryScheduleApply(
 					zap.Error(err),
 					zap.Uint64("dsn", dsn),
 					zap.Uint64("safe-dsn", r.replayedState.safeDSN),
-					zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+					zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				)
 				return
 			}
 		} else {
 			// [dsn not found && dsn > safeDSN && allReaded]
 			// it can only get in here when allReaded. it means even all records have been read,
-			// there are some big DSNs not found in the dsn2PSNMap.
+			// there are some big DSNs not found in pendingRecords.
 			// Truncated: PSN 11
 			// PSN: 10,     11,     12,     13,     14,	    15
 			// DSN: [37,37],[35,35],[40,40],[36,36],[39,39],[38,38]
@@ -564,7 +626,7 @@ func (r *replayer) tryScheduleApply(
 				"Wal-Replay-Info",
 				zap.Uint64("dsn", dsn),
 				zap.Uint64("safe-dsn", r.replayedState.safeDSN),
-				zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+				zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
 			)
 
@@ -583,7 +645,7 @@ func (r *replayer) tryScheduleApply(
 				)
 				r.waterMarks.minDSN = dsn + 1
 				r.waterMarks.dsnScheduled = dsn
-				if len(r.replayedState.dsn2PSNMap) == 0 {
+				if r.replayedState.pendingRecords.Len() == 0 {
 					err = ErrAllRecordsRead
 					return
 				}
@@ -591,12 +653,13 @@ func (r *replayer) tryScheduleApply(
 			}
 
 			// [dsn not found && dsn > safeDSN]
-			if len(r.replayedState.dsn2PSNMap) != 0 && (r.needWriteSkip == nil || r.needWriteSkip()) {
+			if r.replayedState.pendingRecords.Len() != 0 && (r.needWriteSkip == nil || r.needWriteSkip()) {
+				skipMap := r.pendingDSNToPSNMap()
 				if r.onWriteSkip != nil {
-					r.onWriteSkip(r.replayedState.dsn2PSNMap)
+					r.onWriteSkip(skipMap)
 				}
 				if err = r.appendSkipCmd(
-					ctx, r.replayedState.dsn2PSNMap,
+					ctx, skipMap,
 				); err != nil {
 					return
 				}
@@ -636,8 +699,8 @@ func (r *replayer) tryScheduleApply(
 	r.stats.schedulePSNCount++
 
 	r.replayedState.readCache.removeRecord(psn)
-	// dsn2PSNMap is produced by the readNextBatch and consumed if it is scheduled apply
-	delete(r.replayedState.dsn2PSNMap, dsn)
+	// pendingRecords is produced by readNextBatch and consumed when scheduled.
+	r.replayedState.pendingRecords.Delete(pendingRecord)
 
 	if r.onScheduled != nil {
 		r.onScheduled(psn, record)
@@ -804,44 +867,152 @@ func (r *replayer) readNextBatch(
 
 			// 3. remove the skipped records if the entry is a skip entry
 			if entry.GetCmdType() == uint16(Cmd_SkipDSN) {
+				skipVersion := entry.GetSkipCmdVersion()
+				if skipVersion != SkipCmdVersionLegacy && skipVersion != SkipCmdVersionDSNPSN {
+					err = moerr.NewInternalErrorNoCtxf(
+						"unsupported wal skip command version %d", skipVersion,
+					)
+					return false, err
+				}
 				cmd := SkipCmd(entry.GetEntry(0))
 				skipDSNs := cmd.GetDSNSlice()
+				skipPSNs := cmd.GetPSNSlice()
+				var legacyPSNs map[uint64]struct{}
+				if skipVersion == SkipCmdVersionLegacy {
+					legacyPSNs = make(map[uint64]struct{}, len(skipPSNs))
+					for _, skipPSN := range skipPSNs {
+						legacyPSNs[skipPSN] = struct{}{}
+					}
+				}
 				logutil.Info(
 					"Wal-Read-Skip-Entry",
 					zap.Any("skip-dsns", skipDSNs),
-					zap.Any("skip-psns", cmd.GetPSNSlice()),
+					zap.Any("skip-psns", skipPSNs),
 					zap.Uint64("psn", psn),
 					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
-					// zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+					zap.Uint16("skip-version", uint16(skipVersion)),
+					// zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				)
 
-				for _, dsn := range skipDSNs {
-					if _, ok := r.replayedState.dsn2PSNMap[dsn]; !ok {
-						panic(fmt.Sprintf("dsn %d not found in the dsn2PSNMap", dsn))
+				for i, dsn := range skipDSNs {
+					targetPSN := skipPSNs[i]
+					skippedRecord, ok := r.replayedState.pendingRecords.Get(
+						pendingDSNRange{start: dsn},
+					)
+					// Historical V2 sorting could permute the PSNs among the sorted DSNs,
+					// but it preserved the PSN set. Membership therefore accepts every
+					// original legacy target without letting a delayed duplicate delete a
+					// later record that reused the same DSN. New commands preserve pairs
+					// and can require an exact target. In either format, an absent or
+					// mismatched target is a stale, idempotent no-op.
+					matchesTarget := ok
+					if matchesTarget {
+						if skipVersion == SkipCmdVersionLegacy {
+							_, matchesTarget = legacyPSNs[skippedRecord.psn]
+						} else {
+							matchesTarget = skippedRecord.psn == targetPSN
+						}
 					}
-					delete(r.replayedState.dsn2PSNMap, dsn)
+					if !matchesTarget {
+						logutil.Info(
+							"Wal-Replay-Stale-Skip-Entry",
+							zap.Uint64("dsn", dsn),
+							zap.Uint64("target-psn", targetPSN),
+							zap.Uint64("pending-psn", skippedRecord.psn),
+							zap.Bool("pending-found", ok),
+						)
+						continue
+					}
+					// Remove both owners for the accepted target so the skipped copy
+					// cannot be scheduled or retained in the read cache.
+					r.replayedState.readCache.removeRecord(skippedRecord.psn)
+					r.replayedState.pendingRecords.Delete(skippedRecord)
 				}
+				r.replayedState.readCache.removeRecord(psn)
 
 				continue
 			}
 
-			// 4. update the DSN->PSN mapping
+			// 4. update the pending record index
 			dsn := entry.GetStartDSN()
-			r.replayedState.dsn2PSNMap[dsn] = psn
 			safe := entry.GetSafeDSN()
+			dsnRange := entry.DSNRange()
+
+			// PSN is the physical order and DSN is the logical order. A record may
+			// appear again at a larger PSN, for example when an append times out
+			// after being committed and the caller retries it. Once a complete DSN
+			// range has been scheduled, a later physical copy has no new logical
+			// work and can be ignored. A partial overlap is not a retry of the same
+			// record and violates the atomic DSN-range invariant.
+			if r.stats.schedulePSNCount != 0 && dsnRange.Start <= r.waterMarks.dsnScheduled {
+				if dsnRange.End > r.waterMarks.dsnScheduled {
+					r.replayedState.readCache.removeRecord(psn)
+					err = moerr.NewInternalErrorNoCtxf(
+						"wal record dsn range [%d, %d] at psn %d partially overlaps scheduled dsn %d",
+						dsnRange.Start, dsnRange.End, psn, r.waterMarks.dsnScheduled,
+					)
+					logutil.Error(
+						"Wal-Replay-DSN-Overlap",
+						zap.Error(err),
+						zap.Uint64("safe-dsn", safe),
+					)
+					return false, err
+				}
+
+				r.replayedState.readCache.removeRecord(psn)
+				logutil.Info(
+					"Wal-Replay-Duplicate-Entry",
+					zap.Uint64("start-dsn", dsnRange.Start),
+					zap.Uint64("end-dsn", dsnRange.End),
+					zap.Uint64("psn", psn),
+					zap.Uint64("safe-dsn", safe),
+					zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
+				)
+				continue
+			}
+
+			current := pendingDSNRange{
+				start: dsnRange.Start,
+				end:   dsnRange.End,
+				psn:   psn,
+			}
+			if overlap, ok := r.findPendingOverlap(current); ok {
+				// Duplicate append is a possible source of out-of-order physical
+				// records. Only an identical logical range is an idempotent retry;
+				// every other overlap would make one pending record unreachable.
+				if overlap.start != current.start || overlap.end != current.end {
+					r.replayedState.readCache.removeRecord(psn)
+					err = moerr.NewInternalErrorNoCtxf(
+						"wal record dsn range [%d, %d] at psn %d overlaps pending dsn range [%d, %d] at psn %d",
+						current.start, current.end, current.psn,
+						overlap.start, overlap.end, overlap.psn,
+					)
+					logutil.Error(
+						"Wal-Replay-DSN-Overlap",
+						zap.Error(err),
+						zap.Uint64("safe-dsn", safe),
+					)
+					return false, err
+				}
+
+				// Keep the first physical copy so scheduling stays stable and the
+				// duplicate does not remain orphaned in readCache.
+				r.replayedState.readCache.removeRecord(psn)
+				logutil.Info(
+					"Wal-Replay-Duplicate-Entry",
+					zap.Uint64("start-dsn", dsnRange.Start),
+					zap.Uint64("end-dsn", dsnRange.End),
+					zap.Uint64("first-psn", overlap.psn),
+					zap.Uint64("duplicate-psn", psn),
+				)
+				continue
+			}
+
+			r.replayedState.pendingRecords.ReplaceOrInsert(current)
 
 			// 5. init the scheduled DSN watermark
 			// it only happens there is no record scheduled for apply
 			if dsn-1 < r.waterMarks.dsnScheduled {
-				if r.stats.schedulePSNCount != 0 {
-					// it means a bigger DSN has been scheduled for apply and then there is
-					// a smaller DSN with bigger PSN. it should not happen
-					logutil.Errorf(
-						"safe: %d, dsn: %d, psn: %d, scheduled: %d",
-						safe, dsn, psn, r.waterMarks.dsnScheduled,
-					)
-					panic("logic error")
-				}
 				// logutil.Infof("DEBUG-3: dsn %d, psn %d, scheduled %d, safe %d", dsn, psn, r.waterMarks.dsnScheduled, safe)
 				if safe == 0 {
 					r.waterMarks.dsnScheduled = 0

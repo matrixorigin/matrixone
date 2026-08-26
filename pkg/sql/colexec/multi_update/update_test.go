@@ -616,6 +616,34 @@ func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
 	require.NoError(t, writer.free(proc))
 }
 
+func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	_, tableDef := getTestMainTable()
+	updateCtx := &MultiUpdateCtx{
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
+	}
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	update.resetMultiUpdateCtxs()
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, writer.free(proc)) }()
+
+	bats, _ := prepareTestInsertBatchs(proc.Mp(), 1, false, false)
+	require.NoError(t, writer.sortAndSyncOneTable(
+		proc,
+		tableDef,
+		process.NewAnalyzer(0, false, false, "multi-update-data-sync"),
+		0,
+		false,
+		bats,
+		true,
+	))
+	require.Nil(t, bats[0])
+	require.NotNil(t, writer.insertBlockInfo[0])
+}
+
 // update table s3
 func TestUpdateS3SingleTable(t *testing.T) {
 	hasUniqueKey := false
