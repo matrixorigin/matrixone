@@ -340,6 +340,82 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	})
 }
 
+func BenchmarkCountDistinctSavedArguments(b *testing.B) {
+	const (
+		rows   = hashmap.UnitLimit * 256
+		groups = 1
+	)
+
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < rows; i++ {
+		if err := vector.AppendFixed(input, int64(i), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer input.Free(mp)
+	vectors := []*vector.Vector{input}
+	groupIDs := make([]uint64, hashmap.UnitLimit)
+	for i := range groupIDs {
+		groupIDs[i] = uint64(i%groups + 1)
+	}
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.Open(128 << 20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(rows * 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		agg := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		owner := AggFuncExec(agg).(AllocationAccountOwner)
+		if err = owner.SetAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+		if err = agg.GroupGrow(groups); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+			if err = agg.(BatchCapacityPreflight).PreflightBatchFill(
+				offset, groupIDs, vectors); err != nil {
+				b.Fatal(err)
+			}
+			if err = agg.BatchFill(offset, groupIDs, vectors); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		agg.Free()
+		if err = owner.ClearAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if account.Snapshot().Used != 0 {
+		b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+	}
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		b.Fatal(err)
+	}
+}
+
 func BenchmarkSumDecimal64FastCardinality(b *testing.B) {
 	mp := mpool.MustNewZero()
 	defer func() {

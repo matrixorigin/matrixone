@@ -20,8 +20,10 @@ import (
 	"math"
 	"slices"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -318,14 +320,64 @@ func preflightArgumentRowsEqual(
 	return true, nil
 }
 
-func earlierDistinctArgumentRow(
+const distinctArgumentBatchSlots = hashmap.UnitLimit * 2
+
+// distinctArgumentBatch suppresses duplicate candidates inside one immutable
+// preflight work unit. The table is deliberately fixed-size: UnitLimit bounds
+// the input at 256 rows, so twice as many open-addressing slots keep the load
+// factor at or below 50% without row-frequency allocation.
+type distinctArgumentBatch struct {
+	rows   [distinctArgumentBatchSlots]uint16
+	hashes [distinctArgumentBatchSlots]uint64
+}
+
+func distinctArgumentRowHash(
+	group uint64,
+	vectors []*vector.Vector,
+	logicalRow int,
+) (uint64, error) {
+	// Start from the target group because DISTINCT is scoped to one aggregate
+	// group. Hash combination preserves column boundaries for multi-argument
+	// DISTINCT; full row comparison below remains the collision oracle.
+	hash := group * 0x9e3779b97f4a7c15
+	var zero [8]byte
+	for _, vec := range vectors {
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return 0, err
+		}
+		value := vec.GetRawBytesAt(row)
+		if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
+			value = zero[:size]
+		}
+		hash = keycodec.HashCombine(hash, xxhash.Sum64(value))
+	}
+	return hash, nil
+}
+
+func (batch *distinctArgumentBatch) seenOrInsert(
 	groups []uint64,
 	vectors []*vector.Vector,
 	offset int,
 	row int,
 ) (bool, error) {
-	for earlier := 0; earlier < row; earlier++ {
-		if groups[earlier] != groups[row] {
+	if batch == nil || row < 0 || row >= len(groups) || len(groups) > hashmap.UnitLimit {
+		return false, mpool.ErrAllocationAccountInvalid
+	}
+	hash, err := distinctArgumentRowHash(groups[row], vectors, offset+row)
+	if err != nil {
+		return false, err
+	}
+	const mask = distinctArgumentBatchSlots - 1
+	for slot := int(hash & uint64(mask)); ; slot = (slot + 1) & mask {
+		encodedRow := batch.rows[slot]
+		if encodedRow == 0 {
+			batch.rows[slot] = uint16(row + 1)
+			batch.hashes[slot] = hash
+			return false, nil
+		}
+		earlier := int(encodedRow - 1)
+		if batch.hashes[slot] != hash || groups[earlier] != groups[row] {
 			continue
 		}
 		equal, err := preflightArgumentRowsEqual(
@@ -337,7 +389,6 @@ func earlierDistinctArgumentRow(
 			return true, nil
 		}
 	}
-	return false, nil
 }
 
 func (ag *aggState) preparePreflightArgumentKey(
@@ -449,6 +500,7 @@ func (ae *aggExec) preflightBatchFillArgs(
 	needCount := 0
 	var progress [hashmap.UnitLimit]argumentTargetProgress
 	progressCount := 0
+	var distinctBatch distinctArgumentBatch
 	header := kAggArgPrefixSz
 	if !distinct {
 		header += kAggArgOrdinalSz
@@ -496,7 +548,7 @@ func (ae *aggExec) preflightBatchFillArgs(
 			return mpool.ErrAllocationAllocatorLimit
 		}
 		if distinct {
-			duplicate, err := earlierDistinctArgumentRow(
+			duplicate, err := distinctBatch.seenOrInsert(
 				groups, vectors, offset, i)
 			if err != nil {
 				return err

@@ -106,11 +106,21 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	equal, err = preflightArgumentRowsEqual([]*vector.Vector{normal}, 1, 1)
 	require.NoError(t, err)
 	require.True(t, equal)
-	duplicate, err := earlierDistinctArgumentRow(
+	batch := distinctArgumentBatch{}
+	duplicate, err := batch.seenOrInsert(
+		[]uint64{1, 2, 1}, []*vector.Vector{normal}, 0, 0)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	duplicate, err = batch.seenOrInsert(
 		[]uint64{1, 2, 1}, []*vector.Vector{normal}, 0, 2)
 	require.NoError(t, err)
 	require.False(t, duplicate)
-	duplicate, err = earlierDistinctArgumentRow(
+	batch = distinctArgumentBatch{}
+	duplicate, err = batch.seenOrInsert(
+		[]uint64{1, 2, 1}, []*vector.Vector{constant}, 5, 0)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	duplicate, err = batch.seenOrInsert(
 		[]uint64{1, 2, 1}, []*vector.Vector{constant}, 5, 2)
 	require.NoError(t, err)
 	require.True(t, duplicate)
@@ -185,6 +195,45 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	intValues.Free(mp)
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestDistinctArgumentBatchDeduplicatesFullWorkUnit(t *testing.T) {
+	const offset = 17
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < offset; i++ {
+		require.NoError(t, vector.AppendFixed(input, int64(-1), false, mp))
+	}
+	groups := make([]uint64, hashmap.UnitLimit)
+	for i := range groups {
+		groups[i] = uint64(i%5 + 1)
+		require.NoError(t, vector.AppendFixed(input, int64(i%13), false, mp))
+	}
+	defer input.Free(mp)
+
+	batch := distinctArgumentBatch{}
+	seen := make(map[[2]uint64]struct{})
+	for row, group := range groups {
+		key := [2]uint64{group, uint64(row % 13)}
+		_, expectedDuplicate := seen[key]
+		duplicate, err := batch.seenOrInsert(
+			groups, []*vector.Vector{input}, offset, row)
+		require.NoError(t, err)
+		require.Equal(t, expectedDuplicate, duplicate, "row %d", row)
+		seen[key] = struct{}{}
+	}
+	for row := range groups {
+		duplicate, err := batch.seenOrInsert(
+			groups, []*vector.Vector{input}, offset, row)
+		require.NoError(t, err)
+		require.True(t, duplicate, "second visit to row %d", row)
+	}
+
+	_, err := batch.seenOrInsert(groups, []*vector.Vector{input}, offset, -1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	_, err = batch.seenOrInsert(
+		make([]uint64, hashmap.UnitLimit+1), []*vector.Vector{input}, offset, 0)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 }
 
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
