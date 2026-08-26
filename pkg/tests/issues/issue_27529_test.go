@@ -160,20 +160,20 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			json_extract(json_array(9007199254740992), '$[0]') = cast(9007199254740993 as signed),
 			json_extract(json_array(9007199254740992), '$[0]') = ?`)
 		require.NoError(t, err)
+		defer stmt.Close()
 		var direct, prepared bool
 		require.NoError(t, stmt.QueryRowContext(ctx, int64(9007199254740993)).Scan(&direct, &prepared))
 		require.Equal(t, direct, prepared)
 		require.False(t, prepared)
-		require.NoError(t, stmt.Close())
 
 		stmt, err = db.PrepareContext(ctx,
 			`select json_extract('18446744073709551615', '$') = ?`)
 		require.NoError(t, err)
+		defer stmt.Close()
 		require.Error(t, db.QueryRowContext(ctx,
 			`select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed)`).Scan(new(bool)))
 		require.Error(t, stmt.QueryRowContext(ctx, int64(9223372036854775807)).Scan(new(bool)),
 			"prepared BIGINT must retain the direct JSON-to-BIGINT overflow error")
-		require.NoError(t, stmt.Close())
 
 		for _, query := range []string{
 			`select json_extract(json_object('v', json_object('nested', true)), '$.v') = ?`,
@@ -181,8 +181,8 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		} {
 			stmt, err = db.PrepareContext(ctx, query)
 			require.NoError(t, err)
+			defer stmt.Close()
 			require.Error(t, stmt.QueryRowContext(ctx, true).Scan(new(bool)))
-			require.NoError(t, stmt.Close())
 		}
 		var health int
 		require.NoError(t, db.QueryRowContext(ctx, "select 1").Scan(&health))
