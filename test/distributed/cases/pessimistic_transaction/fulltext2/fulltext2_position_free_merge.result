@@ -7,8 +7,8 @@ insert into t values (1,'我家有三个人'),(2,'三个人都住在我家'),(3,
 create fulltext2 index ft on t(body) with parser gojieba position_free = true;
 set @t_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ft' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
 set @capture_t_tail_sql = concat(
-'select coalesce(max(chunk_id), -1) into @t_tail_before_mutation from `', database(), '`.`', @t_ft2,
-'` where index_id = ''cdc_tail'' and tag = 1'
+'set @t_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_t_tail from @capture_t_tail_sql;
 execute capture_t_tail;
@@ -25,8 +25,8 @@ execute wait_t_mutation;
 1
 deallocate prepare wait_t_mutation;
 set @capture_t_tail_sql = concat(
-'select coalesce(max(chunk_id), -1) into @t_tail_before_mutation from `', database(), '`.`', @t_ft2,
-'` where index_id = ''cdc_tail'' and tag = 1'
+'set @t_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_t_tail from @capture_t_tail_sql;
 execute capture_t_tail;
@@ -62,8 +62,8 @@ select id from t where match(body) against('我家' in bm25 mode) order by id;
 select id from t where match(body) against('我家' in boolean mode) order by id;
 invalid input: fulltext2 index "ft" is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching
 set @capture_t_tail_sql = concat(
-'select coalesce(max(chunk_id), -1) into @t_tail_before_mutation from `', database(), '`.`', @t_ft2,
-'` where index_id = ''cdc_tail'' and tag = 1'
+'set @t_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_t_tail from @capture_t_tail_sql;
 execute capture_t_tail;
@@ -80,8 +80,8 @@ execute wait_t_mutation;
 1
 deallocate prepare wait_t_mutation;
 set @capture_t_tail_sql = concat(
-'select coalesce(max(chunk_id), -1) into @t_tail_before_mutation from `', database(), '`.`', @t_ft2,
-'` where index_id = ''cdc_tail'' and tag = 1'
+'set @t_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_t_tail from @capture_t_tail_sql;
 execute capture_t_tail;

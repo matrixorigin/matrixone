@@ -46,8 +46,8 @@ select id, prio from src_ins where match(body) against('fox') and prio > 15 orde
 
 -- mutate src_upd: UPDATE an include value (LWW) + DELETE, BEFORE its first search.
 set @capture_src_upd_tail_sql = concat(
-    'select coalesce(max(chunk_id), -1) into @src_upd_tail_before_mutation from `', database(), '`.`', @src_upd_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'set @src_upd_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_upd_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_src_upd_tail from @capture_src_upd_tail_sql;
 execute capture_src_upd_tail;
@@ -63,8 +63,8 @@ prepare wait_src_upd_mutation from @wait_src_upd_mutation_sql;
 execute wait_src_upd_mutation;
 deallocate prepare wait_src_upd_mutation;
 set @capture_src_upd_tail_sql = concat(
-    'select coalesce(max(chunk_id), -1) into @src_upd_tail_before_mutation from `', database(), '`.`', @src_upd_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'set @src_upd_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_upd_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_src_upd_tail from @capture_src_upd_tail_sql;
 execute capture_src_upd_tail;
@@ -109,8 +109,8 @@ prepare wait_phantom_initial from @wait_phantom_initial_sql;
 execute wait_phantom_initial;
 deallocate prepare wait_phantom_initial;
 set @capture_phantom_tail_sql = concat(
-    'select coalesce(max(chunk_id), -1) into @phantom_tail_before_mutation from `', database(), '`.`', @src_phantom_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'set @phantom_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_phantom_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_phantom_tail from @capture_phantom_tail_sql;
 execute capture_phantom_tail;

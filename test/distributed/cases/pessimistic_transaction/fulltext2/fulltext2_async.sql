@@ -65,8 +65,8 @@ show create table src2;
 
 -- post-create UPDATE + DELETE flow through CDC too
 set @capture_src_tail_sql = concat(
-    'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'set @src_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_src_tail from @capture_src_tail_sql;
 execute capture_src_tail;
@@ -82,8 +82,8 @@ prepare wait_src_mutation from @wait_src_mutation_sql;
 execute wait_src_mutation;
 deallocate prepare wait_src_mutation;
 set @capture_src_tail_sql = concat(
-    'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'set @src_tail_before_mutation = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_src_tail from @capture_src_tail_sql;
 execute capture_src_tail;

@@ -50,8 +50,8 @@ prepare wait_dl2_initial from @wait_dl2_initial_sql;
 execute wait_dl2_initial;
 deallocate prepare wait_dl2_initial;
 set @capture_dl2_tail_sql = concat(
-    'select coalesce(max(chunk_id), -1) into @dl2_tail_before_update from `', database(), '`.`', @dl2_ft2,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'set @dl2_tail_before_update = (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @dl2_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1)'
 );
 prepare capture_dl2_tail from @capture_dl2_tail_sql;
 execute capture_dl2_tail;
