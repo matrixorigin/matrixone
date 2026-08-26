@@ -725,6 +725,7 @@ func verifyTextPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_text"); err != nil {
 		return fmt.Errorf("deallocate text-protocol MongoDB scan: %w", err)
 	}
+	return nil
 }
 
 func expectExplainRedacted(ctx context.Context, db *sql.DB, query string, required, forbidden []string) error {
