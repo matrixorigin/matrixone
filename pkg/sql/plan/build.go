@@ -218,7 +218,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 			case icebergRowLevelDMLUnsupportedMsg:
 				return nil, moerr.NewNotSupported(ctx.GetContext(), "Iceberg row-level DML is not implemented")
 			case externalTableUnsupportedDMLMsg:
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), readOnlyExternalTableDMLMsg)
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 			}
 		}
 		return nil, err

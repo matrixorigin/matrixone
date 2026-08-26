@@ -514,7 +514,7 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 				return nil
 			}
 		}
-		return moerr.NewInvalidInput(ctx, readOnlyExternalTableDMLMsg)
+		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from view")
 	} else if tableDef.TableType == catalog.SystemSequenceRel && ctx.Value(defines.BgKey{}) == nil {

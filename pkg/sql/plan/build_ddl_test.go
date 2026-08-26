@@ -740,9 +740,45 @@ func TestBuildTruncateMongoDBExternalTableRejectsReadOnlyDML(t *testing.T) {
 			p, err := BuildPlan(ctx, stmt, prepare)
 			require.Nil(t, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
-			require.Equal(t, "invalid input: "+readOnlyExternalTableDMLMsg, err.Error())
+			require.Equal(t, "invalid input: cannot insert/update/delete from external table", err.Error())
 		})
 	}
+}
+
+func TestBuildTruncateNonMongoExternalTableKeepsExistingBehavior(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table external_events", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["external_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "external_events"}
+	ctx.tables["external_events"] = &TableDef{
+		Name:      "external_events",
+		TableType: catalog.SystemExternalRel,
+	}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDdl().GetTruncateTable())
+}
+
+func TestBuildTruncateMalformedMongoDBExternalTableReturnsCatalogError(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table mongo_events", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["mongo_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "mongo_events"}
+	ctx.tables["mongo_events"] = &TableDef{
+		Name:        "mongo_events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+	}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.Nil(t, p)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Equal(t, "invalid input: MongoDB external table is missing its catalog envelope", err.Error())
 }
 
 func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {

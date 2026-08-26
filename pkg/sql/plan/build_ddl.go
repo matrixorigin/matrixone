@@ -4671,7 +4671,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				return nil, err
 			}
 			if isMongoDB {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), readOnlyExternalTableDMLMsg)
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 			}
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
