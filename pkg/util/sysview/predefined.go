@@ -512,14 +512,19 @@ var (
 		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaTablePrivilegesDDL = "CREATE TABLE information_schema.`TABLE_PRIVILEGES` (" +
-		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
-		"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
-		"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
-		"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
-		"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
-		"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
-		")"
+	InformationSchemaTablePrivilegesDDL = "CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS " +
+		"SELECT " +
+		"CAST(rp.role_name AS varchar(292)) AS `GRANTEE`," +
+		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +
+		"CAST(tbl.reldatabase AS varchar(64)) AS `TABLE_SCHEMA`," +
+		"CAST(tbl.relname AS varchar(64)) AS `TABLE_NAME`," +
+		"CAST(upper(rp.privilege_name) AS varchar(64)) AS `PRIVILEGE_TYPE`," +
+		"CAST(case when rp.with_grant_option then 'YES' else 'NO' end AS varchar(3)) AS `IS_GRANTABLE` " +
+		"FROM mo_catalog.mo_role_privs rp " +
+		"JOIN mo_catalog.mo_tables tbl ON rp.obj_id = tbl.rel_id " +
+		"WHERE tbl.account_id = current_account_id() " +
+		"AND rp.obj_type = 'table' " +
+		"AND rp.privilege_level IN ('d.t', 't')"
 
 	InformationSchemaColumnPrivilegesDDL = "CREATE TABLE information_schema.`COLUMN_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +

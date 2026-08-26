@@ -1,0 +1,27 @@
+drop role if exists table_privileges_metadata_reader;
+drop database if exists table_privileges_metadata_db;
+create database table_privileges_metadata_db;
+create table table_privileges_metadata_db.t(id int);
+create role table_privileges_metadata_reader;
+grant select on table table_privileges_metadata_db.t to table_privileges_metadata_reader;
+grant insert on table table_privileges_metadata_db.t to table_privileges_metadata_reader with grant option;
+select grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable
+from information_schema.table_privileges
+where grantee = 'table_privileges_metadata_reader'
+and table_schema = 'table_privileges_metadata_db'
+and table_name = 't'
+order by privilege_type;
+➤ grantee[12,292,0]  ¦  table_catalog[12,512,0]  ¦  table_schema[12,64,0]  ¦  table_name[12,64,0]  ¦  privilege_type[12,64,0]  ¦  is_grantable[12,3,0]  𝄀
+table_privileges_metadata_reader  ¦  def  ¦  table_privileges_metadata_db  ¦  t  ¦  INSERT  ¦  YES  𝄀
+table_privileges_metadata_reader  ¦  def  ¦  table_privileges_metadata_db  ¦  t  ¦  SELECT  ¦  NO
+revoke select on table table_privileges_metadata_db.t from table_privileges_metadata_reader;
+select grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable
+from information_schema.table_privileges
+where grantee = 'table_privileges_metadata_reader'
+and table_schema = 'table_privileges_metadata_db'
+and table_name = 't'
+order by privilege_type;
+➤ grantee[12,292,0]  ¦  table_catalog[12,512,0]  ¦  table_schema[12,64,0]  ¦  table_name[12,64,0]  ¦  privilege_type[12,64,0]  ¦  is_grantable[12,3,0]  𝄀
+table_privileges_metadata_reader  ¦  def  ¦  table_privileges_metadata_db  ¦  t  ¦  INSERT  ¦  YES
+drop role table_privileges_metadata_reader;
+drop database table_privileges_metadata_db;

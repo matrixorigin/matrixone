@@ -172,6 +172,36 @@ func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaTablePrivilegesDDL(t *testing.T) {
+	assert.True(t, strings.HasPrefix(
+		InformationSchemaTablePrivilegesDDL,
+		"CREATE VIEW information_schema.`TABLE_PRIVILEGES` AS"))
+	for _, projection := range []string{
+		"CAST(rp.role_name AS varchar(292)) AS `GRANTEE`",
+		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`",
+		"CAST(tbl.reldatabase AS varchar(64)) AS `TABLE_SCHEMA`",
+		"CAST(tbl.relname AS varchar(64)) AS `TABLE_NAME`",
+		"CAST(upper(rp.privilege_name) AS varchar(64)) AS `PRIVILEGE_TYPE`",
+		"CAST(case when rp.with_grant_option then 'YES' else 'NO' end AS varchar(3)) AS `IS_GRANTABLE`",
+	} {
+		assert.Contains(t, InformationSchemaTablePrivilegesDDL, projection)
+	}
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL, "FROM mo_catalog.mo_role_privs rp")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+		"JOIN mo_catalog.mo_tables tbl ON rp.obj_id = tbl.rel_id")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+		"tbl.account_id = current_account_id()")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL, "rp.obj_type = 'table'")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+		"rp.privilege_level IN ('d.t', 't')")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTablePrivilegesDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",

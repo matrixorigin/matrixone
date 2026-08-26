@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 19)
+	require.Len(t, tenantUpgEntries, 20)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -126,6 +126,15 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, collationApplicability.UpgSql)
 	require.Contains(t, strings.ToLower(collationApplicability.PreSql),
 		"drop view if exists information_schema.collation_character_set_applicability")
+	tablePrivileges := tenantUpgEntries[19]
+	require.Equal(t, versions.MODIFY_VIEW, tablePrivileges.UpgType)
+	require.Equal(t, sysview.InformationDBConst, tablePrivileges.Schema)
+	require.Equal(t, "TABLE_PRIVILEGES", tablePrivileges.TableName)
+	require.Contains(t, strings.ToLower(tablePrivileges.PreSql),
+		"drop table if exists information_schema.table_privileges")
+	require.Contains(t, strings.ToLower(tablePrivileges.UpgSql),
+		"drop view if exists information_schema.table_privileges")
+	require.Equal(t, sysview.InformationSchemaTablePrivilegesDDL, tablePrivileges.PostSql)
 }
 
 func TestInformationSchemaCollationsUpgradeCheckIsExact(t *testing.T) {
@@ -161,7 +170,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 19)
+	require.Len(t, tenantUpgEntries, 20)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -398,6 +407,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaCheckConstraints(),
 		upgradeInformationSchemaTableConstraints(),
 		upgradeInformationSchemaCollationCharacterSetApplicability(),
+		upgradeInformationSchemaTablePrivileges(),
 	}
 
 	for _, entry := range entries {
@@ -514,6 +524,37 @@ func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
 	require.Empty(t, executed)
 }
 
+func TestTablePrivilegesViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
+	entry := upgradeInformationSchemaTablePrivileges()
+	upgraded := false
+	stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		require.Equal(t, "TABLE_PRIVILEGES", viewName)
+		if upgraded {
+			return true, sysview.InformationSchemaTablePrivilegesDDL, nil
+		}
+		return false, "", nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.PostSql {
+			upgraded = true
+		}
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Empty(t, executed)
+}
+
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		tableStub := gostub.Stub(&versions.CheckTableDefinition, func(executor.TxnExecutor, uint32, string, string) (bool, error) {
@@ -531,6 +572,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaCheckConstraintsDDL, nil
 			case "COLLATION_CHARACTER_SET_APPLICABILITY":
 				return true, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, nil
+			case "TABLE_PRIVILEGES":
+				return true, sysview.InformationSchemaTablePrivilegesDDL, nil
 			case "TABLE_CONSTRAINTS":
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":

@@ -47,6 +47,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
+	upgradeInformationSchemaTablePrivileges(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -157,6 +158,23 @@ func upgradeInformationSchemaCollationCharacterSetApplicability() versions.Upgra
 		},
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLLATION_CHARACTER_SET_APPLICABILITY;",
 			sysview.InformationDBConst),
+	}
+}
+
+// upgradeInformationSchemaTablePrivileges replaces the historical empty base
+// table with the canonical catalog-backed view. The three statements converge
+// absent, base-table, and stale-view states without relying on a default schema.
+func upgradeInformationSchemaTablePrivileges() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "TABLE_PRIVILEGES",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.TABLE_PRIVILEGES;",
+			sysview.InformationDBConst),
+		CheckFunc: checkViewDefinition("TABLE_PRIVILEGES", sysview.InformationSchemaTablePrivilegesDDL),
+		PreSql: fmt.Sprintf("DROP TABLE IF EXISTS %s.TABLE_PRIVILEGES;",
+			sysview.InformationDBConst),
+		PostSql: sysview.InformationSchemaTablePrivilegesDDL,
 	}
 }
 
