@@ -2522,6 +2522,9 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, true, types.DateType)
 		if !ok {
@@ -2541,6 +2544,9 @@ func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
 	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		t, ok := checkedTimeMicrosecondInterval(start, diff, true)
@@ -2562,6 +2568,9 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, true, types.DateTimeType)
 		if !ok {
@@ -2582,12 +2591,15 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, true, types.DateTimeType)
 		if !ok {
 			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 		}
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -3119,6 +3131,29 @@ func checkedMicrosecondArithmetic(start, diff int64, subtract bool) (int64, bool
 	return start + diff, true
 }
 
+// temporalRangeIntervalConversionOK prevents fixed-duration units from
+// wrapping while AddInterval converts them to microseconds. The magnitude
+// check accepts values that fit in an int64, but their later conversion can
+// still overflow before AddInterval validates the temporal domain.
+func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool {
+	var multiplier int64
+	switch unit {
+	case types.Second:
+		multiplier = types.MicroSecsPerSec
+	case types.Minute:
+		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+	case types.Day:
+		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+	case types.Week:
+		multiplier = types.MicroSecsPerSec * types.SecsPerWeek
+	default:
+		return true
+	}
+	return diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier
+}
+
 // checkedDatetimeMicrosecondInterval validates both the signed arithmetic and
 // the resulting DATE/DATETIME domain. Datetime.AddInterval intentionally
 // fast-paths MICROSECOND without a calendar validation, so RANGE bounds must
@@ -3149,6 +3184,9 @@ func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, false, types.DateType)
 		if !ok {
@@ -3168,6 +3206,9 @@ func doTimeAdd(start types.Time, diff int64, unit int64) (types.Time, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
 	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		t, ok := checkedTimeMicrosecondInterval(start, diff, false)
@@ -3189,6 +3230,9 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, false, types.DateTimeType)
 		if !ok {
@@ -3209,12 +3253,15 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, false, types.DateTimeType)
 		if !ok {
 			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 		}
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {

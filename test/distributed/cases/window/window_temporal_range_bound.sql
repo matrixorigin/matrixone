@@ -83,6 +83,20 @@ select id, ts, sum(v) over (
 from temporal_time_timestamp_bound
 order by ts, id;
 
+-- A magnitude that passes raw interval validation must not wrap while MINUTE
+-- is converted to microseconds. The first frame reaches the partition end.
+create table temporal_interval_conversion_bound(id int primary key, dt datetime(6), v int);
+insert into temporal_interval_conversion_bound values
+  (1, '2024-01-01 00:00:00.000000', 1),
+  (2, '2024-01-01 00:00:11.000000', 10);
+select id, sum(v) over (
+         order by dt
+         range between current row and interval 307445734562 minute following
+       ) as s
+from temporal_interval_conversion_bound
+order by id;
+
 drop table t;
 drop table temporal_time_timestamp_bound;
+drop table temporal_interval_conversion_bound;
 drop database window_temporal_range_bound;

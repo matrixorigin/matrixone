@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -4623,5 +4624,92 @@ func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 0, right)
 		})
+	}
+}
+
+func TestTimestampRangeMicrosecondDSTGapBoundary(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	beforeGap, err := types.ParseTimestamp(loc, "2024-03-10 01:59:59.999999", 6)
+	require.NoError(t, err)
+	gapEnd, err := types.ParseTimestamp(loc, "2024-03-10 03:00:00.000000", 6)
+	require.NoError(t, err)
+
+	add, err := doTimestampAdd(loc, beforeGap, 1, int64(types.MicroSecond))
+	require.NoError(t, err)
+	require.Equal(t, gapEnd, add)
+	sub, err := doTimestampSub(loc, gapEnd, 1, int64(types.MicroSecond))
+	require.NoError(t, err)
+	require.Equal(t, gapEnd, sub)
+
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	for _, tc := range []struct {
+		name      string
+		values    []types.Timestamp
+		addRow    int
+		subRow    int
+		desc      bool
+		wantLeft  int
+		wantRight int
+	}{
+		{"asc", []types.Timestamp{beforeGap, gapEnd}, 0, 1, false, 1, 2},
+		{"desc", []types.Timestamp{gapEnd, beforeGap}, 1, 0, true, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, tc.values, nil, mp))
+			defer vec.Free(mp)
+
+			expr := intervalExpr(1, types.MicroSecond)
+			leftAdd, rightAdd := true, false
+			leftSub, rightSub := false, true
+			if tc.desc {
+				leftAdd, rightAdd = false, true
+				leftSub, rightSub = true, false
+			}
+			left, err := searchLeftWithLocation(loc, 0, vec.Length(), tc.addRow, vec, expr, leftAdd, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLeft, left)
+			right, err := searchRightWithLocation(loc, 0, vec.Length(), tc.addRow, vec, expr, rightAdd, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRight, right)
+
+			left, err = searchLeftWithLocation(loc, 0, vec.Length(), tc.subRow, vec, expr, leftSub, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLeft, left)
+			right, err = searchRightWithLocation(loc, 0, vec.Length(), tc.subRow, vec, expr, rightSub, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRight, right)
+		})
+	}
+}
+
+func TestTemporalRangeFixedUnitConversionOverflow(t *testing.T) {
+	const magnitude = int64(307445734562)
+	date := types.DateFromCalendar(2024, 1, 1)
+	datetime := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)
+	timestamp := datetime.ToTimestamp(time.UTC)
+	timeValue, err := types.ParseTime("12:00:00", 6)
+	require.NoError(t, err)
+
+	for _, unit := range []types.IntervalType{types.Minute, types.Hour, types.Day, types.Week} {
+		for _, diff := range []int64{magnitude, -magnitude} {
+			t.Run(fmt.Sprintf("%s_%d", unit, diff), func(t *testing.T) {
+				for _, call := range []func() error{
+					func() error { _, err := doDateAdd(date, diff, int64(unit)); return err },
+					func() error { _, err := doDateSub(date, diff, int64(unit)); return err },
+					func() error { _, err := doTimeAdd(timeValue, diff, int64(unit)); return err },
+					func() error { _, err := doTimeSub(timeValue, diff, int64(unit)); return err },
+					func() error { _, err := doDatetimeAdd(datetime, diff, int64(unit)); return err },
+					func() error { _, err := doDatetimeSub(datetime, diff, int64(unit)); return err },
+					func() error { _, err := doTimestampAdd(time.UTC, timestamp, diff, int64(unit)); return err },
+					func() error { _, err := doTimestampSub(time.UTC, timestamp, diff, int64(unit)); return err },
+				} {
+					err := call()
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "fixed-unit conversion overflow must become a temporal domain boundary")
+				}
+			})
+		}
 	}
 }
