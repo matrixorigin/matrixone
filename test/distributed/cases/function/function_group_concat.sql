@@ -341,4 +341,7 @@ select group_concat(y order by id separator '|') from group_concat_extended_type
 select group_concat(u order by id separator '|') from group_concat_extended_types;
 select hex(group_concat(g order by id separator '|')) from group_concat_extended_types;
 select hex(group_concat(g32 order by id separator '|')) from group_concat_extended_types;
+set session group_concat_max_len = 20;
+select hex(group_concat(g order by id separator '')) from group_concat_extended_types;
+set session group_concat_max_len = 1024;
 drop table group_concat_extended_types;

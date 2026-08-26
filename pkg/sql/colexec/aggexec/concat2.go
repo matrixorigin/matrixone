@@ -151,7 +151,8 @@ func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
 
 func GroupConcatReturnType(args []types.Type) types.Type {
 	for _, p := range args {
-		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob ||
+			p.Oid == types.T_geometry || p.Oid == types.T_geometry32 {
 			return types.T_blob.ToType()
 		}
 	}

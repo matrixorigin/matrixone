@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -504,6 +505,36 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 	right.Free(mp)
 	vecs[0].Free(mp)
 	exec.Free()
+}
+
+func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
+	geometryType := types.T_geometry.ToType()
+	geometry32Type := types.T_geometry32.ToType()
+	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{geometryType}))
+	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{
+		types.T_varchar.ToType(), geometry32Type,
+	}))
+
+	mp := mpool.MustNewZero()
+	exec, err := MakeAgg(mp, AggIdOfGroupConcat, false, geometryType)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 20), 0))
+
+	wkb := geo.WriteWKB(geo.Point{X: 1, Y: 2})
+	require.Len(t, wkb, 21)
+	values := vector.NewVec(geometryType)
+	defer values.Free(mp)
+	require.NoError(t, vector.AppendBytes(values, wkb, false, mp))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(mp)
+	require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
+	require.Equal(t, wkb[:20], results[0].GetBytesAt(0))
 }
 
 func TestGroupConcatPreservesTextCharsetForNestedMin(t *testing.T) {

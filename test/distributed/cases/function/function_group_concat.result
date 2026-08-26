@@ -412,4 +412,9 @@ hex(group_concat(g, |,order by id))
 select hex(group_concat(g32 order by id separator '|')) from group_concat_extended_types;
 hex(group_concat(g32, |,order by id))
 010100000000004040000080407C01010000000000E04000000041
+set session group_concat_max_len = 20;
+select hex(group_concat(g order by id separator '')) from group_concat_extended_types;
+hex(group_concat(g, ,order by id))
+0101000000000000000000F03F00000000000000
+set session group_concat_max_len = 1024;
 drop table group_concat_extended_types;
