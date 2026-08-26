@@ -173,8 +173,8 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			pipelineFlush = true
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
-		s3Writer := colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, false,
+		s3Writer := colexec.NewCNS3DataWriterForService(
+			proc.GetService(), proc.Mp(), fs, insert.InsertCtx.TableDef, -1, false,
 			sinkerOpts...)
 
 		insert.ctr.s3Writer = s3Writer
