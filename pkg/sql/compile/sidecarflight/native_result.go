@@ -38,9 +38,9 @@ type nativeResultSchema struct {
 	Columns []*nativeResultColumn `protobuf:"bytes,2,rep,name=columns,proto3"`
 }
 
-func (m *nativeResultSchema) Reset()         { *m = nativeResultSchema{} }
-func (m *nativeResultSchema) String() string { return proto.CompactTextString(m) }
-func (m *nativeResultSchema) ProtoMessage()  {}
+func (s *nativeResultSchema) Reset()         { *s = nativeResultSchema{} }
+func (s *nativeResultSchema) String() string { return proto.CompactTextString(s) }
+func (s *nativeResultSchema) ProtoMessage()  {}
 
 type nativeResultColumn struct {
 	Name        string `protobuf:"bytes,1,opt,name=name,proto3"`
