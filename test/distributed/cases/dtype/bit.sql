@@ -95,3 +95,18 @@ select * from t1;
 ALTER TABLE t1 CHANGE a new_a int;
 show create table t1;
 select * from t1;
+
+-- prepared parameters preserve NULL across first execution and statement reuse
+DROP TABLE IF EXISTS prepared_bit_null;
+CREATE TABLE prepared_bit_null (id INT PRIMARY KEY, b1 BIT(1), b8 BIT(8), b64 BIT(64));
+PREPARE prepared_bit_insert FROM 'INSERT INTO prepared_bit_null VALUES (?, ?, ?, ?)';
+SET @id = 1, @b1 = NULL, @b8 = NULL, @b64 = NULL;
+EXECUTE prepared_bit_insert USING @id, @b1, @b8, @b64;
+SET @id = 2, @b1 = 1, @b8 = 165, @b64 = 9223372036854775808;
+EXECUTE prepared_bit_insert USING @id, @b1, @b8, @b64;
+SET @id = 3, @b1 = NULL, @b8 = NULL, @b64 = NULL;
+EXECUTE prepared_bit_insert USING @id, @b1, @b8, @b64;
+SELECT id, b1 IS NULL, b8 IS NULL, b64 IS NULL, HEX(b1), HEX(b8), HEX(b64)
+FROM prepared_bit_null ORDER BY id;
+DEALLOCATE PREPARE prepared_bit_insert;
+DROP TABLE prepared_bit_null;
