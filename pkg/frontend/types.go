@@ -334,6 +334,12 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// directResultParamPositions is computed with the prepared plan and reused
+	// by COM_STMT_EXECUTE. Keeping the result on the prepared statement avoids
+	// walking and allocating plan-trace maps on every execute, including
+	// ordinary prepared DML and SELECT statements with no direct marker.
+	directResultParamPositions    []int32
+	directResultParamPositionsSet bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -738,6 +744,8 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
 }
 

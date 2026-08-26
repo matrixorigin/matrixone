@@ -152,6 +152,9 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 		onlyFullGroupBySet:  true,
 		getFromSendLongData: make(map[int]struct{}),
 		protocolVersion:     currentProtocolVersion(proc),
+		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
+			preparePlan.GetDcl().GetPrepare().Plan),
+		directResultParamPositionsSet: true,
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
@@ -297,6 +300,62 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamPreservesZeroDecimalResultDomain(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		mysqlType defines.MysqlType
+		oid       types.T
+		width     int32
+		scale     int32
+	}{
+		{name: "fixed scale", value: "0.00", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, oid: types.T_decimal64, width: 2, scale: 2},
+		{name: "exponent scale", value: "0e-30", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, oid: types.T_decimal128, width: 30, scale: 30},
+	}
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(120+i), "select ? as result")
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(test.value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(test.mysqlType), 0}
+
+			_, runtimePlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.NotNil(t, runtimePlan)
+			root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			result := root.ProjectList[0]
+			require.Equal(t, test.oid, types.T(result.Typ.Id))
+			require.Equal(t, test.width, result.Typ.Width)
+			require.Equal(t, test.scale, result.Typ.Scale)
+			switch test.oid {
+			case types.T_decimal64:
+				value, ok := result.GetLit().Value.(*plan.Literal_Decimal64Val)
+				require.True(t, ok)
+				require.Zero(t, value.Decimal64Val.A)
+			case types.T_decimal128:
+				value, ok := result.GetLit().Value.(*plan.Literal_Decimal128Val)
+				require.True(t, ok)
+				require.Zero(t, value.Decimal128Val.A)
+				require.Zero(t, value.Decimal128Val.B)
+			}
+
+			columns := getPreparedResultColumnsFor(prepareStmt.PrepareStmt, runtimePlan, false)
+			require.Len(t, columns, 1)
+			require.Equal(t, test.width, columns[0].Typ.Width)
+			require.Equal(t, test.scale, columns[0].Typ.Scale)
+		})
+	}
+}
+
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		mysqlType  defines.MysqlType
@@ -356,6 +415,8 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		{name: "integral decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "123", wantOID: types.T_decimal64, wantWidth: 3, wantOK: true},
 		{name: "wide integral decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "123456789012345678901234567890", wantOID: types.T_decimal128, wantWidth: 30, wantOK: true},
 		{name: "small exponent decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "1e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
+		{name: "fixed scale zero decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "0.00", wantOID: types.T_decimal64, wantWidth: 2, wantScale: 2, wantOK: true},
+		{name: "exponent zero decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "0e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
 		{name: "decimal fallback", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "not-decimal", wantOID: types.T_decimal128, wantOK: true},
 		{name: "null", mysqlType: defines.MYSQL_TYPE_NULL, wantOID: types.T_any, wantOK: false},
 		{name: "text", mysqlType: defines.MYSQL_TYPE_VAR_STRING, value: "1", wantOID: types.T_text, wantOK: false},

@@ -609,6 +609,8 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 		{name: "integral wire decimal", value: "123", wantType: types.T_decimal64, wantWidth: 3},
 		{name: "wide wire decimal", value: "123456789012345678901234567890", wantType: types.T_decimal128, wantWidth: 30},
 		{name: "small exponent wire decimal", value: "1e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
+		{name: "fixed scale zero wire decimal", value: "0.00", wantType: types.T_decimal64, wantWidth: 2, wantScale: 2},
+		{name: "exponent zero wire decimal", value: "0e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
 		{name: "large exponent wire decimal", value: "1e+37", wantType: types.T_decimal128, wantWidth: 38},
 		{name: "decimal256 boundary", value: "123456789012345678901234567890123456789012345678901234567890123456789012345.1", wantType: types.T_decimal256, wantWidth: 76, wantScale: 1},
 	} {
@@ -660,12 +662,20 @@ func TestPreparedRuntimeParamExprMaterializesProtocolTypes(t *testing.T) {
 			v, ok := l.Value.(*plan.Literal_Decimal64Val)
 			return l != nil && ok && v.Decimal64Val.A == 123
 		}},
+		{name: "decimal64 fixed scale zero", value: "0.00", runtimeTyp: types.New(types.T_decimal64, 2, 2), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal64Val)
+			return l != nil && ok && v.Decimal64Val.A == 0
+		}},
 		{name: "decimal64 inferred", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
 		{name: "decimal64 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
 		{name: "decimal128", value: "12.34", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
 		{name: "decimal128 negative exponent", value: "1e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
 			v, ok := l.Value.(*plan.Literal_Decimal128Val)
 			return l != nil && ok && v.Decimal128Val.A == 1 && v.Decimal128Val.B == 0
+		}},
+		{name: "decimal128 exponent zero", value: "0e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal128Val)
+			return l != nil && ok && v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
 		}},
 		{name: "decimal128 inferred", value: "123456789012345678901234567890123456.12", runtimeTyp: types.New(types.T_decimal128, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
 		{name: "decimal128 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},

@@ -890,6 +890,8 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
+		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
+		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
@@ -1003,11 +1005,12 @@ func initExecuteStmtParamWithResolverInSession(
 	// cached compile and avoid the per-execute type-inference regression from
 	// the original broad specialization fix.
 	runtimeSpecialized := false
-	directResultPositions := plan2.PreparedPlanDirectResultParamPositions(executionPlan)
-	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(directResultPositions) > 0 {
+	if execCtx.input != nil && execCtx.input.isBinaryProtExecute &&
+		prepareStmt.directResultParamPositionsSet &&
+		len(prepareStmt.directResultParamPositions) > 0 {
 		var specialized bool
 		cwft.paramVals, specialized, err = preparedParamValuesWithRuntimeTypes(
-			cwft.proc, prepareStmt.ParamTypes, directResultPositions)
+			cwft.proc, prepareStmt.ParamTypes, prepareStmt.directResultParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}

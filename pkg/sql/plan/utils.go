@@ -3609,10 +3609,45 @@ func preparedDecimalType(value string) (types.Type, bool) {
 	digits := integerPart + fractionalPart
 	trimmedDigits := strings.TrimLeft(digits, "0")
 	if trimmedDigits == "" {
-		// Zero has no significant exponent or scale. Keeping the smallest
-		// representable domain also avoids overflowing while examining an
-		// otherwise harmless value such as 0e-9223372036854775808.
-		return types.New(types.T_decimal64, 1, 0), true
+		// A zero still carries a meaningful wire scale. Preserve the number of
+		// fractional places after applying the exponent (for example, 0.00 is
+		// DECIMAL(2,2), while 0e-30 is DECIMAL(30,30)). Derive this without
+		// negating MinInt64 so malformed, excessively small exponents remain a
+		// safe fallback rather than overflowing during type inference.
+		scale64 := int64(len(fractionalPart))
+		switch {
+		case exponent > 0:
+			if exponent >= scale64 {
+				scale64 = 0
+			} else {
+				scale64 -= exponent
+			}
+		case exponent < 0:
+			if scale64 > math.MaxInt64+exponent {
+				return types.Type{}, false
+			}
+			scale64 -= exponent
+		}
+		if scale64 < 0 {
+			scale64 = 0
+		}
+		width64 := scale64
+		if width64 == 0 {
+			width64 = 1
+		}
+		if width64 > 76 {
+			return types.Type{}, false
+		}
+		width := int32(width64)
+		scale := int32(scale64)
+		switch {
+		case width <= types.T_decimal64.ToType().Width:
+			return types.New(types.T_decimal64, width, scale), true
+		case width <= types.T_decimal128.ToType().Width:
+			return types.New(types.T_decimal128, width, scale), true
+		default:
+			return types.New(types.T_decimal256, width, scale), true
+		}
 	}
 	leadingZeroes := len(digits) - len(trimmedDigits)
 	digits = trimmedDigits
