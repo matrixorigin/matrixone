@@ -17,6 +17,7 @@ package incrservice
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -35,7 +36,8 @@ import (
 )
 
 var (
-	lazyDeleteInterval = time.Second * 10
+	lazyDeleteInterval                    = time.Second * 10
+	errCommittedTableCacheBuildSuperseded = errors.New("committed table cache build superseded")
 )
 
 type privateResetKey struct {
@@ -58,6 +60,51 @@ type txnEpochCacheCallback struct {
 	registration *privateResetRegistration
 }
 
+// committedTableCacheBuild is the single in-flight committed-cache build for
+// one table generation. All fields are protected by service.mu; closing ready
+// publishes the final err to waiters.
+type committedTableCacheBuild struct {
+	generation uint64
+	epoch      uint32
+	ready      chan struct{}
+	err        error
+	done       bool
+}
+
+// pendingTableCacheCommit fences the short interval in which a cache created
+// by a transaction is already published in tables, but still carries that
+// transaction while its commit transition runs outside service.mu. New users
+// of the same table wait on ready; unrelated tables remain independent.
+type pendingTableCacheCommit struct {
+	ready chan struct{}
+}
+
+type tableCacheLifecycleAction struct {
+	tableID       uint64
+	cache         incrTableCache
+	commit        bool
+	pendingCommit *pendingTableCacheCommit
+}
+
+func (s *service) runTableCacheLifecycleAction(a tableCacheLifecycleAction) {
+	defer s.builders.Done()
+	if a.pendingCommit != nil {
+		defer func() {
+			s.mu.Lock()
+			if s.mu.pendingCommits[a.tableID] == a.pendingCommit {
+				delete(s.mu.pendingCommits, a.tableID)
+			}
+			close(a.pendingCommit.ready)
+			s.mu.Unlock()
+		}()
+	}
+	if a.commit {
+		a.cache.commit()
+	} else {
+		a.cache.retire()
+	}
+}
+
 type service struct {
 	sid       string
 	logger    *log.MOLogger
@@ -74,6 +121,8 @@ type service struct {
 		tables           map[uint64]incrTableCache
 		generation       map[uint64]uint64
 		generationBuilds map[uint64]uint64
+		committedBuilds  map[uint64]*committedTableCacheBuild
+		pendingCommits   map[uint64]*pendingTableCacheCommit
 		private          map[privateResetKey]incrTableCache
 		privateCallbacks map[privateResetKey]*privateResetRegistration
 		createdResets    map[privateResetKey]incrTableCache
@@ -101,6 +150,8 @@ func NewIncrService(
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
 	s.mu.generation = make(map[uint64]uint64, 1024)
 	s.mu.generationBuilds = make(map[uint64]uint64)
+	s.mu.committedBuilds = make(map[uint64]*committedTableCacheBuild)
+	s.mu.pendingCommits = make(map[uint64]*pendingTableCacheCommit)
 	s.mu.private = make(map[privateResetKey]incrTableCache)
 	s.mu.privateCallbacks = make(map[privateResetKey]*privateResetRegistration)
 	s.mu.createdResets = make(map[privateResetKey]incrTableCache)
@@ -194,10 +245,16 @@ func (s *service) Reset(
 		for idx := range cols {
 			cols[idx].Offset = 0
 		}
-	} else if c := s.getTableCache(oldTableID); c != nil {
-		// reuse ids in cache
-		if err := c.adjust(ctx, cols); err != nil {
+	} else {
+		c, err := s.getTableCache(ctx, oldTableID)
+		if err != nil {
 			return err
+		}
+		if c != nil {
+			// reuse ids in cache
+			if err := c.adjust(ctx, cols); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -307,23 +364,34 @@ func (s *service) Reload(
 	ctx context.Context,
 	tableID uint64,
 ) error {
-	s.mu.Lock()
-	if s.mu.closed {
+	for {
+		s.mu.Lock()
+		if s.mu.closed {
+			s.mu.Unlock()
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if pending := s.mu.pendingCommits[tableID]; pending != nil {
+			s.mu.Unlock()
+			select {
+			case <-pending.ready:
+				continue
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+		s.bumpGenerationLocked(tableID)
+		c, ok := s.mu.tables[tableID]
+		if !ok {
+			s.mu.Unlock()
+			return nil
+		}
+
+		// drop cache, will be reloaded when next query
+		delete(s.mu.tables, tableID)
 		s.mu.Unlock()
-		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
-	}
-	s.bumpGenerationLocked(tableID)
-	c, ok := s.mu.tables[tableID]
-	if !ok {
-		s.mu.Unlock()
+		c.retire()
 		return nil
 	}
-
-	// drop cache, will be reloaded when next query
-	delete(s.mu.tables, tableID)
-	s.mu.Unlock()
-	c.retire()
-	return nil
 }
 
 func (s *service) SetOffset(
@@ -349,10 +417,22 @@ func (s *service) SetOffset(
 		trackGeneration       bool
 	)
 
-	s.mu.Lock()
-	if s.mu.closed {
-		s.mu.Unlock()
-		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	for {
+		s.mu.Lock()
+		if s.mu.closed {
+			s.mu.Unlock()
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if pending := s.mu.pendingCommits[tableID]; pending != nil {
+			s.mu.Unlock()
+			select {
+			case <-pending.ready:
+				continue
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+		break
 	}
 	s.builders.Add(1)
 	if txnOp != nil {
@@ -491,12 +571,57 @@ func (s *service) finishGenerationBuild(tableID uint64) {
 }
 
 func (s *service) bumpGenerationLocked(tableID uint64) uint64 {
+	return s.bumpGenerationWithBuildErrorLocked(
+		tableID,
+		moerr.NewTxnNeedRetryWithDefChanged(context.Background()),
+	)
+}
+
+func (s *service) bumpGenerationWithBuildErrorLocked(
+	tableID uint64,
+	buildErr error,
+) uint64 {
 	if s.mu.generationBuilds[tableID] == 0 {
 		delete(s.mu.generation, tableID)
 		return 0
 	}
 	s.mu.generation[tableID]++
+	s.finishCommittedTableCacheBuildLocked(
+		tableID,
+		s.mu.committedBuilds[tableID],
+		buildErr,
+	)
 	return s.mu.generation[tableID]
+}
+
+func (s *service) finishCommittedTableCacheBuildLocked(
+	tableID uint64,
+	build *committedTableCacheBuild,
+	err error,
+) error {
+	if build == nil {
+		return err
+	}
+	if build.done {
+		return build.err
+	}
+	build.err = err
+	build.done = true
+	if s.mu.committedBuilds[tableID] == build {
+		delete(s.mu.committedBuilds, tableID)
+	}
+	close(build.ready)
+	return err
+}
+
+func (s *service) finishCommittedTableCacheBuild(
+	tableID uint64,
+	build *committedTableCacheBuild,
+	err error,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finishCommittedTableCacheBuildLocked(tableID, build, err)
 }
 
 func (s *service) buildPrivateTableCache(
@@ -573,6 +698,13 @@ func (s *service) Close() {
 		return
 	}
 	s.mu.closed = true
+	for tableID, build := range s.mu.committedBuilds {
+		s.finishCommittedTableCacheBuildLocked(
+			tableID,
+			build,
+			moerr.NewTxnNeedRetryWithDefChanged(context.Background()),
+		)
+	}
 	s.mu.Unlock()
 
 	s.stopper.Stop()
@@ -594,6 +726,8 @@ func (s *service) Close() {
 	s.mu.createdResets = make(map[privateResetKey]incrTableCache)
 	s.mu.generation = make(map[uint64]uint64)
 	s.mu.generationBuilds = make(map[uint64]uint64)
+	s.mu.committedBuilds = make(map[uint64]*committedTableCacheBuild)
+	s.mu.pendingCommits = make(map[uint64]*pendingTableCacheCommit)
 	s.mu.Unlock()
 	for _, tc := range tables {
 		tc.retire()
@@ -626,7 +760,7 @@ func (s *service) acquireTableCacheForEpoch(
 		}
 		s.mu.Unlock()
 	}
-	return s.getCommittedTableCacheForEpoch(ctx, tableID, autoIncrEpoch, txnOp)
+	return s.getCommittedTableCacheForEpoch(ctx, tableID, autoIncrEpoch, txnOp, false)
 }
 
 func (s *service) installPrivateReset(
@@ -770,54 +904,128 @@ func (s *service) getCommittedTableCacheForEpoch(
 	tableID uint64,
 	autoIncrEpoch uint32,
 	txnOp client.TxnOperator,
+	anyEpoch bool,
 ) (incrTableCache, error) {
-	s.mu.Lock()
-	if s.mu.closed {
+	for {
+		s.mu.Lock()
+		if s.mu.closed {
+			s.mu.Unlock()
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if pending := s.mu.pendingCommits[tableID]; pending != nil {
+			s.mu.Unlock()
+			select {
+			case <-pending.ready:
+				continue
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			}
+		}
+		c, ok := s.mu.tables[tableID]
+		if ok && (anyEpoch || c.epoch() == autoIncrEpoch) {
+			c.acquire()
+			s.mu.Unlock()
+			return c, nil
+		}
+		if ok && c.epoch() > autoIncrEpoch {
+			s.mu.Unlock()
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if _, ok := s.mu.destroyed[tableID]; ok {
+			s.mu.Unlock()
+			return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+		}
+		if build := s.mu.committedBuilds[tableID]; build != nil {
+			// A higher explicit epoch must be able to supersede a blocked older
+			// build. It starts a new generation; same-epoch callers and any-epoch
+			// readers share the existing build instead.
+			if !anyEpoch && autoIncrEpoch > build.epoch {
+				s.bumpGenerationWithBuildErrorLocked(
+					tableID, errCommittedTableCacheBuildSuperseded,
+				)
+			} else {
+				s.mu.Unlock()
+				select {
+				case <-build.ready:
+					if build.err == errCommittedTableCacheBuildSuperseded {
+						if anyEpoch {
+							continue
+						}
+						return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+					}
+					if build.err != nil {
+						return nil, build.err
+					}
+					continue
+				case <-ctx.Done():
+					return nil, context.Cause(ctx)
+				}
+			}
+		}
+		generation := s.startGenerationBuildLocked(tableID)
+		build := &committedTableCacheBuild{
+			generation: generation,
+			epoch:      autoIncrEpoch,
+			ready:      make(chan struct{}),
+		}
+		s.mu.committedBuilds[tableID] = build
+		s.builders.Add(1)
 		s.mu.Unlock()
-		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		cache, err := s.buildCommittedTableCacheForEpoch(
+			ctx, tableID, autoIncrEpoch, txnOp, anyEpoch, build,
+		)
+		if err == errCommittedTableCacheBuildSuperseded {
+			if anyEpoch {
+				continue
+			}
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		return cache, err
 	}
-	c, ok := s.mu.tables[tableID]
-	if ok && c.epoch() == autoIncrEpoch {
-		c.acquire()
-		s.mu.Unlock()
-		return c, nil
-	}
-	if ok && c.epoch() > autoIncrEpoch {
-		s.mu.Unlock()
-		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
-	}
-	if _, ok := s.mu.destroyed[tableID]; ok {
-		s.mu.Unlock()
-		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
-	}
-	generation := s.startGenerationBuildLocked(tableID)
-	s.builders.Add(1)
-	s.mu.Unlock()
+}
+
+func (s *service) buildCommittedTableCacheForEpoch(
+	ctx context.Context,
+	tableID uint64,
+	autoIncrEpoch uint32,
+	txnOp client.TxnOperator,
+	anyEpoch bool,
+	build *committedTableCacheBuild,
+) (incrTableCache, error) {
 	defer s.builders.Done()
 	defer s.finishGenerationBuild(tableID)
 
 	cols, err := s.store.GetColumns(ctx, tableID, nil)
 	if err != nil {
-		return nil, err
+		return nil, s.finishCommittedTableCacheBuild(tableID, build, err)
 	}
 	if len(cols) == 0 {
-		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+		err = moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+		return nil, s.finishCommittedTableCacheBuild(tableID, build, err)
 	}
 
 	s.mu.Lock()
-	if s.mu.closed || s.mu.generation[tableID] != generation {
+	if build.done || s.mu.closed || s.mu.generation[tableID] != build.generation {
+		err = s.finishCommittedTableCacheBuildLocked(
+			tableID, build, moerr.NewTxnNeedRetryWithDefChanged(ctx),
+		)
 		s.mu.Unlock()
-		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		return nil, err
 	}
+	var previous incrTableCache
 	if current, ok := s.mu.tables[tableID]; ok {
-		if current.epoch() == autoIncrEpoch {
+		if anyEpoch || current.epoch() == autoIncrEpoch {
 			current.acquire()
+			s.finishCommittedTableCacheBuildLocked(tableID, build, nil)
 			s.mu.Unlock()
 			return current, nil
 		}
 		if current.epoch() > autoIncrEpoch {
+			err = s.finishCommittedTableCacheBuildLocked(
+				tableID, build, moerr.NewTxnNeedRetryWithDefChanged(ctx),
+			)
 			s.mu.Unlock()
-			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			return nil, err
 		}
 	}
 	s.mu.Unlock()
@@ -834,7 +1042,7 @@ func (s *service) getCommittedTableCacheForEpoch(
 		true,
 	)
 	if err != nil {
-		return nil, err
+		return nil, s.finishCommittedTableCacheBuild(tableID, build, err)
 	}
 	var registration *privateResetRegistration
 	if txnOp != nil {
@@ -847,43 +1055,52 @@ func (s *service) getCommittedTableCacheForEpoch(
 		if err := s.appendTxnEpochCacheCallback(txnOp, callback); err != nil {
 			close(registration.ready)
 			_ = replacement.close()
-			return nil, err
+			return nil, s.finishCommittedTableCacheBuild(tableID, build, err)
 		}
 		defer close(registration.ready)
 	}
 
 	s.mu.Lock()
-	if s.mu.closed || s.mu.generation[tableID] != generation {
+	if build.done || s.mu.closed || s.mu.generation[tableID] != build.generation {
+		err = s.finishCommittedTableCacheBuildLocked(
+			tableID, build, moerr.NewTxnNeedRetryWithDefChanged(ctx),
+		)
 		s.mu.Unlock()
 		_ = replacement.close()
-		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		return nil, err
 	}
 	if _, ok := s.mu.destroyed[tableID]; ok {
+		err = s.finishCommittedTableCacheBuildLocked(
+			tableID, build, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID)),
+		)
 		s.mu.Unlock()
 		_ = replacement.close()
-		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+		return nil, err
 	}
 	if current, ok := s.mu.tables[tableID]; ok {
-		if current.epoch() == autoIncrEpoch {
+		if anyEpoch || current.epoch() == autoIncrEpoch {
 			current.acquire()
+			s.finishCommittedTableCacheBuildLocked(tableID, build, nil)
 			s.mu.Unlock()
 			_ = replacement.close()
 			return current, nil
 		}
 		if current.epoch() > autoIncrEpoch {
+			err = s.finishCommittedTableCacheBuildLocked(
+				tableID, build, moerr.NewTxnNeedRetryWithDefChanged(ctx),
+			)
 			s.mu.Unlock()
 			_ = replacement.close()
-			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			return nil, err
 		}
-		c = current
-	} else {
-		c = nil
+		previous = current
 	}
 	s.mu.tables[tableID] = replacement
 	replacement.acquire()
+	s.finishCommittedTableCacheBuildLocked(tableID, build, nil)
 	s.mu.Unlock()
-	if c != nil {
-		c.retire()
+	if previous != nil {
+		previous.retire()
 	}
 	return replacement, nil
 }
@@ -908,57 +1125,61 @@ func (s *service) acquireCommittedTableCache(
 	ctx context.Context,
 	tableID uint64,
 ) (incrTableCache, error) {
-	s.mu.Lock()
-	if s.mu.closed {
-		s.mu.Unlock()
-		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
-	}
-	if c, ok := s.mu.tables[tableID]; ok {
-		c.acquire()
-		s.mu.Unlock()
-		return c, nil
-	}
-	s.mu.Unlock()
-
 	// CurrentValue does not carry the table epoch. A published cache of any
-	// epoch is valid for its fast path above. On a cold cache, epoch zero keeps
-	// the existing construction semantics while reusing the generation-fenced
-	// builder, which performs all store and allocator I/O without service.mu.
-	return s.getCommittedTableCacheForEpoch(ctx, tableID, 0, nil)
+	// epoch is valid. Epoch zero keeps the cold construction semantics while
+	// anyEpoch makes every locked recheck accept a concurrently published cache.
+	return s.getCommittedTableCacheForEpoch(ctx, tableID, 0, nil, true)
 }
 
 func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
 	s.mu.Lock()
-	s.handleCreatesLocked(event.Txn)
+	if s.mu.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	actions := s.handleCreatesLocked(event.Txn)
 	retired := s.handleDeletesLocked(event.Txn)
+	for _, tc := range retired {
+		actions = append(actions, tableCacheLifecycleAction{tableID: tc.table(), cache: tc})
+	}
+	// Register every action before releasing service.mu. Close sets closed under
+	// the same lock before waiting, so no lifecycle work can outlive the cache,
+	// allocator, or store objects it may still touch.
+	s.builders.Add(len(actions))
 	s.mu.Unlock()
 
-	// Retirement takes column locks. A column may hold its lock while waiting
-	// for allocator/store I/O, so it must not extend the service.mu critical path.
-	for _, tc := range retired {
-		tc.retire()
+	// Commit and retirement take table/column locks. A column may hold its lock
+	// while waiting for allocator/store I/O, so lifecycle work must not extend
+	// the service.mu critical path.
+	for _, action := range actions {
+		s.runTableCacheLifecycleAction(action)
 	}
 	return nil
 }
 
-func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
+func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) []tableCacheLifecycleAction {
 	key := string(txnMeta.ID)
 	tables, ok := s.mu.creates[key]
 	if !ok {
-		return
+		return nil
 	}
 
+	var actions []tableCacheLifecycleAction
 	for _, id := range tables {
 		resetKey := privateResetKey{txnID: key, tableID: id}
 		if previous := s.mu.createdResets[resetKey]; previous != nil {
-			previous.retire()
+			actions = append(actions, tableCacheLifecycleAction{tableID: id, cache: previous})
 			delete(s.mu.createdResets, resetKey)
 		}
 		if tc, ok := s.mu.tables[id]; ok {
 			if txnMeta.Status == txn.TxnStatus_Committed {
-				tc.commit()
+				pending := &pendingTableCacheCommit{ready: make(chan struct{})}
+				s.mu.pendingCommits[id] = pending
+				actions = append(actions, tableCacheLifecycleAction{
+					tableID: id, cache: tc, commit: true, pendingCommit: pending,
+				})
 			} else {
-				tc.retire()
+				actions = append(actions, tableCacheLifecycleAction{tableID: id, cache: tc})
 				delete(s.mu.tables, id)
 				s.logger.Info(
 					"incrservice.cache.destroyed",
@@ -970,6 +1191,7 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 	}
 
 	delete(s.mu.creates, key)
+	return actions
 }
 
 func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) []incrTableCache {
@@ -1002,11 +1224,26 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) []incrTableCache {
 	return retired
 }
 
-func (s *service) getTableCache(tableID uint64) incrTableCache {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.mu.tables[tableID]
+func (s *service) getTableCache(ctx context.Context, tableID uint64) (incrTableCache, error) {
+	for {
+		s.mu.Lock()
+		if s.mu.closed {
+			s.mu.Unlock()
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if pending := s.mu.pendingCommits[tableID]; pending != nil {
+			s.mu.Unlock()
+			select {
+			case <-pending.ready:
+				continue
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			}
+		}
+		cache := s.mu.tables[tableID]
+		s.mu.Unlock()
+		return cache, nil
+	}
 }
 
 func (s *service) destroyTables(ctx context.Context) {
