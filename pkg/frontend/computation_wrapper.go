@@ -76,11 +76,13 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
-	// runtimeCacheTarget is set only while a newly specialized parameterized
-	// plan is being compiled; the resulting compile is installed in the owning
-	// prepared statement's one-entry semantic-category cache.
+	// runtimeCacheTarget/runtimeCacheKey/runtimeCachePlan stage a candidate
+	// specialization outside the live PrepareStmt cache. The candidate is
+	// installed only after its Compile succeeds, so a failed replacement leaves
+	// the preceding category and Compile intact.
 	runtimeCacheTarget *PrepareStmt
 	runtimeCacheKey    string
+	runtimeCachePlan   *plan.Plan
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -364,8 +366,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	if _, isTextProtExecute := cwft.stmt.(*tree.Execute); isTextProtExecute || execCtx.input.isBinaryProtExecute {
-		cwft.runtimeCacheTarget = nil
-		cwft.runtimeCacheKey = ""
+		cwft.discardRuntimeCacheCandidate()
 		owner, ownerErr := preparedStatementOwner(execCtx.reqCtx, cwft.ses)
 		if ownerErr != nil {
 			return nil, ownerErr
@@ -477,13 +478,14 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				preparedRetry,
 			)
 			if err != nil {
+				cwft.completeRuntimeCacheCandidate(nil, err)
 				return nil, err
 			}
 			cwft.compile.SetOriginSQL(originSQL)
-			if cwft.runtimeCacheTarget != nil && cwft.runtimeCacheKey != "" {
-				if runtimeCompile, ok := cwft.compile.(*compile.Compile); ok {
-					runtimeCompile.SetIsPrepare(true)
-					cwft.runtimeCacheTarget.runtimeCompile = runtimeCompile
+			if cwft.runtimeCacheTarget != nil {
+				runtimeCompile, ok := cwft.compile.(*compile.Compile)
+				if !ok || !cwft.completeRuntimeCacheCandidate(runtimeCompile, nil) {
+					cwft.discardRuntimeCacheCandidate()
 				}
 			}
 		} else {
@@ -1213,11 +1215,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
-				prepareStmt.clearRuntimeSpecializationCache()
-				prepareStmt.runtimeSpecializationKey = runtimeCacheKey
-				prepareStmt.runtimePlan = runtimePlan
 				cwft.runtimeCacheTarget = prepareStmt
 				cwft.runtimeCacheKey = runtimeCacheKey
+				cwft.runtimeCachePlan = runtimePlan
 			}
 		}
 	}
@@ -1275,6 +1275,34 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
+	cwft.runtimeCacheTarget = nil
+	cwft.runtimeCacheKey = ""
+	cwft.runtimeCachePlan = nil
+}
+
+func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(
+	runtimeCompile *compile.Compile,
+	compileErr error,
+) bool {
+	if compileErr != nil {
+		cwft.discardRuntimeCacheCandidate()
+		return false
+	}
+	return cwft.installRuntimeCacheCandidate(runtimeCompile)
+}
+
+func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *compile.Compile) bool {
+	if cwft.runtimeCacheTarget == nil || cwft.runtimeCacheKey == "" ||
+		cwft.runtimeCachePlan == nil || runtimeCompile == nil {
+		return false
+	}
+	cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile)
+	cwft.discardRuntimeCacheCandidate()
+	return true
 }
 
 func retainPreparedRuntimeParamRefs(paramVals []any) {

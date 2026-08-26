@@ -155,10 +155,10 @@ are separate because their overloads, metadata, and worker topology can differ.
 | ordinary | ineligible execution | ordinary | reuse prepare plan/compile |
 | ordinary | eligible cache miss | specializing | deep-copy and specialize |
 | specializing | plan failure | ordinary | discard copy; return error |
-| specializing | compile failure | ordinary | discard candidate; retry/error policy applies |
-| specializing | compile success | runtime-cached | restore ParamRefs; install plan/compile/key |
+| specializing | compile failure | previous state | discard candidate; retain the preceding live cache unchanged |
+| specializing | compile success | runtime-cached | restore ParamRefs; atomically install candidate, then release the old compile |
 | runtime-cached | same category | runtime-cached | reuse plan/compile with current params |
-| runtime-cached | different category | specializing | release old runtime compile; build replacement |
+| runtime-cached | different category | specializing | retain live cache; stage candidate plan/key outside it |
 | any | schema definition change | rebuilt/ordinary | rebuild immutable plan; clear runtime cache |
 | any | protocol capability change | ordinary | clear plan/compile specialization cache |
 | any | statement close | closed | release ordinary and runtime compiles exactly once |

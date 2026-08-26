@@ -598,8 +598,9 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.False(t, paramValue.IsBinaryProtocol)
 	require.True(t, paramValue.EnableNumericPrefix)
 	require.True(t, paramValue.RetainParamRef)
-	require.Same(t, runtimePlan, prepareStmt.runtimePlan)
-	require.NotEmpty(t, prepareStmt.runtimeSpecializationKey)
+	require.Nil(t, prepareStmt.runtimePlan, "candidate plan must remain outside the live cache")
+	require.Empty(t, prepareStmt.runtimeSpecializationKey)
+	require.Same(t, runtimePlan, cw.runtimeCachePlan)
 
 	// Complete the first execution's compile installation, then prove that an
 	// equivalent SQL EXECUTE category reuses both bounded cache entries instead
@@ -607,7 +608,9 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	runtimeCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	prepareStmt.runtimeCompile = runtimeCompile
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	require.Same(t, runtimePlan, prepareStmt.runtimePlan)
+	require.NotEmpty(t, prepareStmt.runtimeSpecializationKey)
 	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.50tail", ""))
 	retComp, secondRuntimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
@@ -729,15 +732,15 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.NoError(t, err)
 	require.Nil(t, retComp)
 	require.NotSame(t, manualPlan, firstPlan)
-	require.NotEmpty(t, prepareStmt.runtimeSpecializationKey)
-	require.Same(t, firstPlan, prepareStmt.runtimePlan)
+	require.Empty(t, prepareStmt.runtimeSpecializationKey)
+	require.Nil(t, prepareStmt.runtimePlan)
+	require.Same(t, firstPlan, cw.runtimeCachePlan)
 	require.NotNil(t, cw.paramVals)
 
 	sentinel := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	sentinel.SetIsPrepare(true)
-	prepareStmt.runtimeCompile = sentinel
+	require.True(t, cw.installRuntimeCacheCandidate(sentinel))
 	cw.proc.SetPrepareParams(nil)
 	secondParams := install("8.0")
 	firstParams.Free(cw.proc.Mp())
@@ -747,11 +750,34 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Same(t, firstPlan, secondPlan)
 	require.Same(t, secondParams, cw.proc.GetPrepareParams())
 
+	oldKey := prepareStmt.runtimeSpecializationKey
+	cw.proc.SetPrepareParams(nil)
+	thirdParams := install("99.0")
+	secondParams.Free(cw.proc.Mp())
+	retComp, thirdPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, firstPlan, thirdPlan)
+	require.Equal(t, oldKey, prepareStmt.runtimeSpecializationKey,
+		"a category miss must retain the preceding live key until compile succeeds")
+	require.Same(t, firstPlan, prepareStmt.runtimePlan)
+	require.Same(t, sentinel, prepareStmt.runtimeCompile)
+	require.NotEqual(t, oldKey, cw.runtimeCacheKey)
+	require.Same(t, thirdPlan, cw.runtimeCachePlan)
+
+	replacement := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.completeRuntimeCacheCandidate(replacement, nil))
+	require.Same(t, thirdPlan, prepareStmt.runtimePlan)
+	require.Same(t, replacement, prepareStmt.runtimeCompile)
+	require.NotEqual(t, oldKey, prepareStmt.runtimeSpecializationKey)
+
 	cw.proc.SetPrepareParams(nil)
 	prepareStmt.clearRuntimeSpecializationCache()
 	textParams := install("9.0")
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-	secondParams.Free(cw.proc.Mp())
+	thirdParams.Free(cw.proc.Mp())
 	retComp, textPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -786,6 +812,47 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
 }
 
+func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
+	defer prepareStmt.Close()
+
+	oldPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
+	oldCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile)
+
+	failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
+	cw.runtimeCacheTarget = prepareStmt
+	cw.runtimeCacheKey = "failed"
+	cw.runtimeCachePlan = failedPlan
+	require.False(t, cw.completeRuntimeCacheCandidate(nil, assert.AnError))
+	require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
+	require.Same(t, oldPlan, prepareStmt.runtimePlan)
+	require.Same(t, oldCompile, prepareStmt.runtimeCompile)
+	require.Nil(t, cw.runtimeCacheTarget)
+	require.Nil(t, cw.runtimeCachePlan)
+
+	newPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
+	newCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	cw.runtimeCacheTarget = prepareStmt
+	cw.runtimeCacheKey = "new"
+	cw.runtimeCachePlan = newPlan
+	require.True(t, cw.completeRuntimeCacheCandidate(newCompile, nil))
+	require.Equal(t, "new", prepareStmt.runtimeSpecializationKey)
+	require.Same(t, newPlan, prepareStmt.runtimePlan)
+	require.Same(t, newCompile, prepareStmt.runtimeCompile)
+	require.Nil(t, cw.runtimeCacheTarget)
+	require.Nil(t, cw.runtimeCachePlan)
+
+	prepareStmt.clearRuntimeSpecializationCache()
+	require.Empty(t, prepareStmt.runtimeSpecializationKey)
+	require.Nil(t, prepareStmt.runtimePlan)
+	require.Nil(t, prepareStmt.runtimeCompile)
+}
+
 func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 207, "select ?")
 	defer func() {
@@ -813,7 +880,7 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) 
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	sentinel.SetIsPrepare(true)
-	prepareStmt.runtimeCompile = sentinel
+	require.True(b, cw.installRuntimeCacheCandidate(sentinel))
 
 	b.ReportAllocs()
 	b.ResetTimer()

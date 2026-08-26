@@ -731,15 +731,36 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	tableInfos map[string][]ColumnInfo
 //}
 
-func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
-	if prepareStmt.runtimeCompile != nil && prepareStmt.runtimeCompile != prepareStmt.compile {
-		prepareStmt.runtimeCompile.FreeOperator()
-		prepareStmt.runtimeCompile.SetIsPrepare(false)
-		prepareStmt.runtimeCompile.Release()
+func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
+	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
+		return
 	}
+	runtimeCompile.FreeOperator()
+	runtimeCompile.SetIsPrepare(false)
+	runtimeCompile.Release()
+}
+
+func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
+	key string,
+	runtimePlan *plan.Plan,
+	runtimeCompile *compile.Compile,
+) {
+	oldRuntimeCompile := prepareStmt.runtimeCompile
+	runtimeCompile.SetIsPrepare(true)
+	prepareStmt.runtimeSpecializationKey = key
+	prepareStmt.runtimePlan = runtimePlan
+	prepareStmt.runtimeCompile = runtimeCompile
+	if oldRuntimeCompile != runtimeCompile {
+		prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+	}
+}
+
+func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
+	oldRuntimeCompile := prepareStmt.runtimeCompile
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
 	prepareStmt.runtimeCompile = nil
+	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
 
 func (prepareStmt *PrepareStmt) Close() {
