@@ -53,7 +53,7 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 }
 
 func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 || cteRef.hasNestedRef {
+	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
 		return false
 	}
 

@@ -42,6 +42,24 @@ where s_suppkey = supplier_no
   and total_revenue = (select max(total_revenue) from revenue0)
 order by s_suppkey`
 
+const nestedSharedCTEQ15 = `
+with base_lineitem as (
+    select l_suppkey, l_extendedprice, l_discount, l_shipdate
+    from lineitem
+), revenue0 as (
+    select l_suppkey as supplier_no,
+           sum(l_extendedprice * (1 - l_discount)) as total_revenue
+    from base_lineitem
+    where l_shipdate >= date '1995-12-01'
+      and l_shipdate < date '1995-12-01' + interval '3' month
+    group by l_suppkey
+)
+select s_suppkey, s_name, total_revenue
+from supplier, revenue0
+where s_suppkey = supplier_no
+  and total_revenue = (select max(total_revenue) from revenue0)
+order by s_suppkey`
+
 func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -93,7 +111,32 @@ func TestIssue26131Q15SharedCTEExecutesBothConsumers(t *testing.T) {
 		require.False(t, rows.Next(), "both consumers must drain to one terminal result")
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
+
+		nestedPlanText := explainSQL(t, ctx, db, "explain "+nestedSharedCTEQ15)
+		require.Equal(t, 1, strings.Count(nestedPlanText, ".lineitem"),
+			"a shared CTE containing another CTE must keep one lineitem producer:\n%s", nestedPlanText)
+		require.Equal(t, 2, strings.Count(finalExplainPlan(nestedPlanText), "Sink Scan"),
+			"the outer shared CTE must still serve both consumers:\n%s", nestedPlanText)
+
+		nestedRows, err := db.QueryContext(ctx, nestedSharedCTEQ15)
+		require.NoError(t, err)
+		defer nestedRows.Close()
+		require.True(t, nestedRows.Next())
+		require.NoError(t, nestedRows.Scan(&supplierKey, &supplierName, &revenue))
+		require.Equal(t, 42, supplierKey)
+		require.Equal(t, "supplier-42", supplierName)
+		require.Equal(t, 4.0, revenue)
+		require.False(t, nestedRows.Next())
+		require.NoError(t, nestedRows.Err())
+		require.NoError(t, nestedRows.Close())
 	})
+}
+
+func finalExplainPlan(planText string) string {
+	if finalPlan := strings.LastIndex(planText, "\nPlan "); finalPlan >= 0 {
+		return planText[finalPlan+1:]
+	}
+	return planText
 }
 
 func explainSQL(t *testing.T, ctx context.Context, db *sql.DB, statement string) string {

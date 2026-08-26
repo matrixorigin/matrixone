@@ -480,6 +480,101 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 	}
 }
 
+func TestCTEMultiReferenceReusesProducerContainingCTE(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with base_rows as (
+			select l_suppkey, l_extendedprice from lineitem
+		), supplier_totals as (
+			select l_suppkey, sum(l_extendedprice) as total
+			from base_rows group by l_suppkey
+		)
+		select a.l_suppkey, a.total, b.total
+		from supplier_totals a join supplier_totals b
+			on a.l_suppkey = b.l_suppkey`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	lineitemScans := 0
+	groupedAggs := 0
+	sinks := 0
+	sinkScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		switch node.NodeType {
+		case planpb.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Name == "lineitem" {
+				lineitemScans++
+			}
+		case planpb.Node_AGG:
+			if len(node.GroupBy) == 1 {
+				groupedAggs++
+			}
+		case planpb.Node_SINK:
+			sinks++
+			require.Equal(t, materialized.CTESinkOption, node.ExtraOptions)
+		case planpb.Node_SINK_SCAN:
+			sinkScans++
+		}
+	}
+	require.Equal(t, 1, lineitemScans)
+	require.Equal(t, 1, groupedAggs)
+	require.Equal(t, 1, sinks)
+	require.Equal(t, 2, sinkScans)
+}
+
+func TestCTEReuseKeepsConsumersBoundInsideCTEInline(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with supplier_totals as (
+			select l_suppkey, sum(l_extendedprice) as total
+			from lineitem group by l_suppkey
+		), combined as (
+			select a.l_suppkey, a.total as a_total, b.total as b_total
+			from supplier_totals a join supplier_totals b
+				on a.l_suppkey = b.l_suppkey
+		)
+		select * from combined`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	lineitemScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN &&
+			node.TableDef != nil && node.TableDef.Name == "lineitem" {
+			lineitemScans++
+		}
+	}
+	require.Equal(t, 2, lineitemScans)
+}
+
+func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `with recursive r(n) as (
+		select 1
+		union all
+		select n + 1 from r where n < 3
+	), c as (
+		select n from r
+	) select a.n from c a join c b on a.n = b.n`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	cteSinks := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_SINK && node.ExtraOptions == materialized.CTESinkOption {
+			cteSinks++
+		}
+	}
+	require.Equal(t, 0, cteSinks)
+}
+
 func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tests := []struct {
