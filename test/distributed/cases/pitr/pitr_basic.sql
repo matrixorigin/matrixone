@@ -163,7 +163,6 @@ create account acc02 admin_name = 'test_account' identified by '111';
 create pitr pitr01 for account range 1 'h';
 -- @ignore:1,2
 show pitr;
-select sleep(1);
 alter pitr pitr01 range 1 'd';
 -- @ignore:1,2
 show pitr;
