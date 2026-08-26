@@ -1265,6 +1265,19 @@ func (tbl *txnTable) GetByFilter(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
+	err = tbl.findDeletes(
+		tbl.store.ctx,
+		rowIDs,
+		types.TS{},
+		tbl.store.txn.GetStartTS(),
+	)
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		return
+	}
+	if rowIDs.IsNull(0) {
+		err = moerr.NewNotFoundNoCtx()
+		return
+	}
 	rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](rowIDs.GetDownstreamVector(), 0)
 	id = tbl.entry.AsCommonID()
 	id.BlockID = *rowID.BorrowBlockID()
@@ -1277,6 +1290,28 @@ func (tbl *txnTable) GetByFilter(
 	if deleted {
 		id = nil
 		err = moerr.NewNotFoundNoCtx()
+	}
+	return
+}
+
+func (tbl *txnTable) waitTombstoneRowsCommittedBefore(ts types.TS) (waited bool) {
+	// Resolve catalog-level creation/deletion first. The per-object wait below
+	// handles row AppendNodes inside already visible appendable objects.
+	tbl.entry.WaitTombstoneObjectCommitted(ts)
+	it := tbl.entry.MakeTombstoneObjectIt()
+	defer it.Release()
+	for ok := it.Last(); ok; ok = it.Prev() {
+		obj := it.Item()
+		if obj.CreatedAt.GT(&ts) || !obj.VisibleByTS(ts) {
+			continue
+		}
+		objData := obj.GetObjectData()
+		if objData == nil {
+			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
+		}
+		if objData.WaitAppendCommittingBefore(ts, tbl.store.txn) {
+			waited = true
+		}
 	}
 	return
 }
@@ -1536,33 +1571,66 @@ func (tbl *txnTable) findDeletes(
 	}
 	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
 
-	tbl.entry.WaitTombstoneObjectCommitted(to)
-	it := tbl.entry.MakeTombstoneObjectIt()
-	defer it.Release()
-	return foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
-		objData := obj.GetObjectData()
-		if objData == nil {
-			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
-		}
-		// PXU TODO: jxm need to double check this logic
-		// if !obj.ObjectLocation().IsEmpty() {
-		if obj.Rows() != 0 {
-			var skip bool
-			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
-				return err
-			} else if skip {
-				return nil
-			}
-		}
+	// Dedup uses a PrepareTS-based upper fence. A delete that is still
+	// committing conflicts with the writer regardless of whether it prepared
+	// before or after the writer's StartTS, so waiting through the fence and
+	// rechecking its outcome is safe. PrePrepare currently passes an rt.Now()
+	// fence because the current transaction's PrepareTS is assigned immediately
+	// after PrePrepare returns. The pre-WAL worker finishes PrepareCommit for one
+	// transaction before starting the next; merge/flush transfer appends are
+	// attached during that PrepareCommit. Therefore a queue transaction only
+	// waits for predecessors that have already left this worker and can make
+	// progress in the WAL/apply workers, rather than forming a same-worker cycle.
+	//
+	// GetByFilter passes the reader's StartTS instead: it asks whether a
+	// successful delete is visible to that snapshot. After the wait, Contains
+	// checks the AppendNode again. A committed delete participates in the lookup;
+	// an aborted delete has IsAborted set by ApplyRollback and is ignored.
+	tbl.waitTombstoneRowsCommittedBefore(to)
 
-		return objData.Contains(
-			ctx,
-			tbl.store.txn,
-			rowIDs,
-			keysZM,
-			common.WorkspaceAllocator,
-		)
-	})
+retryScan:
+	for {
+		tbl.entry.WaitTombstoneObjectCommitted(to)
+		it := tbl.entry.MakeTombstoneObjectIt()
+		err = foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
+			objData := obj.GetObjectData()
+			if objData == nil {
+				panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
+			}
+			// PXU TODO: jxm need to double check this logic
+			// if !obj.ObjectLocation().IsEmpty() {
+			if obj.Rows() != 0 {
+				var skip bool
+				if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
+					return err
+				} else if skip {
+					return nil
+				}
+			}
+
+			return objData.Contains(
+				ctx,
+				tbl.store.txn,
+				rowIDs,
+				keysZM,
+				common.WorkspaceAllocator,
+			)
+		})
+		it.Release()
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) &&
+				tbl.waitTombstoneRowsCommittedBefore(to) {
+				// A merge/flush transaction may attach transfer tombstones
+				// after the pre-scan wait. It has now reached a terminal state;
+				// retry to distinguish its commit from rollback. If no eligible
+				// transaction was found, the WW lies beyond to and must remain.
+				err = nil
+				continue retryScan
+			}
+			return
+		}
+		return
+	}
 }
 
 // DoPrecommitDedupByPK 1. it do deduplication by traversing all the Objects/blocks, and

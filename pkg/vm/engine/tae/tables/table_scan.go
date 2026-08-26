@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,6 +29,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
+
+type preservePhysicalRowsKey struct{}
+
+// WithPreservePhysicalRows keeps append-abort holes in HybridScan results.
+// Merge and flush need source batch offsets to remain identical to physical
+// object row offsets while constructing transfer maps.
+func WithPreservePhysicalRows(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preservePhysicalRowsKey{}, true)
+}
+
+func preservePhysicalRows(ctx context.Context) bool {
+	preserve, _ := ctx.Value(preservePhysicalRowsKey{}).(bool)
+	return preserve
+}
+
+func compactAbortRows(bat *containers.Batch, abortRows *nulls.Bitmap) {
+	if bat == nil || abortRows.IsEmpty() {
+		return
+	}
+
+	aborts := abortRows.ToArray()
+	remainingDeletes := nulls.NewWithSize(bat.Length() - len(aborts))
+	abortIdx := 0
+	for _, row := range bat.Deletes.ToArray() {
+		for abortIdx < len(aborts) && aborts[abortIdx] < row {
+			abortIdx++
+		}
+		if abortIdx < len(aborts) && aborts[abortIdx] == row {
+			continue
+		}
+		remainingDeletes.Add(row - uint64(abortIdx))
+	}
+
+	// Compact only append-abort holes. Tombstone and workspace deletes remain
+	// represented in the returned batch, with offsets shifted to account for
+	// the physically removed abort rows.
+	bat.Deletes = abortRows
+	bat.Compact()
+	if !remainingDeletes.IsEmpty() {
+		bat.Deletes = remainingDeletes
+	}
+}
 
 func HybridScanByBlock(
 	ctx context.Context,
@@ -45,8 +88,15 @@ func HybridScanByBlock(
 	}
 	_, offset := blkID.Offsets()
 	deleteStartOffset := 0
+	var deletesBeforeScan *nulls.Bitmap
+	filterAbortRows := dataObject.IsAppendable() &&
+		!dataObject.ObjectPersisted() &&
+		!preservePhysicalRows(ctx)
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
+		if filterAbortRows {
+			deletesBeforeScan = (*bat).Deletes.Clone()
+		}
 	}
 	err = dataObject.GetObjectData().Scan(ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
@@ -54,6 +104,16 @@ func HybridScanByBlock(
 	}
 	if *bat == nil {
 		return nil
+	}
+	var abortRows *nulls.Bitmap
+	if filterAbortRows {
+		abortRows = (*bat).Deletes.Clone()
+		if deletesBeforeScan != nil {
+			deletesBeforeScan.Foreach(func(row uint64) bool {
+				abortRows.Del(row)
+				return true
+			})
+		}
 	}
 	it := tableEntry.MakeTombstoneVisibleObjectIt(txn)
 	defer it.Release()
@@ -70,8 +130,10 @@ func HybridScanByBlock(
 	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes, uint64(deleteStartOffset))
 	if err != nil {
 		(*bat).Close()
+		return err
 	}
-	return err
+	compactAbortRows(*bat, abortRows)
+	return nil
 }
 
 /*

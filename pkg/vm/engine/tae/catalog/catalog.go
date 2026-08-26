@@ -61,7 +61,10 @@ type Catalog struct {
 	nodesMu   sync.RWMutex
 	gcTS      types.TS
 
-	mergeNotifier atomic.Value
+	// A nil pointer means that catalog notifications are detached. Use a
+	// pointer to the interface because atomic.Value cannot store nil, while
+	// replay/write-mode transitions intentionally clear the notifier.
+	mergeNotifier atomic.Pointer[MergeNotifierOnCatalog]
 }
 
 func MockCatalog(dataFactory DataFactory) *Catalog {

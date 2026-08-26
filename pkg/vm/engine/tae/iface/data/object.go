@@ -90,6 +90,10 @@ type Object interface {
 	// if the object is not an appendable object:
 	// only check with the created ts
 	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
+	// WaitAppendCommittingBefore waits for append transactions whose prepare
+	// timestamp precedes ts. Callers use it before evaluating row visibility at
+	// ts; it does not wait for appends prepared outside that snapshot.
+	WaitAppendCommittingBefore(ts types.TS, reader txnif.TxnReader) bool
 	GetDuplicatedRows(
 		ctx context.Context,
 		txn txnif.TxnReader,

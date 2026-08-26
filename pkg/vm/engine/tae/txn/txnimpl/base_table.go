@@ -359,26 +359,34 @@ func foreachIncrementalObject(
 		}
 		return fn(obj)
 	}
-	if catalog.SeekObjectListGroupBefore(it, catalog.ObjectListGroupAppendableCreate, from) {
-		if err := visit(it.Item(), true); err != nil {
-			return err
-		}
-	}
-	for ok := catalog.SeekObjectListGroup(it, catalog.ObjectListGroupAppendableCreate, from); ok; ok = it.Next() {
-		obj := it.Item()
-		if obj.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || obj.CreatedAt.GT(&to) {
-			break
-		}
-		if err := visit(obj, true); err != nil {
-			return err
-		}
-	}
-	visitDropGroup := func(group catalog.ObjectListGroup) error {
-		appendable := group == catalog.ObjectListGroupAppendableDrop
-		for ok := catalog.SeekObjectListGroup(it, group, to); ok; ok = it.Next() {
+	visitCreateGroup := func(group catalog.ObjectListGroup, appendable bool) error {
+		// An appendable object created before from can still contain an append
+		// prepared in [from, to]. Do not use CreatedAt to truncate a create
+		// group: inspect every entry and let visit apply the per-entry bounds.
+		for ok := catalog.SeekObjectListGroup(it, group, types.TS{}); ok; ok = it.Next() {
 			obj := it.Item()
 			if obj.ObjectListGroup() != group {
 				break
+			}
+			if err := visit(obj, appendable); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visitCreateGroup(catalog.ObjectListGroupAppendableCreate, true); err != nil {
+		return err
+	}
+	visitDropGroup := func(group catalog.ObjectListGroup) error {
+		appendable := group == catalog.ObjectListGroupAppendableDrop
+		for ok := catalog.SeekObjectListGroup(it, group, from); ok; ok = it.Next() {
+			obj := it.Item()
+			if obj.ObjectListGroup() != group {
+				break
+			}
+			// Seek is inclusive. Drop processing starts strictly after from.
+			if !obj.DeletedAt.GT(&from) {
+				continue
 			}
 			if err := visit(obj, appendable); err != nil {
 				return err
@@ -390,14 +398,8 @@ func foreachIncrementalObject(
 		return err
 	}
 
-	for ok := catalog.SeekObjectListGroup(it, catalog.ObjectListGroupNonAppendableCreate, from); ok; ok = it.Next() {
-		obj := it.Item()
-		if obj.ObjectListGroup() != catalog.ObjectListGroupNonAppendableCreate || obj.CreatedAt.GT(&to) {
-			break
-		}
-		if err := visit(obj, false); err != nil {
-			return err
-		}
+	if err := visitCreateGroup(catalog.ObjectListGroupNonAppendableCreate, false); err != nil {
+		return err
 	}
 	return visitDropGroup(catalog.ObjectListGroupNonAppendableDrop)
 }

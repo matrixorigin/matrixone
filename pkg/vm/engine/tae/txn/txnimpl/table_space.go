@@ -286,6 +286,10 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 		}
 		destOff := anode.GetMaxRow() - toAppend
 		appender.ReserveAppend(destOff, toAppend)
+		// Publish the selected object while appendMu still serializes allocation.
+		// The table keeps only a non-owning candidate; the next txn gets its own
+		// handle and GetAppender validates and references the object before use.
+		tableData.ApplyHandle(space.tableHandle, space.isTombstone)
 		appender.UnlockFreeze()
 		tableData.UnlockAppend()
 		/// ------- Attach AppendNode Successfully -----
