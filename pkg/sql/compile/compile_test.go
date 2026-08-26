@@ -1542,7 +1542,7 @@ func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion28)
 	require.False(t, c.supportsRemoteVarianceAggregates())
 	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"mixed-version clusters must keep normalized variance state local")
+		"mixed-version clusters must keep exponent-scaled variance state local")
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion30)
 	require.True(t, c.supportsRemoteVarianceAggregates())

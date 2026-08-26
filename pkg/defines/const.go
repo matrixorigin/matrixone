@@ -65,7 +65,7 @@ const (
 	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
 	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
-	MORPCVersion30     int64 = 30 // normalized variance aggregate partial state
+	MORPCVersion30     int64 = 30 // exponent-scaled variance aggregate partial state
 	MORPCLatestVersion       = MORPCVersion30
 )
 

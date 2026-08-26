@@ -87,6 +87,7 @@ func (exec *varStdDevExec[T, A]) BatchFill(offset int, groups []uint64, vectors 
 	var cnts []int64
 	var means []float64
 	var variances []float64
+	var varianceExponents []int64
 	var origins []A
 	isDecimal := exec.aggInfo.argTypes[0].Oid == types.T_decimal64 || exec.aggInfo.argTypes[0].Oid == types.T_decimal128
 
@@ -105,8 +106,9 @@ func (exec *varStdDevExec[T, A]) BatchFill(offset int, groups []uint64, vectors 
 			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
 			means = vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[1])
 			variances = vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[2])
+			varianceExponents = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[3])
 			if isDecimal {
-				origins = vector.MustFixedColNoTypeCheck[A](exec.state[x].vecs[3])
+				origins = vector.MustFixedColNoTypeCheck[A](exec.state[x].vecs[4])
 			}
 		}
 
@@ -124,13 +126,15 @@ func (exec *varStdDevExec[T, A]) BatchFill(offset int, groups []uint64, vectors 
 				}
 			}
 		}
-		mean, variance, count, err := updateVarianceState(means[y], variances[y], cnts[y], fv)
+		mean, variance, varianceExponent, count, err := updateVarianceState(
+			means[y], variances[y], varianceExponents[y], cnts[y], fv)
 		if err != nil {
 			return err
 		}
 
 		means[y] = mean
 		variances[y] = variance
+		varianceExponents[y] = varianceExponent
 		cnts[y] = count
 	}
 	return nil
@@ -163,10 +167,12 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 		means2 := vector.MustFixedColNoTypeCheck[float64](other.state[x2].vecs[1])
 		variances1 := vector.MustFixedColNoTypeCheck[float64](exec.state[x1].vecs[2])
 		variances2 := vector.MustFixedColNoTypeCheck[float64](other.state[x2].vecs[2])
+		varianceExponents1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[3])
+		varianceExponents2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[3])
 		mean2 := means2[y2]
 		if isDecimal {
-			origins1 := vector.MustFixedColNoTypeCheck[A](exec.state[x1].vecs[3])
-			origins2 := vector.MustFixedColNoTypeCheck[A](other.state[x2].vecs[3])
+			origins1 := vector.MustFixedColNoTypeCheck[A](exec.state[x1].vecs[4])
+			origins2 := vector.MustFixedColNoTypeCheck[A](other.state[x2].vecs[4])
 			if cnts1[y1] == 0 {
 				origins1[y1] = origins2[y2]
 			} else if cnts2[y2] != 0 {
@@ -177,9 +183,9 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 				mean2 += delta
 			}
 		}
-		mean, variance, count, err := mergeVarianceState(
-			means1[y1], variances1[y1], cnts1[y1],
-			mean2, variances2[y2], cnts2[y2],
+		mean, variance, varianceExponent, count, err := mergeVarianceState(
+			means1[y1], variances1[y1], varianceExponents1[y1], cnts1[y1],
+			mean2, variances2[y2], varianceExponents2[y2], cnts2[y2],
 		)
 		if err != nil {
 			return err
@@ -187,6 +193,7 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 
 		means1[y1] = mean
 		variances1[y1] = variance
+		varianceExponents1[y1] = varianceExponent
 		cnts1[y1] = count
 	}
 	return nil
@@ -280,85 +287,254 @@ func (exec *varStdDevExec[T, A]) SetExtraInformation(partialResult any, _ int) e
 	return nil
 }
 
-// updateVarianceState uses Welford's online algorithm and stores the
-// normalized population variance rather than M2. Unlike M2, this state stays
-// finite whenever the requested VAR_POP result is finite.
-func updateVarianceState(mean, variance float64, count int64, value float64) (float64, float64, int64, error) {
+// scaledVariance stores value * 2^exponent. The common path keeps exponent
+// zero, so ordinary inputs use direct floating-point arithmetic. Exponent
+// scaling is activated only when a square or weighted sum would overflow or
+// underflow. This lets STDDEV retain a finite result even when its square is
+// outside float64's range.
+type scaledVariance struct {
+	value    float64
+	exponent int64
+}
+
+func normalizeScaledVariance(value float64, exponent int64) scaledVariance {
+	if value == 0 || math.IsInf(value, 0) || math.IsNaN(value) {
+		return scaledVariance{value: value}
+	}
+	fraction, adjustment := math.Frexp(value)
+	return scaledVariance{value: fraction, exponent: exponent + int64(adjustment)}
+}
+
+func scaleVariance(state scaledVariance, factor float64) scaledVariance {
+	if state.value == 0 || factor == 0 {
+		return scaledVariance{}
+	}
+	if state.exponent == 0 {
+		product := state.value * factor
+		if !math.IsInf(product, 0) && (product != 0 || math.IsNaN(product)) {
+			return scaledVariance{value: product}
+		}
+	}
+	if math.IsInf(state.value, 0) || math.IsNaN(state.value) {
+		return scaledVariance{value: state.value * factor}
+	}
+	valueFraction, valueExponent := math.Frexp(state.value)
+	factorFraction, factorExponent := math.Frexp(factor)
+	return normalizeScaledVariance(
+		valueFraction*factorFraction,
+		state.exponent+int64(valueExponent)+int64(factorExponent),
+	)
+}
+
+func squareAndScaleVariance(value float64, valueExponent int64, factor float64) scaledVariance {
+	if value == 0 || factor == 0 {
+		return scaledVariance{}
+	}
+	if valueExponent == 0 {
+		square := value * value
+		product := square * factor
+		if !math.IsInf(square, 0) && !math.IsInf(product, 0) &&
+			(product != 0 || math.IsNaN(product)) {
+			return scaledVariance{value: product}
+		}
+	}
+	if math.IsInf(value, 0) || math.IsNaN(value) {
+		return scaledVariance{value: value * value * factor}
+	}
+	valueFraction, adjustment := math.Frexp(value)
+	factorFraction, factorExponent := math.Frexp(factor)
+	return normalizeScaledVariance(
+		valueFraction*valueFraction*factorFraction,
+		2*(valueExponent+int64(adjustment))+int64(factorExponent),
+	)
+}
+
+func addScaledVariances(left, right scaledVariance) scaledVariance {
+	if left.value == 0 {
+		return right
+	}
+	if right.value == 0 {
+		return left
+	}
+	if left.exponent == 0 && right.exponent == 0 {
+		sum := left.value + right.value
+		if !math.IsInf(sum, 0) {
+			return scaledVariance{value: sum}
+		}
+	}
+	if math.IsInf(left.value, 0) || math.IsInf(right.value, 0) ||
+		math.IsNaN(left.value) || math.IsNaN(right.value) {
+		return scaledVariance{value: left.value + right.value}
+	}
+
+	left = normalizeScaledVariance(left.value, left.exponent)
+	right = normalizeScaledVariance(right.value, right.exponent)
+	if left.exponent < right.exponent {
+		left, right = right, left
+	}
+	shift := right.exponent - left.exponent
+	sum := left.value + math.Ldexp(right.value, int(shift))
+	return normalizeScaledVariance(sum, left.exponent)
+}
+
+func varianceDifference(left, right float64) (float64, int64) {
+	difference := left - right
+	if !math.IsInf(difference, 0) || math.IsInf(left, 0) || math.IsInf(right, 0) {
+		return difference, 0
+	}
+	// Both operands are finite but their difference is not. Halving before the
+	// subtraction retains the difference as a scaled value.
+	return left*0.5 - right*0.5, 1
+}
+
+func scaledVarianceFloat64(state scaledVariance) float64 {
+	return math.Ldexp(state.value, int(state.exponent))
+}
+
+func scaledVarianceSqrt(state scaledVariance) float64 {
+	if state.value == 0 || math.IsInf(state.value, 0) || math.IsNaN(state.value) {
+		return math.Sqrt(state.value)
+	}
+	state = normalizeScaledVariance(state.value, state.exponent)
+	if state.exponent&1 != 0 {
+		state.value *= 2
+		state.exponent--
+	}
+	return math.Ldexp(math.Sqrt(state.value), int(state.exponent/2))
+}
+
+// updateVarianceState uses Welford's recurrence with a normalized population
+// variance. The exponent is zero for normal values; only exceptional squares
+// use the scaled representation.
+func updateVarianceState(
+	mean, variance float64,
+	varianceExponent, count int64,
+	value float64,
+) (float64, float64, int64, int64, error) {
 	nextCount := count + 1
 	delta := value - mean
-	if err := float64OfCheck(0, 0, delta); err != nil {
-		return 0, 0, 0, err
-	}
 	nextMean := mean + delta/float64(nextCount)
-	if err := float64OfCheck(0, 0, nextMean); err != nil {
-		return 0, 0, 0, err
+	if varianceExponent == 0 && !math.IsInf(delta, 0) {
+		weight := float64(count) / float64(nextCount)
+		residual := value - nextMean
+		product := delta * residual
+		if !math.IsInf(product, 0) {
+			correction := product / float64(nextCount)
+			nextVariance := variance*weight + correction
+			if !math.IsInf(nextVariance, 0) &&
+				(nextVariance != 0 || (variance == 0 && (count == 0 || delta == 0))) {
+				return nextMean, nextVariance, 0, nextCount, nil
+			}
+		}
 	}
-	// delta*(value-nextMean) is the M2 increment. Divide it by nextCount
-	// before multiplying so a finite final variance does not overflow in an
-	// intermediate product.
-	increment := scaledProductQuotient(delta, value-nextMean, float64(nextCount))
-	nextVariance := variance*float64(count)/float64(nextCount) + increment
-	if err := float64OfCheck(0, 0, nextVariance); err != nil {
-		return 0, 0, 0, err
-	}
-	return nextMean, nextVariance, nextCount, nil
+	delta, deltaExponent := varianceDifference(value, mean)
+	return updateVarianceStateScaled(
+		mean, variance, varianceExponent, count, value,
+		nextCount, delta, deltaExponent, nextMean,
+	)
 }
 
-// scaledProductQuotient calculates a*b/c by separately combining the
-// mantissas and exponents. It avoids overflowing at a*b when the quotient is
-// representable.
-func scaledProductQuotient(a, b, c float64) float64 {
-	if a == 0 || b == 0 {
-		return 0
+func updateVarianceStateScaled(
+	mean, variance float64,
+	varianceExponent, count int64,
+	value float64,
+	nextCount int64,
+	delta float64,
+	deltaExponent int64,
+	nextMean float64,
+) (float64, float64, int64, int64, error) {
+	if deltaExponent != 0 {
+		oldWeight := float64(count) / float64(nextCount)
+		nextMean = mean*oldWeight + value/float64(nextCount)
 	}
-	ma, ea := math.Frexp(a)
-	mb, eb := math.Frexp(b)
-	mc, ec := math.Frexp(c)
-	return math.Ldexp((ma*mb)/mc, ea+eb-ec)
+
+	oldVariance := scaleVariance(
+		scaledVariance{value: variance, exponent: varianceExponent},
+		float64(count)/float64(nextCount),
+	)
+	correctionFactor := float64(count) / float64(nextCount)
+	correctionFactor /= float64(nextCount)
+	correction := squareAndScaleVariance(delta, deltaExponent, correctionFactor)
+	nextVariance := addScaledVariances(oldVariance, correction)
+	return nextMean, nextVariance.value, nextVariance.exponent, nextCount, nil
 }
 
-// mergeVarianceState uses Chan's parallel-variance merge formula with a
-// normalized population-variance state.
-func mergeVarianceState(mean1, variance1 float64, count1 int64, mean2, variance2 float64, count2 int64) (float64, float64, int64, error) {
+// mergeVarianceState uses Chan's parallel-variance merge formula with the
+// same scaled normalized-variance representation as updateVarianceState.
+func mergeVarianceState(
+	mean1, variance1 float64,
+	varianceExponent1, count1 int64,
+	mean2, variance2 float64,
+	varianceExponent2, count2 int64,
+) (float64, float64, int64, int64, error) {
 	if count2 == 0 {
-		return mean1, variance1, count1, nil
+		return mean1, variance1, varianceExponent1, count1, nil
 	}
 	if count1 == 0 {
-		return mean2, variance2, count2, nil
+		return mean2, variance2, varianceExponent2, count2, nil
 	}
 
 	count := count1 + count2
-	delta := mean2 - mean1
-	if err := float64OfCheck(0, 0, delta); err != nil {
-		return 0, 0, 0, err
-	}
-	mean := mean1 + delta*float64(count2)/float64(count)
-	if err := float64OfCheck(0, 0, mean); err != nil {
-		return 0, 0, 0, err
-	}
 	weight1 := float64(count1) / float64(count)
 	weight2 := float64(count2) / float64(count)
-	correction := scaledProductQuotient(delta, delta*weight1, 1/weight2)
-	variance := variance1*weight1 + variance2*weight2 + correction
-	if err := float64OfCheck(0, 0, variance); err != nil {
-		return 0, 0, 0, err
+	delta := mean2 - mean1
+	mean := mean1 + delta*weight2
+	if varianceExponent1 == 0 && varianceExponent2 == 0 && !math.IsInf(delta, 0) {
+		left := variance1 * weight1
+		right := variance2 * weight2
+		square := delta * delta
+		if !math.IsInf(square, 0) {
+			correction := square * weight1 * weight2
+			variance := left + right + correction
+			if !math.IsInf(variance, 0) &&
+				(variance != 0 || (variance1 == 0 && variance2 == 0 && delta == 0)) {
+				return mean, variance, 0, count, nil
+			}
+		}
 	}
-	return mean, variance, count, nil
+	delta, deltaExponent := varianceDifference(mean2, mean1)
+	return mergeVarianceStateScaled(
+		mean1, variance1, varianceExponent1,
+		mean2, variance2, varianceExponent2,
+		count, weight1, weight2, delta, deltaExponent, mean,
+	)
 }
 
-func (exec *varStdDevExec[T, A]) getResult(variance float64, cnt int64) (T, error) {
-	result := variance
-	if !exec.isPop {
-		result *= float64(cnt) / float64(cnt-1)
-	}
-	// Variance is non-negative by construction. A negative result can only be a
-	// rounding artifact in a merged state; SQL variance must never be negative.
-	if result < 0 {
-		result = 0
+func mergeVarianceStateScaled(
+	mean1, variance1 float64,
+	varianceExponent1 int64,
+	mean2, variance2 float64,
+	varianceExponent2 int64,
+	count int64,
+	weight1, weight2 float64,
+	delta float64,
+	deltaExponent int64,
+	mean float64,
+) (float64, float64, int64, int64, error) {
+	if deltaExponent != 0 {
+		mean = mean1*weight1 + mean2*weight2
 	}
 
-	if !exec.isVar {
-		result = math.Sqrt(result)
+	left := scaleVariance(
+		scaledVariance{value: variance1, exponent: varianceExponent1}, weight1)
+	right := scaleVariance(
+		scaledVariance{value: variance2, exponent: varianceExponent2}, weight2)
+	correction := squareAndScaleVariance(delta, deltaExponent, weight1*weight2)
+	variance := addScaledVariances(addScaledVariances(left, right), correction)
+	return mean, variance.value, variance.exponent, count, nil
+}
+
+func (exec *varStdDevExec[T, A]) getResult(variance float64, varianceExponent, cnt int64) (T, error) {
+	state := scaledVariance{value: variance, exponent: varianceExponent}
+	if !exec.isPop {
+		state = scaleVariance(state, float64(cnt)/float64(cnt-1))
+	}
+
+	var result float64
+	if exec.isVar {
+		result = scaledVarianceFloat64(state)
+	} else {
+		result = scaledVarianceSqrt(state)
 	}
 
 	z, err := exec.f2t(result, exec.aggInfo.retType.Scale)
@@ -426,7 +602,8 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				} else {
 					mean := float64(0)
-					m2 := float64(0)
+					variance := float64(0)
+					varianceExponent := int64(0)
 					seen := int64(0)
 					var origin A
 					isDecimal := exec.aggInfo.argTypes[0].Oid == types.T_decimal64 || exec.aggInfo.argTypes[0].Oid == types.T_decimal128
@@ -446,7 +623,8 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 							}
 						}
 						var fnerr error
-						mean, m2, seen, fnerr = updateVarianceState(mean, m2, seen, fv)
+						mean, variance, varianceExponent, seen, fnerr = updateVarianceState(
+							mean, variance, varianceExponent, seen, fv)
 						if fnerr != nil {
 							return fnerr
 						}
@@ -456,7 +634,7 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 						return nil, err
 					}
 
-					z, err := exec.getResult(m2, seen)
+					z, err := exec.getResult(variance, varianceExponent, seen)
 					if err != nil {
 						return nil, err
 					}
@@ -468,6 +646,7 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 		for i := range vecs {
 			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[i].vecs[0])
 			variances := vector.MustFixedColNoTypeCheck[float64](exec.state[i].vecs[2])
+			varianceExponents := vector.MustFixedColNoTypeCheck[int64](exec.state[i].vecs[3])
 			for j, cnt := range cnts {
 				if cnt <= 1 {
 					// cnt == 1 && exec is samp
@@ -478,7 +657,7 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
 					vector.AppendFixed(vecs[i], z, false, exec.mp)
 				} else {
-					result, err := exec.getResult(variances[j], cnt)
+					result, err := exec.getResult(variances[j], varianceExponents[j], cnt)
 					if err != nil {
 						return nil, err
 					}
@@ -606,12 +785,20 @@ func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts |
 	exec.f2t = f2t
 
 	retType := VarStdDevReturnType([]types.Type{param})
+	stateTypes := []types.Type{
+		types.T_int64.ToType(),
+		types.T_float64.ToType(),
+		types.T_float64.ToType(),
+	}
+	if !legacyState {
+		stateTypes = append(stateTypes, types.T_int64.ToType())
+	}
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    retType,
-		stateTypes: []types.Type{types.T_int64.ToType(), types.T_float64.ToType(), types.T_float64.ToType()},
+		stateTypes: stateTypes,
 		emptyNull:  false,
 		saveArg:    isDistinct,
 	}

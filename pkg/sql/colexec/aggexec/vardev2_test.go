@@ -25,63 +25,72 @@ import (
 )
 
 func TestVarianceStateLargeOffset(t *testing.T) {
-	mean, variance, count := 0.0, 0.0, int64(0)
+	mean, variance, varianceExponent, count := 0.0, 0.0, int64(0), int64(0)
 	for i := 0; i < 7; i++ {
 		var err error
-		mean, variance, count, err = updateVarianceState(mean, variance, count, 1_000_000_000_000+float64(i))
+		mean, variance, varianceExponent, count, err = updateVarianceState(
+			mean, variance, varianceExponent, count, 1_000_000_000_000+float64(i))
 		require.NoError(t, err)
 	}
 
 	require.Equal(t, int64(7), count)
 	require.InEpsilon(t, 1_000_000_000_003.0, mean, 1e-15)
 	require.InEpsilon(t, 4.0, variance, 1e-15)
+	require.Zero(t, varianceExponent)
 
 	varPop := &varStdDevExec[float64, float64]{isVar: true, isPop: true, f2t: float64ToResult}
 	stddevPop := &varStdDevExec[float64, float64]{isVar: false, isPop: true, f2t: float64ToResult}
-	result, err := varPop.getResult(variance, count)
+	result, err := varPop.getResult(variance, varianceExponent, count)
 	require.NoError(t, err)
-	stddev, err := stddevPop.getResult(variance, count)
+	stddev, err := stddevPop.getResult(variance, varianceExponent, count)
 	require.NoError(t, err)
 	require.InEpsilon(t, 4.0, result, 1e-15)
 	require.InEpsilon(t, 2.0, stddev, 1e-15)
 }
 
 func TestMergeVarianceStateLargeOffset(t *testing.T) {
-	leftMean, leftVariance, leftCount := 0.0, 0.0, int64(0)
+	leftMean, leftVariance, leftExponent, leftCount := 0.0, 0.0, int64(0), int64(0)
 	for i := 0; i < 3; i++ {
 		var err error
-		leftMean, leftVariance, leftCount, err = updateVarianceState(leftMean, leftVariance, leftCount, 1_000_000_000_000+float64(i))
+		leftMean, leftVariance, leftExponent, leftCount, err = updateVarianceState(
+			leftMean, leftVariance, leftExponent, leftCount, 1_000_000_000_000+float64(i))
 		require.NoError(t, err)
 	}
-	rightMean, rightVariance, rightCount := 0.0, 0.0, int64(0)
+	rightMean, rightVariance, rightExponent, rightCount := 0.0, 0.0, int64(0), int64(0)
 	for i := 3; i < 7; i++ {
 		var err error
-		rightMean, rightVariance, rightCount, err = updateVarianceState(rightMean, rightVariance, rightCount, 1_000_000_000_000+float64(i))
+		rightMean, rightVariance, rightExponent, rightCount, err = updateVarianceState(
+			rightMean, rightVariance, rightExponent, rightCount, 1_000_000_000_000+float64(i))
 		require.NoError(t, err)
 	}
 
-	mean, variance, count, err := mergeVarianceState(leftMean, leftVariance, leftCount, rightMean, rightVariance, rightCount)
+	mean, variance, varianceExponent, count, err := mergeVarianceState(
+		leftMean, leftVariance, leftExponent, leftCount,
+		rightMean, rightVariance, rightExponent, rightCount)
 	require.NoError(t, err)
 	require.Equal(t, int64(7), count)
 	require.InEpsilon(t, 1_000_000_000_003.0, mean, 1e-15)
 	require.InEpsilon(t, 4.0, variance, 1e-15)
+	require.Zero(t, varianceExponent)
 }
 
 func TestMergeVarianceStateAvoidsFiniteIntermediateOverflow(t *testing.T) {
-	_, variance, count, err := mergeVarianceState(0, 0, 2, 1.5e154, 0, 2)
+	_, variance, varianceExponent, count, err := mergeVarianceState(
+		0, 0, 0, 2, 1.5e154, 0, 0, 2)
 	require.NoError(t, err)
 	require.Equal(t, int64(4), count)
-	require.False(t, math.IsInf(variance, 0))
-	require.InEpsilon(t, 5.625e307, variance, 1e-15)
+	require.InEpsilon(t, 5.625e307,
+		scaledVarianceFloat64(scaledVariance{value: variance, exponent: varianceExponent}), 1e-15)
 
-	mean, residentVariance, residentCount := 0.0, 0.0, int64(0)
+	mean, residentVariance, residentExponent, residentCount := 0.0, 0.0, int64(0), int64(0)
 	for _, value := range []float64{0, 0, 1.5e154, 1.5e154} {
-		mean, residentVariance, residentCount, err = updateVarianceState(mean, residentVariance, residentCount, value)
+		mean, residentVariance, residentExponent, residentCount, err = updateVarianceState(
+			mean, residentVariance, residentExponent, residentCount, value)
 		require.NoError(t, err)
 	}
 	require.Equal(t, int64(4), residentCount)
-	require.False(t, math.IsInf(residentVariance, 0))
-	require.InEpsilon(t, 5.625e307, residentVariance, 1e-15)
+	require.InEpsilon(t, 5.625e307,
+		scaledVarianceFloat64(scaledVariance{value: residentVariance, exponent: residentExponent}), 1e-15)
 }
 
 func TestVarStdDevExecLargeOffset(t *testing.T) {
@@ -152,7 +161,131 @@ func TestVarPopExecAvoidsFiniteIntermediateOverflow(t *testing.T) {
 	require.InEpsilon(t, 5.625e307, result, 1e-15)
 }
 
-func TestLegacyVarianceStateKeepsPreV29WireLayout(t *testing.T) {
+func TestVarPopExecRescalesExistingVarianceBeforeMultiply(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	for _, tc := range []struct {
+		name   string
+		values []float64
+		want   float64
+	}{
+		{name: "reviewer-zero-two-one", values: []float64{0, 2e154, 1e154}, want: 6.666666666666667e307},
+		{name: "reviewer-symmetric", values: []float64{1.3e154, -1.3e154, 0}, want: 1.1266666666666666e308},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := vector.NewVec(types.T_float64.ToType())
+			defer input.Free(mp)
+			for _, value := range tc.values {
+				require.NoError(t, vector.AppendFixed(input, value, false, mp))
+			}
+
+			exec := makeVarPopExec(mp, AggIdOfVarPop, false, *input.GetType())
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			vecs, err := exec.Flush()
+			require.NoError(t, err)
+			defer vecs[0].Free(mp)
+			got := vector.MustFixedColNoTypeCheck[float64](vecs[0])[0]
+			require.False(t, math.IsInf(got, 0))
+			require.InEpsilon(t, tc.want, got, 1e-15)
+		})
+	}
+}
+
+func TestStdDevPopExecRetainsFiniteResultWhenVarianceOverflows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	param := types.T_float64.ToType()
+
+	makeInput := func(values ...float64) *vector.Vector {
+		input := vector.NewVec(param)
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(input, value, false, mp))
+		}
+		return input
+	}
+	check := func(t *testing.T, exec AggFuncExec, want float64) {
+		t.Helper()
+		vecs, err := exec.Flush()
+		require.NoError(t, err)
+		defer vecs[0].Free(mp)
+		got := vector.MustFixedColNoTypeCheck[float64](vecs[0])[0]
+		require.False(t, math.IsInf(got, 0))
+		require.InEpsilon(t, want, got, 1e-15)
+	}
+
+	for _, distinct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "resident", true: "distinct"}[distinct], func(t *testing.T) {
+			input := makeInput(1e200, -1e200)
+			defer input.Free(mp)
+			exec := makeStdDevPopExec(mp, AggIdOfStdDevPop, distinct, param)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			check(t, exec, 1e200)
+		})
+	}
+
+	t.Run("sample", func(t *testing.T) {
+		input := makeInput(1e200, -1e200)
+		defer input.Free(mp)
+		exec := makeStdDevSampleExec(mp, AggIdOfStdDevSample, false, param)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+		check(t, exec, math.Sqrt2*1e200)
+	})
+
+	t.Run("merge", func(t *testing.T) {
+		leftInput, rightInput := makeInput(1e200), makeInput(-1e200)
+		defer leftInput.Free(mp)
+		defer rightInput.Free(mp)
+		left := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
+		right := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
+		defer left.Free()
+		defer right.Free()
+		require.NoError(t, left.GroupGrow(1))
+		require.NoError(t, right.GroupGrow(1))
+		require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
+		require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+		require.NoError(t, left.Merge(right, 0, 0))
+		check(t, left, 1e200)
+	})
+
+	for _, tc := range []struct {
+		name      string
+		magnitude float64
+	}{
+		{name: "variance-underflows", magnitude: 1e-200},
+		{name: "difference-overflows", magnitude: math.MaxFloat64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := makeInput(tc.magnitude, -tc.magnitude)
+			defer input.Free(mp)
+			exec := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			check(t, exec, tc.magnitude)
+		})
+	}
+}
+
+func BenchmarkUpdateVarianceStateNormalRange(b *testing.B) {
+	mean, variance, varianceExponent, count := 0.0, 0.0, int64(0), int64(0)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		mean, variance, varianceExponent, count, _ = updateVarianceState(
+			mean, variance, varianceExponent, count, float64(i&1023))
+		if count == 1<<20 {
+			mean, variance, varianceExponent, count = 0, 0, 0, 0
+		}
+	}
+}
+
+func TestLegacyVarianceStateKeepsPreV30WireLayout(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	param := types.New(types.T_decimal128, 38, 20)
@@ -165,7 +298,7 @@ func TestLegacyVarianceStateKeepsPreV29WireLayout(t *testing.T) {
 	stable := makeVarPopExec(mp, AggIdOfVarPop, false, param).(*varStdDevExec[types.Decimal128, types.Decimal128])
 	defer stable.Free()
 	require.False(t, stable.legacyState)
-	require.Len(t, stable.aggInfo.stateTypes, 4)
+	require.Len(t, stable.aggInfo.stateTypes, 5)
 }
 
 func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {
