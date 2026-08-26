@@ -71,6 +71,15 @@ var (
 
 type immediateLockTimestampWaiter struct{}
 
+type lockServiceConfigOverride struct {
+	lockservice.LockService
+	cfg lockservice.Config
+}
+
+func (s lockServiceConfigOverride) GetConfig() lockservice.Config {
+	return s.cfg
+}
+
 func (immediateLockTimestampWaiter) GetTimestamp(
 	_ context.Context,
 	ts timestamp.Timestamp,
@@ -1021,6 +1030,74 @@ func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+func TestLockWithRetryPreservesUpgradeAcrossBindRetry(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 0
+	t.Cleanup(func() { defaultWaitTimeOnRetryLock = oldWait })
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
+
+	ctx := context.Background()
+	rows := [][]byte{{1}, {2}}
+	tableRows := [][]byte{{0}, {255}}
+	rowOptions := lock.LockOptions{Mode: lock.LockMode_Shared}
+	tableOptions := rowOptions
+	tableOptions.Granularity = lock.Granularity_Range
+	needUpgrade := moerr.NewLockNeedUpgradeNoCtx()
+	bindChanged := moerr.NewLockTableBindChangedNoCtx()
+	expected := lock.Result{NewLockAdd: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), rows, []byte("txn1"), rowOptions).
+			Return(lock.Result{}, needUpgrade),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), tableRows, []byte("txn1"), tableOptions).
+			Return(lock.Result{}, bindChanged),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), rows, []byte("txn1"), rowOptions).
+			Return(lock.Result{}, needUpgrade),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), tableRows, []byte("txn1"), tableOptions).
+			Return(expected, nil),
+	)
+
+	fetch := func(
+		_ *vector.Vector,
+		_ *types.Packer,
+		_ types.Type,
+		_ int,
+		lockTable bool,
+		_ RowsFilter,
+		_ []int32,
+	) (bool, [][]byte, lock.Granularity) {
+		require.True(t, lockTable)
+		return true, tableRows, lock.Granularity_Range
+	}
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		rows,
+		[]byte("txn1"),
+		rowOptions,
+		txnOp,
+		fetch,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
 func TestLockWithRetryKeepsSuccessfulResultAfterContextCanceled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1110,6 +1187,106 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		},
 		client.WithEnableRefreshExpression(),
 	)
+}
+
+func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
+	tests := []struct {
+		name      string
+		table     uint64
+		typeValue types.Type
+		makeVec   func(*mpool.MPool) *vector.Vector
+		encodeGap func(*types.Packer) []byte
+	}{
+		{
+			name:      "fixed",
+			table:     26769,
+			typeValue: types.T_int64.ToType(),
+			makeVec: func(mp *mpool.MPool) *vector.Vector {
+				vec := vector.NewVec(types.T_int64.ToType())
+				vector.AppendFixedList(vec, []int64{1, 2, 3, 4, 5}, nil, mp)
+				return vec
+			},
+			encodeGap: func(packer *types.Packer) []byte {
+				packer.EncodeInt64(3)
+				return bytes.Clone(packer.Bytes())
+			},
+		},
+		{
+			name:      "varlena",
+			table:     26770,
+			typeValue: types.T_varchar.ToType(),
+			makeVec: func(mp *mpool.MPool) *vector.Vector {
+				vec := vector.NewVec(types.T_varchar.ToType())
+				for _, value := range []string{"1", "2", "3", "4", "5"} {
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+				}
+				return vec
+			},
+			encodeGap: func(packer *types.Packer) []byte {
+				packer.EncodeStringType([]byte("3"))
+				return bytes.Clone(packer.Bytes())
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runLockOpTest(t, func(proc *process.Process) {
+				baseService := proc.GetLockService()
+				cfg := baseService.GetConfig()
+				cfg.MaxLockRowCount = 3
+				proc.Base.LockService = lockServiceConfigOverride{
+					LockService: baseService,
+					cfg:         cfg,
+				}
+				proc.Base.WaitPolicy = lock.WaitPolicy_FastFail
+
+				packer := types.NewPacker()
+				defer packer.Close()
+				gapRow := test.encodeGap(packer)
+				foreignTxn := []byte("shared-gap-" + test.name)
+				_, err := baseService.Lock(
+					proc.Ctx,
+					test.table,
+					[][]byte{gapRow},
+					foreignTxn,
+					lock.LockOptions{
+						Granularity: lock.Granularity_Row,
+						Mode:        lock.LockMode_Shared,
+						Policy:      lock.WaitPolicy_FastFail,
+					},
+				)
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, baseService.Unlock(
+						proc.Ctx, foreignTxn, timestamp.Timestamp{}))
+				}()
+
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = test.makeVec(proc.Mp())
+				bat.SetRowCount(bat.Vecs[0].Length())
+				defer bat.Clean(proc.Mp())
+
+				locked, _, _, err := doLock(
+					proc.Ctx,
+					nil,
+					process.NewTempAnalyzer(),
+					nil,
+					test.table,
+					proc,
+					bat,
+					0,
+					test.typeValue,
+					-1,
+					DefaultLockOptions(packer).
+						WithLockMode(lock.LockMode_Shared).
+						WithHasNewVersionInRangeFunc(testFunc),
+				)
+				require.NoError(t, err)
+				require.True(t, locked)
+			})
+		})
+	}
 }
 
 func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {

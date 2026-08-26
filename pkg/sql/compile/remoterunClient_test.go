@@ -569,6 +569,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 	tests := []struct {
 		name        string
 		cancelCause error
+		cancelQuery bool
 		wantErr     error
 	}{
 		{
@@ -579,12 +580,19 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 		{
 			name: "normal internal cancellation remains secondary",
 		},
+		{
+			name:        "query cancellation remains terminal",
+			cancelQuery: true,
+			wantErr:     context.Canceled,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
 			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			_, cancelQuery := process.GetQueryCtxFromProc(proc)
+			t.Cleanup(cancelQuery)
 			proc.BuildPipelineContext(queryCtx)
 			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 			proc.Base.TxnClient = txnCli
@@ -599,7 +607,11 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 					message := request.(*pipeline.Message)
 					switch message.GetCmd() {
 					case pipeline.Method_PipelineMessage:
-						proc.Cancel(tt.cancelCause)
+						if tt.cancelQuery {
+							cancelQuery()
+						} else {
+							proc.Cancel(tt.cancelCause)
+						}
 					case pipeline.Method_StopSending:
 						response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 						response.SetMessageType(pipeline.Method_PipelineMessage)
@@ -650,7 +662,11 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			select {
 			case signal := <-reg.Ch2:
 				_, terminalErr := signal.Action()
-				if tt.wantErr != nil {
+				if tt.wantErr == nil {
+					require.Equal(t, process.EventEnd, signal.EventType)
+					require.NoError(t, terminalErr)
+				} else {
+					require.Equal(t, process.EventError, signal.EventType)
 					require.ErrorIs(t, terminalErr, tt.wantErr)
 				}
 			case <-time.After(time.Second):

@@ -157,6 +157,20 @@ type CSVParser struct {
 	appendBuf *bytes.Buffer
 }
 
+// Reset re-points the parser at a new input stream and clears all buffered
+// stream state (buf/pos/chunk flags and scratch buffers), so one parser —
+// and its large block buffer — can be reused across many small independent
+// inputs with no possibility of cross-input bleed. Configuration and the
+// per-record scratch space are kept.
+func (parser *CSVParser) Reset(reader io.Reader) {
+	parser.reader = reader
+	parser.buf = nil
+	parser.pos = 0
+	parser.isLastChunk = false
+	parser.remainBuf.Reset()
+	parser.appendBuf.Reset()
+}
+
 // NewCSVParser creates a CSV parser.
 func NewCSVParser(
 	cfg *CSVConfig,
