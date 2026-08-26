@@ -558,6 +558,14 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if err = h.closeCurrentChangeHandle(); err != nil {
 		return err
 	}
+	return h.installSnapshotStateRangeHandle(ctx, snapshotTbl, state)
+}
+
+func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
+	ctx context.Context,
+	snapshotTbl *txnTable,
+	state *logtailreplay.PartitionState,
+) error {
 	pkFilter := engine.PKFilterFromContext(ctx)
 	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
 	spillConfig := engine.ChangeRangeSpillFromContext(ctx)

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -204,4 +205,37 @@ func TestNewDeletionTombstoneWriterUsesProcessService(t *testing.T) {
 	writer := newDeletionTombstoneWriter(proc, fs, types.T_int64.ToType())
 	require.NotNil(t, writer)
 	require.NoError(t, writer.Close())
+}
+
+func TestFlushCreatesTombstoneWriterForFirstBlock(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	blockID := types.BuildTestBlockid(1, 1)
+	rowID := types.NewRowid(&blockID, 0)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(7), false, proc.Mp()))
+	bat.SetRowCount(1)
+
+	ctr := container{
+		partitionId_blockId_rowIdBatch: map[int]map[types.Blockid]*batch.Batch{
+			0: {blockID: bat},
+		},
+		partitionId_tombstoneObjectStatsBats: make(map[int][]*batch.Batch),
+		blockId_type:                         map[types.Blockid]int8{blockID: DeletionOnCommitted},
+		pool:                                 &BatchPool{},
+	}
+	size, err := ctr.flush(proc, process.NewAnalyzer(0, false, false, "deletion-flush"))
+	require.NoError(t, err)
+	require.NotZero(t, size)
+	require.Empty(t, ctr.partitionId_blockId_rowIdBatch[0])
+	require.Len(t, ctr.partitionId_tombstoneObjectStatsBats[0], 1)
+	for _, statsBat := range ctr.partitionId_tombstoneObjectStatsBats[0] {
+		statsBat.Clean(proc.Mp())
+	}
+	for _, pooled := range ctr.pool.pools {
+		pooled.Clean(proc.Mp())
+	}
 }

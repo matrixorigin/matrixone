@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -225,6 +226,91 @@ func TestTableChangesStartStopsBeforeEngineLookup(t *testing.T) {
 	}
 	err := (&tableChangesState{accountColumnIdx: -1}).start(tf, proc, 0, nil)
 	require.EqualError(t, err, "internal error: engine is missing from table_changes context")
+}
+
+func TestTableChangesStartAndCallSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	handle := mock_frontend.NewMockChangesHandle(ctrl)
+	after := types.BuildTS(80, 0)
+	until := types.BuildTS(90, 0)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(100, 0).ToTimestamp()).AnyTimes()
+	txnOp.EXPECT().CloneSnapshotOp(after.ToTimestamp()).Return(txnOp)
+	txnOp.EXPECT().CloneSnapshotOp(until.ToTimestamp()).Return(txnOp)
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = context.WithValue(
+		defines.AttachAccountId(proc.Ctx, 7),
+		defines.EngineKey{},
+		engine.Engine(eng),
+	)
+
+	tableDef := &plan.TableDef{
+		TblId:     42,
+		Version:   3,
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{{
+			Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Primary: true,
+		}},
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+	}
+	eng.EXPECT().Database(gomock.Any(), "db", txnOp).Return(db, nil).Times(3)
+	db.EXPECT().Relation(gomock.Any(), "t", nil).Return(relation, nil).Times(3)
+	relation.EXPECT().CopyTableDef(gomock.Any()).Return(tableDef).Times(3)
+	relation.EXPECT().CollectChanges(
+		gomock.Any(), after.Next(), until, false, proc.Mp(),
+	).Return(handle, nil)
+
+	data := batch.NewWithSize(2)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(11), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(data.Vecs[1], until, false, proc.Mp()))
+	data.SetRowCount(1)
+	handle.EXPECT().Next(gomock.Any(), proc.Mp()).Return(
+		data, nil, engine.ChangesHandle_Tail_done, nil,
+	)
+	handle.EXPECT().Next(gomock.Any(), proc.Mp()).Return(
+		nil, nil, engine.ChangesHandle_Tail_done, nil,
+	)
+	handle.EXPECT().Close().Return(nil)
+
+	args := make([]*vector.Vector, 4)
+	for i, value := range []string{"db", "t", after.ToString(), until.ToString()} {
+		args[i] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(args[i], []byte(value), false, proc.Mp()))
+		defer args[i].Free(proc.Mp())
+	}
+	tf := &TableFunction{
+		Attrs: []string{catalog.TableChangesAttrChangeType, "id"},
+		ctr: container{
+			argVecs: args,
+			retSchema: []types.Type{
+				types.T_varchar.ToType(), types.T_int64.ToType(),
+			},
+		},
+	}
+	state := &tableChangesState{accountColumnIdx: -1}
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	require.Equal(t, uint32(7), state.accountID)
+
+	result, err := state.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, []string{"insert"}, vector.InefficientMustStrCol(result.Batch.Vecs[0]))
+	require.Equal(t, []int64{11}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+
+	result, err = state.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult.Status, result.Status)
+	require.Nil(t, state.handle)
+	state.free(tf, proc, false, nil)
 }
 
 func TestValidateTableChangesWindow(t *testing.T) {

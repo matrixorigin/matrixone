@@ -18,15 +18,20 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -267,11 +272,233 @@ func TestDeferredChangesHandleBuildsOnFirstNext(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestInstallSnapshotStateRangeHandleBuildsDeferredRange(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+	snapshotTbl := &txnTable{
+		tableId:       42,
+		tableDef:      makeVisibleStateTableDef(true, true),
+		primaryIdx:    0,
+		primarySeqnum: 0,
+	}
+	snapshotTbl.ensureSeqnumsAndTypesExpectRowid()
+	state := logtailreplay.NewPartitionState("", false, 42, false)
+	handle := &PartitionChangesHandle{
+		currentPSFrom:       from,
+		currentPSTo:         to,
+		skipDeletes:         false,
+		preserveAllVersions: true,
+		mp:                  mp,
+	}
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  128,
+		MaxInMemoryBytes: 1 << 20,
+	})
+	ctx = engine.WithRetainRowID(ctx, true)
+	require.NoError(t, handle.installSnapshotStateRangeHandle(ctx, snapshotTbl, state))
+	deferred, ok := handle.currentChangeHandle.(*deferredChangesHandle)
+	require.True(t, ok)
+	require.NotNil(t, deferred.build)
+
+	data, tombstone, _, err := deferred.Next(ctx, mp)
+	require.NoError(t, err)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.Nil(t, deferred.build)
+	require.NoError(t, deferred.Close())
+}
+
+func newSnapshotRangeTestHandle(
+	t *testing.T,
+	mp *mpool.MPool,
+) (*PartitionChangesHandle, *mock_frontend.MockTxnOperator) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	baseTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	baseEngine := mock_frontend.NewMockEngine(ctrl)
+	snapshotTbl, snapshotEngine := newPrimaryKeyCheckTableForTest(t)
+	snapshotOp, _ := newResetTxnForTest(t, snapshotEngine)
+	snapshotTbl.db.op = snapshotOp
+	snapshotTbl.relKind = "V"
+	snapshotTbl.tableDef = makeVisibleStateTableDef(true, true)
+	snapshotTbl.primaryIdx = 0
+	snapshotTbl.primarySeqnum = 0
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+	baseTxnOp.EXPECT().CloneSnapshotOp(to.ToTimestamp()).Return(baseTxnOp).AnyTimes()
+	baseEngine.EXPECT().GetRelationById(gomock.Any(), baseTxnOp, uint64(42)).Return(
+		"db", "t", snapshotTbl, nil,
+	).AnyTimes()
+	return &PartitionChangesHandle{
+		tbl: &txnTable{
+			tableId: 42,
+			db:      &txnDatabase{op: baseTxnOp},
+			eng:     baseEngine,
+		},
+		fromTs:             from,
+		toTs:               to,
+		currentPSFrom:      from,
+		currentPSTo:        to,
+		snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+		mp:                 mp,
+	}, baseTxnOp
+}
+
+func TestSwapCurrentHandleToSnapshotStateRange(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	handle, _ := newSnapshotRangeTestHandle(t, mp)
+	handle.currentChangeHandle = &stubChangesHandle{}
+
+	require.NoError(t, handle.swapCurrentHandleToSnapshotStateRange(context.Background()))
+	deferred, ok := handle.currentChangeHandle.(*deferredChangesHandle)
+	require.True(t, ok)
+	data, tombstone, _, err := deferred.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.NoError(t, handle.Close())
+}
+
+func TestGetNextChangeHandleBuildsVisibleSnapshotRange(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	handle, _ := newSnapshotRangeTestHandle(t, mp)
+	handle.currentPSFrom = types.TS{}
+	handle.currentPSTo = types.TS{}
+
+	end, err := handle.getNextChangeHandle(context.Background())
+	require.NoError(t, err)
+	require.False(t, end)
+	require.Equal(t, handle.fromTs, handle.currentPSFrom)
+	require.Equal(t, handle.toTs, handle.currentPSTo)
+	require.IsType(t, &deferredChangesHandle{}, handle.currentChangeHandle)
+	require.NoError(t, handle.Close())
+}
+
+func TestBufferCurrentRangeRecoversFileNotFoundWithSnapshotRange(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	handle, _ := newSnapshotRangeTestHandle(t, mp)
+	resources := newTestVisibleStateResources()
+	handle.visibleResources = resources
+	handle.currentChangeHandle = &batchThenErrorChangesHandle{
+		err: moerr.NewFileNotFoundNoCtx("compacted-object"),
+	}
+
+	require.NoError(t, handle.bufferCurrentRange(context.Background(), mp))
+	require.True(t, handle.currentRangeDrained)
+	require.Empty(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
+	require.Zero(t, mp.CurrNB())
+	require.NoError(t, handle.Close())
+}
+
+func TestDeferredChangesHandleBuildErrorAndCloseBeforeBuild(t *testing.T) {
+	want := moerr.NewInternalErrorNoCtx("deferred build")
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	handle := &deferredChangesHandle{
+		build: func(context.Context) (engine.ChangesHandle, error) {
+			return nil, want
+		},
+	}
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	require.Equal(t, want, err)
+	require.NoError(t, handle.Close())
+	require.NoError(t, (*deferredChangesHandle)(nil).Close())
+}
+
+func TestBufferCurrentRangeCleansQueuedBatchOnError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	resources := newTestVisibleStateResources()
+	want := moerr.NewInternalErrorNoCtx("range read")
+	handle := &PartitionChangesHandle{
+		mp:                  mp,
+		visibleResources:    resources,
+		currentChangeHandle: &batchThenErrorChangesHandle{err: want},
+	}
+	require.Equal(t, want, handle.bufferCurrentRange(context.Background(), mp))
+	require.Empty(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestLoadCheckpointEntries(t *testing.T) {
+	original := RequestSnapshotRead
+	t.Cleanup(func() { RequestSnapshotRead = original })
+	from := types.BuildTS(5, 0)
+	start := types.BuildTS(2, 0).ToTimestamp()
+	end := types.BuildTS(8, 0).ToTimestamp()
+	RequestSnapshotRead = func(
+		_ context.Context,
+		_ *txnTable,
+		got *types.TS,
+	) (any, error) {
+		require.Equal(t, from, *got)
+		return &cmd_util.SnapshotReadResp{
+			Succeed: true,
+			Entries: []*cmd_util.CheckpointEntryResp{{
+				Start: &start, End: &end,
+				EntryType: int32(checkpoint.ET_Incremental),
+				Location1: "location-1", Location2: "location-2",
+			}},
+		}, nil
+	}
+	handle := &PartitionChangesHandle{tbl: &txnTable{}}
+	entries, minTS, maxTS, err := handle.loadCheckpointEntries(context.Background(), from)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, types.TimestampToTS(start), minTS)
+	require.Equal(t, types.TimestampToTS(end), maxTS)
+
+	want := moerr.NewInternalErrorNoCtx("snapshot read")
+	RequestSnapshotRead = func(context.Context, *txnTable, *types.TS) (any, error) {
+		return nil, want
+	}
+	entries, minTS, maxTS, err = handle.loadCheckpointEntries(context.Background(), from)
+	require.Nil(t, entries)
+	require.Equal(t, types.MaxTs(), minTS)
+	require.True(t, maxTS.IsEmpty())
+	require.Equal(t, want, err)
+}
+
 type stubChangesHandle struct {
 	closed    bool
 	calls     int
 	remaining int
 }
+
+type batchThenErrorChangesHandle struct {
+	calls int
+	err   error
+}
+
+func (h *batchThenErrorChangesHandle) Next(
+	_ context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	h.calls++
+	if h.calls > 1 {
+		return nil, nil, engine.ChangesHandle_Tail_done, h.err
+	}
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	if err := vector.AppendFixed(data.Vecs[0], int64(1), false, mp); err != nil {
+		return data, nil, engine.ChangesHandle_Tail_done, err
+	}
+	data.SetRowCount(1)
+	return data, nil, engine.ChangesHandle_Tail_done, nil
+}
+
+func (h *batchThenErrorChangesHandle) Close() error { return nil }
 
 func (s *stubChangesHandle) Next(_ context.Context, mp *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
 	s.calls++
