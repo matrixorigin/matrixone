@@ -1453,6 +1453,79 @@ func TestSessionTempTableMigrationSnapshot(t *testing.T) {
 	}}, snapshot)
 }
 
+func TestSessionDropDatabaseRemovesTempTableMappings(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:          make(map[string]string),
+			tempTablesRev:       make(map[string]string),
+			tempTableIdentities: make(map[string]tempTableIdentity),
+		}
+	}
+	seed := func(ses *Session) {
+		ses.addTempTable("d", "t", "__mo_tmp_d_t_before_drop", "", "")
+		ses.addTempIndexTable("d", "__mo_index_t", "__mo_tmp_d_index_before_drop", "", "")
+		ses.addTempTable("other", "kept", "__mo_tmp_other_kept", "", "")
+	}
+	get := func(t *testing.T, ses *Session, dbName, alias string) string {
+		t.Helper()
+		realName, ok := ses.GetTempTable(dbName, alias)
+		require.True(t, ok)
+		return realName
+	}
+
+	t.Run("dropped database is absent from migration snapshot", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "", "")
+
+		require.Equal(t, []*query.MigrateTempTable{{
+			Database: "other", Alias: "kept", PhysicalName: "__mo_tmp_other_kept",
+		}}, ses.snapshotTempTables())
+		_, ok := ses.GetTempTable("d", "t")
+		require.False(t, ok)
+	})
+
+	t.Run("statement rollback restores dropped aliases", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "txn", "drop")
+		ses.rollbackTempTableStatement("txn", "drop")
+
+		require.Equal(t, "__mo_tmp_d_t_before_drop", get(t, ses, "d", "t"))
+		require.Equal(t, "__mo_tmp_d_index_before_drop", get(t, ses, "d", "__mo_index_t"))
+	})
+
+	t.Run("recreate does not retain the dropped physical table", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "txn", "drop")
+		ses.commitTempTableStatement("txn", "drop")
+		ses.addTempTable("d", "t", "__mo_tmp_d_t_after_recreate", "txn", "create")
+		ses.commitTempTableStatement("txn", "create")
+		ses.commitTempTableTransaction("txn")
+
+		require.Equal(t, []*query.MigrateTempTable{
+			{Database: "d", Alias: "t", PhysicalName: "__mo_tmp_d_t_after_recreate"},
+			{Database: "other", Alias: "kept", PhysicalName: "__mo_tmp_other_kept"},
+		}, ses.snapshotTempTables())
+	})
+
+	t.Run("transaction rollback discards aliases recreated after drop", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "txn", "drop")
+		ses.addTempTable("d", "t", "__mo_tmp_d_t_after_recreate", "txn", "create")
+		ses.rollbackTempTableTransaction("txn")
+
+		require.Equal(t, "__mo_tmp_d_t_before_drop", get(t, ses, "d", "t"))
+		require.Equal(t, "__mo_tmp_d_index_before_drop", get(t, ses, "d", "__mo_index_t"))
+	})
+}
+
 func TestMigrateTempTablesClonesIntoTargetOwnership(t *testing.T) {
 	newSession := func() *Session {
 		return &Session{

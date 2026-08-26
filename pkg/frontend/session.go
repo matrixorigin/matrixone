@@ -754,6 +754,39 @@ func (ses *Session) RemoveTempTable(dbName, alias string) {
 	ses.removeTempTable(dbName, alias, txnKey, stmtKey)
 }
 
+// RemoveTempTablesByDatabase removes every temporary-table alias owned by a
+// database that has been dropped. The mutation is journaled so a failed
+// statement or rolled-back transaction restores the aliases with their
+// original physical identities.
+func (ses *Session) RemoveTempTablesByDatabase(dbName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
+}
+
+func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	changed := false
+	for key, realName := range ses.tempTables {
+		identity, tracked := ses.tempTableIdentities[key]
+		if tracked {
+			if identity.dbName != dbName {
+				continue
+			}
+		} else if !strings.HasPrefix(key, dbName+".") {
+			continue
+		}
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		delete(ses.tempTables, key)
+		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, key)
+		changed = true
+	}
+	if changed {
+		ses.tempTableVersion++
+	}
+}
+
 func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

@@ -334,6 +334,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if session, ok := c.proc.GetSession().(interface {
+		RemoveTempTablesByDatabase(string)
+	}); ok {
+		// The catalog removal has completed, so these aliases now refer to
+		// relations that cannot be cloned during connection migration. The
+		// session implementation journals this cleanup with the DDL statement.
+		session.RemoveTempTablesByDatabase(dbName)
+	}
 
 	c.setAffectedRows(uint64(len(deleteTables)))
 	return nil

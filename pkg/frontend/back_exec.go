@@ -1596,6 +1596,16 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 	}
 }
 
+func (backSes *backSession) RemoveTempTablesByDatabase(dbName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 	if backSes == nil || backSes.upstream == nil {
 		return false, false
