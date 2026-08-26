@@ -146,6 +146,77 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
+// RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
+// planner-injected CAST that uses the numeric-prefix sentinel. Charset=255 was
+// deliberately unused before this contract, so older workers must not execute
+// any plan that carries it.
+func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
+	required := false
+	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
+		if !required {
+			required = expr.requiresMORPCVersion30NumericPrefix()
+		}
+		return nil
+	})
+	return required, err
+}
+
+func (m *Expr) requiresMORPCVersion30NumericPrefix() bool {
+	if m == nil {
+		return false
+	}
+	if m.Typ.Charset == 255 {
+		fn := m.GetF()
+		if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") {
+			return true
+		}
+	}
+	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion30NumericPrefix() {
+		return true
+	}
+	if fn := m.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if arg.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+	}
+	if list := m.GetList(); list != nil {
+		for _, item := range list.List {
+			if item.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+	}
+	if subquery := m.GetSub(); subquery != nil && subquery.Child.requiresMORPCVersion30NumericPrefix() {
+		return true
+	}
+	if window := m.GetW(); window != nil {
+		if window.WindowFunc.requiresMORPCVersion30NumericPrefix() {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if item.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && order.Expr.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {
 	if m == nil {
 		return 0, false, nil
@@ -337,6 +408,77 @@ func (p *Plan) ValidateStringLiteralForms() error {
 
 func ValidateStringLiteralFormsInOwner(owner any) error {
 	return validateStringLiteralFormsInOwner(owner)
+}
+
+// VisitExprTree visits expr and every nested expression exactly once in
+// deterministic pre-order. It is the canonical traversal for Expr variants;
+// callers should not maintain partial per-variant recursion.
+func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
+	if expr == nil {
+		return nil
+	}
+	if err := visitor(expr); err != nil {
+		return err
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return VisitExprTree(lit.Src, visitor)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if err := VisitExprTree(arg, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if subquery := expr.GetSub(); subquery != nil {
+		if err := VisitExprTree(subquery.Child, visitor); err != nil {
+			return err
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
+			return err
+		}
+		for _, item := range window.PartitionBy {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				if err := VisitExprTree(order.Expr, visitor); err != nil {
+					return err
+				}
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
+					return err
+				}
+			}
+			if window.Frame.End != nil {
+				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// VisitExpressionsInOwner calls visitor once for every expression root nested
+// in owner. The visitor owns traversal inside each Expr; the reflective walk
+// deliberately stops at *Expr so expression subtrees are not visited twice.
+func VisitExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkExpressionsInOwner(owner, visitor)
 }
 
 // validateStringLiteralFormsInOwner validates every expression nested in a
