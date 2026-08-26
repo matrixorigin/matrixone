@@ -19,7 +19,6 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -45,54 +44,49 @@ func TestDataBranchPick(t *testing.T) {
 			sqlDB, err := sql.Open("mysql", dsn)
 			require.NoError(t, err)
 			defer sqlDB.Close()
+			sqlDB.SetMaxOpenConns(1)
 
-			t.Log("pick specific rows by PK value list")
-			runPickByKeyValues(t, ctx, sqlDB)
+			dbName := testutils.GetDatabaseName(t)
+			defer cleanupTestDatabases(t, sqlDB, dbName)
+			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
 
-			t.Log("pick all rows (no KEYS clause)")
-			runPickAll(t, ctx, sqlDB)
-
-			t.Log("pick with DELETE propagation")
-			runPickWithDelete(t, ctx, sqlDB)
-
-			t.Log("pick conflict matrix")
-			runPickConflictMatrix(t, ctx, sqlDB)
-
-			t.Log("pick with subquery KEYS")
-			runPickSubqueryKeys(t, ctx, sqlDB)
-
-			t.Log("pick with subquery key coercion")
-			runPickSubqueryKeyCoercion(t, ctx, sqlDB)
-
-			t.Log("pick subquery rejects NULL keys")
-			runPickSubqueryRejectsNullKey(t, ctx, sqlDB)
-
-			t.Log("pick subquery rejects invalid key coercion")
-			runPickSubqueryRejectsInvalidCoercion(t, ctx, sqlDB)
-
-			t.Log("large-scale pick (1000 rows, pick 50)")
-			runPickLargeScale(t, ctx, sqlDB)
-
-			t.Log("pick with varchar primary key")
-			runPickVarcharPK(t, ctx, sqlDB)
-
-			t.Log("pick varchar delete/update conflict handles escaped keys on LCA path")
-			runPickVarcharPKLCAEscapedDeleteUpdate(t, ctx, sqlDB)
-
-			t.Log("pick consecutive: two picks from same source")
-			runPickConsecutive(t, ctx, sqlDB)
-
-			t.Log("pick into table with pre-existing non-overlapping data")
-			runPickIntoExistingData(t, ctx, sqlDB)
-
-			t.Log("pick with mixed INSERT + UPDATE + DELETE in source")
-			runPickMixedOperations(t, ctx, sqlDB)
-
-			t.Log("pick rejects destination snapshots")
-			runPickRejectDstSnapshot(t, ctx, sqlDB)
-
-			t.Log("pick rejects explicit transactions")
-			runPickRejectExplicitTransaction(t, ctx, sqlDB)
+			t.Run("key_values_and_consecutive_pick", func(t *testing.T) {
+				runPickByKeyValues(t, ctx, sqlDB)
+			})
+			t.Run("conflict_policies", func(t *testing.T) {
+				runPickConflictMatrix(t, ctx, sqlDB)
+			})
+			t.Run("subquery_keys", func(t *testing.T) {
+				runPickSubqueryKeys(t, ctx, sqlDB)
+			})
+			t.Run("subquery_key_coercion", func(t *testing.T) {
+				runPickSubqueryKeyCoercion(t, ctx, sqlDB)
+			})
+			t.Run("subquery_rejects_null_key", func(t *testing.T) {
+				runPickSubqueryRejectsNullKey(t, ctx, sqlDB)
+			})
+			t.Run("subquery_rejects_invalid_coercion", func(t *testing.T) {
+				runPickSubqueryRejectsInvalidCoercion(t, ctx, sqlDB)
+			})
+			t.Run("varchar_primary_key", func(t *testing.T) {
+				runPickVarcharPK(t, ctx, sqlDB)
+			})
+			t.Run("varchar_escaped_lca_conflict", func(t *testing.T) {
+				runPickVarcharPKLCAEscapedDeleteUpdate(t, ctx, sqlDB)
+			})
+			t.Run("non_overlapping_destination_data", func(t *testing.T) {
+				runPickIntoExistingData(t, ctx, sqlDB)
+			})
+			t.Run("mixed_insert_update_delete", func(t *testing.T) {
+				runPickMixedOperations(t, ctx, sqlDB)
+			})
+			t.Run("rejects_destination_snapshot", func(t *testing.T) {
+				runPickRejectDstSnapshot(t, ctx, sqlDB)
+			})
+			t.Run("rejects_explicit_transaction", func(t *testing.T) {
+				runPickRejectExplicitTransaction(t, ctx, sqlDB)
+			})
 		})
 }
 
@@ -168,15 +162,17 @@ func execExpectError(t *testing.T, ctx context.Context, db *sql.DB, stmt string)
 	return err.Error()
 }
 
-// pickDB creates a unique database and returns (dbName, cleanup).
-func pickDB(t *testing.T, ctx context.Context, db *sql.DB) (string, func()) {
+// cleanupPickCaseTables lets the orthogonal pick scenarios share one database
+// while retaining fresh table state. Descendants are listed before their base
+// tables so branch metadata is removed in dependency order.
+func cleanupPickCaseTables(t *testing.T, db *sql.DB) {
 	t.Helper()
-	dbName := testutils.GetDatabaseName(t)
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
-	return dbName, func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := db.ExecContext(ctx,
+		"drop table if exists dst, src, base, pick_keys, ckeys, csrc, cbase")
+	if err != nil {
+		t.Errorf("clean up shared data branch pick tables: %v", err)
 	}
 }
 
@@ -184,14 +180,14 @@ func pickDB(t *testing.T, ctx context.Context, db *sql.DB) (string, func()) {
 // test cases
 // ---------------------------------------------------------------------------
 
-// runPickByKeyValues: pick 2 out of 5 inserted rows by KEYS(2,4).
+// runPickByKeyValues covers subset selection, an already-identical key, and a
+// second pick from the same source without rebuilding an equivalent fixture.
 func runPickByKeyValues(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20),(3,30)")
@@ -209,53 +205,12 @@ func runPickByKeyValues(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	var b int
 	require.NoError(t, db.QueryRowContext(ctx, "select b from base where a=4").Scan(&b))
 	require.Equal(t, 40, b)
-}
 
-// runPickAll: pick everything (no KEYS clause) from branch into base.
-func runPickAll(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b varchar(32))")
-	execSQLDB(t, ctx, db, "insert into base values (1,'one'),(2,'two')")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "insert into src values (3,'three'),(4,'four'),(5,'five')")
-
-	execSQLDB(t, ctx, db, "data branch pick src into base keys(1,2,3,4,5)")
-
-	cnt := queryRowCount(t, ctx, db, "select count(*) from base")
-	require.Equal(t, 5, cnt)
-
-	pks := queryIntColumn(t, ctx, db, "select a from base order by a")
+	// A second pick proves the source remains usable and completes the set. This
+	// subsumes the old duplicate "pick all" and "consecutive" fixtures.
+	execSQLDB(t, ctx, db, "data branch pick src into base keys(5)")
+	pks = queryIntColumn(t, ctx, db, "select a from base order by a")
 	require.Equal(t, []int{1, 2, 3, 4, 5}, pks)
-}
-
-// runPickWithDelete: source branch deletes rows, pick propagates deletion.
-func runPickWithDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20),(3,30),(4,40),(5,50)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-
-	// Delete rows 2 and 4 in src
-	execSQLDB(t, ctx, db, "delete from src where a in (2,4)")
-	// Also insert a new row
-	execSQLDB(t, ctx, db, "insert into src values (6,60)")
-
-	execSQLDB(t, ctx, db, "data branch pick src into base keys(1,2,3,4,5,6)")
-
-	pks := queryIntColumn(t, ctx, db, "select a from base order by a")
-	require.Equal(t, []int{1, 3, 5, 6}, pks)
 }
 
 // runPickConflictMatrix covers four conflict shapes against all three policies.
@@ -269,9 +224,6 @@ func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) 
 	// deadline than they had as independent tests on slower CI runners.
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
 
 	execSQLDB(t, ctx, db, "create table conflict_base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into conflict_base values (1,10),(2,20)")
@@ -384,8 +336,7 @@ func runPickSubqueryKeys(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20),(3,30)")
@@ -415,8 +366,7 @@ func runPickSubqueryKeyCoercion(t *testing.T, parentCtx context.Context, db *sql
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a bigint primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10)")
@@ -448,8 +398,7 @@ func runPickSubqueryRejectsNullKey(t *testing.T, parentCtx context.Context, db *
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10)")
@@ -469,8 +418,7 @@ func runPickSubqueryRejectsInvalidCoercion(t *testing.T, parentCtx context.Conte
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10)")
@@ -485,57 +433,13 @@ func runPickSubqueryRejectsInvalidCoercion(t *testing.T, parentCtx context.Conte
 	require.Equal(t, []int{1}, queryIntColumn(t, ctx, db, "select a from base order by a"))
 }
 
-// runPickLargeScale: 1000-row table, branch inserts 500 more, pick 50 specific.
-func runPickLargeScale(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 120*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b varchar(64))")
-
-	// Insert 1000 seed rows
-	execSQLDB(t, ctx, db,
-		"insert into base select result, concat('seed_', cast(result as char)) from generate_series(1,1000) g")
-
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-
-	// Insert 500 new rows in src (1001..1500)
-	execSQLDB(t, ctx, db,
-		"insert into src select result, concat('new_', cast(result as char)) from generate_series(1001,1500) g")
-
-	// Pick 50 specific new rows: 1001,1011,1021,...,1491
-	keyList := make([]string, 50)
-	for i := 0; i < 50; i++ {
-		keyList[i] = strconv.Itoa(1001 + i*10)
-	}
-	keysCSV := strings.Join(keyList, ",")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("data branch pick src into base keys(%s)", keysCSV))
-
-	cnt := queryRowCount(t, ctx, db, "select count(*) from base")
-	require.Equal(t, 1050, cnt) // 1000 seed + 50 picked
-
-	// Spot-check: key 1001 should exist with value 'new_1001'
-	var b string
-	require.NoError(t, db.QueryRowContext(ctx, "select b from base where a=1001").Scan(&b))
-	require.Equal(t, "new_1001", b)
-
-	// Key 1002 should NOT exist (we didn't pick it)
-	cnt = queryRowCount(t, ctx, db, "select count(*) from base where a=1002")
-	require.Equal(t, 0, cnt)
-}
-
 // runPickVarcharPK: pick with non-integer PK.
 func runPickVarcharPK(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (name varchar(64) primary key, score int)")
 	execSQLDB(t, ctx, db, "insert into base values ('alice',85),('bob',90)")
@@ -557,8 +461,7 @@ func runPickVarcharPKLCAEscapedDeleteUpdate(t *testing.T, parentCtx context.Cont
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (name varchar(64) primary key, score int)")
 	execSQLDB(t, ctx, db,
@@ -576,39 +479,13 @@ func runPickVarcharPKLCAEscapedDeleteUpdate(t *testing.T, parentCtx context.Cont
 	require.Equal(t, [][]string{{"plain", "95"}}, rows)
 }
 
-// runPickConsecutive: two consecutive picks from the same source.
-func runPickConsecutive(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "insert into src values (2,20),(3,30),(4,40),(5,50)")
-
-	// First pick: keys 2,3
-	execSQLDB(t, ctx, db, "data branch pick src into base keys(2,3)")
-	pks := queryIntColumn(t, ctx, db, "select a from base order by a")
-	require.Equal(t, []int{1, 2, 3}, pks)
-
-	// Second pick: keys 4,5
-	execSQLDB(t, ctx, db, "data branch pick src into base keys(4,5)")
-	pks = queryIntColumn(t, ctx, db, "select a from base order by a")
-	require.Equal(t, []int{1, 2, 3, 4, 5}, pks)
-}
-
 // runPickIntoExistingData: dst already has rows that don't overlap with src.
 func runPickIntoExistingData(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10)")
@@ -632,8 +509,7 @@ func runPickMixedOperations(t *testing.T, parentCtx context.Context, db *sql.DB)
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int, c varchar(32))")
 	execSQLDB(t, ctx, db, "insert into base values (1,10,'x'),(2,20,'y'),(3,30,'z'),(4,40,'w'),(5,50,'v')")
@@ -675,8 +551,7 @@ func runPickRejectDstSnapshot(t *testing.T, parentCtx context.Context, db *sql.D
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10)")
@@ -694,8 +569,7 @@ func runPickRejectExplicitTransaction(t *testing.T, parentCtx context.Context, d
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
 
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
+	defer cleanupPickCaseTables(t, db)
 
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10)")

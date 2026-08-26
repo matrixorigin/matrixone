@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -2710,10 +2711,13 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(proc, source, rs, zone, length, selectList, assignmentCast)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType,
 			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+	case types.T_datalink:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToDatalink(proc, source, rs, length, selectList)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -7982,6 +7986,37 @@ func functionRowSkipped(selectList *FunctionSelectList, i uint64) bool {
 
 func explicitZeroTemporalCastReturnsNull(proc *process.Process) (bool, error) {
 	return process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+}
+
+func strToDatalink(
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, _, err := datalink.ParseDatalink(convertByteSliceToString(value), proc); err != nil {
+			return err
+		}
+		if err := to.AppendBytes(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func strToStr(
