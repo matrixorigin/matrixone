@@ -22,13 +22,12 @@ import (
 )
 
 const (
-	EnableFault           = "ENABLE_FAULT_INJECTION"
-	DisableFault          = "DISABLE_FAULT_INJECTION"
-	StatusFault           = "STATUS_FAULT_POINT"
-	ListFault             = "LIST_FAULT_POINT"
-	AddFault              = "ADD_FAULT_POINT"
-	RemoveFault           = "REMOVE_FAULT_POINT"
-	GetFaultPointCountCmd = "GET_FAULT_POINT_COUNT"
+	EnableFault  = "ENABLE_FAULT_INJECTION"
+	DisableFault = "DISABLE_FAULT_INJECTION"
+	StatusFault  = "STATUS_FAULT_POINT"
+	ListFault    = "LIST_FAULT_POINT"
+	AddFault     = "ADD_FAULT_POINT"
+	RemoveFault  = "REMOVE_FAULT_POINT"
 )
 
 func HandleFaultInject(
@@ -49,20 +48,10 @@ func HandleFaultInject(
 		res = handleAddFaultPoint(ctx, parameter)
 	case RemoveFault:
 		res = handleRemoveFaultPoint(ctx, parameter)
-	case GetFaultPointCountCmd:
-		res = handleGetFaultPointCount(parameter)
 	default:
 		res = "unknown fault injection command"
 	}
 	return
-}
-
-func handleGetFaultPointCount(name string) string {
-	count, ok := GetFaultPointCount(name)
-	if !ok {
-		return fmt.Sprintf("fault point '%s' not found", name)
-	}
-	return strconv.FormatInt(count, 10)
 }
 
 func handleEnableFaultInjection() string {

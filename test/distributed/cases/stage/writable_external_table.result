@@ -79,9 +79,6 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
 100000  ¦  1  ¦  100000
-select add_fault_point('fj/cn/external_writer_non_empty', ':::', 'return', 0, '');
-➤ add_fault_point(fj/cn/external_writer_non_empty, :::, return, 0, )[-7,1,0]  𝄀
-1
 select mo_ctl('dn', 'flush', 'wext.big_src');
 ➤ mo_ctl(dn, flush, wext.big_src)[12,-1,0]  𝄀
 {
@@ -111,19 +108,6 @@ explain insert into ext_remote select * from big_src;
 ➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
 Multi Update
 insert into ext_remote select * from big_src;
-set @wext_writer_counts = (select fault_inject('cn.', 'get_fault_point_count', 'fj/cn/external_writer_non_empty'));
-select (
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[1].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[2].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[3].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[4].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[5].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[6].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[7].return_str')) as bigint), 0) > 0 then 1 else 0 end
-) >= 1 as data_bearing_writer;
-➤ data_bearing_writer[-7,1,0]  𝄀
-1
 select count(*), min(a), max(a) from ext_remote;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
 100000  ¦  1  ¦  100000

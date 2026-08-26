@@ -76,19 +76,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 		PodID:     id,
 		ReturnStr: "OK",
 	}}
-	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test#:::#echo#7##true", proc)
-	require.Equal(t, res, ret)
-
-	// Query a point's count through the same read-only CN RPC path used by
-	// distributed BVTs. The RPC must not execute the point's action.
-	_, _, ok := fault.TriggerFault("test")
-	require.True(t, ok)
-	res = []PodResponse{{
-		PodType:   cn,
-		PodID:     id,
-		ReturnStr: "1",
-	}}
-	ret = CNFaultInject([]string{}, fault.GetFaultPointCountCmd, "test", proc)
+	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test#:::#echo#0##true", proc)
 	require.Equal(t, res, ret)
 
 	// modify constant fault point
@@ -97,7 +85,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 		PodID:    id,
 		ErrorStr: "internal error: failed to add fault point; it may already exist and be constant.",
 	}}
-	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test#:::#echo#7##true", proc)
+	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test#:::#echo#0##true", proc)
 	require.Equal(t, res, ret)
 
 	// list fault point
@@ -106,7 +94,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 		PodID:   id,
 		ReturnList: []fault.Point{{
 			Name:     "test",
-			Iarg:     7,
+			Iarg:     0,
 			Sarg:     "",
 			Constant: true,
 		}},

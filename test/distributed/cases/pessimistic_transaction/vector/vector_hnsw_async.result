@@ -2,6 +2,26 @@ SET experimental_hnsw_index = 1;
 drop database if exists hnsw_cdc;
 create database if not exists hnsw_cdc;
 use hnsw_cdc;
+create table t0_f64(a bigint primary key, b vecf64(3));
+create index idx0_f64 using hnsw on t0_f64(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
+insert into t0_f64 values (0, '[1,2,3]');
+update t0_f64 set b = '[4,5,6]' where a = 0;
+insert into t0_f64 values (1, '[2,3,4]');
+delete from t0_f64 where a = 1;
+insert into t0_f64 values (2, '[100,100,100]');
+set @t0_f64_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx0_f64' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't0_f64') limit 1);
+set @wait_t0_sql = concat('select count(*) = 1 and min(filesize) > 0 as f64_empty_ready from `', database(), '`.`', @t0_f64_meta, '`');
+prepare wait_t0 from @wait_t0_sql;
+execute wait_t0;
+f64_empty_ready
+1
+deallocate prepare wait_t0;
+select case_name, a, b from ( select 'f64-empty-update' as case_name, a, b from (select * from t0_f64 order by l2_distance(b, '[4,5,6]') limit 1) q union all select 'f64-empty-delete', a, b from (select * from t0_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-empty-insert', a, b from (select * from t0_f64 order by l2_distance(b, '[100,100,100]') limit 1) q ) readiness order by case_name;
+case_name	a	b
+f64-empty-delete	0	[4, 5, 6]
+f64-empty-insert	2	[100, 100, 100]
+f64-empty-update	0	[4, 5, 6]
+drop table t0_f64;
 create table t1_f32(a bigint primary key, b vecf32(3), c int, key c_k(c));
 create table t1_f64(a bigint primary key, b vecf64(3), c int, key c_k(c));
 insert into t1_f32 values (0, '[1,2,3]', 1), (1, '[2,3,4]', 1), (2, '[100,100,100]', 2);
@@ -47,15 +67,15 @@ drop table t1_f64;
 create table t2_f32(a bigint primary key, b vecf32(128));
 create table t2_f64(a bigint primary key, b vecf64(128));
 create index idx2_f64 using hnsw on t2_f64(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
-load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2_f64 fields terminated by ':' parallel 'true';
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2_f32 fields terminated by ':' parallel 'true';
+insert into t2_f64 select a, cast(b as vecf64(128)) from t2_f32 where a in (0, 9999);
 create index idx2_f32 using hnsw on t2_f32(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
 set @t2_f32_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx2_f32' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't2_f32') limit 1);
 set @t2_f64_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx2_f64' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't2_f64') limit 1);
 select (select count(*) from t2_f32) as f32_rows, (select count(*) from t2_f64) as f64_rows;
 f32_rows	f64_rows
-10000	10000
-set @wait_t2_build_sql = concat('select (select count(*) = 1 and min(filesize) > 100000 from `', database(), '`.`', @t2_f32_meta, '`) as f32_ready, (select count(*) = 1 and min(filesize) > 100000 from `', database(), '`.`', @t2_f64_meta, '`) as f64_ready');
+10000	2
+set @wait_t2_build_sql = concat('select (select count(*) = 1 and min(filesize) > 100000 from `', database(), '`.`', @t2_f32_meta, '`) as f32_ready, (select count(*) = 1 and min(filesize) > 0 from `', database(), '`.`', @t2_f64_meta, '`) as f64_ready');
 prepare wait_t2_build from @wait_t2_build_sql;
 execute wait_t2_build;
 f32_ready	f64_ready

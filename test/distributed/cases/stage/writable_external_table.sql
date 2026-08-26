@@ -80,9 +80,11 @@ select count(*), min(a), max(a) from ext_big;
 -- ---------- remote run (multi-CN dispatch) ----------
 -- Reuse the parallel source, but force the small input into many real objects
 -- so the scan has physical ranges to distribute. Planner statistics retain the
--- original MULTICN threshold, while a per-CN first-non-empty-batch counter below
--- proves that execution (not just EXPLAIN) rebuilt data-bearing remote writers.
-select add_fault_point('fj/cn/external_writer_non_empty', ':::', 'return', 0, '');
+-- original MULTICN threshold. Because wstage is a local file stage, remote
+-- source scopes are merged back to the current CN before the external writer;
+-- this case proves distributed source execution plus the public write result.
+-- Remote external-writer reconstruction for shared stages is covered by the
+-- compile/remoterun unit tests and must not be inferred from this topology.
 -- @separator:table
 select mo_ctl('dn', 'flush', 'wext.big_src');
 -- @metacmp(false)
@@ -100,22 +102,6 @@ fields terminated by ',';
 -- @regex("(?i)ap query plan on multicn", true)
 explain insert into ext_remote select * from big_src;
 insert into ext_remote select * from big_src;
-set @wext_writer_counts = (select fault_inject('cn.', 'get_fault_point_count', 'fj/cn/external_writer_non_empty'));
--- One-CN developer runs require one data-bearing writer; multi-CN CI requires
--- a MULTICN plan plus a writer that actually consumed rows. The scheduler is
--- free to coalesce physical ranges onto one CN, so the test must not prescribe
--- the number of data-bearing pipelines. Read up to eight CNs, comfortably
--- above the BVT topology, without depending on pod ordering/IDs.
-select (
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[0].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[1].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[2].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[3].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[4].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[5].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[6].return_str')) as bigint), 0) > 0 then 1 else 0 end +
-         case when coalesce(cast(json_unquote(json_extract(@wext_writer_counts, '$[7].return_str')) as bigint), 0) > 0 then 1 else 0 end
-       ) >= 1 as data_bearing_writer;
 select count(*), min(a), max(a) from ext_remote;
 select disable_fault_injection();
 

@@ -27,18 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
 	FormatCSV      = "csv"
 	FormatJSONLine = "jsonline"
-
-	// FaultPointNonEmptyWriter counts external-write pipelines that receive at
-	// least one row. Distributed BVTs use it to prove that remote CNs execute
-	// data-bearing writers rather than merely appearing in an EXPLAIN plan.
-	FaultPointNonEmptyWriter = "fj/cn/external_writer_non_empty"
 )
 
 // WriterConfig describes how one external-table write pipeline should encode and
@@ -99,7 +93,6 @@ type externalWriter struct {
 	fw           *fileservice.FileServiceWriter
 	rowsWritten  uint64
 	opened       bool
-	observedData bool
 	expandedPath string
 
 	// Encoding scratch space, reused across batches: buf holds one encoded
@@ -213,16 +206,7 @@ func (w *externalWriter) WriteBatch(ctx context.Context, bat *batch.Batch, analy
 		return err
 	}
 	w.rowsWritten += uint64(bat.RowCount())
-	w.observeNonEmptyBatch()
 	return nil
-}
-
-func (w *externalWriter) observeNonEmptyBatch() {
-	if w.observedData {
-		return
-	}
-	w.observedData = true
-	fault.TriggerFault(FaultPointNonEmptyWriter)
 }
 
 func (w *externalWriter) Close(ctx context.Context) (uint64, error) {

@@ -5,6 +5,30 @@ drop database if exists hnsw_cdc;
 create database if not exists hnsw_cdc;
 use hnsw_cdc;
 
+-- Empty-index first-generation replay. Admit INSERT -> UPDATE on one PK and
+-- INSERT -> DELETE on another immediately after CREATE INDEX, before observing
+-- any ready generation. This retains the original race-sensitive lifecycle
+-- without a sleep; metadata publication is the barrier and exact ANN results
+-- reject a generation that lost or reordered either CDC transition.
+create table t0_f64(a bigint primary key, b vecf64(3));
+create index idx0_f64 using hnsw on t0_f64(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
+insert into t0_f64 values (0, '[1,2,3]');
+update t0_f64 set b = '[4,5,6]' where a = 0;
+insert into t0_f64 values (1, '[2,3,4]');
+delete from t0_f64 where a = 1;
+insert into t0_f64 values (2, '[100,100,100]');
+
+set @t0_f64_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx0_f64' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't0_f64') limit 1);
+set @wait_t0_sql = concat('select count(*) = 1 and min(filesize) > 0 as f64_empty_ready from `', database(), '`.`', @t0_f64_meta, '`');
+prepare wait_t0 from @wait_t0_sql;
+-- @metacmp(false)
+-- @wait_expect(1, 120)
+execute wait_t0;
+deallocate prepare wait_t0;
+
+select case_name, a, b from ( select 'f64-empty-update' as case_name, a, b from (select * from t0_f64 order by l2_distance(b, '[4,5,6]') limit 1) q union all select 'f64-empty-delete', a, b from (select * from t0_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-empty-insert', a, b from (select * from t0_f64 order by l2_distance(b, '[100,100,100]') limit 1) q ) readiness order by case_name;
+drop table t0_f64;
+
 -- f32 and f64 exercise distinct HNSW type paths while sharing each
 -- readiness barrier. Build a baseline generation first, then make INSERT,
 -- UPDATE, and DELETE one committed CDC delta for both consumers.
@@ -55,16 +79,17 @@ select case_name, a, b, c from ( select 'f32-update' as case_name, a, b, c from 
 drop table t1_f32;
 drop table t1_f64;
 
--- Split the two independent 10k builds across the two original lifecycle
--- axes. f64 keeps empty-index -> parallel CDC load; f32 keeps parallel load ->
--- index build on existing data (issue #22794). Both builds still overlap before
--- one barrier, and both types retain their endpoint probes.
+-- Keep the 128-dimensional f64 path at its minimum two endpoint rows. The f32
+-- path retains the bulk LOAD lifecycle needed by issue #22794: build on the
+-- first 10k snapshot, then merge a second 10k CDC generation. This removes a
+-- redundant f64 10k build while preserving type, dimension, and endpoint
+-- coverage.
 create table t2_f32(a bigint primary key, b vecf32(128));
 create table t2_f64(a bigint primary key, b vecf64(128));
 create index idx2_f64 using hnsw on t2_f64(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
 
-load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2_f64 fields terminated by ':' parallel 'true';
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2_f32 fields terminated by ':' parallel 'true';
+insert into t2_f64 select a, cast(b as vecf64(128)) from t2_f32 where a in (0, 9999);
 create index idx2_f32 using hnsw on t2_f32(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
 
 set @t2_f32_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'idx2_f32' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't2_f32') limit 1);
@@ -74,7 +99,7 @@ select (select count(*) from t2_f32) as f32_rows, (select count(*) from t2_f64) 
 -- Random 128-dimensional 10k models are materially larger than 100 KiB. This
 -- deterministic lower bound rejects an absent or empty generation without
 -- depending on the exact serialized size.
-set @wait_t2_build_sql = concat('select (select count(*) = 1 and min(filesize) > 100000 from `', database(), '`.`', @t2_f32_meta, '`) as f32_ready, (select count(*) = 1 and min(filesize) > 100000 from `', database(), '`.`', @t2_f64_meta, '`) as f64_ready');
+set @wait_t2_build_sql = concat('select (select count(*) = 1 and min(filesize) > 100000 from `', database(), '`.`', @t2_f32_meta, '`) as f32_ready, (select count(*) = 1 and min(filesize) > 0 from `', database(), '`.`', @t2_f64_meta, '`) as f64_ready');
 prepare wait_t2_build from @wait_t2_build_sql;
 -- @metacmp(false)
 -- @wait_expect(2, 120)
@@ -84,11 +109,9 @@ deallocate prepare wait_t2_build;
 -- Read each model only after its metadata generation is visible on this CN.
 select case_name, a, b from ( select 'f32-last' as case_name, a, b from (select * from t2_f32 order by l2_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") limit 1) q union all select 'f32-first', a, b from (select * from t2_f32 order by l2_distance(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78, 55, 10, 45, 83, 11, 6, 14, 57, 102, 75, 20, 8, 3, 5, 67, 17, 19, 26, 5, 0, 1, 22, 60, 26, 7, 1, 18, 22, 84, 53, 85, 119, 119, 4, 24, 18, 7, 7, 1, 81, 106, 102, 72, 30, 6, 0, 9, 1, 9, 119, 72, 1, 4, 33, 119, 29, 6, 1, 0, 1, 14, 52, 119, 30, 3, 0, 0, 55, 92, 111, 2, 5, 4, 9, 22, 89, 96, 14, 1, 0, 1, 82, 59, 16, 20, 5, 25, 14, 11, 4, 0, 0, 1, 26, 47, 23, 4, 0, 0, 4, 38, 83, 30, 14, 9, 4, 9, 17, 23, 41, 0, 0, 2, 8, 19, 25, 23, 1]") limit 1) q union all select 'f64-last', a, b from (select * from t2_f64 order by l2_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") limit 1) q union all select 'f64-first', a, b from (select * from t2_f64 order by l2_distance(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78, 55, 10, 45, 83, 11, 6, 14, 57, 102, 75, 20, 8, 3, 5, 67, 17, 19, 26, 5, 0, 1, 22, 60, 26, 7, 1, 18, 22, 84, 53, 85, 119, 119, 4, 24, 18, 7, 7, 1, 81, 106, 102, 72, 30, 6, 0, 9, 1, 9, 119, 72, 1, 4, 33, 119, 29, 6, 1, 0, 1, 14, 52, 119, 30, 3, 0, 0, 55, 92, 111, 2, 5, 4, 9, 22, 89, 96, 14, 1, 0, 1, 82, 59, 16, 20, 5, 25, 14, 11, 4, 0, 0, 1, 26, 47, 23, 4, 0, 0, 4, 38, 83, 30, 14, 9, 4, 9, 17, 23, 41, 0, 0, 2, 8, 19, 25, 23, 1]") limit 1) q ) readiness order by case_name;
 
--- Preserve issue #22794's distinct lifecycle axis without duplicating it for
--- both vector types: update an already materialized f32 model with a second
--- parallel 10k CDC load, then prove both the generation transition and the
--- two endpoints that exist only in the delta dataset.
--- @bvt:issue#22794
+-- Regression for closed issue #22794: update an already materialized f32 model
+-- with a second bulk CDC load, then prove both the generation transition and
+-- the endpoints that exist only in the delta dataset.
 set @capture_t2_f32_sql = concat('select checksum into @t2_f32_before from `', database(), '`.`', @t2_f32_meta, '` limit 1');
 prepare capture_t2_f32 from @capture_t2_f32_sql;
 execute capture_t2_f32;
@@ -113,7 +136,6 @@ select case_name, a from ( select 'f32-delta-first' as case_name, a from (select
 -- the original 10k model as well as admitting the two delta endpoints above.
 -- @wait_expect(2, 120)
 select case_name, a from ( select 'f32-base-first-after-delta' as case_name, a from (select a from t2_f32 order by l2_distance(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78, 55, 10, 45, 83, 11, 6, 14, 57, 102, 75, 20, 8, 3, 5, 67, 17, 19, 26, 5, 0, 1, 22, 60, 26, 7, 1, 18, 22, 84, 53, 85, 119, 119, 4, 24, 18, 7, 7, 1, 81, 106, 102, 72, 30, 6, 0, 9, 1, 9, 119, 72, 1, 4, 33, 119, 29, 6, 1, 0, 1, 14, 52, 119, 30, 3, 0, 0, 55, 92, 111, 2, 5, 4, 9, 22, 89, 96, 14, 1, 0, 1, 82, 59, 16, 20, 5, 25, 14, 11, 4, 0, 0, 1, 26, 47, 23, 4, 0, 0, 4, 38, 83, 30, 14, 9, 4, 9, 17, 23, 41, 0, 0, 2, 8, 19, 25, 23, 1]") limit 1) q union all select 'f32-base-last-after-delta', a from (select a from t2_f32 order by l2_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") limit 1) q ) retained order by case_name;
--- @bvt:issue
 
 drop table t2_f32;
 drop table t2_f64;

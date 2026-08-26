@@ -17,16 +17,10 @@ package externalwrite
 import (
 	"bytes"
 	"context"
-	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,38 +58,6 @@ func TestWriteBatchNilEmpty(t *testing.T) {
 	require.NoError(t, w.WriteBatch(context.Background(), empty, nil))
 
 	require.False(t, w.opened)
-	require.False(t, w.observedData)
-}
-
-func TestWriteBatchObservesNonEmptyWriterOnce(t *testing.T) {
-	require.True(t, fault.Enable())
-	t.Cleanup(func() { fault.Disable() })
-	require.NoError(t, fault.AddFaultPoint(
-		context.Background(), FaultPointNonEmptyWriter, ":::", "return", 0, "", false))
-
-	mp := mpool.MustNewZero()
-	bat := testBatch(t, mp)
-	defer bat.Clean(mp)
-
-	fw, err := fileservice.NewFileServiceWriter(
-		filepath.Join(t.TempDir(), "observed.csv"), context.Background())
-	require.NoError(t, err)
-	t.Cleanup(func() { fw.Abort(errors.New("external writer test cleanup")) })
-	w := NewExternalWriter(nil, WriterConfig{}).(*externalWriter)
-	// Bypass stage resolution, which is outside this writer-lifecycle test.
-	w.fw = fw
-	w.opened = true
-	analyzer := process.NewAnalyzer(0, false, false, "external-write-test")
-	require.NoError(t, w.WriteBatch(context.Background(), bat, analyzer))
-	require.NoError(t, w.WriteBatch(context.Background(), bat, analyzer))
-	rows, err := w.Close(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, uint64(4), rows)
-
-	// A writer may receive many non-empty batches, but contributes exactly once.
-	count, ok := fault.GetFaultPointCount(FaultPointNonEmptyWriter)
-	require.True(t, ok)
-	require.Equal(t, int64(1), count)
 }
 
 // TestCloseNoOp: Close before any file is opened returns 0 rows, no error.
