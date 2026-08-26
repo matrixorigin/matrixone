@@ -1915,7 +1915,7 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 		}},
 	}
 	rowNumberCol := GetColExpr(rowNumberFunc.Typ, windowTag, 0)
-	upperBound := makePlan2Int64ConstExprWithType(int64(offset + limit))
+	upperBound := MakePlan2Uint64ConstExprWithType(offset + limit)
 	rowFilter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=", []*plan.Expr{
 		DeepCopyExpr(rowNumberCol),
 		upperBound,
@@ -1924,7 +1924,7 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 		return 0, err
 	}
 	if offset > 0 {
-		lowerBound := makePlan2Int64ConstExprWithType(int64(offset))
+		lowerBound := MakePlan2Uint64ConstExprWithType(offset)
 		afterOffset, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), ">", []*plan.Expr{
 			DeepCopyExpr(rowNumberCol),
 			lowerBound,

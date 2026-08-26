@@ -3307,6 +3307,9 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	if !hasUpdateFromDedupWindow(query, 1) {
 		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window partitioned by row_id")
 	}
+	if !hasUpdateFromDedupInt64Selector(query) {
+		t.Fatalf("UPDATE FROM dedup selector should explicitly cast row_number to int64")
+	}
 }
 
 func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
@@ -4223,6 +4226,32 @@ func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
 				}
 			}
 			if allRowID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasUpdateFromDedupInt64Selector verifies that the internal UPDATE ... FROM
+// dedup consumer converts ROW_NUMBER's public unsigned result to its signed
+// selector contract at the projection boundary.
+func hasUpdateFromDedupInt64Selector(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			if expr.Typ.Id != int32(types.T_int64) {
+				continue
+			}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+				continue
+			}
+			col := fn.Args[0].GetCol()
+			if col != nil && col.Name == "__mo_update_from_dedup_row_number" &&
+				fn.Args[0].Typ.Id == int32(types.T_uint64) {
 				return true
 			}
 		}

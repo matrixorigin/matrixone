@@ -4283,14 +4283,18 @@ func (builder *QueryBuilder) appendTargetRowNumberBelowAssignmentProject(
 	selectNode.Children[0] = windowID
 
 	rowNumberPos := int32(len(selectNode.ProjectList))
-	selectNode.ProjectList = append(selectNode.ProjectList, &plan.Expr{
+	rowNumberProject, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: windowTag,
 			ColPos: 0,
 			Name:   "__mo_multi_target_update_row_number",
 		}},
-	})
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, 0, err
+	}
+	selectNode.ProjectList = append(selectNode.ProjectList, rowNumberProject)
 	return lastNodeID, rowNumberPos, nil
 }
 
@@ -4704,7 +4708,7 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 	for pos := range selectNode.ProjectList {
 		projectList = append(projectList, childColExpr(int32(pos)))
 	}
-	projectList = append(projectList, &plan.Expr{
+	rowNumberProject, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -4713,7 +4717,11 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 				Name:   "__mo_multi_target_update_row_number",
 			},
 		},
-	})
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, nil, 0, 0, err
+	}
+	projectList = append(projectList, rowNumberProject)
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
@@ -4913,7 +4921,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 	for pos := range selectNode.ProjectList {
 		windowProjectList = append(windowProjectList, childColExpr(int32(pos)))
 	}
-	windowProjectList = append(windowProjectList, &plan.Expr{
+	rowNumberProject, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -4922,7 +4930,11 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 				Name:   "__mo_update_from_dedup_row_number",
 			},
 		},
-	})
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, nil, 0, err
+	}
+	windowProjectList = append(windowProjectList, rowNumberProject)
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
