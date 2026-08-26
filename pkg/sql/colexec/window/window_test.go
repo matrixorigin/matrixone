@@ -1484,12 +1484,13 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 	tests := []struct {
 		name        string
 		wantInt     []int64
+		wantUint    []uint64
 		wantFloat   []float64
 		bucketCount int64
 	}{
-		{name: "row_number", wantInt: []int64{2, 3, 4}},
-		{name: "rank", wantInt: []int64{1, 3, 4}},
-		{name: "dense_rank", wantInt: []int64{1, 2, 3}},
+		{name: "row_number", wantUint: []uint64{2, 3, 4}},
+		{name: "rank", wantUint: []uint64{1, 3, 4}},
+		{name: "dense_rank", wantUint: []uint64{1, 2, 3}},
 		{name: "percent_rank", wantFloat: []float64{0, 2.0 / 3.0, 1}},
 		{name: "cume_dist", wantFloat: []float64{0.5, 0.75, 1}},
 		{name: "ntile", wantInt: []int64{1, 2, 3}, bucketCount: 3},
@@ -1518,8 +1519,13 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 			require.NoError(t, err)
 			defer result.Free(proc.Mp())
 			if test.wantFloat != nil {
+				require.Equal(t, types.T_float64, result.GetType().Oid)
 				require.Equal(t, test.wantFloat, vector.MustFixedColWithTypeCheck[float64](result))
+			} else if test.wantUint != nil {
+				require.Equal(t, types.T_uint64, result.GetType().Oid)
+				require.Equal(t, test.wantUint, vector.MustFixedColWithTypeCheck[uint64](result))
 			} else {
+				require.Equal(t, types.T_int64, result.GetType().Oid)
 				require.Equal(t, test.wantInt, vector.MustFixedColWithTypeCheck[int64](result))
 			}
 		})
