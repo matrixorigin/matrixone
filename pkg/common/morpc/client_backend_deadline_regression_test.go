@@ -35,6 +35,73 @@ type lateSuccessfulBackendFactory struct {
 	calls   atomic.Int32
 }
 
+type retryableDeadlineBackendFactory struct {
+	calls atomic.Int32
+}
+
+func (f *retryableDeadlineBackendFactory) Create(
+	string,
+	...BackendOption,
+) (Backend, error) {
+	f.calls.Add(1)
+	return nil, moerr.NewRPCTimeoutNoCtx()
+}
+
+// TestAutoCreateRetryableFactoryIsBoundedAndReleasesGeneration is the MORPC
+// half of #27523. A stale endpoint can keep returning a retryable dial error;
+// coalesced callers must share one finite factory budget, and the expired
+// generation must be removed so later topology generations are not poisoned.
+func TestAutoCreateRetryableFactoryIsBoundedAndReleasesGeneration(t *testing.T) {
+	const callers = 16
+	factory := &retryableDeadlineBackendFactory{}
+	rpcClient, err := NewClient(
+		t.Name(),
+		factory,
+		WithClientEnableAutoCreateBackend(),
+		WithClientAutoCreateQueueWaitTimeout(50*time.Millisecond),
+		WithClientAutoCreateWaitTimeout(50*time.Millisecond),
+		WithClientDisableCircuitBreaker(),
+		WithClientLogger(zap.NewNop()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rpcClient.Close()) })
+
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			<-start
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			stream, streamErr := rpcClient.NewStream(ctx, "stale-cn:6002", false)
+			if stream != nil {
+				_ = stream.Close(true)
+			}
+			results <- streamErr
+		}()
+	}
+	started := time.Now()
+	close(start)
+	for range callers {
+		select {
+		case streamErr := <-results:
+			require.ErrorIs(t, streamErr, ErrBackendCreateTimeout)
+		case <-time.After(time.Second):
+			t.Fatal("coalesced stale-backend caller exceeded its bounded retry budget")
+		}
+	}
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+	require.Positive(t, factory.calls.Load())
+
+	client := rpcClient.(*client)
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return client.mu.creating["stale-cn:6002"] == nil
+	}, time.Second, time.Millisecond,
+		"expired backend generation remained owned after all callers returned")
+}
+
 func (f *lateSuccessfulBackendFactory) Create(
 	string,
 	...BackendOption,
