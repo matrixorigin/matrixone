@@ -164,6 +164,18 @@ bool read_cgroup_uint(const std::string& path, uint64_t* out) {
     return parse_uint(value, out);
 }
 
+// PAGE_COUNTER_MAX: LONG_MAX rounded down to a page. A bare LONG_MAX is larger,
+// so >= covers kernels that report either.
+static constexpr uint64_t kCgroupV1Unlimited = 0x7FFFFFFFFFFFF000ULL;
+
+bool read_cgroup_limit(const std::string& path, uint64_t* out) {
+    uint64_t v = 0;
+    if (!read_cgroup_uint(path, &v)) return false;
+    if (v >= kCgroupV1Unlimited) return false;
+    *out = v;
+    return true;
+}
+
 bool read_meminfo_bytes(const std::string& path, const char* key, uint64_t* out) {
     std::string data;
     if (!read_file(path, &data)) return false;
@@ -203,7 +215,7 @@ headroom_status hierarchical_headroom(const std::string& dir_in, const std::stri
     bool     found   = false;
     for (;;) {
         uint64_t limit = 0;
-        if (read_cgroup_uint((dir / limit_file).generic_string(), &limit) && limit > 0) {
+        if (read_cgroup_limit((dir / limit_file).generic_string(), &limit) && limit > 0) {
             uint64_t usage = 0;
             if (!read_cgroup_uint((dir / usage_file).generic_string(), &usage)) {
                 // A level caps us and we cannot read what it has already spent.

@@ -64,6 +64,15 @@ host_available_t host_available_bytes();
 // reading for an empty cgroup.
 bool read_cgroup_uint(const std::string& path, uint64_t* out);
 
+// Reads a cgroup LIMIT file. False when the file imposes no bound -- missing,
+// empty, v2's "max", or v1's NUMERIC unlimited sentinel.
+//
+// v1 has no "max" string: with no limit set it writes PAGE_COUNTER_MAX, which
+// parses as a valid integer. Read as a real limit it yields ~9.2 EB of headroom
+// reported as MEASURED, which disables the host bound on exactly the hosts that
+// still run cgroup v1.
+bool read_cgroup_limit(const std::string& path, uint64_t* out);
+
 // Reads one `Key:  N kB` line out of a /proc/meminfo-shaped file, returning
 // BYTES. Callers pass the key including no colon, e.g. "MemAvailable".
 bool read_meminfo_bytes(const std::string& path, const char* key, uint64_t* out);

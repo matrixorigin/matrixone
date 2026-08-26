@@ -178,6 +178,29 @@ func readCgroupUint(path string) (uint64, bool) {
 	return v, true
 }
 
+// cgroupV1Unlimited is what cgroup v1 writes into memory.limit_in_bytes when no
+// limit is set: PAGE_COUNTER_MAX, i.e. LONG_MAX rounded down to a page
+// boundary. Only v2 signals "no limit" with the string "max". Kernels that
+// report a bare LONG_MAX are covered too, since it is larger than this.
+const cgroupV1Unlimited = uint64(0x7FFFFFFFFFFFF000)
+
+// readCgroupLimit reads a cgroup LIMIT file. ok is false when the file is
+// missing or empty, when it holds v2's "max", and when it holds v1's numeric
+// unlimited sentinel -- all three mean "this level imposes no bound".
+//
+// The sentinel matters because it parses as a perfectly good integer: treating
+// it as a real limit makes an unlimited v1 hierarchy report ~9.2 EB of headroom
+// as a MEASURED figure, and every caller that sizes an allocation from that
+// figure loses its memory bound entirely rather than falling back to the host
+// reading.
+func readCgroupLimit(path string) (uint64, bool) {
+	v, ok := readCgroupUint(path)
+	if !ok || v >= cgroupV1Unlimited {
+		return 0, false
+	}
+	return v, true
+}
+
 // minHierarchicalHeadroom returns the tightest `limit - usage` across every
 // governing level from `dir` up to `mountPoint`, and whether any level imposed
 // a limit at all.
@@ -200,7 +223,7 @@ func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile string) (uint
 		found   bool
 	)
 	for {
-		if limit, ok := readCgroupUint(filepath.Join(dir, limitFile)); ok && limit > 0 {
+		if limit, ok := readCgroupLimit(filepath.Join(dir, limitFile)); ok && limit > 0 {
 			usage, uok := readCgroupUint(filepath.Join(dir, usageFile))
 			if !uok {
 				return 0, false
@@ -291,14 +314,9 @@ func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {
 	mountPoint = filepath.Clean(mountPoint)
 	var minimum uint64
 	for {
-		data, err := os.ReadFile(filepath.Join(dir, filename))
-		if err == nil {
-			value := strings.TrimSpace(string(data))
-			if value != "" && value != "max" {
-				if limit, parseErr := strconv.ParseUint(value, 10, 64); parseErr == nil && limit > 0 && (minimum == 0 || limit < minimum) {
-					minimum = limit
-				}
-			}
+		if limit, ok := readCgroupLimit(filepath.Join(dir, filename)); ok && limit > 0 &&
+			(minimum == 0 || limit < minimum) {
+			minimum = limit
 		}
 		if dir == mountPoint {
 			break

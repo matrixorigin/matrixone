@@ -415,3 +415,46 @@ func TestMemoryAvailableIncludingCacheReportsStatus(t *testing.T) {
 		require.Equal(t, uint64(0), avail, "unmeasured must report zero")
 	}
 }
+
+// cgroup v1 has no "max" string: when no memory limit is set it writes
+// PAGE_COUNTER_MAX into memory.limit_in_bytes, which parses as a perfectly
+// good integer. Treating it as a real limit reported ~9.2 EB of headroom as a
+// MEASURED figure, and a measured figure is exactly what callers size bulk
+// allocations from -- so an unlimited v1 host silently lost its memory bound
+// instead of falling back to the host reading.
+func TestMinHierarchicalHeadroom_V1UnlimitedSentinel(t *testing.T) {
+	const v1Unlimited = uint64(0x7FFFFFFFFFFFF000) // PAGE_COUNTER_MAX
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	require.NoError(t, os.MkdirAll(child, 0o755))
+	write := func(dir, name string, val uint64) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name),
+			[]byte(strconv.FormatUint(val, 10)+"\n"), 0o600))
+	}
+
+	write(root, "memory.limit_in_bytes", v1Unlimited)
+	write(root, "memory.usage_in_bytes", 1<<30)
+	write(child, "memory.limit_in_bytes", v1Unlimited)
+	write(child, "memory.usage_in_bytes", 1<<30)
+
+	_, ok := minHierarchicalHeadroom(child, root, "memory.limit_in_bytes", "memory.usage_in_bytes")
+	require.False(t, ok, "an unlimited v1 hierarchy must fall back to the host reading")
+
+	// A bare LONG_MAX is larger than the sentinel and must also read as unlimited.
+	write(child, "memory.limit_in_bytes", uint64(1<<63-1))
+	_, ok = minHierarchicalHeadroom(child, root, "memory.limit_in_bytes", "memory.usage_in_bytes")
+	require.False(t, ok, "LONG_MAX must also read as unlimited")
+
+	// A REAL v1 limit still binds: 4 GiB cap, 1 GiB used -> 3 GiB headroom.
+	write(child, "memory.limit_in_bytes", 4<<30)
+	got, ok := minHierarchicalHeadroom(child, root, "memory.limit_in_bytes", "memory.usage_in_bytes")
+	require.True(t, ok, "a real limit must still be measured")
+	require.Equal(t, uint64(3<<30), got)
+
+	// ...and the same sentinel must not be mistaken for a limit by the limit walk,
+	// which feeds CgroupMemoryLimit and thence the second tier of
+	// MemoryAvailableIncludingCache.
+	write(child, "memory.limit_in_bytes", v1Unlimited)
+	require.Zero(t, minHierarchicalLimit(child, root, "memory.limit_in_bytes"),
+		"unlimited v1 must not surface as a colossal limit")
+}

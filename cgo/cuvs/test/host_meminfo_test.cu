@@ -28,6 +28,7 @@
 
 using matrixone::host_available_bytes;
 using matrixone::min_hierarchical_headroom;
+using matrixone::read_cgroup_limit;
 using matrixone::read_cgroup_uint;
 using matrixone::read_meminfo_bytes;
 
@@ -222,4 +223,36 @@ TEST(HostMeminfoTest, LiveReadingIsSelfConsistent) {
     if (!r.measured) {
         ASSERT_EQ(r.bytes, (uint64_t)0);
     }
+}
+
+// The Go twin of this rule is TestMinHierarchicalHeadroom_V1UnlimitedSentinel.
+// cgroup v1 has no "max" string: with no limit set it writes PAGE_COUNTER_MAX,
+// which parses as a valid integer. Reading it as a real limit reports ~9.2 EB
+// as MEASURED and silently disables the host bound.
+TEST(HostMeminfoTest, V1UnlimitedSentinelIsNotALimit) {
+    temp_tree t("v1max");
+    uint64_t  v = 0;
+
+    write_file(t.root, "unlimited", "9223372036854771712");  // PAGE_COUNTER_MAX
+    ASSERT_TRUE(read_cgroup_uint((t.root / "unlimited").string(), &v));  // parses fine...
+    ASSERT_FALSE(read_cgroup_limit((t.root / "unlimited").string(), &v));  // ...but is no bound
+
+    write_file(t.root, "longmax", "9223372036854775807");  // bare LONG_MAX
+    ASSERT_FALSE(read_cgroup_limit((t.root / "longmax").string(), &v));
+
+    // A real limit still reads as one.
+    write_file(t.root, "real", "4294967296");  // 4 GiB
+    ASSERT_TRUE(read_cgroup_limit((t.root / "real").string(), &v));
+    ASSERT_EQ(v, (uint64_t)4294967296);
+
+    // And the walk falls through rather than reporting exabytes.
+    const fs::path child = t.root / "child";
+    fs::create_directories(child);
+    write_file(t.root, "memory.limit_in_bytes", "9223372036854771712");
+    write_file(t.root, "memory.usage_in_bytes", "1073741824");
+    write_file(child, "memory.limit_in_bytes", "9223372036854771712");
+    write_file(child, "memory.usage_in_bytes", "1073741824");
+    uint64_t got = 0;
+    ASSERT_FALSE(min_hierarchical_headroom(child.string(), t.root.string(),
+                                           "memory.limit_in_bytes", "memory.usage_in_bytes", &got));
 }
