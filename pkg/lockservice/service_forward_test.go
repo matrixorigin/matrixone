@@ -292,11 +292,7 @@ func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 			require.Less(t, time.Since(start), 3*time.Second)
 		},
 		func(c *Config) {
-			c.TxnIterFunc = func(fn func([]byte) bool) {
-				if fn(holderTxn) {
-					fn(waiterTxn)
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(holderTxn, waiterTxn)
 		},
 	)
 }
