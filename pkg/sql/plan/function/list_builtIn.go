@@ -8881,7 +8881,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 1 && inputs[0].Oid == types.T_TS {
 				return newCheckResultWithSuccess(0)
 			}
-			if len(inputs) == 2 && inputs[0].Oid == types.T_TS && inputs[1].Oid == types.T_int64 {
+			if len(inputs) == 2 && inputs[0].Oid == types.T_TS &&
+				(inputs[1].Oid == types.T_int64 || inputs[1].Oid == types.T_any) {
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)

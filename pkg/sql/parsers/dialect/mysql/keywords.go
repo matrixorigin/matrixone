@@ -70,6 +70,7 @@ func init() {
 		"ef_search":                  EF_SEARCH,
 		"bit_or":                     BIT_OR,
 		"bit_and":                    BIT_AND,
+		"bit_xor":                    BIT_XOR,
 		"call":                       CALL,
 		"cancel":                     CANCEL,
 		"catalog":                    CATALOG,
