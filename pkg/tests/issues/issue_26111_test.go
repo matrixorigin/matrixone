@@ -22,11 +22,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,45 +103,36 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 			require.Error(t, err)
 		}
 
-		testutils.WaitDatabaseCreatedWithAccount(t, targetAccountID, accountBranch, cn)
-		testutils.WaitTableCreatedWithAccount(t, targetAccountID, accountBranch, "a", cn)
-		testutils.WaitTableCreatedWithAccount(t, targetAccountID, accountBranch, "b", cn)
-		tenantCtx := defines.AttachAccountId(ctx, uint32(targetAccountID))
-		tenantExec := cn.RawService().(cnservice.Service).GetSQLExecutor()
-		tenantOpts := executor.Options{}.WithAccountID(uint32(targetAccountID)).WithDatabase(accountBranch)
-
-		result, err := tenantExec.Exec(tenantCtx,
-			"select count(*) from `a` a join `b` b on a.b_id = b.id and b.a_id = a.id", tenantOpts)
+		// The cross-account DDL returns only after commit. Verify visibility and FK
+		// enforcement through the target account's public SQL path instead of three
+		// open-ended catalog polling loops.
+		targetDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/%s", targetAccount, port, accountBranch,
+		))
 		require.NoError(t, err)
-		require.Equal(t, 1, testutils.ReadCount(result))
-		result.Close()
+		defer targetDB.Close()
+		require.NoError(t, targetDB.PingContext(ctx))
+		require.NoError(t, targetDB.QueryRowContext(ctx,
+			"select count(*) from `a` a join `b` b on a.b_id = b.id and b.a_id = a.id").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, targetDB.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"' and ((table_name = 'a' and refer_table_name = 'b') or (table_name = 'b' and refer_table_name = 'a'))").Scan(&count))
+		require.Equal(t, 2, count)
 
-		result, err = tenantExec.Exec(tenantCtx,
-			"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"' and ((table_name = 'a' and refer_table_name = 'b') or (table_name = 'b' and refer_table_name = 'a'))", tenantOpts)
-		require.NoError(t, err)
-		require.Equal(t, 2, testutils.ReadCount(result))
-		result.Close()
-
-		result, err = tenantExec.Exec(tenantCtx, "insert into `a` values (2, 999)", tenantOpts)
-		result.Close()
+		_, err = targetDB.ExecContext(ctx, "insert into `a` values (2, 999)")
 		require.Error(t, err)
-		result, err = tenantExec.Exec(tenantCtx, "insert into `b` values (2, 999)", tenantOpts)
-		result.Close()
+		_, err = targetDB.ExecContext(ctx, "insert into `b` values (2, 999)")
 		require.Error(t, err)
 
 		_, err = db.ExecContext(ctx, "data branch create database `"+accountBranch+"` from `"+sourceDB+"` {snapshot='"+snapshotName+"'} to account `"+targetAccount+"`")
 		require.Error(t, err)
 		require.NoError(t, db.QueryRowContext(ctx, "select @@session.foreign_key_checks").Scan(&foreignKeyChecks))
 		require.Equal(t, 1, foreignKeyChecks)
-		result, err = tenantExec.Exec(tenantCtx,
-			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+accountBranch+"' and relkind = 'r'", tenantOpts)
-		require.NoError(t, err)
-		require.Equal(t, 2, testutils.ReadCount(result))
-		result.Close()
-		result, err = tenantExec.Exec(tenantCtx,
-			"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"'", tenantOpts)
-		require.NoError(t, err)
-		require.Equal(t, 2, testutils.ReadCount(result))
-		result.Close()
+		require.NoError(t, targetDB.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+accountBranch+"' and relkind = 'r'").Scan(&count))
+		require.Equal(t, 2, count)
+		require.NoError(t, targetDB.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"'").Scan(&count))
+		require.Equal(t, 2, count)
 	})
 }
