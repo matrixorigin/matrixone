@@ -8163,7 +8163,7 @@ func strToBit(
 	for i := 0; i < length; i++ {
 		v, null := from.GetStrValue(uint64(i))
 		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
+			if err := to.Append(0, true); err != nil {
 				return err
 			}
 		} else {
