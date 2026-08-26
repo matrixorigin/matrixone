@@ -962,7 +962,7 @@ select id, sum(id) over (partition by sex order by id
        rows between 2 preceding and 1 following), sex from row_number01;
 
 -- try the same as a view
-create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;
+create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as window_sum, sex from row_number01;
 show create view v;
 select * from v;
 

@@ -594,6 +594,14 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 	}
+	// Foreign connections (esql_tvf/sql_tvf and ENGINE=ESQL|SQL scans) are
+	// session-CN-local: neither the pools/transports nor the handle->conn map
+	// migrate, so a transferred client would keep handle strings that resolve
+	// to nothing on the target. Fail closed like pending long-data below;
+	// the client can disconnect its handles and retry.
+	if ses.hasForeignConns() {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
@@ -608,6 +616,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		}
 	}
 	resp.PreparedStmtLongDataChecked = true
+	resp.FoundRows = ses.GetLastFoundRows()
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		// Typed snapshots can only be replayed by a v22 target when the proxy's
 		// raw COM_QUERY history did not observe every assignment (for example,
@@ -664,7 +673,9 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 }
 
 func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
-	return rt.resetSessionWithContext(rt.getCancelRoutineCtx(), baseServiceID, resp)
+	return rt.resetSessionWithAdmission(
+		rt.getCancelRoutineCtx(), baseServiceID, resp, false,
+	)
 }
 
 func (rt *Routine) resetSessionWithContext(
@@ -672,7 +683,26 @@ func (rt *Routine) resetSessionWithContext(
 	baseServiceID string,
 	resp *query.ResetSessionResponse,
 ) error {
-	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
+	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true)
+}
+
+func (rt *Routine) resetSessionWithAdmission(
+	ctx context.Context,
+	baseServiceID string,
+	resp *query.ResetSessionResponse,
+	waitForRequest bool,
+) error {
+	var operationCtx context.Context
+	var ok bool
+	if waitForRequest {
+		// ResetSession is sent after Proxy has sealed the client generation, so
+		// waiting here lets an already-running request finish before the old
+		// session is replaced. The QueryService caller supplies the bounded
+		// context; the no-context helper above intentionally remains fail-fast.
+		operationCtx, ok = rt.mc.beginOperationAfterRequestWithContext(ctx)
+	} else {
+		operationCtx, ok = rt.mc.tryBeginOperationWithContext(ctx)
+	}
 	if !ok {
 		if ctx != nil {
 			if cause := context.Cause(ctx); cause != nil {

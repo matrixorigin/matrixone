@@ -213,7 +213,9 @@ func (s *Service) checkReplicaHealth(ctx context.Context) {
 			zap.Uint64("shardID", tnShardID))
 		return
 	}
-	if err := s.store.checkHealth(tnShardID); err != nil {
+	// A TN shard and its backing Log shard have distinct IDs. The only
+	// supported TN shard is backed by the first Log shard.
+	if err := s.store.checkHealth(firstLogShardID); err != nil {
 		s.runtime.Logger().Error("failed to check health", zap.Error(err))
 		v2.LogServiceReplicaHealthGauge.Set(0)
 	} else {

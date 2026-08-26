@@ -80,9 +80,17 @@ const (
 )
 
 type collectRange struct {
-	from []types.TS
-	end  []types.TS
-	rel  []engine.Relation
+	from             []types.TS
+	end              []types.TS
+	rel              []engine.Relation
+	startBoundaryRel []engine.Relation
+}
+
+func (r collectRange) startBoundary(i int) engine.Relation {
+	if i < 0 || i >= len(r.startBoundaryRel) {
+		return nil
+	}
+	return r.startBoundaryRel[i]
 }
 
 // branchMetaInfo describes the lineage relationship between the two

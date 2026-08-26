@@ -130,8 +130,26 @@ func fetchBoolRows(
 		parker.EncodeBool(v)
 		return parker.Bytes()
 	}
-	return true, [][]byte{fn(false), fn(true)},
-		lock.Granularity_Range
+	if lockTable {
+		return true, [][]byte{fn(false), fn(true)},
+			lock.Granularity_Range
+	}
+	return fetchFixedRowsWithCompare(
+		vec,
+		max,
+		fn,
+		func(left, right bool) int {
+			if left == right {
+				return 0
+			}
+			if !left {
+				return -1
+			}
+			return 1
+		},
+		filter,
+		filterCols,
+	)
 }
 
 func fetchInt8Rows(

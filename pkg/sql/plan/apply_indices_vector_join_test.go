@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
@@ -492,10 +493,44 @@ func TestApplyIndicesForSortUsingIvfflat_JoinThroughKeepsProviderChild(t *testin
 	require.NoError(t, err)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
-	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
-	require.NotNil(t, funcScan)
-	require.Equal(t, []int32{tc.providerNodeID}, funcScan.Children)
-	require.Equal(t, int32(1), funcScan.TblFuncExprList[1].GetCol().ColPos)
+	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
+	require.NotNil(t, vectorScan)
+	require.Empty(t, vectorScan.Children)
+	require.Equal(t, int32(1), vectorScan.VectorIndexScan.QueryVector.GetCol().ColPos)
+	applyNode := findFirstNodeByType(tc.builder, plan.Node_APPLY)
+	require.NotNil(t, applyNode)
+	require.Equal(t, []int32{tc.providerNodeID, vectorScan.NodeId}, applyNode.Children)
+}
+
+func TestApplyIndicesForSortUsingIvfflatPreservesScanSnapshot(t *testing.T) {
+	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{
+		providerSingle:        true,
+		providerVectorNotNull: true,
+	})
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 123},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+	tc.builder.qry.Nodes[tc.mainScanNodeID].ScanSnapshot = snapshot
+
+	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
+	require.NotNil(t, vecCtx)
+	_, err := tc.builder.applyIndicesForSortUsingIvfflat(
+		tc.projNodeID, vecCtx, newVectorJoinIvfIndex(), nil, nil)
+	require.NoError(t, err)
+
+	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
+	require.NotNil(t, vectorScan)
+	require.Equal(t, snapshot, vectorScan.ScanSnapshot)
+	require.Equal(t, snapshot, vectorScan.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, snapshot, vectorScan.ScanSnapshot)
+	require.NotSame(t, snapshot, vectorScan.VectorIndexScan.ScanSnapshot)
+
+	clone := DeepCopyNode(vectorScan)
+	require.Equal(t, snapshot, clone.ScanSnapshot)
+	require.Equal(t, snapshot, clone.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, vectorScan.ScanSnapshot, clone.ScanSnapshot)
+	require.NotSame(t, vectorScan.VectorIndexScan.ScanSnapshot, clone.VectorIndexScan.ScanSnapshot)
 }
 
 func TestApplyIndicesForProject_JoinThroughReachesVectorRule(t *testing.T) {

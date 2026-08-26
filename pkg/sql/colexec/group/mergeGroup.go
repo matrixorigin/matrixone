@@ -406,6 +406,11 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 				return moerr.NewInvalidStateNoCtx(
 					"aggregate binary-string metadata requires MORPCVersion18")
 			}
+			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+				vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
+				return moerr.NewInvalidStateNoCtx(
+					"aggregate explicit-text metadata requires MORPCVersion23")
+			}
 			if err := validateDecodedAggregateGroupCount(
 				ctr.spillAggList[i], bat.RowCount()); err != nil {
 				return err
@@ -543,6 +548,7 @@ func (mergeGroup *MergeGroup) restorePartialPrepareParamKinds(
 		targets,
 		ctr.mp,
 		binaryStringWireEnabled(proc),
+		explicitTextWireEnabled(proc),
 	)
 	if err != nil {
 		return err

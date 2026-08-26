@@ -572,6 +572,14 @@ retryInsertValues:
 		}
 	}
 
-	proc.SetLastInsertID(lastInsertValue)
+	if lastInsertValue != 0 {
+		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
+		// all sharing the statement-wide process state.  Publish the smallest
+		// generated value through the shared coordinator so scheduling cannot make
+		// LAST_INSERT_ID depend on which scope happens to finish first.  Subsequent
+		// batches in a serial scope naturally keep the first value because
+		// auto-increment allocations are monotonic.
+		proc.SetStatementLastInsertIDIfEarlier(lastInsertValue)
+	}
 	return nil
 }

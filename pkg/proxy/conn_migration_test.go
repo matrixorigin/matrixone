@@ -52,6 +52,25 @@ func runTestWithQueryServiceHandler(
 	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
 	fn func(cc *clientConn, addr string),
 ) {
+	runTestWithQueryServiceHandlers(t, cn, migrateConnToHandler, nil, fn)
+}
+
+func runTestWithQueryServiceResetHandler(
+	t *testing.T,
+	cn metadata.CNService,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
+	runTestWithQueryServiceHandlers(t, cn, nil, resetSessionHandler, fn)
+}
+
+func runTestWithQueryServiceHandlers(
+	t *testing.T,
+	cn metadata.CNService,
+	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -91,6 +110,7 @@ func runTestWithQueryServiceHandler(
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
 					DB:                            "d1",
 					LastAffectedRows:              7,
+					FoundRows:                     11,
 					UserLevelLockReleaseSupported: true,
 				}
 				return nil
@@ -111,7 +131,10 @@ func runTestWithQueryServiceHandler(
 				}
 			}
 			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, migrateConnToHandler, false)
-			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, buf *morpc.Buffer) error {
+				if resetSessionHandler != nil {
+					return resetSessionHandler(ctx, req, resp, buf)
+				}
 				if req.ResetSessionRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
@@ -148,12 +171,28 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
 		assert.Equal(t, int64(7), resp.LastAffectedRows)
+		assert.Equal(t, uint64(11), resp.FoundRows)
 	})
 }
 
 func TestQueryServiceMigrateTo(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
-	runTestWithQueryService(t, cn, func(cc *clientConn, addr string) {
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		if req.MigrateConnToRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		if req.MigrateConnToRequest.LastAffectedRows != 7 {
+			return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
+				req.MigrateConnToRequest.LastAffectedRows)
+		}
+		if req.MigrateConnToRequest.FoundRows != 11 {
+			return moerr.NewInternalErrorf(ctx, "unexpected found rows: %d",
+				req.MigrateConnToRequest.FoundRows)
+		}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, addr string) {
 		resp, err := cc.migrateConnFrom(addr)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
@@ -208,6 +247,55 @@ func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
 		assert.ErrorContains(t, err, "read deadline clear failed")
 		assert.False(t, raw.readDeadline().IsZero(),
 			"a failed clear must not make the backend eligible for handoff")
+	})
+}
+
+func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion28)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{FoundRows: 11})
+		assert.ErrorContains(t, err, "cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToAllowsZeroFoundRowsForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
+		assert.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
 	})
 }
 

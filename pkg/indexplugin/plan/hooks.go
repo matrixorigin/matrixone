@@ -174,6 +174,13 @@ type Hooks interface {
 	ValidateViewDefinition(ctx CompilerContext, query *plan.Query) error
 }
 
+// LogicalSearchHooks is the optional migration capability for algorithms whose
+// ANN access path is safe to splice before global optimization. Algorithms
+// still backed by opaque table functions omit it and remain in the late pass.
+type LogicalSearchHooks interface {
+	BuildLogicalSearch(pb PlanBuilder, vctx *VectorSortContext, mti *MultiTableIndexRef, nodeID int32, opts ApplyForSortOpts) (int32, bool, error)
+}
+
 // Schema-build / tablefunc helper bodies live in pkg/sql/plan. They're
 // published here as function variables (init wired up at pkg/sql/plan
 // package load). Plugin schema.go and tablefunc.go call them as

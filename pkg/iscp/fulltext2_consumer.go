@@ -127,6 +127,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				// a known cache-layer gap deferred to a follow-up PR (see the Decision
 				// block on veccache.VectorIndexCache.Remove).
 				if len(segs) > 0 {
+					fulltext2.NewFulltext2Search(w.cfg).OnCacheInvalidated(string(fulltext2.LoadMissCDCFlush))
 					veccache.Cache.Remove(w.cfg.IndexTable)
 					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
 				}

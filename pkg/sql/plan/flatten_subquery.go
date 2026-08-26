@@ -287,6 +287,14 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	ctx *BindContext,
 	nullResultRejected bool,
 ) (int32, *plan.Expr, error) {
+	memoID := expr.AuxId
+	if memoID < 0 && ctx != nil && ctx.flattenedVolatileExprs != nil {
+		if flattened, ok := ctx.flattenedVolatileExprs[memoID]; ok {
+			copy := DeepCopyExpr(flattened)
+			copy.AuxId = memoID
+			return nodeID, copy, nil
+		}
+	}
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
@@ -301,6 +309,13 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 
 	case *plan.Expr_Sub:
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx, nullResultRejected)
+	}
+	if err == nil && memoID < 0 && ctx != nil {
+		expr.AuxId = memoID
+		if ctx.flattenedVolatileExprs == nil {
+			ctx.flattenedVolatileExprs = make(map[int32]*plan.Expr)
+		}
+		ctx.flattenedVolatileExprs[memoID] = DeepCopyExpr(expr)
 	}
 
 	return nodeID, expr, err

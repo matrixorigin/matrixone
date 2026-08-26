@@ -25,9 +25,11 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	query "github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -643,5 +645,79 @@ func TestResetSession(t *testing.T) {
 			_, err := cc.(*connCache).resetSession(mockConn1)
 			assert.NoError(t, err)
 		})
+	})
+}
+
+func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	resetEntered := make(chan struct{})
+	runTestWithQueryServiceResetHandler(t, cn, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		if req.ResetSessionRequest == nil {
+			return fmt.Errorf("missing ResetSession request")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return fmt.Errorf("ResetSession request is missing its production deadline")
+		}
+		close(resetEntered)
+		resp.ResetSessionResponse = &query.ResetSessionResponse{Success: true, AuthString: []byte("auth")}
+		return nil
+	}, func(cc *clientConn, _ string) {
+		tun := &tunnel{}
+		tun.mu.csp = &pipe{}
+		tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+		tun.mu.scp = &pipe{}
+		tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+
+		// A completed prepared-statement request has a response fence. QUIT must
+		// see that clean boundary and may publish the backend after ResetSession
+		// completes.
+		prepare := makeSimplePacket("select 1")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		tun.trackClientRequest(prepare)
+		tun.trackServerResponse(makePrepareOKPacket(0, 0))
+		require.False(t, tun.hasInFlightClientRequest())
+
+		clientSide, backendSide := net.Pipe()
+		defer clientSide.Close()
+		defer backendSide.Close()
+		backend := newMockServerConn(backendSide)
+		backend.setCN(&CNServer{connID: 27, uuid: "cn1"})
+
+		cache := newConnCache(
+			context.Background(),
+			"",
+			runtime.DefaultRuntime().Logger(),
+			withQueryClient(cc.queryClient),
+			withAuthConstructor(nil),
+		)
+		cache.(*connCache).moCluster = cc.moCluster
+		defer cache.Close()
+
+		client := &clientConn{
+			log:        runtime.DefaultRuntime().Logger(),
+			tun:        tun,
+			sc:         backend,
+			connCache:  cache,
+			clientInfo: clientInfo{hash: "tenant-a"},
+		}
+		require.NoError(t, client.handleQuitCommand(context.Background()))
+		select {
+		case <-resetEntered:
+		case <-time.After(time.Second):
+			t.Fatal("connCache.Push did not reach QueryService ResetSession")
+		}
+		require.True(t, client.isConnCached())
+		require.Equal(t, 1, cache.Count())
+
+		// Pop is the next client's login/SET CONNECTION ID boundary. The same
+		// backend must remain usable for a prepared statement and a query.
+		reused := cache.Pop("tenant-a", 99, nil, nil, clientInfo{})
+		require.Same(t, backend, reused)
+		ok, err := reused.ExecStmt(internalStmt{cmdType: cmdQuery, s: "prepare p from 'select 1'"}, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = reused.ExecStmt(internalStmt{cmdType: cmdQuery, s: "select 1"}, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
 	})
 }

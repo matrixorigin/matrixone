@@ -121,6 +121,47 @@ type autoIncrementOffsetCompilerContext struct {
 	offset int64
 }
 
+type subscriptionScopeCompilerContext struct {
+	*MockCompilerContext
+	subscription  *SubscriptionMeta
+	querying      *SubscriptionMeta
+	publisherByID map[uint64]*TableDef
+}
+
+func (c *subscriptionScopeCompilerContext) SetQueryingSubscription(meta *SubscriptionMeta) {
+	c.querying = meta
+}
+
+func (c *subscriptionScopeCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
+	return c.querying
+}
+
+func (c *subscriptionScopeCompilerContext) GetSubscriptionMeta(
+	dbName string,
+	_ *Snapshot,
+) (*SubscriptionMeta, error) {
+	if dbName == c.subscription.SubName {
+		return c.subscription, nil
+	}
+	if c.querying != nil && dbName != c.querying.SubName {
+		publisherBinding := *c.querying
+		publisherBinding.DbName = dbName
+		return &publisherBinding, nil
+	}
+	return nil, nil
+}
+
+func (c *subscriptionScopeCompilerContext) ResolveSubscriptionTableById(
+	tableID uint64,
+	_ *SubscriptionMeta,
+) (*ObjectRef, *TableDef, error) {
+	tableDef := DeepCopyTableDef(c.publisherByID[tableID], true)
+	if tableDef == nil {
+		return nil, nil, nil
+	}
+	return &ObjectRef{SchemaName: tableDef.DbName, ObjName: tableDef.Name}, tableDef, nil
+}
+
 func (c *autoIncrementOffsetCompilerContext) ResolveVariable(
 	varName string, isSystemVar, isGlobalVar bool,
 ) (interface{}, error) {
@@ -159,6 +200,69 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t2", renames[1].GetTableDef().GetName())
 	require.Equal(t, "t2", renames[1].GetActions()[0].GetAlterName().GetOldName())
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
+}
+
+func TestBuildTableRenameIdentifierLength(t *testing.T) {
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+
+	testCases := []struct {
+		name string
+		sql  func(string) string
+	}{
+		{
+			name: "rename table",
+			sql: func(name string) string {
+				return fmt.Sprintf("rename table nation to `%s`", name)
+			},
+		},
+		{
+			name: "alter table rename",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation rename to `%s`", name)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			require.NoError(t, err)
+		})
+
+		invalidNames := []struct {
+			name string
+			make func(*MockOptimizer) string
+		}{
+			{
+				name: "65 characters",
+				make: func(*MockOptimizer) string {
+					return "表" + strings.Repeat("b", MaxIdentifierLength)
+				},
+			},
+			{
+				name: "generated temporary table prefix",
+				make: func(mock *MockOptimizer) string {
+					return defines.GenTempTableName(
+						mock.ctxt.GetProcess().GetSessionInfo().SessionId,
+						"database",
+						strings.Repeat("t", MaxIdentifierLength),
+					)
+				},
+			},
+		}
+
+		for _, invalidName := range invalidNames {
+			t.Run(testCase.name+" rejects "+invalidName.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				_, err := runOneStmt(mock, t, testCase.sql(invalidName.make(mock)))
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok, "unexpected error type %T: %v", err, err)
+				require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+				require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+			})
+		}
+	}
 }
 
 func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
@@ -2361,6 +2465,18 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 		require.Len(t, leftJoinDef.GetCols(), 1)
 		require.True(t, leftJoinDef.GetCols()[0].GetDefault().GetNullAbility())
 		require.Equal(t, "9", leftJoinDef.GetCols()[0].GetDefault().GetOriginString())
+		leftJoinDef.Name = "v_left_join"
+		leftJoinDef.DbName = "tpch"
+		leftJoinDef.TableType = catalog.SystemViewRel
+		ctx.tables[leftJoinDef.Name] = leftJoinDef
+		ctx.objects[leftJoinDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: leftJoinDef.Name}
+		ctasStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"create table copied_left_join as select * from v_left_join", 1)
+		require.NoError(t, err)
+		defer ctasStmt.Free()
+		ctasPlan, err := BuildPlan(ctx, ctasStmt, false)
+		require.NoError(t, err)
+		require.True(t, ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
 
 		ambiguousSQL := "create view v_ambiguous as select n_nationkey from nation l join nation2 r " +
 			"on l.n_nationkey = r.n_nationkey"
@@ -3430,6 +3546,169 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
 }
 
+func TestBuildCreateTableLikeRestoresSubscriptionBeforePlanningTarget(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepared=%t", prepared), func(t *testing.T) {
+			const rootSQL = "CREATE TABLE localdb.clone LIKE subdb.source"
+			base := NewMockCompilerContext(false)
+			base.dbs["localdb"] = true
+			base.dbs["subdb"] = true
+			base.tables["source"] = &plan.TableDef{
+				Name:      "source",
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*plan.ColDef{{
+					Name: "id", OriginName: "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+			base.objects["source"] = &plan.ObjectRef{
+				SchemaName:       "publisherdb",
+				ObjName:          "source",
+				SubscriptionName: "subdb",
+				PubInfo:          &plan.PubInfo{TenantId: 7},
+			}
+			ctx := &subscriptionScopeCompilerContext{
+				MockCompilerContext: base,
+				subscription: &SubscriptionMeta{
+					AccountId: 7, DbName: "publisherdb", SubName: "subdb",
+					Tables: "*",
+				},
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, prepared)
+			require.NoError(t, err)
+			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
+			require.Nil(t, ctx.GetQueryingSubscription())
+		})
+	}
+}
+
+func TestBuildCreateTableLikeSubscriptionForeignKeysUseSourceOnlyContext(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		foreignTbl uint64
+	}{
+		{name: "self reference", foreignTbl: 0},
+		{name: "other table", foreignTbl: 101},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			const rootSQL = "CREATE TABLE localdb.child_copy LIKE subdb.child"
+			base := NewMockCompilerContext(false)
+			base.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+				if name == "foreign_key_checks" {
+					return int64(0), nil
+				}
+				return nil, moerr.NewInternalError(t.Context(), fmt.Sprintf("unexpected variable %s", name))
+			}
+			base.dbs["localdb"] = true
+			base.dbs["subdb"] = true
+			parent := &plan.TableDef{
+				Name: "parent", DbName: "publisherdb", TblId: 101,
+				Cols: []*plan.ColDef{{
+					ColId: 1, Name: "id", OriginName: "id",
+					Typ: plan.Type{Id: int32(types.T_int32)},
+				}},
+				Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+			}
+			child := &plan.TableDef{
+				Name: "child", DbName: "publisherdb", TblId: 102,
+				Cols: []*plan.ColDef{{
+					ColId: 2, Name: "parent_id", OriginName: "parent_id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name: "fk_parent", Cols: []uint64{2}, ForeignTbl: testCase.foreignTbl,
+					ForeignCols: []uint64{1},
+				}},
+			}
+			if testCase.foreignTbl == 0 {
+				child.Cols[0].ColId = 1
+				child.Fkeys[0].Cols = []uint64{1}
+				child.Pkey = &plan.PrimaryKeyDef{Names: []string{"parent_id"}}
+			}
+			base.tables["child"] = child
+			base.objects["child"] = &plan.ObjectRef{
+				SchemaName: "publisherdb", ObjName: "child", SubscriptionName: "subdb",
+				PubInfo: &plan.PubInfo{TenantId: 7},
+			}
+			base.tables["parent"] = parent
+			base.objects["parent"] = &plan.ObjectRef{
+				SchemaName: "publisherdb", ObjName: "parent", SubscriptionName: "subdb",
+				PubInfo: &plan.PubInfo{TenantId: 7},
+			}
+			ctx := &subscriptionScopeCompilerContext{
+				MockCompilerContext: base,
+				subscription: &SubscriptionMeta{
+					AccountId: 7, DbName: "publisherdb", SubName: "subdb", Tables: "*",
+				},
+				publisherByID: map[uint64]*TableDef{101: parent},
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
+			require.Nil(t, ctx.GetQueryingSubscription())
+		})
+	}
+}
+
+func TestConstructCreateTableSQLSubscriptionCloneMapsPublisherForeignKeyToTarget(t *testing.T) {
+	base := NewMockCompilerContext(false)
+	base.dbs["clone_fk_chain"] = true
+	parent := &plan.TableDef{
+		Name: "parent", DbName: "publisherdb", TblId: 101,
+		Cols: []*plan.ColDef{{
+			ColId: 1, Name: "id", OriginName: "id",
+			Typ: plan.Type{Id: int32(types.T_int32)},
+		}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+	}
+	child := &plan.TableDef{
+		Name: "child", DbName: "clone_fk_chain", TblId: 102,
+		Cols: []*plan.ColDef{{
+			ColId: 2, Name: "parent_id", OriginName: "parent_id",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: true},
+		}},
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name: "fk_parent", Cols: []uint64{2}, ForeignTbl: 101, ForeignCols: []uint64{1},
+		}},
+	}
+	base.tables["parent"] = parent
+	base.objects["parent"] = &plan.ObjectRef{SchemaName: "clone_fk_chain", ObjName: "parent"}
+	subscription := &SubscriptionMeta{
+		AccountId: 7, DbName: "publisherdb", SubName: "sub_fk_chain", Tables: "*",
+	}
+	ctx := &subscriptionScopeCompilerContext{
+		MockCompilerContext: base,
+		subscription:        subscription,
+		publisherByID:       map[uint64]*TableDef{101: parent},
+	}
+	cloneStmt := &tree.CloneTable{
+		SrcTable: *tree.NewTableName("child", tree.ObjectNamePrefix{
+			SchemaName: "sub_fk_chain", ExplicitSchema: true,
+		}, nil),
+		StmtType: tree.WithinAccCloneDB,
+	}
+
+	createSQL, statement, err := constructCreateTableSQL(
+		ctx, child, nil, true, cloneStmt, true, subscription,
+	)
+	require.NoError(t, err)
+	defer statement.Free()
+	require.Contains(t, createSQL, "REFERENCES `clone_fk_chain`.`parent`")
+	require.NotContains(t, createSQL, "`publisherdb`.`parent`")
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
 func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -4082,6 +4361,187 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateTableIdentifierLength(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+	plan, err := runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", validName))
+	require.NoError(t, err)
+	require.Equal(t, validName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	for _, invalidName := range []string{
+		"表" + strings.Repeat("b", MaxIdentifierLength),
+		"表" + strings.Repeat("c", MaxIdentifierLength+1),
+	} {
+		_, err = runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", invalidName))
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "unexpected error type %T: %v", err, err)
+		require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+		require.Equal(t, fmt.Sprintf("Identifier name '%s' is too long", invalidName), moErr.Error())
+	}
+
+	internalMock := NewMockOptimizer(false)
+	internalMock.ctxt.SetContext(context.WithValue(
+		internalMock.ctxt.GetContext(),
+		defines.InternalExecutorKey{},
+		true,
+	))
+	internalName := "表" + strings.Repeat("i", MaxIdentifierLength)
+	plan, err = runOneStmt(internalMock, t, fmt.Sprintf("create table `%s` (id int)", internalName))
+	require.NoError(t, err)
+	require.Equal(t, internalName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	tempMock := NewMockOptimizer(false)
+	tempCtx := &rootSQLCompilerContext{
+		MockCompilerContext: &tempMock.ctxt,
+		rootSQL:             "delete from temp_table",
+	}
+	physicalTempName := defines.GenTempTableName(
+		tempCtx.GetProcess().GetSessionInfo().SessionId,
+		"database",
+		strings.Repeat("t", MaxIdentifierLength),
+	)
+	createTempSQL := fmt.Sprintf("create table `%s` (id int)", physicalTempName)
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		createTempSQL,
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+	plan, err = BuildPlan(tempCtx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, physicalTempName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	tempCtx.rootSQL = createTempSQL
+	_, err = BuildPlan(tempCtx, stmt, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+}
+
+func TestBuildCatalogIdentifierLength(t *testing.T) {
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+	invalidName := "表" + strings.Repeat("b", MaxIdentifierLength)
+	testCases := []struct {
+		name string
+		sql  func(string) string
+	}{
+		{
+			name: "database",
+			sql: func(name string) string {
+				return fmt.Sprintf("create database `%s`", name)
+			},
+		},
+		{
+			name: "view",
+			sql: func(name string) string {
+				return fmt.Sprintf("create view `%s` as select 1", name)
+			},
+		},
+		{
+			name: "view column",
+			sql: func(name string) string {
+				return fmt.Sprintf("create view v as select 1 as `%s`", name)
+			},
+		},
+		{
+			name: "table column",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (`%s` int)", name)
+			},
+		},
+		{
+			name: "table index",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (a int, index `%s` (a))", name)
+			},
+		},
+		{
+			name: "table constraint",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (a int, constraint `%s` unique (a))", name)
+			},
+		},
+		{
+			name: "create index",
+			sql: func(name string) string {
+				return fmt.Sprintf("create index `%s` on nation (n_nationkey)", name)
+			},
+		},
+		{
+			name: "alter add column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add column `%s` int", name)
+			},
+		},
+		{
+			name: "alter change column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation change column n_name `%s` varchar(25)", name)
+			},
+		},
+		{
+			name: "alter rename column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation rename column n_name to `%s`", name)
+			},
+		},
+		{
+			name: "alter add index",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add index `%s` (n_nationkey)", name)
+			},
+		},
+		{
+			name: "alter add constraint",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add constraint `%s` unique (n_nationkey)", name)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			require.NoError(t, err)
+		})
+		t.Run(testCase.name+" rejects 65 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(invalidName))
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok, "unexpected error type %T: %v", err, err)
+			require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+			require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+		})
+	}
+
+	buildAlterView := func(t *testing.T, name string) error {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["v"] = &plan.TableDef{
+			Name:    "v",
+			ViewSql: &plan.ViewDef{View: `{"Stmt":"create view v as select 1","DefaultDatabase":"tpch"}`},
+		}
+		mock.ctxt.objects["v"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v"}
+		_, err := runOneStmt(mock, t, fmt.Sprintf("alter view v (`%s`) as select 1", name))
+		return err
+	}
+	t.Run("alter view column accepts 64 characters", func(t *testing.T) {
+		require.NoError(t, buildAlterView(t, validName))
+	})
+	t.Run("alter view column rejects 65 characters", func(t *testing.T) {
+		err := buildAlterView(t, invalidName)
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "unexpected error type %T: %v", err, err)
+		require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+	})
+}
+
 func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -4337,6 +4797,23 @@ func TestBuildMongoDBExternalTableRejectsForeignKeys(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err.Error())
 }
 
+func TestBuildMongoDBExternalTableRejectsAutoIncrementBeforeCatalogDDL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_auto_increment (
+			id BIGINT AUTO_INCREMENT MONGODB_PATH '_id'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.ErrorContains(t, err, "MongoDB external table does not support AUTO_INCREMENT column 'id'")
+	require.Nil(t, logicPlan, "validation must fail before a catalog DDL plan can be emitted")
+}
+
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)
@@ -4372,6 +4849,65 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	require.Len(t, envelope.Columns, 1)
 	require.True(t, envelope.Columns[0].NotNullable)
 	require.True(t, sqlmongodb.ColumnsToPlan(envelope.Columns)[0].MoType.NotNullable)
+}
+
+func TestBuildMongoDBExternalTableRejectsSetColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	for _, members := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "nonempty", sql: "'a','b'"},
+		{name: "single_empty", sql: "''"},
+	} {
+		for _, nullability := range []struct {
+			name string
+			sql  string
+		}{
+			{name: "nullable"},
+			{name: "not_null", sql: "NOT NULL"},
+		} {
+			for _, conversion := range []string{sqlmongodb.ConversionStrict, sqlmongodb.ConversionTryNull} {
+				t.Run(members.name+"/"+nullability.name+"/"+conversion, func(t *testing.T) {
+					sql := fmt.Sprintf(`
+					CREATE EXTERNAL TABLE tpch.mongo_set (
+						v SET(%s) %s MONGODB_PATH 'device_id'
+					) ENGINE=MONGODB WITH (
+						"connection"='source', "database"='telemetry', "collection"='samples',
+						"schema_mode"='explicit', "conversion_mode"='%s', "max_parallelism"='1'
+					)`, members.sql, nullability.sql, conversion)
+
+					logicPlan, err := runOneStmt(mock, t, sql)
+					require.ErrorContains(t, err, "MongoDB mapping target type SET")
+					require.Nil(t, logicPlan, "failed CREATE must not retain a DDL plan or catalog mapping")
+				})
+			}
+		}
+	}
+}
+
+func TestBuildMongoDBExternalTableAcceptsUnsignedBigInt(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_unsigned (
+			v BIGINT UNSIGNED MONGODB_PATH 'device_id'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples',
+			"schema_mode"='explicit', "conversion_mode"='strict', "max_parallelism"='1'
+		)`)
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+	require.Equal(t, int32(types.T_uint64), logicPlan.GetDdl().GetCreateTable().GetTableDef().Cols[0].Typ.Id)
 }
 
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
@@ -4631,6 +5167,91 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := &mock.ctxt
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.AutoIncr = true
+	sourceCol.Default = nil
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied as select n_nationkey as id, n_name as payload from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	var visible []*plan.ColDef
+	for _, col := range cols {
+		if !col.GetHidden() {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 2)
+	var idCol *plan.ColDef
+	for _, col := range visible {
+		if col.Name == "id" {
+			idCol = col
+			break
+		}
+	}
+	require.NotNil(t, idCol)
+	require.False(t, idCol.Typ.AutoIncr)
+	require.NotNil(t, idCol.Default)
+	require.False(t, idCol.Default.NullAbility)
+	require.Equal(t, "0", idCol.Default.OriginString)
+	require.NotNil(t, idCol.Default.Expr)
+	require.Equal(t, int32(types.T_int32), idCol.Default.Expr.Typ.Id)
+	require.Equal(t, int32(0), idCol.Default.Expr.GetLit().GetI32Val())
+
+	target := p.GetDdl().GetCreateTable()
+	tableDef := target.GetTableDef()
+	tableDef.TblId = 99102
+	ctx.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+	ctx.tables[tableDef.Name] = tableDef
+	ctx.id2name[tableDef.TblId] = tableDef.Name
+	ctx.pks[tableDef.Name] = nil
+	_, err = runOneStmt(mock, t, "insert into copied(payload) values ('omitted-id')")
+	require.NoError(t, err)
+}
+
+func TestBuildCTASExplicitTargetDefaultOverridesAutoIncrementTypeDefault(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.AutoIncr = true
+	sourceCol.Default = nil
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied_explicit (id int not null default 42, payload varchar(25)) as select n_nationkey as id, n_name as payload from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	var idCol *plan.ColDef
+	for _, col := range cols {
+		if !col.Hidden && col.Name == "id" {
+			idCol = col
+			break
+		}
+	}
+	require.NotNil(t, idCol)
+	require.False(t, idCol.Typ.AutoIncr)
+	require.Equal(t, "42", idCol.Default.OriginString)
+	require.NotNil(t, idCol.Default.Expr)
+	require.Equal(t, int32(42), idCol.Default.Expr.GetLit().GetI32Val())
+}
+
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -4695,6 +5316,39 @@ func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
+	const selectSQL = "select " +
+		"date_add(cast('2026-01-01' as date), interval n_name year_month) as add_result, " +
+		"date_sub(cast('2026-01-01' as date), interval n_name year_month) as sub_result " +
+		"from nation"
+
+	t.Run("CTAS", func(t *testing.T) {
+		mock := NewMockOptimizer(false)
+		logicPlan, err := buildSingleStmt(mock, t, "create table ctas_interval as "+selectSQL)
+		require.NoError(t, err)
+
+		for _, column := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[:2] {
+			require.True(t, column.GetDefault().GetNullAbility(),
+				"invalid values in NOT NULL n_name can make to_interval and date arithmetic return NULL")
+		}
+	})
+
+	t.Run("view", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create view interval_view as "+selectSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		logicPlan, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+
+		for _, column := range logicPlan.GetDdl().GetCreateView().GetTableDef().GetCols()[:2] {
+			require.True(t, column.GetDefault().GetNullAbility(),
+				"view metadata must preserve date arithmetic nullability from dynamic interval normalization")
+		}
+	})
 }
 
 func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {

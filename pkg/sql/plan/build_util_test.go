@@ -352,6 +352,30 @@ func TestGetTypeFromAstTinyTextPreservesByteLimit(t *testing.T) {
 	require.Equal(t, int32(types.MaxTinyTextLen), typ.Width)
 }
 
+func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "text", sql: "text", width: 0},
+		{name: "mediumtext", sql: "mediumtext", width: types.MaxMediumTextLen},
+		{name: "longtext", sql: "longtext", width: types.MaxLongTextLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+tc.sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_text), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+}
+
 func TestGetTypeFromAstArrayValidatesElementType(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (tags array(varchar(16777217)))", 1)
 	require.NoError(t, err)
@@ -641,6 +665,7 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
 	}
 	for _, target := range targets {
 
@@ -659,6 +684,28 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
 
+func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
+	ctx := context.Background()
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
+	} {
+		expr, err := MakePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_assign", expr.GetF().GetFunc().GetObjName())
+	}
+
+	dateExpr, err := MakePlan2AssignmentCastExpr(
+		ctx,
+		DeepCopyExpr(srcText),
+		plan.Type{Id: int32(types.T_date)},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+}
+
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
@@ -670,12 +717,13 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
 	}
 	for _, target := range targets {
 		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
 		want := "cast_strict"
-		if useSqlModeStringAssignmentCast(target) {
+		if useSqlModeAssignmentCast(target) {
 			want = "cast_assign"
 		}
 		require.Equal(t, want, strictExpr.GetF().GetFunc().GetObjName())
@@ -854,6 +902,9 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	for _, test := range tests {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
 		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+		require.Equal(t, test.want, assignmentCastFunctionName(
+			plan.Type{Id: int32(types.T_year), Width: 4}, test.ignore, proc,
+		))
 
 		source := makePlan2Int64ConstExprWithType(1)
 		targetType := &plan.Expr{

@@ -146,6 +146,15 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			}
 		}
 	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+		// Recovery takes this gate before locking a target View. Take it before
+		// the database lock so DROP cannot hold catalog/target locks while
+		// waiting for recovery's refresh-row transaction.
+		if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
+			return err
+		}
+	}
 
 	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
@@ -193,6 +202,19 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	relations, err := database.Relations(c.proc.Ctx)
 	if err != nil {
 		return err
+	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
+		droppedDatabaseID, parseErr := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if parseErr != nil {
+			return parseErr
+		}
+		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
+		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
+			return err
+		}
+		if err = c.deleteDroppedDatabaseViewMetadata(accountId, droppedDatabaseID, dbName); err != nil {
+			return err
+		}
 	}
 	var ignoreTables []string
 	existingRelations := make([]string, 0, len(relations))
@@ -245,7 +267,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		dropSql := fmt.Sprintf("drop table if exists %s.%s;",
 			quoteMySQLIdent(dbName), quoteMySQLIdent(t))
 		if err = c.runSqlWithOptions(
-			dropSql, executor.StatementOption{}.WithDisableLog(),
+			dropSql, executor.StatementOption{}.WithDisableLog().WithIgnorePublish(),
 		); err != nil {
 			return err
 		}
@@ -441,12 +463,15 @@ func (s *Scope) AlterView(c *Compile) error {
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
-	if _, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
+	oldRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+	if err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
 	}
+	oldRelationID := oldRelation.GetTableID(c.proc.Ctx)
+	oldLogicalID := oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
@@ -468,7 +493,13 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
+		return err
+	}
+	return c.refreshViewsAfterRelationMutation(dbName, tblName, oldRelationID, oldLogicalID)
 }
 
 // reindexSpecifiedParams extracts the build options the user wrote on
@@ -488,7 +519,7 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	}
 	var opt *tree.AlterOptionAlterReIndex
 	for _, o := range at.Options {
-		if ro, ok := o.(*tree.AlterOptionAlterReIndex); ok && string(ro.Name) == indexName {
+		if ro, ok := o.(*tree.AlterOptionAlterReIndex); ok && plan2.IndexNamesEqual(string(ro.Name), indexName) {
 			opt = ro
 			break
 		}
@@ -1276,7 +1307,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
-				if err = iscp.MarkJobsErrorBySourceTable(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), req.TableId, "source table was renamed"); err != nil {
+				if err = iscp.MarkJobsErrorBySourceTable(
+					c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.TableId,
+					"source table was renamed",
+				); err != nil {
 					return err
 				}
 				// iscp
@@ -2101,6 +2138,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
 			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
+			if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
+				if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
+					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
+				}
+			}
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
@@ -2124,6 +2166,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		// The temporary table and all follow-up metadata/index/CTAS work have
 		// completed. Keep the alias registered in the session.
 		rollbackTempAlias = false
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2495,6 +2542,15 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+	var oldRelationID, oldLogicalID uint64
+	if exists && qry.GetReplace() {
+		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
+		if relationErr != nil {
+			return relationErr
+		}
+		oldRelationID = oldRelation.GetTableID(c.proc.Ctx)
+		oldLogicalID = oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
+	}
 
 	if exists {
 		if qry.GetIfNotExists() {
@@ -2603,6 +2659,12 @@ func (s *Scope) CreateView(c *Compile) error {
 		if _, err = CreateCdcTask(c, spec, job, false); err != nil {
 			return err
 		}
+	}
+	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
+		return err
+	}
+	if oldRelationID != 0 {
+		return c.refreshViewsAfterRelationMutation(dbName, viewName, oldRelationID, oldLogicalID)
 	}
 	return nil
 }
@@ -3671,8 +3733,26 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		return err
 	}
+	droppedRelationID := rel.GetTableID(c.proc.Ctx)
+	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
+	droppedLogicalID := droppedTableDef.GetLogicalId()
+	droppedDatabaseID := droppedTableDef.GetDbId()
+	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish && !needSkipDbs[dbName] &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+		// Keep the global gate ahead of the target/source relation lock. This is
+		// the same order used by recovery when it claims and regenerates a View.
+		if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
+			return err
+		}
+	}
 	if !isTemp && !isView {
-		if err = iscp.MarkJobsErrorBySourceTable(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), rel.GetTableID(c.proc.Ctx), "source table was dropped"); err != nil {
+		if err = iscp.MarkJobsErrorBySourceTable(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			c.proc.GetTxnOperator(),
+			droppedRelationID,
+			"source table was dropped",
+		); err != nil {
 			return err
 		}
 	}
@@ -3843,6 +3923,17 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.enqueueViewsAfterRelationRemoval(
+			dbName, tblName, droppedDatabaseID, droppedRelationID, droppedLogicalID); err != nil {
+			return err
+		}
+		if isView {
+			if err = c.deleteDroppedViewMetadata(droppedRelationID); err != nil {
+				return err
+			}
+		}
 	}
 	// Try to remove temp table alias from session if it exists.
 	// tblName is the real name here (because Binder resolved it using the temp name from session if it was an alias).

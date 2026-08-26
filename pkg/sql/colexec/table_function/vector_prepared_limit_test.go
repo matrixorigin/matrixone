@@ -25,15 +25,13 @@ import (
 )
 
 // vectorSearchStateLimit returns the resolved candidate limit (k) after running a
-// vector-search TVF Prepare. Only the CPU TVFs (hnsw, ivfflat) are covered here so
-// the test runs in the default (non-GPU) build; ivfpq/cagra share the identical
-// Prepare limit-resolution code and are covered end-to-end by the GPU BVT.
+// vector-search TVF Prepare. IVF-FLAT is now an optimizer-visible direct reader,
+// so its prepared-limit path is covered by pkg/vectorindex/ivfflat tests; this
+// file covers the remaining CPU table-function implementation.
 func vectorSearchStateLimit(t *testing.T, st tvfState) uint64 {
 	t.Helper()
 	switch s := st.(type) {
 	case *hnswSearchState:
-		return s.limit
-	case *ivfSearchState:
 		return s.limit
 	default:
 		t.Fatalf("unexpected tvf state type %T", st)
@@ -56,7 +54,6 @@ func TestVectorSearchPrepareResolvesLimitFromIndexReaderParam(t *testing.T) {
 		fn   func(*process.Process, *TableFunction) (tvfState, error)
 	}{
 		{"hnsw", hnswSearchPrepare},
-		{"ivf", ivfSearchPrepare},
 	}
 
 	run := func(t *testing.T, fn func(*process.Process, *TableFunction) (tvfState, error), argLimit, idxLimit *plan.Expr) uint64 {

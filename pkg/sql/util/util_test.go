@@ -19,9 +19,18 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildViewMetadataDependenciesFilterIncludesGlobalSentinel(t *testing.T) {
+	filter := tree.String(BuildViewMetadataDependenciesFilter(10001), dialect.MYSQL)
+	require.Contains(t, filter, "account_id = 10001")
+	require.Contains(t, filter, "account_id = 0")
+	require.Contains(t, filter, "target_relation_id = 0")
+	require.Contains(t, filter, "dependency_ordinal = 0")
+}
 
 type kase struct {
 	a       string

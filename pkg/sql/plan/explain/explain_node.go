@@ -134,6 +134,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Table Function"
+	case plan.Node_VECTOR_INDEX_SCAN:
+		pname = "Vector Index Scan"
 	case plan.Node_PRE_INSERT:
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
@@ -187,6 +189,14 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			buf.WriteString(" on ")
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
 				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
+			}
+		case plan.Node_VECTOR_INDEX_SCAN:
+			buf.WriteString(" on ")
+			if spec := ndesc.Node.VectorIndexScan; spec != nil && spec.Index != nil {
+				buf.WriteString(spec.Index.IndexName)
+				buf.WriteString(" [")
+				buf.WriteString(spec.DistanceFunction)
+				buf.WriteString("]")
 			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")
@@ -534,15 +544,43 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if len(msg) > 0 {
 			lines = append(lines, msg)
 		}
-		msg, err = ndesc.GetIvfSearchInfo(ctx, options)
+	}
+	if ndesc.Node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		msg, err := ndesc.GetVectorIndexScanInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
-		if len(msg) > 0 {
+		if msg != "" {
 			lines = append(lines, msg)
 		}
 	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetVectorIndexScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	spec := ndesc.Node.GetVectorIndexScan()
+	if spec == nil || spec.GetIndex() == nil {
+		return "", nil
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, 192))
+	buf.WriteString("Vector Index: ")
+	buf.WriteString(spec.GetIndex().GetIndexName())
+	buf.WriteString(", Metric: ")
+	buf.WriteString(spec.GetDistanceFunction())
+	buf.WriteString(", Candidate Limit: ")
+	if err := describeExpr(ctx, spec.GetCandidateLimit(), options, buf); err != nil {
+		return "", err
+	}
+	buf.WriteString(", NProbe: ")
+	buf.WriteString(strconv.FormatUint(uint64(spec.GetInitialProbeCount()), 10))
+	if len(spec.GetPreFilters()) > 0 {
+		buf.WriteString(", Index Filter: ")
+		filters := NewExprListDescribeImpl(spec.GetPreFilters())
+		if err := filters.GetDescription(ctx, options, buf); err != nil {
+			return "", err
+		}
+	}
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetIcebergScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -592,27 +630,6 @@ func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *Expl
 		return result, nil
 	}
 	return "", nil
-}
-
-func (ndesc *NodeDescribeImpl) GetIvfSearchInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType != plan.Node_FUNCTION_SCAN ||
-		ndesc.Node.TableDef == nil ||
-		ndesc.Node.TableDef.TblFunc == nil ||
-		ndesc.Node.TableDef.TblFunc.Name != "ivf_search" ||
-		len(ndesc.Node.TblFuncExprList) < 3 {
-		return "", nil
-	}
-
-	filterExpr := ndesc.Node.TblFuncExprList[2]
-	litExpr, ok := filterExpr.Expr.(*plan.Expr_Lit)
-	if !ok || litExpr.Lit == nil {
-		return "", nil
-	}
-	rawFilter := litExpr.Lit.GetSval()
-	if strings.TrimSpace(rawFilter) == "" {
-		return "", nil
-	}
-	return "Filter Cond: " + rawFilter, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {

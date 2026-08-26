@@ -1,0 +1,30 @@
+{
+    "port": 4444,
+    "chunksize": 4096,
+    "datasource": [
+        { "name": "file_numbers", "type": "file",
+          "path": "/jstfu-test/distributed/resources/datastream/numbers.csv" },
+        { "name": "bad_file", "type": "file",
+          "path": "/nonexistent/jstfu/bvt.csv" },
+        { "name": "jdbc_numbers", "type": "jdbc",
+          "connectionstring": "jdbc:mysql://127.0.0.1:6001?useSSL=false&allowPublicKeyRetrieval=true",
+          "user": "dump", "password": "111",
+          "sql": "select col1, col2, col3, col4 from datastream_bvt.src_numbers where ${FILTER}" },
+        { "name": "jdbc_bad_sql", "type": "jdbc",
+          "connectionstring": "jdbc:mysql://127.0.0.1:6001?useSSL=false&allowPublicKeyRetrieval=true",
+          "user": "dump", "password": "111",
+          "sql": "select * from datastream_bvt.no_such_table where ${FILTER}" },
+        { "name": "file_parallel", "type": "file",
+          "path": "/jstfu-test/distributed/resources/load_data/test_parallel.csv" },
+        { "name": "file_rawlog", "type": "file",
+          "path": "/jstfu-test/distributed/resources/external_table_file/rawlog_withnull.csv" },
+        { "name": "jdbc_parallel", "type": "jdbc",
+          "connectionstring": "jdbc:mysql://127.0.0.1:6001?useSSL=false&allowPublicKeyRetrieval=true",
+          "user": "dump", "password": "111",
+          "sql": "select col1, col2, col3 from datastream_bvt2.t_parallel where ${FILTER}" },
+        { "name": "jdbc_rawlog", "type": "jdbc",
+          "connectionstring": "jdbc:mysql://127.0.0.1:6001?useSSL=false&allowPublicKeyRetrieval=true",
+          "user": "dump", "password": "111",
+          "sql": "select raw_item, node_uuid, node_type, span_id, statement_id, logger_name, `timestamp`, `level`, caller, message, extra, err_code, error, stack, span_name, parent_span_id, start_time, end_time, duration, resource from datastream_bvt2.t_rawlog where ${FILTER}" }
+    ]
+}
