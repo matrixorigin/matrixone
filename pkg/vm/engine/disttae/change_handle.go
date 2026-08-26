@@ -45,6 +45,13 @@ const DefaultLoadParallism = 20
 // from the partition state. It is a variable so tests can stub it.
 var NewPartitionStateChangesHandler = logtailreplay.NewChangesHandler
 
+var newPartitionChangesHandle = func(
+	ctx context.Context, tbl *txnTable, from, to types.TS, skipDeletes bool,
+	policy engine.SnapshotReadPolicy, mp *mpool.MPool,
+) (engine.ChangesHandle, error) {
+	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, policy, mp)
+}
+
 func GetPartitionStateStart(
 	ctx context.Context,
 	rel engine.Relation,
@@ -67,10 +74,13 @@ func (tbl *txnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
-	if from.IsEmpty() {
+	if tbl.tableDef != nil {
+		tbl.ensureSeqnumsAndTypesExpectRowid()
+	}
+	if from.IsEmpty() && !useBoundedVisibleStateRange(ctx) {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(
+	return newPartitionChangesHandle(
 		ctx,
 		tbl,
 		from,
@@ -79,6 +89,11 @@ func (tbl *txnTable) CollectChanges(
 		engine.SnapshotReadPolicyFromContext(ctx),
 		mp,
 	)
+}
+
+func useBoundedVisibleStateRange(ctx context.Context) bool {
+	return engine.SnapshotReadPolicyFromContext(ctx) == engine.SnapshotReadPolicyVisibleState &&
+		engine.ChangeRangeLimitFromContext(ctx).Enabled()
 }
 
 type queuedChangeBatch struct {
@@ -109,6 +124,7 @@ type PartitionChangesHandle struct {
 
 	bufferedBatches     []queuedChangeBatch
 	currentRangeDrained bool
+	boundedVisibleState bool
 }
 
 func NewPartitionChangesHandle(
@@ -132,15 +148,16 @@ func NewPartitionChangesHandle(
 		return nil, err
 	}
 	handle := &PartitionChangesHandle{
-		tbl:                tbl,
-		fromTs:             from,
-		toTs:               to,
-		skipDeletes:        skipDeletes,
-		primarySeqnum:      tbl.primarySeqnum,
-		changeSchema:       changeSchema,
-		snapshotReadPolicy: snapshotReadPolicy,
-		mp:                 mp,
-		fs:                 tbl.getTxn().engine.fs,
+		tbl:                 tbl,
+		fromTs:              from,
+		toTs:                to,
+		skipDeletes:         skipDeletes,
+		primarySeqnum:       tbl.primarySeqnum,
+		changeSchema:        changeSchema,
+		snapshotReadPolicy:  snapshotReadPolicy,
+		mp:                  mp,
+		fs:                  tbl.getTxn().engine.fs,
+		boundedVisibleState: useBoundedVisibleStateRange(ctx),
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
@@ -212,7 +229,7 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 	}
 	// The normal path keeps the existing replay behavior. The VisibleState
 	// policy enables snapshot-recovery on FileNotFound (via SnapshotStateRange).
-	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState && !h.boundedVisibleState {
 		return h.nextWithSnapshotRecovery(ctx, mp)
 	}
 	return h.nextReplay(ctx, mp)
@@ -413,6 +430,19 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
+	if h.boundedVisibleState {
+		if h.currentPSFrom.IsEmpty() {
+			h.currentPSFrom = h.fromTs
+		} else {
+			h.currentPSFrom = h.currentPSTo.Next()
+		}
+		h.currentPSTo = h.toTs
+		h.handleIdx++
+		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	state, err := h.tbl.getPartitionState(ctxWithTimeout)
@@ -578,12 +608,38 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if snapshotTbl == nil {
 		return moerr.NewErrStaleReadNoCtx(h.currentPSTo.ToString(), h.currentPSFrom.ToString())
 	}
+	if snapshotTbl.tableDef != nil {
+		snapshotTbl.ensureSeqnumsAndTypesExpectRowid()
+	}
 	state, err := snapshotTbl.getPartitionState(ctx)
 	if err != nil {
 		return err
 	}
 	if err = h.closeCurrentChangeHandle(); err != nil {
 		return err
+	}
+	if h.boundedVisibleState {
+		limit := engine.ChangeRangeLimitFromContext(ctx)
+		spill := engine.ChangeRangeSpillFromContext(ctx)
+		pkFilter := engine.PKFilterFromContext(ctx)
+		debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
+		retainRowID := engine.RetainRowIDFromContext(ctx)
+		schema := h.changeSchema
+		seqnums := append([]uint16(nil), snapshotTbl.seqnums...)
+		from, to := h.currentPSFrom, h.currentPSTo
+		h.currentChangeHandle = &deferredChangesHandle{build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
+			nextCtx = engine.WithChangeRangeLimit(nextCtx, limit)
+			nextCtx = engine.WithChangeRangeSpill(nextCtx, spill)
+			nextCtx = engine.WithPKFilter(nextCtx, pkFilter)
+			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
+			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
+			nextCtx = engine.WithCollectChangesSchema(nextCtx, schema)
+			return logtailreplay.NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
+				nextCtx, state, from, to, h.skipDeletes, objectio.BlockMaxRows,
+				snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx, seqnums, h.mp, h.fs,
+			)
+		}}
+		return nil
 	}
 	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRange(
 		ctx,
@@ -596,6 +652,32 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 		h.mp,
 		h.fs,
 	)
+	return err
+}
+
+type deferredChangesHandle struct {
+	build  func(context.Context) (engine.ChangesHandle, error)
+	handle engine.ChangesHandle
+	err    error
+}
+
+func (h *deferredChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	if h.handle == nil && h.err == nil {
+		h.handle, h.err = h.build(ctx)
+		h.build = nil
+	}
+	if h.err != nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, h.err
+	}
+	return h.handle.Next(ctx, mp)
+}
+
+func (h *deferredChangesHandle) Close() error {
+	if h == nil || h.handle == nil {
+		return nil
+	}
+	err := h.handle.Close()
+	h.handle = nil
 	return err
 }
 

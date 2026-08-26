@@ -15,6 +15,7 @@
 package publication
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -34,6 +35,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+func decompressObjectColumnExtent(
+	ctx context.Context,
+	data []byte,
+	ext objectio.Extent,
+	allocator fileservice.CacheDataAllocator,
+) ([]byte, error) {
+	if ext.Alg() == compress.None {
+		return bytes.Clone(data), nil
+	}
+	decoded, err := objectio.DecompressColumnExtent(ctx, data, ext, allocator)
+	if err != nil {
+		return nil, err
+	}
+	defer decoded.Release()
+	return bytes.Clone(decoded.Bytes()), nil
+}
 
 // readSingleBlockToBatch reads a single block from object content into a CN batch
 func readSingleBlockToBatch(
@@ -85,29 +103,12 @@ func readSingleBlockToBatch(
 		}
 		colData := objectContent[ext.Offset() : ext.Offset()+ext.Length()]
 
-		// Decompress if needed
-		var decompressedData []byte
-		var decompressedBuf fscache.Data
-
-		if ext.Alg() == compress.None {
-			decompressedData = append([]byte(nil), colData...)
-		} else {
-			decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
-			bs, err := compress.Decompress(colData, decompressedBuf.Bytes(), compress.Lz4)
-			if err != nil {
-				if decompressedBuf != nil {
-					decompressedBuf.Release()
-				}
-				for k := 0; k <= i; k++ {
-					vecs[k].Free(mp)
-				}
-				return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
+		decompressedData, err := decompressObjectColumnExtent(ctx, colData, ext, allocator)
+		if err != nil {
+			for k := 0; k <= i; k++ {
+				vecs[k].Free(mp)
 			}
-			decompressedData = decompressedBuf.Bytes()[:len(bs)]
-			decompressedData = append([]byte(nil), decompressedData...)
-			if decompressedBuf != nil {
-				decompressedBuf.Release()
-			}
+			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
 		}
 
 		// Decode to vector.Vector
@@ -280,6 +281,16 @@ func convertObjectToBatch(
 	for i, typ := range typs {
 		vecs[i] = containers.MakeVector(typ, mp)
 	}
+	ownershipTransferred := false
+	defer func() {
+		if !ownershipTransferred {
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Close()
+				}
+			}
+		}
+	}()
 	allocator := fileservice.DefaultCacheDataAllocator()
 
 	// Iterate through all blocks
@@ -290,14 +301,14 @@ func convertObjectToBatch(
 			var colMeta objectio.ColumnMeta
 			var ext objectio.Extent
 
-			// Handle special columns (commit TS)
+			// Resolve special columns by layout: newer appendable objects may
+			// place Abort after CommitTS, so the last column is not CommitTS.
 			if seqnum >= objectio.SEQNUM_UPPER {
-				if seqnum == objectio.SEQNUM_COMMITTS {
-					metaColCnt := blkMeta.GetMetaColumnCount()
-					colMeta = blkMeta.ColumnMeta(metaColCnt - 1)
-				} else {
+				pos, ok := objectio.ResolveSpecialColumnLayout(blkMeta).Resolve(seqnum)
+				if !ok {
 					return nil, moerr.NewInternalErrorf(ctx, "unsupported special column: %d", seqnum)
 				}
+				colMeta = blkMeta.ColumnMeta(pos)
 			} else {
 				// Normal column
 				if seqnum > maxSeqnum || blkMeta.ColumnMeta(seqnum).DataType() == 0 {
@@ -319,30 +330,9 @@ func convertObjectToBatch(
 			}
 			colData := objectContent[ext.Offset() : ext.Offset()+ext.Length()]
 
-			// Decompress if needed
-			var decompressedData []byte
-			var decompressedBuf fscache.Data
-
-			if ext.Alg() == compress.None { // Clone non-compressed data to avoid buffer sharing with objectContent
-				// objectContent may be reused/pooled, and UnmarshalBinary doesn't copy data
-				decompressedData = append([]byte(nil), colData...)
-			} else {
-				// Allocate buffer for decompressed data
-				decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
-				bs, err := compress.Decompress(colData, decompressedBuf.Bytes(), compress.Lz4)
-				if err != nil {
-					if decompressedBuf != nil {
-						decompressedBuf.Release()
-					}
-					return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
-				}
-				decompressedData = decompressedBuf.Bytes()[:len(bs)]
-				// Clone the data to ensure decoded vector doesn't hold reference to buffer
-				decompressedData = append([]byte(nil), decompressedData...)
-				// Release buffer immediately after cloning
-				if decompressedBuf != nil {
-					decompressedBuf.Release()
-				}
+			decompressedData, err := decompressObjectColumnExtent(ctx, colData, ext, allocator)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
 			}
 
 			// Decode to vector.Vector
@@ -370,7 +360,7 @@ func convertObjectToBatch(
 		}
 		bat.AddVector(attr, vec)
 	}
-
+	ownershipTransferred = true
 	return bat, nil
 }
 

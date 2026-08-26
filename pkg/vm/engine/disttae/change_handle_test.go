@@ -18,11 +18,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/stretchr/testify/require"
@@ -207,4 +210,105 @@ func (s *stubChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (*batch.B
 func (s *stubChangesHandle) Close() error {
 	s.closed = true
 	return nil
+}
+
+func TestUseBoundedVisibleStateRangeForEmptyWatermark(t *testing.T) {
+	base := context.Background()
+	require.False(t, useBoundedVisibleStateRange(base))
+	require.False(t, useBoundedVisibleStateRange(
+		engine.WithSnapshotReadPolicy(base, engine.SnapshotReadPolicyVisibleState),
+	))
+
+	bounded := engine.WithChangeRangeLimit(base, engine.ChangeRangeLimit{
+		MaxInMemoryBytes: 64 << 20,
+	})
+	require.False(t, useBoundedVisibleStateRange(bounded))
+	require.True(t, useBoundedVisibleStateRange(
+		engine.WithSnapshotReadPolicy(bounded, engine.SnapshotReadPolicyVisibleState),
+	))
+}
+
+func TestCollectChangesRoutesBoundedEmptyWatermarkToVisibleStateRange(t *testing.T) {
+	original := newPartitionChangesHandle
+	t.Cleanup(func() { newPartitionChangesHandle = original })
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	_, err := original(
+		context.Background(), &txnTable{}, types.BuildTS(1, 0), types.TS{}, false,
+		engine.SnapshotReadPolicyVisibleState, mp,
+	)
+	require.Error(t, err)
+
+	want := &stubChangesHandle{}
+	called := false
+	newPartitionChangesHandle = func(
+		_ context.Context,
+		_ *txnTable,
+		from, to types.TS,
+		skipDeletes bool,
+		policy engine.SnapshotReadPolicy,
+		_ *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		called = true
+		require.True(t, from.IsEmpty())
+		require.Equal(t, types.BuildTS(20, 0), to)
+		require.False(t, skipDeletes)
+		require.Equal(t, engine.SnapshotReadPolicyVisibleState, policy)
+		return want, nil
+	}
+	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
+	ctx = engine.WithChangeRangeLimit(ctx, engine.ChangeRangeLimit{MaxInMemoryBytes: 64 << 20})
+
+	got, err := (&txnTable{}).CollectChanges(
+		ctx, types.TS{}, types.BuildTS(20, 0), false, mp,
+	)
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Same(t, want, got)
+}
+
+func TestCollectChangesInitializesLogicalSeqnumsBeforeBuildingRange(t *testing.T) {
+	original := newPartitionChangesHandle
+	t.Cleanup(func() { newPartitionChangesHandle = original })
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	var got []uint16
+	newPartitionChangesHandle = func(
+		_ context.Context, tbl *txnTable, _, _ types.TS, _ bool,
+		_ engine.SnapshotReadPolicy, _ *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		got = append([]uint16(nil), tbl.seqnums...)
+		return &stubChangesHandle{}, nil
+	}
+	tbl := &txnTable{tableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+		{Name: "added", Typ: plan2.Type{Id: int32(types.T_int32)}, Seqnum: 2},
+		{Name: "id", Typ: plan2.Type{Id: int32(types.T_int32)}, Seqnum: 0},
+		{Name: "payload", Typ: plan2.Type{Id: int32(types.T_varchar)}, Seqnum: 1},
+		{Name: catalog.Row_ID, Typ: plan2.Type{Id: int32(types.T_Rowid)}, Seqnum: uint32(objectio.SEQNUM_ROWID)},
+	}}}
+	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
+	ctx = engine.WithChangeRangeLimit(ctx, engine.ChangeRangeLimit{MaxInMemoryBytes: 64 << 20})
+	_, err := tbl.CollectChanges(ctx, types.TS{}, types.BuildTS(20, 0), false, mp)
+	require.NoError(t, err)
+	require.Equal(t, []uint16{2, 0, 1}, got)
+}
+
+func TestDeferredChangesHandleBuildErrorDoesNotRetry(t *testing.T) {
+	want := moerr.NewInternalErrorNoCtx("range construction failed")
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	builds := 0
+	handle := &deferredChangesHandle{build: func(context.Context) (engine.ChangesHandle, error) {
+		builds++
+		return nil, want
+	}}
+	for range 2 {
+		data, tombstone, hint, err := handle.Next(context.Background(), mp)
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+		require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+		require.Equal(t, want, err)
+	}
+	require.Equal(t, 1, builds)
+	require.NoError(t, handle.Close())
 }

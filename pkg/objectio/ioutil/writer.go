@@ -243,6 +243,10 @@ func (w *BlockWriter) SetAppendable() {
 	w.writer.SetAppendable()
 }
 
+func (w *BlockWriter) SetChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) {
+	w.writer.SetChunkedColumnPolicy(policy)
+}
+
 func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
 	return w.writer.GetObjectStats(opts...)
 }

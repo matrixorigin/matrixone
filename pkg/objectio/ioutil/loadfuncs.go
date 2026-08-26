@@ -548,22 +548,38 @@ func LoadOneBlock(
 	key objectio.Location,
 	metaType objectio.DataMetaType,
 ) (*batch.Batch, uint16, error) {
+	bat, sortKey, _, err := LoadOneBlockWithSpecialLayout(ctx, fs, key, metaType)
+	return bat, sortKey, err
+}
+
+func LoadOneBlockWithSpecialLayout(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, objectio.SpecialColumnLayout, error) {
 	sortKey := uint16(math.MaxUint16)
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+		CommitTS:     objectio.InvalidSpecialColumnPosition,
+		Abort:        objectio.InvalidSpecialColumnPosition,
+	}
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, sortKey, err
+		return nil, sortKey, layout, err
 	}
 	data := meta.MustGetMeta(metaType)
 	if data.BlockHeader().Appendable() {
 		sortKey = data.BlockHeader().SortKey()
 	}
+	layout = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(key.ID())))
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
-	return bat, sortKey, err
+	return bat, sortKey, layout, err
 }
 
 func LoadOneBlockWithIndex(
