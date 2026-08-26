@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,27 +37,99 @@ const (
 )
 
 // JoinMapBuildError is the immutable, typed error published by a failed
-// HashBuild.  The error is snapshotted when it is constructed; consumers get a
-// fresh moerr clone through AsMoErr so a caller cannot mutate the value seen by
-// another broadcast consumer.
+// HashBuild. The error is snapshotted when it is constructed: consumers get a
+// fresh moerr clone for substantive failures, while cancellation consumers
+// share only immutable context sentinels and a copied diagnostic string.
 type JoinMapBuildError struct {
-	err *moerr.Error
+	err        *moerr.Error
+	contextErr error
+	message    string
 }
 
 var _ error = new(JoinMapBuildError)
 
-// NewJoinMapBuildError snapshots err as a typed build error.  Non-moerr
-// errors are converted to an internal MatrixOne error so callers still get a
-// stable error code from every consumer.
+// NewJoinMapBuildError snapshots err as a typed build error. Substantive
+// MatrixOne errors retain their stable wire code. Pure context cancellation
+// errors retain their identity so scope aggregation can recover the causal
+// execution error from the canceled pipeline context. Other non-moerr errors
+// are converted to a stable internal MatrixOne error.
 func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
 	var me *moerr.Error
-	if !errors.As(err, &me) {
-		me = moerr.NewInternalErrorNoCtx(err.Error())
+	if errors.As(err, &me) {
+		return &JoinMapBuildError{err: cloneMoErr(me)}
 	}
-	return &JoinMapBuildError{err: cloneMoErr(me)}
+	if contextErr, ok := snapshotContextCancellation(err); ok {
+		return &JoinMapBuildError{
+			contextErr: contextErr,
+			message:    err.Error(),
+		}
+	}
+	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
+}
+
+type contextCancellationKind uint8
+
+const (
+	contextCanceled contextCancellationKind = 1 << iota
+	contextDeadlineExceeded
+)
+
+// snapshotContextCancellation recognizes only error trees whose every leaf is
+// cancellation-shaped. A joined substantive failure must not be downgraded to
+// cleanup fallout merely because another leaf is context.Canceled.
+func snapshotContextCancellation(err error) (error, bool) {
+	kind, ok := contextCancellationTreeKind(err)
+	if !ok {
+		return nil, false
+	}
+	switch kind {
+	case contextCanceled:
+		return context.Canceled, true
+	case contextDeadlineExceeded:
+		return context.DeadlineExceeded, true
+	case contextCanceled | contextDeadlineExceeded:
+		return errors.Join(context.Canceled, context.DeadlineExceeded), true
+	default:
+		return nil, false
+	}
+}
+
+func contextCancellationTreeKind(err error) (contextCancellationKind, bool) {
+	if err == nil {
+		return 0, false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return 0, false
+		}
+		var kind contextCancellationKind
+		for _, child := range children {
+			childKind, ok := contextCancellationTreeKind(child)
+			if !ok {
+				return 0, false
+			}
+			kind |= childKind
+		}
+		return kind, true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return contextCancellationTreeKind(child)
+		}
+	}
+
+	var kind contextCancellationKind
+	if errors.Is(err, context.Canceled) {
+		kind |= contextCanceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		kind |= contextDeadlineExceeded
+	}
+	return kind, kind != 0
 }
 
 func cloneMoErr(src *moerr.Error) *moerr.Error {
@@ -79,20 +152,42 @@ func cloneMoErr(src *moerr.Error) *moerr.Error {
 }
 
 func (e *JoinMapBuildError) Error() string {
-	if e == nil || e.err == nil {
+	if e == nil {
+		return "hash build failed"
+	}
+	if e.err == nil {
+		if e.message != "" {
+			return e.message
+		}
+		if e.contextErr != nil {
+			return e.contextErr.Error()
+		}
 		return "hash build failed"
 	}
 	return e.err.Error()
 }
 
-// Unwrap lets errors.As/errors.Is inspect the MatrixOne error while keeping
-// the published BuildError as the outer, typed terminal value.
+// Unwrap lets errors.As/errors.Is inspect either the MatrixOne error or the
+// preserved cancellation identity while keeping the published BuildError as
+// the outer, typed terminal value.
 func (e *JoinMapBuildError) Unwrap() error {
+	if e != nil && e.contextErr != nil {
+		return e.contextErr
+	}
 	return e.AsMoErr()
 }
 
 func (e *JoinMapBuildError) ErrorCode() uint16 {
-	if e == nil || e.err == nil {
+	if e == nil {
+		return moerr.ErrInternal
+	}
+	if e.err == nil {
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			return moerr.ErrQueryTimeout
+		}
+		if errors.Is(e.contextErr, context.Canceled) {
+			return moerr.ErrQueryInterrupted
+		}
 		return moerr.ErrInternal
 	}
 	return e.err.ErrorCode()
@@ -110,7 +205,26 @@ func (e *JoinMapBuildError) AsMoErr() *moerr.Error {
 	if e == nil {
 		return moerr.NewInternalErrorNoCtx("hash build failed")
 	}
+	if e.err == nil {
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			return moerr.NewQueryTimeout(context.Background())
+		}
+		if errors.Is(e.contextErr, context.Canceled) {
+			return moerr.NewQueryInterrupted(context.Background())
+		}
+		return moerr.NewInternalErrorNoCtx(e.Error())
+	}
 	return cloneMoErr(e.err)
+}
+
+// AsError returns the immutable cancellation wrapper when cancellation
+// identity must survive errors.Is, or a fresh moerr clone for substantive
+// failures. Execution operators should propagate this value to their scope.
+func (e *JoinMapBuildError) AsError() error {
+	if e != nil && e.contextErr != nil {
+		return e
+	}
+	return e.AsMoErr()
 }
 
 // JoinMapResult is the immutable terminal dependency value shared by all

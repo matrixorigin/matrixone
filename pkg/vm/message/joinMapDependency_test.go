@@ -16,6 +16,8 @@ package message
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -46,6 +48,74 @@ func TestJoinMapResultDistinguishesSuccessEmptyAndBuildError(t *testing.T) {
 	var got *moerr.Error
 	require.ErrorAs(t, failure.Err(), &got)
 	require.Equal(t, baseErr.ErrorCode(), got.ErrorCode())
+}
+
+func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
+	tests := []struct {
+		name         string
+		buildErr     error
+		wantCanceled bool
+		wantDeadline bool
+	}{
+		{
+			name:         "canceled",
+			buildErr:     context.Canceled,
+			wantCanceled: true,
+		},
+		{
+			name:         "wrapped canceled",
+			buildErr:     fmt.Errorf("hash build stopped: %w", context.Canceled),
+			wantCanceled: true,
+		},
+		{
+			name:         "deadline",
+			buildErr:     context.DeadlineExceeded,
+			wantDeadline: true,
+		},
+		{
+			name:         "joined cancellation",
+			buildErr:     errors.Join(context.Canceled, context.DeadlineExceeded),
+			wantCanceled: true,
+			wantDeadline: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewJoinMapBuildError(tt.buildErr).AsError()
+			require.Equal(t, tt.buildErr.Error(), got.Error())
+			require.Equal(t, tt.wantCanceled, errors.Is(got, context.Canceled))
+			require.Equal(t, tt.wantDeadline, errors.Is(got, context.DeadlineExceeded))
+		})
+	}
+}
+
+func TestReceiveJoinMapPreservesCancellationSemantics(t *testing.T) {
+	mb := NewMessageBoard()
+	require.True(t, FinalizeJoinMapBuildError(mb, 42, false, 0, context.Canceled))
+
+	jm, err := ReceiveJoinMap(42, false, 0, mb, context.Background())
+	require.Nil(t, jm)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestJoinMapBuildErrorPrefersSubstantiveError(t *testing.T) {
+	t.Run("moerr", func(t *testing.T) {
+		oom := moerr.NewOOM(context.Background())
+		got := NewJoinMapBuildError(errors.Join(context.Canceled, oom)).AsError()
+
+		require.True(t, moerr.IsMoErrCode(got, moerr.ErrOOM), got)
+		require.NotErrorIs(t, got, context.Canceled)
+	})
+
+	t.Run("go error", func(t *testing.T) {
+		buildErr := errors.New("build storage failed")
+		got := NewJoinMapBuildError(errors.Join(context.Canceled, buildErr)).AsError()
+
+		require.True(t, moerr.IsMoErrCode(got, moerr.ErrInternal), got)
+		require.ErrorContains(t, got, buildErr.Error())
+		require.NotErrorIs(t, got, context.Canceled)
+	})
 }
 
 func TestSendJoinMapResultRetainsOwnershipWhenBoardUnavailable(t *testing.T) {
