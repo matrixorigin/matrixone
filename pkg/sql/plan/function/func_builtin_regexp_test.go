@@ -138,10 +138,38 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 
 	_, err := op.regMap.regularInstr("^$", "", 1, 0, 0)
 	require.Error(t, err)
+	_, err = op.regMap.regularInstr("^$", "", 1, 1, -1)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
 	_, err = op.regMap.regularInstr("^$", "", 1, 1, 2)
 	require.Error(t, err)
 	_, err = op.regMap.regularInstr("*", "", 1, 1, 0)
 	require.Error(t, err)
+
+	for _, tc := range []struct {
+		name    string
+		subject string
+		pattern string
+	}{
+		{name: "empty_subject", subject: "", pattern: "^$"},
+		{name: "nonempty_subject", subject: "Cat", pattern: "Cat"},
+	} {
+		t.Run("regexp_instr_negative_return_option_"+tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.subject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.pattern}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{-1}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+				op.builtInRegexpInstr)
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
 
 	_, _, err = op.regMap.regularSubstr("^$", "", 1, 0)
 	require.Error(t, err)

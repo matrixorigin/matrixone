@@ -859,7 +859,7 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
 	}
 	// check retOption
-	if retOption > 1 {
+	if retOption < 0 || retOption > 1 {
 		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr have Index out of bounds in regular expression search, return option %d", retOption)
 	}
 
