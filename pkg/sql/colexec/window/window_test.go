@@ -1250,10 +1250,10 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[uint64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, int64(idx+1), resultValues[idx], "row %d", idx)
+		require.Equal(t, uint64(idx+1), resultValues[idx], "row %d", idx)
 	}
 
 	arg.Free(proc, false, nil)
@@ -1289,10 +1289,10 @@ func TestWindowRankPeerAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[uint64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, row := range []int{0, 1, colexec.DefaultBatchSize - 2, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
-		want := int64(row/3*3 + 1)
+		want := uint64(row/3*3 + 1)
 		require.Equal(t, want, resultValues[row], "row %d", row)
 	}
 
@@ -1330,7 +1330,7 @@ func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 1))
+	require.Equal(t, []uint64{1, 2, 3, 3}, collectFixedWindowColumn[uint64](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1369,7 +1369,7 @@ func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+	require.Equal(t, []uint64{1, 2, 3, 3}, collectFixedWindowColumn[uint64](t, arg, proc, 2))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1416,8 +1416,8 @@ func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []int32{0, 1, 2},
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-	require.Equal(t, []int64{1, 2, 3},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+	require.Equal(t, []uint64{1, 2, 3},
+		vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1879,7 +1879,7 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []int32{20, 10, 20, 10},
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
-	require.Len(t, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]), 4)
+	require.Len(t, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]), 4)
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1926,7 +1926,7 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Len(t, arg.ctr.orderVecs, 2)
 	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
 	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
-	require.Equal(t, []int64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+	require.Equal(t, []uint64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
@@ -1976,8 +1976,8 @@ func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []int32{0, 1, 2, 0, 1, 2},
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-	require.Equal(t, []int64{1, 2, 3, 1, 2, 3},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+	require.Equal(t, []uint64{1, 2, 3, 1, 2, 3},
+		vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
@@ -2050,7 +2050,7 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, result.Batch)
 			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+			require.Equal(t, []uint64{1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 			windowArg.Free(proc, false, nil)
 			partitionArg.Free(proc, false, nil)
