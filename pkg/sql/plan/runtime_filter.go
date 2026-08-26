@@ -184,7 +184,7 @@ func localProtocolEnablesSortedMembershipFilter(sid string) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion11
+	return ok && version >= defines.MORPCVersion10
 }
 
 func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(

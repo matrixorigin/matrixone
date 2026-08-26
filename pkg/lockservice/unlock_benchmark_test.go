@@ -123,14 +123,14 @@ func BenchmarkUnlockWithoutConflict(b *testing.B) {
 // BenchmarkRemoteMultiTableUnlock isolates the regression shape from #27628:
 // one transaction releases several physical tables on the same remote owner.
 // The protocol gate provides an in-process A/B: v29 exercises the table-scoped
-// fallback and v30 exercises the bounded batch without changing workload data.
+// fallback and v31 exercises the bounded batch without changing workload data.
 func BenchmarkRemoteMultiTableUnlock(b *testing.B) {
 	benchmarks := []struct {
 		name    string
 		version int64
 	}{
 		{name: "legacy-v29", version: defines.MORPCVersion29},
-		{name: "batch-v30", version: defines.MORPCVersion30},
+		{name: "batch-v31", version: defines.MORPCVersion31},
 	}
 	for _, benchmark := range benchmarks {
 		b.Run(benchmark.name, func(b *testing.B) {

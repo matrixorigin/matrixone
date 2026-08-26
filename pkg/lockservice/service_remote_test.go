@@ -51,7 +51,7 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 		require.True(t, supportsLockProtocolV28(""))
-		require.False(t, supportsLockProtocolV30(""))
+		require.False(t, supportsLockProtocolV31(""))
 		err = checkMethodVersion(context.Background(), "", &pb.Request{
 			Method: pb.Method_BatchUnlock,
 		})
@@ -59,7 +59,15 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
 		require.True(t, supportsLockProtocolV28(""))
-		require.True(t, supportsLockProtocolV30(""))
+		require.False(t, supportsLockProtocolV31(""))
+		err = checkMethodVersion(context.Background(), "", &pb.Request{
+			Method: pb.Method_BatchUnlock,
+		})
+		require.Error(t, err)
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+		require.True(t, supportsLockProtocolV28(""))
+		require.True(t, supportsLockProtocolV31(""))
 		require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{
 			Method: pb.Method_BatchUnlock,
 		}))
@@ -83,7 +91,7 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 		require.IsType(t, &remoteLockTable{}, legacy,
 			"mixed versions must not create table-scoped proxy handoffs")
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
 		negotiated := s.createLockTableByBind(bind)
 		require.IsType(t, &localLockTableProxy{}, negotiated)
 	})
