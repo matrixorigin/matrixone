@@ -1443,9 +1443,9 @@ func (ses *Session) Close() {
 		dbName   string
 		realName string
 	}
-	var tempTables []tempTableEntry
 	var tenant *TenantInfo
 	ses.mu.Lock()
+	tempTables := make([]tempTableEntry, 0, len(ses.tempTables))
 	for key, realName := range ses.tempTables {
 		identity := ses.tempTableIdentityLocked(key)
 		tempTables = append(tempTables, tempTableEntry{
