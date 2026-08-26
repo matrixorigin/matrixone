@@ -99,6 +99,9 @@ func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
 	} {
 		t.Run(sql[:20], func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			ctrl := gomock.NewController(t)
+			_, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnOperator = txnOp
 			compile := NewCompile("test", "test", sql, "", "", nil, proc, nil, false, nil, time.Now())
 			t.Cleanup(compile.Release)
 
