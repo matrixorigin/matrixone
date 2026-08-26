@@ -337,6 +337,7 @@ func (builder *QueryBuilder) flattenSubquery(
 	var scalarOuterResult *plan.Expr
 	var scalarExistential bool
 	var scalarPerOuterOrderKey *plan.Expr
+	var scalarProjectionStatus scalarProjectionNormalization
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
@@ -384,8 +385,12 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR {
-		subID, scalarMatch, scalarOuterResult, scalarExistential, scalarPerOuterOrderKey =
+		subID, scalarMatch, scalarOuterResult, scalarExistential, scalarPerOuterOrderKey, scalarProjectionStatus =
 			builder.normalizeCorrelatedScalarProjection(subID, subCtx)
+		if scalarProjectionStatus == scalarProjectionUnsafe {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"wrapped correlated scalar projection cannot be safely decorrelated")
+		}
 	}
 
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
@@ -664,22 +669,31 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 }
 
+type scalarProjectionNormalization uint8
+
+const (
+	scalarProjectionNotApplicable scalarProjectionNormalization = iota
+	scalarProjectionNormalized
+	scalarProjectionUnsafe
+)
+
 // normalizeCorrelatedScalarProjection lifts a depth-one correlated scalar
-// projection above its decorrelation join.  The right projection keeps a TRUE
-// match marker plus any inner-only dependencies needed by the lifted result;
-// correlated references become ordinary outer columns after decreaseDepth.
-// This keeps Corr expressions out of executable projection nodes.
+// projection above its decorrelation join. The explicit status distinguishes a
+// non-target scalar projection from a recognized shape that cannot safely leave
+// Corr expressions behind for the executor.
 func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	subID int32,
 	ctx *BindContext,
-) (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr) {
+) (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
 	if len(ctx.results) != 1 || len(ctx.projects) == 0 || len(ctx.aggregates) > 0 || len(ctx.groups) > 0 ||
-		!hasCorrCol(ctx.projects[0]) || !allCorrColsAtDepthOne(ctx.projects[0]) ||
-		containsVolatileFunction(ctx.projects[0]) {
-		return subID, nil, nil, false, nil
+		!hasCorrCol(ctx.projects[0]) || !allCorrColsAtDepthOne(ctx.projects[0]) {
+		return subID, nil, nil, false, nil, scalarProjectionNotApplicable
 	}
-	if !builder.casePreservesType(ctx.projects[0]) {
-		return subID, nil, nil, false, nil
+	unsafe := func() (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
+		return subID, nil, nil, false, nil, scalarProjectionUnsafe
+	}
+	if containsVolatileFunction(ctx.projects[0]) || !builder.casePreservesType(ctx.projects[0]) {
+		return unsafe()
 	}
 
 	innerDependent := exprHasColRef(ctx.projects[0])
@@ -690,7 +704,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	for {
 		node := builder.qry.Nodes[nodeID]
 		if node.Offset != nil || node.RankOption != nil {
-			return subID, nil, nil, false, nil
+			return unsafe()
 		}
 		if len(node.OrderBy) > 0 {
 			hasOrdering = true
@@ -698,7 +712,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		if node.Limit != nil {
 			limit, ok := getLiteralUint64(node.Limit)
 			if !ok || limit == 0 {
-				return subID, nil, nil, false, nil
+				return unsafe()
 			}
 			limitOne = limit == 1
 		}
@@ -706,18 +720,18 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag {
 			if len(node.ProjectList) == 0 || !exprStructuralEqual(node.ProjectList[0], ctx.projects[0]) ||
 				!hasCorrCol(node.ProjectList[0]) || !allCorrColsAtDepthOne(node.ProjectList[0]) {
-				return subID, nil, nil, false, nil
+				return unsafe()
 			}
 			if innerDependent && (nodeID != subID || hasDistinct ||
 				(limitOne && (hasOrdering || builder.isPrepareStatement ||
 					builder.qry.StmtType != plan.Query_SELECT))) {
-				return subID, nil, nil, false, nil
+				return unsafe()
 			}
 			var innerOrderSource *plan.Expr
 			if innerDependent && limitOne {
 				innerOrderSource = builder.findReachableRowIDColRef(node.Children[0])
 				if innerOrderSource == nil {
-					return subID, nil, nil, false, nil
+					return unsafe()
 				}
 			}
 
@@ -726,7 +740,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 			innerDependent = exprHasColRef(liftedResult)
 			liftedResult, stillCorrelated := decreaseDepth(liftedResult)
 			if stillCorrelated {
-				return subID, nil, nil, false, nil
+				return unsafe()
 			}
 
 			marker := DeepCopyExpr(constTrue)
@@ -735,7 +749,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 			match := GetColExpr(marker.Typ, ctx.projectTag, 0)
 			if !innerDependent {
 				node.Limit = nil
-				return nodeID, match, liftedResult, limitOne || hasDistinct, nil
+				return nodeID, match, liftedResult, limitOne || hasDistinct, nil, scalarProjectionNormalized
 			}
 			if limitOne {
 				// SQL does not define which matching row an unordered LIMIT 1
@@ -745,20 +759,20 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 				node.ProjectList = append(node.ProjectList, innerOrderSource)
 				orderKey := GetColExpr(innerOrderSource.Typ, ctx.projectTag, orderPos)
 				node.Limit = nil
-				return nodeID, match, liftedResult, false, orderKey
+				return nodeID, match, liftedResult, false, orderKey, scalarProjectionNormalized
 			}
-			return nodeID, match, liftedResult, false, nil
+			return nodeID, match, liftedResult, false, nil, scalarProjectionNormalized
 		}
 
 		if len(node.Children) != 1 {
-			return subID, nil, nil, false, nil
+			return unsafe()
 		}
 		switch node.NodeType {
 		case plan.Node_PROJECT, plan.Node_SORT:
 		case plan.Node_DISTINCT:
 			hasDistinct = true
 		default:
-			return subID, nil, nil, false, nil
+			return unsafe()
 		}
 		nodeID = node.Children[0]
 	}

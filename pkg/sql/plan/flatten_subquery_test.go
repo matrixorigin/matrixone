@@ -2149,7 +2149,7 @@ func TestWrappedCorrelatedScalarProjectionIsEvaluatedAfterJoin(t *testing.T) {
 		         WHERE r.r_regionkey > n.n_regionkey
 		         LIMIT 1)
 		  FROM nation n`)
-	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 }
 
 func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
@@ -2196,7 +2196,7 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 		  FROM nation n`, 1)
 	require.NoError(t, parseErr)
 	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
-	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 
 	_, err = runOneStmt(NewMockOptimizer(true), t, `
 		SELECT n.n_nationkey,
@@ -2222,7 +2222,7 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 		   FROM nation n`,
 	} {
 		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
-		require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 		require.NotContains(t, err.Error(), "Column remapping failed")
 	}
 
@@ -2259,8 +2259,77 @@ func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
 		                          LIMIT 1)`,
 	} {
 		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
-		require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 	}
+}
+
+func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          ORDER BY r.r_name
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT DISTINCT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1 OFFSET 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN rand() > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT max(r_regionkey) AS d FROM region) r
+		          WHERE r.d = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`DELETE FROM nation n
+		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1) >= 0`,
+		`UPDATE nation n
+		    SET n_regionkey = (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                           FROM region r
+		                          WHERE r.r_regionkey = n.n_regionkey
+		                          LIMIT 1)`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+	}
+
+	preparedStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey = n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`, 1)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey = n.n_regionkey)
+		  FROM nation n`)
+	require.NoError(t, err)
+	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
 }
 
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
@@ -2410,13 +2479,14 @@ func TestNormalizeCorrelatedScalarProjectionFallsBack(t *testing.T) {
 				projects:   tt.projects,
 			}
 
-			nodeID, match, outerResult, existential, perOuterOrderKey :=
+			nodeID, match, outerResult, existential, perOuterOrderKey, status :=
 				builder.normalizeCorrelatedScalarProjection(tt.subID, ctx)
 			require.Equal(t, tt.subID, nodeID)
 			require.Nil(t, match)
 			require.Nil(t, outerResult)
 			require.False(t, existential)
 			require.Nil(t, perOuterOrderKey)
+			require.NotEqual(t, scalarProjectionNormalized, status)
 		})
 	}
 }
