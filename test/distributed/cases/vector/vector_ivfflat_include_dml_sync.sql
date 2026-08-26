@@ -2,6 +2,19 @@ drop database if exists vector_ivfflat_include_phase3;
 create database vector_ivfflat_include_phase3;
 use vector_ivfflat_include_phase3;
 
+-- This CDC-only PK scenario is independent of the synchronous INCLUDE cases
+-- below. Start its insert-then-async-index build now and verify it only after
+-- the synchronous work, overlapping convergence without weakening either wait.
+create table vector_ivfflat_async_pk(
+    id bigint primary key,
+    embedding vecf32(3)
+);
+insert into vector_ivfflat_async_pk values
+    (10, "[1,2,3]"),
+    (30, "[7,8,9]");
+create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
+lists=1 op_type "vector_l2_ops" async;
+
 drop table if exists vector_ivfflat_include_phase3;
 create table vector_ivfflat_include_phase3(
     id int primary key,
@@ -41,30 +54,38 @@ set @q = concat(
 );
 
 prepare s1 from @q;
+-- JDBC reports hidden VARCHAR width differently through proxy and direct CN;
+-- this regression checks exact index payload values, not transport metadata.
+-- @metacmp(false)
 execute s1;
 
 update vector_ivfflat_include_phase3
 set note = 'n2-only'
 where id = 2;
+-- @metacmp(false)
 execute s1;
 
 update vector_ivfflat_include_phase3
 set title = 'beta2', category = 200, note = 'n2b'
 where id = 2;
+-- @metacmp(false)
 execute s1;
 
 update vector_ivfflat_include_phase3
 set embedding = "[4,5,7]"
 where id = 2;
+-- @metacmp(false)
 execute s1;
 
 update vector_ivfflat_include_phase3
 set id = 20
 where id = 2;
 select id from vector_ivfflat_include_phase3 order by id;
+-- @metacmp(false)
 execute s1;
 
 delete from vector_ivfflat_include_phase3 where id = 1;
+-- @metacmp(false)
 execute s1;
 
 deallocate prepare s1;
@@ -102,11 +123,14 @@ set @fake_q = concat(
     'from `', database(), '`.`', @fake_entries, '`'
 );
 prepare s2 from @fake_q;
+-- GROUP_CONCAT metadata width is transport-dependent; values stay exact.
+-- @metacmp(false)
 execute s2;
 
 update vector_ivfflat_fake_pk
 set embedding = "[2,2,2]", title = "after"
 where k = 1;
+-- @metacmp(false)
 execute s2;
 
 begin;
@@ -114,6 +138,7 @@ update vector_ivfflat_fake_pk
 set embedding = "[3,3,3]", title = "rollback"
 where k = 1;
 rollback;
+-- @metacmp(false)
 execute s2;
 
 deallocate prepare s2;
@@ -122,16 +147,6 @@ drop table vector_ivfflat_fake_pk;
 -- Async IVF maintenance is CDC-only. Updating the source PK must replace the
 -- active-version entry identity without retaining the old PK or duplicating
 -- the new one.
-create table vector_ivfflat_async_pk(
-    id bigint primary key,
-    embedding vecf32(3)
-);
-insert into vector_ivfflat_async_pk values
-    (10, "[1,2,3]"),
-    (30, "[7,8,9]");
-create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
-lists=1 op_type "vector_l2_ops" async;
-
 set @async_entries = (
     select index_table_name
     from mo_catalog.mo_indexes
@@ -168,10 +183,12 @@ set @async_q = concat(
     'where `__mo_index_key` = ''version'')'
 );
 prepare s3 from @async_q;
+-- @metacmp(false)
 -- @wait_expect(2, 60)
 execute s3;
 
 update vector_ivfflat_async_pk set id = 20 where id = 10;
+-- @metacmp(false)
 -- @wait_expect(2, 60)
 execute s3;
 
