@@ -17,11 +17,11 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -142,17 +142,6 @@ func ReadOneBlockWithMeta(
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	if ctx == nil || meta == nil || fs == nil || factory == nil {
-		return fileservice.IOVector{}, moerr.NewInvalidInputNoCtx(
-			"object block read requires context, metadata, file service, and cache factory",
-		)
-	}
-	if len(typs) != 0 && len(typs) != len(seqnums) {
-		return fileservice.IOVector{}, moerr.NewInvalidInputNoCtxf(
-			"object block read has %d columns but %d fallback types",
-			len(seqnums), len(typs),
-		)
-	}
 	ioVec = fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
@@ -160,11 +149,6 @@ func ReadOneBlockWithMeta(
 	}
 	var generatedIOVec fileservice.IOVector
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = moerr.NewInvalidInputNoCtxf(
-				"object block %d metadata or column data is malformed: %v", blk, recovered,
-			)
-		}
 		if err != nil {
 			ioVec.ReleaseReadResultOnError()
 			generatedIOVec.ReleaseReadResultOnError()
@@ -182,31 +166,34 @@ func ReadOneBlockWithMeta(
 		}
 	}
 
-	startID := uint32(meta.BlockHeader().StartID())
-	blockID := uint32(blk)
-	if blockID < startID || blockID-startID >= meta.BlockCount() {
-		return ioVec, moerr.NewInvalidInputNoCtxf(
-			"object block %d is outside metadata range [%d,%d)",
-			blk, startID, uint64(startID)+uint64(meta.BlockCount()),
-		)
-	}
-	blkmeta := meta.GetBlockMeta(blockID)
+	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
-	specialLayout := ResolveSpecialColumnLayout(blkmeta)
 	for i, seqnum := range seqnums {
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
-			var ok bool
-			if seqnum != SEQNUM_COMMITTS && seqnum != SEQNUM_ABORT {
-				return ioVec, moerr.NewInvalidInputNoCtxf(
-					"unsupported object special column %d", seqnum,
-				)
+			metaColCnt := blkmeta.GetMetaColumnCount()
+			switch seqnum {
+			case SEQNUM_COMMITTS:
+				if metaColCnt == 0 {
+					putFillHolder(i, 0)
+					continue
+				}
+				seqnum = metaColCnt - 1
+			case SEQNUM_ABORT:
+				panic("not support")
+			default:
+				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
-			seqnum, ok = specialLayout.Resolve(seqnum)
-			if !ok {
+			// Type alone is insufficient: the last user column may itself be
+			// T_TS. A hidden commit-TS column must sit beyond MaxSeqnum.
+			// If the last column is not commits, do not read it:
+			//  1. created by cn
+			//  2. old version tn nonappendable block
+			col := blkmeta.ColumnMeta(seqnum)
+			hasHiddenColumn := metaColCnt > maxSeqnum+1
+			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
 				putFillHolder(i, seqnum)
 			} else {
-				col := blkmeta.ColumnMeta(seqnum)
 				ext := col.Location()
 				ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 			}
@@ -223,11 +210,6 @@ func ReadOneBlockWithMeta(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
-	}
-	if filledEntries != nil && len(typs) == 0 {
-		return ioVec, moerr.NewInvalidInputNoCtx(
-			"object block read requires fallback types for missing columns",
-		)
 	}
 	if len(ioVec.Entries) > 0 {
 		err = fs.Read(ctx, &ioVec)
@@ -254,48 +236,29 @@ func ReadOneBlockWithMeta(
 
 	// need to generate vector
 	if filledEntries != nil {
+		if len(typs) == 0 {
+			panic(fmt.Sprintf("block %s generate need typs", meta.BlockHeader().BlockID().String()))
+		}
 		length := int(blkmeta.GetRows())
 		readed := ioVec.Entries
 		for i := range filledEntries {
 			if filledEntries[i].Size == 0 { // we can tell it is the placeholder for the readed column
-				if len(readed) == 0 {
-					return ioVec, moerr.NewInternalErrorNoCtx(
-						"object block read returned fewer columns than metadata requested",
-					)
-				}
 				filledEntries[i] = readed[0]
 				readed = readed[1:]
 			} else {
 				buf := &bytes.Buffer{}
 				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
-				func() {
-					generated := vector.NewConstNull(typs[i], length, m)
-					defer generated.Free(m)
-					err = generated.MarshalBinaryWithBuffer(buf)
-				}()
-				if err != nil {
+				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())
-				if cacheData == nil {
-					return ioVec, moerr.NewInternalErrorNoCtx(
-						"object block fallback column cache allocation failed",
-					)
-				}
 				filledEntries[i].CachedData = cacheData
 				generatedIOVec.Entries = append(generatedIOVec.Entries, fileservice.IOEntry{
 					CachedData: cacheData,
 				})
 			}
 		}
-		if len(readed) != 0 {
-			return ioVec, moerr.NewInternalErrorNoCtxf(
-				"object block read returned %d unassigned columns", len(readed),
-			)
-		}
 		ioVec.Entries = filledEntries
-		// Ownership of generated cache entries has moved into ioVec.
-		generatedIOVec = fileservice.IOVector{}
 	}
 
 	return
@@ -349,57 +312,14 @@ func ReadOneBlockAllColumns(
 	cachePolicy fileservice.Policy,
 	fs fileservice.FileService,
 ) (bat *batch.Batch, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if bat != nil {
-				bat.Clean(nil)
-				bat = nil
-			}
-			err = moerr.NewInvalidInputNoCtxf(
-				"object block %d metadata is malformed: %v", id, recovered,
-			)
-		}
-	}()
-	if ctx == nil || meta == nil || fs == nil {
-		return nil, moerr.NewInvalidInputNoCtx(
-			"object block read requires context, metadata, and file service",
-		)
-	}
-	if len(cols) == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("object block read has no columns")
-	}
-	dataMeta := *meta
-	startID := uint32(dataMeta.BlockHeader().StartID())
-	if id < startID || id-startID >= dataMeta.BlockCount() {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"object block %d is outside metadata range [%d,%d)",
-			id, startID, uint64(startID)+uint64(dataMeta.BlockCount()),
-		)
-	}
-	blockMeta := dataMeta.GetBlockMeta(id)
-	metaColumnCount := blockMeta.GetMetaColumnCount()
-	columnTypes := make([]types.T, len(cols))
-	for position, seqnum := range cols {
-		if seqnum >= metaColumnCount {
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"object block %d has no metadata for column %d", id, seqnum,
-			)
-		}
-		columnType := types.T(blockMeta.ColumnMeta(seqnum).DataType())
-		if columnType == types.T_any {
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"object block %d column %d is absent", id, seqnum,
-			)
-		}
-		columnTypes[position] = columnType
-	}
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
 		Policy:   cachePolicy,
 	}
 	for _, seqnum := range cols {
-		col := blockMeta.ColumnMeta(seqnum)
+		blkmeta := meta.GetBlockMeta(id)
+		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 			Offset:         int64(ext.Offset()),
@@ -417,52 +337,16 @@ func ReadOneBlockAllColumns(
 	defer ioVec.Release()
 
 	bat = batch.NewWithSize(len(cols))
-	success := false
-	defer func() {
-		if !success && bat != nil {
-			// Decode binds vectors to the cloned Go backing below; they do not own
-			// mpool allocations, so nil is the matching cleanup allocator.
-			bat.Clean(nil)
-			bat = nil
-		}
-	}()
 	var obj any
-	expectedRows := int(blockMeta.GetRows())
 	for i := range cols {
-		if ioVec.Entries[i].CachedData == nil {
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"object column %d returned no cached data", cols[i],
-			)
-		}
 		// always copy to avoid memory leak
 		bs := slices.Clone(ioVec.Entries[i].CachedData.Bytes())
 		obj, err = Decode(bs)
 		if err != nil {
 			return nil, err
 		}
-		decoded, ok := obj.(*vector.Vector)
-		if !ok || decoded == nil {
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"object column %d decoded as %T, expected vector", cols[i], obj,
-			)
-		}
-		if decoded.Length() != expectedRows {
-			decoded.Free(nil)
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"object column %d has %d rows, expected %d",
-				cols[i], decoded.Length(), expectedRows,
-			)
-		}
-		if decoded.GetType().Oid != columnTypes[i] {
-			decoded.Free(nil)
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"object column %d has type %s, expected %s",
-				cols[i], decoded.GetType().String(), columnTypes[i].String(),
-			)
-		}
-		bat.Vecs[i] = decoded
+		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
 	}
-	bat.SetRowCount(expectedRows)
-	success = true
 	return
 }

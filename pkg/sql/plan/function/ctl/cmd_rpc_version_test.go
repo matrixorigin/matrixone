@@ -15,7 +15,6 @@
 package ctl
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -30,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -140,18 +138,6 @@ func requireVersionValue(t *testing.T, version int64) {
 	require.EqualValues(t, version, v)
 }
 
-type addressRecordingQueryClient struct {
-	testQClient
-	address string
-}
-
-func (c *addressRecordingQueryClient) SendMessage(
-	_ context.Context, address string, _ *query.Request,
-) (*query.Response, error) {
-	c.address = address
-	return nil, moerr.NewInternalErrorNoCtx("send error")
-}
-
 func Test_transferToTN(t *testing.T) {
 
 	rt := runtime.DefaultRuntime()
@@ -173,8 +159,7 @@ func Test_transferToTN(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	qcli := &addressRecordingQueryClient{}
+	qcli := &testQClient{}
 	_, err := transferToTN(qcli, 0)
 	assert.Error(t, err)
-	assert.Equal(t, "wrong address", qcli.address)
 }

@@ -171,19 +171,10 @@ func (idx *MutIndex) GetDuplicatedRows(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		// Preserve the conflict check against the newest non-aborted owner even
-		// when that row is newer than this transaction's snapshot. Aborted
-		// append nodes remain in the index as rollback holes and must be skipped.
 		if skipFn != nil {
-			for i := len(rows) - 1; i >= 0; i-- {
-				err = skipFn(rows[i])
-				if err == index.ErrNotFound {
-					continue
-				}
-				if err != nil {
-					return err
-				}
-				break
+			err = skipFn(rows[len(rows)-1])
+			if err != nil {
+				return err
 			}
 		}
 		var maxRow uint32
@@ -193,15 +184,6 @@ func (idx *MutIndex) GetDuplicatedRows(
 				break
 			}
 			if int32(rows[i]) < maxVisibleRow {
-				if skipFn != nil {
-					err = skipFn(rows[i])
-					if err == index.ErrNotFound {
-						continue
-					}
-					if err != nil {
-						return err
-					}
-				}
 				maxRow = rows[i]
 				exist = true
 				break
@@ -246,19 +228,14 @@ func (idx *MutIndex) Contains(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		for i := len(rows) - 1; i >= 0; i-- {
-			if skipFn != nil {
-				err = skipFn(rows[i])
-				if err == index.ErrNotFound {
-					continue
-				}
-				if err != nil {
-					return err
-				}
-			}
-			containers.UpdateValue(keys, uint32(offset), nil, true, mp)
-			return nil
+		if len(rows) != 1 {
+			panic("logic err: tombstones doesn't have duplicate rows")
 		}
+		err = skipFn(rows[0])
+		if err != nil {
+			return err
+		}
+		containers.UpdateValue(keys, uint32(offset), nil, true, mp)
 		return nil
 	}
 	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {

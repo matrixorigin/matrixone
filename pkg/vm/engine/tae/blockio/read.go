@@ -32,9 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
 
@@ -139,16 +137,6 @@ func BlockDataReadNoCopy(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (*batch.Batch, *nulls.Bitmap, func(), error) {
-	if ctx == nil || info == nil || ds == nil || mp == nil || fs == nil {
-		return nil, nil, nil, moerr.NewInvalidInputNoCtx(
-			"no-copy block read requires context, block info, data source, mpool, and file service",
-		)
-	}
-	if len(columns) == 0 || len(columns) != len(colTypes) {
-		return nil, nil, nil, moerr.NewInvalidInputNoCtxf(
-			"no-copy block read has %d columns and %d column types", len(columns), len(colTypes),
-		)
-	}
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -159,14 +147,15 @@ func BlockDataReadNoCopy(
 		err        error
 	)
 
-	transferRelease := false
 	defer func() {
-		if !transferRelease && release != nil {
-			release()
+		if err != nil {
+			if release != nil {
+				release()
+			}
 		}
 	}()
 
-	cacheVectors := containers.NewVectors(len(columns) + 2)
+	cacheVectors := containers.NewVectors(len(columns) + 1)
 
 	phyAddrColumnPos := -1
 	for i := range columns {
@@ -182,13 +171,11 @@ func BlockDataReadNoCopy(
 	); err != nil {
 		return nil, nil, nil, err
 	}
-	defer func() {
-		deleteMask.Release()
-	}()
+	defer deleteMask.Release()
 
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
-		tombstones.Release()
+		release()
 		return nil, nil, nil, err
 	}
 
@@ -200,24 +187,6 @@ func BlockDataReadNoCopy(
 		tombstones.Release()
 	}
 	outputBat := batch.NewWithSize(len(columns))
-	var actualRows int
-	if phyAddrColumnPos < 0 || len(columns) > 1 || info.IsAppendable() {
-		actualRows = cacheVectors[0].Length()
-	} else {
-		// A BlockInfo synthesized from ObjectStats estimates every non-final
-		// block as BlockMaxRows. Resolve the exact physical cardinality before
-		// constructing a rowid-only result.
-		location := info.MetaLocation()
-		objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-		if metaErr != nil {
-			return nil, nil, nil, metaErr
-		}
-		dataMeta, metaErr := ioutil.GetDataMetaForLocation(objectMeta, location)
-		if metaErr != nil {
-			return nil, nil, nil, metaErr
-		}
-		actualRows = int(dataMeta.GetBlockMeta(uint32(location.ID())).GetRows())
-	}
 
 	loadedColumnPos := 0
 	for outputColPos := range columns {
@@ -226,35 +195,19 @@ func BlockDataReadNoCopy(
 			loadedColumnPos++
 		} else {
 			outputBat.Vecs[outputColPos] = vector.NewOffHeapVecWithType(objectio.RowidType)
-			if err = objectio.ConstructRowidColumnTo(
-				outputBat.Vecs[phyAddrColumnPos], &info.BlockID, 0, uint32(actualRows), mp,
+			if err = buildRowidColumn(
+				info, outputBat.Vecs[phyAddrColumnPos], nil, mp,
 			); err != nil {
-				outputBat.Vecs[phyAddrColumnPos].Free(mp)
+				release()
 				return nil, nil, nil, err
 			}
-			loadedRelease := release
-			rowIDVec := outputBat.Vecs[phyAddrColumnPos]
 			release = func() {
-				if loadedRelease != nil {
-					loadedRelease()
-				}
-				rowIDVec.Free(mp)
+				release()
+				outputBat.Vecs[phyAddrColumnPos].Free(mp)
 			}
 		}
 	}
-	for pos, vec := range outputBat.Vecs {
-		if vec == nil {
-			return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
-				"no-copy block column %d is nil", pos,
-			)
-		}
-		if vec.Length() != actualRows {
-			return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
-				"no-copy block column %d has %d rows, expected %d", pos, vec.Length(), actualRows,
-			)
-		}
-	}
-	outputBat.SetRowCount(actualRows)
+	outputBat.SetRowCount(outputBat.Vecs[0].Length())
 
 	// FIXME: w-zr
 	var retMask *nulls.Bitmap
@@ -263,7 +216,6 @@ func BlockDataReadNoCopy(
 		retMask = &nulls.Bitmap{}
 		retMask.OrBitmap(deleteMask.Bitmap())
 	}
-	transferRelease = true
 	return outputBat, retMask, release, nil
 }
 
@@ -507,12 +459,15 @@ func CopyBlockData(
 	return
 }
 
-type rowBoundedTombstoneDataSource interface {
-	GetTombstonesWithRowCount(
-		context.Context,
-		*objectio.Blockid,
-		int,
-	) (objectio.Bitmap, error)
+func windowCNBatch(bat *batch.Batch, start, end uint64) error {
+	var err error
+	for i, vec := range bat.Vecs {
+		bat.Vecs[i], err = vec.Window(int(start), int(end))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func BlockDataReadBackup(
@@ -523,181 +478,45 @@ func BlockDataReadBackup(
 	ts types.TS,
 	fs fileservice.FileService,
 ) (loaded *batch.Batch, sortKey uint16, err error) {
-	if ctx == nil || info == nil || ds == nil || fs == nil {
-		err = moerr.NewInvalidInputNoCtx(
-			"backup block read requires context, block info, data source, and file service",
-		)
-		return
-	}
-	location := info.MetaLocation()
-	requestedColumnCount := len(idxes)
-	commitPos, abortPos := -1, -1
 	if len(idxes) == 0 {
-		var layout objectio.SpecialColumnLayout
-		loaded, sortKey, layout, err = ioutil.LoadOneBlockWithSpecialLayout(
-			ctx, fs, location, objectio.SchemaData,
-		)
-		if pos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
-			commitPos = int(pos)
-		}
-		if pos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
-			abortPos = int(pos)
-		}
+		loaded, sortKey, err = ioutil.LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
 	} else {
-		objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-		if metaErr != nil {
-			err = metaErr
-			return
-		}
-		dataMeta, metaErr := ioutil.GetDataMetaForLocation(objectMeta, location)
-		if metaErr != nil {
-			err = metaErr
-			return
-		}
-		blockMeta := dataMeta.GetBlockMeta(uint32(location.ID()))
-		layout := objectio.ResolveSpecialColumnLayout(blockMeta)
-		loadIdxes := slices.Clone(idxes)
-		if pos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
-			commitPos = slices.Index(loadIdxes, pos)
-			if commitPos < 0 {
-				commitPos = len(loadIdxes)
-				loadIdxes = append(loadIdxes, pos)
-			}
-		}
-		if pos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
-			abortPos = slices.Index(loadIdxes, pos)
-			if abortPos < 0 {
-				abortPos = len(loadIdxes)
-				loadIdxes = append(loadIdxes, pos)
-			}
-		}
-		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(
-			ctx, fs, loadIdxes, location, objectio.SchemaData,
-		)
+		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(ctx, fs, idxes, info.MetaLocation(), objectio.SchemaData)
 	}
 	// read block data from storage specified by meta location
 	if err != nil {
 		return
 	}
-	if loaded == nil {
-		err = moerr.NewInternalError(ctx, "backup block loader returned no batch")
-		return
-	}
-	loadedForCleanup := loaded
-	defer func() {
-		if err != nil {
-			loadedForCleanup.Clean(common.DebugAllocator)
-			loaded = nil
-			return
-		}
-		if requestedColumnCount > 0 {
-			for i := requestedColumnCount; i < len(loaded.Vecs); i++ {
-				loaded.Vecs[i].Free(common.DebugAllocator)
-				loaded.Vecs[i] = nil
+	if !ts.IsEmpty() {
+		commitTs := types.TS{}
+		for v := 0; v < loaded.Vecs[0].Length(); v++ {
+			err = commitTs.Unmarshal(loaded.Vecs[len(loaded.Vecs)-1].GetRawBytesAt(v))
+			if err != nil {
+				return
 			}
-			loaded.Vecs = loaded.Vecs[:requestedColumnCount]
-			if len(loaded.Attrs) > requestedColumnCount {
-				loaded.Attrs = loaded.Attrs[:requestedColumnCount]
+			if commitTs.GT(&ts) {
+				err = windowCNBatch(loaded, 0, uint64(v))
+				if err != nil {
+					return
+				}
+				logutil.Info("[BlockDataReadBackup]",
+					zap.String("commitTs", commitTs.ToString()),
+					zap.String("ts", ts.ToString()),
+					zap.String("location", info.MetaLocation().String()),
+					zap.Int("rows", v))
+				break
 			}
 		}
-	}()
-	if len(loaded.Vecs) == 0 || requestedColumnCount > len(loaded.Vecs) {
-		err = moerr.NewInternalError(ctx, "backup block loader returned an invalid column set")
-		return
 	}
-	rowCount := loaded.RowCount()
-	if rowCount == 0 {
-		rowCount = loaded.Vecs[0].Length()
-	}
-	for pos, vec := range loaded.Vecs {
-		if vec == nil || vec.Length() != rowCount {
-			err = moerr.NewInternalErrorf(
-				ctx, "backup block column %d has invalid logical row count", pos,
-			)
-			return
-		}
-	}
-	var tombstones objectio.Bitmap
-	if bounded, ok := ds.(rowBoundedTombstoneDataSource); ok {
-		tombstones, err = bounded.GetTombstonesWithRowCount(
-			ctx, &info.BlockID, rowCount,
-		)
-	} else {
-		tombstones, err = ds.GetTombstones(ctx, &info.BlockID)
-	}
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
-		tombstones.Release()
 		return
 	}
 	defer tombstones.Release()
-	if tombstones.Count() > rowCount {
-		err = moerr.NewInternalErrorf(
-			ctx,
-			"backup tombstone contains %d rows for a block with %d rows",
-			tombstones.Count(),
-			rowCount,
-		)
-		return
-	}
-	tombstoneRows := tombstones.ToI64Array(nil)
-	for _, row := range tombstoneRows {
-		if row < 0 || row >= int64(rowCount) {
-			err = moerr.NewInternalErrorf(
-				ctx,
-				"backup tombstone row offset %d is outside block row count %d",
-				row,
-				rowCount,
-			)
-			return
-		}
-	}
-	if commitPos < 0 {
-		if !ts.IsEmpty() {
-			err = moerr.NewInternalError(ctx, "backup object has no commit timestamp")
-			return
-		}
-		if len(tombstoneRows) > 0 {
-			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(tombstoneRows)))
-			loaded.Shrink(tombstoneRows, true)
-		}
-		return
-	}
-	if commitPos >= len(loaded.Vecs) || loaded.Vecs[commitPos] == nil ||
-		(abortPos >= 0 && (abortPos >= len(loaded.Vecs) || loaded.Vecs[abortPos] == nil)) {
-		err = moerr.NewInternalError(ctx, "backup block has invalid visibility columns")
-		return
-	}
-
-	commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(
-		rowCount, loaded.Vecs[commitPos],
-	)
-	if err != nil {
-		return
-	}
-	var aborts ioutil.TombstoneAbortColumn
-	if abortPos >= 0 {
-		aborts, err = ioutil.ValidateTombstoneAbortColumn(rowCount, loaded.Vecs[abortPos])
-		if err != nil {
-			return
-		}
-	}
-	visibleRows := make([]int64, 0, rowCount)
-	for row := 0; row < rowCount; row++ {
-		commitTS := commitTSs.At(row)
-		if (!ts.IsEmpty() && commitTS.GT(&ts)) ||
-			commitTS.Equal(&txnif.UncommitTS) ||
-			(aborts.IsPresent() && aborts.At(row)) ||
-			tombstones.Contains(uint64(row)) {
-			continue
-		}
-		visibleRows = append(visibleRows, int64(row))
-	}
-	if len(visibleRows) != rowCount {
-		loaded.Shrink(visibleRows, false)
-		logutil.Info("[BlockDataReadBackup]",
-			zap.String("ts", ts.ToString()),
-			zap.String("location", location.String()),
-			zap.Int("rows", len(visibleRows)))
+	rows := tombstones.ToI64Array(nil)
+	if len(rows) > 0 {
+		logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
+		loaded.Shrink(rows, true)
 	}
 	return
 }
@@ -1674,18 +1493,11 @@ func readBlockData(
 	err error,
 ) {
 	cacheVectors.Free(m)
-	defer func() {
-		if err != nil && release != nil {
-			release()
-			release = nil
-		}
-	}()
 
 	idxes, typs := excludePhyAddrColumn(colIndexes, colTypes, phyAddrColumnPos)
 
 	readColumns := func(
 		cols []uint16,
-		columnTypes []types.Type,
 		cacheVectors2 containers.Vectors,
 	) (err2 error) {
 		if len(cols) == 0 && phyAddrColumnPos >= 0 {
@@ -1695,7 +1507,7 @@ func readBlockData(
 		}
 
 		release, _, err2 = ioutil.LoadColumns(
-			ctx, cols, columnTypes, fs, info.MetaLocation(), cacheVectors2, m, policy,
+			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		return
 	}
@@ -1707,49 +1519,24 @@ func readBlockData(
 		deletes objectio.Bitmap,
 		err2 error,
 	) {
-		// Appendable blocks are filtered by both MVCC special columns. The
-		// object reader synthesizes a NULL abort vector for old commitTS-only
-		// objects, which is interpreted as "no aborted rows".
-		readCols := make([]uint16, len(cols), len(cols)+2)
-		copy(readCols, cols)
-		readCols = append(readCols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
-		readTypes := make([]types.Type, len(typs), len(typs)+2)
-		copy(readTypes, typs)
-		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
+		// appendable block should be filtered by committs
+		//cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
 
-		if err2 = readColumns(readCols, readTypes, cacheVectors2); err2 != nil {
+		// no need to add typs, the two columns won't be generated
+		if err2 = readColumns(
+			cols, cacheVectors2,
+		); err2 != nil {
 			return
 		}
 
-		t0 := time.Now()
-		abortVec := &cacheVectors2[len(readCols)-1]
-		commitVec := &cacheVectors2[len(readCols)-2]
-		// Decoded vectors know the actual block cardinality. MetaLocation.Rows
-		// can be an ObjectStats-derived estimate for intermediate short blocks.
-		rowCount := commitVec.Length()
-		for pos := range readCols {
-			if cacheVectors2[pos].Length() != rowCount {
-				return objectio.Bitmap{}, moerr.NewInternalErrorf(
-					ctx,
-					"appendable block column %d has %d rows, expected %d",
-					pos, cacheVectors2[pos].Length(), rowCount,
-				)
-			}
-		}
-		commits, err2 := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitVec)
-		if err2 != nil {
-			return objectio.Bitmap{}, err2
-		}
-		aborts, err2 := ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
-		if err2 != nil {
-			return objectio.Bitmap{}, err2
-		}
-
 		deletes = objectio.GetReusableBitmap()
-		for i := 0; i < rowCount; i++ {
-			commitTS := commits.At(i)
-			if commitTS.Equal(&txnif.UncommitTS) || commitTS.GT(&ts) ||
-				(aborts.IsPresent() && aborts.At(i)) {
+
+		t0 := time.Now()
+		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
+		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-1])
+		for i := 0; i < len(commits); i++ {
+			if commits[i].GT(&ts) {
 				deletes.Add(uint64(i))
 			}
 		}
@@ -1766,7 +1553,7 @@ func readBlockData(
 	if info.IsAppendable() {
 		deleteMask, err = readABlkColumns(idxes, cacheVectors)
 	} else {
-		err = readColumns(idxes, typs, cacheVectors)
+		err = readColumns(idxes, cacheVectors)
 	}
 
 	return

@@ -89,7 +89,6 @@ type flushTableTailTask struct {
 	createdMergedTombstoneName string
 
 	mergeRowsCnt, aObjDeletesCnt, tombstoneMergeRowsCnt int
-	aTombstoneDeletesCnt                                int
 	createAt                                            time.Time
 }
 
@@ -520,10 +519,10 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		}
 	}
 	totalRowCnt := bat.Length()
-	if isTombstone {
-		task.aTombstoneDeletesCnt += bat.Deletes.GetCardinality()
-	} else {
-		task.aObjDeletesCnt += bat.Deletes.GetCardinality()
+	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
+
+	if isTombstone && bat.Deletes.GetCardinality() > 0 {
+		panic(fmt.Sprintf("logic err, tombstone %v has deletes", obj.GetID().String()))
 	}
 
 	var sortMapping []int64
@@ -634,9 +633,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		vec := bat.Vecs[sortKeyPos]
 		totalRowCnt += vec.Length()
 	}
-	if isTombstone {
-		totalRowCnt -= task.aTombstoneDeletesCnt
-	} else {
+	if !isTombstone {
 		totalRowCnt -= task.aObjDeletesCnt
 	}
 	if isTombstone {

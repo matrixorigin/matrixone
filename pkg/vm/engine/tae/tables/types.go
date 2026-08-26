@@ -77,7 +77,6 @@ type NodeT interface {
 		blkID *objectio.Blockid,
 		deletes **nulls.Nulls,
 		deleteStartOffset uint64,
-		deleteEndOffset uint64,
 		mp *mpool.MPool) error
 }
 

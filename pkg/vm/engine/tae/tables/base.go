@@ -164,27 +164,10 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	return obj.loadPersistedCommitTS(context.Background(), bid)
 }
 
-func (obj *baseObject) LoadPersistedMVCC(
-	bid uint16,
-) (commitTS, abort containers.Vector, err error) {
-	return obj.loadPersistedMVCC(context.Background(), bid)
-}
-
 func (obj *baseObject) loadPersistedCommitTS(
 	ctx context.Context,
 	bid uint16,
 ) (vec containers.Vector, err error) {
-	vec, abort, err := obj.loadPersistedMVCC(ctx, bid)
-	if abort != nil {
-		abort.Close()
-	}
-	return vec, err
-}
-
-func (obj *baseObject) loadPersistedMVCC(
-	ctx context.Context,
-	bid uint16,
-) (commitTS, abort containers.Vector, err error) {
 	location, err := obj.buildMetalocation(bid)
 	if err != nil {
 		return
@@ -198,8 +181,8 @@ func (obj *baseObject) loadPersistedMVCC(
 	// the caller owns and must close the returned vector.
 	vectors, _, err := ioutil.LoadColumns2(
 		ctx,
-		[]uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-		[]types.Type{types.T_TS.ToType(), types.T_bool.ToType()},
+		[]uint16{objectio.SEQNUM_COMMITTS},
+		[]types.Type{types.T_TS.ToType()},
 		obj.rt.Fs,
 		location,
 		fileservice.Policy(0),
@@ -209,22 +192,10 @@ func (obj *baseObject) loadPersistedMVCC(
 	if err != nil {
 		return
 	}
-	if len(vectors) != 2 ||
-		vectors[0] == nil || vectors[0].GetType().Oid != types.T_TS ||
-		vectors[1] == nil || vectors[1].GetType().Oid != types.T_bool ||
-		vectors[0].Length() != vectors[1].Length() {
-		for _, vec := range vectors {
-			if vec != nil {
-				vec.Close()
-			}
-		}
-		err = moerr.NewInternalErrorNoCtxf(
-			"invalid persisted MVCC columns for object %s",
-			obj.meta.Load().ID().String(),
-		)
-		return
-	}
-	return vectors[0], vectors[1], nil
+	return validatePersistedCommitTSVectors(
+		obj.meta.Load().ID().String(),
+		vectors,
+	)
 }
 
 func validatePersistedCommitTSVectors(
@@ -323,8 +294,8 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	var dedupFn any
 	if filterByCommitTS {
 		loader := &commitTSLoader{
-			load: func() (containers.Vector, containers.Vector, error) {
-				return obj.loadPersistedMVCC(ctx, blkOffset)
+			load: func() (containers.Vector, error) {
+				return obj.loadPersistedCommitTS(ctx, blkOffset)
 			},
 		}
 		defer loader.close()
@@ -384,7 +355,7 @@ func (obj *baseObject) containsWithLoad(
 	var dedupFn any
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedMVCC, txn,
+			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
 			func(vrowID any, commitTS types.TS) (types.TS, error) {
 				rowID := vrowID.(types.Rowid)
 				blkID := rowID.BorrowBlockID()
@@ -569,23 +540,13 @@ func (obj *baseObject) FillBlockTombstones(
 	blkID *objectio.Blockid,
 	deletes **nulls.Nulls,
 	deleteStartOffset uint64,
-	deleteEndOffset uint64,
 	mp *mpool.MPool) error {
-	if obj == nil {
-		return moerr.NewInternalErrorNoCtx("tombstone fill has no object")
-	}
-	meta := obj.meta.Load()
-	if meta == nil || !meta.IsTombstone {
-		return moerr.NewInternalErrorNoCtx("cannot fill tombstones from a data object")
-	}
 	node := obj.PinNode()
-	if node == nil {
-		return moerr.NewInternalErrorNoCtx("tombstone fill could not pin object data")
-	}
 	defer node.Unref()
-	return node.FillBlockTombstones(
-		ctx, txn, blkID, deletes, deleteStartOffset, deleteEndOffset, mp,
-	)
+	if !obj.meta.Load().IsTombstone {
+		panic("logic err")
+	}
+	return node.FillBlockTombstones(ctx, txn, blkID, deletes, deleteStartOffset, mp)
 }
 
 func (obj *baseObject) ScanInMemory(

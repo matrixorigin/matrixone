@@ -2598,40 +2598,22 @@ func (tbl *txnTable) getPartitionState(
 // callers should keep the original conservative behavior in that case.
 func pkCommitTSMatchedInRange(
 	commitTSVec *vector.Vector,
-	abortVec *vector.Vector,
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil ||
-		commitTSVec.GetType().Oid != types.T_TS ||
-		commitTSVec.IsConstNull() {
+	if commitTSVec == nil {
 		return false, false
 	}
 	rowCount := commitTSVec.Length()
-	var aborts ioutil.TombstoneAbortColumn
-	if abortVec != nil && abortVec.GetType().Oid != types.T_any && !abortVec.IsConstNull() {
-		var err error
-		aborts, err = ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
-		if err != nil {
-			return false, false
-		}
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
+	if err != nil {
+		return false, false
 	}
 	for _, sel := range sels {
 		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
-		if commitTSVec.IsNull(uint64(sel)) {
-			return false, false
-		}
-		if aborts.IsPresent() {
-			if abortVec.IsNull(uint64(sel)) {
-				return false, false
-			}
-			if aborts.At(int(sel)) {
-				continue
-			}
-		}
-		ts := vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, int(sel))
+		ts := timestamps.At(int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}
@@ -2818,7 +2800,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, nil
 	}
 
-	cacheVectors := containers.NewVectors(3)
+	cacheVectors := containers.NewVectors(2)
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
@@ -2859,8 +2841,8 @@ func (tbl *txnTable) PKPersistedBetween(
 				var release func()
 				release, _, err = ioutil.LoadColumns(
 					ctx,
-					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-					[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
+					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
+					[]types.Type{pkType, objectio.TSType},
 					fs,
 					blk.MetaLocation(),
 					cacheVectors,
@@ -2872,7 +2854,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					if len(sels) == 0 {
 						matched, usable = false, true
 					} else {
-						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
+						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
 					}
 					release()
 				}
@@ -3025,7 +3007,7 @@ func tombstonePKExistsInRange(
 				continue
 			}
 
-			vecCount := 4
+			vecCount := 3
 			if isCNCreated {
 				vecCount = 2
 			}
@@ -3041,7 +3023,7 @@ func tombstonePKExistsInRange(
 					release()
 					return true, "tombstone_cn_hit", nil
 				}
-				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], &tombVectors[3], hits, from, to)
+				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], hits, from, to)
 				release()
 				if !ok || changed {
 					if ok {

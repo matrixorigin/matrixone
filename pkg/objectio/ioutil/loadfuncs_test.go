@@ -41,13 +41,23 @@ type releaseTrackingFS struct {
 	outstanding atomic.Int32
 }
 
-func TestGetDataMetaForLocationRejectsMalformedMetadataWithoutPanic(t *testing.T) {
-	location := objectio.NewRandomLocation(0, 1)
-	var err error
-	require.NotPanics(t, func() {
-		_, err = GetDataMetaForLocation(objectio.ObjectMeta{1}, location)
-	})
-	require.ErrorContains(t, err, "malformed")
+type failLegacyReloadFS struct {
+	*releaseTrackingFS
+	failed                   atomic.Bool
+	firstLeaseReleasedOnFail atomic.Bool
+}
+
+func (f *failLegacyReloadFS) Read(
+	ctx context.Context,
+	ioVector *fileservice.IOVector,
+) error {
+	// The first legacy read loads rowid while commitTS is synthesized. The
+	// compatibility reload then has two physical entries: rowid + commitTS.
+	if len(ioVector.Entries) == 2 && f.failed.CompareAndSwap(false, true) {
+		f.firstLeaseReleasedOnFail.Store(f.outstanding.Load() == 0)
+		return fmt.Errorf("injected legacy commit-ts reload failure")
+	}
+	return f.releaseTrackingFS.Read(ctx, ioVector)
 }
 
 func (f *releaseTrackingFS) Read(
@@ -77,310 +87,286 @@ type releaseTrackingData struct {
 	outstanding *atomic.Int32
 }
 
-func TestLoadOneBlockWithColumnLayoutSupportsSparseSeqnums(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
+func TestValidateTombstoneCommitTSColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	input := batch.NewWithSize(5)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[3] = vector.NewVec(types.T_TS.ToType())
-	input.Vecs[4] = vector.NewVec(types.T_bool.ToType())
-	defer input.Clean(mp)
-	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
-	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, mp))
-	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("pk"), false, mp))
-	require.NoError(t, vector.AppendFixed(input.Vecs[2], types.NewRowid(blockID, 0), false, mp))
-	require.NoError(t, vector.AppendFixed(input.Vecs[3], types.BuildTS(9, 0), false, mp))
-	require.NoError(t, vector.AppendFixed(input.Vecs[4], false, false, mp))
-	input.SetRowCount(1)
+	valid := vector.NewVec(types.T_TS.ToType())
+	for i := int64(1); i <= 3; i++ {
+		require.NoError(t, vector.AppendFixed(valid, types.BuildTS(i, 0), false, mp))
+	}
+	column, err := ValidateTombstoneCommitTSColumn(3, valid)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(1, 0), column.At(0))
+	require.Equal(t, types.BuildTS(3, 0), column.At(2))
+	valid.Free(mp)
 
-	writer := ConstructWriter(
-		0,
-		[]uint16{0, 5, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-		1,
-		false,
-		false,
-		fs,
-	)
-	writer.SetAppendable()
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
+	missing := vector.NewConstNull(types.T_TS.ToType(), 3, mp)
+	_, err = ValidateTombstoneCommitTSColumn(3, missing)
+	require.ErrorContains(t, err, "unavailable")
+	missing.Free(mp)
 
-	stats := writer.GetObjectStats(objectio.WithAppendable())
-	location := stats.ObjectLocation()
-	loaded, sortKey, layout, seqnums, err := LoadOneBlockWithColumnLayout(
-		ctx, fs, location, objectio.SchemaData,
-	)
+	partial := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(partial, types.BuildTS(1, 0), false, mp))
+	_, err = ValidateTombstoneCommitTSColumn(3, partial)
+	require.ErrorContains(t, err, "1 rows, expected 3")
+	partial.Free(mp)
+
+	shortBacking := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(shortBacking, types.BuildTS(1, 0), false, mp))
+	shortBacking.SetLength(3)
+	_, err = ValidateTombstoneCommitTSColumn(3, shortBacking)
+	require.ErrorContains(t, err, "backing bytes")
+	shortBacking.Free(mp)
+
+	nullCommitTS := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(nullCommitTS, types.BuildTS(1, 0), true, mp))
+	_, err = ValidateTombstoneCommitTSColumn(1, nullCommitTS)
+	require.ErrorContains(t, err, "contains null rows")
+	nullCommitTS.Free(mp)
+
+	wrongType := vector.NewVec(types.T_int64.ToType())
+	_, err = ValidateTombstoneCommitTSColumn(0, wrongType)
+	require.ErrorContains(t, err, "expected TS")
+	wrongType.Free(mp)
+
+	constant, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(1, 0), 3, mp)
 	require.NoError(t, err)
-	require.NotNil(t, loaded)
-	defer loaded.Clean(mp)
-	require.Equal(t, []uint16{0, 5, 6, 7, 8}, seqnums)
-	require.Equal(t, uint16(1), sortKey)
-	require.Equal(t, uint16(2), layout.PhysicalAddr)
-	require.Equal(t, uint16(3), layout.CommitTS)
-	require.Equal(t, uint16(4), layout.Abort)
-	require.Len(t, loaded.Vecs, 5)
-	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](loaded.Vecs[0], 0))
-	require.Equal(t, "pk", loaded.Vecs[1].GetStringAt(0))
-	require.Equal(t, types.T_Rowid, loaded.Vecs[2].GetType().Oid)
-	require.Equal(t, types.BuildTS(9, 0), vector.GetFixedAtNoTypeCheck[types.TS](loaded.Vecs[3], 0))
+	column, err = ValidateTombstoneCommitTSColumn(3, constant)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(1, 0), column.At(0))
+	require.Equal(t, types.BuildTS(1, 0), column.At(2))
+	constant.Free(mp)
 }
 
-func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) {
+func TestLegacyBackupTombstoneUsesTrailingCommitTS(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
+	blockID := *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
 	defer input.Clean(mp)
+
 	for _, row := range []struct {
-		key     string
-		commit  types.TS
-		aborted bool
+		offset   uint32
+		pk       types.TS
+		commitTS types.TS
 	}{
-		{key: "live", commit: types.BuildTS(5, 0)},
-		{key: "aborted", commit: types.BuildTS(6, 0), aborted: true},
-		{key: "future", commit: types.BuildTS(20, 0)},
+		{offset: 1, pk: types.BuildTS(100, 0), commitTS: types.BuildTS(5, 0)},
+		{offset: 2, pk: types.BuildTS(100, 0), commitTS: types.BuildTS(20, 0)},
 	} {
-		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(row.key), false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.commit, false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[2], row.aborted, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[0], types.NewRowid(&blockID, row.offset), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.pk, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], row.commitTS, false, mp))
 	}
-	input.SetRowCount(3)
+	input.SetRowCount(2)
 
-	writer := ConstructWriter(
-		0,
-		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-		-1,
-		false,
-		false,
-		fs,
+	// The old Backup path used the generic writer. It persisted commitTS as
+	// dense user seqnum 2 instead of hidden SEQNUM_COMMITTS.
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := NewBlockWriter(fs, name.String())
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	require.False(t, blocks[0].BlockHeader().Appendable())
+	require.Equal(t, uint16(3), blocks[0].GetMetaColumnCount())
+	require.Equal(t, uint16(2), blocks[0].GetMaxSeqnum())
+	require.Equal(t, uint8(types.T_TS), blocks[0].ColumnMeta(2).DataType())
+
+	location := objectio.BuildLocation(
+		name,
+		blocks[0].GetExtent(),
+		uint32(input.RowCount()),
+		blocks[0].GetID(),
 	)
-	writer.SetAppendable()
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats(objectio.WithAppendable())
-	location := stats.ObjectLocation()
 	snapshot := types.BuildTS(10, 0)
+	trackingFS := &releaseTrackingFS{FileService: fs}
 
-	destination := vector.NewVec(types.T_varchar.ToType())
-	defer destination.Free(mp)
-	deleteMask, _, err := LoadColumnsDataInto(
-		ctx,
-		[]uint16{0},
-		[]types.Type{types.T_varchar.ToType()},
-		fs,
-		location,
-		[]*vector.Vector{destination},
-		nil,
-		&snapshot,
-		mp,
-		fileservice.Policy(0),
-	)
-	require.NoError(t, err)
-	defer deleteMask.Release()
-	require.True(t, deleteMask.Contains(1), "aborted row must be hidden from full scans")
-	require.True(t, deleteMask.Contains(2), "future row must be hidden from full scans")
-	require.False(t, deleteMask.Contains(0))
+	t.Run("timestamp primary key remains distinct", func(t *testing.T) {
+		cacheVectors := containers.NewVectors(3)
+		pkType := types.T_TS.ToType()
+		_, release, err := ReadDeletes(ctx, location, trackingFS, false, cacheVectors, &pkType)
+		require.NoError(t, err)
+		primaryKeys := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[2])
+		require.Equal(t, []types.TS{types.BuildTS(100, 0), types.BuildTS(100, 0)}, primaryKeys)
+		require.Equal(t, []types.TS{types.BuildTS(5, 0), types.BuildTS(20, 0)}, commitTSs)
+		release()
+		require.Zero(t, trackingFS.outstanding.Load())
+	})
 
-	search := objectio.NewReadFilterSearch(
-		types.T_varchar,
-		[][]byte{[]byte("live"), []byte("aborted"), []byte("future")},
-	)
-	sels, _, err := LoadColumnDataBySearch(
-		ctx,
-		0,
-		types.T_varchar.ToType(),
-		fs,
-		location,
-		search,
-		false,
-		&snapshot,
-		mp,
-		fileservice.Policy(0),
-	)
-	require.NoError(t, err)
-	require.Equal(t, []int64{0}, sels, "cached search must return only live visible rows")
+	t.Run("point lookup", func(t *testing.T) {
+		row := types.NewRowid(&blockID, 1)
+		deleted, err := IsRowDeletedByLocation(ctx, &snapshot, &row, location, trackingFS, false)
+		require.NoError(t, err)
+		require.True(t, deleted)
+		require.Zero(t, trackingFS.outstanding.Load())
+	})
+
+	t.Run("block mask", func(t *testing.T) {
+		mask, err := FillBlockDeleteMask(ctx, &snapshot, &blockID, location, trackingFS, false)
+		require.NoError(t, err)
+		defer mask.Release()
+		require.True(t, mask.Contains(1))
+		require.False(t, mask.Contains(2))
+		require.Zero(t, trackingFS.outstanding.Load())
+	})
+
+	t.Run("reload failure releases first lease", func(t *testing.T) {
+		failingFS := &failLegacyReloadFS{
+			releaseTrackingFS: &releaseTrackingFS{FileService: fs},
+		}
+		cacheVectors := containers.NewVectors(2)
+		_, release, err := ReadDeletes(ctx, location, failingFS, false, cacheVectors, nil)
+		require.ErrorContains(t, err, "injected legacy commit-ts reload failure")
+		require.Nil(t, release)
+		require.True(t, failingFS.failed.Load())
+		require.True(t, failingFS.firstLeaseReleasedOnFail.Load())
+		require.Zero(t, failingFS.outstanding.Load())
+	})
+	require.Positive(t, trackingFS.tracked.Load())
 }
 
-func TestReadDeletesBroadcastsConstantAbort(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(objectio.RowidType)
-	input.Vecs[1] = vector.NewVec(objectio.TSType)
-	input.Vecs[2], _ = vector.NewConstFixed(types.T_bool.ToType(), false, 3, mp)
-	defer input.Clean(mp)
-	for row := 0; row < 3; row++ {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(blockID, uint32(row)), false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(5, 0), false, mp))
-	}
-	input.SetRowCount(3)
-	writer := ConstructWriter(0, []uint16{
-		objectio.TombstoneAttr_Rowid_SeqNum,
-		objectio.SEQNUM_COMMITTS,
-		objectio.SEQNUM_ABORT,
-	}, -1, false, false, fs)
-	writer.SetAppendable()
-	require.NoError(t, func() error { _, err := writer.WriteBatch(input); return err }())
-	_, _, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats(objectio.WithAppendable())
-	location := stats.ObjectLocation()
-
-	cache := containers.NewVectors(3)
-	_, release, err := ReadDeletes(ctx, location, fs, false, cache, nil)
-	require.NoError(t, err)
-	defer release()
-	aborts, err := ValidateTombstoneAbortColumn(3, &cache[2])
-	require.NoError(t, err)
-	require.True(t, aborts.IsPresent())
-	require.False(t, aborts.At(1))
-}
-
-func TestFillBlockDeleteMaskSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
+func TestReadDeletesBroadcastsPersistedConstantCommitTS(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	blockID := *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(objectio.RowidType)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[2] = vector.NewVec(objectio.TSType)
+	for offset := uint32(1); offset <= 2; offset++ {
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[0], types.NewRowid(&blockID, offset), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(offset), false, mp))
+	}
+	commitTS := types.BuildTS(5, 0)
+	var err error
+	input.Vecs[2], err = vector.NewConstFixed(types.T_TS.ToType(), commitTS, 2, mp)
+	require.NoError(t, err)
+	input.SetRowCount(2)
 	defer input.Clean(mp)
-	require.NoError(t, vector.AppendFixed(
-		input.Vecs[0], types.NewRowid(blockID, 7), false, mp,
-	))
-	require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(7), false, mp))
-	require.NoError(t, vector.AppendFixed(
-		input.Vecs[2], types.BuildTS(5, 0), false, mp,
-	))
-	input.SetRowCount(1)
 
-	writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
-	writer.SetAppendable()
-	_, err := writer.WriteBatch(input)
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := objectio.NewObjectWriter(
+		name, fs, 0, objectio.TombstoneSeqnums_DN_Created, nil,
+	)
 	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
+	_, err = writer.Write(input)
 	require.NoError(t, err)
-	stats := writer.GetObjectStats(objectio.WithAppendable())
-	location := stats.ObjectLocation()
-	snapshot := types.BuildTS(10, 0)
+	blocks, err := writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
 
-	cache := containers.NewVectors(3)
-	_, release, err := ReadDeletes(ctx, location, fs, false, cache, nil)
+	location := objectio.BuildLocation(
+		name, blocks[0].GetExtent(), uint32(input.RowCount()), blocks[0].GetID(),
+	)
+	cacheVectors := containers.NewVectors(2)
+	_, release, err := ReadDeletes(ctx, location, fs, false, cacheVectors, nil)
 	require.NoError(t, err)
-	require.Equal(t, types.T_bool, cache[2].GetType().Oid)
-	require.True(t, cache[2].IsConstNull())
-	require.Equal(t, input.RowCount(), cache[2].Length())
-	aborts, err := ValidateTombstoneAbortColumn(input.RowCount(), &cache[2])
+	require.True(t, cacheVectors[1].IsConst())
+	validated, err := ValidateTombstoneCommitTSColumn(2, &cacheVectors[1])
 	require.NoError(t, err)
-	require.False(t, aborts.IsPresent())
+	require.Equal(t, commitTS, validated.At(0))
+	require.Equal(t, commitTS, validated.At(1))
 	release()
 
-	mask, err := FillBlockDeleteMask(
-		ctx, &snapshot, blockID, location, fs, false,
-	)
+	row := types.NewRowid(&blockID, 2)
+	deleted, err := IsRowDeletedByLocation(ctx, &commitTS, &row, location, fs, false)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	mask, err := FillBlockDeleteMask(ctx, &commitTS, &blockID, location, fs, false)
 	require.NoError(t, err)
 	defer mask.Release()
-	require.True(t, mask.Contains(7))
+	require.True(t, mask.Contains(1))
+	require.True(t, mask.Contains(2))
 }
 
-func TestFillBlockDeleteMaskRejectsMalformedAbortColumn(t *testing.T) {
+func TestTimestampPrimaryKeyWithoutCommitTSIsRejected(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(objectio.RowidType)
-	input.Vecs[1] = vector.NewVec(objectio.TSType)
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	blockID := *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
 	defer input.Clean(mp)
-	for offset := uint32(1); offset <= 3; offset++ {
-		require.NoError(t, vector.AppendFixed(
-			input.Vecs[0], types.NewRowid(blockID, offset), false, mp,
-		))
-		require.NoError(t, vector.AppendFixed(
-			input.Vecs[1], types.BuildTS(5, 0), false, mp,
-		))
-	}
-	require.NoError(t, vector.AppendFixed(input.Vecs[2], false, false, mp))
-	input.SetRowCount(3)
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[0], types.NewRowid(&blockID, 1), false, mp,
+	))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(5, 0), false, mp))
+	input.SetRowCount(1)
 
-	writer := ConstructWriter(
-		0,
-		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-		-1,
-		false,
-		true,
-		fs,
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := NewBlockWriter(fs, name.String())
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	require.Equal(t, uint16(2), blocks[0].GetMetaColumnCount())
+	require.Equal(t, uint16(1), blocks[0].GetMaxSeqnum())
+
+	location := objectio.BuildLocation(
+		name,
+		blocks[0].GetExtent(),
+		uint32(input.RowCount()),
+		blocks[0].GetID(),
 	)
-	writer.SetAppendable()
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats(objectio.WithAppendable())
-	location := stats.ObjectLocation()
 	snapshot := types.BuildTS(10, 0)
+	row := types.NewRowid(&blockID, 1)
+	trackingFS := &releaseTrackingFS{FileService: fs}
 
-	mask, err := FillBlockDeleteMask(
-		ctx, &snapshot, blockID, location, fs, false,
-	)
-	require.ErrorContains(t, err, "abort column has 1 rows, expected 3")
-	require.False(t, mask.IsValid())
+	t.Run("non-CN point lookup", func(t *testing.T) {
+		_, err := IsRowDeletedByLocation(ctx, &snapshot, &row, location, trackingFS, false)
+		require.ErrorContains(t, err, "commit-ts column is unavailable")
+		require.Zero(t, trackingFS.outstanding.Load())
+	})
+
+	t.Run("non-CN block mask", func(t *testing.T) {
+		_, err := FillBlockDeleteMask(ctx, &snapshot, &blockID, location, trackingFS, false)
+		require.ErrorContains(t, err, "commit-ts column is unavailable")
+		require.Zero(t, trackingFS.outstanding.Load())
+	})
+
+	t.Run("CN-created path", func(t *testing.T) {
+		deleted, err := IsRowDeletedByLocation(ctx, &snapshot, &row, location, fs, true)
+		require.NoError(t, err)
+		require.True(t, deleted)
+	})
 }
 
-func TestValidateTombstoneAbortColumnRejectsMalformed(t *testing.T) {
+func TestEvalDeleteMaskRejectsMissingCommitTS(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
+	var blockID types.Blockid
+	rowIDs := vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixed(rowIDs, types.NewRowid(&blockID, 1), false, mp))
+	defer rowIDs.Free(mp)
+	missingCommitTS := vector.NewConstNull(types.T_TS.ToType(), 1, mp)
+	defer missingCommitTS.Free(mp)
 
-	wrongType := vector.NewVec(types.T_int8.ToType())
-	defer wrongType.Free(mp)
-	require.NoError(t, func() error { return vector.AppendFixed(wrongType, int8(1), false, mp) }())
-	_, err := ValidateTombstoneAbortColumn(1, wrongType)
-	require.Error(t, err)
-
-	short := vector.NewVec(types.T_bool.ToType())
-	defer short.Free(mp)
-	require.NoError(t, func() error { return vector.AppendFixed(short, true, false, mp) }())
-	_, err = ValidateTombstoneAbortColumn(2, short)
-	require.Error(t, err)
-
-	null := vector.NewVec(types.T_bool.ToType())
-	defer null.Free(mp)
-	require.NoError(t, func() error { return vector.AppendFixed(null, false, true, mp) }())
-	_, err = ValidateTombstoneAbortColumn(1, null)
-	require.Error(t, err)
-
-	constNull := vector.NewConstNull(types.T_bool.ToType(), 1, mp)
-	defer constNull.Free(mp)
-	_, err = ValidateTombstoneAbortColumn(2, constNull)
-	require.ErrorContains(t, err, "const-null column has 1 rows, expected 2")
-
-	empty := vector.NewVec(types.T_bool.ToType())
-	defer empty.Free(mp)
-	_, err = ValidateTombstoneAbortColumn(1, empty)
-	require.ErrorContains(t, err, "abort column is empty")
+	rows, err := EvalDeleteMaskFromDNCreatedTombstones(
+		rowIDs, missingCommitTS, objectio.BlockObject{}, &types.TS{}, &blockID,
+	)
+	require.ErrorContains(t, err, "commit-ts column is unavailable")
+	require.False(t, rows.IsValid())
 }
 
 func (d *releaseTrackingData) Slice(length int) fscache.Data {
@@ -635,39 +621,4 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	require.Len(t, vectors, 1)
 	require.Equal(t, types.BuildTS(42, 0), vectors[0].Get(0))
 	vectors[0].Close()
-
-	// nil types are the supported fast path when the object has no schema
-	// changes. The returned zero-copy vector keeps the cache lease until release.
-	zeroCopy, zeroCopyRelease, err := LoadColumns2(
-		ctx,
-		[]uint16{0},
-		nil,
-		trackingFS,
-		stats.ObjectLocation(),
-		fileservice.Policy(0),
-		false,
-		nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, zeroCopyRelease)
-	require.Len(t, zeroCopy, 1)
-	require.Equal(t, types.T_TS, zeroCopy[0].GetType().Oid)
-	require.Positive(t, trackingFS.outstanding.Load())
-	zeroCopyRelease()
-	require.Zero(t, trackingFS.outstanding.Load())
-
-	badVectors, badRelease, err := LoadColumns2(
-		ctx,
-		[]uint16{0},
-		[]types.Type{types.T_int64.ToType()},
-		trackingFS,
-		stats.ObjectLocation(),
-		fileservice.Policy(0),
-		true,
-		pool,
-	)
-	require.ErrorContains(t, err, "has type TRANSACTION TIMESTAMP, expected BIGINT")
-	require.Nil(t, badVectors)
-	require.Nil(t, badRelease)
-	require.Zero(t, trackingFS.outstanding.Load())
 }

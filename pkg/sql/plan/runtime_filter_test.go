@@ -798,13 +798,13 @@ func TestSortedMembershipFilterProtocolGate(t *testing.T) {
 	})
 
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion11)
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
 	require.True(t, localProtocolEnablesSortedMembershipFilter(sid))
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 }
 

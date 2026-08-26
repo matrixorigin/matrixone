@@ -368,7 +368,7 @@ func TestApplyIndicesForSortUsingIvfflat_OldProtocolKeepsRelationalPlan(t *testi
 				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion9)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(
 		scanNode, scanNodeID, "include", 0, 2, 4)
