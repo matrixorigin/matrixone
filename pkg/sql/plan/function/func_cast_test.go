@@ -3650,6 +3650,15 @@ func TestCastJsonToNumeric(t *testing.T) {
 			[]int64{1, 2, -3}, []bool{false, false, false}, false)
 	})
 
+	t.Run("json_integer_cast_preserves_values_above_float_precision", func(t *testing.T) {
+		run(t, "int64_precision", []string{"9007199254740993", "9223372036854775807"}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "uint64_precision", []string{"9007199254740993", "18446744073709551615"}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
 	t.Run("json_number_to_int8", func(t *testing.T) {
 		run(t, "int8", []string{"10", "20"}, nil,
 			types.T_int8.ToType(),
@@ -3660,6 +3669,15 @@ func TestCastJsonToNumeric(t *testing.T) {
 		run(t, "string_to_int64", []string{`"42"`, `"100"`}, nil,
 			types.T_int64.ToType(),
 			[]int64{42, 100}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_integer_cast_preserves_boundaries", func(t *testing.T) {
+		run(t, "string_int64_precision", []string{`"9007199254740993"`, `"9223372036854775807"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_precision", []string{`"9007199254740993"`, `"18446744073709551615"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
 	})
 
 	t.Run("json_null_to_int64", func(t *testing.T) {

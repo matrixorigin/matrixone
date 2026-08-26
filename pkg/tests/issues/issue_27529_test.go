@@ -125,6 +125,14 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			{name: "null-safe equality preserves JSON number to boolean coercion", query: `select ? <=> json_extract(json_array(1), '$[0]')`, arg: true, expected: true},
 			{name: "IN preserves JSON number to boolean coercion", query: `select json_extract(json_array(1), '$[0]') in (?)`, arg: true, expected: true},
 			{name: "NOT IN preserves JSON number to boolean coercion", query: `select json_extract(json_array(1), '$[0]') not in (?)`, arg: true, expected: false},
+			{name: "equality preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') = ?`, arg: int64(9007199254740993), expected: false},
+			{name: "reversed equality preserves adjacent int64 precision", query: `select ? = json_extract(json_array(9007199254740992), '$[0]')`, arg: int64(9007199254740993), expected: false},
+			{name: "null-safe equality preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') <=> ?`, arg: int64(9007199254740993), expected: false},
+			{name: "IN preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') in (?)`, arg: int64(9007199254740993), expected: false},
+			{name: "NOT IN preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') not in (?)`, arg: int64(9007199254740993), expected: true},
+			{name: "equality preserves max int64", query: `select json_extract(json_array(9223372036854775807), '$[0]') = ?`, arg: int64(9223372036854775807), expected: true},
+			{name: "integer parameter keeps numeric JSON string coercion", query: `select json_extract(json_array('7'), '$[0]') = ?`, arg: int64(7), expected: true},
+			{name: "float parameter preserves typed literal parity", query: `select json_extract(json_array(1.25), '$[0]') = ?`, arg: float64(1.25), expected: true},
 			{name: "null-safe equality JSON right boolean", query: `select ? <=> json_extract(json_object('v', true), '$.v')`, arg: true, expected: true},
 			{name: "null-safe equality boolean coerces to string parameter", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: true},
 			{name: "null-safe equality string matches string parameter", query: `select ? <=> json_extract(json_object('v', 'true'), '$.v')`, arg: "true", expected: true},
@@ -148,6 +156,29 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 				}
 			})
 		}
+
+		stmt, err := db.PrepareContext(ctx, `select
+			json_extract(json_array(9007199254740992), '$[0]') = cast(9007199254740993 as signed),
+			json_extract(json_array(9007199254740992), '$[0]') = ?`)
+		require.NoError(t, err)
+		var direct, prepared bool
+		require.NoError(t, stmt.QueryRowContext(ctx, int64(9007199254740993)).Scan(&direct, &prepared))
+		require.Equal(t, direct, prepared)
+		require.False(t, prepared)
+		require.NoError(t, stmt.Close())
+
+		for _, query := range []string{
+			`select json_extract(json_object('v', json_object('nested', true)), '$.v') = ?`,
+			`select json_extract(json_object('v', json_array(true)), '$.v') = ?`,
+		} {
+			stmt, err = db.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			require.Error(t, stmt.QueryRowContext(ctx, true).Scan(new(bool)))
+			require.NoError(t, stmt.Close())
+		}
+		var health int
+		require.NoError(t, db.QueryRowContext(ctx, "select 1").Scan(&health))
+		require.Equal(t, 1, health)
 
 		execSQLRequire(t, ctx, db, `prepare issue_27529_p from "select id from `+dbName+`.docs where json_extract(meta, '$.active') = ? order by id"`)
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_p")

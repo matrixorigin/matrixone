@@ -2851,7 +2851,9 @@ func jsonCastErr(ctx context.Context, toOid types.T) error {
 	return moerr.NewInvalidArg(ctx, "operator cast", fmt.Sprintf("[JSON -> %s]", toOid.String()))
 }
 
-// jsonToScalar extracts a numeric scalar from JSON. Returns (float64, isNull, ok). Used for all JSON->numeric casts.
+// jsonToScalar extracts a floating-point scalar from JSON. Integer casts use
+// the exact helpers below so values above 2^53 do not first pass through a
+// float64. Returns (value, isNull, ok).
 func jsonToScalar(bj bytejson.ByteJson) (float64, bool, bool) {
 	switch bj.Type {
 	case bytejson.TpCodeInt64:
@@ -2860,11 +2862,8 @@ func jsonToScalar(bj bytejson.ByteJson) (float64, bool, bool) {
 		return float64(bj.GetUint64()), false, true
 	case bytejson.TpCodeFloat64:
 		return bj.GetFloat64(), false, true
-	case bytejson.TpCodeString:
+	case bytejson.TpCodeString, bytejson.TpCodeDecimal:
 		s := bj.GetString()
-		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			s = s[1 : len(s)-1]
-		}
 		f, err := strconv.ParseFloat(string(s), 64)
 		if err != nil {
 			return 0, false, false
@@ -2882,6 +2881,84 @@ func jsonToScalar(bj bytejson.ByteJson) (float64, bool, bool) {
 	}
 }
 
+func jsonToInt64Scalar(bj bytejson.ByteJson) (int64, bool, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return bj.GetInt64(), false, true
+	case bytejson.TpCodeUint64:
+		value := bj.GetUint64()
+		if value > math.MaxInt64 {
+			return 0, false, false
+		}
+		return int64(value), false, true
+	case bytejson.TpCodeFloat64:
+		return float64ToJSONInt64(bj.GetFloat64())
+	case bytejson.TpCodeString, bytejson.TpCodeDecimal:
+		text := string(bj.GetString())
+		if value, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return value, false, true
+		}
+		value, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return 0, false, false
+		}
+		return float64ToJSONInt64(value)
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) > 0 && bj.Data[0] == bytejson.LiteralNull {
+			return 0, true, true
+		}
+	}
+	return 0, false, false
+}
+
+func float64ToJSONInt64(value float64) (int64, bool, bool) {
+	// float64(math.MaxInt64) rounds up to 2^63, so the upper bound must be
+	// exclusive. The lower endpoint (-2^63) is exactly representable.
+	const upperExclusive = 9223372036854775808.0
+	if math.IsNaN(value) || value < math.MinInt64 || value >= upperExclusive {
+		return 0, false, false
+	}
+	return int64(value), false, true
+}
+
+func jsonToUint64Scalar(bj bytejson.ByteJson) (uint64, bool, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		value := bj.GetInt64()
+		if value < 0 {
+			return 0, false, false
+		}
+		return uint64(value), false, true
+	case bytejson.TpCodeUint64:
+		return bj.GetUint64(), false, true
+	case bytejson.TpCodeFloat64:
+		return float64ToJSONUint64(bj.GetFloat64())
+	case bytejson.TpCodeString, bytejson.TpCodeDecimal:
+		text := string(bj.GetString())
+		if value, err := strconv.ParseUint(text, 10, 64); err == nil {
+			return value, false, true
+		}
+		value, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return 0, false, false
+		}
+		return float64ToJSONUint64(value)
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) > 0 && bj.Data[0] == bytejson.LiteralNull {
+			return 0, true, true
+		}
+	}
+	return 0, false, false
+}
+
+func float64ToJSONUint64(value float64) (uint64, bool, bool) {
+	const upperExclusive = 18446744073709551616.0
+	if math.IsNaN(value) || value < 0 || value >= upperExclusive {
+		return 0, false, false
+	}
+	return uint64(value), false, true
+}
+
 // jsonToNumeric implements JSON -> all numeric types in one loop; append per row via type switch.
 func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper, length int, toType types.Type) error {
@@ -2893,21 +2970,101 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			}
 			continue
 		}
-		f, isNull, ok := jsonToScalar(types.DecodeJson(v))
-		if !ok {
-			return jsonCastErr(ctx, toType.Oid)
-		}
-		if isNull {
-			if err := jsonAppendNull(result, toType); err != nil {
+		bj := types.DecodeJson(v)
+		switch toType.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			value, isNull, ok := jsonToInt64Scalar(bj)
+			if !ok {
+				return jsonCastErr(ctx, toType.Oid)
+			}
+			if isNull {
+				if err := jsonAppendNull(result, toType); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := jsonAppendInt64(ctx, result, toType.Oid, value); err != nil {
 				return err
 			}
-			continue
-		}
-		if err := jsonAppendValue(ctx, result, toType, f); err != nil {
-			return err
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			value, isNull, ok := jsonToUint64Scalar(bj)
+			if !ok {
+				return jsonCastErr(ctx, toType.Oid)
+			}
+			if isNull {
+				if err := jsonAppendNull(result, toType); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := jsonAppendUint64(ctx, result, toType.Oid, value); err != nil {
+				return err
+			}
+		default:
+			f, isNull, ok := jsonToScalar(bj)
+			if !ok {
+				return jsonCastErr(ctx, toType.Oid)
+			}
+			if isNull {
+				if err := jsonAppendNull(result, toType); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := jsonAppendValue(ctx, result, toType, f); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func jsonAppendInt64(ctx context.Context, result vector.FunctionResultWrapper, oid types.T, value int64) error {
+	switch oid {
+	case types.T_int8:
+		if value < math.MinInt8 || value > math.MaxInt8 {
+			return jsonCastErr(ctx, oid)
+		}
+		return vector.MustFunctionResult[int8](result).Append(int8(value), false)
+	case types.T_int16:
+		if value < math.MinInt16 || value > math.MaxInt16 {
+			return jsonCastErr(ctx, oid)
+		}
+		return vector.MustFunctionResult[int16](result).Append(int16(value), false)
+	case types.T_int32:
+		if value < math.MinInt32 || value > math.MaxInt32 {
+			return jsonCastErr(ctx, oid)
+		}
+		return vector.MustFunctionResult[int32](result).Append(int32(value), false)
+	case types.T_int64:
+		return vector.MustFunctionResult[int64](result).Append(value, false)
+	default:
+		panic("jsonAppendInt64: unsupported type")
+	}
+}
+
+func jsonAppendUint64(ctx context.Context, result vector.FunctionResultWrapper, oid types.T, value uint64) error {
+	switch oid {
+	case types.T_uint8:
+		if value > math.MaxUint8 {
+			return jsonCastErr(ctx, oid)
+		}
+		return vector.MustFunctionResult[uint8](result).Append(uint8(value), false)
+	case types.T_uint16:
+		if value > math.MaxUint16 {
+			return jsonCastErr(ctx, oid)
+		}
+		return vector.MustFunctionResult[uint16](result).Append(uint16(value), false)
+	case types.T_uint32:
+		if value > math.MaxUint32 {
+			return jsonCastErr(ctx, oid)
+		}
+		return vector.MustFunctionResult[uint32](result).Append(uint32(value), false)
+	case types.T_uint64:
+		return vector.MustFunctionResult[uint64](result).Append(value, false)
+	default:
+		panic("jsonAppendUint64: unsupported type")
+	}
 }
 
 // jsonToBool implements JSON -> BOOL while preserving the JSON scalar type.
@@ -2925,52 +3082,50 @@ func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[type
 			continue
 		}
 
-		bj := types.DecodeJson(v)
-		var value bool
-		switch bj.Type {
-		case bytejson.TpCodeLiteral:
-			if len(bj.Data) == 0 {
-				return jsonCastErr(ctx, types.T_bool)
-			}
-			switch bj.Data[0] {
-			case bytejson.LiteralNull:
-				if err := to.Append(false, true); err != nil {
-					return err
-				}
-				continue
-			case bytejson.LiteralTrue:
-				value = true
-			case bytejson.LiteralFalse:
-				value = false
-			default:
-				return jsonCastErr(ctx, types.T_bool)
-			}
-		case bytejson.TpCodeInt64:
-			value = bj.GetInt64() != 0
-		case bytejson.TpCodeUint64:
-			value = bj.GetUint64() != 0
-		case bytejson.TpCodeFloat64:
-			value = bj.GetFloat64() != 0
-		case bytejson.TpCodeDecimal:
-			var valid bool
-			value, valid = jsonDecimalToBool(bj.GetString())
-			if !valid {
-				return jsonCastErr(ctx, types.T_bool)
-			}
-		case bytejson.TpCodeString:
-			if err := to.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		default:
-			return jsonCastErr(ctx, types.T_bool)
+		value, isNull, err := jsonScalarToBool(ctx, types.DecodeJson(v))
+		if err != nil {
+			return err
 		}
-
-		if err := to.Append(value, false); err != nil {
+		if err := to.Append(value, isNull); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func jsonScalarToBool(ctx context.Context, bj bytejson.ByteJson) (bool, bool, error) {
+	switch bj.Type {
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) == 0 {
+			return false, false, jsonCastErr(ctx, types.T_bool)
+		}
+		switch bj.Data[0] {
+		case bytejson.LiteralNull:
+			return false, true, nil
+		case bytejson.LiteralTrue:
+			return true, false, nil
+		case bytejson.LiteralFalse:
+			return false, false, nil
+		default:
+			return false, false, jsonCastErr(ctx, types.T_bool)
+		}
+	case bytejson.TpCodeInt64:
+		return bj.GetInt64() != 0, false, nil
+	case bytejson.TpCodeUint64:
+		return bj.GetUint64() != 0, false, nil
+	case bytejson.TpCodeFloat64:
+		return bj.GetFloat64() != 0, false, nil
+	case bytejson.TpCodeDecimal:
+		value, valid := jsonDecimalToBool(bj.GetString())
+		if valid {
+			return value, false, nil
+		}
+		return false, false, jsonCastErr(ctx, types.T_bool)
+	case bytejson.TpCodeString:
+		return false, true, nil
+	default:
+		return false, false, jsonCastErr(ctx, types.T_bool)
+	}
 }
 
 func jsonDecimalToBool(text []byte) (value bool, valid bool) {
@@ -3024,55 +3179,6 @@ func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) erro
 func jsonAppendValue(ctx context.Context, result vector.FunctionResultWrapper, toType types.Type, f float64) error {
 	toOid := toType.Oid
 	switch toOid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val := int64(f)
-		if f < math.MinInt64 || f > math.MaxInt64 || math.IsNaN(f) {
-			return jsonCastErr(ctx, toOid)
-		}
-		if toOid == types.T_int8 && (val < math.MinInt8 || val > math.MaxInt8) {
-			return jsonCastErr(ctx, toOid)
-		}
-		if toOid == types.T_int16 && (val < math.MinInt16 || val > math.MaxInt16) {
-			return jsonCastErr(ctx, toOid)
-		}
-		if toOid == types.T_int32 && (val < math.MinInt32 || val > math.MaxInt32) {
-			return jsonCastErr(ctx, toOid)
-		}
-		switch toOid {
-		case types.T_int8:
-			return vector.MustFunctionResult[int8](result).Append(int8(val), false)
-		case types.T_int16:
-			return vector.MustFunctionResult[int16](result).Append(int16(val), false)
-		case types.T_int32:
-			return vector.MustFunctionResult[int32](result).Append(int32(val), false)
-		default:
-			return vector.MustFunctionResult[int64](result).Append(val, false)
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val := int64(f)
-		if val < 0 || f > math.MaxUint64 || math.IsNaN(f) {
-			return jsonCastErr(ctx, toOid)
-		}
-		u := uint64(val)
-		if toOid == types.T_uint8 && u > math.MaxUint8 {
-			return jsonCastErr(ctx, toOid)
-		}
-		if toOid == types.T_uint16 && u > math.MaxUint16 {
-			return jsonCastErr(ctx, toOid)
-		}
-		if toOid == types.T_uint32 && u > math.MaxUint32 {
-			return jsonCastErr(ctx, toOid)
-		}
-		switch toOid {
-		case types.T_uint8:
-			return vector.MustFunctionResult[uint8](result).Append(uint8(u), false)
-		case types.T_uint16:
-			return vector.MustFunctionResult[uint16](result).Append(uint16(u), false)
-		case types.T_uint32:
-			return vector.MustFunctionResult[uint32](result).Append(uint32(u), false)
-		default:
-			return vector.MustFunctionResult[uint64](result).Append(u, false)
-		}
 	case types.T_float32:
 		if f < -math.MaxFloat32 || f > math.MaxFloat32 {
 			return jsonCastErr(ctx, toOid)

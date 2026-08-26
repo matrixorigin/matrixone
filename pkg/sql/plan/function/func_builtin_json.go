@@ -47,12 +47,55 @@ func normalizeJsonComparisonParam(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	_ *FunctionSelectList,
+	selectList *FunctionSelectList,
 ) error {
 	from := vector.GenerateFunctionStrParameter(parameters[0])
 	to := vector.MustFunctionResult[types.Varlena](result)
-	kinds := make([]vector.PrepareParamKind, length)
+	resultVector := to.GetResultVector()
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		if err := to.AppendMultiBytes(nil, true, length); err != nil {
+			return err
+		}
+		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
+		return nil
+	}
+
+	// A direct prepared parameter is normally constant for the batch. Encode
+	// its physical value once, share the varlena payload across all rows, and
+	// keep the provenance in the scalar sidecar fast path.
+	if parameters[0].IsConst() && (selectList == nil || selectList.ShouldEvalAllRow()) {
+		value, null := from.GetStrValue(0)
+		kind := parameters[0].GetPrepareParamKindAt(0)
+		if null {
+			if err := to.AppendMultiBytes(nil, true, length); err != nil {
+				return err
+			}
+		} else {
+			encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+			if err != nil {
+				return err
+			}
+			if err := to.AppendMultiBytes(encoded, false, length); err != nil {
+				return err
+			}
+		}
+		resultVector.SetPrepareParamKind(kind)
+		return nil
+	}
+
+	var (
+		firstKind vector.PrepareParamKind
+		seenKind  bool
+		kinds     []vector.PrepareParamKind
+	)
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		value, null := from.GetStrValue(i)
 		if null {
 			if err := to.AppendBytes(nil, true); err != nil {
@@ -61,21 +104,20 @@ func normalizeJsonComparisonParam(
 			continue
 		}
 
-		var scalar any = string(value)
 		kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
-		kinds[i] = kind
-		if kind != vector.PrepareParamNone {
-			var err error
-			scalar, err = preparedTextToJSONValue(proc.Ctx, string(value), kind)
-			if err != nil {
-				return err
+		if !seenKind {
+			firstKind, seenKind = kind, true
+		} else if kinds == nil && kind != firstKind {
+			kinds = make([]vector.PrepareParamKind, length)
+			for prior := uint64(0); prior < i; prior++ {
+				kinds[prior] = firstKind
 			}
 		}
-		jsonValue, err := bytejson.CreateByteJSON(scalar)
-		if err != nil {
-			return err
+		if kinds != nil {
+			kinds[i] = kind
 		}
-		encoded, err := types.EncodeJson(jsonValue)
+
+		encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
 		if err != nil {
 			return err
 		}
@@ -83,8 +125,36 @@ func normalizeJsonComparisonParam(
 			return err
 		}
 	}
-	to.GetResultVector().SetPrepareParamKinds(kinds)
+	if !seenKind {
+		// The marker, not its value, distinguishes this adapter output from an
+		// ordinary JSON vector even when every logical row is NULL.
+		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
+	} else if kinds == nil {
+		resultVector.SetPrepareParamKind(firstKind)
+	} else if err := resultVector.SetPrepareParamKindsWithMP(kinds, proc.Mp()); err != nil {
+		return err
+	}
 	return nil
+}
+
+func encodeJsonComparisonParam(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+) ([]byte, error) {
+	var scalar any = string(value)
+	if kind != vector.PrepareParamNone {
+		var err error
+		scalar, err = preparedTextToJSONValue(ctx, string(value), kind)
+		if err != nil {
+			return nil, err
+		}
+	}
+	jsonValue, err := bytejson.CreateByteJSON(scalar)
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(jsonValue)
 }
 
 func normalizeJsonOrderingParam(
