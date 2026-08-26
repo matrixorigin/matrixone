@@ -280,23 +280,11 @@ public:
         this->cost_ = std::make_unique<matrixone::cagra_cost>(
             this->dimension, sizeof(T), bp.intermediate_graph_degree);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("cagra build", /*with_ids=*/true);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
 
-        // resize()+clear(), not reserve(): reserve() obtains the allocation but leaves
-        // every page unfaulted, and MemoryAvailableIncludingCache reads cgroup usage
-        // (or MemAvailable), both of which only move when a page is touched. The host
-        // claim covering these bytes is settled as soon as this constructor returns,
-        // so with a bare reserve() it settles against memory the kernel has not
-        // charged -- a second build can pass the same admission, and both fault their
-        // promised pages later during ingest. resize() value-initialises (a memset for
-        // a trivial IdT) which faults them now; clear() then returns size() to 0 while
-        // KEEPING the capacity, so the append path and the host_ids.empty() id-less
-        // test below are both unchanged.
-        this->host_ids.resize(this->count);
-        this->host_ids.clear();
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -325,19 +313,7 @@ public:
         this->cost_ = std::make_unique<matrixone::cagra_cost>(
             this->dimension, sizeof(T), bp.intermediate_graph_degree);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
-        // resize()+clear(), not reserve(): reserve() obtains the allocation but leaves
-        // every page unfaulted, and MemoryAvailableIncludingCache reads cgroup usage
-        // (or MemAvailable), both of which only move when a page is touched. The host
-        // claim covering these bytes is settled as soon as this constructor returns,
-        // so with a bare reserve() it settles against memory the kernel has not
-        // charged -- a second build can pass the same admission, and both fault their
-        // promised pages later during ingest. resize() value-initialises (a memset for
-        // a trivial IdT) which faults them now; clear() then returns size() to 0 while
-        // KEEPING the capacity, so the append path and the host_ids.empty() id-less
-        // test below are both unchanged.
-        this->host_ids.resize(this->count);
-        this->host_ids.clear();
+        this->allocate_host_capacity("cagra build", /*with_ids=*/true);
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -393,7 +369,7 @@ public:
             this->dimension, sizeof(T), this->build_params.intermediate_graph_degree);
     }
 
-    void start(index_start_mode_t mode = INDEX_START_NONE) override {
+    void start() override {
         auto init_fn = [&](raft_handle_wrapper_t&) -> std::any {
             return std::any();
         };
@@ -401,11 +377,6 @@ public:
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);
-        // Mask, not equality: a combined mode runs every branch that applies.
-        // SEARCH stages nothing today; the branch exists so adding one has a home.
-        if (static_cast<unsigned>(mode) & static_cast<unsigned>(INDEX_START_BUILD)) {
-            this->build_preallocate();
-        }
     }
 
     /**

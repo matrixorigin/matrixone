@@ -95,10 +95,7 @@ void gpu_ivf_pq_get_quantizer(gpu_ivf_pq_c index_c, float* min, float* max, void
 void gpu_ivf_pq_destroy(gpu_ivf_pq_c index_c, void* errmsg);
 
 // Start function (initializes worker and resources)
-// mode is index_start_mode_t: INDEX_START_BUILD or INDEX_START_SEARCH. Required,
-// so every caller states what the index is for and the mode's up-front
-// allocations happen without a separate call that can be forgotten.
-void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, int mode, void* errmsg);
+void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, void* errmsg);
 
 // Build function (actually triggers the build/load logic)
 void gpu_ivf_pq_build(gpu_ivf_pq_c index_c, void* errmsg);

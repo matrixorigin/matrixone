@@ -201,10 +201,10 @@ void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg) {
     }
 }
 
-void gpu_cagra_start(gpu_cagra_c index_c, int mode, void* errmsg) {
+void gpu_cagra_start(gpu_cagra_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cagra_dispatch(static_cast<gpu_cagra_any_t*>(index_c), [mode](auto* idx) { idx->start(static_cast<matrixone::index_start_mode_t>(mode)); });
+        cagra_dispatch(static_cast<gpu_cagra_any_t*>(index_c), [](auto* idx) { idx->start(); });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_start", e.what());
     } catch (...) {

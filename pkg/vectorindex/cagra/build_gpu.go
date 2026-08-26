@@ -59,23 +59,6 @@ type CagraBuild[B, Q cuvs.VectorType] struct {
 	nthread uint32
 	devices []int
 
-	// hostBytesPerRow is the per-row HOST cost of the eager capacity-sized
-	// staging buffers (vector staging + INCLUDE columns + per-row ids), supplied
-	// by the create TVF, which owns the per-algo cost model. 0 means no
-	// claim is taken, which keeps direct API users and tests as they were.
-	hostBytesPerRow uint64
-
-	// stagingBytes is the host cost of the int8/uint8 quantizer's raw training
-	// arena, supplied by the create TVF. NOT per-row: the arena is
-	// min(train limit, device cap, source rows) of dim*sizeof(base), independent
-	// of how many rows this sub-index holds.
-	//
-	// It joins the claim below rather than getting one of its own because the
-	// native start() now reserves the arena up front, inside the same window --
-	// so one claim covers every byte, taken before the allocation and settled once
-	// it has been taken.
-	stagingBytes uint64
-
 	count int64    // vectors in current sub-index
 	idBuf [1]int64 // reusable buffer for AddRow to avoid per-call heap allocation
 
@@ -169,18 +152,9 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 	}
 
 	if b.current == nil {
-		// Claim the host memory BEFORE anything allocates it. The native
-		// constructor resizes flattened_host_dataset to capacity*dim and RESERVES
-		// host_ids to capacity, and SetFilterColumns resizes every INCLUDE column to
-		// capacity * elem_size -- reserve mallocs the whole span, so by the time
-		// either returns every byte of the claim has been taken.
-		hostClaim, herr := b.reserveBuildHost(capacity)
-		if herr != nil {
-			return nil, herr
-		}
-		// Roll back if we never reach the allocation -- error return or a panic
-		// out of the C++ constructor. The explicit Settle below makes this a no-op.
-		defer hostClaim.Settle()
+		// The capacity-sized host buffers this allocates are claimed inside the
+		// native constructor (index_base.hpp, allocate_host_capacity), where the
+		// claim can wrap the allocation itself rather than the cgo call around it.
 
 		key := b.createKey(len(b.indexes))
 		m, err := NewCagraModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
@@ -197,13 +171,6 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 				return nil, err
 			}
 		}
-		// The buffers are malloc'ed now, so the ledger must stop counting them:
-		// they are already visible in MemoryAvailableIncludingCache, and holding
-		// the claim for the rest of the build would charge a concurrent build this
-		// claim's worth of headroom for as long as the build runs -- tens of
-		// minutes for a large index. The deferred Settle above then does nothing.
-		hostClaim.Settle()
-
 		m.TmpDir = b.tmpDir
 		b.current = m
 		b.count = 0
@@ -352,54 +319,4 @@ func (b *CagraBuild[B, Q]) Destroy() error {
 // GetIndexes returns the completed sub-indexes (for testing).
 func (b *CagraBuild[B, Q]) GetIndexes() []*CagraModel[B, Q] {
 	return b.indexes
-}
-
-// SetHostBytesPerRow records the per-row host cost used to claim host memory
-// around each sub-index's eager capacity-sized allocation.
-// SetStagingBytes hands the builder the int8/uint8 quantizer staging arena's host
-// cost, which the native start() reserves up front. 0 (every non-narrow storage
-// type) adds nothing to the claim.
-func (b *CagraBuild[B, Q]) SetStagingBytes(n uint64) {
-	b.stagingBytes = n
-}
-
-func (b *CagraBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
-	b.hostBytesPerRow = perRow
-}
-
-// reserveBuildHost claims the host memory this sub-index is about to allocate.
-// HostRowsFitting only answers "does it fit" from a snapshot, which two concurrent
-// CREATE INDEX statements both pass before either allocates; the claim is what
-// makes that decision exclusive.
-//
-// ONE claim with ONE lifetime, because every byte it covers is malloc'ed by the
-// time InitEmpty and SetFilterColumns return: the capacity-sized
-// flattened_host_dataset.resize and host_ids.reserve in the chunked constructor
-// (cagra.hpp:317-318), plus FilterStore's per-INCLUDE resize. It is taken before
-// them and settled as soon as they return -- see the call site for why holding it
-// longer double-counts.
-//
-// This is only true because id_to_index_ is no longer populated during a build
-// (index_base.hpp, ensure_id_index). When it was, ~40 bytes/row of the claim stood
-// for memory the allocator had not been asked for yet, and settling here left those
-// bytes counted nowhere -- not in the ledger, not yet in availability -- so a
-// concurrent build could be admitted against them. That is fixed by not allocating
-// the map, not by tracking it: see HostIDBytesPerRow.
-//
-// Returns a no-op when the per-row cost was never supplied or the capacity is
-// zero: ReserveHostMemory refuses a zero claim by design and there is nothing
-// to protect.
-func (b *CagraBuild[B, Q]) reserveBuildHost(rows int64) (*memory.HostReservation, error) {
-	if b.hostBytesPerRow == 0 || rows <= 0 {
-		return nil, nil
-	}
-	// The quantizer staging arena is part of the same claim. It used to be
-	// subtracted from this build's own budget and nothing more, which protects a
-	// build from itself but tells a peer nothing -- and the arena was allocated
-	// during ingest, long after this claim settled, so a concurrent build measuring
-	// live availability saw bytes that were already spoken for. The native start()
-	// now reserves the arena inside this window, so one claim covers it with the
-	// right lifetime.
-	need := uint64(rows)*b.hostBytesPerRow + b.stagingBytes
-	return memory.ReserveHostMemory(need, "cagra build")
 }

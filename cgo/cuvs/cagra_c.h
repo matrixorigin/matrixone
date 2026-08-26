@@ -52,10 +52,7 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
 void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg);
 
 // Start function (initializes worker and resources)
-// mode is index_start_mode_t: INDEX_START_BUILD or INDEX_START_SEARCH. Required,
-// so every caller states what the index is for and the mode's up-front
-// allocations happen without a separate call that can be forgotten.
-void gpu_cagra_start(gpu_cagra_c index_c, int mode, void* errmsg);
+void gpu_cagra_start(gpu_cagra_c index_c, void* errmsg);
 
 // Build function (actually triggers the build/load logic)
 void gpu_cagra_build(gpu_cagra_c index_c, void* errmsg);

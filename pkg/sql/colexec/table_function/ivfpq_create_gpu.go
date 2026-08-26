@@ -74,16 +74,6 @@ type ivfpqBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	// SetHostBytesPerRow hands the builder the per-row HOST cost computed above,
-	// so each sub-index can claim its eager capacity-sized host allocation
-	// against the per-CN ledger before InitEmpty spends it.
-	SetHostBytesPerRow(perRow uint64)
-	// SetStagingBytes hands the builder the int8/uint8 quantizer staging arena's
-	// host cost, so it can be REGISTERED on the ledger and not merely subtracted
-	// from this build's own budget. The subtraction protects a build from itself;
-	// only a claim tells a concurrent build the bytes are spoken for, and the
-	// arena is not allocated until rows are ingested.
-	SetStagingBytes(n uint64)
 	ToInsertSql(ts int64) ([]string, error)
 	// PerDeviceBytes is what ONE device must hold to serve this index, valid after
 	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
@@ -638,8 +628,6 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 		// hostPerRow was computed for the capacity decision above; hand the same
 		// number to the builder so admission and the capacity model agree.
-		u.builder.SetHostBytesPerRow(hostPerRow)
-		u.builder.SetStagingBytes(stagingBytes)
 
 		// ---- pre-filter (INCLUDE columns) setup ----
 		// u.filterCols was already resolved above (before memory.HostRowsFitting)

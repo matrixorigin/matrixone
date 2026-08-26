@@ -35,15 +35,7 @@ import (
 // supports (B,Q) combos (float,float),(float,half),(half,half); int8/uint8
 // storage is not supported and throws at runtime.
 type GpuBruteForce[B, Q VectorType] struct {
-	// startMode is what this index was CONSTRUCTED for, read by Start(). It is a
-	// property of the index's purpose, not of one call, so it is set once here
-	// rather than passed to Start -- an index built for loading cannot then be
-	// started as a build.
-	//
-	// SEARCH is the default: the neutral, allocate-nothing behaviour. Only a
-	// caller that means to ingest asks for BUILD.
-	startMode StartMode
-	cIndex    C.gpu_brute_force_c
+	cIndex C.gpu_brute_force_c
 }
 
 // NewGpuBruteForce creates a new GpuBruteForce instance
@@ -79,7 +71,7 @@ func NewGpuBruteForce[B, Q VectorType](dataset []Q, countVectors uint64, dimensi
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuBruteForce")
 	}
 	return &GpuBruteForce[B, Q]{
-		startMode: StartSearch, cIndex: cIndex}, nil
+		cIndex: cIndex}, nil
 }
 
 // NewGpuBruteForceEmpty creates a new GpuBruteForce instance with pre-allocated buffer but no data yet.
@@ -113,7 +105,7 @@ func NewGpuBruteForceEmpty[B, Q VectorType](totalCount uint64, dimension uint32,
 	}
 
 	return &GpuBruteForce[B, Q]{
-		startMode: StartSearch, cIndex: cBruteForce}, nil
+		cIndex: cBruteForce}, nil
 }
 
 // Start initializes the worker and resources
@@ -122,7 +114,7 @@ func (gb *GpuBruteForce[B, Q]) Start() error {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_brute_force_start(gb.cIndex, C.int(gb.startMode), unsafe.Pointer(&errmsg))
+	C.gpu_brute_force_start(gb.cIndex, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

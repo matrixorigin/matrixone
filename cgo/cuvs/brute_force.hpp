@@ -204,7 +204,7 @@ public:
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("brute_force", /*with_ids=*/false);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -226,7 +226,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("brute_force", /*with_ids=*/false);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -248,7 +248,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("brute_force", /*with_ids=*/false);
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -274,13 +274,13 @@ public:
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("brute_force", /*with_ids=*/false);
         if (ids) {
             this->set_ids(ids, this->count);
         }
     }
 
-    void start(index_start_mode_t mode = INDEX_START_NONE) override {
+    void start() override {
         auto init_fn = [](raft_handle_wrapper_t&) -> std::any { return std::any(); };
         auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -290,11 +290,6 @@ public:
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);
-        // Mask, not equality: a combined mode runs every branch that applies.
-        // SEARCH stages nothing today; the branch exists so adding one has a home.
-        if (static_cast<unsigned>(mode) & static_cast<unsigned>(INDEX_START_BUILD)) {
-            this->build_preallocate();
-        }
     }
 
     void build() override {

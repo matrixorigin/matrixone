@@ -37,11 +37,10 @@ import (
 // HostIDBytesPerRow is the HOST cost of the per-row identity bookkeeping every GPU
 // index keeps, charged by the capacity model on top of vector + INCLUDE bytes.
 //
-//	host_ids   8   one int64 per row, from host_ids.reserve(capacity) in both
-//	               chunked constructors (ivf_pq.hpp:266, cagra.hpp:318). reserve()
-//	               mallocs the whole span, so this is taken by the time InitEmpty
-//	               returns -- which is what lets the build hold ONE claim with one
-//	               lifetime (see reserveBuildHost).
+//	host_ids   8   one int64 per row, sized to capacity alongside the vector
+//	               buffer by index_base.hpp's allocate_host_capacity. This
+//	               constant is what the CAPACITY model charges; the admission
+//	               claim for the same bytes is taken natively, at the allocation.
 //
 // id_to_index_ is deliberately NOT charged. It used to be, at ~40 bytes/row (24
 // map node + 8 allocator header + 8 bucket slot), and that was honest at the time:

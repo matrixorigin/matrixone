@@ -37,10 +37,7 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
 gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t btype, quantization_t qtype, const int64_t* ids, void* errmsg);
 
 // Starts the worker and initializes resources
-// mode is index_start_mode_t: INDEX_START_BUILD or INDEX_START_SEARCH. Required,
-// so every caller states what the index is for and the mode's up-front
-// allocations happen without a separate call that can be forgotten.
-void gpu_brute_force_start(gpu_brute_force_c index_c, int mode, void* errmsg);
+void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg);
 
 // Builds the index (loads the dataset to the GPU)
 void gpu_brute_force_build(gpu_brute_force_c index_c, void* errmsg);

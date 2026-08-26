@@ -137,10 +137,10 @@ gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimen
     }
 }
 
-void gpu_brute_force_start(gpu_brute_force_c index_c, int mode, void* errmsg) {
+void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        brute_force_dispatch(static_cast<gpu_brute_force_any_t*>(index_c), [mode](auto* idx) { idx->start(static_cast<matrixone::index_start_mode_t>(mode)); });
+        brute_force_dispatch(static_cast<gpu_brute_force_any_t*>(index_c), [](auto* idx) { idx->start(); });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_start", e.what());

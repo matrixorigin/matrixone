@@ -165,7 +165,7 @@ func (idx *CagraModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if err != nil {
 		return err
 	}
-	gi, err := cuvs.NewGpuCagraEmptyForBuild[B, Q](
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,

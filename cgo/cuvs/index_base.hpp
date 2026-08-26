@@ -17,6 +17,7 @@
 #pragma once
 
 #include "device_memory.hpp"
+#include "host_memory.hpp"
 #include "index_cost.hpp"
 
 
@@ -308,25 +309,6 @@ inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
 // apply_pq_post_filter_locked uses FLT_MAX).
 // =============================================================================
 
-// Effective top-k for the cuVS call: clamp the caller's requested limit to
-// the shard / index row count. Pure host-side; raft-free.
-// What an index is being started FOR. Each mode owns the allocations that mode
-// makes up front, so they land inside whatever admission window the caller holds.
-// BIT FLAGS, so an index that is both ingested and queried can say so:
-// INDEX_START_SEARCH | INDEX_START_BUILD. Dispatch is by mask, never equality, so
-// a combined mode runs both branches.
-//
-// 0 is NONE on purpose: a caller that has not thought about the mode, or a C
-// caller passing a default-initialised value, gets no pre-allocation rather than
-// the wrong one. Allocating is always the opt-in.
-//
-// (If BUILD should IMPLY search, define it as SEARCH|2 -- the mask dispatch below
-// needs no change.)
-enum index_start_mode_t {
-    INDEX_START_NONE   = 0,       // no up-front allocation; grow on demand
-    INDEX_START_SEARCH = 1u << 0, // deserialise + query: stages nothing today
-    INDEX_START_BUILD  = 1u << 1, // ingest + build: pre-allocates the staging arena
-};
 
 inline uint32_t clamp_k_to_index_size(uint32_t limit, uint64_t shard_sz) {
     return static_cast<uint32_t>(
@@ -1085,15 +1067,10 @@ public:
         }
     }
 
-    // start() takes the caller's INTENT, so each mode's up-front work happens
-    // without a separate opt-in call the caller can forget. That is not
-    // hypothetical: build_preallocate() began life as an opt-in method, every
-    // existing test opted out by simply not calling it, and the production path
-    // became the only untested one. A required parameter makes the compiler
-    // revisit every call site instead.
-    virtual void start(index_start_mode_t mode = INDEX_START_NONE) {
-        (void)mode;
-    }
+    // Brings up the worker and whatever else the index needs before ingest or
+    // search. It allocates nothing on its own: the large host buffers are
+    // claimed and taken where they are used -- see allocate_host_capacity.
+    virtual void start() {}
     virtual void build() {}
 
     // Common management methods
@@ -1233,9 +1210,25 @@ public:
 
     void set_filter_columns(const std::string& col_meta_json, uint64_t total_count) {
         auto cols = parse_filter_col_meta(col_meta_json);
+
+        // FilterStore::init resizes every INCLUDE column to capacity * elem_size,
+        // so this is a capacity-sized host allocation like the vector buffer and
+        // claims the same way. A build with several fixed-width INCLUDE columns
+        // can spend more here than on a narrow vector.
+        //
+        // Claimed before the lock: the availability reading touches /proc and the
+        // cgroup files, and there is no reason to hold mutex_ across that.
+        size_t need = 0;
+        for (const auto& m : cols) {
+            need += static_cast<size_t>(total_count) * filter_col_elem_size(m.type);
+        }
+        host_memory_governor::reservation claim;
+        if (need > 0) claim = host_memory_governor::reserve(need, "filter columns");
+
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot set filter columns on built index");
         filter_host_.init(std::move(cols), total_count);
+        claim.release();
     }
 
     // null_bitmap: packed uint32 words, LSB-first (bit i = row i is not-null).
@@ -1375,54 +1368,50 @@ public:
             this->budget_percent());
     }
 
-    // build_preallocate: everything a BUILD allocates up front, so it lands inside
-    // the window the Go-side build claim already covers.
+    // Allocates the capacity-sized host buffers, claiming them from the host
+    // governor first.
     //
-    // Today that is the int8/uint8 staging arena. Called explicitly by the build
-    // path after start(), never from start() itself -- a cold load calls start()
-    // too, and would otherwise allocate an arena it never writes to.
+    // These are the build's large host allocations: flattened_host_dataset at
+    // capacity * dim * sizeof(T), and for the pre-allocating constructors
+    // host_ids at capacity * sizeof(IdT). Both are taken here in full, which is
+    // what lets ONE claim with ONE lifetime cover them.
     //
-    // It used to grow during ingest instead, minutes after that claim settled.
-    // The bytes were subtracted from the planning budget, which stops a build
-    // overcommitting against ITSELF, but a concurrent build measuring live
-    // availability saw nothing -- the arena did not exist yet -- and planned
-    // against memory that was already spoken for. Allocating here lets one claim
-    // cover it with the right lifetime: taken before, settled once taken.
+    // The claim is released as soon as the buffers exist, not when they are
+    // freed: from that moment the bytes are visible in the availability reading
+    // instead, and a claim still on the ledger would be counted twice. See
+    // host_memory_governor::reservation::release.
     //
-    // resize()+clear(), not reserve(): reserve() obtains the allocation but leaves
-    // the pages unfaulted, and MemoryAvailableIncludingCache only moves when a page
-    // is touched -- so settling the claim would leave the bytes counted nowhere,
-    // in neither the ledger nor availability. clear() keeps the capacity and puts
-    // size back to 0, which is what the append path expects. Same idiom the
-    // constructor uses for flattened_host_dataset.
+    // resize()+clear() rather than reserve(): reserve() obtains the allocation
+    // but leaves the pages unfaulted, and the availability reading (cgroup
+    // usage, or MemAvailable) only moves once a page is touched -- so releasing
+    // the claim would leave the bytes counted in neither the ledger nor
+    // availability, and a second build could be admitted against them. The
+    // alternative is to hold the claim for the buffer's whole lifetime, which
+    // permits a bare reserve() but double-counts every page as ingest faults
+    // it. Faulting now costs one linear pass; holding costs a concurrent build
+    // this claim's worth of headroom for the length of the build. clear() then
+    // returns size() to 0 while KEEPING the capacity, so the append path and
+    // the host_ids.empty() id-less test are both unchanged.
     //
-    // Sized by the same staging_bound_rows()/staging_row_limit() the ingest path
-    // uses, so the reservation and the growth cannot disagree; the memoised limit
-    // is simply fixed here, measured before the index has allocated anything.
-    //
-    // Why not start(): a cold load calls start() too, and deserialising ingests no
-    // raw float rows, so the arena would never be written to. It would also be at
-    // its MAXIMUM there -- idxcfg.IndexCapacity is 0 on every search-path load, so
-    // count is 0, staging_bound_rows' capacity clamp does not engage, and the full
-    // stage_limit stands: ~293 MiB at dim 768 from an f32 base, on every load, and
-    // outside the load's host claim.
-    void build_preallocate() {
-        if constexpr (sizeof(T) == 1) {
-            uint64_t job_id = this->worker->submit_main(
-                [this](raft_handle_wrapper_t&) -> std::any {
-                    const uint64_t bound = staging_bound_rows(staging_row_limit());
-                    const size_t elems = static_cast<size_t>(bound) * this->dimension;
-                    if (elems > 0) {
-                        std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                        this->staging_data_.resize(elems);
-                        this->staging_data_.clear();
-                    }
-                    return std::any();
-                });
-            auto res = this->worker->wait(job_id).get();
-            if (res.error) std::rethrow_exception(res.error);
+    // THROWS if the host cannot admit the buffers, which propagates out of the
+    // constructor and is reported to the caller as a failed index creation.
+    void allocate_host_capacity(const char* who, bool with_ids) {
+        const size_t rows      = static_cast<size_t>(this->count);
+        const size_t elems     = rows * this->dimension;
+        const size_t vec_bytes = elems * sizeof(T);
+        const size_t id_bytes  = with_ids ? rows * sizeof(IdT) : 0;
+        const size_t need      = vec_bytes + id_bytes;
+        if (need == 0) return;  // a zero-row index allocates nothing to claim for
+
+        auto claim = host_memory_governor::reserve(need, who);
+        this->flattened_host_dataset.resize(elems);
+        if (with_ids) {
+            this->host_ids.resize(this->count);
+            this->host_ids.clear();
         }
+        claim.release();
     }
+
 
     // Upper bound on rows this index can ever stage: the staging bound, further
     // capped by the index's capacity (staging beyond capacity is impossible).
@@ -1459,23 +1448,47 @@ public:
         // per call) while never over-allocating more than 2x what is in use.
         const uint64_t bound = staging_bound_rows(stage_limit);
         const uint64_t need  = pending_total_count_ + n_rows;
-        if (staging_data_.capacity() < need * dimension) {
-            uint64_t grow = std::max<uint64_t>(need * 2, kStagingReserveFloorRows);
-            grow = std::min<uint64_t>(grow, bound);
-            grow = std::max<uint64_t>(grow, need);          // never below what we need
-            staging_data_.reserve(static_cast<size_t>(grow) * dimension);
+
+        auto grow_to = [&](uint64_t want) {
+            uint64_t g = std::max<uint64_t>(want * 2, kStagingReserveFloorRows);
+            g = std::min<uint64_t>(g, bound);
+            return std::max<uint64_t>(g, want);             // never below what we need
+        };
+        const bool grow_data = staging_data_.capacity() < need * dimension;
+        const bool grow_ids  = ids && staging_ids_.capacity() < need;
+        const uint64_t data_rows = grow_data ? grow_to(need) : 0;
+        const uint64_t ids_rows  = grow_ids ? grow_to(need) : 0;
+
+        // Claim what the growth ADDS, not what the arenas will hold: most calls
+        // fit the existing capacity and add nothing. One claim covers both
+        // arenas so a growth is admitted or refused as a unit.
+        //
+        // Held across the inserts below rather than released at the reserve:
+        // reserve() leaves the new pages unfaulted, and the inserts are what
+        // charge them to the availability reading the next caller will see.
+        // The geometric slack beyond `need` stays unfaulted until a later call
+        // uses it; it is bounded by staging_bound_rows, so at most one doubling
+        // of the arena is briefly accounted in neither place.
+        size_t growth = 0;
+        if (grow_data) {
+            growth += (static_cast<size_t>(data_rows) * dimension - staging_data_.capacity()) *
+                      sizeof(B);
         }
-        if (ids && staging_ids_.capacity() < need) {
-            uint64_t grow = std::max<uint64_t>(need * 2, kStagingReserveFloorRows);
-            grow = std::min<uint64_t>(grow, bound);
-            grow = std::max<uint64_t>(grow, need);
-            staging_ids_.reserve(static_cast<size_t>(grow));
+        if (grow_ids) {
+            growth += (static_cast<size_t>(ids_rows) - staging_ids_.capacity()) * sizeof(int64_t);
         }
+        host_memory_governor::reservation staging_claim;
+        if (growth > 0) staging_claim = host_memory_governor::reserve(growth, "quantizer staging");
+
+        if (grow_data) staging_data_.reserve(static_cast<size_t>(data_rows) * dimension);
+        if (grow_ids) staging_ids_.reserve(static_cast<size_t>(ids_rows));
+
         const uint64_t start_row = pending_total_count_;
         const uint64_t ids_start = staging_ids_.size();
         staging_data_.insert(staging_data_.end(), rows, rows + n_rows * dimension);
         if (ids) staging_ids_.insert(staging_ids_.end(), ids, ids + n_rows);
         pending_total_count_ += n_rows;
+        staging_claim.release();
 
         if (!staging_spans_.empty()) {
             staged_span_t& last = staging_spans_.back();

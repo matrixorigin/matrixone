@@ -382,28 +382,6 @@ func QuantizerStagingBytes(deviceID int, dim, elemSize, trainLimit, maxRows uint
 	return uint64(n), nil
 }
 
-// StartMode is what an index is being started FOR. Each mode owns the allocations
-// that mode makes up front, so they land inside whatever admission window the
-// caller is holding.
-//
-// Required rather than optional: the staging pre-allocation began as an opt-in
-// method, every existing test opted out by not calling it, and the production
-// path became the only untested one. A required argument makes the compiler
-// revisit every call site.
-type StartMode int
-
-// Bit flags, so an index that is both ingested and queried can say so:
-// StartSearch|StartBuild. C++ dispatches by mask, never equality.
-const (
-	// StartNone is 0 on purpose -- a caller that has not thought about the mode
-	// gets no pre-allocation rather than the wrong one.
-	StartNone StartMode = 0
-	// StartSearch: deserialise and query. Stages nothing today.
-	StartSearch StartMode = 1 << 0
-	// StartBuild: ingest and build. Pre-allocates the int8/uint8 staging arena.
-	StartBuild StartMode = 1 << 1
-)
-
 // DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
 // not what is currently free.
 //
