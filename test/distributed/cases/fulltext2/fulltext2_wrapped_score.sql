@@ -128,6 +128,17 @@ select id, round(match(body) against('hello'),3) as r from two order by id;  -- 
 select count(*) as n from two where match(body) against('hello') > 0.0132;   -- and through an aggregate
 select count(*) as n from two where match(body) against('hello') > 0.9;
 
+-- ---------------- wrapped-only MATCH on either INNER JOIN child ----------------
+-- A wrapped-only MATCH must drive the fulltext2 stream even when its table is one child of a
+-- join. Check both child positions and both a qualifying and a rejecting score threshold.
+create table join_peer(id int primary key);
+insert into join_peer values (1),(2),(3),(4),(5);
+select t.id from two t join join_peer p on t.id = p.id where match(t.body) against('hello') > 0.0132 order by t.id;
+select t.id from two t join join_peer p on t.id = p.id where match(t.body) against('hello') > 0.9 order by t.id;
+select t.id from join_peer p join two t on p.id = t.id where match(t.body) against('hello') > 0.0132 order by t.id;
+select t.id from join_peer p join two t on p.id = t.id where match(t.body) against('hello') > 0.9 order by t.id;
+drop table join_peer;
+
 -- @separator:table
 -- @regex("Table Function on fulltext2_search", true)
 explain select id from two where match(body) against('hello') > 0.0132;

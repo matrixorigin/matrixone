@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -267,6 +268,132 @@ func TestFulltext2CoveredProjectionUsesTVFOutputs(t *testing.T) {
 			if tc.withIncludeFilter {
 				require.Contains(t, search.TblFuncExprList[3].GetLit().GetSval(), `"col":-1`)
 			}
+		})
+	}
+}
+
+func newFulltext2JoinChildFixture(t *testing.T, matchOnRight bool) (*QueryBuilder, int32) {
+	t.Helper()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	newTableDef := func(name string) *plan.TableDef {
+		indexName := "ft2_" + name
+		storage := &plan.IndexDef{
+			IndexName:          indexName,
+			IndexAlgo:          catalog.MoIndexFullText2Algo.ToString(),
+			IndexAlgoTableType: catalog.FullText2Index_TblType_Storage,
+			IndexTableName:     "__" + indexName + "_store",
+			IndexAlgoParams:    `{"parser":"ngram"}`,
+			Parts:              []string{"body"},
+			TableExist:         true,
+		}
+		metadata := &plan.IndexDef{
+			IndexName:          indexName,
+			IndexAlgo:          storage.IndexAlgo,
+			IndexAlgoTableType: catalog.FullText2Index_TblType_Metadata,
+			IndexTableName:     "__" + indexName + "_meta",
+			IndexAlgoParams:    storage.IndexAlgoParams,
+			Parts:              []string{"body"},
+			TableExist:         true,
+		}
+		return &plan.TableDef{
+			Name: name,
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				{Name: "body", Typ: plan.Type{Id: int32(types.T_text)}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "body": 1},
+			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*plan.IndexDef{storage, metadata},
+		}
+	}
+
+	leftDef := newTableDef("left_docs")
+	rightDef := newTableDef("right_docs")
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	matchTag := leftTag
+	if matchOnRight {
+		matchTag = rightTag
+	}
+	match := ft2TestMatch("hello", 0, matchTag, "body")
+	match.Args[2].GetCol().ColPos = 1
+	wrapped := fulltext2ComparisonExpr(">", ft2TestExpr(match), makePlan2Float64ConstExprWithType(0.01))
+	newScan := func(tableDef *plan.TableDef, tag int32, filters []*plan.Expr) *plan.Node {
+		return &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			TableDef:    tableDef,
+			ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: tableDef.Name},
+			BindingTags: []int32{tag},
+			FilterList:  filters,
+			Stats:       &plan.Stats{TableCnt: 1000, Outcnt: 100, Selectivity: 0.1, Cost: 1000},
+		}
+	}
+	var leftFilters, rightFilters []*plan.Expr
+	if matchOnRight {
+		rightFilters = []*plan.Expr{wrapped}
+	} else {
+		leftFilters = []*plan.Expr{wrapped}
+	}
+	leftScanID := builder.appendNode(newScan(leftDef, leftTag, leftFilters), ctx)
+	rightScanID := builder.appendNode(newScan(rightDef, rightTag, rightFilters), ctx)
+	joinCond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		fulltext2ColumnExpr(leftTag, 0, "id", leftDef.Cols[0].Typ),
+		fulltext2ColumnExpr(rightTag, 0, "id", rightDef.Cols[0].Typ),
+	})
+	require.NoError(t, err)
+	joinID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{leftScanID, rightScanID},
+		JoinType: plan.Node_INNER,
+		OnList:   []*plan.Expr{joinCond},
+	}, ctx)
+	return builder, joinID
+}
+
+func countFulltext2SearchNodes(builder *QueryBuilder, nodeID int32) int {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return 0
+	}
+	node := builder.qry.Nodes[nodeID]
+	count := 0
+	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil && node.TableDef.TblFunc != nil &&
+		node.TableDef.TblFunc.Name == fulltext2_search_func_name {
+		count++
+	}
+	for _, childID := range node.Children {
+		count += countFulltext2SearchNodes(builder, childID)
+	}
+	return count
+}
+
+func TestFulltext2WrappedMatchJoinChild(t *testing.T) {
+	for _, matchOnRight := range []bool{false, true} {
+		t.Run(map[bool]string{false: "left", true: "right"}[matchOnRight], func(t *testing.T) {
+			builder, joinID := newFulltext2JoinChildFixture(t, matchOnRight)
+			joinNode := builder.qry.Nodes[joinID]
+			originalMatchedScanID := joinNode.Children[0]
+			if matchOnRight {
+				originalMatchedScanID = joinNode.Children[1]
+			}
+
+			newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+			require.NoError(t, err)
+			require.Equal(t, joinID, newID)
+
+			matchedChildID := builder.qry.Nodes[joinID].Children[0]
+			if matchOnRight {
+				matchedChildID = builder.qry.Nodes[joinID].Children[1]
+			}
+			require.NotEqual(t, originalMatchedScanID, matchedChildID)
+			matchedChild := builder.qry.Nodes[matchedChildID]
+			require.Equal(t, plan.Node_FILTER, matchedChild.NodeType)
+			require.Len(t, matchedChild.FilterList, 1)
+			require.False(t, exprCallsFunc(matchedChild.FilterList[0], "fulltext_match"))
+			require.Len(t, matchedChild.Children, 1)
+			require.Equal(t, plan.Node_JOIN, builder.qry.Nodes[matchedChild.Children[0]].NodeType)
+			require.Equal(t, 1, countFulltext2SearchNodes(builder, matchedChildID))
 		})
 	}
 }

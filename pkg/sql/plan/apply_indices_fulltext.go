@@ -1212,12 +1212,13 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, bool, error) {
 	filterids, filterIndexDefs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
-	if len(filterids) == 0 {
+	wrappedExprs, wrappedIndexDefs := builder.getWrappedFullText2Matches(nil, scanNode, filterids, nil)
+	if len(filterids) == 0 && len(wrappedExprs) == 0 {
 		return scanNode.NodeId, false, nil
 	}
 
 	ctxNodeID := builder.fullTextRewriteContextNodeID(nodeID, scanNode)
-	newNodeID, _, _, err := builder.applyJoinFullTextIndices(
+	newNodeID, _, _, _, err := builder.applyJoinFullTextIndicesWithWrapped(
 		ctxNodeID,
 		nil,
 		scanNode,
@@ -1227,6 +1228,8 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		filterIndexDefs,
 		nil,
 		nil,
+		wrappedExprs,
+		wrappedIndexDefs,
 		map[int32]int32{},
 		colRefCnt,
 		idxColMap,
