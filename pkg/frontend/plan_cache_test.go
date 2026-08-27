@@ -278,6 +278,47 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.NotPanics(t, func() { ses.releasePlanCache() })
 }
 
+func TestMergeOptimizerStatsVersionsRejectsMixedGenerations(t *testing.T) {
+	versions := map[uint64]uint64{1: 10}
+	require.True(t, mergeOptimizerStatsVersions(versions, map[uint64]uint64{1: 10, 2: 20}))
+	require.Equal(t, map[uint64]uint64{1: 10, 2: 20}, versions)
+	require.False(t, mergeOptimizerStatsVersions(versions, map[uint64]uint64{1: 11}))
+	require.Equal(t, uint64(10), versions[1])
+}
+
+var optimizerStatsVersionsCurrentSink bool
+
+func BenchmarkOptimizerStatsVersionsCurrent(b *testing.B) {
+	const (
+		service   = "optimizer-stats-version-benchmark"
+		accountID = uint32(7)
+	)
+	InitServerLevelVars(service)
+	b.Cleanup(func() { serverVarsMap.Delete(service) })
+
+	for _, tc := range []struct {
+		name       string
+		dependency int
+	}{
+		{name: "no-dependency", dependency: 0},
+		{name: "one-table", dependency: 1},
+		{name: "four-tables", dependency: 4},
+		{name: "sixteen-tables", dependency: 16},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			versions := make(map[uint64]uint64, tc.dependency)
+			for tableID := 1; tableID <= tc.dependency; tableID++ {
+				versions[uint64(tableID)] = 0
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				optimizerStatsVersionsCurrentSink = optimizerStatsVersionsCurrent(
+					service, accountID, versions)
+			}
+		})
+	}
+}
+
 func TestSessionRemoveCachedPlanOnlyEvictsTarget(t *testing.T) {
 	ses := &Session{planCache: newPlanCache(2)}
 	first := &trackedStatement{}

@@ -181,6 +181,8 @@ type GlobalStatsConfig struct {
 	LogtailUpdateStatsThreshold int
 }
 
+const optimizerStatsRefreshStripes = 64
+
 type GlobalStatsOption func(s *GlobalStats)
 
 // WithUpdateWorkerFactor set the update worker factor.
@@ -233,6 +235,11 @@ type GlobalStats struct {
 		updating map[pb.StatsInfoKey]*updateRecord
 	}
 
+	// Explicit ANALYZE refreshes and automatic logtail refreshes share this
+	// bounded admission layer. The same table is calculated and published in
+	// order; unrelated tables normally remain parallel.
+	refreshAdmission [optimizerStatsRefreshStripes]chan struct{}
+
 	// statsInfoMap is the global stats info in engine which
 	// contains all subscribed tables stats info.
 	mu struct {
@@ -279,6 +286,7 @@ func NewGlobalStats(
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.cond = sync.NewCond(&s.mu)
+	s.initStatsRefreshAdmission()
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -314,6 +322,30 @@ func NewGlobalStats(
 		zap.Int("worker-factor", s.updateWorkerFactor),
 	)
 	return s
+}
+
+func (gs *GlobalStats) initStatsRefreshAdmission() {
+	for i := range gs.refreshAdmission {
+		gs.refreshAdmission[i] = make(chan struct{}, 1)
+	}
+}
+
+func optimizerStatsRefreshStripe(key pb.StatsInfoKey) int {
+	mixed := key.TableID ^ uint64(key.AccId)*0x9e3779b97f4a7c15
+	return int(mixed % optimizerStatsRefreshStripes)
+}
+
+func (gs *GlobalStats) acquireStatsRefresh(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+) (func(), error) {
+	admission := gs.refreshAdmission[optimizerStatsRefreshStripe(key)]
+	select {
+	case admission <- struct{}{}:
+		return func() { <-admission }, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
 }
 
 // keyExists returns true only if key already exists in the map.
@@ -886,6 +918,11 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 	defer func() {
 		gs.markUpdateComplete(wrapKey.Key, updated, actualObjectCount, samplingRatio)
 	}()
+	release, err := gs.acquireStatsRefresh(wrapKey.Ctx, wrapKey.Key)
+	if err != nil {
+		return
+	}
+	defer release()
 
 	broadcastWithoutUpdate := func() {
 		gs.mu.Lock()
@@ -947,6 +984,12 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 
 // RefreshWithMode triggers a stats refresh with the specified sampling mode
 func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey, samplingMode string) error {
+	release, err := gs.acquireStatsRefresh(ctx, key)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	// Get partition state
 	ps, err := gs.engine.pClient.toSubscribeTable(
 		ctx,

@@ -108,7 +108,8 @@ type TxnComputationWrapper struct {
 
 	// protocolVersion is captured when plan is built. The session plan cache
 	// uses it instead of the version observed later when execution completes.
-	protocolVersion int64
+	protocolVersion        int64
+	optimizerStatsVersions map[uint64]uint64
 }
 
 func InitTxnComputationWrapper(
@@ -205,7 +206,19 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.preparedSchedulingSQLMode = ""
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
+	cwft.optimizerStatsVersions = nil
 	cwft.schedulingTrace.Reset()
+}
+
+func (cwft *TxnComputationWrapper) recordOptimizerStatsVersion(tableID, version uint64) {
+	if cwft.optimizerStatsVersions == nil {
+		cwft.optimizerStatsVersions = make(map[uint64]uint64)
+	}
+	// Keep the first observed version. If publication happens between repeated
+	// reads, admission against the newer current version will reject the plan.
+	if _, exists := cwft.optimizerStatsVersions[tableID]; !exists {
+		cwft.optimizerStatsVersions[tableID] = version
+	}
 }
 
 func (cwft *TxnComputationWrapper) ParamVals() []any {
@@ -317,6 +330,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
+		clear(cwft.optimizerStatsVersions)
 		cwft.plan, err = buildPlanWithPrepareMode(
 			execCtx.reqCtx,
 			cwft.ses,

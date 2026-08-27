@@ -26,6 +26,7 @@ type cachedPlan struct {
 	stmts           []tree.Statement
 	plans           []*plan.Plan
 	protocolVersion int64
+	statsVersions   map[uint64]uint64
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -52,6 +53,16 @@ func freeStmts(stmts []tree.Statement) {
 }
 
 func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	pc.cacheWithStatsVersions(sql, stmts, plans, nil, versions...)
+}
+
+func (pc *planCache) cacheWithStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	statsVersions map[uint64]uint64,
+	versions ...int64,
+) {
 	protocolVersion := currentProtocolVersion(nil)
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
@@ -74,6 +85,7 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 			stmts:           stmts,
 			plans:           plans,
 			protocolVersion: protocolVersion,
+			statsVersions:   cloneStatsVersions(statsVersions),
 		}
 		pc.lruList.MoveToFront(element)
 		return
@@ -83,6 +95,7 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 		stmts:           stmts,
 		plans:           plans,
 		protocolVersion: protocolVersion,
+		statsVersions:   cloneStatsVersions(statsVersions),
 	})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
@@ -91,6 +104,27 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 		delete(pc.cachePool, toRemove.Value.(*cachedPlan).sql)
 		freeStmts(toRemove.Value.(*cachedPlan).stmts)
 	}
+}
+
+func cloneStatsVersions(versions map[uint64]uint64) map[uint64]uint64 {
+	if len(versions) == 0 {
+		return nil
+	}
+	cloned := make(map[uint64]uint64, len(versions))
+	for tableID, version := range versions {
+		cloned[tableID] = version
+	}
+	return cloned
+}
+
+func mergeOptimizerStatsVersions(dst, src map[uint64]uint64) bool {
+	for tableID, version := range src {
+		if prior, exists := dst[tableID]; exists && prior != version {
+			return false
+		}
+		dst[tableID] = version
+	}
+	return true
 }
 
 func (pc *planCache) remove(sql string) {

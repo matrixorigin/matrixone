@@ -162,6 +162,21 @@ func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 	return tcc.execCtx.ses.GetStatsCache()
 }
 
+func (tcc *TxnCompilerContext) getStatsCacheVersion(tableID uint64) (*Session, *plan2.StatsCache, uint64) {
+	tcc.mu.Lock()
+	feSes := tcc.execCtx.ses
+	txnWrapper, _ := tcc.tcw.(*TxnComputationWrapper)
+	tcc.mu.Unlock()
+	if ses, ok := feSes.(*Session); ok {
+		cache, version := ses.getStatsCacheWithVersion(tableID)
+		if txnWrapper != nil {
+			txnWrapper.recordOptimizerStatsVersion(tableID, version)
+		}
+		return ses, cache, version
+	}
+	return nil, feSes.GetStatsCache(), 0
+}
+
 func InitTxnCompilerContext(db string) *TxnCompilerContext {
 	return &TxnCompilerContext{dbName: db}
 }
@@ -1125,10 +1140,11 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	}()
 
 	tableID := uint64(obj.Obj)
+	ses, statsCache, statsVersion := tcc.getStatsCacheVersion(tableID)
 
 	// Fast path: return cached result if visited within 3 seconds AND stats is valid
 	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
-	if w := tcc.GetStatsCache().Get(tableID); w.Exists() {
+	if w := statsCache.Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
 			if s != nil && s.AccurateObjectNumber > 0 {
@@ -1144,8 +1160,13 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		return nil, err
 	}
 
-	// Cache the result
-	tcc.GetStatsCache().Set(tableID, result)
+	// A refresh may have completed while the slow path was reading storage. Do
+	// not let work from the old generation repopulate the new session cache.
+	if ses == nil {
+		statsCache.Set(tableID, result)
+	} else {
+		ses.cacheStatsIfCurrent(tableID, statsVersion, result)
+	}
 
 	return result, nil
 }
