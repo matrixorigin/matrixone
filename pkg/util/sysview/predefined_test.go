@@ -181,19 +181,42 @@ func TestInformationSchemaTablePrivilegesDDL(t *testing.T) {
 		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`",
 		"CAST(tbl.reldatabase AS varchar(64)) AS `TABLE_SCHEMA`",
 		"CAST(tbl.relname AS varchar(64)) AS `TABLE_NAME`",
-		"CAST(upper(rp.privilege_name) AS varchar(64)) AS `PRIVILEGE_TYPE`",
-		"CAST(case when rp.with_grant_option then 'YES' else 'NO' end AS varchar(3)) AS `IS_GRANTABLE`",
+		"CAST(privilege_map.external_name AS varchar(64)) AS `PRIVILEGE_TYPE`",
+		"max(case when rp.with_grant_option or rp.privilege_name = 'table ownership' then 1 else 0 end)",
+		"CAST(case when max(",
 	} {
 		assert.Contains(t, InformationSchemaTablePrivilegesDDL, projection)
+	}
+	for internalName, externalName := range map[string]string{
+		"select":    "SELECT",
+		"insert":    "INSERT",
+		"update":    "UPDATE",
+		"truncate":  "TRUNCATE",
+		"delete":    "DELETE",
+		"reference": "REFERENCES",
+		"index":     "INDEX",
+		"values":    "VALUES",
+	} {
+		assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+			fmt.Sprintf("'%s'", internalName))
+		assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+			fmt.Sprintf("'%s'", externalName))
 	}
 	assert.Contains(t, InformationSchemaTablePrivilegesDDL, "FROM mo_catalog.mo_role_privs rp")
 	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
 		"JOIN mo_catalog.mo_tables tbl ON rp.obj_id = tbl.rel_id")
 	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+		"rp.privilege_name IN ('table all', 'table ownership')")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
 		"tbl.account_id = current_account_id()")
-	assert.Contains(t, InformationSchemaTablePrivilegesDDL, "rp.obj_type = 'table'")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+		"rp.obj_type IN ('table', 'view')")
 	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
 		"rp.privilege_level IN ('d.t', 't')")
+	assert.Contains(t, InformationSchemaTablePrivilegesDDL,
+		"GROUP BY rp.role_name, tbl.reldatabase, tbl.relname, privilege_map.external_name")
+	assert.NotContains(t, InformationSchemaTablePrivilegesDDL,
+		"upper(rp.privilege_name)")
 
 	statements, err := mysql.Parse(context.Background(), InformationSchemaTablePrivilegesDDL, 1)
 	assert.NoError(t, err)

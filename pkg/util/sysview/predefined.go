@@ -518,13 +518,27 @@ var (
 		"CAST('def' AS varchar(512)) AS `TABLE_CATALOG`," +
 		"CAST(tbl.reldatabase AS varchar(64)) AS `TABLE_SCHEMA`," +
 		"CAST(tbl.relname AS varchar(64)) AS `TABLE_NAME`," +
-		"CAST(upper(rp.privilege_name) AS varchar(64)) AS `PRIVILEGE_TYPE`," +
-		"CAST(case when rp.with_grant_option then 'YES' else 'NO' end AS varchar(3)) AS `IS_GRANTABLE` " +
+		"CAST(privilege_map.external_name AS varchar(64)) AS `PRIVILEGE_TYPE`," +
+		"CAST(case when max(case when rp.with_grant_option or rp.privilege_name = 'table ownership' " +
+		"then 1 else 0 end) = 1 then 'YES' else 'NO' end AS varchar(3)) AS `IS_GRANTABLE` " +
 		"FROM mo_catalog.mo_role_privs rp " +
 		"JOIN mo_catalog.mo_tables tbl ON rp.obj_id = tbl.rel_id " +
+		"JOIN (VALUES " +
+		"ROW('select', 'SELECT')," +
+		"ROW('insert', 'INSERT')," +
+		"ROW('update', 'UPDATE')," +
+		"ROW('truncate', 'TRUNCATE')," +
+		"ROW('delete', 'DELETE')," +
+		"ROW('reference', 'REFERENCES')," +
+		"ROW('index', 'INDEX')," +
+		"ROW('values', 'VALUES')" +
+		") privilege_map(internal_name, external_name) " +
+		"ON rp.privilege_name = privilege_map.internal_name " +
+		"OR rp.privilege_name IN ('table all', 'table ownership') " +
 		"WHERE tbl.account_id = current_account_id() " +
-		"AND rp.obj_type = 'table' " +
-		"AND rp.privilege_level IN ('d.t', 't')"
+		"AND rp.obj_type IN ('table', 'view') " +
+		"AND rp.privilege_level IN ('d.t', 't') " +
+		"GROUP BY rp.role_name, tbl.reldatabase, tbl.relname, privilege_map.external_name"
 
 	InformationSchemaColumnPrivilegesDDL = "CREATE TABLE information_schema.`COLUMN_PRIVILEGES` (" +
 		"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
