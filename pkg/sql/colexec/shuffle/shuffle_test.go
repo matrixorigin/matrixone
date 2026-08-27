@@ -17,13 +17,17 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -736,6 +740,122 @@ func TestShuffleResetAndFreeReleaseRuntimeState(t *testing.T) {
 	arg.Free(proc, false, nil)
 	require.Nil(t, arg.ctr.exprExec)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestStableStringHashProtocolGateAndRollback(t *testing.T) {
+	const service = ""
+	runtime := moruntime.ServiceRuntime(service)
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+	require.False(t, supportsStableStringHash(service))
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := NewArgument()
+	defer arg.Release()
+	arg.BucketNum = 2
+	require.NoError(t, arg.Prepare(proc))
+	require.False(t, arg.ctr.stableStringHash)
+	arg.Reset(proc, false, nil)
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	require.True(t, supportsStableStringHash(service))
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, arg.ctr.stableStringHash)
+	arg.Reset(proc, false, nil)
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+	require.False(t, supportsStableStringHash(service), "rollback must restore legacy owner routing")
+}
+
+func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_text.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	values := [][]byte{
+		[]byte("common-prefix/00000000/common-suffix"),
+		[]byte("common-prefix/00000001/common-suffix"),
+		nil,
+		{},
+		[]byte("租户/共同前缀/00000002/共同后缀"),
+		{0, 1, 2, 0, 255, 128},
+	}
+	for row, value := range values {
+		require.NoError(t, vector.AppendBytes(vec, value, row == 2, mp))
+	}
+
+	const bucketNum = uint64(8)
+	arg := &Shuffle{}
+	arg.ctr.stableStringHash = true
+	sels := make([][]int32, bucketNum)
+	col, area := vector.MustVarlenaRawData(vec)
+	appendStringHashSels(arg, sels, vec, col, area, bucketNum, true)
+
+	for row, value := range values {
+		expectedBucket := uint64(0)
+		if row != 2 {
+			expectedBucket = plan2.StableCharHashToRange(value, bucketNum)
+		}
+		require.Contains(t, sels[expectedBucket], int32(row))
+	}
+}
+
+func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
+	for _, keyLength := range []int{8, 32, 64, 1024, 64 << 10, 1 << 20} {
+		rows := min(256, max(1, (4<<20)/keyLength))
+		mp := mpool.MustNewZero()
+		vec := vector.NewVec(types.T_text.ToType())
+		for row := 0; row < rows; row++ {
+			value := make([]byte, keyLength)
+			for i := range value {
+				value[i] = byte(i*131 + 17)
+			}
+			binary.LittleEndian.PutUint64(value[keyLength-8:], uint64(row))
+			if err := vector.AppendBytes(vec, value, false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		col, area := vector.MustVarlenaRawData(vec)
+		for _, mode := range []struct {
+			name   string
+			stable bool
+		}{
+			{name: "v31-sampled", stable: false},
+			{name: "v32-complete", stable: true},
+		} {
+			arg := &Shuffle{}
+			arg.ctr.stableStringHash = mode.stable
+			sels := make([][]int32, 16)
+			appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+
+			b.Run(fmt.Sprintf("%s/%dB/%drows", mode.name, keyLength, rows), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(rows * keyLength))
+				for b.Loop() {
+					for bucket := range sels {
+						sels[bucket] = sels[bucket][:0]
+					}
+					appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+				}
+			})
+		}
+
+		vec.Free(mp)
+		if mp.CurrNB() != 0 {
+			b.Fatalf("leaked %d bytes", mp.CurrNB())
+		}
+	}
 }
 
 func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {

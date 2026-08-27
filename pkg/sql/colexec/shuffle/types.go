@@ -91,6 +91,7 @@ type container struct {
 	pendingOffset        int
 	shufflePool          *ShufflePool
 	runtimeFilterHandled bool
+	stableStringHash     bool
 	exprExec             colexec.ExpressionExecutor
 	held                 bool
 	writingStopped       bool
@@ -180,6 +181,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingBucket = 0
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.runtimeFilterHandled = false
+	shuffle.ctr.stableStringHash = false
 	shuffle.ctr.held = false
 	shuffle.ctr.writingStopped = false
 	shuffle.ctr.producerOnce = sync.Once{}
