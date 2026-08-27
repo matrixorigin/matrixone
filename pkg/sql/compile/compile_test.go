@@ -1058,10 +1058,15 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	txnOperator.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
 		return txn.TxnMeta{SnapshotTS: currentSnapshot}
 	}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 
 	proc := testutil.NewProcess(t)
+	c := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
+	defer func() {
+		c.SetIsPrepare(false)
+		c.Release()
+	}()
 	proc.Base.TxnOperator = txnOperator
-	c := &Compile{proc: proc}
 	c.capturePlanSnapshot()
 
 	child := proc.NewNoContextChildProc(0)
@@ -1069,32 +1074,124 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, currentSnapshot, got)
 
-	// Prepared scope reuse is a new execution generation. Refresh both the top
-	// process and every retained pipeline process before locks can run.
+	// Prepared execution reuses the same compiled-plan generation. Applying the
+	// binding to a newer transaction process must not recapture its snapshot.
+	c.SetPlanGenerationReused(true)
 	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
-	c.capturePlanSnapshot()
+	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_stmt"))
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
+	require.True(t, proc.PlanGenerationReused())
 	scope := &Scope{Proc: child}
 	require.NoError(t, scope.resetForReuse(c))
 	got, ok = child.GetPlanSnapshotTS()
 	require.True(t, ok)
-	require.Equal(t, currentSnapshot, got)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
+	require.True(t, child.PlanGenerationReused())
 
 	// A data-only retry recompiles pipelines from the same logical plan. It
 	// retains the original binding even after the transaction snapshot moves.
-	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
-	c.reusePlanSnapshot = true
-	c.bindPlanSnapshotForCompile()
+	retry := &Compile{proc: proc}
+	c.bindRetryPlanGeneration(retry, false)
+	retry.bindPlanSnapshotForCompile()
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
-	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
+	require.True(t, proc.PlanGenerationReused())
 
 	// A definition-change retry rebuilds the logical plan and starts a new plan
-	// generation at the transaction's refreshed snapshot.
-	c.reusePlanSnapshot = false
-	c.bindPlanSnapshotForCompile()
+	// generation at the transaction's refreshed snapshot. The old prepared
+	// physical topology becomes ineligible for another execution.
+	c.SetIsPrepare(true)
+	rebuilt := &Compile{proc: proc}
+	c.bindRetryPlanGeneration(rebuilt, true)
+	require.True(t, c.PlanGenerationRebuilt())
+	rebuilt.bindPlanSnapshotForCompile()
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, currentSnapshot, got)
+	require.False(t, proc.PlanGenerationReused())
+	c.inheritPlanSnapshot(rebuilt)
+
+	// A later data-only retry of that rebuilt plan inherits the new generation,
+	// not the stale generation that originally encountered the DDL fence.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
+	postRebuildRetry := &Compile{proc: proc}
+	c.bindRetryPlanGeneration(postRebuildRetry, false)
+	postRebuildRetry.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+	require.False(t, proc.PlanGenerationReused())
+
+	// The same signal is required when EXECUTE compiles an old prepared logical
+	// plan without a cached physical topology.
+	uncachedPrepared := &Compile{proc: proc}
+	uncachedPrepared.bindRetryPlanGeneration(&Compile{proc: proc}, true)
+	require.True(t, uncachedPrepared.PlanGenerationRebuilt())
+
+	// A prepared logical plan without a cached physical pipeline must also keep
+	// its original generation when it is compiled inside a newer transaction.
+	preparedWithoutCache := &Compile{proc: proc}
+	preparedWithoutCache.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 5})
+	preparedWithoutCache.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 5}, got)
+}
+
+func TestFrozenResultMetadataRejectsIncompatibleDefinitionRetry(t *testing.T) {
+	makeResultPlan := func(name string, typ types.T) *plan.Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Headings: []string{name},
+			Nodes: []*plan.Node{{
+				ProjectList: []*plan.Expr{{Typ: plan.Type{Id: int32(typ)}}},
+			}},
+		}}}
+	}
+
+	original := makeResultPlan("v", types.T_int64)
+	c := &Compile{pn: original}
+	// Before a consumer materializes metadata, a definition retry may change
+	// the output schema and the caller can derive metadata from the new plan.
+	require.NoError(t, c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan("renamed", types.T_varchar)))
+
+	c.FreezeResultMetadata()
+	require.NoError(t, c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan("v", types.T_int64)))
+	for _, rebuilt := range []*plan.Plan{
+		makeResultPlan("renamed", types.T_int64),
+		makeResultPlan("v", types.T_varchar),
+	} {
+		err := c.validateRetryResultMetadata(context.Background(), rebuilt)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	}
+}
+
+func TestCompileReleaseClearsPlanSnapshotTransport(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
+	c.SetIsPrepare(true)
+	planSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	c.SetPlanSnapshotTS(planSnapshot)
+
+	c.Release()
+	_, ok := proc.GetPlanSnapshotTS()
+	require.False(t, ok)
+
+	// A cached Compile retains ownership and can bind the same generation to a
+	// later execution even though the Process transport was cleared.
+	c.applyPlanSnapshot()
+	got, ok := proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, planSnapshot, got)
+
+	c.SetIsPrepare(false)
+	c.Release()
 }
 
 var (

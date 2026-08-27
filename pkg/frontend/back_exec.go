@@ -672,6 +672,9 @@ func executeStmtInBack(backSes *backSession,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.completeCompileExecution(c, err)
+			}
 			// Preserve the historical BackgroundExec projection for engine-backed
 			// execution. This is return-only data; the authoritative statement
 			// resource root is sealed independently and must not ingest it again.
