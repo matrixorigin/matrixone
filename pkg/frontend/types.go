@@ -334,6 +334,12 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// needsRebuild is set when execution-time retry discovers that the cached
+	// prepared plan generation is stale before frontend metadata catches up.
+	needsRebuild bool
+	// compileNeedsRebuild remembers that this statement had an eligible cached
+	// topology before it was invalidated, even after that topology is released.
+	compileNeedsRebuild bool
 	// numericPrefixConsumer is computed once per prepared-plan generation so
 	// ordinary COM_STMT Query executions never scan or copy the cached plan.
 	numericPrefixConsumer bool
@@ -786,6 +792,23 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ColDefData = nil
 	}
 	prepareStmt.remapDb = nil
+}
+
+// invalidateCachedCompile detaches and returns the old cached topology. The
+// caller owns its one Release unless it is also the currently running Compile,
+// whose normal execution cleanup owns that Release.
+func (prepareStmt *PrepareStmt) invalidateCachedCompile() *compile.Compile {
+	prepareStmt.needsRebuild = true
+	prepareStmt.compileNeedsRebuild = true
+	if prepareStmt.compile == nil {
+		return nil
+	}
+	invalidatedCompile := prepareStmt.compile
+	invalidatedCompile.FreeOperator()
+	invalidatedCompile.SetIsPrepare(false)
+	// Clear first so PrepareStmt.Close cannot release the detached owner.
+	prepareStmt.compile = nil
+	return invalidatedCompile
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {
