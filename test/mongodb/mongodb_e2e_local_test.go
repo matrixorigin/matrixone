@@ -16,11 +16,15 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +36,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
+	"github.com/xdg-go/scram"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
@@ -899,6 +905,154 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.NoError(t, os.WriteFile(fileParent, []byte("x"), 0o600))
 		require.Error(t, writeReport(filepath.Join(fileParent, "child"), report{}))
 	})
+}
+
+func TestMongoDBTransferProfilerProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	host, commands := newMongoDBTransferTestServer(t)
+	_, err := newMongoTransferMonitor(ctx, host, "", "secret")
+	require.ErrorContains(t, err, "requires both root credentials")
+
+	profiler, err := newMongoTransferMonitor(ctx, host, "root", "secret")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, profiler.Close(context.Background())) })
+	require.NoError(t, profiler.Reset(ctx))
+	returned, err := profiler.DocumentsReturned(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 6, returned)
+
+	var received []string
+	for len(commands) > 0 {
+		received = append(received, <-commands)
+	}
+	joined := strings.Join(received, "\n")
+	require.Contains(t, joined, "profile")
+	require.Contains(t, joined, "drop")
+	require.Contains(t, joined, "find")
+	require.NoError(t, (*mongoProfiler)(nil).Close(ctx))
+	require.NoError(t, (*mongoProfiler)(nil).Reset(ctx))
+	returned, err = (*mongoProfiler)(nil).DocumentsReturned(ctx)
+	require.NoError(t, err)
+	require.Zero(t, returned)
+}
+
+func newMongoDBTransferTestServer(t *testing.T) (string, chan string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	commands := make(chan string, 16)
+	digest := fmt.Sprintf("%x", md5.Sum([]byte("root:mongo:secret")))
+	client, err := scram.SHA1.NewClientUnprepped("root", digest, "")
+	require.NoError(t, err)
+	credentials := client.GetStoredCredentials(scram.KeyFactors{Salt: "test-salt", Iters: 4096})
+	server, err := scram.SHA1.NewServer(func(username string) (scram.StoredCredentials, error) {
+		if username != "root" {
+			return scram.StoredCredentials{}, fmt.Errorf("unknown test user %q", username)
+		}
+		return credentials, nil
+	})
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go serveMongoDBTransferTestConnection(conn, commands, server)
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String(), commands
+}
+
+func serveMongoDBTransferTestConnection(conn net.Conn, commands chan<- string, server *scram.Server) {
+	defer conn.Close()
+	var conversation *scram.ServerConversation
+	for {
+		header := make([]byte, 16)
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return
+		}
+		length := int(binary.LittleEndian.Uint32(header[:4]))
+		if length < len(header) {
+			return
+		}
+		body := make([]byte, length-len(header))
+		if _, err := io.ReadFull(conn, body); err != nil {
+			return
+		}
+		command := string(body)
+		commands <- command
+		response := bson.D{{Key: "ok", Value: 1}, {Key: "isWritablePrimary", Value: true}, {Key: "minWireVersion", Value: 0}, {Key: "maxWireVersion", Value: 13}}
+		request, err := mongoDBTransferCommand(header, body)
+		if err != nil {
+			return
+		}
+		if payload, ok := request["payload"].(bson.Binary); ok {
+			if _, started := request["saslStart"]; started {
+				conversation = server.NewConversation()
+			}
+			if conversation != nil {
+				reply, err := conversation.Step(string(payload.Data))
+				if err != nil {
+					return
+				}
+				response = bson.D{{Key: "ok", Value: 1}, {Key: "conversationId", Value: 1}, {Key: "done", Value: conversation.Done()}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(reply)}}}
+			}
+		}
+		if strings.Contains(command, "find") {
+			response = bson.D{{Key: "ok", Value: 1}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "mongodb_source.system.profile"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "nreturned", Value: 5}}, bson.D{{Key: "nreturned", Value: 1}}}}}}}
+		}
+		encoded, err := bson.Marshal(response)
+		if err != nil {
+			return
+		}
+		if _, err := conn.Write(mongoDBTransferWireResponse(header, encoded)); err != nil {
+			return
+		}
+	}
+}
+
+func mongoDBTransferCommand(header, body []byte) (bson.M, error) {
+	var document []byte
+	if binary.LittleEndian.Uint32(header[12:16]) == 2004 { // OP_QUERY
+		if len(body) < 4 {
+			return nil, errors.New("short OP_QUERY test command")
+		}
+		remainder := body[4:]
+		if end := strings.IndexByte(string(remainder), 0); end >= 0 && len(remainder) >= end+9 {
+			document = remainder[end+9:]
+		}
+	} else if len(body) >= 5 { // OP_MSG flags followed by a document section
+		document = body[5:]
+	}
+	var command bson.M
+	if err := bson.Unmarshal(document, &command); err != nil {
+		return nil, err
+	}
+	return command, nil
+}
+
+func mongoDBTransferWireResponse(requestHeader, document []byte) []byte {
+	requestID := binary.LittleEndian.Uint32(requestHeader[4:8])
+	if binary.LittleEndian.Uint32(requestHeader[12:16]) == 2004 { // OP_QUERY
+		message := make([]byte, 16+4+8+4+4+len(document))
+		binary.LittleEndian.PutUint32(message[:4], uint32(len(message)))
+		binary.LittleEndian.PutUint32(message[8:12], requestID)
+		binary.LittleEndian.PutUint32(message[12:16], 1) // OP_REPLY
+		binary.LittleEndian.PutUint32(message[32:36], 1)
+		copy(message[36:], document)
+		return message
+	}
+	message := make([]byte, 16+4+1+len(document))
+	binary.LittleEndian.PutUint32(message[:4], uint32(len(message)))
+	binary.LittleEndian.PutUint32(message[8:12], requestID)
+	binary.LittleEndian.PutUint32(message[12:16], 2013) // OP_MSG
+	message[20] = 0                                     // BSON document section
+	copy(message[21:], document)
+	return message
 }
 
 func mongoDBTestRepoRoot(t *testing.T) string {
