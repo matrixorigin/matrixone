@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 20)
+	require.Len(t, tenantUpgEntries, 21)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -130,8 +130,15 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_METADATA, unsignedColumns.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, unsignedColumns.Schema)
 	require.Equal(t, catalog.MO_COLUMNS, unsignedColumns.TableName)
-	require.Equal(t, int64(defines.MORPCVersion32), unsignedColumns.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion33), unsignedColumns.RequiredProtocolVersion)
 	require.True(t, unsignedColumns.AllowMoColumnsUpdate)
+	statistics := tenantUpgEntries[20]
+	require.Equal(t, versions.MODIFY_VIEW, statistics.UpgType)
+	require.Equal(t, sysview.InformationDBConst, statistics.Schema)
+	require.Equal(t, "STATISTICS", statistics.TableName)
+	require.Equal(t, sysview.InformationSchemaStatisticsDDL, statistics.UpgSql)
+	require.Contains(t, strings.ToLower(statistics.PreSql),
+		"drop view if exists information_schema.statistics")
 }
 
 func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {
@@ -163,7 +170,7 @@ func TestMoColumnsUnsignedBackfillWaitsForAllCNsAndIsIdempotent(t *testing.T) {
 				result.NewBatchWithRowCount(1)
 				return result.GetResult(), nil
 			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:31"}`), nil
+				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:33,cn-b:32"}`), nil
 			case entry.UpgSql:
 				updated = true
 			}
@@ -187,7 +194,7 @@ func TestMoColumnsUnsignedBackfillWaitsForAllCNsAndIsIdempotent(t *testing.T) {
 					return result.GetResult(), nil
 				}
 			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:32"}`), nil
+				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:33,cn-b:33"}`), nil
 			case entry.UpgSql:
 				hasMismatch = false
 			}
@@ -240,7 +247,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 20)
+	require.Len(t, tenantUpgEntries, 21)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -468,7 +475,7 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+removedIndexVisibilityUpgradeOffset, meta.VersionOffset)
-	require.Equal(t, int64(defines.MORPCVersion32), meta.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion33), meta.RequiredProtocolVersion)
 }
 
 func TestTenantViewDefinitionChecks(t *testing.T) {
@@ -478,6 +485,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaCheckConstraints(),
 		upgradeInformationSchemaTableConstraints(),
 		upgradeInformationSchemaCollationCharacterSetApplicability(),
+		upgradeInformationSchemaStatistics(),
 	}
 
 	for _, entry := range entries {
@@ -615,6 +623,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
 				return true, sysview.InformationSchemaColumnsDDL, nil
+			case "STATISTICS":
+				return true, sysview.InformationSchemaStatisticsDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}

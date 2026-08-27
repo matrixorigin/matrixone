@@ -48,6 +48,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
 	backfillMoColumnsAttIsUnsigned(),
+	upgradeInformationSchemaStatistics(),
 }
 
 const moColumnsUnsignedMismatchPredicate = "account_id = current_account_id() " +
@@ -60,7 +61,7 @@ func backfillMoColumnsAttIsUnsigned() versions.UpgradeEntry {
 		TableName:               catalog.MO_COLUMNS,
 		UpgType:                 versions.MODIFY_METADATA,
 		UpgSql:                  "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE " + moColumnsUnsignedMismatchPredicate,
-		RequiredProtocolVersion: defines.MORPCVersion32,
+		RequiredProtocolVersion: defines.MORPCVersion33,
 		AllowMoColumnsUpdate:    true,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			mismatch, err := versions.CheckTableDataExist(txn, accountID,
@@ -354,6 +355,22 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 			sysview.InformationSchemaTableConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
 			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
+	}
+}
+
+// Keep this entry last so increasing the v4.0.6 version offset refreshes all
+// metadata views for tenants that completed an earlier v4.0.6 offset. The
+// existing KEY_COLUMN_USAGE, COLUMNS, and TABLE_CONSTRAINTS entries are
+// definition-checked and rerun by the same upgrade pass.
+func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "STATISTICS",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaStatisticsDDL,
+		CheckFunc: checkViewDefinition("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "STATISTICS"),
 	}
 }
 

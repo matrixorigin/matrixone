@@ -46,7 +46,7 @@ func init() {
 		UpgradeCluster:          versions.Yes,
 		UpgradeTenant:           versions.Yes,
 		VersionOffset:           uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) + removedIndexVisibilityUpgradeOffset,
-		RequiredProtocolVersion: defines.MORPCVersion32,
+		RequiredProtocolVersion: defines.MORPCVersion33,
 	}}
 }
 

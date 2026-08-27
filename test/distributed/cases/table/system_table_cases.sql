@@ -38,10 +38,10 @@ SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
 -- tables in information_schema
 USE information_schema;
 -- key_column_usage
-SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-SELECT COUNT(0) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-SELECT COUNT('') FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
+SELECT COUNT(*) FROM (SELECT * FROM key_column_usage WHERE table_schema = '__nonexistent_schema__' LIMIT 10) AS temp;
+SELECT COUNT(0) FROM (SELECT * FROM key_column_usage WHERE table_schema = '__nonexistent_schema__' LIMIT 10) AS temp;
+SELECT COUNT('') FROM (SELECT * FROM key_column_usage WHERE table_schema = '__nonexistent_schema__' LIMIT 10) AS temp;
+SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage WHERE table_schema = '__nonexistent_schema__' LIMIT 10) AS temp;
 
 -- columns
 SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
@@ -86,7 +86,7 @@ SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 
 -- table_constraints
-SELECT COUNT(*) FROM table_constraints;
+SELECT COUNT(*) FROM table_constraints WHERE table_schema = '__nonexistent_schema__';
 
 -- tables in mo_catalog
 USE mo_catalog;
