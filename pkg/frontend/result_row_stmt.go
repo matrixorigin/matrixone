@@ -111,6 +111,16 @@ func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper
 	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
 }
 
+type resultMetadataFreezer interface {
+	FreezeResultMetadata()
+}
+
+func freezeResultMetadata(runner ComputationRunner) {
+	if freezer, ok := runner.(resultMetadataFreezer); ok {
+		freezer.FreezeResultMetadata()
+	}
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -120,6 +130,17 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW {
 		if execCtx.returning == nil || execCtx.returning.spool == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING spool is not initialized")
+		}
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			return err
+		}
+		// RETURNING rows are attempt-spooled and no metadata has reached the
+		// client yet. Sync a definition-retried generation first, then derive
+		// metadata from the plan that actually produced the committed spool.
+		if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			if runningCompile, ok := execCtx.runner.(Compile); ok {
+				txnCw.syncCompileExecution(runningCompile)
+			}
 		}
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
@@ -131,9 +152,6 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 		execCtx.returning.columns = columns
-		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
-			return err
-		}
 		execCtx.returning.affectedRows = execCtx.runResult.AffectRows
 		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows {
 			return moerr.NewInternalErrorf(execCtx.reqCtx,
@@ -168,6 +186,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
+		freezeResultMetadata(execCtx.runner)
 		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
 		if cursorExecute {
 			// A cursor must retain its metadata before the pipeline starts so
@@ -236,6 +255,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
+		freezeResultMetadata(execCtx.runner)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
@@ -269,6 +289,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtDefault1)
 		defer ses.ExitFPrint(FPResultRowStmtDefault1)
+		freezeResultMetadata(execCtx.runner)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return

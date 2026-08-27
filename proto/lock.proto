@@ -62,6 +62,12 @@ message LockOptions {
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
+  // Snapshot against which the SQL execution plan was compiled. This is
+  // separate from SnapShotTs, which is the transaction creation timestamp and
+  // is also used by rolling-restart admission. It is sent only when the plan
+  // predates transaction creation. Otherwise, and for older senders, the lock
+  // service falls back to SnapShotTs.
+  timestamp.Timestamp PlanSnapshotTs    = 12;
 }
 
 // LockTable describes which CN manages a Table's Locks.

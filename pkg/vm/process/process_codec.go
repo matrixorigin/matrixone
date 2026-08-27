@@ -71,6 +71,7 @@ func (proc *Process) BuildProcessInfo(
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
+		procInfo.PlanGenerationReused = proc.PlanGenerationReused()
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -276,6 +277,7 @@ func (c *codecService) Decode(
 	proc.Base.SessionInfo.StorageEngine = c.engine
 	if value.PlanSnapshotTs != nil {
 		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+		proc.SetPlanGenerationReused(value.PlanGenerationReused)
 	}
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
