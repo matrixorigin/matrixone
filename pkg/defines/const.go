@@ -67,7 +67,7 @@ const (
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
 	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
 	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
-	MORPCVersion32     int64 = 32 // exponent-scaled variance aggregate partial state
+	MORPCVersion32     int64 = 32 // scaled variance state with exact numeric origins
 	MORPCLatestVersion       = MORPCVersion32
 )
 

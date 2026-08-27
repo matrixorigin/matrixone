@@ -89,7 +89,7 @@ func (exec *varStdDevExec[T, A]) BatchFill(offset int, groups []uint64, vectors 
 	var variances []float64
 	var varianceExponents []int64
 	var origins []A
-	isDecimal := exec.aggInfo.argTypes[0].Oid == types.T_decimal64 || exec.aggInfo.argTypes[0].Oid == types.T_decimal128
+	hasExactOrigin := hasExactVarianceOrigin(exec.aggInfo.argTypes[0].Oid)
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -107,20 +107,21 @@ func (exec *varStdDevExec[T, A]) BatchFill(offset int, groups []uint64, vectors 
 			means = vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[1])
 			variances = vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[2])
 			varianceExponents = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[3])
-			if isDecimal {
+			if hasExactOrigin {
 				origins = vector.MustFixedColNoTypeCheck[A](exec.state[x].vecs[4])
 			}
 		}
 
 		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
 		fv := exec.a2f(val, scale)
-		if isDecimal {
+		if hasExactOrigin {
 			if cnts[y] == 0 {
 				origins[y] = val
 				fv = 0
 			} else {
 				var err error
-				fv, err = decimalDeviationToFloat64(val, origins[y], exec.aggInfo.argTypes[0].Oid, scale)
+				fv, err = exactVarianceDeviationToFloat64(
+					val, origins[y], exec.aggInfo.argTypes[0].Oid, scale)
 				if err != nil {
 					return err
 				}
@@ -157,7 +158,7 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 		return exec.batchMergeLegacy(other, offset, groups)
 	}
 
-	isDecimal := exec.aggInfo.argTypes[0].Oid == types.T_decimal64 || exec.aggInfo.argTypes[0].Oid == types.T_decimal128
+	hasExactOrigin := hasExactVarianceOrigin(exec.aggInfo.argTypes[0].Oid)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -174,13 +175,15 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 		varianceExponents1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[3])
 		varianceExponents2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[3])
 		mean2 := means2[y2]
-		if isDecimal {
+		if hasExactOrigin {
 			origins1 := vector.MustFixedColNoTypeCheck[A](exec.state[x1].vecs[4])
 			origins2 := vector.MustFixedColNoTypeCheck[A](other.state[x2].vecs[4])
 			if cnts1[y1] == 0 {
 				origins1[y1] = origins2[y2]
 			} else if cnts2[y2] != 0 {
-				delta, err := decimalDeviationToFloat64(origins2[y2], origins1[y1], exec.aggInfo.argTypes[0].Oid, exec.aggInfo.argTypes[0].Scale)
+				delta, err := exactVarianceDeviationToFloat64(
+					origins2[y2], origins1[y1], exec.aggInfo.argTypes[0].Oid,
+					exec.aggInfo.argTypes[0].Scale)
 				if err != nil {
 					return err
 				}
@@ -285,6 +288,61 @@ func decimalDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types
 	default:
 		return 0, moerr.NewInternalErrorNoCtxf("unsupported decimal type %v", oid)
 	}
+}
+
+func hasExactVarianceOrigin(oid types.T) bool {
+	switch oid {
+	case types.T_int64, types.T_uint64, types.T_bit,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
+// exactVarianceDeviationToFloat64 converts an exact numeric difference only
+// after subtracting the operands in their native domain. This preserves small
+// integer variation above 2^53 while still allowing the stable floating-point
+// recurrence to represent very large signed and unsigned ranges.
+func exactVarianceDeviationToFloat64[A types.Ints | types.UInts | types.Floats | types.Decimal64 | types.Decimal128](
+	value, origin A, oid types.T, scale int32,
+) (float64, error) {
+	switch oid {
+	case types.T_int64:
+		return signedInt64Deviation(
+			any(value).(int64), any(origin).(int64)), nil
+	case types.T_uint64, types.T_bit:
+		return unsignedUint64Deviation(
+			any(value).(uint64), any(origin).(uint64)), nil
+	case types.T_decimal64, types.T_decimal128:
+		return decimalDeviationToFloat64(value, origin, oid, scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"unsupported exact variance type %v", oid)
+	}
+}
+
+func signedInt64Deviation(value, origin int64) float64 {
+	if value >= origin {
+		return float64(nonNegativeSignedInt64Difference(value, origin))
+	}
+	return -float64(nonNegativeSignedInt64Difference(origin, value))
+}
+
+func nonNegativeSignedInt64Difference(upper, lower int64) uint64 {
+	if lower >= 0 || upper < 0 {
+		return uint64(upper - lower)
+	}
+	// Avoid overflowing int64 when the operands straddle zero. The adjusted
+	// negation also handles MinInt64 without taking abs(MinInt64).
+	return uint64(upper) + uint64(-(lower + 1)) + 1
+}
+
+func unsignedUint64Deviation(value, origin uint64) float64 {
+	if value >= origin {
+		return float64(value - origin)
+	}
+	return -float64(origin - value)
 }
 
 func (exec *varStdDevExec[T, A]) SetExtraInformation(partialResult any, _ int) error {
@@ -610,17 +668,19 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 					varianceExponent := int64(0)
 					seen := int64(0)
 					var origin A
-					isDecimal := exec.aggInfo.argTypes[0].Oid == types.T_decimal64 || exec.aggInfo.argTypes[0].Oid == types.T_decimal128
+					hasExactOrigin := hasExactVarianceOrigin(exec.aggInfo.argTypes[0].Oid)
 					err := exec.state[i].iter(uint16(j), func(k []byte) error {
 						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
 						fv := exec.a2f(*ptr, exec.aggInfo.argTypes[0].Scale)
-						if isDecimal {
+						if hasExactOrigin {
 							if seen == 0 {
 								origin = *ptr
 								fv = 0
 							} else {
 								var derr error
-								fv, derr = decimalDeviationToFloat64(*ptr, origin, exec.aggInfo.argTypes[0].Oid, exec.aggInfo.argTypes[0].Scale)
+								fv, derr = exactVarianceDeviationToFloat64(
+									*ptr, origin, exec.aggInfo.argTypes[0].Oid,
+									exec.aggInfo.argTypes[0].Scale)
 								if derr != nil {
 									return derr
 								}
@@ -814,7 +874,7 @@ func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts |
 		emptyNull:  false,
 		saveArg:    isDistinct,
 	}
-	if !legacyState && (param.Oid == types.T_decimal64 || param.Oid == types.T_decimal128) {
+	if !legacyState && hasExactVarianceOrigin(param.Oid) {
 		exec.aggInfo.stateTypes = append(exec.aggInfo.stateTypes, param)
 	}
 	return &exec
