@@ -98,8 +98,8 @@ select * from orders where __mo_query = 'select id, name from src';
 invalid input: the data of row 1 contained is not equal to input columns
 insert into orders values (9,'x',1.0,'2026-01-01 00:00:00');
 invalid input: cannot insert/update/delete from external table
-create external table badopt (id int) engine = sql with ('recheck'='true');
-invalid input: unknown sql option 'recheck' (supported: config, query)
+create external table badopt (id int) engine = sql with ('compress'='true');
+invalid input: unknown sql option 'compress' (supported: config, query, pushdown)
 create external table badcfg (id int) engine = sql with ('config'='{"driver":"nope","dsn":"x"}');
 invalid input: sql_tvf: unsupported driver "nope" (supported: mysql, postgres)
 create table typed(
