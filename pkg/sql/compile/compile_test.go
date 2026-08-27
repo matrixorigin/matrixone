@@ -888,6 +888,30 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
+func TestCompileLockLoadRemovesPrePipelineTableTarget(t *testing.T) {
+	c := NewMockCompile(t)
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_INSERT, LoadTag: true},
+		},
+	}
+	c.lockTables = make(map[uint64]*plan.LockTarget)
+	target := &plan.LockTarget{
+		TableId:   42,
+		LockTable: true,
+	}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+	scopes := []*Scope{{}}
+
+	got, err := c.compileLock(node, scopes)
+	require.NoError(t, err)
+	require.Equal(t, scopes, got)
+	require.Empty(t, node.LockTargets,
+		"LOAD must not retain a batch-driven LockOp after registering its table lock")
+	require.Same(t, target, c.lockTables[target.TableId])
+	require.False(t, target.LockTableAtTheEnd)
+}
+
 func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	for _, lockTable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("table=%t", lockTable), func(t *testing.T) {
