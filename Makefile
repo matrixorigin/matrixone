@@ -423,7 +423,7 @@ UT_PARALLEL ?= 1
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
 # serial while a developer's `make -jN` remains parallel.
 NATIVE_BUILD_JOBS ?= $(if $(filter-out 1,$(UT_PARALLEL)),$(UT_PARALLEL))
-ifeq ($(NATIVE_BUILD_JOBS),0)
+ifeq ($(strip $(NATIVE_BUILD_JOBS)),0)
 $(error NATIVE_BUILD_JOBS and UT_PARALLEL must be positive)
 endif
 ENABLE_UT ?= "false"
