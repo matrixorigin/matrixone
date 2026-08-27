@@ -26,8 +26,8 @@ const (
 
 // StableBytesHash generates a deterministic hash for a complete byte string.
 // The mapping is identical across processes and does not depend on optional CPU
-// instructions. It performs no allocation and hashes each logical byte exactly
-// once. Empty strings retain the legacy owner-zero contract.
+// instructions. It performs no allocation and covers the complete logical key.
+// Empty strings retain the legacy owner-zero contract.
 func StableBytesHash(data []byte) uint64 {
 	if len(data) == 0 {
 		return 0

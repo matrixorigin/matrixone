@@ -68,7 +68,7 @@ const (
 	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
 	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
 	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
-	MORPCVersion33     int64 = 33 // stable complete-key GROUP string shuffle hash
+	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
 	MORPCLatestVersion       = MORPCVersion33
 )
 

@@ -20,12 +20,9 @@ import (
 	"fmt"
 
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -93,23 +90,13 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr.held = true
 	shuffle.ctr.ending = false
 	shuffle.ctr.runtimeFilterHandled = false
-	shuffle.ctr.stableStringHash = supportsStableStringHash(proc.GetService())
+	shuffle.ctr.stableStringHash = proc.UsesCompleteStringShuffleHash()
 	if !shuffle.DrainAllBuckets {
 		shuffle.ctr.producerDone = make(chan struct{})
 		shuffle.ctr.directBatches = make(chan directHandoff)
 		shuffle.ctr.consumerDone = make(chan struct{})
 	}
 	return nil
-}
-
-func supportsStableStringHash(service string) bool {
-	runtime := moruntime.ServiceRuntime(service)
-	if runtime == nil {
-		return false
-	}
-	value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion33
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
@@ -1511,12 +1498,7 @@ func appendStringHashSels(
 	for row := range col {
 		regIndex := uint64(0)
 		if !withNull || !vec.IsNull(uint64(row)) {
-			value := col[row].GetByteSlice(area)
-			if ap.ctr.stableStringHash {
-				regIndex = hashtable.StableBytesHash(value) % bucketNum
-			} else {
-				regIndex = plan2.SimpleCharHashToRange(value, bucketNum)
-			}
+			regIndex = stringHashToRange(ap, col[row].GetByteSlice(area), bucketNum)
 		}
 		sels[regIndex] = append(sels[regIndex], int32(row))
 	}

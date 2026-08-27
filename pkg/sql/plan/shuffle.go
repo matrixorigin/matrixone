@@ -100,8 +100,9 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 }
 
 // StableCharHashToRange maps a complete logical key identically across
-// processes and CPU feature sets. Distributed execution may use it only after
-// every CN supports MORPCVersion33.
+// processes and CPU feature sets. MORPCVersion33 freezes this mapping for one
+// execution, and its remote Shuffle wire marker makes older CNs fail before
+// execution instead of silently choosing a different owner.
 func StableCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	if len(bytes) == 0 {
 		return 0

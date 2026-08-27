@@ -31,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -1062,6 +1064,16 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 
 	proc := testutil.NewProcess(t)
+	serviceRuntime := runtime.ServiceRuntime(proc.GetService())
+	originalProtocolVersion, hadProtocolVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocolVersion {
+			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, originalProtocolVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
 	c := NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
 	defer func() {
 		c.SetIsPrepare(false)
@@ -1069,37 +1081,48 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	}()
 	proc.Base.TxnOperator = txnOperator
 	c.capturePlanSnapshot()
+	c.captureStringShuffleHashAlgorithm()
+	require.Equal(t, process.StringShuffleHashComplete, proc.StringShuffleHashAlgorithm())
 
 	child := proc.NewNoContextChildProc(0)
 	got, ok := child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, currentSnapshot, got)
+	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
 
 	// Prepared execution reuses the same compiled-plan generation. Applying the
 	// binding to a newer transaction process must not recapture its snapshot.
 	c.SetPlanGenerationReused(true)
 	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
+	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
 	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_stmt"))
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
+	// The prior execution's already-created child remains immutable until the
+	// prepared scope is explicitly reset for the next execution.
+	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
 	scope := &Scope{Proc: child}
 	require.NoError(t, scope.resetForReuse(c))
 	got, ok = child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, child.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashLegacy, child.StringShuffleHashAlgorithm())
 
 	// A data-only retry recompiles pipelines from the same logical plan. It
 	// retains the original binding even after the transaction snapshot moves.
 	retry := &Compile{proc: proc}
 	c.bindRetryPlanGeneration(retry, false)
 	retry.bindPlanSnapshotForCompile()
+	retry.bindStringShuffleHashAlgorithmForCompile()
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
 
 	// A definition-change retry rebuilds the logical plan and starts a new plan
 	// generation at the transaction's refreshed snapshot. The old prepared
@@ -1140,6 +1163,70 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 5}, got)
+}
+
+func TestStringShuffleHashCaptureIgnoresParticipantRuntimeAfterAdmission(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	const (
+		coordinatorID = "string-shuffle-v33-coordinator"
+		participantID = "string-shuffle-v32-participant"
+	)
+	coordinatorRuntime := runtime.NewRuntime(
+		metadata.ServiceType_CN, coordinatorID, zap.NewNop())
+	participantRuntime := runtime.NewRuntime(
+		metadata.ServiceType_CN, participantID, zap.NewNop())
+	runtime.SetupServiceBasedRuntime(coordinatorID, coordinatorRuntime)
+	runtime.SetupServiceBasedRuntime(participantID, participantRuntime)
+	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
+	participantRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+
+	coordinatorProc := testutil.NewProcess(t)
+	participantProc := testutil.NewProcess(t)
+	defer coordinatorProc.Free()
+	defer participantProc.Free()
+	coordinatorLock := mock_lock.NewMockLockService(ctrl)
+	participantLock := mock_lock.NewMockLockService(ctrl)
+	coordinatorLock.EXPECT().GetConfig().Return(
+		lockservice.Config{ServiceID: coordinatorID}).AnyTimes()
+	participantLock.EXPECT().GetConfig().Return(
+		lockservice.Config{ServiceID: participantID}).AnyTimes()
+	coordinatorProc.Base.LockService = coordinatorLock
+	participantProc.Base.LockService = participantLock
+
+	compile := &Compile{proc: coordinatorProc}
+	compile.captureStringShuffleHashAlgorithm()
+	require.Equal(t, process.StringShuffleHashComplete,
+		coordinatorProc.StringShuffleHashAlgorithm())
+	require.False(t, supportsStableStringShuffleHash(participantProc.GetService()))
+
+	// Model the ProcessInfo decoder's copy of the coordinator's exact selection
+	// (its codec round trip is covered separately). A new participant must
+	// consume that value instead of consulting its v32 local gate during Prepare
+	// or remote-pipeline reconstruction.
+	participantProc.CopyStringShuffleHashAlgorithmFrom(coordinatorProc)
+	require.Equal(t, process.StringShuffleHashComplete,
+		participantProc.StringShuffleHashAlgorithm())
+	arg := shuffle.NewArgument()
+	defer arg.Release()
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	_, instruction, err := convertToPipelineInstruction(
+		arg, participantProc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.ShuffleStable), instruction.Op)
+
+	// A rollout gate change applies only to the next execution. It cannot alter
+	// either process already admitted into this one.
+	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	require.Equal(t, process.StringShuffleHashComplete,
+		coordinatorProc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete,
+		participantProc.StringShuffleHashAlgorithm())
+	next := &Compile{proc: coordinatorProc}
+	next.captureStringShuffleHashAlgorithm()
+	require.Equal(t, process.StringShuffleHashLegacy,
+		coordinatorProc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete,
+		participantProc.StringShuffleHashAlgorithm())
 }
 
 func TestFrozenResultMetadataRejectsIncompatibleDefinitionRetry(t *testing.T) {

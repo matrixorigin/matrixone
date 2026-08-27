@@ -113,6 +113,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 		Session: proc.Session,
 	}
 	child.CopyPlanSnapshotFrom(proc)
+	child.CopyStringShuffleHashAlgorithmFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -131,6 +132,7 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 		Session: proc.Session,
 	}
 	child.CopyPlanSnapshotFrom(proc)
+	child.CopyStringShuffleHashAlgorithmFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)

@@ -472,6 +472,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	ctx.scope = s
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -612,6 +613,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
+			t.ShuffleType == int32(plan.ShuffleType_Hash) {
+			// This appended wire opcode is deliberately unknown to pre-v33
+			// receivers, which then fail before execution instead of silently
+			// rebuilding a legacy-hash Shuffle.
+			in.Op = int32(vm.ShuffleStable)
+		}
 		in.Shuffle = &pipeline.Shuffle{}
 		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
 		in.Shuffle.ShuffleType = t.ShuffleType
@@ -1152,8 +1160,31 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op = arg
-	case vm.Shuffle:
+	case vm.Shuffle, vm.ShuffleStable:
 		t := opr.GetShuffle()
+		wireAlgorithm := process.StringShuffleHashLegacy
+		if vm.OpType(opr.Op) == vm.ShuffleStable {
+			wireAlgorithm = process.StringShuffleHashComplete
+		}
+		if wireAlgorithm == process.StringShuffleHashComplete &&
+			t.ShuffleType != int32(plan.ShuffleType_Hash) {
+			return nil, moerr.NewInvalidStateNoCtx(
+				"complete string shuffle hash marker requires hash shuffle")
+		}
+		processAlgorithm := process.StringShuffleHashLegacy
+		var proc *process.Process
+		if ctx != nil && ctx.scope != nil {
+			proc = ctx.scope.Proc
+		}
+		if proc != nil {
+			processAlgorithm = proc.StringShuffleHashAlgorithm()
+		}
+		if proc != nil && t.ShuffleType == int32(plan.ShuffleType_Hash) &&
+			processAlgorithm != wireAlgorithm {
+			return nil, moerr.NewInvalidStateNoCtxf(
+				"string shuffle hash algorithm mismatch: pipeline=%d process=%d",
+				wireAlgorithm, processAlgorithm)
+		}
 		arg := shuffle.NewArgument()
 		arg.ShuffleColIdx = t.ShuffleColIdx
 		arg.ShuffleType = t.ShuffleType

@@ -23,11 +23,9 @@ import (
 	"testing"
 	"time"
 
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -742,37 +740,83 @@ func TestShuffleResetAndFreeReleaseRuntimeState(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestStableStringHashProtocolGateAndRollback(t *testing.T) {
-	const service = ""
-	runtime := moruntime.ServiceRuntime(service)
-	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
-	require.False(t, supportsStableStringHash(service))
+func TestStableStringHashUsesFrozenExecutionContract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	arg := NewArgument()
 	defer arg.Release()
 	arg.BucketNum = 2
+
+	// An absent field from an older coordinator is legacy by construction.
 	require.NoError(t, arg.Prepare(proc))
 	require.False(t, arg.ctr.stableStringHash)
 	arg.Reset(proc, false, nil)
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
-	require.True(t, supportsStableStringHash(service))
+	// A new execution can select the complete-key mapping explicitly.
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
 	require.NoError(t, arg.Prepare(proc))
 	require.True(t, arg.ctr.stableStringHash)
 	arg.Reset(proc, false, nil)
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
-	require.False(t, supportsStableStringHash(service), "rollback must restore legacy owner routing")
+	// Pipelines already created for that execution keep its immutable value if
+	// the coordinator admits the next execution under a rollback gate.
+	frozenChild := proc.NewNoContextChildProc(0)
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	require.NoError(t, arg.Prepare(frozenChild))
+	require.True(t, arg.ctr.stableStringHash)
+	arg.Reset(frozenChild, false, nil)
+
+	nextChild := proc.NewNoContextChildProc(0)
+	require.NoError(t, arg.Prepare(nextChild))
+	require.False(t, arg.ctr.stableStringHash)
+	arg.Reset(nextChild, false, nil)
+}
+
+func TestEqualStringKeysKeepOneOwnerAcrossCoordinatorAndRemoteProcesses(t *testing.T) {
+	coordinatorProc := testutil.NewProcess(t)
+	remoteProc := testutil.NewProcess(t)
+	defer coordinatorProc.Free()
+	defer remoteProc.Free()
+	coordinatorProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+	remoteProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+
+	coordinatorShuffle := NewArgument()
+	remoteShuffle := NewArgument()
+	defer func() {
+		coordinatorShuffle.Reset(coordinatorProc, false, nil)
+		coordinatorShuffle.Release()
+	}()
+	defer func() {
+		remoteShuffle.Reset(remoteProc, false, nil)
+		remoteShuffle.Release()
+	}()
+	coordinatorShuffle.BucketNum = 16
+	remoteShuffle.BucketNum = 16
+	require.NoError(t, coordinatorShuffle.Prepare(coordinatorProc))
+	require.NoError(t, remoteShuffle.Prepare(remoteProc))
+
+	// Find a deterministic counterexample for which changing algorithms would
+	// split one equal key across two owners.
+	var key []byte
+	for i := 0; i < 1024; i++ {
+		candidate := []byte(fmt.Sprintf("shared-prefix/%08d/shared-suffix", i))
+		if plan2.StableCharHashToRange(candidate, 16) !=
+			plan2.SimpleCharHashToRange(candidate, 16) {
+			key = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, key)
+
+	// A rollout rollback after Prepare affects only the next execution. Both
+	// running processes retain the complete-key contract carried on Process.
+	coordinatorProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	remoteProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	coordinatorOwner := stringHashToRange(coordinatorShuffle, key, 16)
+	remoteOwner := stringHashToRange(remoteShuffle, key, 16)
+	require.Equal(t, coordinatorOwner, remoteOwner)
+	require.Equal(t, plan2.StableCharHashToRange(key, 16), coordinatorOwner)
+	require.NotEqual(t, plan2.SimpleCharHashToRange(key, 16), coordinatorOwner)
 }
 
 func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
@@ -831,7 +875,7 @@ func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
 			name   string
 			stable bool
 		}{
-			{name: "v31-sampled", stable: false},
+			{name: "v32-sampled", stable: false},
 			{name: "v33-complete", stable: true},
 		} {
 			arg := &Shuffle{}
