@@ -201,6 +201,51 @@ func (s *Skiplist) Arena() *Arena { return s.arena }
 // Size returns the number of bytes that have allocated from the arena.
 func (s *Skiplist) Size() uint32 { return s.arena.Size() }
 
+// GrowArena relocates the skiplist into an independent, larger backing buffer
+// without rebuilding its nodes. Every internal link is an arena-relative
+// offset; only the arena plus the external head and tail pointers need to be
+// rebound.
+//
+// The caller must have exclusive access to the skiplist and must not retain an
+// iterator, Inserter, or Arena handle across this call. A failed arena allocation
+// can advance Arena.Size past the old backing buffer; a list in that state cannot
+// be relocated this way because the last valid allocation boundary is no longer
+// available.
+func (s *Skiplist) GrowArena(buf []byte) error {
+	if s == nil || s.arena == nil || s.head == nil || s.tail == nil {
+		return moerr.NewInternalErrorNoCtx("cannot grow an uninitialized skiplist")
+	}
+	if len(buf) > maxArenaSize {
+		return moerr.NewInvalidInputNoCtxf(
+			"skiplist arena size %d exceeds maximum %d", len(buf), maxArenaSize)
+	}
+	oldArena := s.arena
+	if len(buf) <= len(oldArena.buf) {
+		return ErrArenaFull
+	}
+	oldStart := uintptr(unsafe.Pointer(unsafe.SliceData(oldArena.buf)))
+	newStart := uintptr(unsafe.Pointer(unsafe.SliceData(buf)))
+	overlaps := oldStart <= newStart && newStart-oldStart < uintptr(len(oldArena.buf)) ||
+		newStart < oldStart && oldStart-newStart < uintptr(len(buf))
+	if overlaps {
+		return moerr.NewInvalidInputNoCtx("skiplist arena buffers overlap")
+	}
+	used := oldArena.n.Load()
+	if used > uint64(len(oldArena.buf)) || used > uint64(len(buf)) {
+		return ErrArenaFull
+	}
+	headOffset := oldArena.getPointerOffset(unsafe.Pointer(s.head))
+	tailOffset := oldArena.getPointerOffset(unsafe.Pointer(s.tail))
+	copy(buf[:used], oldArena.buf[:used])
+
+	newArena := NewArena(buf)
+	newArena.n.Store(used)
+	s.arena = newArena
+	s.head = (*node)(newArena.getPointer(headOffset))
+	s.tail = (*node)(newArena.getPointer(tailOffset))
+	return nil
+}
+
 // Add adds a new key if it does not yet exist. If the key already exists, then
 // Add returns ErrRecordExists. If there isn't enough room in the arena, then
 // Add returns ErrArenaFull.

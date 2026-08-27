@@ -4662,11 +4662,18 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
 
-		// TRUNCATE has always been a silent no-op for external tables; keep that
-		// for read-only ones, but a writable external table holds INSERTed data
-		// the user would expect TRUNCATE to remove — reject rather than report
-		// success while the stage files survive.
+		// TRUNCATE has historically been a silent no-op for generic read-only
+		// external tables. MongoDB mappings, however, have an explicit read-only
+		// DML contract, so fail closed with the same stable error as other direct
+		// mutations. Keep the existing behavior for other generic mappings.
 		if tableDef.TableType == catalog.SystemExternalRel {
+			isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
+			if err != nil {
+				return nil, err
+			}
+			if isMongoDB {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+			}
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
 				return nil, err
