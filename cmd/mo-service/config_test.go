@@ -419,6 +419,19 @@ func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
 			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
 			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
 			require.NoError(t, validator.call(cfg))
+
+			// Catalog authentication is unreachable when user checks are skipped,
+			// so its connection-timeout budget must not reject startup.
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+			cfg.CN.Frontend.SkipCheckUser = true
+			require.NoError(t, validator.call(cfg))
+
+			// Skipping authentication does not bypass the general clock contract.
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "max-clock-offset must be positive")
 		})
 	}
 }

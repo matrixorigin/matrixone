@@ -316,6 +316,12 @@ func (c *Config) validateAuthenticationClockBudget() error {
 		return nil
 	}
 	c.CN.Frontend.SetDefaultValues()
+	// skipCheckUser bypasses catalog authentication, so no authentication
+	// freshness fence can consume the connection deadline. General clock
+	// validation above remains mandatory for every service mode.
+	if c.CN.Frontend.SkipCheckUser {
+		return nil
+	}
 	return config.ValidateAuthenticationFreshnessBudget(
 		c.Clock.MaxClockOffset.Duration,
 		c.CN.Frontend.ConnectTimeout.Duration,

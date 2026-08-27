@@ -24,9 +24,10 @@ read by `AuthenticateUser`.
 Authentication must therefore opt out of sacrificed freshness. Immediately
 before its background transaction is created, it establishes a session minimum
 snapshot at a timestamp strictly beyond the local HLC's uncertainty upper
-bound. Existing transaction creation then waits for the local logtail to reach
-that bound. All authentication reads remain in one transaction and therefore
-observe one complete catalog generation.
+bound and waits for the local logtail to reach it. The authentication transaction
+then inherits that same minimum and confirms it without holding an admission
+slot during the uncertainty wait. All authentication reads remain in one
+transaction and therefore observe one complete catalog generation.
 
 ## 2. Scope
 
@@ -74,8 +75,9 @@ authorization mutation commits and returns
 1. **Freshness:** before creating a normal user's authentication transaction,
    the session minimum snapshot is advanced to a fence strictly greater than
    the HLC uncertainty upper bound captured for that login.
-2. **Local application:** transaction creation may proceed only after the CN's
-   timestamp waiter reports that logtail through the fence has been applied.
+2. **Local application:** the authentication transaction may be created only
+   after the CN's timestamp waiter reports that logtail through the fence has
+   been applied.
 3. **Single generation:** every catalog read used to accept or reject one login
    uses the same transaction snapshot. A concurrent security mutation belongs
    either before or after that snapshot; authentication never combines both
@@ -103,13 +105,19 @@ Add a small frontend helper that:
 2. captures the clock's uncertainty upper bound;
 3. constructs the smallest physical timestamp strictly greater than every HLC
    timestamp at that upper-bound physical time;
-4. advances `Session.lastCommitTS` through the existing monotonic update path.
+4. advances `Session.lastCommitTS` through the existing monotonic update path;
+5. asks the transaction client to wait for local logtail through the effective
+   session minimum before transaction admission.
 
 `AuthenticateUser` calls the helper after the special-user bypass and before
-constructing its background executor. The background session already inherits
-the upstream session's minimum timestamp. `TxnClient.New` already passes that
-minimum to `TimestampWaiter.GetTimestamp`, which waits for local logtail and
-returns a snapshot after the applied timestamp.
+constructing its background executor. `TxnClient.WaitLogTailAppliedAt` owns the
+pre-admission wait and rejects a missing or regressing applied timestamp. The
+background session then inherits the upstream session's minimum timestamp.
+`TxnClient.New` rechecks that minimum through the same monotonic timestamp
+waiter. In the default sacrificing-freshness mode the fence check is therefore
+immediate while preserving the transaction snapshot contract. The non-default
+freshness-preserving mode retains its existing wait for the later of the current
+clock and the caller minimum.
 
 The configured `max-clock-offset` is the uncertainty bound even when
 `enable-check-clock-offset` is false. The boolean controls only active local
@@ -134,10 +142,10 @@ Authentication also marks its background transaction creation as
 request-cancellable. The transaction handler continues to use its long-lived
 session context for ordinary statements, but the authentication call to
 `TxnClient.New` derives its context only from the handshake request. The
-handshake deadline is the single timeout owner of a blocked timestamp wait;
-`createTxnOpTimeout` remains the owner for ordinary transaction creation but
-must not silently shorten a connection budget already validated for strict
-authentication freshness.
+handshake deadline is the single timeout owner of both the pre-admission
+timestamp wait and any later admission wait; `createTxnOpTimeout` remains the
+owner for ordinary transaction creation but must not silently shorten a
+connection budget already validated for strict authentication freshness.
 
 The configuration budget follows the complete clock geometry. Let `O` be the
 configured pairwise `max-clock-offset`. Authentication captures a fence at
@@ -199,8 +207,10 @@ correctness under the configured external NTP/PTP assumption.
 ## 7. Failure, Restart, and Compatibility Semantics
 
 - The caller's authentication context is the deadline and cancellation owner
-  of transaction creation and its timestamp wait. The existing transaction
-  client failure path aborts the unpublished operator and removes the waiter.
+  of the pre-admission timestamp wait and transaction creation. A failed
+  pre-admission wait creates no operator; the timestamp waiter removes its own
+  entry. A later creation failure uses the existing transaction-client abort
+  path for the unpublished operator.
 - A lagging but healthy CN waits and then authenticates from the complete
   snapshot. A CN whose logtail cannot reach the fence rejects the login rather
   than authorizing stale state.
@@ -219,13 +229,16 @@ correctness under the configured external NTP/PTP assumption.
   negative value is rejected during startup. There is no wire or persisted-data
   compatibility impact, but connection-latency dashboards can show the newly
   enforced uncertainty wait after rollout.
-- A CN rejects startup when `cn.frontend.connectTimeout` is not strictly greater
-  than the mathematically necessary pairwise-skew fence above. This does not
-  certify an operational latency budget; the request still fails closed if
-  runtime logtail or network progress consumes the deadline. Duration
-  arithmetic is checked before multiplication/addition. An extreme offset that
-  would overflow the clock budget fails startup instead of wrapping into an
-  accepted negative or small timeout.
+- A CN with catalog authentication enabled rejects startup when
+  `cn.frontend.connectTimeout` is not strictly greater than the mathematically
+  necessary pairwise-skew fence above. `skipCheckUser=true` makes the fence
+  unreachable and therefore bypasses only this authentication-specific deadline
+  check; general clock validation remains mandatory. Passing the budget does not
+  certify an operational latency guarantee: the request still fails closed if
+  runtime logtail or network progress consumes the deadline. Duration arithmetic
+  is checked before multiplication/addition. An extreme offset that would
+  overflow the clock budget fails startup instead of wrapping into an accepted
+  negative or small timeout.
 
 ## 8. Performance Budget
 
@@ -236,13 +249,16 @@ correctness under the configured external NTP/PTP assumption.
   assignment with one timestamp comparison so its documented caller-minimum
   contract is monotonic; the default transaction hot path is unchanged.
 - Each normal login adds one local HLC read and reuses the existing transaction
-  timestamp waiter; it adds no cluster RPC, goroutine, or per-login collection.
+  timestamp waiter before opening its authentication transaction; it adds no
+  cluster RPC, goroutine, or new per-login collection.
 - A healthy synchronized deployment normally adds approximately the configured
   uncertainty interval (500ms by default) to normal-user connection setup. It
   can be shorter when the applied logtail watermark is already ahead and longer
   when logtail is delayed; cancellation and the existing timeouts bound broken
   paths. The cost is intentionally isolated to connection establishment, and
-  connection pooling amortizes it for TP workloads.
+  connection pooling amortizes it for TP workloads. The wait occurs before
+  transaction admission, so the uncertainty interval does not occupy a
+  `max-active` user-transaction slot.
 - Active clock monitoring has no per-login branch. Disabling it saves only the
   monitor work and does not trade away the authentication correctness bound.
 - Removing the nested `createTxnOpTimeout` from authentication does not extend a
@@ -250,6 +266,10 @@ correctness under the configured external NTP/PTP assumption.
   configured deadline. Ordinary transaction creation retains the existing
   timeout path. The authentication path replaces one timer context with a
   cheaper cancel-only child context.
+- The built-in timestamp waiter observes transaction-client closure directly
+  during the pre-admission wait, avoiding a derived context and
+  `context.AfterFunc` allocation per login. The public transaction-client API
+  retains its derived-context fallback for legacy waiter implementations.
 - Retaining the bound also gives TN commit-deadline validation and the
   lockservice orphan-recovery fence their configured skew tolerance. The latter
   may add the bound to ambiguous-commit recovery, which is an unhappy path; at
@@ -265,11 +285,13 @@ correctness under the configured external NTP/PTP assumption.
 | Fence uses the HLC uncertainty upper bound and dominates its logical range | focused frontend unit test with a deterministic clock |
 | Disabling active clock monitoring retains the configured uncertainty bound in process and embedded launchers | focused clock and launcher-config unit tests |
 | A handshake budget at or below the necessary pairwise clock fence fails during CN configuration, while the first representable value above it is accepted; overflow fails closed | shared config model plus process and embedded config unit tests |
+| `skipCheckUser=true` bypasses only the unreachable authentication deadline check while general clock validation remains active | process and embedded config unit tests through both validation entry points |
 | Existing larger session minimum is never lowered | focused frontend unit test |
-| Missing runtime/clock, invalid offset, and timestamp overflow fail closed | focused frontend unit tests |
-| Authentication installs the fence before background transaction creation | focused frontend unit test at the executor seam |
+| Missing runtime/clock/transaction client, invalid offset, timestamp overflow, wait failure, and a returned watermark below the fence fail closed | focused frontend unit tests |
+| Authentication applies the fence before background transaction creation and therefore before user-transaction admission | focused frontend unit test at the executor seam |
 | Both transaction freshness modes preserve a later caller minimum | focused txn-client unit test |
-| Authentication transaction creation is owned only by the request deadline, ignores a shorter ordinary create timeout, waits for the supplied minimum, and exits on request cancellation | deterministic frontend deadline/barrier test plus existing txn-client timestamp-waiter tests |
+| Authentication freshness waiting and transaction creation are owned only by the request deadline, ignore a shorter ordinary create timeout, and exit on request cancellation | deterministic frontend deadline/barrier test plus existing txn-client timestamp-waiter tests |
+| Transaction-client close terminates both the built-in close-aware waiter and a legacy waiter without changing public errors | deterministic txn-client barrier test under normal and race modes |
 | Revoke fallback and immediate regrant are visible to new implicit/explicit sessions | existing `revoked_default_role_login` BVT on multi-CN topology |
 | Public authentication behavior remains unchanged on one CN | repeated existing BVT and frontend owning-package tests |
 

@@ -2062,6 +2062,33 @@ func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
 	return nil
 }
 
+// prepareAuthenticationSnapshot installs the authentication fence and waits
+// for the local logtail before creating the user transaction. Waiting outside
+// TxnClient.New keeps the uncertainty interval from consuming a user-transaction
+// admission slot. The transaction still inherits the same session minimum, so
+// the default sacrificing-freshness path confirms it immediately and preserves
+// the snapshot contract. Freshness-preserving mode retains its existing wait for
+// the later of the current clock and this minimum.
+func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
+	if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
+	}
+	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+	if err != nil {
+		return err
+	}
+	if applied.Less(minimum) {
+		return moerr.NewInternalError(ctx, "authentication snapshot did not reach the required timestamp")
+	}
+	return nil
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2108,7 +2135,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
-	if err = ses.advanceAuthenticationSnapshot(ctx); err != nil {
+	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
 		return nil, err
 	}
 

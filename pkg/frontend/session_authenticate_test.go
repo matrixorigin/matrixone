@@ -25,31 +25,38 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
+func newAuthenticationSnapshotTestSession(
+	t *testing.T,
+	physicalTime int64,
+	maxOffset time.Duration,
+) *Session {
+	t.Helper()
+	service := "auth-snapshot-" + t.Name()
+	rt := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		service,
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(
+			func() int64 { return physicalTime },
+			maxOffset,
+		)),
+	)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	InitServerLevelVars(service)
+	return &Session{feSessionImpl: feSessionImpl{service: service}}
+}
+
 func TestAdvanceAuthenticationSnapshot(t *testing.T) {
-	newSessionWithClock := func(t *testing.T, physicalTime int64, maxOffset time.Duration) *Session {
-		t.Helper()
-		service := "auth-snapshot-" + t.Name()
-		rt := moruntime.NewRuntime(
-			metadata.ServiceType_CN,
-			service,
-			nil,
-			moruntime.WithClock(clock.NewHLCClock(
-				func() int64 { return physicalTime },
-				maxOffset,
-			)),
-		)
-		moruntime.SetupServiceBasedRuntime(service, rt)
-		return &Session{feSessionImpl: feSessionImpl{service: service}}
-	}
 
 	t.Run("uses uncertainty upper bound", func(t *testing.T) {
-		ses := newSessionWithClock(t, 100, 20*time.Nanosecond)
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
 		require.NoError(t, ses.advanceAuthenticationSnapshot(t.Context()))
 		require.Equal(t,
 			timestamp.Timestamp{PhysicalTime: 121},
@@ -58,7 +65,7 @@ func TestAdvanceAuthenticationSnapshot(t *testing.T) {
 	})
 
 	t.Run("does not lower existing minimum", func(t *testing.T) {
-		ses := newSessionWithClock(t, 100, 20*time.Nanosecond)
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
 		ses.lastCommitTS = timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7}
 		require.NoError(t, ses.advanceAuthenticationSnapshot(t.Context()))
 		require.Equal(t,
@@ -89,7 +96,7 @@ func TestAdvanceAuthenticationSnapshot(t *testing.T) {
 	})
 
 	t.Run("negative clock offset fails closed", func(t *testing.T) {
-		ses := newSessionWithClock(t, 100, -time.Nanosecond)
+		ses := newAuthenticationSnapshotTestSession(t, 100, -time.Nanosecond)
 		require.ErrorContains(t,
 			ses.advanceAuthenticationSnapshot(t.Context()),
 			"negative transaction clock offset",
@@ -98,7 +105,7 @@ func TestAdvanceAuthenticationSnapshot(t *testing.T) {
 	})
 
 	t.Run("timestamp overflow fails closed", func(t *testing.T) {
-		ses := newSessionWithClock(t, math.MaxInt64, 0)
+		ses := newAuthenticationSnapshotTestSession(t, math.MaxInt64, 0)
 		require.ErrorContains(t,
 			ses.advanceAuthenticationSnapshot(t.Context()),
 			"timestamp overflow",
@@ -107,13 +114,113 @@ func TestAdvanceAuthenticationSnapshot(t *testing.T) {
 	})
 
 	t.Run("clock upper bound overflow fails closed", func(t *testing.T) {
-		ses := newSessionWithClock(t, math.MaxInt64, time.Nanosecond)
+		ses := newAuthenticationSnapshotTestSession(t, math.MaxInt64, time.Nanosecond)
 		require.ErrorContains(t,
 			ses.advanceAuthenticationSnapshot(t.Context()),
 			"timestamp overflow",
 		)
 		require.True(t, ses.getLastCommitTS().IsEmpty())
 	})
+}
+
+func TestPrepareAuthenticationSnapshotFailsClosed(t *testing.T) {
+	t.Run("missing parameter unit", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		require.ErrorContains(t,
+			ses.prepareAuthenticationSnapshot(t.Context()),
+			"missing transaction client",
+		)
+	})
+
+	t.Run("missing transaction client", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		setPu(ses.GetService(), &mo_config.ParameterUnit{})
+		require.ErrorContains(t,
+			ses.prepareAuthenticationSnapshot(t.Context()),
+			"missing transaction client",
+		)
+	})
+
+	t.Run("timestamp wait failure", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("logtail unavailable")
+		txnClient.EXPECT().WaitLogTailAppliedAt(
+			gomock.Any(),
+			timestamp.Timestamp{PhysicalTime: 121},
+		).Return(timestamp.Timestamp{}, wantErr)
+		setPu(ses.GetService(), &mo_config.ParameterUnit{TxnClient: txnClient})
+
+		require.ErrorIs(t, ses.prepareAuthenticationSnapshot(t.Context()), wantErr)
+	})
+
+	t.Run("timestamp waiter cannot claim success below fence", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().WaitLogTailAppliedAt(
+			gomock.Any(),
+			timestamp.Timestamp{PhysicalTime: 121},
+		).Return(timestamp.Timestamp{PhysicalTime: 120}, nil)
+		setPu(ses.GetService(), &mo_config.ParameterUnit{TxnClient: txnClient})
+
+		require.ErrorContains(t,
+			ses.prepareAuthenticationSnapshot(t.Context()),
+			"did not reach the required timestamp",
+		)
+	})
+}
+
+func TestPrepareAuthenticationSnapshotWaitsForEffectiveSessionMinimum(t *testing.T) {
+	ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+	wantMinimum := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7}
+	ses.lastCommitTS = wantMinimum
+
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), wantMinimum).
+		Return(wantMinimum.Next(), nil)
+	setPu(ses.GetService(), &mo_config.ParameterUnit{TxnClient: txnClient})
+
+	require.NoError(t, ses.prepareAuthenticationSnapshot(t.Context()))
+	require.Equal(t, wantMinimum, ses.getLastCommitTS())
+}
+
+func TestPrepareAuthenticationSnapshotHonorsRequestCancellation(t *testing.T) {
+	ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	entered := make(chan struct{})
+	txnClient.EXPECT().WaitLogTailAppliedAt(
+		gomock.Any(),
+		timestamp.Timestamp{PhysicalTime: 121},
+	).DoAndReturn(func(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
+		close(entered)
+		<-ctx.Done()
+		return timestamp.Timestamp{}, ctx.Err()
+	})
+	setPu(ses.GetService(), &mo_config.ParameterUnit{TxnClient: txnClient})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	errC := make(chan error, 1)
+	go func() {
+		errC <- ses.prepareAuthenticationSnapshot(ctx)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("authentication snapshot wait did not start")
+	}
+	cancel()
+	select {
+	case err := <-errC:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("authentication snapshot wait did not stop after request cancellation")
+	}
 }
 
 func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.T) {
@@ -130,6 +237,17 @@ func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.
 		)),
 	)
 	moruntime.SetupServiceBasedRuntime(service, rt)
+	InitServerLevelVars(service)
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	wantMinimum := timestamp.Timestamp{PhysicalTime: 121}
+	waitCompleted := false
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), wantMinimum).
+		DoAndReturn(func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+			waitCompleted = true
+			return wantMinimum.Next(), nil
+		})
+	setPu(service, &mo_config.ParameterUnit{TxnClient: txnClient})
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{service: service},
@@ -148,6 +266,7 @@ func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.
 		gotCancellable bool
 	)
 	NewBackgroundExec = func(_ context.Context, upstream FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		require.True(t, waitCompleted, "freshness wait must finish before transaction admission")
 		gotMinimum = upstream.getLastCommitTS()
 		if len(opts) == 1 && opts[0] != nil {
 			gotRealUser = opts[0].fromRealUser
@@ -165,7 +284,7 @@ func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.
 		func([]byte, []byte, []byte) bool { return false },
 	)
 	require.ErrorIs(t, err, wantErr)
-	require.Equal(t, timestamp.Timestamp{PhysicalTime: 121}, gotMinimum)
+	require.Equal(t, wantMinimum, gotMinimum)
 	require.True(t, gotRealUser)
 	require.True(t, gotCancellable)
 }

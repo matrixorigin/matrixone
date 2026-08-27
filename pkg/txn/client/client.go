@@ -869,9 +869,20 @@ func (client *txnClient) WaitLogTailAppliedAt(
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}
-	ctx, cancel := client.withCloseContext(ctx)
-	defer cancel()
-	value, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+	var (
+		value timestamp.Timestamp
+		err   error
+	)
+	if waiter, ok := client.timestampWaiter.(closeAwareTimestampWaiter); ok {
+		// The built-in waiter can observe client closure directly. Avoid a
+		// derived context and context.AfterFunc allocation on every wait.
+		value, err = waiter.GetTimestampWithClose(ctx, ts, client.lifecycle.closedC)
+	} else {
+		// Preserve compatibility with external/legacy waiter implementations.
+		waitCtx, cancel := client.withCloseContext(ctx)
+		defer cancel()
+		value, err = client.timestampWaiter.GetTimestamp(waitCtx, ts)
+	}
 	if err != nil && client.isClosed() {
 		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
 	}
