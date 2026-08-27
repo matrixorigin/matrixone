@@ -269,8 +269,8 @@ func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 
 // ResolveViewDependencyAccount returns the account whose catalog namespace was
 // used to resolve a View dependency. Keep the override order aligned with
-// getRelation: snapshot tenant, subscription publisher, then relations that
-// are always read from the system account.
+// getRelation: snapshot tenant, cluster-table name override, subscription
+// publisher, then relations that are always read from the system account.
 func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
 	obj *plan2.ObjectRef,
 	tableDef *plan2.TableDef,
@@ -291,9 +291,6 @@ func (tcc *TxnCompilerContext) resolvePhysicalObjectAccount(
 	if snapshot != nil && snapshot.Tenant != nil {
 		accountID = snapshot.Tenant.TenantID
 	}
-	if obj != nil && obj.PubInfo != nil {
-		accountID = uint32(obj.PubInfo.TenantId)
-	}
 
 	var dbName, tableName string
 	if obj != nil {
@@ -305,8 +302,15 @@ func (tcc *TxnCompilerContext) resolvePhysicalObjectAccount(
 	if tableName == "" && tableDef != nil {
 		tableName = tableDef.Name
 	}
-	if (tableDef != nil && tableDef.TableType == catalog.SystemClusterRel) ||
-		isClusterTable(dbName, tableName) || ShouldSwitchToSysAccount(dbName, tableName) {
+	if isClusterTable(dbName, tableName) {
+		accountID = sysAccountID
+	}
+	// getRelation applies publication ownership after the generic cluster-table
+	// name rule, so the publisher remains the physical owner in that overlap.
+	if obj != nil && obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	}
+	if ShouldSwitchToSysAccount(dbName, tableName) {
 		accountID = sysAccountID
 	}
 	return accountID

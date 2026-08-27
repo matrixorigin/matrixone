@@ -116,8 +116,11 @@ func TestResolveViewDependencyAccount(t *testing.T) {
 			PubInfo: &pbplan.PubInfo{TenantId: 9}},
 			snapshot: &pbplan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 8}}, want: 9},
 		{name: "cluster table", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_CATALOG, ObjName: "cluster_table"}, want: 0},
-		{name: "cluster relation kind", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "cluster_table"},
-			tableDef: &pbplan.TableDef{TableType: catalog.SystemClusterRel}, want: 0},
+		{name: "relation kind alone keeps tenant context", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "cluster_table"},
+			tableDef: &pbplan.TableDef{TableType: catalog.SystemClusterRel}, want: 7},
+		{name: "publication overrides generic cluster name", obj: &pbplan.ObjectRef{
+			SchemaName: catalog.MO_CATALOG, ObjName: "cluster_table",
+			PubInfo: &pbplan.PubInfo{TenantId: 9}}, want: 9},
 		{name: "statement info", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT}, want: 0},
 		{name: "system relation overrides publisher", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM,
 			ObjName: catalog.MO_STATEMENT, PubInfo: &pbplan.PubInfo{TenantId: 9}}, want: 0},

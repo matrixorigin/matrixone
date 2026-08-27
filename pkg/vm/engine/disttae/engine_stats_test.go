@@ -92,3 +92,25 @@ func TestOptimizerStatsRefreshAdmissionIsTableScopedAndCancelable(t *testing.T) 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, releaseCanceled)
 }
+
+func TestCoordinateStatsUpdateCancellationReleasesUpdateGeneration(t *testing.T) {
+	gs := &GlobalStats{}
+	gs.initStatsRefreshAdmission()
+	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+	key := pb.StatsInfoKey{AccId: 1, TableID: 42}
+
+	release, err := gs.acquireStatsRefresh(context.Background(), key)
+	require.NoError(t, err)
+	defer release()
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	gs.coordinateStatsUpdate(pb.StatsInfoKeyWithContext{Ctx: canceled, Key: key})
+
+	gs.updatingMu.Lock()
+	record := gs.updatingMu.updating[key]
+	gs.updatingMu.Unlock()
+	require.NotNil(t, record)
+	require.False(t, record.inProgress,
+		"cancellation while waiting for refresh admission must close the update generation")
+}

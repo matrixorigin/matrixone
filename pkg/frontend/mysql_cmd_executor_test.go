@@ -5006,6 +5006,40 @@ func TestCompilerContextRecordsTheStatsVersionActuallyRead(t *testing.T) {
 		"a plan that read both sides of publication must retain its stale dependency and be rejected")
 }
 
+func TestSessionStatsCacheDoesNotAliasSameTableIDAcrossAccounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+
+	const tableID = uint64(42)
+	tenantKey := optimizerStatsTableKey{accountID: 7, tableID: tableID}
+	systemKey := optimizerStatsTableKey{accountID: catalog.System_Account, tableID: tableID}
+	tenantStats := plan.NewStatsInfo()
+	tenantStats.TableCnt = 7
+	systemStats := plan.NewStatsInfo()
+	systemStats.TableCnt = 70
+
+	tenantVersion := currentOptimizerStatsVersion(ses.GetService(), tenantKey)
+	require.True(t, ses.cacheStatsIfCurrent(tenantKey, tenantVersion, tenantStats))
+	cache, _ := ses.getStatsCacheWithVersion(tenantKey)
+	wrapper := cache.Get(tableID)
+	require.Same(t, tenantStats, wrapper.GetStats())
+
+	cache, systemVersion := ses.getStatsCacheWithVersion(systemKey)
+	wrapper = cache.Get(tableID)
+	require.False(t, wrapper.Exists(),
+		"the physical owner is part of the cache identity")
+	require.True(t, ses.cacheStatsIfCurrent(systemKey, systemVersion, systemStats))
+	wrapper = cache.Get(tableID)
+	require.Same(t, systemStats, wrapper.GetStats())
+
+	cache, _ = ses.getStatsCacheWithVersion(tenantKey)
+	wrapper = cache.Get(tableID)
+	require.False(t, wrapper.Exists(),
+		"switching back must not expose statistics from the system account")
+}
+
 func TestOptimizerStatsVersionsCompactWithoutRevalidatingOldEntries(t *testing.T) {
 	vars := &ServerLevelVariables{
 		optimizerStatsVersions: make(map[optimizerStatsTableKey]uint64),
@@ -5131,6 +5165,21 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 	wrapper := cache.Get(tableID)
 	require.Same(t, oldStats, wrapper.GetStats())
 	require.NotNil(t, ses.getCachedPlan("select url from events"))
+
+	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
+	admission := getOptimizerStatsVars(ses.GetService()).
+		optimizerStatsPublish[optimizerStatsPublisherStripe(tableKey)]
+	select {
+	case admission <- struct{}{}:
+		<-admission
+	default:
+		t.Fatal("a failed refresh leaked same-table publication admission")
+	}
+	freshStats := plan.NewStatsInfo()
+	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key,
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+			return freshStats, nil
+		})), "a failed refresh must release same-table publication admission")
 }
 
 func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
