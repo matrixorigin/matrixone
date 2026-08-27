@@ -1581,6 +1581,14 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
+					// Clearing the cache is also the explicit synchronization point
+					// for externally changed role membership. Refresh it now, outside
+					// the caller's transaction snapshot, instead of allowing the next
+					// authorization check to repopulate the cache from stale state.
+					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
+					if err != nil {
+						return err
+					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {

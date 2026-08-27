@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2517,6 +2518,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -2694,6 +2696,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -2844,6 +2847,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		bh.init()
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
@@ -2900,6 +2904,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -2962,6 +2967,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3016,6 +3022,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3071,6 +3078,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		bh.init()
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db1")
@@ -3131,6 +3139,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3199,6 +3208,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3275,6 +3285,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3351,6 +3362,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3425,6 +3437,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3478,6 +3491,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3552,6 +3566,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3638,6 +3653,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3701,6 +3717,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3771,6 +3788,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3846,6 +3864,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3904,6 +3923,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -3971,6 +3991,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4028,6 +4049,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4092,6 +4114,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4167,6 +4190,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4251,6 +4275,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
 
@@ -4326,6 +4351,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -4407,6 +4433,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -4479,6 +4506,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -4540,6 +4568,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
@@ -6298,7 +6327,9 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 				DefaultRoleID: roleID,
 			})
 
-			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			sql2result := makeSql2ExecResult2(userID, [][]interface{}{
+				{roleID, false},
+			}, nil, nil, nil, nil, nil, nil, nil)
 			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
 				PrivilegeTypeSelect: tc.tableSelect,
 			})
@@ -8058,7 +8089,15 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		var forcedPessimisticRC bool
+		bhStub := gostub.Stub(&NewBackgroundExec, func(
+			_ context.Context,
+			_ FeSession,
+			opts ...*BackgroundExecOption,
+		) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		})
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -8111,6 +8150,7 @@ func Test_doRevokeRole(t *testing.T) {
 
 		err := doRevokeRole(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
 	})
 
 	convey.Convey("revoke role from role succ (if exists = true, miss role before FROM)", t, func() {
@@ -10259,6 +10299,9 @@ func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
 		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(6))
 		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role2")
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
+		valid, cached := ses.GetPrivilegeCache().getActiveRoleGrant(tenant.GetUserID(), 6)
+		convey.So(cached, convey.ShouldBeTrue)
+		convey.So(valid, convey.ShouldBeTrue)
 
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil
@@ -12045,7 +12088,11 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 		return nil
 	}).AnyTimes()
 	bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-		return []interface{}{sql2result[currentSql]}
+		result, ok := sql2result[currentSql]
+		if !ok {
+			result = sql2result[backgroundExecTestFixtureSQL(currentSql)]
+		}
+		return []interface{}{result}
 	}).AnyTimes()
 	bh.EXPECT().GetExecStatsArray().DoAndReturn(func() statistic.StatsArray {
 		var stats statistic.StatsArray
@@ -12161,7 +12208,18 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
-	return bt.sql2err[s]
+	if err, ok := bt.sql2err[s]; ok {
+		return err
+	}
+	return bt.sql2err[backgroundExecTestFixtureSQL(s)]
+}
+
+func backgroundExecTestFixtureSQL(sql string) string {
+	if strings.HasPrefix(sql, "select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant ") &&
+		strings.HasSuffix(sql, " for update;") {
+		return strings.TrimSuffix(sql, " for update;") + ";"
+	}
+	return sql
 }
 
 func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sqlMode string) error {
@@ -12176,11 +12234,15 @@ func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from ui
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
-	if _, ok := bt.sql2result[bt.currentSql]; !ok &&
+	result, ok := bt.sql2result[bt.currentSql]
+	if !ok {
+		result, ok = bt.sql2result[backgroundExecTestFixtureSQL(bt.currentSql)]
+	}
+	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
 		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}
 	}
-	return []interface{}{bt.sql2result[bt.currentSql]}
+	return []interface{}{result}
 }
 
 func (bt *backgroundExecTest) ClearExecResultSet() {
@@ -12888,6 +12950,17 @@ func makeRowsOfMoRole(sql2result map[string]ExecResult, roleNames []string, rows
 
 func makeRowsOfMoUserGrant(sql2result map[string]ExecResult, userId int, rows [][]interface{}) {
 	sql2result[getSqlForRoleIdOfUserId(userId)] = newMrsForRoleIdOfUserId(rows)
+	for _, row := range rows {
+		if len(row) < 2 {
+			continue
+		}
+		roleID, err := strconv.ParseInt(fmt.Sprint(row[0]), 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid role id %v in mo_user_grant fixture: %v", row[0], err))
+		}
+		sql2result[getSqlForCheckUserGrant(roleID, int64(userId))] = newMrsForCheckUserGrant(
+			[][]interface{}{{roleID, int64(userId), row[1]}})
+	}
 }
 
 func makeRowsOfMoRolePrivs(sql2result map[string]ExecResult, roleIds []int, entries []privilegeEntry, rowsOfMoRolePrivs [][]interface{}) {
@@ -13137,6 +13210,193 @@ func Test_cache(t *testing.T) {
 			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
 			convey.So(ret, convey.ShouldBeFalse)
 		}
+	})
+}
+
+func TestActiveRoleGrantCacheLifecycle(t *testing.T) {
+	var nilCache *privilegeCache
+	_, cached := nilCache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+	nilCache.setActiveRoleGrant(2, 3, true)
+
+	cache := &privilegeCache{}
+
+	_, cached = cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	cache.setActiveRoleGrant(2, 3, true)
+	valid, cached := cache.getActiveRoleGrant(2, 3)
+	require.True(t, cached)
+	require.True(t, valid)
+
+	// Switching the session's active role cannot reuse the previous role's
+	// membership decision.
+	_, cached = cache.getActiveRoleGrant(2, 4)
+	require.False(t, cached)
+
+	cache.invalidate()
+	_, cached = cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	cache.setActiveRoleGrant(2, 3, false)
+	valid, cached = cache.getActiveRoleGrant(2, 3)
+	require.True(t, cached)
+	require.False(t, valid)
+}
+
+func TestActiveRoleGrantCachePublishesKeyAndValueAtomically(t *testing.T) {
+	cache := &privilegeCache{}
+	const iterations = 10_000
+
+	var writers sync.WaitGroup
+	writers.Add(2)
+	go func() {
+		defer writers.Done()
+		for range iterations {
+			cache.setActiveRoleGrant(2, 3, true)
+		}
+	}()
+	go func() {
+		defer writers.Done()
+		for range iterations {
+			cache.setActiveRoleGrant(4, 5, false)
+		}
+	}()
+
+	for range iterations {
+		if valid, cached := cache.getActiveRoleGrant(2, 3); cached {
+			require.True(t, valid)
+		}
+		if valid, cached := cache.getActiveRoleGrant(4, 5); cached {
+			require.False(t, valid)
+		}
+	}
+	writers.Wait()
+}
+
+func TestActiveRoleGrantValidationCompatibility(t *testing.T) {
+	for _, roleID := range []uint32{moAdminRoleID, publicRoleID, accountAdminRoleID} {
+		tenant := &TenantInfo{DefaultRoleID: roleID}
+		require.False(t, activeRoleGrantNeedsCheck(tenant))
+		valid, err := activeRoleGrantIsValid(context.Background(), nil, tenant)
+		require.NoError(t, err)
+		require.True(t, valid)
+	}
+
+	require.False(t, activeRoleGrantNeedsCheck(nil))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{DefaultRoleID: 3}))
+}
+
+func TestValidateActiveRoleGrantForAuthorizationDoesNotCacheCatalogErrors(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	ses := &Session{cache: &privilegeCache{}}
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "acc1",
+		User:          "alice",
+		TenantID:      1,
+		UserID:        2,
+		DefaultRole:   "reader",
+		DefaultRoleID: 3,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	catalogErr := errors.New("role grant catalog unavailable")
+	bh.sql2err[roleGrantSQL] = catalogErr
+	var forcedPessimisticRC bool
+	backgroundExecStub := gostub.Stub(&NewBackgroundExec, func(
+		_ context.Context,
+		_ FeSession,
+		opts ...*BackgroundExecOption,
+	) BackgroundExec {
+		forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+		return bh
+	})
+	defer backgroundExecStub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.False(t, valid)
+	require.ErrorIs(t, err, catalogErr)
+	require.True(t, forcedPessimisticRC)
+	_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	delete(bh.sql2err, roleGrantSQL)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(
+		[][]interface{}{{int64(3), int64(2), false}})
+	valid, _, err = validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.NoError(t, err)
+	require.True(t, valid)
+}
+
+func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	newRevokedSession := func(priv *privilege) *Session {
+		ses := &Session{cache: &privilegeCache{}, priv: priv}
+		ses.SetFromRealUser(true)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "alice",
+			TenantID:      1,
+			UserID:        2,
+			DefaultRole:   "reader",
+			DefaultRoleID: 3,
+		})
+		ses.GetPrivilegeCache().setActiveRoleGrant(2, 3, false)
+		return ses
+	}
+
+	t.Run("database ownership", func(t *testing.T) {
+		stmt := &tree.DropDatabase{Name: tree.Identifier("owned_db")}
+		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[getSqlForGetOwnerOfDatabase("owned_db")] = newMrsForOwner(
+			[][]interface{}{{int64(3)}})
+		backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer backgroundExecStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			context.Background(), ses, stmt)
+		require.False(t, ok)
+		require.Error(t, err)
+		require.Empty(t, bh.executedSQLs, "revoked role must not reach ownership fallback")
+	})
+
+	t.Run("privilege grant option", func(t *testing.T) {
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+			ObjType:    tree.OBJECT_TYPE_TABLE,
+			Level:      &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+		}
+		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+		bh := &backgroundExecTest{}
+		bh.init()
+		backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer backgroundExecStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(
+			context.Background(), ses, stmt)
+		require.False(t, ok)
+		require.NoError(t, err)
+		require.Empty(t, bh.executedSQLs, "revoked role must not reach WITH GRANT OPTION traversal")
+	})
+
+	t.Run("role switch remains available", func(t *testing.T) {
+		stmt := &tree.SetRole{}
+		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(
+			context.Background(), ses, stmt)
+		require.True(t, ok)
+		require.NoError(t, err)
 	})
 }
 

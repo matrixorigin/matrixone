@@ -1889,6 +1889,10 @@ func getSqlForCheckUserGrant(roleId, userId int64) string {
 	return fmt.Sprintf(checkUserGrantFormat, roleId, userId)
 }
 
+func getSqlForCheckUserGrantForAuthorization(roleId, userId int64) string {
+	return strings.TrimSuffix(getSqlForCheckUserGrant(roleId, userId), ";") + " for update;"
+}
+
 func getSqlForCheckUserHasRole(ctx context.Context, userName string, roleId int64) (string, error) {
 	err := inputNameIsInvalid(ctx, userName)
 	if err != nil {
@@ -2635,6 +2639,42 @@ type privilegeCache struct {
 	storeForAccount [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
 	total           atomic.Uint64
 	hit             atomic.Uint64
+
+	// The active primary role is session state, while its grant to the user is
+	// catalog state. Keep the validation in the same cache generation as the
+	// privilege entries so clear_privilege_cache rechecks both before either
+	// can authorize another statement.
+	activeRoleGrant atomic.Pointer[activeRoleGrantCacheEntry]
+}
+
+type activeRoleGrantCacheEntry struct {
+	key   uint64
+	valid bool
+}
+
+func activeRoleGrantKey(userID, roleID uint32) uint64 {
+	return uint64(userID)<<32 | uint64(roleID)
+}
+
+func (pc *privilegeCache) getActiveRoleGrant(userID, roleID uint32) (valid bool, cached bool) {
+	if pc == nil {
+		return false, false
+	}
+	entry := pc.activeRoleGrant.Load()
+	if entry == nil || entry.key != activeRoleGrantKey(userID, roleID) {
+		return false, false
+	}
+	return entry.valid, true
+}
+
+func (pc *privilegeCache) setActiveRoleGrant(userID, roleID uint32, valid bool) {
+	if pc == nil {
+		return
+	}
+	pc.activeRoleGrant.Store(&activeRoleGrantCacheEntry{
+		key:   activeRoleGrantKey(userID, roleID),
+		valid: valid,
+	})
 }
 
 // has checks the cache has privilege on a table
@@ -2767,6 +2807,7 @@ func (pc *privilegeCache) invalidate() {
 	pc.storeForView2.Clear()
 	pc.storeForView3.Clear()
 	pc.storeForDatabase2.Clear()
+	pc.activeRoleGrant.Store(nil)
 	// ratio := float64(0)
 	// if total == 0 {
 	//	ratio = 0
@@ -3660,6 +3701,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
+		ses.markActiveRoleGrantValid()
 
 		return err
 	}
@@ -5847,7 +5889,11 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	// Role membership changes must commit with the same latest-committed
+	// semantics used by active-session authorization refreshes. Otherwise an
+	// SI snapshot can make a committed REVOKE temporarily invisible even to a
+	// fresh private authorization transaction.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -7974,7 +8020,24 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	if err != nil {
 		return false, stats, err
 	}
-	if enableCache && !priv.needMatchedRole {
+
+	tenant := ses.GetTenantInfo()
+	roleGrantNeedsCheck := activeRoleGrantNeedsCheck(tenant)
+	roleGrantValid := !roleGrantNeedsCheck
+	roleGrantCached := !roleGrantNeedsCheck
+	cache := ses.GetPrivilegeCache()
+	if roleGrantNeedsCheck && enableCache && cache != nil {
+		roleGrantValid, roleGrantCached = cache.getActiveRoleGrant(
+			tenant.GetUserID(), tenant.GetDefaultRoleID())
+		if roleGrantCached && !roleGrantValid {
+			return false, stats, activeRoleGrantAuthorizationError(ctx)
+		}
+	}
+
+	// A privilege hit is usable only after the active role membership from the
+	// same cache generation has been validated. Otherwise a revoked role can
+	// keep authorizing statements solely through stale session state.
+	if roleGrantCached && enableCache && !priv.needMatchedRole {
 		yes, err = checkPrivilegeInCache(ctx, ses, priv, enableCache)
 		if err != nil {
 			return false, stats, err
@@ -7985,8 +8048,16 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		}
 	}
 
-	tenant := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	var backgroundExecOptions []*BackgroundExecOption
+	if roleGrantNeedsCheck && !roleGrantCached {
+		// Active role membership is external authorization state. Revalidate it
+		// in a private RC transaction so a user transaction opened before REVOKE
+		// cannot continue authorizing through its older catalog snapshot.
+		backgroundExecOptions = append(backgroundExecOptions, &BackgroundExecOption{
+			forcePessimisticRC: true,
+		})
+	}
+	bh := ses.GetBackgroundExec(ctx, backgroundExecOptions...)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8020,6 +8091,32 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	}()
 	if err != nil {
 		return false, stats, err
+	}
+
+	if !roleGrantCached {
+		roleGrantValid, err = activeRoleGrantIsValid(ctx, bh, tenant)
+		if err != nil {
+			return false, stats, err
+		}
+		if enableCache && cache != nil {
+			cache.setActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid)
+		}
+		if !roleGrantValid {
+			return false, stats, activeRoleGrantAuthorizationError(ctx)
+		}
+
+		// This is the first authorization in the cache generation. Reuse any
+		// compatible privilege entries only after membership has been proved.
+		if enableCache && !priv.needMatchedRole {
+			yes, err = checkPrivilegeInCache(ctx, ses, priv, enableCache)
+			if err != nil {
+				return false, stats, err
+			}
+			if yes {
+				priv.matchedRoleID = int64(tenant.GetDefaultRoleID())
+				return true, stats, nil
+			}
+		}
 	}
 
 	// step 2: The Set R2 {the roleid granted to the userid}
@@ -8147,6 +8244,100 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 	}
 	return ret, stats, err
+}
+
+func activeRoleGrantNeedsCheck(tenant *TenantInfo) bool {
+	if tenant == nil {
+		return false
+	}
+	switch tenant.GetDefaultRoleID() {
+	case moAdminRoleID, publicRoleID, accountAdminRoleID:
+		return false
+	default:
+		return true
+	}
+}
+
+func activeRoleGrantIsValid(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) (bool, error) {
+	if !activeRoleGrantNeedsCheck(tenant) {
+		return true, nil
+	}
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, getSqlForCheckUserGrantForAuthorization(
+		int64(tenant.GetDefaultRoleID()), int64(tenant.GetUserID()))); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(erArray), nil
+}
+
+func activeRoleGrantAuthorizationError(ctx context.Context) error {
+	return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+}
+
+// validateActiveRoleGrantForAuthorization covers authorization paths that use
+// the active role but do not pass through determineUserHasPrivilegeSet, such as
+// a privilege grant authorized solely by WITH GRANT OPTION.
+func validateActiveRoleGrantForAuthorization(
+	ctx context.Context,
+	ses *Session,
+) (ret bool, stats statistic.StatsArray, err error) {
+	stats.Reset()
+	tenant := ses.GetTenantInfo()
+	if !activeRoleGrantNeedsCheck(tenant) {
+		return true, stats, nil
+	}
+
+	enableCache, err := privilegeCacheIsEnabled(ctx, ses)
+	if err != nil {
+		return false, stats, err
+	}
+	cache := ses.GetPrivilegeCache()
+	if enableCache && cache != nil {
+		if valid, cached := cache.getActiveRoleGrant(
+			tenant.GetUserID(), tenant.GetDefaultRoleID()); cached {
+			return valid, stats, nil
+		}
+	}
+
+	// WITH GRANT OPTION authorization can bypass the general privilege walk,
+	// but must use the same latest-committed membership semantics.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	defer func() {
+		stats = bh.GetExecStatsArray()
+		bh.Close()
+	}()
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return false, stats, err
+	}
+
+	ret, err = activeRoleGrantIsValid(ctx, bh, tenant)
+	if err != nil {
+		return false, stats, err
+	}
+	if enableCache && cache != nil {
+		cache.setActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID(), ret)
+	}
+	return ret, stats, nil
+}
+
+func (ses *Session) markActiveRoleGrantValid() {
+	tenant := ses.GetTenantInfo()
+	if !activeRoleGrantNeedsCheck(tenant) {
+		return
+	}
+	if cache := ses.GetPrivilegeCache(); cache != nil {
+		cache.setActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID(), true)
+	}
 }
 
 func matchedActiveRoleID(priv *privilege, matchedRoleID int64, roleRoot map[int64]int64) int64 {
@@ -9912,6 +10103,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			// in the version 0.6, only the moAdmin and accountAdmin can grant the privilege.
 			if tenant.IsAdminRole() {
 				return true, temp, nil
+			}
+			valid, delta, err := validateActiveRoleGrantForAuthorization(ctx, ses)
+			temp.Add(&delta)
+			if err != nil || !valid {
+				return false, temp, err
 			}
 			return determineUserCanGrantPrivilegesToOthers(ctx, ses, g)
 		}
