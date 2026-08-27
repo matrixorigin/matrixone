@@ -6,8 +6,8 @@ Owner issue: [#27720](https://github.com/matrixorigin/matrixone/issues/27720)
 
 Related bounded-memory work: [#27698](https://github.com/matrixorigin/matrixone/issues/27698)
 
-Implementation series: `aunjgr:codex/distinct-key-path-b` followed by the
-bounded DISTINCT-state spill work tracked in #27698.
+Implementation PR: [#27762](https://github.com/matrixorigin/matrixone/pull/27762),
+followed by the bounded DISTINCT-state spill work tracked in #27698.
 
 ## Problem and invariant
 
