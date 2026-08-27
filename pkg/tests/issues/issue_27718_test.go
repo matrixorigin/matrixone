@@ -80,7 +80,6 @@ func TestIssue27718ConcurrentSnapshotQuota(t *testing.T) {
 			{name: "optimistic_si", mode: pbtxn.TxnMode_Optimistic, isolation: pbtxn.TxnIsolation_SI},
 		}
 		for _, mode := range modes {
-			mode := mode
 			t.Run(mode.name, func(t *testing.T) {
 				restore := setIssue27718TxnConfig(cns, mode.mode, mode.isolation)
 				defer restore()
