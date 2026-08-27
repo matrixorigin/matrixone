@@ -10721,6 +10721,27 @@ func (builder *QueryBuilder) bindView(
 	obj *ObjectRef,
 	schema, table string,
 ) (nodeID int32, err error) {
+	// Historical snapshots carry their own View TableDef and do not have a
+	// relation ID in the current lifecycle catalog. Only current-catalog CTAS
+	// derives persisted output metadata from this path.
+	if builder.deriveViewMetadata && !IsSnapshotValid(snapshot) {
+		ownerAccountID, accountErr := builder.compCtx.GetAccountId()
+		if accountErr != nil {
+			return 0, accountErr
+		}
+		if obj.PubInfo != nil {
+			ownerAccountID = uint32(obj.PubInfo.TenantId)
+		}
+		if checker, ok := builder.compCtx.(interface {
+			EnsureViewMetadataCurrent(string, string, uint32, uint64) error
+		}); ok {
+			if err = checker.EnsureViewMetadataCurrent(
+				schema, table, ownerAccountID, tableDef.TblId); err != nil {
+				return 0, err
+			}
+		}
+	}
+
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
 		return 0, nil
@@ -11748,6 +11769,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_VIEW_DEPENDENCIES {
+					viewDependenciesFilter := util.BuildViewMetadataDependenciesFilter(
+						uint64(currentAccountID))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(
+						viewDependenciesFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}

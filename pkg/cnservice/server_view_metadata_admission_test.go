@@ -148,6 +148,80 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 	require.Positive(t, statements.Load())
 }
 
+func TestCNViewMetadataAdmissionPublishesRefreshOnlyAfterCatalogFence(t *testing.T) {
+	s := &service{
+		viewMetadataAdmissionGeneration: 7,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	err := s.applyViewMetadataAdmission(context.Background(),
+		&logservicepb.ViewMetadataAdmission{
+			Generation:         7,
+			Epoch:              3,
+			CatalogFencedEpoch: 3,
+			RefreshReady:       true,
+			RefreshEnabled:     true,
+		})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
+	require.True(t, s.viewMetadataEpochFence.RefreshEnabled())
+
+	lease, acquired, err := s.viewMetadataEpochFence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Equal(t, uint64(3), lease.Epoch())
+	lease.Release()
+}
+
+func TestCNViewMetadataAdmissionCanceledAdvanceKeepsRefreshSealed(t *testing.T) {
+	fence := compile.NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 1))
+	require.True(t, fence.MarkCatalogFenced(1))
+	require.True(t, fence.MarkRefreshReady(1))
+	require.True(t, fence.EnableRefresh(1))
+	blocker, err := fence.Acquire(context.Background())
+	require.NoError(t, err)
+	s := &service{
+		viewMetadataAdmissionGeneration: 7,
+		viewMetadataEpochFence:          fence,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	snapshot := &logservicepb.ViewMetadataAdmission{
+		Generation:           7,
+		Epoch:                2,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   2,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.applyViewMetadataAdmission(ctx, snapshot), context.Canceled)
+	require.False(t, fence.RefreshEnabled())
+	_, _, err = fence.AcquireRefresh(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	blocker.Release()
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
+	require.Equal(t, uint64(2), fence.Epoch())
+	require.False(t, fence.RefreshEnabled())
+}
+
+func TestCNViewMetadataAdmissionRejectsRefreshEnableBeforeCatalogFence(t *testing.T) {
+	s := &service{
+		viewMetadataAdmissionGeneration: 7,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	err := s.applyViewMetadataAdmission(context.Background(),
+		&logservicepb.ViewMetadataAdmission{
+			Generation:     7,
+			Epoch:          3,
+			RefreshReady:   true,
+			RefreshEnabled: true,
+		})
+	require.Error(t, err)
+	require.False(t, s.viewMetadataEpochFence.RefreshEnabled())
+}
+
 func TestCNViewMetadataAdmissionRejectsSupersededResponse(t *testing.T) {
 	s := &service{
 		cfg:                             &Config{},

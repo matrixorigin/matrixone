@@ -5147,6 +5147,84 @@ func TestBuildCTASExplicitTargetDefaultOverridesAutoIncrementTypeDefault(t *test
 	require.Equal(t, int32(42), idCol.Default.Expr.GetLit().GetI32Val())
 }
 
+type viewMetadataCheckingCompilerContext struct {
+	*MockCompilerContext
+	err   error
+	calls int
+}
+
+type snapshotViewMetadataCheckingCompilerContext struct {
+	*viewMetadataCheckingCompilerContext
+	snapshot *Snapshot
+}
+
+func (c *snapshotViewMetadataCheckingCompilerContext) ResolveSnapshotWithSnapshotName(string) (*Snapshot, error) {
+	return c.snapshot, nil
+}
+
+func (c *viewMetadataCheckingCompilerContext) EnsureViewMetadataCurrent(
+	_, _ string,
+	_ uint32,
+	_ uint64,
+) error {
+	c.calls++
+	return c.err
+}
+
+func TestCTASRejectsNonCurrentViewMetadata(t *testing.T) {
+	base := NewMockCompilerContext(false)
+	const createViewSQL = "create view stale_view as select n_nationkey from nation"
+	viewStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+	require.NoError(t, err)
+	viewPlan, err := BuildPlan(&rootSQLCompilerContext{
+		MockCompilerContext: base,
+		rootSQL:             createViewSQL,
+	}, viewStmt, false)
+	viewStmt.Free()
+	require.NoError(t, err)
+	viewDef := DeepCopyTableDef(viewPlan.GetDdl().GetCreateView().GetTableDef(), true)
+	viewDef.Name = "stale_view"
+	viewDef.DbName = "tpch"
+	viewDef.TblId = 42
+	viewDef.TableType = catalog.SystemViewRel
+	base.tables[viewDef.Name] = viewDef
+	base.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
+
+	ctx := &viewMetadataCheckingCompilerContext{
+		MockCompilerContext: base,
+		err:                 moerr.NewBadView(t.Context(), "tpch", "stale_view"),
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied as select * from stale_view", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorIs(t, err, ctx.err)
+	require.Equal(t, 1, ctx.calls)
+
+	ctx.calls = 0
+	selectStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select * from stale_view", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	_, err = BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Zero(t, ctx.calls, "ordinary SELECT must use the rebound View definition")
+
+	snapshotCtx := &snapshotViewMetadataCheckingCompilerContext{
+		viewMetadataCheckingCompilerContext: ctx,
+		snapshot: &Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: 1},
+		},
+	}
+	snapshotStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table historical_copy as select * from stale_view{snapshot='historical'}", 1)
+	require.NoError(t, err)
+	defer snapshotStmt.Free()
+	_, err = BuildPlan(snapshotCtx, snapshotStmt, false)
+	require.NoError(t, err)
+	require.Zero(t, ctx.calls, "historical CTAS must use the View definition from the snapshot catalog")
+}
+
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 	tests := []struct {
 		name        string

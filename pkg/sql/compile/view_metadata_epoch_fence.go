@@ -29,16 +29,20 @@ type viewMetadataEpochGeneration struct {
 }
 
 // ViewMetadataEpochFence prevents an epoch acknowledgement from overtaking a
-// lifecycle-sensitive operation that entered under an older epoch. The public
-// SQL consumers remain disconnected until the activation layer; admission uses
-// Advance to establish the same tested ordering contract now.
+// lifecycle-sensitive operation or transaction snapshot creation that entered
+// under an older epoch.
 type ViewMetadataEpochFence struct {
-	mu          sync.Mutex
-	current     *viewMetadataEpochGeneration
-	advancing   bool
-	advanceDone chan struct{}
-	closed      bool
-	closedC     chan struct{}
+	mu                  sync.Mutex
+	current             *viewMetadataEpochGeneration
+	requestedEpoch      uint64
+	catalogFencedEpoch  uint64
+	refreshReadyEpoch   uint64
+	refreshEnabledEpoch uint64
+	stateChanged        chan struct{}
+	advancing           bool
+	advanceDone         chan struct{}
+	closed              bool
+	closedC             chan struct{}
 }
 
 // ViewMetadataEpochLease is an exactly-once read lease.
@@ -50,8 +54,9 @@ type ViewMetadataEpochLease struct {
 
 func NewViewMetadataEpochFence() *ViewMetadataEpochFence {
 	return &ViewMetadataEpochFence{
-		current: &viewMetadataEpochGeneration{epoch: 0},
-		closedC: make(chan struct{}),
+		current:      &viewMetadataEpochGeneration{epoch: 0},
+		stateChanged: make(chan struct{}),
+		closedC:      make(chan struct{}),
 	}
 }
 
@@ -89,6 +94,55 @@ func (f *ViewMetadataEpochFence) Acquire(ctx context.Context) (*ViewMetadataEpoc
 	}
 }
 
+// AcquireRefresh enters the current enabled refresh epoch. While an epoch is
+// being fenced it waits for the durable catalog fence, closing the publication
+// gap between Advance and RequireViewMetadataRevalidation. Once fenced but not
+// enabled, callers still hold the current generation while durable catalog
+// predicates fail closed.
+func (f *ViewMetadataEpochFence) AcquireRefresh(
+	ctx context.Context,
+) (*ViewMetadataEpochLease, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		f.mu.Lock()
+		if f.closed {
+			f.mu.Unlock()
+			return nil, false, context.Canceled
+		}
+		var changed <-chan struct{}
+		if f.advancing {
+			changed = f.advanceDone
+		} else if f.requestedEpoch > f.current.epoch {
+			changed = f.stateChanged
+		} else {
+			epoch := f.current.epoch
+			if epoch == 0 {
+				f.mu.Unlock()
+				return nil, false, nil
+			}
+			if f.catalogFencedEpoch >= epoch {
+				generation := f.current
+				generation.leases++
+				enabled := f.refreshEnabledEpoch == epoch
+				f.mu.Unlock()
+				return &ViewMetadataEpochLease{fence: f, generation: generation}, enabled, nil
+			}
+			changed = f.stateChanged
+		}
+		closed := f.closedC
+		f.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-closed:
+			return nil, false, context.Canceled
+		case <-changed:
+		}
+	}
+}
+
 func (l *ViewMetadataEpochLease) Epoch() uint64 {
 	if l == nil || l.generation == nil {
 		return 0
@@ -114,7 +168,8 @@ func (l *ViewMetadataEpochLease) Release() {
 }
 
 // Advance drains the old generation before publishing targetEpoch. On
-// cancellation it reopens the old generation and publishes no partial state.
+// cancellation it leaves ordinary work on the old generation but keeps refresh
+// consumers sealed until a retry publishes the requested epoch.
 func (f *ViewMetadataEpochFence) Advance(ctx context.Context, targetEpoch uint64) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -128,6 +183,10 @@ func (f *ViewMetadataEpochFence) Advance(ctx context.Context, targetEpoch uint64
 		if targetEpoch <= f.current.epoch {
 			f.mu.Unlock()
 			return nil
+		}
+		if targetEpoch > f.requestedEpoch {
+			f.requestedEpoch = targetEpoch
+			f.notifyStateChangedLocked()
 		}
 		if f.advancing {
 			done := f.advanceDone
@@ -151,6 +210,7 @@ func (f *ViewMetadataEpochFence) Advance(ctx context.Context, targetEpoch uint64
 		}
 		f.advancing = true
 		f.advanceDone = make(chan struct{})
+		f.notifyStateChangedLocked()
 		done := f.advanceDone
 		closed := f.closedC
 		f.mu.Unlock()
@@ -167,6 +227,7 @@ func (f *ViewMetadataEpochFence) Advance(ctx context.Context, targetEpoch uint64
 		f.mu.Lock()
 		if advanceErr == nil && !f.closed {
 			f.current = &viewMetadataEpochGeneration{epoch: targetEpoch}
+			f.notifyStateChangedLocked()
 		} else {
 			old.draining = false
 			if advanceErr == nil {
@@ -187,6 +248,69 @@ func (f *ViewMetadataEpochFence) Epoch() uint64 {
 	return f.current.epoch
 }
 
+func (f *ViewMetadataEpochFence) MarkCatalogFenced(epoch uint64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed || f.requestedEpoch > f.current.epoch ||
+		epoch != f.current.epoch || epoch < f.catalogFencedEpoch {
+		return false
+	}
+	if epoch > f.catalogFencedEpoch {
+		f.catalogFencedEpoch = epoch
+		f.notifyStateChangedLocked()
+	}
+	return true
+}
+
+func (f *ViewMetadataEpochFence) MarkRefreshReady(epoch uint64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed || f.requestedEpoch > f.current.epoch ||
+		epoch == 0 || epoch != f.current.epoch || f.catalogFencedEpoch < epoch {
+		return false
+	}
+	if f.refreshReadyEpoch != epoch {
+		f.refreshReadyEpoch = epoch
+		f.notifyStateChangedLocked()
+	}
+	return true
+}
+
+func (f *ViewMetadataEpochFence) EnableRefresh(epoch uint64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed || f.requestedEpoch > f.current.epoch ||
+		epoch == 0 || epoch != f.current.epoch ||
+		f.catalogFencedEpoch < epoch || f.refreshReadyEpoch != epoch {
+		return false
+	}
+	if f.refreshEnabledEpoch != epoch {
+		f.refreshEnabledEpoch = epoch
+		f.notifyStateChangedLocked()
+	}
+	return true
+}
+
+func (f *ViewMetadataEpochFence) RefreshEnabled() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.closed && f.requestedEpoch <= f.current.epoch &&
+		f.current.epoch != 0 && f.refreshEnabledEpoch == f.current.epoch
+}
+
+func (f *ViewMetadataEpochFence) RecoveryAllowed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.closed && f.requestedEpoch <= f.current.epoch &&
+		f.current.epoch != 0 && f.catalogFencedEpoch >= f.current.epoch &&
+		f.refreshReadyEpoch == f.current.epoch
+}
+
+func (f *ViewMetadataEpochFence) notifyStateChangedLocked() {
+	close(f.stateChanged)
+	f.stateChanged = make(chan struct{})
+}
+
 // Close independently releases Acquire/Advance waiters. Existing lease owners
 // retain their exactly-once Release responsibility.
 func (f *ViewMetadataEpochFence) Close() {
@@ -197,4 +321,5 @@ func (f *ViewMetadataEpochFence) Close() {
 	}
 	f.closed = true
 	close(f.closedC)
+	f.notifyStateChangedLocked()
 }

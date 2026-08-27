@@ -2359,6 +2359,54 @@ func Test_GetColumns(t *testing.T) {
 	})
 }
 
+func TestViewMetadataStatementNeedsLease(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		stmt            tree.Statement
+		sql             string
+		defaultDatabase string
+		want            bool
+	}{
+		{name: "show columns", stmt: &tree.ShowColumns{}, want: true},
+		{name: "ctas", stmt: &tree.CreateTable{IsAsSelect: true}, want: true},
+		{name: "plain create table", stmt: &tree.CreateTable{}},
+		{name: "prepared execution", stmt: &tree.Execute{}, want: true},
+		{name: "information schema qualified", stmt: &tree.Select{},
+			sql: "select * from `information_schema` . `columns`", want: true},
+		{name: "information schema default database", stmt: &tree.Select{},
+			sql: "select * from columns", defaultDatabase: "INFORMATION_SCHEMA", want: true},
+		{name: "ordinary select", stmt: &tree.Select{}, sql: "select * from db.t"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want,
+				viewMetadataStatementNeedsLease(tc.stmt, tc.sql, tc.defaultDatabase))
+		})
+	}
+}
+
+func TestValidateViewMetadataTransactionEpochs(t *testing.T) {
+	require.NoError(t, validateViewMetadataTransactionEpochs(0, 0))
+	require.NoError(t, validateViewMetadataTransactionEpochs(5, 5))
+	err := validateViewMetadataTransactionEpochs(5, 4)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rollback and retry")
+}
+
+func TestValidateViewMetadataTransactionEpochUsesSessionGeneration(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		fence := compile.NewViewMetadataEpochFence()
+		require.NoError(t, fence.Advance(context.Background(), 5))
+		rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+		ses := &Session{feSessionImpl: feSessionImpl{
+			service:    t.Name(),
+			txnHandler: &TxnHandler{viewMetadataEpoch: 4},
+		}}
+		require.Error(t, validateViewMetadataTransactionEpoch(ses))
+		ses.txnHandler.viewMetadataEpoch = 5
+		require.NoError(t, validateViewMetadataTransactionEpoch(ses))
+	})
+}
+
 func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"

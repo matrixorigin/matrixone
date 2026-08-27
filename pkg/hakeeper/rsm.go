@@ -898,6 +898,9 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 		!store.ViewMetadataAdmissionSupported {
 		return false
 	}
+	if s.state.ViewMetadataRefreshActivated && !store.ViewMetadataRefreshSupported {
+		return false
+	}
 	return true
 }
 
@@ -1055,6 +1058,11 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
+	if s.state.ViewMetadataAdmissionEnabled && s.state.ViewMetadataRefreshActivated &&
+		!s.state.ViewMetadataRevalidationRequired &&
+		s.viewMetadataHAKeeperReplica(hb.UUID) && !hb.ViewMetadataRefreshSupported {
+		s.startViewMetadataRequiredEpoch()
+	}
 	if s.state.ViewMetadataAdmissionPreparing {
 		if s.state.ViewMetadataAdmissionLogReady == nil {
 			s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
@@ -1895,6 +1903,7 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			Preparing:              s.state.ViewMetadataAdmissionPreparing,
 			Enabled:                s.state.ViewMetadataAdmissionEnabled,
 			Pending:                s.state.ViewMetadataAdmissionPending,
+			RefreshActivated:       s.state.ViewMetadataRefreshActivated,
 			HAKeeperAdmissionReady: !s.hasPendingHAKeeperAdmission(),
 			LogReady:               logReady,
 			CNReady:                cnReady,
@@ -1950,5 +1959,6 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.ViewMetadataAdmissionCNTargetTicks = nil
 	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
+	s.state.ViewMetadataRefreshActivated = false
 	return s.state.Unmarshal(data)
 }

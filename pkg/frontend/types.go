@@ -1028,14 +1028,15 @@ type ExecCtx struct {
 	inMigration bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
-	executeParamTypes []byte
-	resper            Responser
-	results           []ExecResult
-	prepareColDef     [][]byte
-	cursorResultSaver StagedBinaryWriter
-	returning         *returningState
-	selectInto        *selectIntoUserVariables
-	isIssue3482       bool
+	executeParamTypes     []byte
+	resper                Responser
+	results               []ExecResult
+	prepareColDef         [][]byte
+	cursorResultSaver     StagedBinaryWriter
+	returning             *returningState
+	selectInto            *selectIntoUserVariables
+	isIssue3482           bool
+	viewMetadataSensitive bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
 	// applyRemapDb, and to the current database (for unqualified references) by
@@ -1089,6 +1090,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
 	execCtx.selectInto = nil
+	execCtx.viewMetadataSensitive = false
 	execCtx.rewriteEnabled = false
 }
 

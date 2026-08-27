@@ -274,6 +274,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.Locality = hb.Locality
 	storeInfo.CommandDeliverySupported = hb.CommandDeliverySupported
 	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
+	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	s.Stores[hb.UUID] = storeInfo
 }
 

@@ -520,6 +520,10 @@ func (boot *testBootService) GetFinalVersionOffset() int32 {
 	panic("implement me")
 }
 
+func (boot *testBootService) IsFinalVersionReady() bool {
+	return boot.choice != 2
+}
+
 func (boot *testBootService) Close() error {
 	boot.closeCount++
 	return boot.closeErr
@@ -656,6 +660,56 @@ func TestBootstrapRetirementWaitsForTenantUpgradeConsumer(t *testing.T) {
 	require.Equal(t, 1, boot.closeCount)
 	require.Empty(t, s.GetFinalVersion())
 	require.Error(t, s.CheckTenantUpgrade(context.Background(), 1))
+}
+
+func TestBootstrapRetirementPreservesFinalVersionReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state int
+		ready bool
+	}{
+		{name: "final version ready", state: 0, ready: true},
+		{name: "final version not ready", state: 2, ready: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			boot := &testBootService{choice: tc.state}
+			s := &service{bootstrapService: boot}
+			s.viewMetadataBootstrap.Store(&bootstrapReadiness{service: boot})
+
+			require.NoError(t, s.closeBootstrapService())
+			require.Equal(t, tc.ready, s.viewMetadataRefreshReady())
+			require.Nil(t, s.viewMetadataBootstrap.Load())
+			require.Equal(t, 1, boot.closeCount)
+		})
+	}
+}
+
+func TestBootstrapRetirementConcurrentReadiness(t *testing.T) {
+	boot := &testBootService{}
+	s := &service{bootstrapService: boot}
+	s.viewMetadataBootstrap.Store(&bootstrapReadiness{service: boot})
+
+	const readers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var failed atomic.Bool
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range 100 {
+				if !s.viewMetadataRefreshReady() {
+					failed.Store(true)
+				}
+			}
+		}()
+	}
+	close(start)
+	require.NoError(t, s.closeBootstrapService())
+	wg.Wait()
+	require.False(t, failed.Load())
+	require.True(t, s.viewMetadataRefreshReady())
 }
 
 func TestServiceCloseWaitsForTraceProducers(t *testing.T) {

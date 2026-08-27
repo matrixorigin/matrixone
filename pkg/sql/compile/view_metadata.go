@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,15 +81,99 @@ type viewRefreshIdentityKey struct {
 	logicalID  uint64
 }
 
-var viewMetadataRefreshEnabled = func(string) bool {
-	return false
+var viewMetadataRefreshEnabled = func(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return false
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	return ok && fence.RefreshEnabled()
 }
 
-// ViewMetadataRefreshEnabled is intentionally false in this inactive lifecycle
-// layer. A later prerequisite owns the durable membership epoch and admission
-// fence; only the subsequent activation layer may replace this gate.
-func ViewMetadataRefreshEnabled(string) bool {
-	return false
+// ViewMetadataRefreshEnabled reports whether HAKeeper authorized the current
+// durable membership epoch after catalog revalidation completed.
+func ViewMetadataRefreshEnabled(serviceID string) bool {
+	return viewMetadataRefreshEnabled(serviceID)
+}
+
+// ViewMetadataEpoch returns the current durable admission epoch observed by
+// this CN. Epoch zero preserves legacy behavior before the admission runtime is
+// installed.
+func ViewMetadataEpoch(serviceID string) uint64 {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return 0
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return 0
+	}
+	return fence.Epoch()
+}
+
+var viewMetadataRecoveryEnabled = func(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return false
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	return ok && fence.RecoveryAllowed()
+}
+
+// AcquireViewMetadataEpochLease serializes transaction snapshot creation with
+// epoch publication so the frontend can reject a later sensitive statement
+// whose transaction belongs to an older epoch.
+func AcquireViewMetadataEpochLease(
+	ctx context.Context,
+	serviceID string,
+) (*ViewMetadataEpochLease, error) {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil, nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return nil, nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "invalid View metadata epoch fence")
+	}
+	return fence.Acquire(ctx)
+}
+
+// AcquireViewMetadataRefreshLease serializes a lifecycle-sensitive public
+// statement with admission epoch changes. acquired=false means durable catalog
+// predicates, rather than an enabled epoch, own the result.
+func AcquireViewMetadataRefreshLease(
+	ctx context.Context,
+	serviceID string,
+) (*ViewMetadataEpochLease, bool, error) {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return nil, false, nil
+	}
+	value, ok := rt.GetGlobalVariables(ViewMetadataEpochFenceRuntimeKey)
+	if !ok {
+		return nil, false, nil
+	}
+	fence, ok := value.(*ViewMetadataEpochFence)
+	if !ok {
+		return nil, false, moerr.NewInternalError(ctx, "invalid View metadata epoch fence")
+	}
+	return fence.AcquireRefresh(ctx)
 }
 
 // viewMetadataRefreshAvailable closes the capability-disabled window before a

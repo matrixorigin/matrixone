@@ -52,9 +52,14 @@ type viewMetadataCleanupRecordingExecutor struct {
 
 func enableViewMetadataRefreshForTest(t *testing.T) {
 	t.Helper()
-	original := viewMetadataRefreshEnabled
+	originalRefresh := viewMetadataRefreshEnabled
+	originalRecovery := viewMetadataRecoveryEnabled
 	viewMetadataRefreshEnabled = func(string) bool { return true }
-	t.Cleanup(func() { viewMetadataRefreshEnabled = original })
+	viewMetadataRecoveryEnabled = func(string) bool { return true }
+	t.Cleanup(func() {
+		viewMetadataRefreshEnabled = originalRefresh
+		viewMetadataRecoveryEnabled = originalRecovery
+	})
 }
 
 func setSynchronousViewRefreshBudgetForTest(t *testing.T, budget int) {
@@ -121,6 +126,51 @@ func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) 
 	require.Contains(t, exec.sqls[1], "limit 16 offset 16")
 }
 
+func TestViewMetadataRefreshEnabledUsesDurableEpochFence(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		fence := NewViewMetadataEpochFence()
+		rt.SetGlobalVariables(ViewMetadataEpochFenceRuntimeKey, fence)
+		require.False(t, ViewMetadataRefreshEnabled(t.Name()))
+		require.NoError(t, fence.Advance(context.Background(), 3))
+		require.True(t, fence.MarkCatalogFenced(3))
+		require.False(t, viewMetadataRecoveryEnabled(t.Name()))
+		require.True(t, fence.MarkRefreshReady(3))
+		require.True(t, viewMetadataRecoveryEnabled(t.Name()))
+		require.False(t, ViewMetadataRefreshEnabled(t.Name()))
+		require.True(t, fence.EnableRefresh(3))
+		require.True(t, ViewMetadataRefreshEnabled(t.Name()))
+		require.NoError(t, fence.Advance(context.Background(), 4))
+		require.False(t, ViewMetadataRefreshEnabled(t.Name()))
+	})
+}
+
+func TestViewMetadataRuntimeAccessors(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		fence := NewViewMetadataEpochFence()
+		rt.SetGlobalVariables(ViewMetadataEpochFenceRuntimeKey, fence)
+		require.NoError(t, fence.Advance(context.Background(), 7))
+		require.Equal(t, uint64(7), ViewMetadataEpoch(t.Name()))
+
+		epochLease, err := AcquireViewMetadataEpochLease(context.Background(), t.Name())
+		require.NoError(t, err)
+		require.Equal(t, uint64(7), epochLease.Epoch())
+		epochLease.Release()
+
+		require.True(t, fence.MarkCatalogFenced(7))
+		refreshLease, enabled, err := AcquireViewMetadataRefreshLease(
+			context.Background(), t.Name())
+		require.NoError(t, err)
+		require.False(t, enabled)
+		require.Equal(t, uint64(7), refreshLease.Epoch())
+		refreshLease.Release()
+	})
+
+	require.Zero(t, ViewMetadataEpoch("missing-runtime"))
+	lease, err := AcquireViewMetadataEpochLease(context.Background(), "missing-runtime")
+	require.NoError(t, err)
+	require.Nil(t, lease)
+}
+
 func TestExportedViewMetadataRevalidationSQLReturnsDefensiveCopy(t *testing.T) {
 	statements := ViewMetadataRequireRevalidationSQL()
 	require.Equal(t, viewMetadataRequireRevalidationSQL(), statements)
@@ -174,6 +224,33 @@ func TestConflictingRecoveryTargetGetsGenerationFencedBackoff(t *testing.T) {
 	require.Contains(t, exec.sqls[1], "attempts=attempts+1")
 	require.Contains(t, exec.sqls[1], "account_id=7 and target_relation_id=11 and target_generation=13")
 	require.Contains(t, exec.sqls[1], "status in ('PENDING','DISCOVERING')")
+}
+
+func TestViewMetadataRevalidationCompleteRequiresDurableTerminalState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	completeResult := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, proc.Mp())
+	completeResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(completeResult, 0, []int64{1}))
+
+	for _, tc := range []struct {
+		name     string
+		result   executor.Result
+		complete bool
+	}{
+		{name: "incomplete", result: executor.Result{}},
+		{name: "complete", result: completeResult.GetResult(), complete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{tc.result}}
+			complete, err := ViewMetadataRevalidationComplete(context.Background(), exec)
+			require.NoError(t, err)
+			require.Equal(t, tc.complete, complete)
+			require.Len(t, exec.sqls, 1)
+			require.Contains(t, exec.sqls[0], "source_relation_kind='ACTIVATED'")
+			require.Contains(t, exec.sqls[0], "source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')")
+			require.Contains(t, exec.sqls[0], "status in ('PENDING','DISCOVERING','RUNNING')")
+		})
+	}
 }
 
 func TestRunRecoveryContinuesAfterTransactionConflict(t *testing.T) {
