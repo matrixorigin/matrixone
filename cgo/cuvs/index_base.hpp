@@ -61,6 +61,25 @@
 
 namespace matrixone {
 
+// kStagingReserveFloorRowsNs / staging_grow_rows are the staging arenas' growth
+// rule, at namespace scope so a test can walk the REAL sequence rather than
+// restate it. `want` is the row count that must fit, `bound` is
+// staging_bound_rows(): double from a floor, cap at the bound, never go below
+// what is needed.
+//
+// The Go planner (memory.HostRowsFittingStaged) deliberately does NOT mirror this
+// schedule. It charges 2x the staged row cost, which is correct for any schedule
+// because the superseded buffer can never exceed `bound`. This is exposed so the
+// two can be checked against each other, not so the planner can copy it.
+inline constexpr uint64_t kStagingReserveFloorRowsNs = 4096;
+
+inline uint64_t staging_grow_rows(uint64_t want, uint64_t bound) {
+    uint64_t g = std::max<uint64_t>(want * 2, kStagingReserveFloorRowsNs);
+    g = std::min<uint64_t>(g, bound);
+    return std::max<uint64_t>(g, want);                     // never below what we need
+}
+
+
 using ::distance_type_t;
 using ::quantization_t;
 using ::distribution_mode_t;
@@ -1500,11 +1519,7 @@ public:
         const uint64_t bound = staging_bound_rows(stage_limit);
         const uint64_t need  = pending_total_count_ + n_rows;
 
-        auto grow_to = [&](uint64_t want) {
-            uint64_t g = std::max<uint64_t>(want * 2, kStagingReserveFloorRows);
-            g = std::min<uint64_t>(g, bound);
-            return std::max<uint64_t>(g, want);             // never below what we need
-        };
+        auto grow_to = [&](uint64_t want) { return staging_grow_rows(want, bound); };
         const bool grow_data = staging_data_.capacity() < need * dimension;
         const bool grow_ids  = ids && staging_ids_.capacity() < need;
         const uint64_t data_rows = grow_data ? grow_to(need) : 0;
@@ -2724,7 +2739,7 @@ protected:
     // First reservation step for the staging arenas — big enough that a
     // one-row-per-call build does not thrash on the early doublings, small
     // enough to be irrelevant for a tiny table.
-    static constexpr uint64_t kStagingReserveFloorRows = 4096;
+    static constexpr uint64_t kStagingReserveFloorRows = kStagingReserveFloorRowsNs;
     // min(quantizer_train_limit_, GPU-trainable rows); measured once, then reused.
     // Atomic because staging_row_limit() runs OUTSIDE mutex_ (it issues a CUDA
     // driver query and may log, neither of which may happen under the lock).

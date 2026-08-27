@@ -391,3 +391,81 @@ TEST(HostMemoryGovernor, SecondArenaGrowthClaimsTheFullReplacement) {
     require_ledger_empty("releasing the hog");
     index.destroy();
 }
+
+// The planner and the governor must share ONE invariant: every capacity Go returns
+// has to clear every growth the arena will actually perform.
+//
+// This walks the REAL growth rule (matrixone::staging_grow_rows, the same function
+// stage_rows_locked calls) and submits each growth to the REAL admission rule
+// (host_memory_governor::reserve_against), with availability injected at the value
+// it would hold at that moment -- capacity and the superseded buffer already
+// resident. Only the availability reading is modelled; the schedule and the
+// admission decision are production code.
+//
+// The case is the reported one: 1 GiB measured availability, f32 dim=768 -> int8, no
+// INCLUDE columns, the 100k default train limit. Charging only the final raw arena
+// admitted 641,889 rows, whose 65,566 -> 100,000 growth then claimed 308,000,000
+// bytes against a 280,269,510-byte budget.
+//
+// IVF-PQ and CAGRA are covered by one walk on purpose: staging_data_/staging_ids_
+// and stage_rows_locked live in the shared index_base, so both algorithms reach this
+// rule through the same code. A second walk would re-run the same arithmetic.
+TEST(HostMemoryGovernor, PlannerSizedCapacityClearsEveryStagingGrowth) {
+    require_ledger_empty("the start of the planner-agreement test");
+
+    const uint64_t kAvail   = 1ull << 30;
+    const uint64_t dim      = 768;
+    const uint64_t perRow   = dim * 1 + 8;   // int8 entry + id map
+    const uint64_t rawRow   = dim * 4;       // the arena retains RAW f32 rows
+    const uint64_t idRow    = 8;             // sizeof(IdT), staged beside them
+    const uint64_t limit    = 100000;
+    const uint64_t stagedRow = rawRow + idRow;
+
+    // memory.HostRowsFittingStaged, transcribed: it charges the REPLACEMENT PEAK,
+    // 2*(raw + id) per staged row, in both branches.
+    const uint64_t stagedPeak = 2 * stagedRow;
+    const uint64_t budget     = host_memory_governor::budget_bytes(kAvail);
+    const uint64_t small      = budget / (perRow + stagedPeak);
+    const uint64_t rows       = (small <= limit) ? small : (budget - limit * stagedPeak) / perRow;
+    ASSERT_TRUE(rows > 0);
+
+    const uint64_t capacityBytes = rows * perRow;
+    const uint64_t bound         = std::min<uint64_t>(limit, rows);
+
+    // The steady state the planner solved for must itself fit, ids included --
+    // charging only raw bytes left the final state 799,496 bytes over budget.
+    ASSERT_TRUE(capacityBytes + bound * stagedRow <= budget);
+
+    // Walk every growth the arena will perform, newest claim against the
+    // availability left once capacity and the superseded buffer are resident.
+    std::vector<uint64_t> seq;
+    uint64_t capacity = 0;
+    for (uint64_t need = 1; capacity < bound; need = capacity + 1) {
+        if (capacity < need) {
+            const uint64_t next = matrixone::staging_grow_rows(need, bound);
+            const uint64_t oldBytes = capacity * stagedRow;
+            if (capacityBytes + oldBytes >= kAvail) {
+                REPORT_FAILURE("planned capacity plus the resident arena exceeds availability");
+                return;
+            }
+            const uint64_t availNow = kAvail - capacityBytes - oldBytes;
+            try {
+                auto claim = host_memory_governor::reserve_against(
+                    measured(availNow), next * stagedRow, "quantizer staging");
+                claim.release();
+            } catch (const std::exception& e) {
+                REPORT_FAILURE(std::string("growth to ") + std::to_string(next) +
+                               " rows refused for a plan the Go solver returned: " + e.what());
+                return;
+            }
+            seq.push_back(next);
+            capacity = next;
+        }
+    }
+
+    // Pin the schedule so a change to it shows up here rather than silently
+    // shifting which transient the planner has to cover.
+    const std::vector<uint64_t> expected = {4096, 8194, 16390, 32782, 65566, 100000};
+    ASSERT_TRUE(seq == expected);
+    require_ledger_empty("walking every staging growth");
+}
