@@ -4817,15 +4817,13 @@ func executeStmtWithResponse(ses *Session,
 	// RespPostMeta below, so a commit error can never follow an advertised
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
-	// Deferred Kafka scan progress is OWNED BY THE TRANSACTION terminal
-	// (TxnHandler.Commit/Rollback): a successful statement inside BEGIN /
-	// autocommit=0 must not publish until the enclosing transaction commits,
-	// or BEGIN; INSERT..SELECT FROM kafka_t; ROLLBACK would advance the
-	// exactly-once chain past rows that were rolled back. A FAILED statement
-	// discards here as a belt (its rollback path also discards).
-	if err != nil {
-		ses.FinalizeKafkaProgress(false)
-	}
+	// The WHOLE-statement terminal for deferred Kafka scan progress: every
+	// pipeline (including downstream consumers on split scopes) has finished
+	// by the time executeStmtWithMaxExecutionTime returns. Kafka progress is
+	// deliberately statement/session state, not transaction state. Consumers
+	// that need atomic data+offset commits store LAST_KAFKA_MESSAGE_ID() in a
+	// separate MatrixOne table in the same explicit transaction.
+	ses.FinalizeKafkaProgress(err == nil)
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
