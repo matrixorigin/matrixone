@@ -884,11 +884,16 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 		{name: "binary uint64", value: ParamValue{Value: "18446744073709551615", PrepareParamKind: vector.PrepareParamInteger}},
 		{name: "runtime boolean", value: ParamValue{Value: true, PrepareParamKind: vector.PrepareParamBoolean}},
 		{name: "binary boolean", value: ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean}},
-		{name: "binary string", value: ParamValue{Value: "2"}, wrongArgs: true},
+		{name: "wrapped text integer", value: ParamValue{Value: "2"}, wrongArgs: true},
+		{name: "binary protocol integer text", value: ParamValue{Value: "2", IsBinaryProtocol: true}},
+		{name: "binary protocol uint64 text", value: ParamValue{Value: "18446744073709551615", IsBinaryProtocol: true}},
+		{name: "binary protocol malformed text", value: ParamValue{Value: "two", IsBinaryProtocol: true}, wrongArgs: true},
+		{name: "binary protocol decimal text", value: ParamValue{Value: "2.0", IsBinaryProtocol: true}, wrongArgs: true},
 		{name: "binary float", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamFloat}, wrongArgs: true},
 		{name: "binary decimal", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamDecimal}, wrongArgs: true},
 		{name: "negative signed", value: int64(-1), outOfRange: true},
 		{name: "negative binary", value: ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger}, outOfRange: true},
+		{name: "negative binary protocol text", value: ParamValue{Value: "-1", IsBinaryProtocol: true}, outOfRange: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{test.value})
