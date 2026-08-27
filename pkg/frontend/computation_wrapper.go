@@ -1006,6 +1006,21 @@ func binaryProtocolPrepareParamType(
 	return runtimeType, ok
 }
 
+// binaryProtocolPrepareParamCategoryType classifies a packet from protocol
+// metadata only. It intentionally does not inspect the value: callers that
+// merely choose a text-vs-numeric specialization must not copy or scan a large
+// DECIMAL payload before preparedParamValues performs the single exact scan.
+func binaryProtocolPrepareParamCategoryType(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+) (types.Type, bool) {
+	if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
+		return types.T_decimal256.ToType(), true
+	}
+	runtimeType, _, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, "")
+	return runtimeType, ok
+}
+
 func binaryProtocolPrepareParamDomains(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
@@ -1968,7 +1983,7 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 		}
 		mysqlType := defines.MysqlType(paramTypes[i*2])
 		isUnsigned := paramTypes[i*2+1]&0x80 != 0
-		if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, params.GetRawBytesAt(i)); ok {
+		if runtimeType, ok := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned); ok {
 			runtimeTypes[i] = runtimeType
 		}
 	}

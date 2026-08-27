@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -799,6 +800,43 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 
 	_, ok = binaryProtocolPrepareParamType(defines.MYSQL_TYPE_NULL, false, nil)
 	require.False(t, ok)
+}
+
+func TestBinaryProtocolRuntimeParamTypesDoesNotScanDecimalPayload(t *testing.T) {
+	params := vector.NewVec(types.T_text.ToType())
+	mp := mpool.MustNewZero()
+	defer params.Free(mp)
+	payload := append([]byte(strings.Repeat("0", 1<<20)), '1', '.', '0')
+	require.NoError(t, vector.AppendBytes(params, payload, false, mp))
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+	var runtimeTypes []types.Type
+	allocs := testing.AllocsPerRun(20, func() {
+		runtimeTypes = binaryProtocolRuntimeParamTypes(paramTypes, params)
+	})
+	require.Len(t, runtimeTypes, 1)
+	require.True(t, runtimeTypes[0].IsNumeric())
+	require.LessOrEqual(t, allocs, float64(1),
+		"OID-only text-comparison admission must not allocate an input-sized DECIMAL string")
+	require.Equal(t, payload, params.GetRawBytesAt(0), "category admission must not mutate packet provenance")
+}
+
+func BenchmarkBinaryProtocolRuntimeParamTypesLargeDecimal(b *testing.B) {
+	params := vector.NewVec(types.T_text.ToType())
+	mp := mpool.MustNewZero()
+	defer params.Free(mp)
+	payload := append([]byte(strings.Repeat("0", 1<<20)), '1', '.', '0')
+	require.NoError(b, vector.AppendBytes(params, payload, false, mp))
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	for b.Loop() {
+		runtimeTypes := binaryProtocolRuntimeParamTypes(paramTypes, params)
+		if len(runtimeTypes) != 1 || !runtimeTypes[0].IsNumeric() {
+			b.Fatal("DECIMAL packet was not classified as numeric")
+		}
+	}
 }
 
 func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
