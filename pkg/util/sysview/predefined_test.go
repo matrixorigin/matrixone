@@ -17,6 +17,7 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -430,6 +431,80 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, ddlIndex, 0)
 	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaViewsMetadata(t *testing.T) {
+	assert.Contains(t, InformationSchemaViewsDDL,
+		"case when left(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)), 3) = '/*!'")
+	assert.Contains(t, InformationSchemaViewsDDL, "end)) as text) AS `VIEW_DEFINITION`")
+	assert.Contains(t, InformationSchemaViewsDDL, "'NO' AS `IS_UPDATABLE`")
+	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
+
+	prefix := regexp.MustCompile(informationSchemaViewDefinitionPrefixPattern)
+	tests := []struct {
+		name       string
+		createSQL  string
+		definition string
+	}{
+		{
+			name:       "aggregate view",
+			createSQL:  "create view agg_v as select a, count(*) cnt from t group by a;",
+			definition: "select a, count(*) cnt from t group by a",
+		},
+		{
+			name:       "qualified stable view",
+			createSQL:  "create view `db`.`v` as select `t`.`a` as `a` from `db`.`t`",
+			definition: "select `t`.`a` as `a` from `db`.`t`",
+		},
+		{
+			name:       "replace view with cte",
+			createSQL:  "CREATE OR REPLACE VIEW IF NOT EXISTS \"db\".\"v as quoted\" AS WITH c AS (SELECT 1) SELECT * FROM c",
+			definition: "WITH c AS (SELECT 1) SELECT * FROM c",
+		},
+		{
+			name:       "alter view with explicit columns",
+			createSQL:  "  ALTER VIEW IF EXISTS `v` (`c as quoted`, plain) AS SELECT a AS plain, b FROM t",
+			definition: "SELECT a AS plain, b FROM t",
+		},
+		{
+			name:       "view options",
+			createSQL:  "CREATE ALGORITHM=MERGE DEFINER=`root`@`%` SQL SECURITY DEFINER VIEW `v` AS SELECT 1;",
+			definition: "SELECT 1",
+		},
+		{
+			name: "mysqldump version comments",
+			createSQL: "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER */" +
+				"/*!50001 VIEW `v` AS select 1 */;",
+			definition: "select 1",
+		},
+		{
+			name:       "select block comment remains intact",
+			createSQL:  "create view v as select 1 /* application comment */;",
+			definition: "select 1 /* application comment */",
+		},
+		{
+			name:       "unrecognized metadata remains visible",
+			createSQL:  "select 1",
+			definition: "select 1",
+		},
+	}
+	suffix := regexp.MustCompile(informationSchemaViewDefinitionCommentSuffixPattern)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			definition := strings.TrimSpace(prefix.ReplaceAllString(test.createSQL, ""))
+			if strings.HasPrefix(strings.TrimSpace(test.createSQL), "/*!") {
+				definition = strings.TrimSpace(suffix.ReplaceAllString(definition, ""))
+			}
+			definition = strings.TrimSuffix(definition, ";")
+			assert.Equal(t, test.definition, definition)
+		})
+	}
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaViewsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.T) {

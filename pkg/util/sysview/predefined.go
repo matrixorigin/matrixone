@@ -21,6 +21,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
+const (
+	informationSchemaViewIdentifierPattern = "(?:`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|[^[:space:].(),]+)"
+	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
+	// DEFINER, and SQL SECURITY clauses as well as mysqldump's version comments.
+	informationSchemaViewDefinitionPrefixPattern = "(?is)^[[:space:]]*(?:/[*]![0-9]+[[:space:]]*)?" +
+		"(?:create(?:[[:space:]]+or[[:space:]]+replace)?|alter).*?[[:space:]]+view[[:space:]]+" +
+		"(?:if[[:space:]]+(?:not[[:space:]]+)?exists[[:space:]]+)?" +
+		informationSchemaViewIdentifierPattern +
+		"(?:[[:space:]]*[.][[:space:]]*" + informationSchemaViewIdentifierPattern + ")?" +
+		"[[:space:]]*(?:[(][[:space:]]*" + informationSchemaViewIdentifierPattern +
+		"(?:[[:space:]]*,[[:space:]]*" + informationSchemaViewIdentifierPattern + ")*[[:space:]]*[)])?" +
+		"[[:space:]]+as[[:space:]]+"
+	informationSchemaViewDefinitionCommentSuffixPattern = "(?is)[[:space:]]*[*]/[[:space:]]*;?[[:space:]]*$"
+	informationSchemaViewStatementSQL                   = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
+	informationSchemaViewDefinitionSQL                  = "cast(trim(trailing ';' from trim(case when left(trim(" +
+		informationSchemaViewStatementSQL + "), 3) = '/*!' then " +
+		"regexp_replace(regexp_replace(" + informationSchemaViewStatementSQL + ", '" +
+		informationSchemaViewDefinitionPrefixPattern + "', '', 1, 1), '" +
+		informationSchemaViewDefinitionCommentSuffixPattern + "', '', 1, 1) else " +
+		"regexp_replace(" + informationSchemaViewStatementSQL + ", '" +
+		informationSchemaViewDefinitionPrefixPattern + "', '', 1, 1) end)) as text)"
+)
+
 // `mysql` database system tables
 // They are all Tenant level system tables
 var (
@@ -565,9 +588,9 @@ var (
 		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
-		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
+		informationSchemaViewDefinitionSQL + " AS `VIEW_DEFINITION`," +
 		"'NONE' AS `CHECK_OPTION`," +
-		"'YES' AS `IS_UPDATABLE`," +
+		"'NO' AS `IS_UPDATABLE`," +
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
