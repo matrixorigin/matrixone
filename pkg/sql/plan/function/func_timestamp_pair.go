@@ -35,10 +35,10 @@ func timestampPairTypeCheck(overloads []overload, inputs []types.Type) checkResu
 
 	validDateInput := func(typ types.T) bool {
 		return typ == types.T_any || typ == types.T_date || typ == types.T_datetime ||
-			typ == types.T_timestamp || typ.IsMySQLString()
+			typ == types.T_timestamp || isTimestampPairString(typ)
 	}
 	validTimeInput := func(typ types.T) bool {
-		return typ == types.T_any || typ == types.T_time || typ.IsMySQLString()
+		return typ == types.T_any || typ == types.T_time || isTimestampPairString(typ)
 	}
 	if !validDateInput(inputs[0].Oid) || !validTimeInput(inputs[1].Oid) {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -58,11 +58,15 @@ func timestampPairTypeCheck(overloads []overload, inputs []types.Type) checkResu
 	return newCheckResultWithSuccess(5)
 }
 
+func isTimestampPairString(typ types.T) bool {
+	return typ == types.T_char || typ == types.T_varchar || typ == types.T_text
+}
+
 func timestampPairReturnType(parameters []types.Type) types.Type {
 	scale := int32(0)
 	for _, parameter := range parameters {
 		parameterScale := parameter.Scale
-		if parameter.Oid == types.T_any || parameter.Oid.IsMySQLString() {
+		if parameter.Oid == types.T_any || isTimestampPairString(parameter.Oid) {
 			parameterScale = 6
 		}
 		if parameterScale < 0 {
@@ -138,12 +142,26 @@ func newTimestampPairTimeReader(vec *vector.Vector) (timestampPairTimeReader, er
 			if text == "" {
 				return 0, true
 			}
+			parseText := text
+			negativeDay := false
 			if space := strings.IndexByte(text, ' '); space >= 0 {
-				if _, err := strconv.ParseUint(text[:space], 10, 64); err != nil {
+				day := text[:space]
+				if strings.HasPrefix(day, "-") {
+					day = day[1:]
+					parseText = text[1:]
+					negativeDay = true
+				}
+				if day == "" {
+					return 0, true
+				}
+				if _, err := strconv.ParseUint(day, 10, 64); err != nil {
 					return 0, true
 				}
 			}
-			timeValue, err := types.ParseTime(text, 6)
+			timeValue, err := types.ParseTime(parseText, 6)
+			if negativeDay {
+				timeValue = -timeValue
+			}
 			return timeValue, err != nil
 		}, nil
 	default:
