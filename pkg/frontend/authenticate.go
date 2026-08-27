@@ -8023,7 +8023,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 	tenant := ses.GetTenantInfo()
 	roleGrantNeedsCheck := activeRoleGrantNeedsCheck(tenant)
-	roleGrantValid := !roleGrantNeedsCheck
+	var roleGrantValid bool
 	roleGrantCached := !roleGrantNeedsCheck
 	cache := ses.GetPrivilegeCache()
 	if roleGrantNeedsCheck && enableCache && cache != nil {
