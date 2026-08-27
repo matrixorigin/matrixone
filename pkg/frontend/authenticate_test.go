@@ -506,24 +506,36 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 
 func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
 	tests := []struct {
-		name              string
-		protocol          int64
-		wantCheckView     bool
-		wantLatestTable   bool
-		wantLegacyTable   bool
-		wantCheckFunction bool
+		name                   string
+		protocol               int64
+		wantCheckFunction      bool
+		wantCurrentRoles       bool
+		wantCompatibilityRoles bool
+		wantCanonicalViews     bool
 	}{
 		{
-			name:            "mixed version protocol uses legacy table constraints",
-			protocol:        defines.MORPCVersion15,
-			wantLegacyTable: true,
+			name:                   "pre check-constraint protocol uses compatibility roles",
+			protocol:               defines.MORPCVersion15,
+			wantCompatibilityRoles: true,
 		},
 		{
-			name:              "latest protocol uses check constraints views",
-			protocol:          defines.MORPCVersion16,
-			wantCheckView:     true,
-			wantLatestTable:   true,
-			wantCheckFunction: true,
+			name:                   "protocol 16 uses check constraints and compatibility roles",
+			protocol:               defines.MORPCVersion16,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:                   "protocol 32 does not install current-role table function views",
+			protocol:               defines.MORPCVersion32,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:               "protocol 33 installs canonical full role closure views",
+			protocol:           defines.MORPCVersion33,
+			wantCheckFunction:  true,
+			wantCurrentRoles:   true,
+			wantCanonicalViews: true,
 		},
 	}
 
@@ -554,10 +566,12 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 
 				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
 
-				require.Equal(t, test.wantCheckView, containsSQL(executed, sysview.InformationSchemaCheckConstraintsDDL))
-				require.Equal(t, test.wantLatestTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-				require.Equal(t, test.wantLegacyTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsLegacyDDL))
 				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
+				require.Equal(t, test.wantCompatibilityRoles,
+					containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+				require.Equal(t, test.wantCanonicalViews,
+					containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
 			})
 		})
 	}

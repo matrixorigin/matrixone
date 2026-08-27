@@ -1,8 +1,10 @@
 set global enable_privilege_cache = off;
 drop database if exists metadata_visibility_db;
+drop database if exists metadata_visibility_show_db;
 drop user if exists metadata_visibility_user;
 drop role if exists metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 create database metadata_visibility_db;
+create database metadata_visibility_show_db;
 create table metadata_visibility_db.allowed_table (
 id int primary key,
 secret varchar(20) unique,
@@ -48,6 +50,11 @@ select count(*) = 0 as schema_hidden
 from information_schema.schemata
 where schema_name = 'metadata_visibility_db';
 ➤ schema_hidden[-7,1,0]  𝄀
+1
+select count(*) = 0 as empty_schema_hidden_without_show_databases
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+➤ empty_schema_hidden_without_show_databases[-7,1,0]  𝄀
 1
 select
 (select count(*) = 0 from information_schema.check_constraints
@@ -208,6 +215,18 @@ where schema_name = 'metadata_visibility_owned_db';
 ➤ owned_schema_visible[-7,1,0]  𝄀
 1
 drop database metadata_visibility_owned_db;
+grant show databases on account * to metadata_visibility_primary;
+select count(*) = 1 as empty_schema_visible_with_show_databases
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+➤ empty_schema_visible_with_show_databases[-7,1,0]  𝄀
+1
+revoke show databases on account * from metadata_visibility_primary;
+select count(*) = 0 as empty_schema_hidden_after_show_databases_revoke
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+➤ empty_schema_hidden_after_show_databases_revoke[-7,1,0]  𝄀
+1
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 select count(*) = 1 as database_schema_visible
 from information_schema.schemata
@@ -294,6 +313,7 @@ where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') 
 ➤ admin_checks_visible[-7,1,0]  ¦  admin_fk_columns_visible[-7,1,0]  ¦  admin_fk_constraints_visible[-7,1,0]  ¦  admin_view_visible[-7,1,0]  ¦  admin_partitions_visible[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1  ¦  1
 drop database metadata_visibility_db;
+drop database metadata_visibility_show_db;
 drop user metadata_visibility_user;
 drop role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 set global enable_privilege_cache = on;

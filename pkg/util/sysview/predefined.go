@@ -159,8 +159,25 @@ var (
 // distributed recursive pipelines in every information_schema query. System
 // schemas remain universally visible for MySQL/tooling compatibility.
 func informationSchemaMetadataVisibilityCTE() string {
-	return "WITH __mo_active_roles(role_id) AS (" +
-		"SELECT role_id FROM mo_current_roles() role_closure), " +
+	return informationSchemaMetadataVisibilityCTEWithActiveRoles(
+		"SELECT role_id FROM mo_current_roles() role_closure")
+}
+
+// informationSchemaMetadataVisibilityCompatibilityCTE is used only while a
+// rolling deployment's common protocol is below the mo_current_roles()
+// capability. It keeps tenant bootstrap executable on every CN and remains
+// cycle-safe by limiting the compatibility closure to the active role and its
+// directly inherited roles. The v33 same-version upgrade replaces these
+// definitions with the complete canonical closure after all CNs support it.
+func informationSchemaMetadataVisibilityCompatibilityCTE() string {
+	return informationSchemaMetadataVisibilityCTEWithActiveRoles(
+		"SELECT current_role_id() UNION " +
+			"SELECT rg.granted_id FROM mo_catalog.mo_role_grant rg " +
+			"WHERE rg.grantee_id = current_role_id()")
+}
+
+func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string) string {
+	return "WITH __mo_active_roles(role_id) AS (" + activeRolesSQL + "), " +
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
@@ -184,6 +201,9 @@ func informationSchemaMetadataVisibilityCTE() string {
 		"db.datname IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR db.owner IN (SELECT role_id FROM __mo_active_roles) " +
 		"OR EXISTS (SELECT 1 FROM __mo_visible_tables tbl WHERE tbl.reldatabase_id = db.dat_id) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
+		"WHERE rp.obj_type = 'account' AND rp.privilege_name IN ('show databases','account all') " +
+		"AND rp.privilege_level = '*' AND rp.obj_id = 0) " +
 		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
 		"WHERE rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
 		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +

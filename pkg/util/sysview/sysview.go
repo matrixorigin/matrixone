@@ -17,6 +17,7 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -75,22 +76,33 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion16 {
+	if protocol >= defines.MORPCVersion33 {
 		return InitInformationSchemaSysTables
 	}
 
-	sqls := make([]string, 0, len(InitInformationSchemaSysTables)-1)
+	includeCheckConstraints := protocol >= defines.MORPCVersion16
+	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
 	for _, sql := range InitInformationSchemaSysTables {
-		switch sql {
-		case InformationSchemaCheckConstraintsDDL:
-			continue
-		case InformationSchemaTableConstraintsDDL:
-			sqls = append(sqls, InformationSchemaTableConstraintsLegacyDDL)
-		default:
-			sqls = append(sqls, sql)
+		if !includeCheckConstraints {
+			switch sql {
+			case InformationSchemaCheckConstraintsDDL:
+				continue
+			case InformationSchemaTableConstraintsDDL:
+				sql = InformationSchemaTableConstraintsLegacyDDL
+			}
 		}
+		sqls = append(sqls, informationSchemaMetadataVisibilityCompatibilityDDL(sql))
 	}
 	return sqls
+}
+
+func informationSchemaMetadataVisibilityCompatibilityDDL(sql string) string {
+	return strings.Replace(
+		sql,
+		informationSchemaMetadataVisibilityCTE(),
+		informationSchemaMetadataVisibilityCompatibilityCTE(),
+		1,
+	)
 }
 
 func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {

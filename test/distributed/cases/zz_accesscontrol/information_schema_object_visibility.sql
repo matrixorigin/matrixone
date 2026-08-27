@@ -2,10 +2,12 @@
 set global enable_privilege_cache = off;
 
 drop database if exists metadata_visibility_db;
+drop database if exists metadata_visibility_show_db;
 drop user if exists metadata_visibility_user;
 drop role if exists metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 
 create database metadata_visibility_db;
+create database metadata_visibility_show_db;
 create table metadata_visibility_db.allowed_table (
     id int primary key,
     secret varchar(20) unique,
@@ -44,6 +46,9 @@ where table_schema = 'metadata_visibility_db';
 select count(*) = 0 as schema_hidden
 from information_schema.schemata
 where schema_name = 'metadata_visibility_db';
+select count(*) = 0 as empty_schema_hidden_without_show_databases
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
 select
     (select count(*) = 0 from information_schema.check_constraints
      where constraint_schema = 'metadata_visibility_db') as check_constraints_hidden,
@@ -188,6 +193,22 @@ where schema_name = 'metadata_visibility_owned_db';
 -- @session
 
 drop database metadata_visibility_owned_db;
+grant show databases on account * to metadata_visibility_primary;
+
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+select count(*) = 1 as empty_schema_visible_with_show_databases
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+-- @session
+
+revoke show databases on account * from metadata_visibility_primary;
+
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+select count(*) = 0 as empty_schema_hidden_after_show_databases_revoke
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+-- @session
+
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
@@ -255,6 +276,7 @@ select
      where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as admin_partitions_visible;
 
 drop database metadata_visibility_db;
+drop database metadata_visibility_show_db;
 drop user metadata_visibility_user;
 drop role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 set global enable_privilege_cache = on;
