@@ -463,6 +463,9 @@ func (s *service) Start() (err error) {
 	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
 		return err
 	}
+	if err = s.prepareDDLVisibilityBarrier(); err != nil {
+		return err
+	}
 	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}

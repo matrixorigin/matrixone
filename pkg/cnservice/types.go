@@ -799,6 +799,7 @@ type service struct {
 	viewMetadataCatalogFenceMu      sync.Mutex
 	viewMetadataCatalogFenceReady   atomic.Bool
 	viewMetadataIngressReady        atomic.Bool
+	ddlVisibilityBarrierReady       atomic.Bool
 	viewMetadataGenerationRevoked   atomic.Bool
 	viewMetadataRevocationOnce      sync.Once
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous

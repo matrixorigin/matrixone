@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"errors"
+	"maps"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -907,7 +909,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			// A fresh proxy connection has no session commit timestamp to carry
 			// across CNs. Do not acknowledge a client DDL until every working CN
 			// has reached the commit, or the observed catalog frontier for a no-op.
-			err = syncDDLCommitToWorkingCNs(ctx2, execCtx.ses.GetService(), visibilityTS)
+			err = syncDDLCommitToBarrierReadyCNs(ctx2, execCtx.ses.GetService(), visibilityTS)
 		}
 	}
 	th.invalidateTxnUnsafe()
@@ -915,11 +917,19 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	return err
 }
 
-// syncDDLCommitToWorkingCNs waits until every CN that can accept a fresh proxy
-// connection has applied the DDL visibility frontier. Embedded and test
-// frontends may omit a query client because they do not expose a multi-CN
-// routing boundary.
-func syncDDLCommitToWorkingCNs(
+type ddlVisibilityTarget struct {
+	serviceID  string
+	generation uint64
+	address    string
+}
+
+// syncDDLCommitToBarrierReadyCNs closes both sides of CN admission. A CN publishes
+// barrier readiness before its startup frontier fence and public ingress. The
+// DDL sender refreshes membership again after fan-out and repeats if any ready
+// generation changed. Protocol v32 is a deployment gate: mixed-version
+// clusters retain legacy behavior without invoking an old receiver's fatal
+// SyncCommit path.
+func syncDDLCommitToBarrierReadyCNs(
 	ctx context.Context,
 	service string,
 	visibilityTS timestamp.Timestamp,
@@ -930,59 +940,108 @@ func syncDDLCommitToWorkingCNs(
 	}
 
 	qc := pu.QueryClient
+	protocol, ok := moruntime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := protocol.(int64)
+	if !ok || !valid || protocolVersion < defines.MORPCVersion32 {
+		return nil
+	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())
 	if cluster == nil {
 		return moerr.NewInternalError(ctx, "cannot establish DDL visibility barrier: cluster service is unavailable")
 	}
-	if refresher, ok := cluster.(clusterservice.AuthoritativeRefresher); ok {
+	refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalError(ctx, "cannot establish DDL visibility barrier: authoritative refresh is unavailable")
+	}
+
+	for {
 		if err := refresher.Refresh(ctx); err != nil {
 			return errors.Join(
 				err,
 				moerr.NewInternalError(ctx, "failed to refresh CNs for DDL visibility barrier"),
 			)
 		}
-	}
+		targets, err := ddlVisibilityTargets(ctx, cluster)
+		if err != nil {
+			return err
+		}
+		if len(targets) == 0 {
+			return moerr.NewInternalError(ctx, "cannot establish DDL visibility barrier: no barrier-ready CN is available")
+		}
 
-	addresses := make([]string, 0, 4)
+		ordered := make([]ddlVisibilityTarget, 0, len(targets))
+		for _, target := range targets {
+			ordered = append(ordered, target)
+		}
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].serviceID < ordered[j].serviceID })
+		for _, target := range ordered {
+			req := qc.NewRequest(querypb.CmdMethod_SyncCommitV2)
+			req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: visibilityTS}
+			resp, err := qc.SendMessage(ctx, target.address, req)
+			if err != nil {
+				return errors.Join(
+					err,
+					moerr.NewInternalErrorf(ctx, "failed to apply DDL commit on CN %s", target.address),
+				)
+			}
+			if resp == nil {
+				return moerr.NewInternalErrorf(ctx, "empty DDL visibility response from CN %s", target.address)
+			}
+			qc.Release(resp)
+		}
+
+		if err := refresher.Refresh(ctx); err != nil {
+			return errors.Join(
+				err,
+				moerr.NewInternalError(ctx, "failed to verify CNs for DDL visibility barrier"),
+			)
+		}
+		verified, err := ddlVisibilityTargets(ctx, cluster)
+		if err != nil {
+			return err
+		}
+		if maps.Equal(targets, verified) {
+			return nil
+		}
+	}
+}
+
+func ddlVisibilityTargets(
+	ctx context.Context,
+	cluster clusterservice.MOCluster,
+) (map[string]ddlVisibilityTarget, error) {
+	targets := make(map[string]ddlVisibilityTarget)
 	missingAddress := ""
-	cluster.GetCNService(
+	err := clusterservice.GetCNServiceRawWithContext(
+		ctx,
+		cluster,
 		clusterservice.NewSelector(),
 		func(cn metadata.CNService) bool {
+			if !cn.DDLVisibilityBarrierReady {
+				return true
+			}
 			if cn.QueryAddress == "" {
 				missingAddress = cn.ServiceID
 				return false
 			}
-			addresses = append(addresses, cn.QueryAddress)
+			targets[cn.ServiceID] = ddlVisibilityTarget{
+				serviceID:  cn.ServiceID,
+				generation: cn.ViewMetadataAdmissionGeneration,
+				address:    cn.QueryAddress,
+			}
 			return true
-		},
-	)
+		})
+	if err != nil {
+		return nil, err
+	}
 	if missingAddress != "" {
-		return moerr.NewInternalErrorf(
+		return nil, moerr.NewInternalErrorf(
 			ctx,
-			"cannot establish DDL visibility barrier: working CN %s has no query address",
+			"cannot establish DDL visibility barrier: barrier-ready CN %s has no query address",
 			missingAddress,
 		)
 	}
-	if len(addresses) == 0 {
-		return moerr.NewInternalError(ctx, "cannot establish DDL visibility barrier: no working CN is available")
-	}
-
-	for _, address := range addresses {
-		req := qc.NewRequest(querypb.CmdMethod_SyncCommit)
-		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: visibilityTS}
-		resp, err := qc.SendMessage(ctx, address, req)
-		if err != nil {
-			return errors.Join(
-				err,
-				moerr.NewInternalErrorf(ctx, "failed to apply DDL commit on CN %s", address),
-			)
-		}
-		if resp == nil {
-			return moerr.NewInternalErrorf(ctx, "empty DDL visibility response from CN %s", address)
-		}
-		qc.Release(resp)
-	}
-	return nil
+	return targets, nil
 }
 
 // Rollback rolls back the txn

@@ -15,10 +15,12 @@
 package client
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +34,19 @@ func testCreateQueryClient(t *testing.T) QueryClient {
 
 func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
+}
+
+func TestSyncCommitV2RequiresProtocolVersion32(t *testing.T) {
+	assert.Equal(t, defines.MORPCVersion32, methodVersions[query.CmdMethod_SyncCommitV2])
+
+	const serviceID = "sync-commit-v2-version-test"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	req := &query.Request{CmdMethod: query.CmdMethod_SyncCommitV2}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+	assert.Error(t, checkMethodVersion(context.Background(), serviceID, req))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	assert.NoError(t, checkMethodVersion(context.Background(), serviceID, req))
 }
 
 func TestNewCacheClient(t *testing.T) {

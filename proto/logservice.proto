@@ -61,6 +61,9 @@ message CNStore {
   uint64 ViewMetadataAdmissionGeneration = 18;
   uint64 ViewMetadataObservedEpoch = 19;
   bool ViewMetadataAdmissionReady = 20;
+  // DDLVisibilityBarrierReady means QueryService can accept the versioned DDL
+  // visibility fence even when public SQL ingress is not admitted yet.
+  bool DDLVisibilityBarrierReady = 21;
 }
 
 message TNStore {
@@ -164,6 +167,7 @@ message CNStoreHeartbeat {
   // ViewMetadataIngressReady is published only after every public CN ingress
   // listener has started successfully. Admission alone is not routability.
   bool            ViewMetadataIngressReady = 24;
+  bool            DDLVisibilityBarrierReady = 25;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -687,6 +691,7 @@ message CNStoreInfo {
   uint64 ViewMetadataRevalidatedEpoch = 24;
   bool ViewMetadataAdmissionReady = 25;
   bool ViewMetadataIngressReady = 26;
+  bool DDLVisibilityBarrierReady = 27;
 }
 
 // CNState contains all CN details known to the HAKeeper.

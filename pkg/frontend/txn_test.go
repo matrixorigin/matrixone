@@ -906,13 +906,19 @@ func (c *ddlSyncQueryClient) Close() error {
 	return nil
 }
 
-func TestCommitSyncsDDLCommitToWorkingCNs(t *testing.T) {
+func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 	const queryServiceID = "ddl-sync-commit-test"
 	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
 	snapshotTS := timestamp.Timestamp{PhysicalTime: 90, LogicalTime: 5}
 	targets := []metadata.CNService{
-		{ServiceID: "cn-1", QueryAddress: "cn-1:6001"},
-		{ServiceID: "cn-2", QueryAddress: "cn-2:6001"},
+		{
+			ServiceID: "cn-1", QueryAddress: "cn-1:6001",
+			ViewMetadataAdmissionGeneration: 1, DDLVisibilityBarrierReady: true,
+		},
+		{
+			ServiceID: "cn-2", QueryAddress: "cn-2:6001",
+			ViewMetadataAdmissionGeneration: 1, DDLVisibilityBarrierReady: true,
+		},
 	}
 
 	newState := func(t *testing.T) (*Session, *testTxnOp, *ddlSyncQueryClient, *ExecCtx) {
@@ -958,21 +964,88 @@ func TestCommitSyncsDDLCommitToWorkingCNs(t *testing.T) {
 		return ses, op, qc, execCtx
 	}
 
-	t.Run("waits for every working CN", func(t *testing.T) {
+	t.Run("waits for every stable barrier-ready CN", func(t *testing.T) {
 		ses, op, qc, execCtx := newState(t)
 		defer ses.Close()
 		defer execCtx.Close()
 
 		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
 		require.Equal(t, []ddlSyncRequest{
-			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
 		}, qc.requests)
 		require.Equal(t, 2, qc.releases)
 		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
-		require.Equal(t, 1, cluster.refreshCalls)
+		require.Equal(t, 2, cluster.refreshCalls)
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("retries when a CN becomes barrier-ready during fan-out", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		expanded := append([]metadata.CNService{}, targets...)
+		expanded = append(expanded, metadata.CNService{
+			ServiceID: "cn-3", QueryAddress: "cn-3:6001",
+			ViewMetadataAdmissionGeneration: 7, DDLVisibilityBarrierReady: true,
+		})
+		cluster.refreshSnapshots = [][]metadata.CNService{targets, expanded, expanded, expanded}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-3:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+		}, qc.requests)
+		require.Equal(t, 5, qc.releases)
+		require.Equal(t, 4, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("retries when a barrier-ready CN generation is replaced", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		replaced := append([]metadata.CNService{}, targets...)
+		replaced[1].ViewMetadataAdmissionGeneration = 2
+		replaced[1].QueryAddress = "cn-2-new:6001"
+		cluster.refreshSnapshots = [][]metadata.CNService{targets, replaced, replaced, replaced}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2-new:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+		}, qc.requests)
+		require.Equal(t, 4, qc.releases)
+		require.Equal(t, 4, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("mixed-version cluster does not call a legacy receiver", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
+			moruntime.MOProtocolVersion,
+			defines.MORPCVersion31,
+		)
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Empty(t, qc.requests)
+		require.Zero(t, qc.releases)
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		require.Zero(t, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
 
@@ -1023,7 +1096,7 @@ func TestCommitSyncsDDLCommitToWorkingCNs(t *testing.T) {
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
 
-	t.Run("rejects an empty working CN set", func(t *testing.T) {
+	t.Run("rejects an empty barrier-ready CN set", func(t *testing.T) {
 		ses, op, qc, execCtx := newState(t)
 		defer ses.Close()
 		defer execCtx.Close()
@@ -1033,23 +1106,25 @@ func TestCommitSyncsDDLCommitToWorkingCNs(t *testing.T) {
 		)
 
 		err := ses.GetTxnHandler().Commit(execCtx)
-		require.ErrorContains(t, err, "no working CN is available")
+		require.ErrorContains(t, err, "no barrier-ready CN is available")
 		require.Empty(t, qc.requests)
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
 
-	t.Run("rejects a working CN without query address", func(t *testing.T) {
+	t.Run("rejects a barrier-ready CN without query address", func(t *testing.T) {
 		ses, op, qc, execCtx := newState(t)
 		defer ses.Close()
 		defer execCtx.Close()
 		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
 			moruntime.ClusterService,
-			&mockMOCluster{cnServices: []metadata.CNService{{ServiceID: "cn-missing-address"}}},
+			&mockMOCluster{cnServices: []metadata.CNService{{
+				ServiceID: "cn-missing-address", DDLVisibilityBarrierReady: true,
+			}}},
 		)
 
 		err := ses.GetTxnHandler().Commit(execCtx)
-		require.ErrorContains(t, err, "working CN cn-missing-address has no query address")
+		require.ErrorContains(t, err, "barrier-ready CN cn-missing-address has no query address")
 		require.Empty(t, qc.requests)
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
@@ -1063,8 +1138,8 @@ func TestCommitSyncsDDLCommitToWorkingCNs(t *testing.T) {
 
 		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
 		require.Equal(t, []ddlSyncRequest{
-			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommit, commitTS: snapshotTS.Prev()},
-			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommit, commitTS: snapshotTS.Prev()},
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: snapshotTS.Prev()},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: snapshotTS.Prev()},
 		}, qc.requests)
 		require.Equal(t, 2, qc.releases)
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)

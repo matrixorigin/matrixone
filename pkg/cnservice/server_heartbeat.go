@@ -218,6 +218,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
 		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
 		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
+		DDLVisibilityBarrierReady:       s.ddlVisibilityBarrierReady.Load(),
 	}
 	if s.viewMetadataEpochFence != nil {
 		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()

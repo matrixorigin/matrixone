@@ -163,6 +163,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
 	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
+	storeInfo.DDLVisibilityBarrierReady = hb.DDLVisibilityBarrierReady
 	s.Stores[hb.UUID] = storeInfo
 }
 

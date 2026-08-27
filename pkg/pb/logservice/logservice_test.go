@@ -39,6 +39,7 @@ func TestCNStateUpdate(t *testing.T) {
 		ServiceAddress:              "addr-a",
 		Role:                        metadata.CNRole_AP,
 		CommandDeliveryAckSupported: true,
+		DDLVisibilityBarrierReady:   true,
 	}
 	tick1 := uint64(100)
 
@@ -51,6 +52,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Labels:                      map[string]metadata.LabelList{},
 		UpTime:                      state.Stores[hb1.UUID].UpTime,
 		CommandDeliveryAckSupported: true,
+		DDLVisibilityBarrierReady:   true,
 	})
 
 	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}

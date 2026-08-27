@@ -147,6 +147,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo)
 	s.addQueryCommandHandler(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo)
 	s.addQueryCommandHandler(query.CmdMethod_SyncCommit, s.handleSyncCommit)
+	s.addQueryCommandHandler(query.CmdMethod_SyncCommitV2, s.handleSyncCommit)
 	s.addQueryCommandHandler(query.CmdMethod_GetCommit, s.handleGetCommit)
 	s.addQueryCommandHandler(query.CmdMethod_ShowProcessList, s.handleShowProcessList)
 	s.addQueryCommandHandler(query.CmdMethod_RunTask, s.handleRunTask)

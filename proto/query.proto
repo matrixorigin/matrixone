@@ -108,6 +108,9 @@ enum CmdMethod {
   IcebergCacheInvalidate = 38;
   // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
   MongoDBClientRetire = 39;
+  // SyncCommitV2 waits for local logtail application with the request context.
+  // Unlike legacy SyncCommit, cancellation is returned to the sender.
+  SyncCommitV2 = 40;
 }
 
 // QueryRequest is the common query request. It contains the query

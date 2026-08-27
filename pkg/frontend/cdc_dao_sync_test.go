@@ -80,9 +80,10 @@ func (m *mockQueryClient) Close() error {
 
 // Mock MOCluster for testing
 type mockMOCluster struct {
-	cnServices   []metadata.CNService
-	refreshCalls int
-	refreshError error
+	cnServices       []metadata.CNService
+	refreshSnapshots [][]metadata.CNService
+	refreshCalls     int
+	refreshError     error
 }
 
 func (m *mockMOCluster) GetCNService(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
@@ -102,7 +103,11 @@ func (m *mockMOCluster) GetAllTNServices() []metadata.TNService {
 }
 
 func (m *mockMOCluster) GetCNServiceWithoutWorkingState(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
-	// Not used in syncCommitTimestamp
+	for _, cn := range m.cnServices {
+		if !apply(cn) {
+			break
+		}
+	}
 }
 
 func (m *mockMOCluster) ForceRefresh(sync bool) {
@@ -111,6 +116,9 @@ func (m *mockMOCluster) ForceRefresh(sync bool) {
 
 func (m *mockMOCluster) Refresh(context.Context) error {
 	m.refreshCalls++
+	if m.refreshCalls <= len(m.refreshSnapshots) {
+		m.cnServices = m.refreshSnapshots[m.refreshCalls-1]
+	}
 	return m.refreshError
 }
 

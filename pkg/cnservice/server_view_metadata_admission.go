@@ -121,6 +121,7 @@ func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 	s.viewMetadataRevocationOnce.Do(func() {
 		s.viewMetadataGenerationRevoked.Store(true)
 		s.viewMetadataIngressReady.Store(false)
+		s.ddlVisibilityBarrierReady.Store(false)
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
 		runner := s.detachRevokedTaskRunner()

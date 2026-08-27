@@ -612,6 +612,7 @@ func TestClusterDetailsKeepsSupportedPendingButHidesLegacyIngress(t *testing.T) 
 	rsm.state.CNState.Stores["pending"] = pb.CNStoreInfo{
 		ViewMetadataAdmissionSupported:  true,
 		ViewMetadataAdmissionGeneration: 2,
+		DDLVisibilityBarrierReady:       true,
 	}
 	rsm.state.CNState.Stores["ready"] = pb.CNStoreInfo{
 		ViewMetadataAdmissionSupported:  true,
@@ -629,6 +630,7 @@ func TestClusterDetailsKeepsSupportedPendingButHidesLegacyIngress(t *testing.T) 
 	}
 	require.Contains(t, byID, "pending")
 	require.False(t, byID["pending"].ViewMetadataAdmissionReady)
+	require.True(t, byID["pending"].DDLVisibilityBarrierReady)
 	require.Contains(t, byID, "ready")
 	require.NotContains(t, byID, "legacy")
 }

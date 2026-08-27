@@ -139,6 +139,9 @@ message CNService {
   uint64 ViewMetadataAdmissionGeneration = 13;
   bool ViewMetadataAdmissionReady = 14;
   uint64 ViewMetadataObservedEpoch = 15;
+  // DDLVisibilityBarrierReady is published after QueryService is listening.
+  // A CN is not publicly routable until its startup DDL frontier fence completes.
+  bool DDLVisibilityBarrierReady = 16;
 }
 
 // TNService tn service metadata
