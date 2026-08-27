@@ -1,0 +1,93 @@
+drop account if exists issue_27660_branch_metadata;
+create account issue_27660_branch_metadata admin_name = 'admin' identified by '111';
+set @issue_27660_old_id = (
+select account_id
+from mo_catalog.mo_account
+where account_name = 'issue_27660_branch_metadata'
+);
+create database issue_27660_branch_db;
+create table issue_27660_branch_db.base (id int primary key);
+insert into issue_27660_branch_db.base values (1);
+data branch create table issue_27660_branch_db.child from issue_27660_branch_db.base;
+select count(*) as branch_rows_before_drop
+from mo_catalog.mo_branch_metadata
+where creator = @issue_27660_old_id;
+➤ branch_rows_before_drop[-5,64,0]  𝄀
+1
+select count(*) as feature_limit_rows_before_drop
+from mo_catalog.mo_feature_limit
+where account_id = @issue_27660_old_id;
+➤ feature_limit_rows_before_drop[-5,64,0]  𝄀
+1
+select feature_code, scope, quota
+from mo_catalog.mo_feature_limit
+where account_id = @issue_27660_old_id;
+➤ feature_code[12,50,0]  ¦  scope[12,50,0]  ¦  quota[-5,64,0]  𝄀
+BRANCH  ¦    ¦  50
+drop account issue_27660_branch_metadata;
+select count(*) as account_rows_after_drop
+from mo_catalog.mo_account
+where account_id = @issue_27660_old_id;
+➤ account_rows_after_drop[-5,64,0]  𝄀
+0
+select count(*) as branch_rows_after_drop
+from mo_catalog.mo_branch_metadata
+where creator = @issue_27660_old_id;
+➤ branch_rows_after_drop[-5,64,0]  𝄀
+0
+select count(*) as feature_limit_rows_after_drop
+from mo_catalog.mo_feature_limit
+where account_id = @issue_27660_old_id;
+➤ feature_limit_rows_after_drop[-5,64,0]  𝄀
+0
+create account issue_27660_branch_metadata admin_name = 'admin' identified by '111';
+set @issue_27660_new_id = (
+select account_id
+from mo_catalog.mo_account
+where account_name = 'issue_27660_branch_metadata'
+);
+select count(*) as recreated_with_new_id
+from mo_catalog.mo_account
+where account_name = 'issue_27660_branch_metadata'
+and account_id <> @issue_27660_old_id;
+➤ recreated_with_new_id[-5,64,0]  𝄀
+1
+create database issue_27660_recreated_db;
+create table issue_27660_recreated_db.base (id int primary key);
+data branch create table issue_27660_recreated_db.child from issue_27660_recreated_db.base;
+select count(*) as new_branch_rows_before_second_drop
+from mo_catalog.mo_branch_metadata
+where creator = @issue_27660_new_id;
+➤ new_branch_rows_before_second_drop[-5,64,0]  𝄀
+1
+select count(*) as old_branch_rows_after_recreate
+from mo_catalog.mo_branch_metadata
+where creator = @issue_27660_old_id;
+➤ old_branch_rows_after_recreate[-5,64,0]  𝄀
+0
+select count(*) as new_feature_limit_rows_before_second_drop
+from mo_catalog.mo_feature_limit
+where account_id = @issue_27660_new_id;
+➤ new_feature_limit_rows_before_second_drop[-5,64,0]  𝄀
+1
+select count(*) as old_feature_limit_rows_after_recreate
+from mo_catalog.mo_feature_limit
+where account_id = @issue_27660_old_id;
+➤ old_feature_limit_rows_after_recreate[-5,64,0]  𝄀
+0
+drop account issue_27660_branch_metadata;
+select count(*) as recreated_account_rows_after_drop
+from mo_catalog.mo_account
+where account_id = @issue_27660_new_id;
+➤ recreated_account_rows_after_drop[-5,64,0]  𝄀
+0
+select count(*) as recreated_branch_rows_after_drop
+from mo_catalog.mo_branch_metadata
+where creator = @issue_27660_new_id;
+➤ recreated_branch_rows_after_drop[-5,64,0]  𝄀
+0
+select count(*) as recreated_feature_limit_rows_after_drop
+from mo_catalog.mo_feature_limit
+where account_id = @issue_27660_new_id;
+➤ recreated_feature_limit_rows_after_drop[-5,64,0]  𝄀
+0
