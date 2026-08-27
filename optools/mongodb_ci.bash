@@ -10,6 +10,8 @@ REPORT_DIR="${MO_MONGODB_REPORT_DIR:-${ROOT_DIR}/test/mongodb/reports/ci_$(date 
 TMP_DIR=""
 MO_PID=""
 PORT_LEASE_PID=""
+MONGODB_KEYFILE_DIR=""
+MONGODB_KEYFILE=""
 
 readonly PORT_BLOCK_WIDTH=80
 # AddressManager permits its base port plus 20 fallback slots when an address
@@ -70,6 +72,15 @@ cleanup() {
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
       MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE_DIR="${MONGODB_KEYFILE_DIR:-/tmp}" \
       docker compose -p "${COMPOSE_PROJECT_NAME:-mo-mongodb-unused}" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    # Docker must receive this bind-mounted file through a shared directory.
+    # It is created by the exact mktemp template below and contains only the
+    # generated keyfile.
+    if [[ -n "$MONGODB_KEYFILE" && -f "$MONGODB_KEYFILE" ]]; then
+      unlink "$MONGODB_KEYFILE" || true
+    fi
+    if [[ -n "$MONGODB_KEYFILE_DIR" && -d "$MONGODB_KEYFILE_DIR" && "$(basename "$MONGODB_KEYFILE_DIR")" == mo-mongodb-key-source.* ]]; then
+      rmdir "$MONGODB_KEYFILE_DIR" || log "refusing to remove non-empty MongoDB keyfile directory: $MONGODB_KEYFILE_DIR"
+    fi
     # TMP_DIR is created by the exact mktemp template below. Refuse a broad
     # deletion if that invariant is ever changed or corrupted.
     if [[ -d "$TMP_DIR" && "$(basename "$TMP_DIR")" == mo-mongodb-e2e.* ]]; then
@@ -414,8 +425,11 @@ run_e2e() {
   export MONGODB_ROOT_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_NEXT_PASSWORD="$(openssl rand -hex 24)"
-  export MONGODB_KEYFILE_DIR="$TMP_DIR/mongodb-key-source"
-  mkdir -p "$MONGODB_KEYFILE_DIR"
+  # Docker Desktop can expose host-only temporary roots as empty bind mounts.
+  # Use the workspace parent, which is shared with Docker, for this one
+  # container-only keyfile. Host-only binaries and diagnostics stay in
+  # /private/tmp and never enter the worktree.
+  export MONGODB_KEYFILE_DIR="$(mktemp -d "$ROOT_DIR/../.mo-mongodb-key-source.XXXXXX")"
   export MONGODB_KEYFILE="$MONGODB_KEYFILE_DIR/mongodb-keyfile"
   openssl rand -base64 756 >"$MONGODB_KEYFILE"
   chmod 600 "$MONGODB_KEYFILE"
