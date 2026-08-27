@@ -1855,6 +1855,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 		emp := mock.ctxt.tables["emp"]
+		require.NotZero(t, emp.TblId)
 		empDeptno := emp.Fkeys[0].Cols[0]
 		selfParentID := selfRef.Fkeys[0].Cols[0]
 		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
@@ -1865,7 +1866,6 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 			OnUpdate:    planpb.ForeignKeyDef_RESTRICT,
 		})
 		selfRef.RefChildTbls = append(selfRef.RefChildTbls, emp.TblId)
-		mock.ctxt.id2name[emp.TblId] = "emp"
 
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = id + 10")
 		require.NoError(t, err)

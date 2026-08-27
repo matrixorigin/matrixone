@@ -1,6 +1,7 @@
 -- @suite
--- This suite asserts SQL semantics only and is intentionally topology-agnostic:
--- the same file runs in standalone and multi-CN BVT jobs.
+-- This suite asserts SQL semantics plus the stable logical runtime-filter
+-- contract, while remaining deployment-topology agnostic: the same file runs
+-- in standalone and multi-CN BVT jobs.
 -- @setup
 drop database if exists right_single_rf;
 create database right_single_rf;
@@ -18,6 +19,13 @@ insert into small_lookup values
     (2, 5000, 49999),
     (3, 30000, 0),
     (4, null, 0);
+
+-- @case
+-- @desc: a naturally local query uses bounded right-SINGLE RF when small-build statistics are unavailable
+-- @label:bvt
+explain select s.id, (select b.v from big_pk b where b.id = s.lookup_id) as scalar_v
+from small_lookup s
+order by s.id;
 
 -- @case
 -- @desc: right-SINGLE exact-IN keeps match, missing and NULL preserved rows

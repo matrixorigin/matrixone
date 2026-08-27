@@ -142,17 +142,25 @@ type SessionInfo struct {
 	// CountUpdateChangedRows requests MySQL changed-row semantics for UPDATE.
 	// Frontend sessions set it when CLIENT_FOUND_ROWS was not negotiated.
 	CountUpdateChangedRows bool
-	StorageEngine          engine.Engine
-	QueryId                []string
-	ResultColTypes         []types.Type
-	SeqCurValues           map[uint64]string
-	SeqDeleteKeys          []uint64
-	SeqAddValues           map[uint64]string
-	SeqLastValue           []string
-	SqlHelper              sqlHelper
-	Buf                    *buffer.Buffer
-	LogLevel               zapcore.Level
-	SessionId              uuid.UUID
+	// FoundRows is the row count exposed by FOUND_ROWS() for the preceding
+	// result-set statement.
+	FoundRows  uint64
+	ResultRows uint64
+	// FoundRowsRecorded prevents a SQL_CALC_FOUND_ROWS count from being
+	// overwritten by the limited output count.
+	FoundRowsRecorded bool
+	SqlCalcFoundRows  bool
+	StorageEngine     engine.Engine
+	QueryId           []string
+	ResultColTypes    []types.Type
+	SeqCurValues      map[uint64]string
+	SeqDeleteKeys     []uint64
+	SeqAddValues      map[uint64]string
+	SeqLastValue      []string
+	SqlHelper         sqlHelper
+	Buf               *buffer.Buffer
+	LogLevel          zapcore.Level
+	SessionId         uuid.UUID
 }
 
 type Session interface {
@@ -192,6 +200,29 @@ type ForeignConnCache interface {
 	// RemoveForeignConn detaches and returns the connection for handle so the
 	// caller can close it; ok=false if no such handle.
 	RemoveForeignConn(handle string) (ForeignConn, bool)
+}
+
+// KafkaSessionState is an OPTIONAL capability implemented only by the
+// interactive frontend session. The Kafka external-table reader records the
+// highest message offset a completed scan consumed, and the
+// LAST_KAFKA_MESSAGE_ID() builtin reads it back — the pair gives a consumer
+// explicit gap-free chaining (feed the last id as the next
+// __mo_read_start_id). Transaction-consistent checkpoints live in an ordinary
+// MatrixOne table, not this session state. Reached via
+// proc.GetSession().(KafkaSessionState).
+type KafkaSessionState interface {
+	// SetLastKafkaMessageID records the offset of the last message a
+	// successfully completed Kafka scan returned in this session.
+	SetLastKafkaMessageID(id int64)
+	// LastKafkaMessageID returns the recorded offset; ok=false when no Kafka
+	// scan has completed in this session yet.
+	LastKafkaMessageID() (int64, bool)
+	// EnqueueKafkaProgress defers a drained Kafka scan's progress publication
+	// to the STATEMENT terminal: on split scopes the source pipeline resets
+	// before downstream pipelines consume the final batch, so source-pipeline
+	// success is not statement success. The session runs every queued finalizer
+	// exactly once with the whole statement's outcome.
+	EnqueueKafkaProgress(finalize func(publish bool))
 }
 
 type ExecStatus int
@@ -738,6 +769,52 @@ func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
 	return &proc.Base.SessionInfo
+}
+
+func (proc *Process) BeginFoundRowsStatement(sqlCalc bool) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.ResultRows = 0
+	proc.Base.SessionInfo.FoundRowsRecorded = false
+	proc.Base.SessionInfo.SqlCalcFoundRows = sqlCalc
+}
+
+func (proc *Process) GetFoundRows() uint64 {
+	if proc == nil || proc.Base == nil {
+		return 0
+	}
+	return proc.Base.SessionInfo.FoundRows
+}
+
+func (proc *Process) AddResultRows(rows uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.ResultRows += rows
+}
+
+func (proc *Process) GetResultRows() uint64 {
+	if proc == nil || proc.Base == nil {
+		return 0
+	}
+	return proc.Base.SessionInfo.ResultRows
+}
+
+func (proc *Process) SetFoundRows(rows uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.FoundRows = rows
+	proc.Base.SessionInfo.FoundRowsRecorded = true
+}
+
+func (proc *Process) FoundRowsRecorded() bool {
+	return proc != nil && proc.Base != nil && proc.Base.SessionInfo.FoundRowsRecorded
+}
+
+func (proc *Process) IsSqlCalcFoundRows() bool {
+	return proc != nil && proc.Base != nil && proc.Base.SessionInfo.SqlCalcFoundRows
 }
 
 func (proc *Process) GetLastInsertID() uint64 {

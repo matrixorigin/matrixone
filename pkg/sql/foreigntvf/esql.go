@@ -106,11 +106,9 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// MO's fileservice replaces http.DefaultTransport with a custom
-	// RoundTripper, so the ES client cannot clone it. Always provide an
-	// explicit transport; with no library CACert set, elastictransport uses
-	// it as-is, so EsqlConn.Close and the failure defer below drain the
-	// transport that actually owns the sockets.
+	// Always provide an explicit transport. With no library CACert set,
+	// elastictransport uses it as-is, so EsqlConn.Close and the failure defer
+	// below drain the transport that actually owns the sockets.
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{

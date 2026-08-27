@@ -15,11 +15,13 @@
 package aggexec
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -106,11 +108,21 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	equal, err = preflightArgumentRowsEqual([]*vector.Vector{normal}, 1, 1)
 	require.NoError(t, err)
 	require.True(t, equal)
-	duplicate, err := earlierDistinctArgumentRow(
+	batch := distinctArgumentBatch{}
+	duplicate, err := batch.seenOrInsert(
+		[]uint64{1, 2, 1}, []*vector.Vector{normal}, 0, 0)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	duplicate, err = batch.seenOrInsert(
 		[]uint64{1, 2, 1}, []*vector.Vector{normal}, 0, 2)
 	require.NoError(t, err)
 	require.False(t, duplicate)
-	duplicate, err = earlierDistinctArgumentRow(
+	batch = distinctArgumentBatch{}
+	duplicate, err = batch.seenOrInsert(
+		[]uint64{1, 2, 1}, []*vector.Vector{constant}, 5, 0)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	duplicate, err = batch.seenOrInsert(
 		[]uint64{1, 2, 1}, []*vector.Vector{constant}, 5, 2)
 	require.NoError(t, err)
 	require.True(t, duplicate)
@@ -185,6 +197,324 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	intValues.Free(mp)
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestDistinctArgumentBatchDeduplicatesFullWorkUnit(t *testing.T) {
+	const offset = 17
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < offset; i++ {
+		require.NoError(t, vector.AppendFixed(input, int64(-1), false, mp))
+	}
+	groups := make([]uint64, hashmap.UnitLimit)
+	for i := range groups {
+		groups[i] = 1
+		require.NoError(t, vector.AppendFixed(input, int64(i), false, mp))
+	}
+	defer input.Free(mp)
+
+	batch := distinctArgumentBatch{}
+	for row := range groups {
+		duplicate, err := batch.seenOrInsert(
+			groups, []*vector.Vector{input}, offset, row)
+		require.NoError(t, err)
+		require.False(t, duplicate, "unique row %d", row)
+	}
+	for row := range groups {
+		duplicate, err := batch.seenOrInsert(
+			groups, []*vector.Vector{input}, offset, row)
+		require.NoError(t, err)
+		require.True(t, duplicate, "second visit to row %d", row)
+	}
+
+	_, err := batch.seenOrInsert(groups, []*vector.Vector{input}, offset, -1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	_, err = batch.seenOrInsert(
+		make([]uint64, hashmap.UnitLimit+1), []*vector.Vector{input}, offset, 0)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+}
+
+func TestDistinctArgumentLinearBatchTransitionsOnlyAfterUniqueLimit(t *testing.T) {
+	const offset = 3
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	for range offset {
+		require.NoError(t, vector.AppendFixed(input, int64(-1), false, mp))
+	}
+	for i := range distinctArgumentLinearLimit {
+		require.NoError(t, vector.AppendFixed(input, int64(i), false, mp))
+	}
+	require.NoError(t, vector.AppendFixed(input, int64(0), false, mp))
+	require.NoError(t, vector.AppendFixed(input, int64(distinctArgumentLinearLimit), false, mp))
+	defer input.Free(mp)
+
+	groups := make([]uint64, distinctArgumentLinearLimit+2)
+	for i := range groups {
+		groups[i] = 1
+	}
+	batch := distinctArgumentLinearBatch{}
+	for row := range distinctArgumentLinearLimit {
+		duplicate, err := batch.seen(
+			groups, []*vector.Vector{input}, offset, row)
+		require.NoError(t, err)
+		require.False(t, duplicate)
+		require.True(t, batch.insertUnique(row))
+	}
+	duplicate, err := batch.seen(
+		groups, []*vector.Vector{input}, offset, distinctArgumentLinearLimit)
+	require.NoError(t, err)
+	require.True(t, duplicate,
+		"a duplicate stays on the exact linear path")
+
+	duplicate, err = batch.seen(
+		groups, []*vector.Vector{input}, offset, distinctArgumentLinearLimit+1)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	require.False(t, batch.insertUnique(distinctArgumentLinearLimit+1),
+		"the ninth unique tuple switches to hashed admission")
+}
+
+func TestDistinctArgumentAdaptivePreflightPreservesMultiColumnSemantics(t *testing.T) {
+	const offset = 2
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec, err := MakeAgg(
+		mp, AggIdOfCountColumn, true,
+		types.T_varchar.ToType(), types.T_int64.ToType())
+	require.NoError(t, err)
+	owner := exec.(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(2))
+
+	stringsInput := vector.NewVec(types.T_varchar.ToType())
+	intsInput := vector.NewVec(types.T_int64.ToType())
+	for range offset {
+		require.NoError(t, vector.AppendBytes(stringsInput, []byte("ignored"), false, mp))
+		require.NoError(t, vector.AppendFixed(intsInput, int64(-1), false, mp))
+	}
+	groups := make([]uint64, hashmap.UnitLimit)
+	want := [2]map[string]struct{}{{}, {}}
+	for row := range groups {
+		group := uint64(row%2 + 1)
+		if row == 0 {
+			group = GroupNotMatched
+		}
+		groups[row] = group
+		value := []byte("value-" + string(rune('a'+row%32)))
+		null := row == 19
+		require.NoError(t, vector.AppendBytes(stringsInput, value, null, mp))
+		require.NoError(t, vector.AppendFixed(intsInput, int64(row%32), false, mp))
+		if group != GroupNotMatched && !null {
+			want[group-1][string(value)] = struct{}{}
+		}
+	}
+	vectors := []*vector.Vector{stringsInput, intsInput}
+	preflight := exec.(BatchCapacityPreflight)
+	require.NoError(t, preflight.PreflightBatchFill(offset, groups, vectors))
+	admitted := account.Snapshot().Used
+	require.NoError(t, exec.BatchFill(offset, groups, vectors))
+	require.Equal(t, admitted, account.Snapshot().Used,
+		"publication must stay within the adaptively admitted capacity")
+
+	// The second pass exercises both the in-batch hashed duplicate path and
+	// keys already present in the published skiplist.
+	require.NoError(t, preflight.PreflightBatchFill(offset, groups, vectors))
+	require.NoError(t, exec.BatchFill(offset, groups, vectors))
+	require.Equal(t, admitted, account.Snapshot().Used)
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	for group := range want {
+		require.Equal(t, int64(len(want[group])),
+			vector.GetFixedAtNoTypeCheck[int64](results[0], group))
+	}
+	results[0].Free(mp)
+	stringsInput.Free(mp)
+	intsInput.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestNonDistinctMultiArgumentPreflightRemainsPublicationFree(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	info := aggInfo{
+		argTypes: []types.Type{
+			types.T_varchar.ToType(), types.T_int64.ToType(),
+		},
+		saveArg: true,
+	}
+	state := aggState{}
+	require.NoError(t, state.initWithAllocation(
+		mp, 1, 1, &info, false, allocation))
+	exec := aggExec{
+		mp:         mp,
+		aggInfo:    info,
+		chunkSize:  AggBatchSize,
+		state:      []aggState{state},
+		allocation: allocation,
+	}
+	stringsInput := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"ignored", "first", "null", "second"})
+	intsInput := buildFixedVec(t, mp, types.T_int64.ToType(),
+		[]int64{0, 1, 2, 3})
+	stringsInput.SetNull(2)
+	require.NoError(t, exec.preflightBatchFillArgs(
+		0,
+		[]uint64{GroupNotMatched, 1, 1, 1},
+		[]*vector.Vector{stringsInput, intsInput},
+		false,
+	))
+	require.Zero(t, exec.state[0].argCnt[0],
+		"capacity admission must not publish aggregate arguments")
+	require.Positive(t, len(exec.state[0].argScratch))
+
+	stringsInput.Free(mp)
+	intsInput.Free(mp)
+	exec.state[0].free(mp)
+	exec.state = nil
+	exec.allocation = nil
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestNextArgumentArenaCapacityUsesGeometricGrowth(t *testing.T) {
+	capacity, err := nextArgumentArenaCapacity(1024, 1024)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1024), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(16<<10, 16<<10+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(16<<10+kAggArgArenaSize), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(kAggArgArenaSize, kAggArgArenaSize+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2*kAggArgArenaSize), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(math.MaxUint32-1, math.MaxUint32)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint32), capacity)
+
+	_, err = nextArgumentArenaCapacity(math.MaxUint32, uint64(math.MaxUint32)+1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+
+	capacity, err = nextLinearArgumentArenaCapacity(
+		2*kAggArgArenaSize, 2*kAggArgArenaSize+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3*kAggArgArenaSize), capacity)
+
+	capacity, err = nextLinearArgumentArenaCapacity(
+		math.MaxUint32-1, math.MaxUint32)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint32), capacity)
+
+	_, err = nextLinearArgumentArenaCapacity(
+		math.MaxUint32, uint64(math.MaxUint32)+1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+}
+
+func TestArgumentArenaGrowthFallsBackUnderCapacityPressure(t *testing.T) {
+	const current = 2 * kAggArgArenaSize
+	preferred, err := nextArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	fallback, err := nextLinearArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2*current), preferred)
+	require.Equal(t, uint64(current+kAggArgArenaSize), fallback)
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	// The old arena and the linear fallback fit together exactly. The preferred
+	// geometric arena does not, proving that retry preserves availability rather
+	// than merely selecting the same capacity through another branch.
+	account, err := registry.Open(current + fallback)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	require.NoError(t, err)
+
+	buf, err := allocation.allocArgumentArena(mp, current)
+	require.NoError(t, err)
+	state := aggState{
+		allocation: allocation,
+		argbuf:     buf,
+		argSkl:     arenaskl.NewSkiplist(arenaskl.NewArena(buf), bytes.Compare),
+	}
+	require.NoError(t, state.argSkl.Add([]byte("kept"), nil))
+	used := uint64(state.argSkl.Arena().Size())
+	require.Less(t, used, uint64(current+1))
+	require.NoError(t, state.preflightArgumentCapacity(
+		mp, uint64(current+1)-used, 0))
+	require.Equal(t, int(fallback), len(state.argbuf))
+	require.True(t, state.argSkl.Contains([]byte("kept")))
+	require.Equal(t, fallback, account.Snapshot().Used)
+
+	mp.Free(state.argbuf)
+	require.Zero(t, account.Snapshot().Used)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArgumentArenaGrowthFallsBackAtAllocatorLimit(t *testing.T) {
+	const current = 2 * kAggArgArenaSize
+	preferred, err := nextArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	fallback, err := nextLinearArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	require.Greater(t, preferred, fallback)
+
+	oldCapLimit := mpool.CapLimit
+	mpool.CapLimit = int(preferred)
+	t.Cleanup(func() {
+		mpool.CapLimit = oldCapLimit
+	})
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(current + fallback)
+	require.NoError(t, err)
+	state := aggState{}
+	t.Cleanup(func() {
+		if state.argbuf != nil {
+			mp.Free(state.argbuf)
+			state.argbuf = nil
+		}
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+		require.Zero(t, mp.CurrNB())
+	})
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	require.NoError(t, err)
+
+	buf, err := allocation.allocArgumentArena(mp, current)
+	require.NoError(t, err)
+	state = aggState{
+		allocation: allocation,
+		argbuf:     buf,
+		argSkl:     arenaskl.NewSkiplist(arenaskl.NewArena(buf), bytes.Compare),
+	}
+
+	require.NoError(t, state.argSkl.Add([]byte("kept"), nil))
+	used := uint64(state.argSkl.Arena().Size())
+	require.Less(t, used, uint64(current+1))
+	require.NoError(t, state.preflightArgumentCapacity(
+		mp, uint64(current+1)-used, 0))
+	require.Equal(t, int(fallback), len(state.argbuf))
+	require.True(t, state.argSkl.Contains([]byte("kept")))
+	require.Equal(t, fallback, account.Snapshot().Used)
 }
 
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {

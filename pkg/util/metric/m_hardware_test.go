@@ -21,8 +21,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/shirou/gopsutil/v3/cpu"
 	. "github.com/smartystreets/goconvey/convey"
 )
+
+func TestCPUBusyTimeUsesMonotonicBusyFields(t *testing.T) {
+	Convey("busy CPU time excludes idle, iowait, and double-counted guest time", t, func() {
+		stats := cpu.TimesStat{
+			User:      1,
+			System:    2,
+			Nice:      3,
+			Irq:       4,
+			Softirq:   5,
+			Steal:     6,
+			Idle:      1 << 53,
+			Iowait:    100,
+			Guest:     100,
+			GuestNice: 100,
+		}
+		So(cpuBusyTime(stats), ShouldEqual, float64(21))
+		So(CPUTotalTime(stats)-stats.Idle, ShouldNotEqual, cpuBusyTime(stats))
+	})
+
+	Convey("a decreasing iowait sample cannot make busy CPU time decrease", t, func() {
+		before := cpu.TimesStat{User: 100, Iowait: 10}
+		after := cpu.TimesStat{User: 101, Iowait: 0}
+
+		So(cpuBusyTime(after), ShouldBeGreaterThanOrEqualTo, cpuBusyTime(before))
+		So(CPUTotalTime(after)-after.Idle, ShouldBeLessThan, CPUTotalTime(before)-before.Idle)
+	})
+}
 
 func TestHardwareCPU(t *testing.T) {
 	Convey("collect cpu succ", t, func() {

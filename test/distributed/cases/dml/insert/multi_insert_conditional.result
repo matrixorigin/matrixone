@@ -1,0 +1,421 @@
+drop database if exists mi_cond;
+create database mi_cond;
+use mi_cond;
+create table src (id int primary key, cat int, val int, score int, txt varchar(20));
+insert into src select result, result % 5, result * 3, if(result % 10 = 0, NULL, result % 100), concat('t', result) from generate_series(1, 1000) g;
+select count(*), sum(val), count(score) from src;
+➤ count(*)[-5,64,0]  ¦  sum(val)[-5,64,0]  ¦  count(score)[-5,64,0]  𝄀
+1000  ¦  1501500  ¦  900
+create table t_even (id int primary key, val int);
+create table t_div3 (id int primary key, val int);
+create table t_big (id int primary key, val int);
+create table t_rest (id int primary key, val int);
+insert all
+when val % 2 = 0 then into t_even (id, val) values (id, val)
+when val % 3 = 0 then into t_div3 (id, val) values (id, val)
+when id > 900   then into t_big  (id, val) values (id, val)
+else                 into t_rest (id, val) values (id, val)
+select id, val from src;
+select (select count(*) from t_even) = (select count(*) from src where val % 2 = 0) as even_ok;
+➤ even_ok[-7,1,0]  𝄀
+1
+select (select count(*) from t_div3) = (select count(*) from src where val % 3 = 0) as div3_ok;
+➤ div3_ok[-7,1,0]  𝄀
+1
+select (select count(*) from t_big)  = (select count(*) from src where id > 900) as big_ok;
+➤ big_ok[-7,1,0]  𝄀
+1
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_div3;
+➤ count(*)[-5,64,0]  𝄀
+1000
+select count(*) from t_even e join t_div3 d on e.id = d.id;
+➤ count(*)[-5,64,0]  𝄀
+500
+select count(*) from t_even e join t_big b on e.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+50
+select count(*) from t_div3 d join t_big b on d.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+100
+select (select count(*) from t_even) + (select count(*) from t_div3) + (select count(*) from t_big) + (select count(*) from t_rest) as total_written;
+➤ total_written[-5,64,0]  𝄀
+1600
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+insert first
+when val % 2 = 0 then into t_even (id, val) values (id, val)
+when val % 3 = 0 then into t_div3 (id, val) values (id, val)
+when id > 900   then into t_big  (id, val) values (id, val)
+else                 into t_rest (id, val) values (id, val)
+select id, val from src;
+select count(*) from t_even;
+➤ count(*)[-5,64,0]  𝄀
+500
+select count(*) from t_div3;
+➤ count(*)[-5,64,0]  𝄀
+500
+select count(*) from t_big;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_even e join t_div3 d on e.id = d.id;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_even e join t_big b on e.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_div3 d join t_big b on d.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+0
+select (select count(*) from t_even) + (select count(*) from t_div3) + (select count(*) from t_big) + (select count(*) from t_rest) = (select count(*) from src) as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+select count(*) from t_big;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+insert first
+when score > 90 then into t_big  (id, val) values (id, score)
+when score < 10 then into t_even (id, val) values (id, score)
+else                 into t_rest (id, val) values (id, coalesce(score, -1))
+select id, score from src;
+select count(*) from t_big;
+➤ count(*)[-5,64,0]  𝄀
+90
+select count(*) from t_even;
+➤ count(*)[-5,64,0]  𝄀
+90
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+820
+select count(*) from t_rest where val = -1;
+➤ count(*)[-5,64,0]  𝄀
+100
+select (select count(*) from t_big) + (select count(*) from t_even) + (select count(*) from t_rest) = 1000 as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+insert all
+when score >= 50 then into t_big  (id, val) values (id, score)
+when score <  50 then into t_even (id, val) values (id, score)
+select id, score from src;
+select (select count(*) from t_big) + (select count(*) from t_even) as non_null_rows;
+➤ non_null_rows[-5,64,0]  𝄀
+900
+select count(*) from src where score is null;
+➤ count(*)[-5,64,0]  𝄀
+100
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+insert first
+when id < 0 then into t_big (id, val) values (id, val)
+else             into t_rest (id, val) values (id, val)
+select id, val from src;
+select count(*) from t_big;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+1000
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+create table vip (id int primary key);
+insert into vip values (5), (50), (500);
+insert first
+when id in (select id from vip)          then into t_big  (id, val) values (id, val)
+when txt like 't1%' and cat between 1 and 2 then into t_even (id, val) values (id, val)
+when score is null or mod(id, 7) = 0     then into t_div3 (id, val) values (id, val)
+else                                          into t_rest (id, val) values (id, val)
+select id, cat, val, score, txt from src;
+select * from t_big order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+5  ¦  15  𝄀
+50  ¦  150  𝄀
+500  ¦  1500
+select (select count(*) from t_even) = (select count(*) from src where txt like 't1%' and cat between 1 and 2 and id not in (5, 50, 500)) as even_ok;
+➤ even_ok[-7,1,0]  𝄀
+1
+select (select count(*) from t_div3) = (select count(*) from src where (score is null or mod(id, 7) = 0) and not (txt like 't1%' and cat between 1 and 2) and id not in (5, 50, 500)) as div3_ok;
+➤ div3_ok[-7,1,0]  𝄀
+1
+select (select count(*) from t_even) + (select count(*) from t_div3) + (select count(*) from t_big) + (select count(*) from t_rest) = 1000 as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+insert first
+when bucket = 'high' then into t_big  (id, val) values (id, doubled)
+when bucket = 'mid'  then into t_even (id, val) values (id, doubled + 1)
+else                      into t_rest (id, val) values (id, case when doubled > 100 then 100 else doubled end)
+select id, val * 2 as doubled, case when val > 2000 then 'high' when val > 1000 then 'mid' else 'low' end as bucket from src;
+select count(*), min(val), max(val) from t_big;
+➤ count(*)[-5,64,0]  ¦  min(val)[4,32,0]  ¦  max(val)[4,32,0]  𝄀
+334  ¦  4002  ¦  6000
+select count(*), min(val), max(val) from t_even;
+➤ count(*)[-5,64,0]  ¦  min(val)[4,32,0]  ¦  max(val)[4,32,0]  𝄀
+333  ¦  2005  ¦  3997
+select count(*), min(val), max(val) from t_rest;
+➤ count(*)[-5,64,0]  ¦  min(val)[4,32,0]  ¦  max(val)[4,32,0]  𝄀
+333  ¦  6  ¦  100
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+create table audit (seq int auto_increment primary key, id int, tag varchar(10));
+insert first
+when cat = 0 then into t_even (id, val) values (id, val)
+into audit (id, tag) values (id, 'zero')
+when cat = 1 then into t_even (id, val) values (id, -val)
+into audit (id, tag) values (id, 'one')
+else              into audit (id, tag) values (id, 'other')
+select id, cat, val from src;
+select count(*), sum(case when val > 0 then 1 else 0 end), sum(case when val < 0 then 1 else 0 end) from t_even;
+➤ count(*)[-5,64,0]  ¦  sum(case when val > 0 then 1 else 0 end)[3,38,0]  ¦  sum(case when val < 0 then 1 else 0 end)[3,38,0]  𝄀
+400  ¦  200  ¦  200
+select tag, count(*) from audit group by tag order by tag;
+➤ tag[12,10,0]  ¦  count(*)[-5,64,0]  𝄀
+one  ¦  200  𝄀
+other  ¦  600  𝄀
+zero  ¦  200
+select count(*) from audit;
+➤ count(*)[-5,64,0]  𝄀
+1000
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+create table per_cat (cat int primary key, n int, total bigint);
+insert all
+when n >= 200 then into per_cat (cat, n, total) values (cat, n, total)
+select cat, count(*) as n, sum(val) as total from src group by cat;
+select * from per_cat order by cat;
+➤ cat[4,32,0]  ¦  n[4,32,0]  ¦  total[-5,64,0]  𝄀
+0  ¦  200  ¦  301500  𝄀
+1  ¦  200  ¦  299100  𝄀
+2  ¦  200  ¦  299700  𝄀
+3  ¦  200  ¦  300300  𝄀
+4  ¦  200  ¦  300900
+insert first
+when v.id is not null then into t_big  (id, val) values (s.id, s.val)
+else                       into t_rest (id, val) values (s.id, s.val)
+select s.id, s.val, v.id as vid from src s left join vip v on s.id = v.id where s.id <= 60;
+invalid input: missing FROM-clause entry for table 'v'
+insert first
+when vid is not null then into t_big  (id, val) values (id, val)
+else                      into t_rest (id, val) values (id, val)
+select s.id, s.val, v.id as vid from src s left join vip v on s.id = v.id where s.id <= 60;
+select * from t_big order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+5  ¦  15  𝄀
+50  ¦  150
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+58
+delete from t_big; delete from t_rest;
+insert all
+when id <= 2 then into t_big (id, val) values (id, val)
+else              into t_rest (id, val) values (id, val)
+select id, val from src where id <= 3 union all select id + 10, val from src where id <= 3;
+select * from t_big order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  6
+select * from t_rest order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+3  ¦  9  𝄀
+11  ¦  3  𝄀
+12  ¦  6  𝄀
+13  ¦  9
+delete from t_big; delete from t_rest;
+insert first
+when cat = 4 then into t_big (id, val) values (id, val)
+else              into t_rest (id, val) values (id, val)
+select id, cat, val from src order by val desc limit 10;
+select * from t_big order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+994  ¦  2982  𝄀
+999  ¦  2997
+select * from t_rest order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+991  ¦  2973  𝄀
+992  ¦  2976  𝄀
+993  ¦  2979  𝄀
+995  ¦  2985  𝄀
+996  ¦  2988  𝄀
+997  ¦  2991  𝄀
+998  ¦  2994  𝄀
+1000  ¦  3000
+delete from t_big;
+insert all into t_big (id, val) values (cat, cat) select distinct cat from src;
+select * from t_big order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4
+create table v1 (id int primary key);
+create table v2 (id int primary key);
+create table v3 (id int primary key);
+create table v4 (id int primary key);
+insert all when rand() < 0.5 then into v1 (id) values (id) into v2 (id) values (id) select id from src;
+select count(*) from v1 a left join v2 b on a.id = b.id where b.id is null;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from v2 b left join v1 a on a.id = b.id where a.id is null;
+➤ count(*)[-5,64,0]  𝄀
+0
+select (select count(*) from v1) = (select count(*) from v2) as same_cardinality;
+➤ same_cardinality[-7,1,0]  𝄀
+1
+insert first when rand() < 0.5 then into v3 (id) values (id) when true then into v4 (id) values (id) select id from src;
+select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+select count(*) from v3 a join v4 b on a.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from src s where s.id not in (select id from v3) and s.id not in (select id from v4);
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from v3; delete from v4; delete from v1;
+insert first
+when id > 100000     then into v1 (id) values (id)
+when rand() < 0.5    then into v3 (id) values (id)
+else                      into v4 (id) values (id)
+select id from src;
+select count(*) from v1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+select count(*) from v3 a join v4 b on a.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table e1 (id int primary key);
+create table e2 (id int primary key);
+create table esrc (id int, s varchar(16));
+insert into esrc values (1, 'bad'), (0, '1');
+insert first
+when id = 1 then into e1 (id) values (id)
+when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+select * from e1 order by id;
+➤ id[4,32,0]  𝄀
+1
+select * from e2 order by id;
+➤ id[4,32,0]  𝄀
+0
+delete from e1; delete from e2;
+insert first
+when id = 99 then into e1 (id) values (id)
+when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+invalid argument cast to int, bad value bad
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from e2;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table bad (s varchar(16));
+insert into bad values ('bad');
+insert first
+when id = 1 then into e1 (id) values (id)
+when (select cast(s as signed) from bad limit 1) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+not supported: INSERT FIRST with a subquery in WHEN #2: it cannot be skipped for rows an earlier WHEN already matched
+delete from e1; delete from e2;
+insert first
+when (select count(*) from bad) > 0 then into e1 (id) values (id)
+else into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from e2;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from e1; delete from e2;
+insert first
+when id = 1 then into e1 (id) values (id)
+else into e2 (id) values ((select cast(s as signed) from bad limit 1))
+select id, s from esrc;
+not supported: multi-table INSERT with a subquery in the VALUES of a conditional INTO clause: it cannot be skipped for rows the clause does not select
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from e1;
+insert all into e1 (id) values ((select count(*) from bad)) select id from esrc;
+Duplicate entry '1' for key 'id'
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from e1; delete from e2;
+insert all
+when id >= 0 then into e1 (id) values (id)
+when (select count(*) from bad) > 0 then into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from e2;
+➤ count(*)[-5,64,0]  𝄀
+2
+insert all
+when id = 1 then into e1 (id) values (id)
+when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+invalid argument cast to int, bad value bad
+delete from t_big; delete from t_rest;
+insert first when id > 0 then into t_big (id, val) values (id, val) else into t_rest (id, val) values (id, val) select id, val from src where id > 100000;
+select count(*) from t_big;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from t_even; delete from t_div3; delete from t_big; delete from t_rest;
+insert into t_div3 values (996, 0);
+insert first
+when cat = 0 then into t_even (id, val) values (id, val)
+when cat = 1 then into t_div3 (id, val) values (id, val)
+else              into t_rest (id, val) values (id, val)
+select id, cat, val from src where id >= 990;
+Duplicate entry '996' for key 'id'
+select count(*) from t_even;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_div3;
+➤ count(*)[-5,64,0]  𝄀
+1
+begin;
+insert first
+when cat = 0 then into t_even (id, val) values (id, val)
+else              into t_rest (id, val) values (id, val)
+select id, cat, val from src where id <= 10;
+select count(*) from t_even;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+8
+rollback;
+select count(*) from t_even;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+0
+begin;
+insert first
+when cat = 0 then into t_even (id, val) values (id, val)
+else              into t_rest (id, val) values (id, val)
+select id, cat, val from src where id <= 10;
+commit;
+select count(*) from t_even;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t_rest;
+➤ count(*)[-5,64,0]  𝄀
+8
+drop database mi_cond;

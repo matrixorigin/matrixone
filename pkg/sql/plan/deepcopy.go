@@ -254,6 +254,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		Children:        slices.Clone(node.Children),
 		JoinType:        node.JoinType,
 		IsRightJoin:     node.IsRightJoin,
+		AsofRightCol:    node.AsofRightCol,
 		BindingTags:     slices.Clone(node.BindingTags),
 		Limit:           DeepCopyExpr(node.Limit),
 		Offset:          DeepCopyExpr(node.Offset),
@@ -821,8 +822,17 @@ func DeepCopyPlan(pl *Plan) *Plan {
 			TryRunTimes: pl.TryRunTimes,
 		}
 
+	case *plan.Plan_Dcl:
+		return &Plan{
+			Plan: &plan.Plan_Dcl{
+				Dcl: proto.Clone(p.Dcl).(*plan.DataControl),
+			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
+		}
+
 	default:
-		// only support query/insert plan now
+		// Only executable query, DDL, and SET-variable plans are supported.
 		return nil
 	}
 }

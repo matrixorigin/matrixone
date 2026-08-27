@@ -181,6 +181,39 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
 }
 
+func TestFoundRows(t *testing.T) {
+	var nilProc *Process
+	nilProc.BeginFoundRowsStatement(true)
+	nilProc.AddResultRows(1)
+	nilProc.SetFoundRows(1)
+	assert.Zero(t, nilProc.GetFoundRows())
+	assert.Zero(t, nilProc.GetResultRows())
+	assert.False(t, nilProc.FoundRowsRecorded())
+	assert.False(t, nilProc.IsSqlCalcFoundRows())
+
+	proc := &Process{Base: &BaseProcess{}}
+	proc.SetFoundRows(7)
+	proc.BeginFoundRowsStatement(true)
+	assert.Equal(t, uint64(7), proc.GetFoundRows())
+	assert.True(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+	proc.AddResultRows(1)
+	proc.AddResultRows(2)
+	assert.Equal(t, uint64(3), proc.GetResultRows())
+
+	proc.SetFoundRows(3)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.True(t, proc.FoundRowsRecorded())
+
+	// Statement setup preserves the previous value while clearing only the
+	// statement-local publication flags.
+	proc.BeginFoundRowsStatement(false)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.Zero(t, proc.GetResultRows())
+	assert.False(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -281,6 +314,22 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	require.False(t, proc.Base.prepareParamsOwned)
 	require.Equal(t, 1, borrowed.Length(), "Process must not release borrowed params")
 	borrowed.Free(proc.Mp())
+}
+
+func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+
+	metadata := proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger}, nil)
+	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
+	first := &metadata[0]
+	metadata = proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
+	require.Same(t, first, &metadata[0])
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
 }
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {

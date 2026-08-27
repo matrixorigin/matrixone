@@ -16,6 +16,9 @@ package hashjoin
 
 import (
 	"bytes"
+	"math/bits"
+	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,7 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const opName = "hash_join"
+const (
+	opName                       = "hash_join"
+	asofLinearOnlyGroupSizeLimit = 4
+)
 
 func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -63,6 +69,10 @@ func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 		buf.WriteString(": hash mark join ")
 	case plan.Node_OUTER:
 		buf.WriteString(": full outer join ")
+	case plan.Node_ASOF:
+		buf.WriteString(": asof join ")
+	case plan.Node_ASOF_LEFT:
+		buf.WriteString(": asof left join ")
 	}
 }
 
@@ -71,6 +81,22 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.IsAsof() {
+		if hashJoin.NonEqCond == nil || len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 ||
+			len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) || hashJoin.HashOnPK ||
+			hashJoin.AsofRightCol < 0 || int(hashJoin.AsofRightCol) >= len(hashJoin.RightTypes) ||
+			!isAsofTemporalType(hashJoin.RightTypes[hashJoin.AsofRightCol].Oid) {
+			return moerr.NewInternalError(proc.Ctx, "invalid ASOF join physical contract")
+		}
+		leftCol, rightCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
+		if leftCol < 0 || leftCol >= len(hashJoin.LeftTypes) ||
+			rightCol != int(hashJoin.AsofRightCol) ||
+			hashJoin.LeftTypes[leftCol].Oid != hashJoin.RightTypes[hashJoin.AsofRightCol].Oid {
+			return moerr.NewInternalError(proc.Ctx, "invalid ASOF temporal predicate metadata")
+		}
+		hashJoin.ctr.asofLeftCol = leftCol
+		hashJoin.ctr.asofStrict = strict
+	}
 	if hashJoin.IsMark() {
 		if err := hashJoin.validateMarkJoin(proc); err != nil {
 			return err
@@ -88,6 +114,10 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			return nil
 		})
 	}
+	if hashJoin.AsofBuildLeft && hashJoin.recursiveProbe {
+		return moerr.NewInternalError(proc.Ctx,
+			"ASOF build-left does not support a recursive probe")
+	}
 
 	if hashJoin.OpAnalyzer == nil {
 		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)
@@ -103,9 +133,14 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.eqCondVecs) == 0 {
+		probeConditions := hashJoin.EqConds[0]
+		if hashJoin.AsofBuildLeft {
+			// The physical probe is the logical right input in this mode.
+			probeConditions = hashJoin.EqConds[1]
+		}
 		eqCondExecs, err := hashbuild.NewExpressionExecutors(
 			proc,
-			hashJoin.EqConds[0],
+			probeConditions,
 			hashJoin.allocationAccount,
 		)
 		if err != nil {
@@ -137,6 +172,15 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
+func isAsofTemporalType(typeID types.T) bool {
+	switch typeID {
+	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+		return true
+	default:
+		return false
+	}
+}
+
 func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 	if hashJoin.NonEqCond != nil {
 		return moerr.NewInternalError(proc.Ctx, "hash MARK join does not support residual conditions")
@@ -160,6 +204,9 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
+	if hashJoin.AsofBuildLeft {
+		return hashJoin.callAsofBuildLeft(proc)
+	}
 	analyzer := hashJoin.OpAnalyzer
 
 	ctr := &hashJoin.ctr
@@ -399,8 +446,13 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	if buildErr := dep.BuildError(); buildErr != nil {
 		// A terminal BuildError is a failed dependency, never an empty build.
 		// Return before consuming probe input so no successful rows can escape.
-		return buildErr.AsMoErr()
+		return buildErr.AsError()
 	}
+	// Close the previous metadata generation before adopting a different
+	// JoinMap. Reset normally makes this empty; keeping the transition local
+	// also makes restart and spill/error reuse fail-safe.
+	ctr.cleanAsofIndexes(proc)
+	ctr.cleanAsofBuildLeftState(proc)
 	ctr.mp = dep.JoinMap()
 
 	// Pre-compute per-query flags for the probe loop.
@@ -432,12 +484,20 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				ctr.mp = nil
 				return mpool.ErrAllocationAccountInvalid
 			}
+			buildKeyExprs, probeKeyExprs := hashJoin.EqConds[1], hashJoin.EqConds[0]
+			needsProbeForEmptyBuild := hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark()
+			needsBuildForEmptyProbe := hashJoin.EmitUnmatchedBuild()
+			if hashJoin.AsofBuildLeft {
+				buildKeyExprs, probeKeyExprs = hashJoin.EqConds[0], hashJoin.EqConds[1]
+				needsProbeForEmptyBuild = false
+				needsBuildForEmptyProbe = hashJoin.JoinType == plan.Node_ASOF_LEFT
+			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-				BuildKeyExprs:           hashJoin.EqConds[1],
-				ProbeKeyExprs:           hashJoin.EqConds[0],
+				BuildKeyExprs:           buildKeyExprs,
+				ProbeKeyExprs:           probeKeyExprs,
 				SpillThreshold:          ctr.spillThreshold,
-				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
-				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
+				NeedsProbeForEmptyBuild: needsProbeForEmptyBuild,
+				NeedsBuildForEmptyProbe: needsBuildForEmptyProbe,
 				HashOnPK:                hashJoin.HashOnPK,
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
@@ -528,9 +588,17 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			// EOF on probe file.
 			engine.FinishBucket()
 			ctr.probeBucketActive = false
+			if hashJoin.AsofBuildLeft && ctr.asofBuildLeftInitialized {
+				return result, nil // finalize this logical-left build bucket
+			}
 			if ctr.rightRowsMatched != nil {
 				return result, nil // trigger Finalize for unmatched right rows
 			}
+			// The index contains ordinals into the completed bucket. Release it
+			// before the spill engine allocates the next bucket's JoinMap so the
+			// two generations cannot overlap in the query memory account.
+			ctr.cleanAsofIndexes(proc)
+			ctr.cleanAsofBuildLeftState(proc)
 			ctr.cleanHashMap()
 		}
 
@@ -540,6 +608,8 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			ok, err := engine.AdvanceToNextBucket(proc, analyzer,
 				func(jm *message.JoinMap, res spillutil.BucketResult) {
 					if res == spillutil.BucketReady {
+						ctr.cleanAsofIndexes(proc)
+						ctr.cleanAsofBuildLeftState(proc)
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
 						ctr.rightRowCnt = jm.GetRowCount()
@@ -571,6 +641,14 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			ctr.probeState = psNextBatch
 			ctr.lastIdx = 0
 			ctr.vsIdx = 0
+			if hashJoin.AsofBuildLeft && ctr.mp != nil && !engine.IsProbing() {
+				// A build-only spill bucket still owns logical-left rows for
+				// ASOF LEFT. Return EOF to the build-left state machine so it can
+				// initialize and finalize those rows instead of silently advancing
+				// to the next bucket before candidate state exists.
+				ctr.probeBucketActive = false
+				return result, nil
+			}
 			ctr.probeBucketActive = true
 		}
 	}
@@ -672,6 +750,43 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					return nil
 				}
 
+				continue
+			}
+
+			if hashJoin.IsAsof() {
+				candidates := []int32{int32(idx)}
+				if !ctr.probeHashOnPK {
+					candidates = ctr.mp.GetSels(uint64(idx))
+				}
+				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row, uint64(idx), candidates)
+				if findErr != nil {
+					return findErr
+				}
+				if found {
+					bestBatch := int64(best / colexec.DefaultBatchSize)
+					bestRow := int64(best % colexec.DefaultBatchSize)
+					// Predecessor selection is complete before output. Append exactly
+					// one final row; intermediate candidates never reach the result.
+					if err = ctr.appendOneMatch(hashJoin, proc, row, bestBatch, bestRow); err != nil {
+						return err
+					}
+					resRowCnt++
+				} else if ctr.probeEmitUnmatched {
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						return err
+					}
+					resRowCnt++
+				}
+				if ctr.vsIdx < len(ctr.vs) {
+					ctr.probeState = psBatchRow
+				} else {
+					ctr.probeState = psNextBatch
+				}
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
 				continue
 			}
 
@@ -861,6 +976,489 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	}
 }
 
+func (ctr *container) findAsofPredecessor(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	leftRow int64,
+	groupKey uint64,
+	candidates []int32,
+) (best int32, found bool, err error) {
+	if len(candidates) == 0 {
+		return -1, false, nil
+	}
+	if ctr.asofLeftCol < 0 || ctr.asofLeftCol >= len(ctr.leftBat.Vecs) {
+		return -1, false, moerr.NewInternalErrorNoCtx("ASOF left temporal column is out of range")
+	}
+	leftValue, leftValid := asofTemporalValue(ctr.leftBat.Vecs[ctr.asofLeftCol], leftRow)
+	if !leftValid {
+		return -1, false, nil
+	}
+
+	// A bounded scan is cheaper than retaining per-group metadata for tiny
+	// equality groups, even when they are reused. This is the literal
+	// one-best-row path: no index table and no per-row search state.
+	if len(candidates) <= asofLinearOnlyGroupSizeLimit {
+		best = ctr.scanAsofBest(hashJoin, candidates, leftValue, ctr.asofStrict)
+		if best < 0 {
+			return -1, false, nil
+		}
+		batchIdx := int64(best / colexec.DefaultBatchSize)
+		rowIdx := int64(best % colexec.DefaultBatchSize)
+		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+		return best, qualified, evalErr
+	}
+
+	index, firstProbe, indexErr := ctr.getOrCreateAsofIndex(hashJoin, proc, groupKey, candidates)
+	if indexErr != nil {
+		return -1, false, indexErr
+	}
+	if firstProbe {
+		// The first probe follows the one-best-row algorithm directly: scan the
+		// group once, keep only the closest candidate, and classify the immutable
+		// selection for possible reuse. No per-row search index is built here.
+		best = ctr.classifyAndScanAsofGroup(hashJoin, index, candidates, leftValue, ctr.asofStrict)
+	} else {
+		switch index.order {
+		case asofIndexEmpty:
+			return -1, false, nil
+		case asofIndexAscending:
+			best = ctr.searchAscendingAsof(hashJoin, candidates, leftValue, ctr.asofStrict)
+		case asofIndexDescending:
+			best = ctr.searchDescendingAsof(hashJoin, candidates, leftValue, ctr.asofStrict)
+		case asofIndexLinear:
+			if index.linearProbes >= asofIndexPromotionScans(index.candidateCount, index.validCount) {
+				if buildErr := ctr.buildSortedAsofIndex(hashJoin, proc, index, candidates); buildErr != nil {
+					return -1, false, buildErr
+				}
+				best = searchSortedAsof(index, leftValue, ctr.asofStrict)
+			} else {
+				best = ctr.scanAsofBest(hashJoin, candidates, leftValue, ctr.asofStrict)
+				index.linearProbes++
+			}
+		case asofIndexSorted:
+			best = searchSortedAsof(index, leftValue, ctr.asofStrict)
+		default:
+			return -1, false, moerr.NewInternalErrorNoCtx("invalid ASOF predecessor index")
+		}
+	}
+	if best < 0 {
+		return -1, false, nil
+	}
+	batchIdx := int64(best / colexec.DefaultBatchSize)
+	rowIdx := int64(best % colexec.DefaultBatchSize)
+	qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+	if evalErr != nil {
+		return -1, false, evalErr
+	}
+	return best, qualified, nil
+}
+
+func asofTemporalValue(vec *vector.Vector, row int64) (int64, bool) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) || vec.GetGrouping().Contains(uint64(row)) {
+		return 0, false
+	}
+	dataRow := row
+	if vec.IsConst() {
+		dataRow = 0
+	}
+	switch vec.GetType().Oid {
+	case types.T_date:
+		return int64(vector.MustFixedColWithTypeCheck[types.Date](vec)[dataRow]), true
+	case types.T_datetime:
+		return int64(vector.MustFixedColWithTypeCheck[types.Datetime](vec)[dataRow]), true
+	case types.T_timestamp:
+		return int64(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[dataRow]), true
+	case types.T_time:
+		return int64(vector.MustFixedColWithTypeCheck[types.Time](vec)[dataRow]), true
+	default:
+		return 0, false
+	}
+}
+
+func (ctr *container) asofRightTemporalValue(hashJoin *HashJoin, candidate int32) (int64, bool) {
+	batchIdx := int(candidate / colexec.DefaultBatchSize)
+	rowIdx := int64(candidate % colexec.DefaultBatchSize)
+	if batchIdx < 0 || batchIdx >= len(ctr.rightBats) || hashJoin.AsofRightCol < 0 ||
+		int(hashJoin.AsofRightCol) >= len(ctr.rightBats[batchIdx].Vecs) {
+		return 0, false
+	}
+	return asofTemporalValue(ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol], rowIdx)
+}
+
+func asofPredecessorEligible(right, left int64, strict bool) bool {
+	if strict {
+		return right < left
+	}
+	return right <= left
+}
+
+func (ctr *container) getOrCreateAsofIndex(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	groupKey uint64,
+	candidates []int32,
+) (*asofIndex, bool, error) {
+	if err := ctr.ensureAsofIndexTable(hashJoin, proc); err != nil {
+		return nil, false, err
+	}
+	indexPos := ctr.findAsofIndexSlot(groupKey)
+	if ctr.asofIndexes[indexPos].occupied &&
+		int(ctr.asofIndexes[indexPos].candidateCount) == len(candidates) {
+		return &ctr.asofIndexes[indexPos], false, nil
+	}
+	if ctr.asofIndexes[indexPos].occupied {
+		// Production JoinMaps are immutable, so a changed group length denotes a
+		// different generation. Clearing one open-addressed slot would break the
+		// collision chain; invalidate the complete generation instead.
+		ctr.cleanAsofIndexes(proc)
+		if err := ctr.ensureAsofIndexTable(hashJoin, proc); err != nil {
+			return nil, false, err
+		}
+		indexPos = ctr.findAsofIndexSlot(groupKey)
+	}
+
+	index := asofIndex{
+		key:            groupKey,
+		candidateCount: int32(len(candidates)),
+		order:          asofIndexLinear,
+		occupied:       true,
+	}
+	if ctr.asofIndexCount+1 > len(ctr.asofIndexes)*3/4 {
+		capacity := len(ctr.asofIndexes) * 2
+		newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](capacity, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+		if allocErr != nil {
+			return nil, false, allocErr
+		}
+		for _, old := range ctr.asofIndexes {
+			if !old.occupied {
+				continue
+			}
+			i := hashAsofIndex(old.key, len(newIndexes))
+			for newIndexes[i].occupied {
+				i = (i + 1) % len(newIndexes)
+			}
+			newIndexes[i] = old
+		}
+		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
+		ctr.asofIndexes = newIndexes
+		indexPos = ctr.findAsofIndexSlot(groupKey)
+	}
+	ctr.asofIndexes[indexPos] = index
+	ctr.asofIndexCount++
+	return &ctr.asofIndexes[indexPos], true, nil
+}
+
+func (ctr *container) ensureAsofIndexTable(hashJoin *HashJoin, proc *process.Process) error {
+	if len(ctr.asofIndexes) != 0 {
+		return nil
+	}
+	indexes, err := mpool.MakeSliceAccounted[asofIndex](
+		8, proc.Mp(), hashJoin.allocationAccount,
+		mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.asofIndexes = indexes
+	return nil
+}
+
+func (ctr *container) classifyAndScanAsofGroup(
+	hashJoin *HashJoin,
+	index *asofIndex,
+	candidates []int32,
+	leftValue int64,
+	strict bool,
+) int32 {
+	best := int32(-1)
+	var bestValue int64
+	ascending, descending := true, true
+	nonNullCount := 0
+	hasPrevious := false
+	hasNull := false
+	var previous int64
+	for _, candidate := range candidates {
+		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
+		if !valid {
+			hasNull = true
+			continue
+		}
+		nonNullCount++
+		if hasPrevious {
+			if value < previous {
+				ascending = false
+			}
+			if value > previous {
+				descending = false
+			}
+		}
+		previous = value
+		hasPrevious = true
+		if asofPredecessorEligible(value, leftValue, strict) &&
+			(best < 0 || value > bestValue) {
+			best = candidate
+			bestValue = value
+		}
+	}
+	index.validCount = int32(nonNullCount)
+	index.linearProbes = 1
+	if nonNullCount == 0 {
+		index.order = asofIndexEmpty
+		return -1
+	}
+	// Binary search over the JoinMap selection is valid only when every
+	// candidate has a temporal value. A NULL hole would break its ordering.
+	if !hasNull && ascending {
+		index.order = asofIndexAscending
+		return best
+	}
+	if !hasNull && descending {
+		index.order = asofIndexDescending
+		return best
+	}
+	index.order = asofIndexLinear
+	return best
+}
+
+func (ctr *container) scanAsofBest(
+	hashJoin *HashJoin,
+	candidates []int32,
+	leftValue int64,
+	strict bool,
+) int32 {
+	best := int32(-1)
+	var bestValue int64
+	for _, candidate := range candidates {
+		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
+		if !valid || !asofPredecessorEligible(value, leftValue, strict) {
+			continue
+		}
+		if best < 0 || value > bestValue {
+			best = candidate
+			bestValue = value
+		}
+	}
+	return best
+}
+
+// asofIndexPromotionScans is an online rent-or-buy boundary. One linear probe
+// costs candidateCount visits. Building the compact index costs one fill scan
+// plus approximately validCount*ceil(log2(validCount)) sort comparisons.
+// The comparison estimate is bounded by the accompanying focused benchmark:
+// sorting copied integers is much cheaper than revisiting vector-backed rows.
+// A group used once or a few times therefore avoids eager sort/allocation.
+func asofIndexPromotionScans(candidateCount, validCount int32) uint32 {
+	if candidateCount <= 0 || validCount <= 0 {
+		return ^uint32(0)
+	}
+	levels := bits.Len32(uint32(validCount - 1))
+	if levels == 0 {
+		levels = 1
+	}
+	buildWork := int64(candidateCount) + int64(validCount)*int64(levels)
+	scans := (buildWork + int64(candidateCount) - 1) / int64(candidateCount)
+	if scans < 2 {
+		scans = 2
+	}
+	// The accompanying benchmark covers 16..4095 unordered rows. Sorting the
+	// copied integer entries costs no more than four vector-backed scans there;
+	// cap the comparison-count estimate so it does not overprice cache-local
+	// sorting and leave a repeatedly probed group on the linear path too long.
+	if scans > 4 {
+		scans = 4
+	}
+	return uint32(scans)
+}
+
+func (ctr *container) buildSortedAsofIndex(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	index *asofIndex,
+	candidates []int32,
+) error {
+	entries, allocErr := mpool.MakeSliceAccounted[asofIndexEntry](
+		int(index.validCount), proc.Mp(), hashJoin.allocationAccount,
+		mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex,
+	)
+	if allocErr != nil {
+		return allocErr
+	}
+	next := 0
+	for ordinal, candidate := range candidates {
+		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
+		if !valid {
+			continue
+		}
+		if next >= len(entries) {
+			mpool.FreeSlice(proc.Mp(), entries)
+			return moerr.NewInternalErrorNoCtx("ASOF group changed while building predecessor index")
+		}
+		entries[next] = asofIndexEntry{value: value, row: candidate, ordinal: int32(ordinal)}
+		next++
+	}
+	if next != len(entries) {
+		mpool.FreeSlice(proc.Mp(), entries)
+		return moerr.NewInternalErrorNoCtx("ASOF group changed while building predecessor index")
+	}
+	slices.SortFunc(entries, func(left, right asofIndexEntry) int {
+		if left.value < right.value {
+			return -1
+		}
+		if left.value > right.value {
+			return 1
+		}
+		// Reverse ordinal order makes the final entry for an equal timestamp
+		// the first row in the materialized JoinMap selection.
+		if left.ordinal > right.ordinal {
+			return -1
+		}
+		if left.ordinal < right.ordinal {
+			return 1
+		}
+		return 0
+	})
+	index.entries = entries
+	index.order = asofIndexSorted
+	return nil
+}
+
+func (ctr *container) searchAscendingAsof(
+	hashJoin *HashJoin,
+	candidates []int32,
+	leftValue int64,
+	strict bool,
+) int32 {
+	lo, hi := 0, len(candidates)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		value, _ := ctr.asofRightTemporalValue(hashJoin, candidates[mid])
+		if asofPredecessorEligible(value, leftValue, strict) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	last := lo - 1
+	if last < 0 {
+		return -1
+	}
+	bestValue, _ := ctr.asofRightTemporalValue(hashJoin, candidates[last])
+	// Equal timestamps choose the first row in this materialized JoinMap.
+	lo, hi = 0, last+1
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		value, _ := ctr.asofRightTemporalValue(hashJoin, candidates[mid])
+		if value < bestValue {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return candidates[lo]
+}
+
+func (ctr *container) searchDescendingAsof(
+	hashJoin *HashJoin,
+	candidates []int32,
+	leftValue int64,
+	strict bool,
+) int32 {
+	lo, hi := 0, len(candidates)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		value, _ := ctr.asofRightTemporalValue(hashJoin, candidates[mid])
+		if asofPredecessorEligible(value, leftValue, strict) {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	if lo == len(candidates) {
+		return -1
+	}
+	return candidates[lo]
+}
+
+func searchSortedAsof(index *asofIndex, leftValue int64, strict bool) int32 {
+	lo, hi := 0, len(index.entries)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if asofPredecessorEligible(index.entries[mid].value, leftValue, strict) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == 0 {
+		return -1
+	}
+	return index.entries[lo-1].row
+}
+
+func hashAsofIndex(key uint64, size int) int {
+	// Mix the equality hash before reducing it to keep sequential keys from
+	// clustering in the open-addressed table.
+	key ^= key >> 33
+	key *= 0xff51afd7ed558ccd
+	key ^= key >> 33
+	return int(key % uint64(size))
+}
+
+func (ctr *container) findAsofIndexSlot(key uint64) int {
+	if len(ctr.asofIndexes) == 0 {
+		return 0
+	}
+	i := hashAsofIndex(key, len(ctr.asofIndexes))
+	for {
+		if !ctr.asofIndexes[i].occupied || ctr.asofIndexes[i].key == key {
+			return i
+		}
+		i = (i + 1) % len(ctr.asofIndexes)
+	}
+}
+
+func asofTemporalMetadata(expr *plan.Expr) (leftCol, rightCol int, strict bool) {
+	leftCol, rightCol = -1, -1
+	if expr == nil {
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil {
+			for _, arg := range fn.Args {
+				if left, right, isStrict := asofTemporalMetadata(arg); left >= 0 {
+					return left, right, isStrict
+				}
+			}
+			return
+		}
+		if strings.EqualFold(fn.Func.ObjName, "and") {
+			for _, arg := range fn.Args {
+				if left, right, isStrict := asofTemporalMetadata(arg); left >= 0 {
+					return left, right, isStrict
+				}
+			}
+			return
+		}
+		if len(fn.Args) == 2 {
+			left, right := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+			if left != nil && right != nil {
+				if left.RelPos == 0 && right.RelPos == 1 && (fn.Func.ObjName == ">" || fn.Func.ObjName == ">=") {
+					return int(left.ColPos), int(right.ColPos), fn.Func.ObjName == ">"
+				}
+				if left.RelPos == 1 && right.RelPos == 0 && (fn.Func.ObjName == "<" || fn.Func.ObjName == "<=") {
+					return int(right.ColPos), int(left.ColPos), fn.Func.ObjName == "<"
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if left, right, isStrict := asofTemporalMetadata(arg); left >= 0 {
+				return left, right, isStrict
+			}
+		}
+	}
+	return
+}
+
 func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	rowCnt := ctr.leftBat.RowCount()
 	for i, rp := range hashJoin.ResultCols {
@@ -921,6 +1519,13 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 		if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
 			return err
 		}
+		// AppendMultiFixed only grows the NULL bitmap when a NULL value is
+		// appended.  The marker currently contains all FALSE values, so its
+		// bitmap can still have a zero logical length even though the result
+		// vector has rowCnt rows.  Establish the visible result range before
+		// merging probe-side NULLs; otherwise a bounded external bitmap treats
+		// every probe NULL as outside the destination and silently drops it.
+		marker.GetNulls().GetBitmap().TryExpandWithSize(rowCnt)
 		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
 	}
 	return nil

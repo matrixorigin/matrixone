@@ -15,9 +15,15 @@
 package fulltext2
 
 import (
+	"context"
 	"math"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -59,6 +66,368 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 
 	// SearchFloat32 is unsupported.
 	require.ErrorContains(t, s.SearchFloat32(proc, nil, vectorindex.RuntimeConfig{}, nil, nil), "not supported")
+}
+
+func TestFulltext2SearchLoadFailurePreservesOtherGeneration(t *testing.T) {
+	loadedBasePool.clearAll()
+	loadedTailPool.clearAll()
+	t.Cleanup(func() {
+		loadedBasePool.clearAll()
+		loadedTailPool.clearAll()
+	})
+
+	cfg := testStorageCfg()
+	baseKey := baseKey{index: "db.__store", id: "base-0", checksum: "sum", filesize: 1}
+	view, err := loadedBasePool.acquire(context.Background(), baseKey, func() (*Segment, error) {
+		return NewSegment("base-0", 0), nil
+	}, 0)
+	require.NoError(t, err)
+	view.Free()
+	tailViews, _ := loadedTailPool.installAndAcquire("db.__store", newTailState(1, 1, []*Segment{NewSegment("tail-1", 0)}, nil))
+	freeSegs(tailViews)
+
+	sp, mp := mockSqlProc(t)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, int64(1)<<50)}}, nil
+	})
+	s := NewFulltext2Search(cfg)
+	require.Error(t, s.Load(sp))
+
+	loadedBasePool.mu.Lock()
+	baseEntries := len(loadedBasePool.entries)
+	loadedBasePool.mu.Unlock()
+	loadedTailPool.mu.Lock()
+	tailStates := len(loadedTailPool.states)
+	loadedTailPool.mu.Unlock()
+	require.Equal(t, 1, baseEntries)
+	require.Equal(t, 1, tailStates)
+}
+
+func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T) {
+	for _, reason := range []LoadMissReason{LoadMissCDCFlush, LoadMissMerge, LoadMissRebuild} {
+		t.Run(string(reason), func(t *testing.T) {
+			sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+			mp := mpool.MustNewZero()
+			cfg := testStorageCfg()
+			var events []LoadEvent
+			restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
+			defer restore()
+
+			pendingLoadReasons.Lock()
+			oldReasons := pendingLoadReasons.m
+			pendingLoadReasons.m = make(map[string]pendingLoadReason)
+			pendingLoadReasons.Unlock()
+			loadGenerations.Lock()
+			oldGenerations := loadGenerations.m
+			loadGenerations.m = make(map[string]loadGenerationState)
+			loadGenerations.Unlock()
+			t.Cleanup(func() {
+				pendingLoadReasons.Lock()
+				pendingLoadReasons.m = oldReasons
+				pendingLoadReasons.Unlock()
+				loadGenerations.Lock()
+				loadGenerations.m = oldGenerations
+				loadGenerations.Unlock()
+			})
+
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "CAST(COALESCE"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				case strings.Contains(sql, "MAX(timestamp)"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
+				case strings.Contains(sql, "MAX(chunk_id)"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+				case strings.Contains(sql, "LENGTH("):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				default:
+					return executor.Result{Mp: mp}, nil
+				}
+			})
+			invalidateLoadGeneration(cfg, reason)
+
+			s := NewFulltext2Search(cfg)
+			require.NoError(t, s.Load(sp))
+			s.FinishLoadObservation()
+			require.Len(t, events, 1)
+			require.Equal(t, reason, events[0].MissReason)
+			require.Equal(t, int64(11), events[0].BaseGeneration)
+			require.Equal(t, int64(22), events[0].TailGeneration)
+			require.True(t, events[0].LoadSuccess)
+			gotReason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+			require.Empty(t, gotReason)
+			require.Zero(t, generation)
+			s.Destroy()
+		})
+	}
+}
+
+func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
+	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+	var event LoadEvent
+	restore := setLoadObserver(func(got LoadEvent) { event = got })
+	defer restore()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+	})
+
+	s := NewFulltext2Search(testStorageCfg())
+	require.Error(t, s.Load(sp))
+	s.FinishLoadObservation()
+	require.True(t, event.LoadCancel)
+	require.False(t, event.LoadError)
+	require.False(t, event.LoadSuccess)
+}
+
+func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) {
+	for _, reason := range []LoadMissReason{LoadMissCDCFlush, LoadMissMerge, LoadMissRebuild} {
+		t.Run(string(reason), func(t *testing.T) {
+			sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+			cfg := testStorageCfg()
+			var events []LoadEvent
+			restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
+			defer restore()
+
+			pendingLoadReasons.Lock()
+			oldReasons := pendingLoadReasons.m
+			pendingLoadReasons.m = make(map[string]pendingLoadReason)
+			pendingLoadReasons.Unlock()
+			loadGenerations.Lock()
+			oldGenerations := loadGenerations.m
+			loadGenerations.m = make(map[string]loadGenerationState)
+			loadGenerations.Unlock()
+			t.Cleanup(func() {
+				pendingLoadReasons.Lock()
+				pendingLoadReasons.m = oldReasons
+				pendingLoadReasons.Unlock()
+				loadGenerations.Lock()
+				loadGenerations.m = oldGenerations
+				loadGenerations.Unlock()
+			})
+
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+				return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+			})
+			invalidateLoadGeneration(cfg, reason)
+
+			s := NewFulltext2Search(cfg)
+			require.Error(t, s.Load(sp))
+			s.FinishLoadObservation()
+			require.Error(t, s.Load(sp))
+			s.FinishLoadObservation()
+
+			require.Len(t, events, 2)
+			require.Equal(t, reason, events[0].MissReason)
+			require.Equal(t, reason, events[1].MissReason)
+			require.True(t, events[0].LoadCancel)
+			require.True(t, events[1].LoadCancel)
+			s.Destroy()
+		})
+	}
+}
+
+func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	pendingLoadReasons.Lock()
+	previousReasons := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previousReasons
+		pendingLoadReasons.Unlock()
+	})
+
+	previousCache := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() { veccache.Cache = previousCache })
+
+	cfg := testStorageCfg()
+	old := NewFulltext2Search(cfg)
+	old.idx = NewIndex(nil, nil)
+	old.loaded = true
+	oldEntry := &veccache.VectorIndexSearch{Algo: old}
+	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+
+	// Production mutation order: record the reason before evicting the local
+	// entry. Hold the old entry lock so Remove has deleted the old map entry but
+	// is blocked before destruction; a replacement can therefore start while
+	// the old eviction is still in flight.
+	oldEntry.Mutex.Lock()
+	old.OnCacheInvalidated(string(LoadMissCDCFlush))
+	removed := make(chan struct{})
+	go func() {
+		veccache.Cache.Remove(cfg.IndexTable)
+		close(removed)
+	}()
+	require.Eventually(t, func() bool {
+		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
+		return !loaded
+	}, time.Second, time.Millisecond)
+	replacement := NewFulltext2Search(cfg)
+	replacement.idx = NewIndex(nil, nil)
+	replacement.loaded = true
+	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
+	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+
+	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Equal(t, LoadMissCDCFlush, reason)
+	require.NotZero(t, generation)
+	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), generation)
+	oldEntry.Mutex.Unlock()
+	select {
+	case <-removed:
+	case <-time.After(time.Second):
+		t.Fatal("old cache eviction did not finish")
+	}
+	reason, generation = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, reason)
+	require.Zero(t, generation)
+	veccache.Cache.Remove(cfg.IndexTable)
+}
+
+func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	previousCache := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	defer func() { veccache.Cache = previousCache }()
+
+	loadGenerations.Lock()
+	previousGenerations := loadGenerations.m
+	loadGenerations.m = make(map[string]loadGenerationState)
+	loadGenerations.Unlock()
+	defer func() {
+		loadGenerations.Lock()
+		loadGenerations.m = previousGenerations
+		loadGenerations.Unlock()
+	}()
+
+	cfg := testStorageCfg()
+	old := NewFulltext2Search(cfg)
+	old.idx = NewIndex(nil, nil)
+	old.loaded = true
+	oldEntry := &veccache.VectorIndexSearch{Algo: old}
+	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	oldEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+
+	oldEntry.Mutex.Lock()
+	done := make(chan struct{})
+	go func() {
+		veccache.Cache.HouseKeeping()
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
+		return !loaded
+	}, time.Second, time.Millisecond)
+	reason, observedGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Equal(t, LoadMissTTLExpired, reason)
+	require.NotZero(t, observedGeneration)
+	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), observedGeneration)
+
+	replacement := NewFulltext2Search(cfg)
+	replacement.idx = NewIndex(nil, nil)
+	replacement.loaded = true
+	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
+	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+
+	loadGen := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.True(t, loadGenerationCurrent(loadGen))
+	endLoadGeneration(loadGen)
+
+	oldEntry.Mutex.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping eviction did not finish")
+	}
+	require.True(t, loadGenerationCurrent(loadGen))
+	veccache.Cache.Remove(cfg.IndexTable)
+}
+
+func TestFulltext2SupersededLoadIsRetryable(t *testing.T) {
+	require.True(t, veccache.IsRetryableLoadError(errLoadGenerationSuperseded))
+	require.Contains(t, errLoadGenerationSuperseded.Error(), "fulltext2 load superseded by a newer generation")
+}
+
+func TestVectorIndexCacheRetriesSupersededFulltext2Load(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*sqlexec.SqlProcess, *Fulltext2Search, TableConfig) error
+	}{
+		{
+			name: "Search",
+			call: func(proc *sqlexec.SqlProcess, loader *Fulltext2Search, cfg TableConfig) error {
+				_, _, err := veccache.Cache.Search(proc, cfg.IndexTable, loader,
+					Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
+				return err
+			},
+		},
+		{
+			name: "SearchInto",
+			call: func(proc *sqlexec.SqlProcess, loader *Fulltext2Search, cfg TableConfig) error {
+				return veccache.Cache.SearchInto(proc, cfg.IndexTable, loader,
+					Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1}, &vectorindex.SearchOutput{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousCache := veccache.Cache
+			veccache.Cache = veccache.NewVectorIndexCache()
+			t.Cleanup(func() { veccache.Cache = previousCache })
+
+			pendingLoadReasons.Lock()
+			previousReasons := pendingLoadReasons.m
+			pendingLoadReasons.m = make(map[string]pendingLoadReason)
+			pendingLoadReasons.Unlock()
+			t.Cleanup(func() {
+				pendingLoadReasons.Lock()
+				pendingLoadReasons.m = previousReasons
+				pendingLoadReasons.Unlock()
+			})
+			loadGenerations.Lock()
+			previousGenerations := loadGenerations.m
+			loadGenerations.m = make(map[string]loadGenerationState)
+			loadGenerations.Unlock()
+			t.Cleanup(func() {
+				loadGenerations.Lock()
+				loadGenerations.m = previousGenerations
+				loadGenerations.Unlock()
+			})
+
+			cfg := testStorageCfg()
+			proc, mp := mockSqlProc(t)
+			var invalidated atomic.Bool
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				if strings.Contains(sql, "index_id") && strings.Contains(sql, "__meta") {
+					if invalidated.CompareAndSwap(false, true) {
+						// This is the production publication-before-remove window: the
+						// loading cache entry still owns the key while the generation bump
+						// becomes visible to its Fulltext2Search.Load.
+						NewFulltext2Search(cfg).OnCacheInvalidated(string(LoadMissCDCFlush))
+					}
+					return executor.Result{Mp: mp}, nil
+				}
+				if strings.Contains(sql, "chunk_id, data") {
+					return executor.Result{Mp: mp}, nil
+				}
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			})
+
+			loader := NewFulltext2Search(cfg)
+			require.NoError(t, tc.call(proc, loader, cfg))
+			require.True(t, invalidated.Load())
+			veccache.Cache.Remove(cfg.IndexTable)
+		})
+	}
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the
