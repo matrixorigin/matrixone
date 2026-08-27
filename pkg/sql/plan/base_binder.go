@@ -3771,6 +3771,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if err := normalizeDecimalParamInArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
@@ -4140,9 +4143,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					continue
 				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-					if err != nil {
-						return nil, err
+					inExpr := rightVal
+					// Keep the partition-IN coercion path unchanged. Ordinary IN can
+					// retain an already same-typed constant cast; casting UUID to UUID
+					// is both redundant and unsupported.
+					if partitionIn || !makeTypeByPlan2Expr(rightVal).Eq(typLeft) {
+						inExpr, err = appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+						if err != nil {
+							return nil, err
+						}
 					}
 					inExprList = append(inExprList, inExpr)
 				} else {
@@ -4227,6 +4236,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
+		return nil, err
+	}
+	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
 		return nil, err
 	}
 
@@ -5198,6 +5210,47 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	return nil
 }
 
+// normalizeDecimalParamInArgs gives a direct prepared marker on the left of IN
+// a provisional DECIMAL envelope when a list member supplies that domain.
+// Parameters inside a DECIMAL-left list need no treatment here: the generic IN
+// binder already recognizes direct numeric parameters and gives each one the
+// left type while preserving a single typed list.
+func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr) error {
+	if (name != "in" && name != "not_in") || len(args) != 2 {
+		return nil
+	}
+	list := args[1].GetList()
+	if list == nil {
+		return nil
+	}
+
+	if isDirectDynamicParam(args[0]) {
+		// Inspect the complete list before choosing a provisional envelope.
+		// DECIMAL mixed with any approximate member has one FLOAT64 common
+		// domain; selecting an earlier DECIMAL item would freeze the marker and
+		// violate the precision/rounding behavior of the complete IN list.
+		for _, item := range list.List {
+			if item != nil && types.T(item.Typ.Id).IsFloat() {
+				var err error
+				floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
+				args[0], err = appendCastBeforeExpr(ctx, args[0], floatType)
+				return err
+			}
+		}
+		for _, item := range list.List {
+			if item != nil && types.T(item.Typ.Id).IsDecimal() {
+				var err error
+				args[0], err = appendCastBeforeExpr(ctx, args[0], item.Typ)
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+	return nil
+}
+
 // MySQL compares scalar TIME expressions to strings as text, but converts a
 // constant string or direct prepared parameter to TIME(scale) when the TIME
 // side is a column.
@@ -5330,6 +5383,42 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 	}
 	args[1] = offset
 	return nil
+}
+
+// LAG/LEAD offsets must be non-NULL, non-negative integers. Prepared markers
+// are normalized to int64 above and checked before execution or plan filling;
+// row-dependent integer expressions are checked after evaluation by the
+// window operator.
+func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 {
+		return nil
+	}
+
+	offsetExpr := args[1]
+	if lagLeadOffsetIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
+		return moerr.NewWrongArguments(ctx, name)
+	}
+	lit := offsetExpr.GetLit()
+	if lit != nil {
+		if offset, ok := literalSignedValue(lit); ok && offset < 0 {
+			return moerr.NewWrongArguments(ctx, name)
+		}
+	}
+	return nil
+}
+
+func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
+	for expr != nil {
+		if lit := expr.GetLit(); lit != nil {
+			return lit.Isnull
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+			return false
+		}
+		expr = fn.Args[0]
+	}
+	return false
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {

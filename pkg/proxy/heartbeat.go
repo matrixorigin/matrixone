@@ -28,6 +28,11 @@ func (s *Server) heartbeat(ctx context.Context) {
 	if s.config.HAKeeper.HeartbeatInterval.Duration == 0 {
 		panic("invalid heartbeat interval")
 	}
+	// Startup admission must not depend on waiting for the first ticker edge.
+	s.doHeartbeat(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	ticker := time.NewTicker(s.config.HAKeeper.HeartbeatInterval.Duration)
 	defer ticker.Stop()
 	for {
@@ -35,27 +40,43 @@ func (s *Server) heartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.doHeartbeat(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+		case <-s.viewMetadataHeartbeatWakeup:
+		}
+		s.doHeartbeat(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }
 
 func (s *Server) doHeartbeat(ctx context.Context) {
-	ctx, cancel := context.WithTimeoutCause(ctx, s.config.HAKeeper.HeartbeatTimeout.Duration, moerr.CauseDoHeartbeat)
-	defer cancel()
-	_, err := s.haKeeperClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{
-		UUID:          s.config.UUID,
-		ListenAddress: s.config.ListenAddress,
-		ConfigData:    s.configData.GetData(),
+	timeout := s.config.HAKeeper.HeartbeatTimeout.Duration
+	if timeout <= 0 {
+		timeout = defaultHeartbeatTimeout
+	}
+	heartbeatCtx, heartbeatCancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoHeartbeat)
+	batch, err := s.haKeeperClient.SendProxyHeartbeat(heartbeatCtx, pb.ProxyHeartbeat{
+		UUID:                            s.config.UUID,
+		ListenAddress:                   s.config.ListenAddress,
+		ConfigData:                      s.configData.GetData(),
+		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
+		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
+		ViewMetadataObservedEpoch:       s.viewMetadataObservedEpoch.Load(),
 	})
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
+		err = moerr.AttachCause(heartbeatCtx, err)
+		heartbeatCancel()
 		s.runtime.Logger().Error("failed to send heartbeat", zap.Error(err))
+	} else {
+		heartbeatCancel()
+		refreshCtx, refreshCancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoHeartbeat)
+		err = s.applyViewMetadataAdmission(refreshCtx, batch.ViewMetadataAdmission)
+		refreshCancel()
+		if err != nil && ctx.Err() == nil {
+			s.runtime.Logger().Error("failed to apply view metadata admission response", zap.Error(err))
+		}
 	}
 	s.configData.DecrCount()
 }

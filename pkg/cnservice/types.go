@@ -780,28 +780,44 @@ type service struct {
 	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
-	stopper             *stopper.Stopper
-	heartbeatInFlight   atomic.Bool
-	commandPollNeeded   atomic.Bool
-	commandPollWakeup   chan struct{}
-	commandMu           sync.Mutex
-	lastCommandBatchID  uint64
-	ackedCommandBatchID atomic.Uint64
-	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
-	lastCommandHash     [32]byte
-	legacyDedupeArmed   bool
+	stopper                         *stopper.Stopper
+	heartbeatInFlight               atomic.Bool
+	commandPollNeeded               atomic.Bool
+	commandPollWakeup               chan struct{}
+	heartbeatWakeup                 chan struct{}
+	commandMu                       sync.Mutex
+	lastCommandBatchID              uint64
+	ackedCommandBatchID             atomic.Uint64
+	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash                 [32]byte
+	legacyDedupeArmed               bool
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataCatalogFencedEpoch  atomic.Uint64
+	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataCatalogFenceMu      sync.Mutex
+	viewMetadataCatalogFenceReady   atomic.Bool
+	viewMetadataIngressReady        atomic.Bool
+	viewMetadataGenerationRevoked   atomic.Bool
+	viewMetadataRevocationOnce      sync.Once
+	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
+	// close request issued after synchronous ingress revocation.
+	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
 	lifecycleMu         sync.Mutex
+	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState
 	closeOnce           sync.Once
 	closeErr            error
 
 	task struct {
 		sync.RWMutex
-		holder         taskservice.TaskServiceHolder
-		runner         taskservice.TaskRunner
-		runnerReady    atomic.Bool
-		storageFactory taskservice.TaskStorageFactory
+		holder            taskservice.TaskServiceHolder
+		runner            taskservice.TaskRunner
+		runnerReady       atomic.Bool
+		generationRevoked bool
+		storageFactory    taskservice.TaskStorageFactory
 	}
 
 	addressMgr address.AddressManager

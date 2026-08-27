@@ -1371,11 +1371,32 @@ func doSetVar(
 			captureSystemReplayability(assign.Name)
 		}
 	}
-	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+	var preparedItems []*plan.SetVariablesItem
+	if preparedExpression {
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.plan != nil {
+			if setVariables := cw.plan.GetDcl().GetSetVariables(); setVariables != nil {
+				preparedItems = setVariables.Items
+			}
+		}
+	}
+	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, valueType, evalErr := getExprValueWithPrepareMeta(
-			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+		var value interface{}
+		var valueType plan.Type
+		var evalErr error
+		if index < len(preparedItems) && preparedItems[index].Value != nil {
+			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
+				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
+					assign.Value, preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+			} else {
+				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
+					preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+			}
+		} else {
+			value, valueType, evalErr = getExprValueWithPrepareMeta(
+				assign.Value, ses, execCtx, preparedExpression, nil, &prepareParamKind, &isBin)
+		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -1652,8 +1673,8 @@ func doSetVar(
 			}
 		}()
 
-		for _, assign := range sv.Assignments {
-			item, evalErr := evaluateAssignment(assign)
+		for index, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(index, assign)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -1666,8 +1687,8 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
-		item, evalErr := evaluateAssignment(assign)
+	for index, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(index, assign)
 		if evalErr != nil {
 			return evalErr
 		}
@@ -2717,7 +2738,7 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2732,20 +2753,24 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
+		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                originSQL,
+		compile:            comp,
+		PreparePlan:        preparePlan,
+		PrepareStmt:        saveStmt,
+		NativeMode:         owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet: true,
+		remapDb:            maps.Clone(execCtx.remapDb),
+		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:   owner.GetTempTableVersion(),
+		ddlVersion:         owner.getDDLVersion(),
+		cloneSQL:           cloneSQL,
+		protocolVersion:    protocolVersion,
+		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
+			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -3792,7 +3817,7 @@ func buildPlanWithPrepareMode(
 	// Default handling of various statements
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
 		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
@@ -4791,15 +4816,13 @@ func executeStmtWithResponse(ses *Session,
 	// RespPostMeta below, so a commit error can never follow an advertised
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
-	// Deferred Kafka scan progress is OWNED BY THE TRANSACTION terminal
-	// (TxnHandler.Commit/Rollback): a successful statement inside BEGIN /
-	// autocommit=0 must not publish until the enclosing transaction commits,
-	// or BEGIN; INSERT..SELECT FROM kafka_t; ROLLBACK would advance the
-	// exactly-once chain past rows that were rolled back. A FAILED statement
-	// discards here as a belt (its rollback path also discards).
-	if err != nil {
-		ses.FinalizeKafkaProgress(false)
-	}
+	// The WHOLE-statement terminal for deferred Kafka scan progress: every
+	// pipeline (including downstream consumers on split scopes) has finished
+	// by the time executeStmtWithMaxExecutionTime returns. Kafka progress is
+	// deliberately statement/session state, not transaction state. Consumers
+	// that need atomic data+offset commits store LAST_KAFKA_MESSAGE_ID() in a
+	// separate MatrixOne table in the same explicit transaction.
+	ses.FinalizeKafkaProgress(err == nil)
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}

@@ -706,6 +706,81 @@ func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
 	require.Equal(t, []uint64{99}, p.GetDdl().GetTruncateTable().GetForeignTbl())
 }
 
+func TestBuildTruncateMongoDBExternalTableRejectsReadOnlyDML(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["mongo_events"] = &ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "mongo_events",
+	}
+	ctx.tables["mongo_events"] = &TableDef{
+		Name:        "mongo_events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source",
+			Database:   "telemetry",
+			Collection: "events",
+			SchemaMode: sqlmongodb.SchemaExplicit,
+			Conversion: sqlmongodb.ConversionStrict,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "id", Path: "_id", TypeID: int32(types.T_varchar), Width: 64},
+			},
+		}),
+		Cols: []*ColDef{
+			{Name: "id", Typ: Type{Id: int32(types.T_varchar), Width: 64}},
+		},
+	}
+
+	for _, prepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table mongo_events", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, prepare)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			require.Equal(t, "invalid input: cannot insert/update/delete from external table", err.Error())
+		})
+	}
+}
+
+func TestBuildTruncateNonMongoExternalTableKeepsExistingBehavior(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table external_events", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["external_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "external_events"}
+	ctx.tables["external_events"] = &TableDef{
+		Name:      "external_events",
+		TableType: catalog.SystemExternalRel,
+	}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDdl().GetTruncateTable())
+}
+
+func TestBuildTruncateMalformedMongoDBExternalTableReturnsCatalogError(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table mongo_events", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["mongo_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "mongo_events"}
+	ctx.tables["mongo_events"] = &TableDef{
+		Name:        "mongo_events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+	}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.Nil(t, p)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Equal(t, "invalid input: MongoDB external table is missing its catalog envelope", err.Error())
+}
+
 func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		t.Context(),
@@ -4669,6 +4744,65 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	require.Len(t, envelope.Columns, 1)
 	require.True(t, envelope.Columns[0].NotNullable)
 	require.True(t, sqlmongodb.ColumnsToPlan(envelope.Columns)[0].MoType.NotNullable)
+}
+
+func TestBuildMongoDBExternalTableRejectsSetColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	for _, members := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "nonempty", sql: "'a','b'"},
+		{name: "single_empty", sql: "''"},
+	} {
+		for _, nullability := range []struct {
+			name string
+			sql  string
+		}{
+			{name: "nullable"},
+			{name: "not_null", sql: "NOT NULL"},
+		} {
+			for _, conversion := range []string{sqlmongodb.ConversionStrict, sqlmongodb.ConversionTryNull} {
+				t.Run(members.name+"/"+nullability.name+"/"+conversion, func(t *testing.T) {
+					sql := fmt.Sprintf(`
+					CREATE EXTERNAL TABLE tpch.mongo_set (
+						v SET(%s) %s MONGODB_PATH 'device_id'
+					) ENGINE=MONGODB WITH (
+						"connection"='source', "database"='telemetry', "collection"='samples',
+						"schema_mode"='explicit', "conversion_mode"='%s', "max_parallelism"='1'
+					)`, members.sql, nullability.sql, conversion)
+
+					logicPlan, err := runOneStmt(mock, t, sql)
+					require.ErrorContains(t, err, "MongoDB mapping target type SET")
+					require.Nil(t, logicPlan, "failed CREATE must not retain a DDL plan or catalog mapping")
+				})
+			}
+		}
+	}
+}
+
+func TestBuildMongoDBExternalTableAcceptsUnsignedBigInt(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_unsigned (
+			v BIGINT UNSIGNED MONGODB_PATH 'device_id'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples',
+			"schema_mode"='explicit', "conversion_mode"='strict', "max_parallelism"='1'
+		)`)
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+	require.Equal(t, int32(types.T_uint64), logicPlan.GetDdl().GetCreateTable().GetTableDef().Cols[0].Typ.Id)
 }
 
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {

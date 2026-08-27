@@ -20,8 +20,10 @@ import (
 	"math"
 	"slices"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -193,47 +195,93 @@ func (ag *aggState) preflightArgumentCapacity(
 		return nil
 	}
 
-	capacity := uint64(len(ag.argbuf))
-	missing := required - capacity
-	steps := (missing + kAggArgArenaSize - 1) / kAggArgArenaSize
-	if steps > (math.MaxUint32-capacity)/kAggArgArenaSize {
+	capacity, err := nextArgumentArenaCapacity(
+		uint64(len(ag.argbuf)), required)
+	if err != nil {
+		return err
+	}
+	fallbackCapacity, err := nextLinearArgumentArenaCapacity(
+		uint64(len(ag.argbuf)), required)
+	if err != nil {
+		return err
+	}
+	// Geometric growth is speculative spare capacity. Clamp both candidates to
+	// the physical single-allocation limit before admission so crossing that
+	// boundary neither logs a failed oversized allocation nor rejects a smaller
+	// arena that still satisfies required.
+	maxAllocation := mpool.MaxAllocationSize()
+	if maxAllocation <= 0 || required > uint64(maxAllocation) {
 		return mpool.ErrAllocationAllocatorLimit
 	}
-	capacity += steps * kAggArgArenaSize
-	if capacity > uint64(math.MaxInt) {
-		return mpool.ErrAllocationAllocatorLimit
+	capacity = min(capacity, uint64(maxAllocation))
+	fallbackCapacity = min(fallbackCapacity, uint64(maxAllocation))
+	next, err := ag.allocation.allocArgumentArena(mp, int(capacity))
+	if err != nil && capacity != fallbackCapacity &&
+		mpool.IsRetryableAllocationCapacity(err) {
+		// Geometric growth keeps repeated relocation linear in the final state
+		// size, but the old arena remains charged until relocation publishes.
+		// Under memory pressure, retain the former chunked-growth availability
+		// envelope instead of failing a query solely because of speculative
+		// spare capacity.
+		next, err = ag.allocation.allocArgumentArena(mp, int(fallbackCapacity))
 	}
-	for {
-		next, err := ag.allocation.allocArgumentArena(mp, int(capacity))
-		if err != nil {
-			return err
-		}
-		nextArena := arenaskl.NewArena(next)
-		nextSkiplist := arenaskl.NewSkiplist(nextArena, bytes.Compare)
-		err = nil
-		it := ag.argSkl.NewIter(nil, nil)
-		for ok, key, value := it.First(); ok; ok, key, value = it.Next() {
-			err = nextSkiplist.AddWithPlan(
-				key, value, arenaskl.MakeAddPlan(key))
-			if err != nil {
-				break
-			}
-		}
-		it.Close()
-		if err == nil {
-			old := ag.argbuf
-			ag.argbuf = next
-			ag.argSkl = nextSkiplist
-			mp.Free(old)
-			return nil
-		}
+	if err != nil {
+		return err
+	}
+	if err = ag.argSkl.GrowArena(next); err != nil {
 		mp.Free(next)
-		if err != arenaskl.ErrArenaFull ||
-			capacity > math.MaxUint32-kAggArgArenaSize {
-			return err
-		}
-		capacity += kAggArgArenaSize
+		return err
 	}
+	old := ag.argbuf
+	ag.argbuf = next
+	mp.Free(old)
+	return nil
+}
+
+func nextArgumentArenaCapacity(current, required uint64) (uint64, error) {
+	if required <= current {
+		return current, nil
+	}
+	if current > math.MaxUint32 || required > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	capacity := current
+	for capacity < required {
+		grow := max(capacity, uint64(kAggArgArenaSize))
+		if grow > math.MaxUint32-capacity {
+			capacity = math.MaxUint32
+		} else {
+			capacity += grow
+		}
+		if capacity == math.MaxUint32 && capacity < required {
+			return 0, mpool.ErrAllocationAllocatorLimit
+		}
+	}
+	if capacity > uint64(math.MaxInt) {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return capacity, nil
+}
+
+func nextLinearArgumentArenaCapacity(current, required uint64) (uint64, error) {
+	if required <= current {
+		return current, nil
+	}
+	if current > math.MaxUint32 || required > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	missing := required - current
+	chunk := uint64(kAggArgArenaSize)
+	steps := (missing + chunk - 1) / chunk
+	grow := steps * chunk
+	capacity := uint64(math.MaxUint32)
+	if grow <= math.MaxUint32-current {
+		capacity = current + grow
+	}
+	if capacity < required || capacity > uint64(math.MaxInt) {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return capacity, nil
 }
 
 func validatePreflightVectors(
@@ -318,13 +366,42 @@ func preflightArgumentRowsEqual(
 	return true, nil
 }
 
-func earlierDistinctArgumentRow(
+const distinctArgumentBatchSlots = hashmap.UnitLimit * 2
+const distinctArgumentLinearLimit = 8
+
+// distinctArgumentLinearBatch keeps the low-cardinality path hash-free. Most
+// duplicate-heavy batches find a representative after one or two exact
+// comparisons, avoiding both hashing large payloads and clearing the larger
+// open-addressing table below.
+type distinctArgumentLinearBatch struct {
+	rows  [distinctArgumentLinearLimit]uint16
+	count uint16
+}
+
+func (batch *distinctArgumentLinearBatch) seen(
 	groups []uint64,
 	vectors []*vector.Vector,
 	offset int,
 	row int,
 ) (bool, error) {
-	for earlier := 0; earlier < row; earlier++ {
+	// Cardinality one is the common duplicate-heavy case. Keep its control
+	// flow as short as the former scan over earlier rows: one group check and
+	// one exact comparison, without entering the representative loop.
+	if batch.count > 0 {
+		earlier := int(batch.rows[0])
+		if groups[earlier] == groups[row] {
+			equal, err := preflightArgumentRowsEqual(
+				vectors, offset+earlier, offset+row)
+			if err != nil {
+				return false, err
+			}
+			if equal {
+				return true, nil
+			}
+		}
+	}
+	for i := uint16(1); i < batch.count; i++ {
+		earlier := int(batch.rows[i])
 		if groups[earlier] != groups[row] {
 			continue
 		}
@@ -338,6 +415,84 @@ func earlierDistinctArgumentRow(
 		}
 	}
 	return false, nil
+}
+
+func (batch *distinctArgumentLinearBatch) insertUnique(row int) bool {
+	if batch.count == distinctArgumentLinearLimit {
+		return false
+	}
+	batch.rows[batch.count] = uint16(row)
+	batch.count++
+	return true
+}
+
+// distinctArgumentBatch suppresses duplicate candidates inside one immutable
+// preflight work unit. The table is deliberately fixed-size: UnitLimit bounds
+// the input at 256 rows, so twice as many open-addressing slots keep the load
+// factor at or below 50% without row-frequency allocation.
+type distinctArgumentBatch struct {
+	rows   [distinctArgumentBatchSlots]uint16
+	hashes [distinctArgumentBatchSlots]uint64
+}
+
+func distinctArgumentRowHash(
+	group uint64,
+	vectors []*vector.Vector,
+	logicalRow int,
+) (uint64, error) {
+	// Start from the target group because DISTINCT is scoped to one aggregate
+	// group. Hash combination preserves column boundaries for multi-argument
+	// DISTINCT; full row comparison below remains the collision oracle.
+	hash := group * 0x9e3779b97f4a7c15
+	var zero [8]byte
+	for _, vec := range vectors {
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return 0, err
+		}
+		value := vec.GetRawBytesAt(row)
+		if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
+			value = zero[:size]
+		}
+		hash = keycodec.HashCombine(hash, xxhash.Sum64(value))
+	}
+	return hash, nil
+}
+
+func (batch *distinctArgumentBatch) seenOrInsert(
+	groups []uint64,
+	vectors []*vector.Vector,
+	offset int,
+	row int,
+) (bool, error) {
+	if batch == nil || row < 0 || row >= len(groups) || len(groups) > hashmap.UnitLimit {
+		return false, mpool.ErrAllocationAccountInvalid
+	}
+	hash, err := distinctArgumentRowHash(groups[row], vectors, offset+row)
+	if err != nil {
+		return false, err
+	}
+	const mask = distinctArgumentBatchSlots - 1
+	for slot := int(hash & uint64(mask)); ; slot = (slot + 1) & mask {
+		encodedRow := batch.rows[slot]
+		if encodedRow == 0 {
+			batch.rows[slot] = uint16(row + 1)
+			batch.hashes[slot] = hash
+			return false, nil
+		}
+		earlier := int(encodedRow - 1)
+		if batch.hashes[slot] != hash || groups[earlier] != groups[row] {
+			continue
+		}
+		equal, err := preflightArgumentRowsEqual(
+			vectors, offset+earlier, offset+row)
+		if err != nil {
+			return false, err
+		}
+		if equal {
+			return true, nil
+		}
+	}
 }
 
 func (ag *aggState) preparePreflightArgumentKey(
@@ -445,14 +600,75 @@ func (ae *aggExec) preflightBatchFillArgs(
 	if err := validatePreflightVectors(vectors, offset, len(groups)); err != nil {
 		return err
 	}
+	if distinct {
+		return ae.preflightDistinctBatchFillArgs(offset, groups, vectors)
+	}
+	if len(vectors) == 1 {
+		return ae.preflightNonDistinctSingleBatchFillArg(
+			offset, groups, vectors)
+	}
+	return ae.preflightNonDistinctBatchFillArgs(offset, groups, vectors)
+}
+
+func (ae *aggExec) preflightNonDistinctSingleBatchFillArg(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+) error {
+	vec := vectors[0]
 	var needs [hashmap.UnitLimit]argumentChunkCapacity
 	needCount := 0
 	var progress [hashmap.UnitLimit]argumentTargetProgress
 	progressCount := 0
-	header := kAggArgPrefixSz
-	if !distinct {
-		header += kAggArgOrdinalSz
+	const header = kAggArgPrefixSz + kAggArgOrdinalSz
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y, state, err := ae.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		logicalRow := offset + i
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return err
+		}
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		payload := len(vec.GetRawBytesAt(row))
+		if payload > math.MaxInt-header {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		ordinal, err := nextArgumentOrdinal(
+			&progress, &progressCount, x, y, state.argCnt[y])
+		if err != nil {
+			return err
+		}
+		key, err := state.preparePreflightArgumentKey(
+			ae.mp, y, vectors, logicalRow, payload, false, ordinal)
+		if err != nil {
+			return err
+		}
+		if err = addArgumentChunkCapacity(
+			&needs, &needCount, x, key); err != nil {
+			return err
+		}
 	}
+	return ae.applyArgumentChunkCapacity(&needs, needCount)
+}
+
+func (ae *aggExec) preflightNonDistinctBatchFillArgs(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+) error {
+	var needs [hashmap.UnitLimit]argumentChunkCapacity
+	needCount := 0
+	var progress [hashmap.UnitLimit]argumentTargetProgress
+	progressCount := 0
+	const header = kAggArgPrefixSz + kAggArgOrdinalSz
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -463,15 +679,93 @@ func (ae *aggExec) preflightBatchFillArgs(
 		}
 		logicalRow := offset + i
 		payload := 0
-		if len(vectors) == 1 {
-			row, err := preflightPhysicalRow(vectors[0], logicalRow)
+		for _, vec := range vectors {
+			row, err := preflightPhysicalRow(vec, logicalRow)
 			if err != nil {
 				return err
 			}
-			if vectors[0].IsNull(uint64(row)) {
+			if vec.IsNull(uint64(row)) {
+				payload = -1
+				break
+			}
+			raw := vec.GetRawBytesAt(row)
+			if len(raw) > math.MaxInt-payload-4 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			payload += 4 + len(raw)
+		}
+		if payload < 0 {
+			continue
+		}
+		if payload > math.MaxInt-header {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		ordinal, err := nextArgumentOrdinal(
+			&progress, &progressCount, x, y, state.argCnt[y])
+		if err != nil {
+			return err
+		}
+		key, err := state.preparePreflightArgumentKey(
+			ae.mp, y, vectors, logicalRow, payload, false, ordinal)
+		if err != nil {
+			return err
+		}
+		if err := addArgumentChunkCapacity(
+			&needs, &needCount, x, key); err != nil {
+			return err
+		}
+	}
+	return ae.applyArgumentChunkCapacity(&needs, needCount)
+}
+
+func (ae *aggExec) addDistinctArgumentCapacity(
+	x int,
+	y uint16,
+	state *aggState,
+	logicalRow int,
+	payload int,
+	vectors []*vector.Vector,
+	needs *[hashmap.UnitLimit]argumentChunkCapacity,
+	needCount *int,
+) error {
+	key, err := state.preparePreflightArgumentKey(
+		ae.mp, y, vectors, logicalRow, payload, true, 0)
+	if err != nil {
+		return err
+	}
+	if state.argSkl.Contains(key) {
+		return nil
+	}
+	return addArgumentChunkCapacity(needs, needCount, x, key)
+}
+
+func (ae *aggExec) preflightDistinctBatchFillArgs(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+) error {
+	var needs [hashmap.UnitLimit]argumentChunkCapacity
+	needCount := 0
+	var linear distinctArgumentLinearBatch
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y, state, err := ae.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		logicalRow := offset + i
+		payload := 0
+		physicalRow := 0
+		if len(vectors) == 1 {
+			physicalRow, err = preflightPhysicalRow(vectors[0], logicalRow)
+			if err != nil {
+				return err
+			}
+			if vectors[0].IsNull(uint64(physicalRow)) {
 				continue
 			}
-			payload = len(vectors[0].GetRawBytesAt(row))
 		} else {
 			for _, vec := range vectors {
 				row, err := preflightPhysicalRow(vec, logicalRow)
@@ -492,41 +786,119 @@ func (ae *aggExec) preflightBatchFillArgs(
 				continue
 			}
 		}
-		if payload > math.MaxInt-header {
-			return mpool.ErrAllocationAllocatorLimit
-		}
-		if distinct {
-			duplicate, err := earlierDistinctArgumentRow(
-				groups, vectors, offset, i)
-			if err != nil {
-				return err
-			}
-			if duplicate {
-				continue
-			}
-		}
-		ordinal := uint32(0)
-		if !distinct {
-			ordinal, err = nextArgumentOrdinal(
-				&progress, &progressCount, x, y, state.argCnt[y])
-			if err != nil {
-				return err
-			}
-		}
-		key, err := state.preparePreflightArgumentKey(
-			ae.mp, y, vectors, logicalRow, payload, distinct, ordinal)
+		duplicate, err := linear.seen(groups, vectors, offset, i)
 		if err != nil {
 			return err
 		}
-		if distinct && state.argSkl.Contains(key) {
+		if duplicate {
 			continue
 		}
-		if err := addArgumentChunkCapacity(
-			&needs, &needCount, x, key); err != nil {
+		if !linear.insertUnique(i) {
+			return ae.preflightDistinctBatchFillArgsHashed(
+				offset, groups, vectors, i, &linear, &needs, &needCount)
+		}
+		if len(vectors) == 1 {
+			// Duplicate rows need neither a retained key nor its payload size.
+			// Delay the raw-value access until exact admission accepts this row.
+			payload = len(vectors[0].GetRawBytesAt(physicalRow))
+		}
+		if payload > math.MaxInt-kAggArgPrefixSz {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		if err = ae.addDistinctArgumentCapacity(
+			x, y, state, logicalRow, payload, vectors, &needs, &needCount); err != nil {
 			return err
 		}
 	}
 	return ae.applyArgumentChunkCapacity(&needs, needCount)
+}
+
+// preflightDistinctBatchFillArgsHashed owns the large table in a separate
+// frame and is called only after the exact representative set overflows. This
+// mirrors radix aggregation admission: hash work is paid only for a batch with
+// enough distinct tuples to amortize it.
+func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+	start int,
+	linear *distinctArgumentLinearBatch,
+	needs *[hashmap.UnitLimit]argumentChunkCapacity,
+	needCount *int,
+) error {
+	if start < 0 || start >= len(groups) || linear == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	var hashed distinctArgumentBatch
+	for i := uint16(0); i < linear.count; i++ {
+		duplicate, err := hashed.seenOrInsert(
+			groups, vectors, offset, int(linear.rows[i]))
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			return mpool.ErrAllocationAccountInvariant
+		}
+	}
+	for i := start; i < len(groups); i++ {
+		group := groups[i]
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y, state, err := ae.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		logicalRow := offset + i
+		payload := 0
+		physicalRow := 0
+		if len(vectors) == 1 {
+			physicalRow, err = preflightPhysicalRow(vectors[0], logicalRow)
+			if err != nil {
+				return err
+			}
+			if vectors[0].IsNull(uint64(physicalRow)) {
+				continue
+			}
+		} else {
+			for _, vec := range vectors {
+				row, err := preflightPhysicalRow(vec, logicalRow)
+				if err != nil {
+					return err
+				}
+				if vec.IsNull(uint64(row)) {
+					payload = -1
+					break
+				}
+				raw := vec.GetRawBytesAt(row)
+				if len(raw) > math.MaxInt-payload-4 {
+					return mpool.ErrAllocationAllocatorLimit
+				}
+				payload += 4 + len(raw)
+			}
+			if payload < 0 {
+				continue
+			}
+		}
+		duplicate, err := hashed.seenOrInsert(groups, vectors, offset, i)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			continue
+		}
+		if len(vectors) == 1 {
+			payload = len(vectors[0].GetRawBytesAt(physicalRow))
+		}
+		if payload > math.MaxInt-kAggArgPrefixSz {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		if err = ae.addDistinctArgumentCapacity(
+			x, y, state, logicalRow, payload, vectors, needs, needCount); err != nil {
+			return err
+		}
+	}
+	return ae.applyArgumentChunkCapacity(needs, *needCount)
 }
 
 func (ae *aggExec) preflightBatchMergeArgs(
@@ -554,6 +926,11 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			int(otherY) >= int(other.state[otherX].length) {
 			return mpool.ErrAllocationAccountInvariant
 		}
+		var upper [kAggArgPrefixSz]byte
+		binary.BigEndian.PutUint16(upper[:], y+1)
+		var targetIter *arenaskl.Iterator
+		var targetKey []byte
+		var targetOK bool
 		err = other.state[otherX].iter(otherY, func(key []byte) error {
 			if len(key) < kAggArgPrefixSz {
 				return mpool.ErrAllocationAccountInvariant
@@ -565,7 +942,14 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			copy(candidate, key)
 			binary.BigEndian.PutUint16(candidate[:kAggArgPrefixSz], y)
 			if ae.isDistinct {
-				if state.argSkl.Contains(candidate) {
+				if targetIter == nil {
+					targetIter = state.argSkl.NewIter(nil, upper[:])
+					targetOK, targetKey, _ = targetIter.SeekGE(candidate)
+				}
+				for targetOK && bytes.Compare(targetKey, candidate) < 0 {
+					targetOK, targetKey, _ = targetIter.Next()
+				}
+				if targetOK && bytes.Equal(targetKey, candidate) {
 					return nil
 				}
 				// A merge work unit can map several source groups into the same
@@ -610,6 +994,9 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			return addArgumentChunkCapacityWithValue(
 				&needs, &needCount, x, candidate, valueSize)
 		})
+		if targetIter != nil {
+			targetIter.Close()
+		}
 		if err != nil {
 			return err
 		}
