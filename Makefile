@@ -292,11 +292,11 @@ endif
 
 .PHONY: cgo
 cgo: thirdparties
-	@(cd cgo; ${MAKE} -j$(NATIVE_BUILD_JOBS) ${CGO_DEBUG_OPT})
+	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
 
 .PHONY: thirdparties
 thirdparties:
-	@(cd thirdparties; ${MAKE} -j$(NATIVE_BUILD_JOBS))
+	@(cd thirdparties; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)))
 	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
@@ -418,11 +418,14 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
-# Native compilation runs before Go tests, so it can use the same bounded CPU
-# budget without increasing peak race-test memory. Developer builds stay
-# serial by default; CI's explicit UT_PARALLEL value enables parallel native
-# compilation as well.
-NATIVE_BUILD_JOBS ?= $(UT_PARALLEL)
+# Native compilation runs before Go tests, so it can use an explicit UT CPU
+# budget without increasing peak race-test memory. With the default UT value,
+# omit -j and preserve recursive make's jobserver contract: a plain make stays
+# serial while a developer's `make -jN` remains parallel.
+NATIVE_BUILD_JOBS ?= $(if $(filter-out 1,$(UT_PARALLEL)),$(UT_PARALLEL))
+ifeq ($(NATIVE_BUILD_JOBS),0)
+$(error NATIVE_BUILD_JOBS and UT_PARALLEL must be positive)
+endif
 ENABLE_UT ?= "false"
 # These are public mirrors, not policy gatekeepers. Fall through on transient
 # errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
