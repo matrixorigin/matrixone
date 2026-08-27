@@ -81,6 +81,42 @@ execute band_stmt using @lo,@hi;
 2  𝄀
 3
 deallocate prepare band_stmt;
+prepare null_upper from 'select id from t where l2_distance(v,''[1,1,1]'') < ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute null_upper using @d;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+set @d=null;
+execute null_upper using @d;
+➤ id[4,32,0]
+set @d=5;
+execute null_upper using @d;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+deallocate prepare null_upper;
+prepare null_lower from 'select id from t where l2_distance(v,''[1,1,1]'') > ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute null_lower using @d;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+set @d=null;
+execute null_lower using @d;
+➤ id[4,32,0]
+set @d=5;
+execute null_lower using @d;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+deallocate prepare null_lower;
+prepare null_both from 'select id from t where l2_distance(v,''[1,1,1]'') > ? and l2_distance(v,''[1,1,1]'') < ? order by id';
+set @lo=null;
+set @hi=null;
+execute null_both using @lo,@hi;
+➤ id[4,32,0]
+deallocate prepare null_both;
 select id from u where l2_distance(v,'[1,1,1]') < lim order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀

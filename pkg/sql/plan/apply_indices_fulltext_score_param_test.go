@@ -55,4 +55,29 @@ func TestIsExecutionConstantExpr(t *testing.T) {
 	require.False(t, isExecutionConstantExpr(makePlan2Float64ConstExprWithType(0.5)),
 		"a literal is handled by the literal path, not this one")
 	require.False(t, isExecutionConstantExpr(nil))
+
+	// A wrapper argument OTHER than the first can make the whole expression vary per
+	// row. ROUND's second argument is the digit count: `round(?, per_row_col)` is a
+	// different value on every row even though its first argument is a parameter, so
+	// it must not be peeled into a single scan-wide bound.
+	roundPerRow := &plan.Expr{
+		Typ: makePlan2Type(&[]types.Type{types.T_float64.ToType()}[0]),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "round"},
+			Args: []*plan.Expr{ftScoreParamExpr(0), ftScoreColExpr()},
+		}},
+	}
+	require.False(t, isExecutionConstantExpr(roundPerRow),
+		"round(?, per_row_column) varies per row")
+
+	// ...while a fully constant ROUND is still fine.
+	roundConst := &plan.Expr{
+		Typ: makePlan2Type(&[]types.Type{types.T_float64.ToType()}[0]),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "round"},
+			Args: []*plan.Expr{ftScoreParamExpr(0), makePlan2Float64ConstExprWithType(2)},
+		}},
+	}
+	require.True(t, isExecutionConstantExpr(roundConst),
+		"round(?, 2) is one value for the whole execution")
 }

@@ -5765,21 +5765,56 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 // before a scan and used as a fixed bound; a column reference varies per row and must
 // stay a residual filter. Optimizer rules that want to admit `?` where they previously
 // demanded a literal should test this, never merely `GetLit() == nil`.
+//
+// EVERY argument of a wrapper is checked, not only the first. Some wrappers have a
+// value-affecting second argument -- `round(?, digits)` -- so `round(?, per_row_col)`
+// is a different value on every row even though argument 0 is a parameter. Following
+// argument 0 alone reports that as constant, and the bound is then peeled into one
+// scan-wide range that cannot be folded, failing the read.
+//
+// The expression must also actually CONTAIN a parameter: an all-literal expression is
+// handled by the literal path, and reporting it here would route it down the runtime
+// branch instead.
 func isExecutionConstantExpr(expr *plan.Expr) bool {
-	for i := 0; expr != nil && i < 8; i++ {
-		if expr.GetP() != nil {
-			return true
-		}
-		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
-			return false
-		}
-		switch fn.Func.ObjName {
-		case "cast", "round", "floor", "ceil":
-			expr = fn.Args[0]
-		default:
-			return false
-		}
+	constant, hasParam := execConstantExpr(expr, 0)
+	return constant && hasParam
+}
+
+// execConstantExpr returns whether expr is constant for the execution, and whether it
+// contains a parameter marker at all.
+func execConstantExpr(expr *plan.Expr, depth int) (constant, hasParam bool) {
+	if expr == nil || depth > 8 {
+		return false, false
 	}
-	return false
+	if expr.GetP() != nil {
+		return true, true
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return true, false // fixed for the execution, but not a parameter
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return false, false
+	}
+	switch fn.Func.ObjName {
+	case "cast":
+		// Argument 1 is the TARGET TYPE, not a value, so only argument 0 carries data.
+		return execConstantExpr(fn.Args[0], depth+1)
+	case "round", "floor", "ceil":
+		// Every argument here is a value, and every one of them affects the result:
+		// round(x, digits) moves with digits. Checking argument 0 alone would accept
+		// round(?, per_row_col).
+		for _, arg := range fn.Args {
+			argConst, argParam := execConstantExpr(arg, depth+1)
+			if !argConst {
+				return false, false
+			}
+			hasParam = hasParam || argParam
+		}
+		return true, hasParam
+	default:
+		// An unlisted function may have any arity or any per-row argument; refuse
+		// rather than guess which of its arguments are value-affecting.
+		return false, false
+	}
 }

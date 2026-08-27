@@ -76,6 +76,37 @@ set @hi=14;
 execute band_stmt using @lo,@hi;
 deallocate prepare band_stmt;
 
+-- ============ a NULL prepared bound selects nothing ============
+-- A parameter may legally bind NULL. `distance < NULL` is UNKNOWN for every row, so
+-- the answer is the empty set -- and once the predicate is peeled into the range, the
+-- range is its only consumer and has to produce that. Erroring instead would turn a
+-- valid query into a failure. Both bounds, and reuse in both directions, because the
+-- prepared statement must keep working after a NULL binding.
+prepare null_upper from 'select id from t where l2_distance(v,''[1,1,1]'') < ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute null_upper using @d;
+set @d=null;
+execute null_upper using @d;
+set @d=5;
+execute null_upper using @d;
+deallocate prepare null_upper;
+
+prepare null_lower from 'select id from t where l2_distance(v,''[1,1,1]'') > ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute null_lower using @d;
+set @d=null;
+execute null_lower using @d;
+set @d=5;
+execute null_lower using @d;
+deallocate prepare null_lower;
+
+-- Both bounds NULL at once.
+prepare null_both from 'select id from t where l2_distance(v,''[1,1,1]'') > ? and l2_distance(v,''[1,1,1]'') < ? order by id';
+set @lo=null;
+set @hi=null;
+execute null_both using @lo,@hi;
+deallocate prepare null_both;
+
 -- ============ a per-row bound stays a residual filter ============
 -- id is a column, not a constant: it must not be pushed as a range, and the answer must
 -- still be right
