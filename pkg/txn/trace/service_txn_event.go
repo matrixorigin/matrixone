@@ -257,6 +257,12 @@ func (s *service) TxnCommit(
 
 	n := 0
 	for _, entry := range entries {
+		if entry.EntryType == api.Entry_LifecycleCommit {
+			// LifecycleCommit is commit-control metadata and intentionally has
+			// no Batch. Data tracing applies only to ordinary row/Object
+			// entries; attempting to decode this control as a Batch would panic.
+			continue
+		}
 		if entryData == nil {
 			entryData = newEntryData(entry, -1, ts)
 		} else {

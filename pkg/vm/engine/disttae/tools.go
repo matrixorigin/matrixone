@@ -46,7 +46,15 @@ func genWriteReqs(
 	}
 	var tnID string
 	var tn metadata.TNService
-	entries := make([]*api.Entry, 0, len(writes))
+	entryCapacity := len(writes)
+	if txnCommit.lifecycleCommitControl != nil {
+		entryCapacity++
+	}
+	entries := make([]*api.Entry, 0, entryCapacity)
+	if control := txnCommit.lifecycleCommitControl; control != nil {
+		tnID = control.TNStore.ServiceID
+		tn = control.TNStore
+	}
 	for _, e := range writes {
 		if tnID == "" {
 			tnID = e.tnStore.ServiceID
@@ -82,6 +90,10 @@ func genWriteReqs(
 		}
 
 		entries = append(entries, pe)
+	}
+	entries, err := appendLifecycleCommitControl(entries, txnCommit.lifecycleCommitControl)
+	if err != nil {
+		return nil, err
 	}
 
 	requireAutoIncrEpochFence := requiresAutoIncrEpochFenceCommit(entries)
@@ -135,6 +147,30 @@ func requiresAutoIncrEpochFenceCommit(entries []*api.Entry) bool {
 		}
 	}
 	return false
+}
+
+func appendLifecycleCommitControl(
+	entries []*api.Entry,
+	control *LifecycleCommitControl,
+) ([]*api.Entry, error) {
+	if control == nil {
+		return entries, nil
+	}
+	if control.Entry == nil {
+		return nil, moerr.NewInvalidInputNoCtx("Lifecycle commit control payload is nil")
+	}
+	if control.Entry.ProtocolVersion != 1 {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"Lifecycle commit protocol version %d",
+			control.Entry.ProtocolVersion,
+		)
+	}
+	return append(entries, &api.Entry{
+		EntryType:       api.Entry_LifecycleCommit,
+		DatabaseId:      control.Entry.DatabaseId,
+		TableId:         control.Entry.PhysicalTableId,
+		LifecycleCommit: control.Entry,
+	}), nil
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {

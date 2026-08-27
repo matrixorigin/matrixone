@@ -48,6 +48,11 @@ def    mo_catalog    mo_iceberg_tables    BASE TABLE    Tae
 def    mo_catalog    mo_index_update    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
+def    mo_catalog    mo_lifecycle_bindings    BASE TABLE    Tae
+def    mo_catalog    mo_lifecycle_datasets    BASE TABLE    Tae
+def    mo_catalog    mo_lifecycle_restore_attempts    BASE TABLE    Tae
+def    mo_catalog    mo_lifecycle_restore_chunks    BASE TABLE    Tae
+def    mo_catalog    mo_lifecycle_ttl_receipts    BASE TABLE    Tae
 def    mo_catalog    mo_merge_settings    BASE TABLE    Tae
 def    mo_catalog    mo_mongodb_connections    BASE TABLE    Tae
 def    mo_catalog    mo_mongodb_tables    BASE TABLE    Tae

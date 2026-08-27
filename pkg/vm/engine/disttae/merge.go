@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -72,6 +73,18 @@ type cnMergeTask struct {
 	num       uint16
 
 	arena *objectio.WriteArena
+
+	// lifecycleReadBudget is nil for every ordinary Merge. Lifecycle installs
+	// it only on its private reader/rewrite host so a physical Block is
+	// rejected before BlockDataReadNoCopy when its metadata estimate exceeds
+	// the release-certified memory envelope.
+	lifecycleReadBudget *lifecycleBlockReadBudget
+}
+
+type lifecycleBlockReadBudget struct {
+	maxBytes uint64
+	metas    []objectio.ObjectDataMeta
+	next     []uint32
 }
 
 func newCNMergeTask(
@@ -206,12 +219,98 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32, _ *batch
 	iter := t.blkIters[objIdx]
 	if iter.Next() {
 		blk := iter.Entry()
+		if err := t.admitLifecycleBlockRead(objIdx, &blk); err != nil {
+			return nil, nil, nil, err
+		}
 		// update delta location
 		obj := t.targets[objIdx]
 		blk.SetFlagByObjStats(&obj)
 		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
+}
+
+func (t *cnMergeTask) configureLifecycleBlockReadBudget(
+	ctx context.Context,
+	maxBytes uint64,
+) error {
+	if maxBytes == 0 {
+		return moerr.NewInvalidInput(
+			ctx,
+			"Lifecycle certified Block read limit must be positive",
+		)
+	}
+	metas := make([]objectio.ObjectDataMeta, len(t.targets))
+	for index := range t.targets {
+		location := t.targets[index].ObjectLocation()
+		meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, t.fs)
+		if err != nil {
+			return err
+		}
+		dataMeta := meta.MustDataMeta()
+		if dataMeta.IsEmpty() {
+			return moerr.NewInvalidInput(
+				ctx,
+				"Lifecycle source Object metadata has no Data blocks",
+			)
+		}
+		metas[index] = dataMeta
+	}
+	t.lifecycleReadBudget = &lifecycleBlockReadBudget{
+		maxBytes: maxBytes,
+		metas:    metas,
+		next:     make([]uint32, len(t.targets)),
+	}
+	return nil
+}
+
+func (t *cnMergeTask) admitLifecycleBlockRead(
+	objIdx uint32,
+	blockInfo *objectio.BlockInfo,
+) error {
+	budget := t.lifecycleReadBudget
+	if budget == nil {
+		return nil
+	}
+	if int(objIdx) >= len(budget.metas) {
+		return moerr.NewInvalidInputNoCtx(
+			"Lifecycle Block read Object index is out of range",
+		)
+	}
+	blockOrdinal := budget.next[objIdx]
+	meta := budget.metas[objIdx]
+	if blockOrdinal >= meta.BlockCount() {
+		return moerr.NewInvalidInputNoCtx(
+			"Lifecycle Block read ordinal is out of range",
+		)
+	}
+	expectedObjectID := t.targets[objIdx].ObjectName().ObjectId()
+	if blockInfo == nil ||
+		*blockInfo.BlockID.Object() != *expectedObjectID ||
+		blockInfo.BlockID.Sequence() != uint16(blockOrdinal) {
+		return moerr.NewInvalidInputNoCtx(
+			"Lifecycle exact reader Block identity/order changed",
+		)
+	}
+	block := meta.GetBlockMeta(blockOrdinal)
+	var sourceLogicalBytes uint64
+	for _, seqnum := range t.host.seqnums {
+		origin := uint64(block.MustGetColumn(seqnum).Location().OriginSize())
+		if sourceLogicalBytes > ^uint64(0)-origin {
+			return moerr.NewInvalidInputNoCtx(
+				"Lifecycle Block read metadata size overflow",
+			)
+		}
+		sourceLogicalBytes += origin
+	}
+	if err := validateLifecycleBlockReadPeak(
+		sourceLogicalBytes,
+		budget.maxBytes,
+	); err != nil {
+		return err
+	}
+	budget.next[objIdx]++
+	return nil
 }
 
 func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {

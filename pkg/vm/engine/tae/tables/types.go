@@ -70,6 +70,7 @@ type NodeT interface {
 		bat **containers.Batch,
 		mp *mpool.MPool,
 		vpool *containers.VectorPool,
+		maxRows uint64,
 	) (err error)
 	FillBlockTombstones(
 		ctx context.Context,

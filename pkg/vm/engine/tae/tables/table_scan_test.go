@@ -30,19 +30,22 @@ import (
 
 type tombstoneScanCounter struct {
 	data.Object
-	scans int
+	scans   int
+	maxRows []uint64
 }
 
 func (counter *tombstoneScanCounter) CollectObjectTombstoneInRange(
-	context.Context,
-	types.TS,
-	types.TS,
-	*types.Objectid,
-	**containers.Batch,
-	*mpool.MPool,
-	*containers.VectorPool,
+	_ context.Context,
+	_ types.TS,
+	_ types.TS,
+	_ *types.Objectid,
+	_ **containers.Batch,
+	_ *mpool.MPool,
+	_ *containers.VectorPool,
+	maxRows uint64,
 ) error {
 	counter.scans++
+	counter.maxRows = append(counter.maxRows, maxRows)
 	return nil
 }
 
@@ -90,6 +93,21 @@ func TestTombstoneRangeScanKeepsOlderAppendableCandidates(t *testing.T) {
 	// the newer object's lifetime precedes start, the older appendable object
 	// can still contain rows committed in the requested range.
 	require.Equal(t, 1, oldData.scans)
+	require.Equal(t, []uint64{0}, oldData.maxRows)
+
+	found, err := HasTombstoneInRangeByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.BuildTS(4, 0),
+		types.BuildTS(5, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Equal(t, 2, oldData.scans)
+	require.Equal(t, []uint64{0, 1}, oldData.maxRows)
 }
 
 func TestTombstoneRangeScanKeepsNonAppendableCNSourceAfterDrop(t *testing.T) {

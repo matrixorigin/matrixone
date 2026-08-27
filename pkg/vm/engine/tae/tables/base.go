@@ -600,13 +600,23 @@ func (obj *baseObject) CollectObjectTombstoneInRange(
 	bat **containers.Batch,
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
+	maxRows uint64,
 ) (err error) {
 	if !obj.meta.Load().IsTombstone {
 		panic("logic err")
 	}
 	node := obj.PinNode()
 	defer node.Unref()
-	return node.CollectObjectTombstoneInRange(ctx, start, end, objID, bat, mp, vpool)
+	return node.CollectObjectTombstoneInRange(
+		ctx,
+		start,
+		end,
+		objID,
+		bat,
+		mp,
+		vpool,
+		maxRows,
+	)
 }
 
 // TODO: equal filter

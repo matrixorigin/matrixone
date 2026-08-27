@@ -159,6 +159,13 @@ func getTableForDump(ctx context.Context, ses *Session, table *tree.TableName) (
 	if err != nil {
 		return "", "", nil, err
 	}
+	if err = sqlplan.ValidateLifecycleRestoreTableAccess(
+		ctx,
+		true,
+		tableName,
+	); err != nil {
+		return "", "", nil, err
+	}
 	eng := ses.GetTxnHandler().GetStorage()
 	txn := ses.GetTxnHandler().GetTxn()
 	db, err := eng.Database(ctx, dbName, txn)

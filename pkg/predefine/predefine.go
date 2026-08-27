@@ -106,6 +106,19 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 	}
 	cronTasks = append(cronTasks, task6)
 
+	task7, err := createCronTask(
+		task.TaskMetadata{
+			ID:       "tae_object_lifecycle",
+			Executor: task.TaskCode_LifecycleCoordinator,
+			Options:  task.TaskOptions{Concurrency: 1},
+		},
+		"15 * * * * *",
+	)
+	if err != nil {
+		return "", err
+	}
+	cronTasks = append(cronTasks, task7)
+
 	sql := fmt.Sprintf(`insert into %s.sys_cron_task (
                            task_metadata_id,
 						   task_metadata_executor,

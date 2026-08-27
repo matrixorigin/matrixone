@@ -48,6 +48,30 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		return nil, nil, nil
 	}
 	e := es[0]
+	switch e.EntryType {
+	case api.Entry_Insert,
+		api.Entry_Delete,
+		api.Entry_Update,
+		api.Entry_Alter,
+		api.Entry_SpecialDelete,
+		api.Entry_DataObject,
+		api.Entry_TombstoneObject:
+	case api.Entry_LifecycleCommit:
+		if e.LifecycleCommit == nil {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"Lifecycle commit entry has no control payload",
+			)
+		}
+		return e.LifecycleCommit, es[1:], nil
+	default:
+		// This validation intentionally precedes all Batch decoding. During a
+		// rolling upgrade, a TN which has the safety parser but not the
+		// Lifecycle handler fails closed instead of dereferencing a nil Batch.
+		return nil, nil, moerr.NewNotSupportedNoCtxf(
+			"unknown transaction EntryType %d",
+			e.EntryType,
+		)
+	}
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_DATABASE_ID {
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
 		if err != nil {

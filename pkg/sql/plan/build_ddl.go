@@ -1470,6 +1470,13 @@ func ctasExprCanBeNull(expr *Expr) bool {
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
+	if err := ValidateLifecycleRestoreTableAccess(
+		ctx.GetContext(),
+		compilerContextIsFrontend(ctx),
+		string(viewName),
+	); err != nil {
+		return nil, err
+	}
 	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
 		return nil, err
 	}
@@ -1795,6 +1802,13 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 }
 
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	if err := ValidateLifecycleRestoreTableAccess(
+		ctx.GetContext(),
+		compilerContextIsFrontend(ctx),
+		string(stmt.Name.ObjectName),
+	); err != nil {
+		return nil, err
+	}
 	createSequence := &plan.CreateSequence{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
@@ -2055,6 +2069,13 @@ func buildCreateTable(
 	isPrepareStmt bool,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
+	if err := ValidateLifecycleRestoreTableAccess(
+		ctx.GetContext(),
+		compilerContextIsFrontend(ctx),
+		tableName,
+	); err != nil {
+		return nil, err
+	}
 	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
 		return nil, err
 	}
@@ -5551,6 +5572,13 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			case *tree.AlterOptionTableName:
 				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				if err := ValidateLifecycleRestoreTableAccess(
+					ctx.GetContext(),
+					compilerContextIsFrontend(ctx),
+					newName,
+				); err != nil {
+					return nil, err
+				}
 				if err := validateIdentifier(ctx.GetContext(), newName); err != nil {
 					return nil, err
 				}
@@ -6122,6 +6150,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
+			if err := ValidateLifecycleRestoreTableAccess(
+				ctx.GetContext(),
+				compilerContextIsFrontend(ctx),
+				newName,
+			); err != nil {
+				return nil, err
+			}
 			if oldName == newName {
 				continue
 			}

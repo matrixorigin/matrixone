@@ -134,6 +134,7 @@ type Object interface {
 		bat **containers.Batch,
 		mp *mpool.MPool,
 		vpool *containers.VectorPool,
+		maxRows uint64,
 	) (err error)
 	ScanInMemory(
 		ctx context.Context,

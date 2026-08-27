@@ -396,6 +396,7 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	bat **containers.Batch,
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
+	maxRows uint64,
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
@@ -414,6 +415,9 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	for i := minRow; i < maxRow; i++ {
 		if aborts[i-minRow] {
 			continue
+		}
+		if maxRows != 0 && *bat != nil && uint64((*bat).Length()) >= maxRows {
+			return nil
 		}
 		if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 {
 			if *bat == nil {

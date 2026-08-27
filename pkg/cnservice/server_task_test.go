@@ -358,8 +358,12 @@ func Test_registerExecutorsLocked(t *testing.T) {
 
 	sv.registerExecutorsLocked()
 	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
-	require.Len(t, ts.cronTasks, 1)
+	require.NotNil(t, run.GetExecutor(task.TaskCode_LifecycleCoordinator))
+	require.Len(t, ts.cronTasks, 2)
 	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
 	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
 	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
+	assert.Equal(t, task.TaskCode_LifecycleCoordinator, ts.cronTasks[1].Executor)
+	assert.Equal(t, "tae_object_lifecycle", ts.cronTasks[1].ID)
+	assert.Equal(t, "15 * * * * *", ts.cronExprs[1])
 }
