@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -411,6 +412,71 @@ func TestIsMissingCCPRMetadataTable(t *testing.T) {
 		moerr.NewInternalErrorNoCtx("ccpr metadata query failed"),
 		tableName,
 	))
+}
+
+func TestCreateDatabaseAffectedRowsReflectPhysicalCreation(t *testing.T) {
+	lockMoDB := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		return nil
+	})
+	defer lockMoDB.Reset()
+
+	createErr := errors.New("create failed")
+	for _, tc := range []struct {
+		name         string
+		existing     bool
+		ifNotExists  bool
+		createErr    error
+		wantErr      bool
+		wantAffected uint64
+	}{
+		{name: "physical creation", wantAffected: 1},
+		{name: "if not exists no-op", existing: true, ifNotExists: true},
+		{name: "strict duplicate", existing: true, wantErr: true},
+		{name: "create failure", createErr: createErr, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			if tc.existing {
+				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
+					mock_frontend.NewMockDatabase(ctrl), nil,
+				)
+			} else {
+				eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(
+					nil, moerr.NewBadDB(context.Background(), "db1"),
+				)
+				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).Return(tc.createErr)
+			}
+
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			c := &Compile{e: eng, proc: proc, affectRows: new(atomic.Uint64)}
+			s := &Scope{
+				Magic: CreateDatabase,
+				Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+					Definition: &plan2.DataDefinition_CreateDatabase{CreateDatabase: &plan2.CreateDatabase{
+						Database:    "db1",
+						IfNotExists: tc.ifNotExists,
+					}},
+				}}},
+			}
+
+			err := c.run(s)
+			if tc.wantErr {
+				require.Error(t, err)
+				if tc.createErr != nil {
+					require.ErrorIs(t, err, tc.createErr)
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDBAlreadyExists))
+				}
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantAffected, c.getAffectedRows())
+		})
+	}
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {

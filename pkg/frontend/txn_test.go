@@ -853,6 +853,71 @@ func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
 	}
 }
 
+func TestTxnHandlerDoesNotOwnKafkaProgress(t *testing.T) {
+	newState := func(t *testing.T) (*Session, *ExecCtx, *testTxnOp) {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+		ses.txnHandler.txnOp = op
+		ses.txnHandler.txnCtx = ctx
+
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		return ses, execCtx, op
+	}
+
+	t.Run("commit leaves publication to statement terminal", func(t *testing.T) {
+		ses, execCtx, op := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		execCtx.stmt = &tree.CommitTransaction{}
+		execCtx.txnOpt = FeTxnOption{byCommit: true, autoCommit: false}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, 1, op.commitCalls)
+		require.Empty(t, calls)
+		require.Len(t, ses.kafkaProgressQueue, 1)
+
+		// executeStmtWithResponse owns this terminal action.
+		ses.FinalizeKafkaProgress(true)
+		require.Equal(t, []bool{true}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+
+	t.Run("rollback leaves discard to statement terminal", func(t *testing.T) {
+		ses, execCtx, op := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		execCtx.stmt = &tree.RollbackTransaction{}
+		execCtx.txnOpt = FeTxnOption{byRollback: true, autoCommit: false}
+
+		require.NoError(t, ses.GetTxnHandler().Rollback(execCtx))
+		require.Equal(t, 1, op.rollbackCalls)
+		require.Empty(t, calls)
+		require.Len(t, ses.kafkaProgressQueue, 1)
+
+		// executeStmtWithResponse owns this terminal action.
+		ses.FinalizeKafkaProgress(false)
+		require.Equal(t, []bool{false}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+}
+
 func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)

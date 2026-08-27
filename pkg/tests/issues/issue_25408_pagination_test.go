@@ -125,7 +125,20 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				require.False(t, rows.Next())
 				require.NoError(t, rows.Err())
 			}()
-			_, err = stmt.ExecContext(ctx, "1", int64(0))
+			// Connector/ODBC sends integer bindings as MYSQL_TYPE_STRING.
+			// A numeric Go string uses the same COM_STMT_EXECUTE wire type.
+			func() {
+				rows, queryErr := stmt.QueryContext(ctx, "1", "1")
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				var id int
+				require.NoError(t, rows.Scan(&id))
+				require.Equal(t, 2, id)
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}()
+			_, err = stmt.ExecContext(ctx, "1.0", int64(0))
 			assertMySQLError(t, err, 1210)
 			_, err = stmt.ExecContext(ctx, int64(-1), int64(0))
 			assertMySQLError(t, err, 1690)
@@ -134,7 +147,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				"create table "+dbName+".bad_page as select 1 limit ?")
 			require.NoError(t, prepareErr)
 			defer ctas.Close()
-			_, err = ctas.ExecContext(ctx, "1")
+			_, err = ctas.ExecContext(ctx, "1.0")
 			assertMySQLError(t, err, 1210)
 		})
 
@@ -146,7 +159,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				stmt, prepareErr := db.PrepareContext(ctx, paginationSQL)
 				require.NoError(t, prepareErr)
 				defer stmt.Close()
-				_, executeErr := stmt.ExecContext(ctx, "1", int64(-1))
+				_, executeErr := stmt.ExecContext(ctx, "1.0", int64(-1))
 				assertMySQLError(t, executeErr, 1210)
 			})
 		}

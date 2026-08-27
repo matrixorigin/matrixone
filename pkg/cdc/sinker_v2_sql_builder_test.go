@@ -675,9 +675,9 @@ func TestCDCStatementBuilder_BuildDeleteSQL_CompositePK_MO(t *testing.T) {
 		sql := string(sqls[0][v2SQLBufReserved:])
 		t.Logf("Generated DELETE SQL (MO format): %s", sql)
 
-		// MO format: WHERE order_id=1 AND customer_id=100
+		// Current MO supports row-constructor IN for composite primary keys.
 		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
-		assert.Contains(t, sql, "WHERE order_id=1 and customer_id=100")
+		assert.Contains(t, sql, "WHERE (order_id,customer_id) IN ((1,100))")
 		assert.True(t, strings.HasSuffix(sql, ";"))
 	})
 
@@ -724,12 +724,13 @@ func TestCDCStatementBuilder_BuildDeleteSQL_CompositePK_MO(t *testing.T) {
 		sql := string(sqls[0][v2SQLBufReserved:])
 		t.Logf("Generated DELETE SQL (MO format): %s", sql)
 
-		// MO format: WHERE order_id=1 AND customer_id=100 OR order_id=2 AND customer_id=200 OR ...
+		// Tuple IN is substantially smaller and cheaper to plan than an OR tree.
 		assert.Contains(t, sql, "DELETE FROM `test_db`.`orders`")
-		assert.Contains(t, sql, "order_id=1 and customer_id=100")
-		assert.Contains(t, sql, "order_id=2 and customer_id=200")
-		assert.Contains(t, sql, "order_id=3 and customer_id=300")
-		assert.Contains(t, sql, " or ")
+		assert.Contains(t, sql, "WHERE (order_id,customer_id) IN")
+		assert.Contains(t, sql, "(1,100)")
+		assert.Contains(t, sql, "(2,200)")
+		assert.Contains(t, sql, "(3,300)")
+		assert.NotContains(t, sql, " or ")
 		assert.True(t, strings.HasSuffix(sql, ";"))
 	})
 }

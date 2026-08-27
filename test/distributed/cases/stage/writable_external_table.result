@@ -64,6 +64,12 @@ select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
 4  ¦  with\backslash
 drop table if exists big_src;
 create table big_src(a int, b varchar(30));
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs', ':::', 'echo', 40, 'wext.big_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, wext.big_src)[-7,1,0]  𝄀
+1
 insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
 drop table if exists ext_big;
 create external table ext_big(a int, b varchar(30))
@@ -73,11 +79,8 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
 100000  ¦  1  ¦  100000
-drop table if exists remote_src;
-create table remote_src(a int, b varchar(30));
-insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
-select mo_ctl('dn', 'flush', 'wext.remote_src');
-➤ mo_ctl(dn, flush, wext.remote_src)[12,-1,0]  𝄀
+select mo_ctl('dn', 'flush', 'wext.big_src');
+➤ mo_ctl(dn, flush, wext.big_src)[12,-1,0]  𝄀
 {
   "method": "Flush",
   "result": [
@@ -87,17 +90,30 @@ select mo_ctl('dn', 'flush', 'wext.remote_src');
   ]
 }
 
-select sleep(1);
-➤ sleep(1)[-6,8,0]  𝄀
-0
+select count(distinct object_name) > 1 as multiple_objects,
+sum(rows_cnt) = 100000 as all_rows_flushed
+from metadata_scan('wext.big_src', 'a') m;
+➤ multiple_objects[-7,1,0]  ¦  all_rows_flushed[-7,1,0]  𝄀
+1  ¦  1
+set @wext_remote_stats = '{"table_cnt":4400000,"block_number":560,"accurate_object_number":35,"approx_object_number":35,"ndv_map":{"a":4400000,"b":4400000}}';
+select table_cnt from table_stats('wext.big_src', 'patch', @wext_remote_stats) g;
+➤ table_cnt[8,53,31]  𝄀
+4400000.0
 drop table if exists ext_remote;
 create external table ext_remote(a int, b varchar(30))
 infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
 fields terminated by ',';
-insert into ext_remote select * from remote_src;
+explain insert into ext_remote select * from big_src;
+-- @regex("(?i)ap query plan on multicn", true)
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
+Multi Update
+insert into ext_remote select * from big_src;
 select count(*), min(a), max(a) from ext_remote;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
-4400000  ¦  1  ¦  4400000
+100000  ¦  1  ¦  100000
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
 drop table if exists ext_jl;
 create external table ext_jl(a int, b varchar(20), c double)
 infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
@@ -375,7 +391,6 @@ drop table if exists tricky_src;
 drop table if exists ext_big;
 drop table if exists big_src;
 drop table if exists ext_remote;
-drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
 drop table if exists ext_sb;
