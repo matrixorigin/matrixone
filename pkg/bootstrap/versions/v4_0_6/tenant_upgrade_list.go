@@ -47,6 +47,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
+	upgradeInformationSchemaStatistics(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -333,6 +334,22 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 			sysview.InformationSchemaTableConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
 			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
+	}
+}
+
+// Keep this entry last so increasing the v4.0.6 version offset refreshes all
+// metadata views for tenants that completed an earlier v4.0.6 offset. The
+// existing KEY_COLUMN_USAGE, COLUMNS, and TABLE_CONSTRAINTS entries are
+// definition-checked and rerun by the same upgrade pass.
+func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "STATISTICS",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaStatisticsDDL,
+		CheckFunc: checkViewDefinition("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "STATISTICS"),
 	}
 }
 

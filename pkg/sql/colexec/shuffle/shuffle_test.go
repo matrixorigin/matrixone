@@ -765,7 +765,7 @@ func TestStableStringHashProtocolGateAndRollback(t *testing.T) {
 	require.False(t, arg.ctr.stableStringHash)
 	arg.Reset(proc, false, nil)
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
 	require.True(t, supportsStableStringHash(service))
 	require.NoError(t, arg.Prepare(proc))
 	require.True(t, arg.ctr.stableStringHash)
@@ -832,7 +832,7 @@ func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
 			stable bool
 		}{
 			{name: "v31-sampled", stable: false},
-			{name: "v32-complete", stable: true},
+			{name: "v33-complete", stable: true},
 		} {
 			arg := &Shuffle{}
 			arg.ctr.stableStringHash = mode.stable

@@ -16,7 +16,7 @@ package hashtable
 
 import "unsafe"
 
-// These constants are part of the MORPCVersion32 ownership contract. Changing
+// These constants are part of the MORPCVersion33 ownership contract. Changing
 // either one changes distributed owner assignment and requires a new rollout
 // gate.
 const (

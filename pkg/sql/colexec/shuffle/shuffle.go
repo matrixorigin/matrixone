@@ -109,7 +109,7 @@ func supportsStableStringHash(service string) bool {
 	}
 	value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion32
+	return ok && valid && version >= defines.MORPCVersion33
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {

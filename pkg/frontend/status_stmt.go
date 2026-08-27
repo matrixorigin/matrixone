@@ -74,6 +74,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.rs = &plan.ResultColDef{
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
+			freezeResultMetadata(execCtx.runner)
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
@@ -123,6 +124,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				mysqlc := c.(Column)
 				mrs.AddColumn(mysqlc)
 			}
+			freezeResultMetadata(execCtx.runner)
 
 			// open new file
 			ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
