@@ -198,7 +198,44 @@ func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
+	s.startTaskRunnerLocked()
+}
 
+func (s *service) publishTaskRunner() error {
+	s.task.Lock()
+	defer s.task.Unlock()
+	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
+		s.task.runnerReady.Store(false)
+		return moerr.NewInvalidStateNoCtx("CN view metadata admission generation revoked")
+	}
+	s.task.runnerReady.Store(true)
+	s.startTaskRunnerLocked()
+	return nil
+}
+
+func (s *service) detachRevokedTaskRunner() taskservice.TaskRunner {
+	s.task.Lock()
+	defer s.task.Unlock()
+	s.task.generationRevoked = true
+	s.task.runnerReady.Store(false)
+	runner := s.task.runner
+	s.task.runner = nil
+	return runner
+}
+
+func (s *service) stopRevokedTaskRunner(runner taskservice.TaskRunner) {
+	if runner != nil {
+		if err := runner.Stop(); err != nil {
+			s.logger.Error("stop revoked generation task runner failed", zap.Error(err))
+		}
+	}
+}
+
+func (s *service) startTaskRunnerLocked() {
+	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
+		s.task.runnerReady.Store(false)
+		return
+	}
 	if !s.task.runnerReady.Load() {
 		return
 	}
