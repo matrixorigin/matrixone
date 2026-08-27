@@ -206,8 +206,10 @@ type ForeignConnCache interface {
 // interactive frontend session. The Kafka external-table reader records the
 // highest message offset a completed scan consumed, and the
 // LAST_KAFKA_MESSAGE_ID() builtin reads it back — the pair gives a consumer
-// exactly-once chaining (feed the last id as the next __mo_read_start_id).
-// Reached via proc.GetSession().(KafkaSessionState).
+// explicit gap-free chaining (feed the last id as the next
+// __mo_read_start_id). Transaction-consistent checkpoints live in an ordinary
+// MatrixOne table, not this session state. Reached via
+// proc.GetSession().(KafkaSessionState).
 type KafkaSessionState interface {
 	// SetLastKafkaMessageID records the offset of the last message a
 	// successfully completed Kafka scan returned in this session.
@@ -218,9 +220,8 @@ type KafkaSessionState interface {
 	// EnqueueKafkaProgress defers a drained Kafka scan's progress publication
 	// to the STATEMENT terminal: on split scopes the source pipeline resets
 	// before downstream pipelines consume the final batch, so source-pipeline
-	// success is not statement success. The session runs every queued
-	// finalizer exactly once with the statement's outcome (publish=false
-	// discards) when the whole statement completes.
+	// success is not statement success. The session runs every queued finalizer
+	// exactly once with the whole statement's outcome.
 	EnqueueKafkaProgress(finalize func(publish bool))
 }
 

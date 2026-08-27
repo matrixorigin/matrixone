@@ -1,0 +1,119 @@
+drop database if exists exterrload;
+create database exterrload;
+use exterrload;
+create table dest (id int, name varchar(20), amount decimal(10,2), ts timestamp);
+create table rejects (line bigint, msg varchar(500), txt varchar(500));
+create external table src_csv (id int, name varchar(20), amount decimal(10,2), ts timestamp)
+infile{'filepath'='$resources/external_table_file/errmix.csv'}
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+select __mo_file_line, id, name, amount, ts, __mo_error_message from src_csv;
+➤ __mo_file_line[-5,64,0]  ¦  id[4,32,0]  ¦  name[12,20,0]  ¦  amount[3,10,2]  ¦  ts[93,19,0]  ¦  __mo_error_message[12,65535,0]  𝄀
+1  ¦  1  ¦  alpha  ¦  10.50  ¦  2024-01-01 00:00:00  ¦  null  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value 'abc' is not int32 type for column 0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value 'notanumber' is invalid Decimal64 type for column 2  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value 'not-a-timestamp' is not Timestamp type for column 3  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null  ¦  invalid input: the data of row 5 contained is less than input columns  𝄀
+6  ¦  6  ¦  zeta  ¦  60.50  ¦  2024-01-06 00:00:00  ¦  null  𝄀
+7  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value '99999999999999999999' is not int32 type for column 0  𝄀
+8  ¦  8  ¦  th"eta  ¦  80.50  ¦  2024-01-08 00:00:00  ¦  null  𝄀
+9  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value '2024-02-30 00:00:00' is not Timestamp type for column 3  𝄀
+10  ¦  10  ¦  kappa  ¦  100.50  ¦  2024-01-10 00:00:00  ¦  null
+insert first
+when errmsg is null then into dest (id, name, amount, ts) values (id, name, amount, ts)
+else into rejects (line, msg, txt) values (ln, errmsg, errtxt)
+select id, name, amount, ts,
+__mo_file_line as ln, __mo_error_message as errmsg, __mo_error_text as errtxt
+from src_csv;
+select * from dest order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  amount[3,10,2]  ¦  ts[93,19,0]  𝄀
+1  ¦  alpha  ¦  10.50  ¦  2024-01-01 00:00:00  𝄀
+6  ¦  zeta  ¦  60.50  ¦  2024-01-06 00:00:00  𝄀
+8  ¦  th"eta  ¦  80.50  ¦  2024-01-08 00:00:00  𝄀
+10  ¦  kappa  ¦  100.50  ¦  2024-01-10 00:00:00
+select line, msg, txt from rejects order by line;
+➤ line[-5,64,0]  ¦  msg[12,500,0]  ¦  txt[12,500,0]  𝄀
+2  ¦  internal error: the input value 'abc' is not int32 type for column 0  ¦  abc,beta,20.50,2024-01-02 00:00:00  𝄀
+3  ¦  internal error: the input value 'notanumber' is invalid Decimal64 type for column 2  ¦  3,gamma,notanumber,2024-01-03 00:00:00  𝄀
+4  ¦  internal error: the input value 'not-a-timestamp' is not Timestamp type for column 3  ¦  4,delta,40.50,not-a-timestamp  𝄀
+5  ¦  invalid input: the data of row 5 contained is less than input columns  ¦  5,epsilon,50.50  𝄀
+7  ¦  internal error: the input value '99999999999999999999' is not int32 type for column 0  ¦  99999999999999999999,eta,70.50,2024-01-07 00:00:00  𝄀
+9  ¦  internal error: the input value '2024-02-30 00:00:00' is not Timestamp type for column 3  ¦  9,iota,90.50,2024-02-30 00:00:00
+select count(*) as good_rows from dest;
+➤ good_rows[-5,64,0]  𝄀
+4
+select count(*) as rejected_rows from rejects;
+➤ rejected_rows[-5,64,0]  𝄀
+6
+select (select count(*) from dest) + (select count(*) from rejects) as total;
+➤ total[-5,64,0]  𝄀
+10
+truncate table dest;
+insert into dest (id, name, amount, ts) select id, name, amount, ts from src_csv;
+internal error: the input value 'abc' is not int32 type for column 0
+select count(*) as dest_after_failed_load from dest;
+➤ dest_after_failed_load[-5,64,0]  𝄀
+0
+truncate table dest;
+truncate table rejects;
+create external table src_json (id int, name varchar(20), amount decimal(10,2), ts timestamp)
+infile{'filepath'='$resources/external_table_file/errmix.jsonl', 'format'='jsonline', 'jsondata'='object'};
+select __mo_file_line, id, name, amount, ts, __mo_error_message from src_json;
+➤ __mo_file_line[-5,64,0]  ¦  id[4,32,0]  ¦  name[12,20,0]  ¦  amount[3,10,2]  ¦  ts[93,19,0]  ¦  __mo_error_message[12,65535,0]  𝄀
+1  ¦  1  ¦  alpha  ¦  10.50  ¦  2024-01-01 00:00:00  ¦  null  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value 'abc' is not int32 type for column 0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value 'notanumber' is invalid Decimal64 type for column 2  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value 'not-a-timestamp' is not Timestamp type for column 3  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the table column is larger than input data column  𝄀
+6  ¦  6  ¦  zeta  ¦  60.50  ¦  2024-01-06 00:00:00  ¦  null  𝄀
+7  ¦  null  ¦  null  ¦  null  ¦  null  ¦  invalid input: the line is not a well-formed json object  𝄀
+8  ¦  null  ¦  null  ¦  null  ¦  null  ¦  invalid input: incomplete json record  𝄀
+9  ¦  null  ¦  null  ¦  null  ¦  null  ¦  internal error: the input value '2024-02-30 00:00:00' is not Timestamp type for column 3  𝄀
+10  ¦  10  ¦  kappa  ¦  100.50  ¦  2024-01-10 00:00:00  ¦  null
+insert first
+when errmsg is null then into dest (id, name, amount, ts) values (id, name, amount, ts)
+else into rejects (line, msg, txt) values (ln, errmsg, errtxt)
+select id, name, amount, ts,
+__mo_file_line as ln, __mo_error_message as errmsg, __mo_error_text as errtxt
+from src_json;
+select * from dest order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  amount[3,10,2]  ¦  ts[93,19,0]  𝄀
+1  ¦  alpha  ¦  10.50  ¦  2024-01-01 00:00:00  𝄀
+6  ¦  zeta  ¦  60.50  ¦  2024-01-06 00:00:00  𝄀
+10  ¦  kappa  ¦  100.50  ¦  2024-01-10 00:00:00
+select line, msg, txt from rejects order by line;
+➤ line[-5,64,0]  ¦  msg[12,500,0]  ¦  txt[12,500,0]  𝄀
+2  ¦  internal error: the input value 'abc' is not int32 type for column 0  ¦  {"id":"abc","name":"beta","amount":20.50,"ts":"2024-01-02 00:00:00"}  𝄀
+3  ¦  internal error: the input value 'notanumber' is invalid Decimal64 type for column 2  ¦  {"id":3,"name":"gamma","amount":"notanumber","ts":"2024-01-03 00:00:00"}  𝄀
+4  ¦  internal error: the input value 'not-a-timestamp' is not Timestamp type for column 3  ¦  {"id":4,"name":"delta","amount":40.50,"ts":"not-a-timestamp"}  𝄀
+5  ¦  internal error: the table column is larger than input data column  ¦  {"id":5,"name":"epsilon"}  𝄀
+7  ¦  invalid input: the line is not a well-formed json object  ¦  this line is not json at all  𝄀
+8  ¦  invalid input: incomplete json record  ¦  {"id":8,"name":"theta","amount":80.50,  𝄀
+9  ¦  internal error: the input value '2024-02-30 00:00:00' is not Timestamp type for column 3  ¦  {"id":9,"name":"iota","amount":90.50,"ts":"2024-02-30 00:00:00"}
+select (select count(*) from dest) + (select count(*) from rejects) as total;
+➤ total[-5,64,0]  𝄀
+10
+drop table if exists audit;
+create table audit (line bigint, failed int);
+truncate table dest;
+truncate table rejects;
+insert all
+when errmsg is null then into dest (id, name, amount, ts) values (id, name, amount, ts)
+when errmsg is not null then into rejects (line, msg, txt) values (ln, errmsg, errtxt)
+when 1 = 1 then into audit (line, failed) values (ln, case when errmsg is null then 0 else 1 end)
+select id, name, amount, ts,
+__mo_file_line as ln, __mo_error_message as errmsg, __mo_error_text as errtxt
+from src_csv;
+select count(*) as dest_rows from dest;
+➤ dest_rows[-5,64,0]  𝄀
+4
+select count(*) as reject_rows from rejects;
+➤ reject_rows[-5,64,0]  𝄀
+6
+select failed, count(*) as cnt from audit group by failed order by failed;
+➤ failed[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+0  ¦  4  𝄀
+1  ¦  6
+select count(*) as audit_rows from audit;
+➤ audit_rows[-5,64,0]  𝄀
+10
+drop database if exists exterrload;

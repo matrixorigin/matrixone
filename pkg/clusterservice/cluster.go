@@ -122,8 +122,10 @@ func GetCNServiceWithoutWorkingStateWithContext(
 }
 
 // GetCNServiceRawWithContext returns the unadmitted built-in inventory. It is
-// intentionally narrow: a CN uses it only to prove that its own heartbeat
-// generation reached the authoritative snapshot before finishing bootstrap.
+// intentionally narrow: callers must be bootstrap or internal control-plane
+// protocols whose listeners are live before public admission and whose own
+// request identities fence stale service generations. Query scheduling and
+// other new-work routing must use the admission-aware inventory instead.
 func GetCNServiceRawWithContext(
 	ctx context.Context,
 	service MOCluster,
@@ -142,8 +144,8 @@ func GetCNServiceRawWithContext(
 	builtIn, ok := service.(*cluster)
 	if !ok {
 		// External implementations cannot expose the built-in snapshot directly.
-		// This helper is used only by CN-local bootstrap, so retain their existing
-		// synchronous inventory contract and cancellation checks.
+		// Retain their existing synchronous inventory contract and cancellation
+		// checks; implementations that apply extra admission policy remain safe.
 		service.GetCNServiceWithoutWorkingState(selector, apply)
 		return ctx.Err()
 	}
