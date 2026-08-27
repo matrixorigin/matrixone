@@ -965,6 +965,37 @@ func TestSession_Migrate(t *testing.T) {
 		require.Equal(t, "stable-value", value.Value)
 	})
 
+	t.Run("temporary tables require protocol v36", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		targetRuntime := runtime.ServiceRuntime(target.proc.GetService())
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB: "d1",
+			TempTables: []*query.MigrateTempTable{{
+				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
+			}},
+		})
+		require.ErrorContains(t, err, "temporary-table migration requires protocol version 36")
+		_, ok := target.GetTempTable("d1", "tmp")
+		require.False(t, ok)
+	})
+
 	t.Run("typed system variables preserve side effects", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

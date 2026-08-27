@@ -23,7 +23,7 @@ After a successful handoff, the new session therefore could not resolve a
 temporary table. A prepared statement referring to that table then failed during
 target replay and Proxy retried the same failed migration.
 
-For every migration admitted by a v32 Proxy and two v32 CNs:
+For every migration admitted by a v36 Proxy and two v36 CNs:
 
 1. each exported user-visible `(database, alias)` resolves on the target to a
    newly created target-owned physical temporary relation with the same data and
@@ -43,13 +43,13 @@ stale. All other clone failures remain fatal.
 
 ## Protocol and lifecycle
 
-`MigrateConnFromRequest.TempTableMigrationSupported` is Proxy's v32 capability.
+`MigrateConnFromRequest.TempTableMigrationSupported` is Proxy's v36 capability.
 The source returns `TempTableStateExported` even for an empty snapshot, so a new
 Proxy can distinguish an empty state from an old source. `MigrateConnToRequest`
 then carries `MigrateTempTable { Database, Alias, PhysicalName }` entries.
 
 ```text
-source session --bounded snapshot--> Proxy --v32 request--> target session
+source session --bounded snapshot--> Proxy --v36 request--> target session
      |                                                    |
      | owns source physical tables                         | installs a short internal alias
      |                                                    v
@@ -76,13 +76,13 @@ transaction is committed by this internal batch.
 
 ## Compatibility, rollout, and rollback
 
-v32 is the feature version. A new source rejects a session with temporary
+v36 is the feature version. A new source rejects a session with temporary
 tables when contacted by an old Proxy. A new Proxy rejects an old source that
-cannot state whether its snapshot is empty, and rejects a pre-v32 target when
+cannot state whether its snapshot is empty, and rejects a pre-v36 target when
 the snapshot is non-empty. These fail-closed paths leave the session on the
 source rather than silently dropping temporary state.
 
-Rollout requires Proxy and all eligible CNs to support v32 before temporary
+Rollout requires Proxy and all eligible CNs to support v36 before temporary
 table sessions can move. During rollback or a mixed deployment, ordinary
 sessions still use the existing migration protocol; sessions with temporary
 tables stay on their current CN until they are closed or the compatible fleet is
@@ -118,7 +118,7 @@ of clone statements from consuming that timeout or control-plane resources.
 Focused frontend tests cover snapshot identity, hidden-index exclusion, dropped
 database rollback/recreate behavior, target ownership, clone/commit failures,
 and the over-limit no-handoff policy. Proxy tests cover capability negotiation
-and the v32 target requirement.
+and the v36 target requirement.
 
 Before this RFC can move from draft to in-progress, a dedicated multi-process
 two-CN + Proxy regression must run through Connector/J with server prepared
