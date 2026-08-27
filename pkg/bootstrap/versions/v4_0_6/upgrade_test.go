@@ -16,6 +16,7 @@ package v4_0_6
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -38,14 +39,33 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 21)
-	require.Len(t, clusterUpgEntries, 3)
+	require.Len(t, clusterUpgEntries, 7)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
 	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
-	for _, entry := range clusterUpgEntries[1:] {
+	for _, entry := range clusterUpgEntries[1:3] {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
 	}
+	for _, tc := range []struct {
+		entry     versions.UpgradeEntry
+		tableName string
+		indexName string
+		column    string
+	}{
+		{clusterUpgEntries[3], catalog.MOSQLTask, "idx_account_id", "account_id"},
+		{clusterUpgEntries[4], catalog.MOSQLTaskRun, "idx_account_id", "account_id"},
+		{clusterUpgEntries[5], catalog.MOSysAsyncTask, "idx_task_parent_id", "task_parent_id"},
+	} {
+		require.Equal(t, tc.tableName, tc.entry.TableName)
+		require.Equal(t, versions.ADD_INDEX, tc.entry.UpgType)
+		require.Equal(t,
+			fmt.Sprintf("create index %s on %s.%s(%s)", tc.indexName, catalog.MOTaskDB, tc.tableName, tc.column),
+			tc.entry.UpgSql)
+	}
+	require.Equal(t, cleanupLegacyOrphanSQLTaskChildren.UpgSql, clusterUpgEntries[6].UpgSql)
+	require.Equal(t, versions.MODIFY_METADATA, clusterUpgEntries[6].UpgType)
+	require.Equal(t, int64(defines.MORPCVersion41), clusterUpgEntries[6].RequiredProtocolVersion)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {
@@ -1128,7 +1148,12 @@ func newProtocolVersionResult(t *testing.T) executor.Result {
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
 	result.NewBatchWithRowCount(1)
-	if err := executor.AppendStringRows(result, 0, []string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:13, cn-b:13"}`}); err != nil {
+	value := fmt.Sprintf(
+		`{"method":"GETPROTOCOLVERSION","result":"cn-a:%d, cn-b:%d"}`,
+		defines.MORPCLatestVersion,
+		defines.MORPCLatestVersion,
+	)
+	if err := executor.AppendStringRows(result, 0, []string{value}); err != nil {
 		t.Fatalf("append protocol version result: %v", err)
 	}
 	return result.GetResult()
@@ -1268,4 +1293,96 @@ func TestRetireKafkaSinkDaemonTasks(t *testing.T) {
 	require.NoError(t, retireKafkaSinkDaemonTasks.Upgrade(txn, catalog.System_Account))
 	require.Equal(t, []string{checkSQL}, executed,
 		"an already-retired cluster must not execute the update again")
+}
+
+func TestCleanupLegacyOrphanSQLTaskChildren(t *testing.T) {
+	entry := cleanupLegacyOrphanSQLTaskChildren
+	checkSQL := "select 1 from mo_task.sys_async_task where " +
+		legacyOrphanSQLTaskChildPredicate + " limit 1"
+
+	require.Equal(t, catalog.MOTaskDB, entry.Schema)
+	require.Equal(t, catalog.MOSysAsyncTask, entry.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, entry.UpgType)
+	require.Equal(t, int64(defines.MORPCVersion41), entry.RequiredProtocolVersion)
+	require.Equal(t,
+		"delete from mo_task.sys_async_task where "+legacyOrphanSQLTaskChildPredicate,
+		entry.UpgSql)
+	require.Contains(t, entry.UpgSql, "task_parent_id like 'sql-task:%'")
+	require.Contains(t, entry.UpgSql, "from mo_task.sql_task ")
+	require.Contains(t, entry.UpgSql, "from mo_task.sql_task_run")
+
+	t.Run("older CN blocks cleanup", func(t *testing.T) {
+		deleted := false
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			switch sql {
+			case checkSQL:
+				result := executor.NewMemResult(nil, nil)
+				result.NewBatchWithRowCount(1)
+				return result.GetResult(), nil
+			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:40"}`), nil
+			case entry.UpgSql:
+				deleted = true
+			}
+			return executor.Result{}, nil
+		})
+
+		require.Error(t, entry.Upgrade(txn, catalog.System_Account))
+		require.False(t, deleted)
+	})
+
+	t.Run("empty snapshot still waits for older CN", func(t *testing.T) {
+		var executed []string
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:40"}`), nil
+			}
+			return executor.Result{}, nil
+		})
+
+		require.Error(t, entry.Upgrade(txn, catalog.System_Account))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+		}, executed)
+	})
+
+	t.Run("all CNs ready and cleanup is idempotent", func(t *testing.T) {
+		hasOrphan := true
+		var executed []string
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			switch sql {
+			case checkSQL:
+				if hasOrphan {
+					result := executor.NewMemResult(nil, nil)
+					result.NewBatchWithRowCount(1)
+					return result.GetResult(), nil
+				}
+			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newProtocolVersionResultValue(t,
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
+			case entry.UpgSql:
+				hasOrphan = false
+			}
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, entry.Upgrade(txn, catalog.System_Account))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+			entry.UpgSql,
+		}, executed)
+
+		executed = nil
+		require.NoError(t, entry.Upgrade(txn, catalog.System_Account))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+		}, executed)
+	})
 }

@@ -11894,6 +11894,71 @@ func Test_doDropAccount(t *testing.T) {
 	})
 }
 
+func TestGetSqlForDropAccountSQLTasks(t *testing.T) {
+	require.Equal(t, []string{
+		"select account_id from mo_catalog.mo_account where account_id = 42 for update;",
+		"update mo_task.sql_task set enabled = 0, updated_at = current_timestamp where account_id = 42;",
+		"delete from mo_task.sys_async_task where task_parent_id in (" +
+			"select concat('sql-task:', task_id) from mo_task.sql_task where account_id = 42 " +
+			"union select concat('sql-task:', task_id) from mo_task.sql_task_run where account_id = 42);",
+		"delete from mo_task.sql_task_run where account_id = 42;",
+		"delete from mo_task.sql_task where account_id = 42;",
+	}, getSqlForDropAccountSQLTasks(42))
+}
+
+func TestSQLTaskCleanupIndexesExistInBootstrapDDL(t *testing.T) {
+	require.Contains(t, MoTaskSQLTaskDDL, "index idx_account_id (account_id)")
+	require.Contains(t, MoTaskSQLTaskRunDDL, "index idx_account_id (account_id)")
+	require.Contains(t, MoTaskSysAsyncTaskDDL, "index idx_task_parent_id (task_parent_id)")
+}
+
+func TestDoDropAccountSQLTaskCleanupFailureRollsBack(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	stmt := &tree.DropAccount{Name: boxExprStr("task_cleanup_failure")}
+	ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccountId(ctx, 0)
+	ses.rm = newTestRoutineManager(t, ctx)
+
+	lockSQL, err := getSqlForLockMoAccountNameFormat(ctx, "task_cleanup_failure")
+	require.NoError(t, err)
+	bh.sql2result[lockSQL] = nil
+	checkSQL, err := getSqlForCheckTenant(ctx, "task_cleanup_failure")
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForGetAllAccounts([][]interface{}{
+		{uint64(42), "task_cleanup_failure", "open", uint64(1), nil},
+	})
+
+	cleanupSQL := getSqlForDropAccountSQLTasks(42)
+	cleanupErr := errors.New("injected SQL task cleanup failure")
+	bh.sql2err[cleanupSQL[2]] = cleanupErr
+
+	err = doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+		Name: "task_cleanup_failure",
+	})
+	require.ErrorIs(t, err, cleanupErr)
+	require.Equal(t, []string{
+		"begin;",
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+		lockSQL,
+		checkSQL,
+		cleanupSQL[0],
+		cleanupSQL[1],
+		cleanupSQL[2],
+		"rollback;",
+	}, bh.executedSQLs)
+}
+
 func Test_doDropAccount_InTransaction(t *testing.T) {
 	convey.Convey("doDropAccount with inTransaction parameter", t, func() {
 		// Test case 1: inTransaction=false (default behavior - creates new transaction)
