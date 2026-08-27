@@ -2630,6 +2630,36 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 	}
 }
 
+func TestPreparedRankingWindowBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	conn := &prepareResponseCaptureConn{}
+	proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t,
+		"select row_number() over () as row_num, rank() over () as rank_num, "+
+			"dense_rank() over () as dense_rank_num, percent_rank() over () as percent_rank_num",
+		conn)
+	proto.capability &^= CLIENT_DEPRECATE_EOF
+
+	require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+	packets := splitProtocolPackets(t, conn.writes)
+	require.Len(t, packets, 6)
+	require.Equal(t, uint16(4), binary.LittleEndian.Uint16(packets[0][5:]))
+	require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][7:]))
+
+	for i, name := range []string{"row_num", "rank_num", "dense_rank_num"} {
+		column := parsePrepareColumnDefinition(t, packets[i+1])
+		require.Equal(t, name, column.name)
+		require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.typ)
+		require.Equal(t, uint16(defines.UNSIGNED_FLAG), column.flags&uint16(defines.UNSIGNED_FLAG))
+	}
+
+	percentRank := parsePrepareColumnDefinition(t, packets[4])
+	require.Equal(t, "percent_rank_num", percentRank.name)
+	require.Equal(t, defines.MYSQL_TYPE_DOUBLE, percentRank.typ)
+	require.Zero(t, percentRank.flags&uint16(defines.UNSIGNED_FLAG))
+	require.Equal(t, byte(defines.EOFHeader), packets[5][0])
+}
+
 func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
 	ctx := context.TODO()
 	tests := []struct {
