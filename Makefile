@@ -292,11 +292,11 @@ endif
 
 .PHONY: cgo
 cgo: thirdparties
-	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
+	@(cd cgo; ${MAKE} -j$(NATIVE_BUILD_JOBS) ${CGO_DEBUG_OPT})
 
 .PHONY: thirdparties
 thirdparties:
-	@(cd thirdparties; ${MAKE})
+	@(cd thirdparties; ${MAKE} -j$(NATIVE_BUILD_JOBS))
 	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
@@ -411,6 +411,11 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+# Native compilation runs before Go tests, so it can use the same bounded CPU
+# budget without increasing peak race-test memory. Developer builds stay
+# serial by default; CI's explicit UT_PARALLEL value enables parallel native
+# compilation as well.
+NATIVE_BUILD_JOBS ?= $(UT_PARALLEL)
 ENABLE_UT ?= "false"
 # These are public mirrors, not policy gatekeepers. Fall through on transient
 # errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
