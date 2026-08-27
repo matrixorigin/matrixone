@@ -1119,16 +1119,18 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 	return nil
 }
 
-// setTableDefChangedAtLocked only sends the retained fence to transactions
-// that could have resolved a plan before it committed. SnapShotTs is the
-// transaction creation timestamp; it is a conservative lower bound for every
-// statement snapshot in that transaction. Fresh transactions therefore keep
-// the ordinary remote lock response allocation- and wire-free, while older
-// transactions still receive the marker for the precise statement-snapshot
-// check on CN.
+// setTableDefChangedAtLocked only sends the retained fence to callers whose
+// compiled plan predates it. Callers without an older cross-transaction plan
+// binding (including older senders during rolling upgrade) fall back to the
+// transaction creation time. SnapShotTs itself retains its separate
+// rolling-restart admission semantics.
 func (l *localLockTable) setTableDefChangedAtLocked(c *lockContext) {
 	changedAt := l.mu.tableDefChangedAt
-	if changedAt != nil && c.opts.SnapShotTs.Less(*changedAt) {
+	planSnapshotTS := c.opts.SnapShotTs
+	if c.opts.PlanSnapshotTs != nil {
+		planSnapshotTS = *c.opts.PlanSnapshotTs
+	}
+	if changedAt != nil && planSnapshotTS.Less(*changedAt) {
 		c.result.TableDefChangedAt = changedAt
 	}
 }
