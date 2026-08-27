@@ -444,6 +444,7 @@ func TestGrowCapacityValidation(t *testing.T) {
 	require.Equal(t, int64(128), capacity)
 
 	maxCapacity := maxAllocationSize()
+	require.Equal(t, maxCapacity, MaxAllocationSize())
 	capacity, ok = GrowCapacity(maxCapacity, maxCapacity)
 	require.True(t, ok)
 	require.Equal(t, maxCapacity, capacity)
