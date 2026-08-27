@@ -144,7 +144,6 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		tc.op.Free(proc, false, nil)
 	}
 
-	proc.GetFileService().Close(proc.Ctx)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
@@ -194,6 +193,10 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	} else {
 		proc = testutil.NewProc(t)
 	}
+	fileService := proc.GetFileService()
+	t.Cleanup(func() {
+		fileService.Close(context.Background())
+	})
 
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
