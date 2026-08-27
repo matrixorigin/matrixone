@@ -169,7 +169,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 		// shard's bytes to the card holding a different shard, rejects the build
 		// for good.
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			demand, len(demand), true, cuvs.BudgetFor(u.idxcfg.Type),
+			demand, 0 /*complete*/, cuvs.BudgetFor(u.idxcfg.Type),
 		); aerr != nil {
 			return aerr
 		}

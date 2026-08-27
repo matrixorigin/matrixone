@@ -175,10 +175,17 @@ func HostRowsFittingStaged(perRowBytes, perTrainRowBytes, stageLimitRows uint64)
 	}
 
 	if rows <= 0 {
+		// Only name the sample when there is one: storage wider than a byte stages
+		// nothing, and pointing at quantizer_train_limit there sends the operator
+		// to a knob that is not involved.
+		alongside := ""
+		if perTrainRowBytes > 0 && stageLimitRows > 0 {
+			alongside = " alongside the quantizer training sample"
+		}
 		return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 			"host memory budget of %d bytes (75%% of %d available) cannot hold one row of %d "+
-				"bytes alongside the quantizer training sample; free memory on this node or run "+
-				"the build on a larger CN", budget, avail, perRowBytes))
+				"bytes%s; free memory on this node or run the build on a larger CN",
+			budget, avail, perRowBytes, alongside))
 	}
 	return rows, avail, nil
 }

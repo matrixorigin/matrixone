@@ -153,7 +153,7 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 		// saveToFile stamped this sub-index's DeviceComponentBytes just above, and
 		// `full` is already in b.indexes, so DeviceDemand covers everything built.
 		if err := memory.DeviceAggregateFitsHardware(
-			b.DeviceDemand(), len(b.indexes), false, cuvs.BudgetFor(b.idxcfg.Type),
+			b.DeviceDemand(), len(b.indexes), cuvs.BudgetFor(b.idxcfg.Type),
 		); err != nil {
 			return nil, err
 		}

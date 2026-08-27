@@ -402,16 +402,20 @@ func DeviceAggregateFitsFree(
 // never exceeds total, so an index above this bound is refused at every load
 // however idle the card. Comparing against raw total would leave that band
 // committing artifacts whose every query fails.
-// builtSoFar is what a build passes for `built` while it is still rotating: the
-// aggregate is incomplete, so the refusal must not present its figure as the
-// whole index.
+// builtSoFar says how much of the index the demand covers, and is the ONLY
+// signal distinguishing a running check from a final one:
 //
-// built is the number of sub-indexes the demand covers. Pass the final count
-// once every sub-index is packed; pass the running count during the build.
-// complete says whether that is all of them -- a build does not know the total
-// in advance, so it cannot report "N of M" the way the load gate does.
+//	> 0  still rotating -- the count of sub-indexes packed so far
+//	<= 0 complete -- every sub-index is accounted for
+//
+// One parameter rather than a count plus a flag, so the two cannot disagree: a
+// caller that passed the wrong count alongside "complete" would print a figure
+// it never measured, and nothing would catch it.
+//
+// A build cannot report "N of M" the way the load gate does, because it does not
+// know the total until it stops.
 func DeviceAggregateFitsHardware(
-	demand map[int]int64, built int, complete bool, budget DeviceBudget,
+	demand map[int]int64, builtSoFar int, budget DeviceBudget,
 ) error {
 	if len(demand) == 0 || budget == nil {
 		return nil
@@ -420,10 +424,10 @@ func DeviceAggregateFitsHardware(
 	// while it is still growing, so the operator does not size a fix from a
 	// figure that is still rising.
 	atLeast, scope := "", ""
-	if !complete {
+	if builtSoFar > 0 {
 		atLeast = "at least "
 		scope = fmt.Sprintf(" (after %d sub-index(es); the build was stopped here rather "+
-			"than packing the rest)", built)
+			"than packing the rest)", builtSoFar)
 	}
 	over, unmeasured := deviceAggregateExceeds(demand, func(dev int) (uint64, uint64, error) {
 		total, terr := budget.MaxAdmissible(dev)

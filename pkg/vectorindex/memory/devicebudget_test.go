@@ -161,11 +161,11 @@ func uniform(devices []int, n int64) map[int]int64 {
 
 func TestDeviceAggregateFitsHardware(t *testing.T) {
 	t.Run("fits on the hardware", func(t *testing.T) {
-		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 4<<30), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
+		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 4<<30), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("exceeding the admissible budget is refused and names both figures", func(t *testing.T) {
-		err := DeviceAggregateFitsHardware(uniform([]int{0}, 9<<30), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})})
+		err := DeviceAggregateFitsHardware(uniform([]int{0}, 9<<30), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "9216 MB") // what one device must hold
 		require.Contains(t, err.Error(), "8192 MB") // what the card has
@@ -176,17 +176,17 @@ func TestDeviceAggregateFitsHardware(t *testing.T) {
 		// The refusal test is >, not >=: an index that exactly fills the admissible
 		// budget is not provably unusable, and this gate only refuses the provable
 		// case -- one that no free-memory level could ever satisfy.
-		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 8<<30), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
+		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 8<<30), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("one byte over is refused", func(t *testing.T) {
-		require.Error(t, DeviceAggregateFitsHardware(uniform([]int{0}, (8<<30)+1), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
+		require.Error(t, DeviceAggregateFitsHardware(uniform([]int{0}, (8<<30)+1), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("the tightest participating device decides", func(t *testing.T) {
 		// Heterogeneous devices: fitting the roomiest is not enough, because under
 		// SINGLE_GPU/REPLICATED every device must hold the whole per-device share.
-		err := DeviceAggregateFitsHardware(uniform([]int{0, 1}, 12<<30), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 24 << 30, 1: 8 << 30})})
+		err := DeviceAggregateFitsHardware(uniform([]int{0, 1}, 12<<30), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 24 << 30, 1: 8 << 30})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "device 1")
 	})
@@ -195,21 +195,21 @@ func TestDeviceAggregateFitsHardware(t *testing.T) {
 		// gpu_multi_simulation resolves every logical rank onto physical 0. The
 		// demand is per-device already, so the aliases must collapse rather than
 		// multiply.
-		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0, 0, 0, 0}, 4<<30), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
+		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0, 0, 0, 0}, 4<<30), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})}))
 	})
 
 	t.Run("an unreadable device refuses rather than guesses", func(t *testing.T) {
 		// Assuming it fits is exactly the failure this gate exists to prevent.
-		err := DeviceAggregateFitsHardware(uniform([]int{7}, 1<<30), 1, true, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})})
+		err := DeviceAggregateFitsHardware(uniform([]int{7}, 1<<30), 0, fakeBudget{maxAdm: fakeMaxAdmissible(map[int]uint64{0: 8 << 30})})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot read the admissible VRAM")
 	})
 
 	t.Run("degenerate inputs are no-ops", func(t *testing.T) {
 		fn := fakeMaxAdmissible(map[int]uint64{0: 1})
-		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 0), 1, true, fakeBudget{maxAdm: fn}), "nothing to admit")
-		require.NoError(t, DeviceAggregateFitsHardware(uniform(nil, 1<<30), 1, true, fakeBudget{maxAdm: fn}), "no devices")
-		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 1<<30), 1, true, nil), "no measurement source")
+		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 0), 0, fakeBudget{maxAdm: fn}), "nothing to admit")
+		require.NoError(t, DeviceAggregateFitsHardware(uniform(nil, 1<<30), 0, fakeBudget{maxAdm: fn}), "no devices")
+		require.NoError(t, DeviceAggregateFitsHardware(uniform([]int{0}, 1<<30), 0, nil), "no measurement source")
 	})
 }
 
@@ -420,7 +420,7 @@ func TestRefusalNeverPrintsZeroForNonZeroBytes(t *testing.T) {
 		"a sub-megabyte refusal must not report zeros")
 	require.Contains(t, err.Error(), "900 bytes")
 
-	err = DeviceAggregateFitsHardware(uniform([]int{0}, 900), 1, true,
+	err = DeviceAggregateFitsHardware(uniform([]int{0}, 900), 0,
 		fakeBudget{maxAdm: func(int) (uint64, error) { return 600, nil }})
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "0 MB")
@@ -448,21 +448,21 @@ func TestDeviceParticipants_SingleGpuIgnoresBystanderCards(t *testing.T) {
 	single := DeviceParticipants(devices, true)
 	require.Equal(t, []int{0}, single, "SINGLE_GPU runs on devices[0] alone")
 
-	require.NoError(t, DeviceAggregateFitsHardware(uniform(single, 500), 1, true, budget),
+	require.NoError(t, DeviceAggregateFitsHardware(uniform(single, 500), 0, budget),
 		"device 1 holds none of a SINGLE_GPU index and must not veto it")
 	require.NoError(t, DeviceAggregateFitsFree(uniform(single, 500), 1, 1, budget),
 		"the situational gate must narrow the same way")
 
 	// The narrowing must not become a way to smuggle an oversized index past the
 	// gate: device 0's own ceiling still binds.
-	require.Error(t, DeviceAggregateFitsHardware(uniform(single, 1001), 1, true, budget),
+	require.Error(t, DeviceAggregateFitsHardware(uniform(single, 1001), 0, budget),
 		"the participating device's own ceiling must still refuse")
 
 	// REPLICATED really does put the whole index on every card, and SHARDED
 	// spreads ranks across them, so neither narrows -- device 1 must still refuse.
 	both := DeviceParticipants(devices, false)
 	require.Equal(t, devices, both)
-	require.Error(t, DeviceAggregateFitsHardware(uniform(both, 500), 1, true, budget),
+	require.Error(t, DeviceAggregateFitsHardware(uniform(both, 500), 0, budget),
 		"a non-SINGLE index does occupy device 1, which cannot hold it")
 }
 
@@ -499,12 +499,12 @@ func TestDeviceAggregate_JudgesEachDeviceOnItsOwnShare(t *testing.T) {
 	require.Equal(t, map[int]int64{0: 900, 1: 100}, demand, "each shard lands on its own rank")
 	require.Equal(t, int64(900), PeakDeviceBytes(devices, comps), "the peak is still the biggest shard")
 
-	require.NoError(t, DeviceAggregateFitsHardware(demand, 1, true, budget),
+	require.NoError(t, DeviceAggregateFitsHardware(demand, 0, budget),
 		"each card holds its own shard, so nothing should be refused")
 	require.NoError(t, DeviceAggregateFitsFree(demand, 1, 1, budget))
 
 	// The peak applied to every card is what used to happen, and it refuses.
-	require.Error(t, DeviceAggregateFitsHardware(uniform(devices, 900), 1, true, budget),
+	require.Error(t, DeviceAggregateFitsHardware(uniform(devices, 900), 0, budget),
 		"guards the regression: the peak against every ceiling refuses device 1")
 
 	// A card that genuinely cannot hold its own shard is still refused, and the
@@ -515,7 +515,7 @@ func TestDeviceAggregate_JudgesEachDeviceOnItsOwnShare(t *testing.T) {
 		}
 		return 1000, nil
 	}}
-	err := DeviceAggregateFitsHardware(demand, 1, true, tight)
+	err := DeviceAggregateFitsHardware(demand, 0, tight)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "device 1")
 	require.Contains(t, err.Error(), "100 bytes", "must quote device 1's own share, not the 900 peak")
@@ -535,7 +535,7 @@ func TestDeviceAggregateFitsHardware_PartialAggregateRefusesEarly(t *testing.T) 
 	for i := 0; i < 4; i++ {
 		sub = append(sub, map[string]int64{"index.bin": 3 << 30})
 		demand := PerDeviceDemand([]int{0}, sub)
-		err := DeviceAggregateFitsHardware(demand, len(sub), false, budget)
+		err := DeviceAggregateFitsHardware(demand, len(sub), budget)
 		if len(sub) < 4 {
 			require.NoError(t, err, "%d sub-indexes are still under the ceiling", len(sub))
 			continue
@@ -549,7 +549,7 @@ func TestDeviceAggregateFitsHardware_PartialAggregateRefusesEarly(t *testing.T) 
 
 	// The completed check words it as final, with no "at least".
 	full := PerDeviceDemand([]int{0}, sub)
-	err := DeviceAggregateFitsHardware(full, len(sub), true, budget)
+	err := DeviceAggregateFitsHardware(full, 0, budget)
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "at least")
 }
@@ -572,7 +572,7 @@ func TestDeviceAggregate_ShardedLayouts(t *testing.T) {
 		demand := PerDeviceDemand([]int{0, 1, 2, 3}, comps)
 		require.Equal(t, map[int]int64{0: 3 << 30, 1: 3 << 30, 2: 3 << 30, 3: 3 << 30}, demand,
 			"rank i lands on devices[i]")
-		require.NoError(t, DeviceAggregateFitsHardware(demand, 1, true, budget),
+		require.NoError(t, DeviceAggregateFitsHardware(demand, 0, budget),
 			"3 GiB per card is well under the 10 GiB ceiling")
 	})
 
@@ -584,7 +584,7 @@ func TestDeviceAggregate_ShardedLayouts(t *testing.T) {
 		demand := PerDeviceDemand([]int{0, 0, 0, 0}, comps)
 		require.Equal(t, map[int]int64{0: 12 << 30}, demand, "aliased ranks accumulate")
 
-		err := DeviceAggregateFitsHardware(demand, 1, true, budget)
+		err := DeviceAggregateFitsHardware(demand, 0, budget)
 		require.Error(t, err, "one card cannot hold what four shards need")
 		require.Contains(t, err.Error(), "device 0")
 	})
@@ -594,8 +594,8 @@ func TestDeviceAggregate_ShardedLayouts(t *testing.T) {
 		// difference is the wording, which must not claim the figure is still
 		// rising when it cannot.
 		demand := PerDeviceDemand([]int{0, 0, 0, 0}, comps)
-		partial := DeviceAggregateFitsHardware(demand, 1, false, budget)
-		complete := DeviceAggregateFitsHardware(demand, 1, true, budget)
+		partial := DeviceAggregateFitsHardware(demand, 1, budget)
+		complete := DeviceAggregateFitsHardware(demand, 0, budget)
 		require.Error(t, partial)
 		require.Error(t, complete)
 		require.Contains(t, partial.Error(), "at least")
