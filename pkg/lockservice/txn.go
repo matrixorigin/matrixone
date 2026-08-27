@@ -51,6 +51,12 @@ type tableLockHolder struct {
 
 type tableLockHolderExtra struct {
 	nonCoarsenableTables map[uint64]struct{}
+	// coarsenedTables records authoritative owner tables whose exact Exclusive
+	// ownership has already crossed the cumulative key budget and committed as
+	// one conservative range. Keeping this state is what makes coarsening
+	// monotonic: later compatible batches widen that range directly instead of
+	// rebuilding another budget-sized set of row locks first.
+	coarsenedTables map[uint64]struct{}
 	// ownerLocalWaitSnapshots records tables whose physical owner explicitly
 	// negotiated the owner-local transaction wait-for snapshot protocol. Only
 	// these tables may use compact origin bookkeeping for deadlock traversal.
@@ -84,6 +90,13 @@ func (h *tableLockHolder) nonCoarsenableTables() map[uint64]struct{} {
 	return h.extra.nonCoarsenableTables
 }
 
+func (h *tableLockHolder) coarsenedTables() map[uint64]struct{} {
+	if h.extra == nil {
+		return nil
+	}
+	return h.extra.coarsenedTables
+}
+
 func (h *tableLockHolder) ownerLocalWaitSnapshots() map[uint64]struct{} {
 	if h.extra == nil {
 		return nil
@@ -115,6 +128,7 @@ func (h *tableLockHolder) uncertainLockKeys() map[uint64]map[string]struct{} {
 func (h *tableLockHolder) clearExtraIfEmpty() {
 	if h.extra != nil &&
 		len(h.extra.nonCoarsenableTables) == 0 &&
+		len(h.extra.coarsenedTables) == 0 &&
 		len(h.extra.ownerLocalWaitSnapshots) == 0 &&
 		len(h.extra.remoteUnlockRequired) == 0 &&
 		len(h.extra.batchUnlockTables) == 0 &&
@@ -233,6 +247,28 @@ type preparedTxnLocks struct {
 	logger           *log.MOLogger
 	hadUncertainKeys bool
 	uncertainKeys    map[string]struct{}
+	coarsenedExtra   *tableLockHolderExtra
+	coarsenedTables  map[uint64]struct{}
+}
+
+// prepareMarkCoarsened builds the next persistent coarsening state before the
+// physical lock representation changes. commit must remain allocation-free: it
+// linearizes the transaction ledger and lock store while both mutexes are held.
+func (p *preparedTxnLocks) prepareMarkCoarsened() bool {
+	current := p.holder.coarsenedTables()
+	if _, ok := current[p.table]; ok {
+		return false
+	}
+	next := make(map[uint64]struct{}, len(current)+1)
+	for table := range current {
+		next[table] = struct{}{}
+	}
+	next[p.table] = struct{}{}
+	p.coarsenedTables = next
+	if p.holder.extra == nil {
+		p.coarsenedExtra = &tableLockHolderExtra{coarsenedTables: next}
+	}
+	return true
 }
 
 func (p *preparedTxnLocks) commit() {
@@ -243,6 +279,13 @@ func (p *preparedTxnLocks) commit() {
 	p.holder.tableKeys[p.table] = p.next
 	p.holder.tableBinds[p.table] = p.bind
 	p.txn.markTableNonCoarsenableLocked(p.holder, p.table, p.opts)
+	if p.coarsenedTables != nil {
+		if p.holder.extra == nil {
+			p.holder.extra = p.coarsenedExtra
+		} else {
+			p.holder.extra.coarsenedTables = p.coarsenedTables
+		}
+	}
 	if p.hadUncertainKeys {
 		extra := p.holder.ensureExtra()
 		if len(p.uncertainKeys) == 0 {
@@ -792,10 +835,12 @@ func (txn *activeTxn) coarsenLockRequest(
 
 	var held *cowSlice
 	heldCount := 0
+	alreadyCoarsened := false
 	if h, ok := txn.lockHolders[group]; ok {
 		if _, disabled := h.nonCoarsenableTables()[table]; disabled {
 			return rows, opts, false
 		}
+		_, alreadyCoarsened = h.coarsenedTables()[table]
 		held = h.tableKeys[table]
 		if held != nil {
 			heldCount = held.mustGet().len()
@@ -805,11 +850,47 @@ func (txn *activeTxn) coarsenLockRequest(
 	// smaller row budget.
 	effectiveBudget := max(maxLockRowCount, 2)
 	naiveCount := heldCount + len(rows)
-	if naiveCount <= effectiveBudget {
+	if !alreadyCoarsened && naiveCount <= effectiveBudget {
 		return rows, opts, false
 	}
 
 	var minKey, maxKey []byte
+	updateBounds := func(key []byte) {
+		if minKey == nil || bytes.Compare(key, minKey) < 0 {
+			minKey = key
+		}
+		if maxKey == nil || bytes.Compare(key, maxKey) > 0 {
+			maxKey = key
+		}
+	}
+	if alreadyCoarsened {
+		// The first committed budget replacement made the conservative range part
+		// of this transaction's ownership semantics. Preserve that representation
+		// for every later compatible batch. This bounds both physical locks and
+		// merge work instead of cycling between two endpoints and another full
+		// budget of exact row locks.
+		if held != nil {
+			locks := held.slice()
+			locks.iter(func(key []byte) bool {
+				updateBounds(key)
+				return true
+			})
+			locks.unref()
+		}
+		for _, row := range rows {
+			updateBounds(row)
+		}
+		if minKey == nil || bytes.Equal(minKey, maxKey) {
+			opts.Granularity = pb.Granularity_Row
+			if minKey == nil {
+				return nil, opts, false
+			}
+			return [][]byte{bytes.Clone(minKey)}, opts, true
+		}
+		opts.Granularity = pb.Granularity_Range
+		return [][]byte{bytes.Clone(minKey), bytes.Clone(maxKey)}, opts, true
+	}
+
 	// Count distinct retained keys only on the budget-crossing path. Ordinary
 	// requests keep the zero-allocation fast path above; this set is bounded by
 	// effectiveBudget because once one more distinct key is seen, coarsening is
@@ -817,12 +898,7 @@ func (txn *activeTxn) coarsenLockRequest(
 	seen := make(map[string]struct{}, min(naiveCount, effectiveBudget))
 	overBudget := false
 	add := func(key []byte) bool {
-		if minKey == nil || bytes.Compare(key, minKey) < 0 {
-			minKey = key
-		}
-		if maxKey == nil || bytes.Compare(key, maxKey) > 0 {
-			maxKey = key
-		}
+		updateBounds(key)
 		if overBudget {
 			return false
 		}
@@ -910,6 +986,7 @@ func (txn *activeTxn) replaceLocks(
 	if err != nil {
 		return err
 	}
+	prepared.prepareMarkCoarsened()
 	prepared.commit()
 	return nil
 }
@@ -1206,6 +1283,7 @@ func (txn *activeTxn) removeClosedLockTable(
 	delete(h.tableBinds, table)
 	if h.extra != nil {
 		delete(h.extra.nonCoarsenableTables, table)
+		delete(h.extra.coarsenedTables, table)
 		delete(h.extra.remoteUnlockRequired, table)
 		delete(h.extra.batchUnlockTables, table)
 		delete(h.extra.ownerLocalWaitSnapshots, table)
