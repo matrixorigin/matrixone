@@ -192,17 +192,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 			if rewritten {
-				markExplicitCastProvenance(expr)
 				return
 			}
 		}
 		if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
-			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
-		}
-		if err == nil {
-			markExplicitCastProvenance(expr)
+			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
 
 	case *tree.BitCastExpr:
@@ -5630,6 +5626,15 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+// appendSyntaxExplicitCastBeforeExpr keeps the ordinary cast conversion
+// semantics while giving an explicit CAST written by the user a stable
+// overload identity. Planner consumers can distinguish it from an implicit
+// reconciliation cast without overloading Expr.AuxId, whose negative values
+// have execution-time memoization semantics.
+func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
 func appendCastBeforeExprWithOverload(

@@ -35,15 +35,22 @@ func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
 	require.NoError(t, err)
 	explicit, err := appendExplicitCastBeforeExpr(ctx, DeepCopyExpr(source), target)
 	require.NoError(t, err)
+	syntaxExplicit, err := appendSyntaxExplicitCastBeforeExpr(ctx, DeepCopyExpr(source), target)
+	require.NoError(t, err)
 
 	ordinaryFunction := ordinary.GetF().GetFunc()
 	explicitFunction := explicit.GetF().GetFunc()
+	syntaxExplicitFunction := syntaxExplicit.GetF().GetFunc()
 	require.Equal(t, "cast", ordinaryFunction.GetObjName())
 	require.Equal(t, "cast", explicitFunction.GetObjName())
+	require.Equal(t, "cast", syntaxExplicitFunction.GetObjName())
 	_, ordinaryOverload := function.DecodeOverloadID(ordinaryFunction.GetObj())
 	_, explicitOverload := function.DecodeOverloadID(explicitFunction.GetObj())
+	_, syntaxExplicitOverload := function.DecodeOverloadID(syntaxExplicitFunction.GetObj())
 	require.Equal(t, int32(0), ordinaryOverload)
 	require.Equal(t, int32(1), explicitOverload)
+	require.Equal(t, int32(2), syntaxExplicitOverload)
+	require.Zero(t, syntaxExplicit.AuxId)
 }
 
 func TestUseExplicitCastOverload(t *testing.T) {

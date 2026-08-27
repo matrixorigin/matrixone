@@ -25,7 +25,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -951,7 +950,7 @@ func collectNegativeAuxIDs(expr *plan.Expr, ids map[int32]struct{}) {
 	if expr == nil {
 		return
 	}
-	if expr.AuxId < 0 && !isExplicitCastProvenanceAuxID(expr.AuxId) {
+	if expr.AuxId < 0 {
 		ids[expr.AuxId] = struct{}{}
 	}
 	switch e := expr.Expr.(type) {
@@ -3557,36 +3556,8 @@ func collectDirectResultParamPositions(
 	}
 }
 
-// Explicit casts need a planner-local expression annotation because the cast
-// execution overload is not a syntax marker: several explicit casts use the
-// ordinary overload for equivalent conversion semantics. Reserve a range far
-// below the per-plan volatile-expression memo IDs and allocate one distinct
-// value per cast. Distinct values are important because negative AuxId values
-// are also used by the expression executor as memo keys; a single sentinel
-// would incorrectly share different explicit casts' executors.
-const (
-	explicitCastProvenanceMinID int32 = -1 << 31
-	explicitCastProvenanceMaxID int32 = -1 << 30
-)
-
-var explicitCastProvenanceNextID int32 = explicitCastProvenanceMinID
-
-func isExplicitCastProvenanceAuxID(id int32) bool {
-	return id >= explicitCastProvenanceMinID && id <= explicitCastProvenanceMaxID
-}
-
-func markExplicitCastProvenance(expr *Expr) *Expr {
-	if expr != nil {
-		expr.AuxId = atomic.AddInt32(&explicitCastProvenanceNextID, 1)
-	}
-	return expr
-}
-
 func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) bool {
 	if expr == nil {
-		return false
-	}
-	if isExplicitCastProvenanceAuxID(expr.AuxId) {
 		return false
 	}
 	if param := expr.GetP(); param != nil {
@@ -3598,7 +3569,10 @@ func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) 
 	// so the parameter remains a direct result source beneath this unary cast.
 	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
 		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
-		return collectDirectResultParamFromExpr(fn.Args[0], positions)
+		_, overloadID := function.DecodeOverloadID(fn.Func.GetObj())
+		if overloadID == 0 {
+			return collectDirectResultParamFromExpr(fn.Args[0], positions)
+		}
 	}
 	return false
 }
