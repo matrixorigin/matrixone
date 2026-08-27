@@ -660,7 +660,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false,
+			true, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -689,7 +689,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, true,
+			false, true, true, false,
 		)
 
 		require.NoError(t, err)
@@ -698,6 +698,30 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.False(t, joinNode.IsRightJoin)
 		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	})
+
+	t.Run("composite set null delete keeps matched hidden rows only", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body_tenant"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body", "tenant"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			false, false, false, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Equal(t, plan.Node_INNER, joinNode.JoinType)
+		require.False(t, joinNode.IsRightJoin)
+		require.NotEmpty(t, joinNode.ProjectList)
+		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	})
 
 	t.Run("composite prefix part", func(t *testing.T) {
@@ -715,7 +739,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, false,
+			false, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -745,7 +769,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false,
+			true, true, false, false,
 		)
 
 		require.NoError(t, err)

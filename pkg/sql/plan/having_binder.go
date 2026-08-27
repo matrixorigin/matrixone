@@ -278,7 +278,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	b.insideAgg = true
 	var expr *plan.Expr
 	var err error
-	if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
+	if strings.EqualFold(funcName, NameMedian) && astExpr.WithinGroup {
+		expr, err = b.bindMedianWithinGroupAgg(funcName, astExpr, depth, isRoot)
+	} else if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
 		expr, err = b.bindOrderedSetPercentileAgg(funcName, astExpr, depth, isRoot)
 	} else {
 		expr, err = b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
@@ -343,6 +345,39 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			},
 		},
 	}, nil
+}
+
+// bindMedianWithinGroupAgg accepts MatrixOne's ordered-set MEDIAN extension and
+// reuses the existing median executor. As with other ordered-set aggregates,
+// the aggregated input comes from WITHIN GROUP's ORDER BY expression; MEDIAN
+// has no direct argument in this form.
+func (b *HavingBinder) bindMedianWithinGroupAgg(
+	funcName string,
+	astExpr *tree.FuncExpr,
+	depth int32,
+	isRoot bool,
+) (*plan.Expr, error) {
+	if len(astExpr.Exprs) != 0 {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s WITHIN GROUP does not accept a direct argument", funcName)
+	}
+	if len(astExpr.OrderBy) != 1 || astExpr.OrderBy[0] == nil || astExpr.OrderBy[0].Expr == nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
+	}
+	value, err := b.BindExpr(astExpr.OrderBy[0].Expr, depth, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	args := useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), funcName, []*plan.Expr{value})
+
+	if b.builder == nil || b.builder.compCtx == nil {
+		return BindFuncExprImplByPlanExpr(b.GetContext(), funcName, args)
+	}
+	return bindFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
+		args,
+	)
 }
 
 // bindOrderedSetPercentileAgg converts the SQL-standard

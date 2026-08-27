@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -2812,13 +2813,16 @@ func (builder *QueryBuilder) appendRowNumberMappingGuardNode(
 		BindingTags: []int32{windowTag},
 	}, bindCtx)
 
-	rowNumberCol := &plan.Expr{
+	rowNumberCol, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: windowTag,
 			ColPos: 0,
 			Name:   "__mo_fk_mapping_row_number",
 		}},
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, err
 	}
 	keepFirstRowExpr, err := BindFuncExprImplByPlanExpr(
 		builder.GetContext(), "=", []*plan.Expr{rowNumberCol, makePlan2Int64ConstExprWithType(1)})
