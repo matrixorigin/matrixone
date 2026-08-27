@@ -26,7 +26,7 @@ import (
 //
 //	select * from (
 //	<query>
-//	) `__mo_subq_<hash>` where <filter>
+//	) __mo_subq_<hash> where <filter>
 //
 // The projection stays `*` deliberately.  A foreign scan maps the remote
 // result onto the declared columns BY POSITION -- field i feeds column i, the
@@ -45,7 +45,7 @@ func WrapPushdownQuery(query, filter string) string {
 	inner := trimQueryTail(query)
 	// The newlines are load-bearing: a query ending in a `-- ...` line comment
 	// would otherwise swallow the closing paren and the whole WHERE clause.
-	return fmt.Sprintf("%s\n%s\n) `%s` where %s", pushdownPrefix, inner, PushdownAlias(inner), filter)
+	return fmt.Sprintf("%s\n%s\n) %s where %s", pushdownPrefix, inner, PushdownAlias(inner), filter)
 }
 
 // pushdownPrefix opens every wrapper WrapPushdownQuery renders.
@@ -57,6 +57,13 @@ const pushdownPrefix = "select * from ("
 // be confused with a user identifier.  Uniqueness against names *inside* the
 // query is not required: the alias lives in the wrapper's scope, which the
 // inner query cannot see.
+//
+// The result is deliberately spelled from [a-z0-9_] only, so the wrapper can
+// write it bare.  Quoting is for identifiers MO does not control -- a source
+// column may be a reserved word, or hold a space or a backtick -- and the
+// quoting character is itself dialect-specific, so a name MO mints is more
+// portable unquoted than wrapped in MySQL backticks.  Keep any change to this
+// format inside that alphabet, or the wrapper has to start quoting.
 func PushdownAlias(query string) string {
 	return fmt.Sprintf("__mo_subq_%08x", crc32.ChecksumIEEE([]byte(query)))
 }
@@ -75,5 +82,5 @@ func trimQueryTail(query string) string {
 // the verbatim text.
 func WrapPushdownProbe(query string) string {
 	inner := trimQueryTail(query)
-	return fmt.Sprintf("%s\n%s\n) `%s` limit 0", pushdownPrefix, inner, PushdownAlias(inner))
+	return fmt.Sprintf("%s\n%s\n) %s limit 0", pushdownPrefix, inner, PushdownAlias(inner))
 }

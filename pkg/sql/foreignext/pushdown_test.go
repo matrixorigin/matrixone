@@ -27,7 +27,11 @@ func TestWrapPushdownQuery(t *testing.T) {
 	wrapped := WrapPushdownQuery("select id, name from src", "(`id` > 3)")
 	require.True(t, strings.HasPrefix(wrapped, "select * from ("), wrapped)
 	require.Contains(t, wrapped, "select id, name from src")
-	require.Contains(t, wrapped, "` where (`id` > 3)")
+	require.Contains(t, wrapped, PushdownAlias("select id, name from src")+" where (`id` > 3)")
+	// the alias is MO's own, spelled from [a-z0-9_], so it is written bare:
+	// quoting is for identifiers MO does not control, and its character is
+	// dialect-specific
+	require.NotContains(t, wrapped, "`"+PushdownAlias("select id, name from src"))
 	require.Contains(t, wrapped, PushdownAlias("select id, name from src"))
 
 	// an empty filter is a no-op: nothing to push means nothing to wrap, and
@@ -70,11 +74,27 @@ func TestWrapPushdownProbe(t *testing.T) {
 	probe := WrapPushdownProbe("select id, name from src")
 	require.Contains(t, probe, "select * from (")
 	require.Contains(t, probe, "select id, name from src")
-	require.Contains(t, probe, "` limit 0")
+	require.Contains(t, probe, PushdownAlias("select id, name from src")+" limit 0")
 	require.NotContains(t, probe, "where")
 
 	// the same alias as the real query, and the same tail handling
 	require.Contains(t, probe, PushdownAlias("select id, name from src"))
 	require.Contains(t, WrapPushdownProbe("select 1 ; "), "select 1\n)")
 	require.Contains(t, WrapPushdownProbe("select 1 -- c"), "-- c\n)")
+}
+
+// TestPushdownAliasIsABareIdentifier pins the property the wrapper relies on
+// when it writes the alias unquoted: every character comes from an alphabet
+// that needs no quoting in either dialect MO can talk to, and the name can
+// neither start with a digit nor collide with a reserved word.
+func TestPushdownAliasIsABareIdentifier(t *testing.T) {
+	for _, q := range []string{"", "select 1", "select * from `weird name`", "SELECT\n\t1 -- x"} {
+		alias := PushdownAlias(q)
+		require.True(t, strings.HasPrefix(alias, "__mo_subq_"), alias)
+		for _, r := range alias {
+			require.True(t,
+				r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'),
+				"alias %q holds %q, which would need quoting", alias, r)
+		}
+	}
 }

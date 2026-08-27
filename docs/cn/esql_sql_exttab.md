@@ -207,7 +207,7 @@ it probes the wrapped-but-unfiltered text for its column names —
 ```
 select * from (
 select a_id, a_name from src
-) `__mo_subq_1a2b3c4d` limit 0
+) __mo_subq_1a2b3c4d limit 0
 ```
 
 — reads the result's column names (`a_id`, `a_name`), pairs them with the
@@ -217,7 +217,7 @@ relies on, and renders the predicate in the source's own vocabulary:
 ```
 select * from (
 select a_id, a_name from src
-) `__mo_subq_1a2b3c4d` where (`a_id` > 3)
+) __mo_subq_1a2b3c4d where (`a_id` > 3)
 ```
 
 `LIMIT 0` makes the probe a metadata round trip, not a scan, and it doubles as
