@@ -17,7 +17,6 @@ package plan
 import (
 	"math"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -463,21 +462,19 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
-	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	params, err := decodeVectorIndexAlgoParams(metaDef.IndexAlgoParams)
 	if err != nil {
 		return nil, nil
 	}
-	opType, err := opTypeAst.StrictString()
-	if err != nil {
+	opType, ok := vectorIndexStringParam(params, catalog.IndexAlgoParamOpType)
+	if !ok {
 		return nil, nil
 	}
 
 	// Get total lists for nprobe boundary handling
 	var totalLists int64 = -1
-	if listsAst, err2 := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamLists); err2 == nil {
-		if lists, err3 := listsAst.Int64(); err3 == nil {
-			totalLists = lists
-		}
+	if lists, ok := vectorIndexInt64Param(params, catalog.IndexAlgoParamLists); ok {
+		totalLists = lists
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
