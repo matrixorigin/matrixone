@@ -3534,6 +3534,21 @@ func collectDirectResultParamPositions(
 			// other branches, so direct-result specialization must not guess a new
 			// common domain from the surviving plan.
 			return
+		case plan.Node_AGG:
+			// DISTINCT over a real row source is represented by PROJECT -> AGG.
+			// The AGG projection references its grouping output with rel_pos=-1;
+			// following child 0 at the same ordinal skips the owned group expression.
+			if col.RelPos < 0 && col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+				groupExpr := node.GroupBy[col.ColPos]
+				if collectDirectResultParamFromExpr(groupExpr, positions) {
+					return
+				}
+				if groupCol := groupExpr.GetCol(); groupCol != nil && len(node.Children) == 1 {
+					collectDirectResultParamPositions(
+						query, node.Children[0], groupCol.ColPos, positions, seen)
+				}
+				return
+			}
 		}
 		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
 			collectDirectResultParamPositions(query, node.Children[col.RelPos], childColPos, positions, seen)
@@ -3689,6 +3704,12 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
+	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
+	// numeric-prefix domain used by common-type consumers; a direct result uses
+	// this scale-preserving domain without parsing the packet again.
+	DirectResultType    types.Type
+	HasDirectResultType bool
 	// RetainParamRef records that a specialized query plan will be cached and
 	// therefore must retain this parameter as runtime provenance even when the
 	// parameter itself is unrelated to numeric-prefix specialization.
@@ -3846,66 +3867,197 @@ func absInt64Within(value, limit int64) bool {
 	return value >= -limit && value <= limit
 }
 
-// PreparedDecimalRuntimeType derives the smallest exact DECIMAL domain that
-// preserves the complete binary-protocol decimal lexeme. Unlike numeric-prefix
-// common-type inference, this retains significant runtime scale, including for
-// zero and trailing-zero spellings, because the domain is published as result
-// metadata for a direct prepared parameter.
-func PreparedDecimalRuntimeType(value string) (types.Type, bool) {
+// PreparedDecimalRuntimeTypes parses one complete binary-protocol DECIMAL
+// lexeme and returns both domains needed by prepared execution. normalized is
+// the trailing-zero-free domain used by numeric-prefix/common-type consumers;
+// visible preserves the lexeme's effective scale for a direct result. The scan
+// performs no input-length allocation, even for a max_allowed_packet-sized
+// value.
+func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, ok bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return types.Type{}, false
-	}
-	unsigned := value
-	if unsigned[0] == '+' || unsigned[0] == '-' {
-		unsigned = unsigned[1:]
-	}
-	if unsigned == "" {
-		return types.Type{}, false
+		return types.Type{}, types.Type{}, false
 	}
 
-	mantissa := unsigned
-	exponentText := ""
-	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
-		if strings.ContainsAny(unsigned[exponentAt+1:], "eE") ||
-			!isDecimalExponent(unsigned[exponentAt+1:]) {
-			return types.Type{}, false
+	pos := 0
+	if value[pos] == '+' || value[pos] == '-' {
+		pos++
+	}
+	if pos == len(value) {
+		return types.Type{}, types.Type{}, false
+	}
+
+	var digitCount, leadingZeros, fractionalDigits, trailingZeros int64
+	seenDigit, seenPoint, seenNonZero := false, false, false
+	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
+		ch := value[pos]
+		switch {
+		case ch >= '0' && ch <= '9':
+			seenDigit = true
+			digitCount++
+			if seenPoint {
+				fractionalDigits++
+			}
+			if !seenNonZero {
+				if ch == '0' {
+					leadingZeros++
+				} else {
+					seenNonZero = true
+				}
+			} else if ch == '0' {
+				trailingZeros++
+			} else {
+				trailingZeros = 0
+			}
+		case ch == '.' && !seenPoint:
+			seenPoint = true
+		default:
+			return types.Type{}, types.Type{}, false
 		}
-		mantissa = unsigned[:exponentAt]
-		exponentText = unsigned[exponentAt+1:]
+		pos++
 	}
-	if !isDecimalMantissa(mantissa) {
-		return types.Type{}, false
-	}
-
-	fractionalDigits := int64(0)
-	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
-		fractionalDigits = int64(len(mantissa) - pointAt - 1)
-	}
-	digits := strings.ReplaceAll(mantissa, ".", "")
-	coefficientDigits := int64(len(strings.TrimLeft(digits, "0")))
-	netExponent, bounded := preparedBoundedDecimalExponent(exponentText, -fractionalDigits)
-	if !bounded {
-		return types.Type{}, false
+	if !seenDigit {
+		return types.Type{}, types.Type{}, false
 	}
 
-	var width, scale int64
+	exponent, exponentState, valid := scanPreparedDecimalExponent(value[pos:])
+	if !valid {
+		return types.Type{}, types.Type{}, false
+	}
+	coefficientDigits := digitCount - leadingZeros
 	if coefficientDigits == 0 {
-		if netExponent < 0 {
-			scale = -netExponent
+		// Zero is representable independently of a positive exponent. Only the
+		// effective negative scale can exceed Decimal256.
+		var scale int64
+		switch exponentState {
+		case preparedExponentHugePositive:
+			scale = 0
+		case preparedExponentHugeNegative:
+			return types.Type{}, types.Type{}, false
+		default:
+			netExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
+			if !bounded || netExponent < -int64(types.T_decimal256.ToType().Width) {
+				return types.Type{}, types.Type{}, false
+			}
+			if netExponent < 0 {
+				scale = -netExponent
+			}
 		}
-		width = max(int64(1), scale)
-	} else if netExponent >= 0 {
-		width = coefficientDigits + netExponent
-	} else {
-		scale = -netExponent
-		width = max(coefficientDigits, scale)
+		visible, ok = preparedDecimalTypeForWidth(max(int64(1), scale), scale)
+		if !ok {
+			return types.Type{}, types.Type{}, false
+		}
+		return types.New(types.T_decimal64, 1, 0), visible, true
 	}
+	if exponentState != preparedExponentFinite {
+		return types.Type{}, types.Type{}, false
+	}
+
+	visibleExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
+	if !bounded {
+		return types.Type{}, types.Type{}, false
+	}
+	visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
+	if !ok {
+		return types.Type{}, types.Type{}, false
+	}
+
+	normalizedExponent, bounded := addPreparedDecimalExponent(
+		exponent, -fractionalDigits+trailingZeros)
+	if !bounded {
+		return types.Type{}, types.Type{}, false
+	}
+	normalized, ok = preparedDecimalTypeFromCoefficient(
+		coefficientDigits-trailingZeros, normalizedExponent)
+	if !ok {
+		return types.Type{}, types.Type{}, false
+	}
+	return normalized, visible, true
+}
+
+type preparedExponentState uint8
+
+const (
+	preparedExponentFinite preparedExponentState = iota
+	preparedExponentHugePositive
+	preparedExponentHugeNegative
+)
+
+func scanPreparedDecimalExponent(value string) (int64, preparedExponentState, bool) {
+	if value == "" {
+		return 0, preparedExponentFinite, true
+	}
+	if value[0] != 'e' && value[0] != 'E' {
+		return 0, preparedExponentFinite, false
+	}
+	value = value[1:]
+	if value == "" {
+		return 0, preparedExponentFinite, false
+	}
+	negative := false
+	if value[0] == '+' || value[0] == '-' {
+		negative = value[0] == '-'
+		value = value[1:]
+	}
+	if value == "" {
+		return 0, preparedExponentFinite, false
+	}
+	for len(value) > 0 && value[0] == '0' {
+		value = value[1:]
+	}
+	if value == "" {
+		return 0, preparedExponentFinite, true
+	}
+	for i := range len(value) {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, preparedExponentFinite, false
+		}
+	}
+	if len(value) > 19 {
+		if negative {
+			return 0, preparedExponentHugeNegative, true
+		}
+		return 0, preparedExponentHugePositive, true
+	}
+	magnitude, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || magnitude > math.MaxInt64 {
+		if negative {
+			return 0, preparedExponentHugeNegative, true
+		}
+		return 0, preparedExponentHugePositive, true
+	}
+	exponent := int64(magnitude)
+	if negative {
+		exponent = -exponent
+	}
+	return exponent, preparedExponentFinite, true
+}
+
+func addPreparedDecimalExponent(exponent, compensation int64) (int64, bool) {
+	if compensation > 0 && exponent > math.MaxInt64-compensation ||
+		compensation < 0 && exponent < math.MinInt64-compensation {
+		return 0, false
+	}
+	return exponent + compensation, true
+}
+
+func preparedDecimalTypeFromCoefficient(coefficientDigits, exponent int64) (types.Type, bool) {
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if coefficientDigits < 1 || exponent < -maxWidth || exponent > maxWidth {
+		return types.Type{}, false
+	}
+	if exponent >= 0 {
+		return preparedDecimalTypeForWidth(coefficientDigits+exponent, 0)
+	}
+	scale := -exponent
+	return preparedDecimalTypeForWidth(max(coefficientDigits, scale), scale)
+}
+
+func preparedDecimalTypeForWidth(width, scale int64) (types.Type, bool) {
 	maxWidth := int64(types.T_decimal256.ToType().Width)
 	if width < 1 || width > maxWidth || scale < 0 || scale > maxWidth || scale > width {
 		return types.Type{}, false
 	}
-
 	w, s := int32(width), int32(scale)
 	switch {
 	case w <= types.T_decimal64.ToType().Width:
@@ -3915,6 +4067,13 @@ func PreparedDecimalRuntimeType(value string) (types.Type, bool) {
 	default:
 		return types.New(types.T_decimal256, w, s), true
 	}
+}
+
+// PreparedDecimalRuntimeType derives the scale-preserving visible domain of a
+// complete binary-protocol DECIMAL lexeme.
+func PreparedDecimalRuntimeType(value string) (types.Type, bool) {
+	_, visible, ok := PreparedDecimalRuntimeTypes(value)
+	return visible, ok
 }
 
 func preparedDecimalType(value string) (types.Type, bool) {
@@ -4445,6 +4604,29 @@ func propagatePreparedDirectResultTypeAt(
 	col := expr.GetCol()
 	if col == nil {
 		return plan.Type{}, false
+	}
+	if node.NodeType == plan.Node_AGG && col.RelPos < 0 &&
+		col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+		groupExpr := node.GroupBy[col.ColPos]
+		if position, ok := preparedRuntimeSourceParamPosition(groupExpr); ok &&
+			position >= 0 && position < len(paramVals) && runtimeParamHasExplicitType(paramVals[position]) {
+			expr.Typ = groupExpr.Typ
+			memo[key], found[key] = groupExpr.Typ, true
+			return groupExpr.Typ, true
+		}
+		groupCol := groupExpr.GetCol()
+		if groupCol == nil || len(node.Children) != 1 {
+			return plan.Type{}, false
+		}
+		typ, direct := propagatePreparedDirectResultTypeAt(
+			query, node.Children[0], groupCol.ColPos, paramVals, memo, found)
+		if !direct {
+			return plan.Type{}, false
+		}
+		groupExpr.Typ = typ
+		expr.Typ = typ
+		memo[key], found[key] = typ, true
+		return typ, true
 	}
 	childID := int32(-1)
 	if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {

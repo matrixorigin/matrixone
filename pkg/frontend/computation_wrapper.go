@@ -786,12 +786,10 @@ func applyBinaryDirectResultDecimalTypes(
 		if mysqlType != defines.MYSQL_TYPE_DECIMAL && mysqlType != defines.MYSQL_TYPE_NEWDECIMAL {
 			continue
 		}
-		runtimeType, ok := plan2.PreparedDecimalRuntimeType(fmt.Sprintf("%v", param.Value))
-		if !ok {
-			return moerr.NewInvalidInputf(
-				ctx, "binary DECIMAL parameter %q exceeds DECIMAL(76) or has invalid syntax", param.Value)
+		if !param.HasDirectResultType {
+			return invalidBinaryDecimalParameter(ctx, param.Value)
 		}
-		param.RuntimeType = runtimeType
+		param.RuntimeType = param.DirectResultType
 		param.HasRuntimeType = true
 		paramVals[position] = param
 	}
@@ -902,6 +900,15 @@ func binaryProtocolPrepareParamType(
 	isUnsigned bool,
 	value []byte,
 ) (types.Type, bool) {
+	runtimeType, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, string(value))
+	return runtimeType, ok
+}
+
+func binaryProtocolPrepareParamDomains(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value string,
+) (runtimeType, directResultType types.Type, hasDirectResultType, ok bool) {
 	signed := func(signedType, unsignedType types.T) types.Type {
 		if isUnsigned {
 			return unsignedType.ToType()
@@ -910,34 +917,43 @@ func binaryProtocolPrepareParamType(
 	}
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY:
-		return signed(types.T_int8, types.T_uint8), true
+		return signed(types.T_int8, types.T_uint8), types.Type{}, false, true
 	case defines.MYSQL_TYPE_SHORT:
-		return signed(types.T_int16, types.T_uint16), true
+		return signed(types.T_int16, types.T_uint16), types.Type{}, false, true
 	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
-		return signed(types.T_int32, types.T_uint32), true
+		return signed(types.T_int32, types.T_uint32), types.Type{}, false, true
 	case defines.MYSQL_TYPE_LONGLONG:
-		return signed(types.T_int64, types.T_uint64), true
+		return signed(types.T_int64, types.T_uint64), types.Type{}, false, true
 	case defines.MYSQL_TYPE_BIT:
-		return signed(types.T_bit, types.T_uint64), true
+		return signed(types.T_bit, types.T_uint64), types.Type{}, false, true
 	case defines.MYSQL_TYPE_YEAR:
-		return types.T_year.ToType(), true
+		return types.T_year.ToType(), types.Type{}, false, true
 	case defines.MYSQL_TYPE_FLOAT:
-		return types.T_float32.ToType(), true
+		return types.T_float32.ToType(), types.Type{}, false, true
 	case defines.MYSQL_TYPE_DOUBLE:
-		return types.T_float64.ToType(), true
+		return types.T_float64.ToType(), types.Type{}, false, true
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		if _, ok := plan2.PreparedDecimalRuntimeType(string(value)); !ok {
-			return types.Type{}, false
-		}
-		typ := plan2.PreparedNumericPrefixTypeFromString(string(value))
-		return typ, typ.IsDecimal()
+		normalized, visible, valid := plan2.PreparedDecimalRuntimeTypes(value)
+		return normalized, visible, valid, valid
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
-		return types.Type{}, false
+		return types.Type{}, types.Type{}, false, false
 	default:
-		return types.T_text.ToType(), true
+		return types.T_text.ToType(), types.Type{}, false, true
 	}
+}
+
+func invalidBinaryDecimalParameter(ctx context.Context, value any) error {
+	length := 0
+	switch value := value.(type) {
+	case string:
+		length = len(value)
+	case []byte:
+		length = len(value)
+	}
+	return moerr.NewInvalidInputf(
+		ctx, "binary DECIMAL parameter (%d bytes) exceeds DECIMAL(76) or has invalid syntax", length)
 }
 
 func initExecuteStmtParamWithResolverInSession(
@@ -1762,14 +1778,16 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			if paramValue.PrepareParamKind == vector.PrepareParamBoolean {
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
-			} else if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw); ok {
+			} else if runtimeType, directResultType, hasDirectResultType, ok :=
+				binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, paramValue.Value.(string)); ok {
 				if runtimeType.Oid != types.T_text {
 					paramValue.RuntimeType = runtimeType
 					paramValue.HasRuntimeType = true
 				}
+				paramValue.DirectResultType = directResultType
+				paramValue.HasDirectResultType = hasDirectResultType
 			} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
-				return nil, moerr.NewInvalidInputf(
-					proc.Ctx, "binary DECIMAL parameter %q exceeds DECIMAL(76) or has invalid syntax", raw)
+				return nil, invalidBinaryDecimalParameter(proc.Ctx, paramValue.Value)
 			}
 		}
 		// COM_STMT_EXECUTE values are binary-protocol values even when their

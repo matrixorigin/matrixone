@@ -562,6 +562,9 @@ func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 		{name: "leading zeros", value: "001.20", wantOID: types.T_decimal64, wantWidth: 3, wantScale: 2, wantOK: true},
 		{name: "fixed scale zero", value: "0.00", wantOID: types.T_decimal64, wantWidth: 2, wantScale: 2, wantOK: true},
 		{name: "exponent zero", value: "0e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
+		{name: "zero positive exponent boundary", value: "0e+77", wantOID: types.T_decimal64, wantWidth: 1, wantOK: true},
+		{name: "zero huge positive exponent", value: "000.000e+999999999999999999999", wantOID: types.T_decimal64, wantWidth: 1, wantOK: true},
+		{name: "zero negative scale overflow", value: "0e-77"},
 		{name: "small exponent", value: "1e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
 		{name: "positive exponent", value: "1.2500e+2", wantOID: types.T_decimal64, wantWidth: 5, wantScale: 2, wantOK: true},
 		{name: "decimal256", value: strings.Repeat("9", 75) + ".1", wantOID: types.T_decimal256, wantWidth: 76, wantScale: 1, wantOK: true},
@@ -582,6 +585,35 @@ func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalRuntimeTypesLargeLexemeHasBoundedAllocations(t *testing.T) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	assertDomains := func() {
+		normalized, visible, ok := PreparedDecimalRuntimeTypes(value)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal64, 1, 0), normalized)
+		require.Equal(t, types.New(types.T_decimal64, 2, 1), visible)
+	}
+	assertDomains()
+	require.Zero(t, testing.AllocsPerRun(10, func() {
+		_, _, ok := PreparedDecimalRuntimeTypes(value)
+		if !ok {
+			panic("large valid DECIMAL lexeme rejected")
+		}
+	}))
+}
+
+func BenchmarkPreparedDecimalRuntimeTypesLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		_, _, ok := PreparedDecimalRuntimeTypes(value)
+		if !ok {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+	}
+}
+
 func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -591,6 +623,7 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 		{name: "direct", sql: "prepare direct_result from 'select ? as result'", want: []int32{0}},
 		{name: "order by", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
 		{name: "distinct", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
+		{name: "distinct row source", sql: "prepare direct_distinct_rows from 'select distinct ? as result from nation'", want: []int32{0}},
 		{name: "union common type control", sql: "prepare direct_union from 'select ? as result union all select 1'"},
 		{name: "nested control", sql: "prepare nested_only from 'select abs(?)'"},
 		{name: "explicit cast control", sql: "prepare explicit_cast from 'select cast(? as decimal(20, 4))'"},
@@ -621,6 +654,7 @@ func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
 		{name: "direct", sql: "prepare runtime_direct from 'select ? as result'"},
 		{name: "order by", sql: "prepare runtime_order from 'select ? as result order by result'"},
 		{name: "distinct", sql: "prepare runtime_distinct from 'select distinct ? as result'"},
+		{name: "distinct row source", sql: "prepare runtime_distinct_rows from 'select distinct ? as result from nation'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)

@@ -733,10 +733,86 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 214, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0e+77"), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	value := values[0].(plan2.ParamValue)
+	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.RuntimeType)
+	require.True(t, value.HasRuntimeType)
+	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.DirectResultType)
+	require.True(t, value.HasDirectResultType)
+}
+
+func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 215, "select ?")
+	defer prepareStmt.Close()
+
+	payload := strings.Repeat("x", 1<<20)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte(payload), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	_, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), payload[:128])
+	require.Contains(t, err.Error(), "1048576 bytes")
+	require.Less(t, len(err.Error()), 160)
+}
+
+func BenchmarkBinaryDirectResultDecimalLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	positions := []int32{0}
+	paramVals := []any{plan2.ParamValue{Value: value}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		normalized, visible, hasVisible, ok := binaryProtocolPrepareParamDomains(
+			defines.MYSQL_TYPE_NEWDECIMAL, false, value)
+		if !ok || !hasVisible {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+		param := paramVals[0].(plan2.ParamValue)
+		param.RuntimeType = normalized
+		param.HasRuntimeType = true
+		param.DirectResultType = visible
+		param.HasDirectResultType = true
+		paramVals[0] = param
+		if err := applyBinaryDirectResultDecimalTypes(
+			context.Background(), paramVals, paramTypes, positions); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestApplyBinaryDirectResultDecimalTypesPreservesLexicalScale(t *testing.T) {
 	values := []any{
-		plan2.ParamValue{Value: "0.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true},
-		plan2.ParamValue{Value: "9.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true},
+		plan2.ParamValue{
+			Value: "0.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true,
+			DirectResultType: types.New(types.T_decimal64, 2, 2), HasDirectResultType: true,
+		},
+		plan2.ParamValue{
+			Value: "9.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true,
+			DirectResultType: types.New(types.T_decimal64, 3, 2), HasDirectResultType: true,
+		},
 	}
 	err := applyBinaryDirectResultDecimalTypes(
 		context.Background(), values,

@@ -211,14 +211,19 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			directStmt, err := conn.PrepareContext(ctx, "select ? as result")
 			require.NoError(t, err)
 			defer directStmt.Close()
-			assertDirect := func(
+			distinctStmt, err := conn.PrepareContext(ctx,
+				"select distinct ? as result from (select 1 union all select 2) as source")
+			require.NoError(t, err)
+			defer distinctStmt.Close()
+			assertPreparedDirect := func(
+				prepared *sql.Stmt,
 				value any,
 				databaseType string,
 				wantPrecision, wantScale int64,
 				scanTarget any,
 			) {
 				t.Helper()
-				rows, queryErr := directStmt.QueryContext(ctx, value)
+				rows, queryErr := prepared.QueryContext(ctx, value)
 				require.NoError(t, queryErr)
 				defer rows.Close()
 
@@ -236,6 +241,16 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 				require.NoError(t, rows.Scan(scanTarget))
 				require.False(t, rows.Next())
 				require.NoError(t, rows.Err())
+			}
+			assertDirect := func(
+				value any,
+				databaseType string,
+				wantPrecision, wantScale int64,
+				scanTarget any,
+			) {
+				t.Helper()
+				assertPreparedDirect(
+					directStmt, value, databaseType, wantPrecision, wantScale, scanTarget)
 			}
 
 			var directInteger int64
@@ -255,6 +270,24 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 				"-12345678901234567890.123456789")
 			assertWireDecimal("0.00", 2, 2, "0.00")
 			assertWireDecimal("0e-30", 30, 30, "0."+strings.Repeat("0", 30))
+			assertWireDecimal("0e+77", 1, 0, "0")
+			assertWireDecimal("000.000e+80", 1, 0, "0")
+
+			traceConn.rewriteNextParamAsDecimal()
+			err = directStmt.QueryRowContext(ctx, "0e-77").Scan(new(string))
+			require.Error(t, err)
+			require.True(t, traceConn.didRewriteParamAsDecimal())
+			var decimalErr *mysqlDriver.MySQLError
+			require.True(t, errors.As(err, &decimalErr), "expected MySQL protocol error, got %T: %v", err, err)
+			require.Equal(t, moerr.ErrInvalidInput, decimalErr.Number)
+			require.NotContains(t, decimalErr.Message, "0e-77")
+
+			traceConn.rewriteNextParamAsDecimal()
+			var distinctDecimal string
+			assertPreparedDirect(distinctStmt, "123.4500", "DECIMAL", 7, 4, &distinctDecimal)
+			require.True(t, traceConn.didRewriteParamAsDecimal())
+			require.Equal(t, "123.4500", distinctDecimal)
+
 			wideDecimal := strings.Repeat("9", 65)
 			assertWireDecimal(wideDecimal, 65, 0, wideDecimal)
 

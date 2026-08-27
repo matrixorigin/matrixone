@@ -97,7 +97,8 @@ copy specialization, and a bounded one-entry semantic-category cache.
 
 - transport/protocol source;
 - conversion kind: integer, decimal, float, Boolean, or none;
-- runtime physical type when known;
+- normalized runtime physical type when known;
+- the scale-preserving direct-result DECIMAL type, parsed from the same wire lexeme;
 - whether numeric-prefix behavior is enabled by protocol capability;
 - whether a rewritten literal must retain its original `ParamRef` source.
 
@@ -144,10 +145,11 @@ included. `BETWEEN` retains SQL three-valued logic: a FALSE comparison dominates
 
 The prepare-time capability scan is conservative. It prevents ordinary binary Query
 execution from constructing runtime parameter objects or traversing/copying plans.
-Direct-result positions are traced once through transparent projection, sort, and
-distinct nodes; parameters nested in ordinary result functions do not enter that
-admission set. Set operations remain common-type owners rather than direct-result
-pass-throughs and therefore keep their PREPARE-time common domain.
+Direct-result positions are traced once through transparent projection and sort nodes,
+and through the grouping output owned by a row-producing DISTINCT aggregate;
+parameters nested in ordinary result functions do not enter that admission set. Set
+operations remain common-type owners rather than direct-result pass-throughs and
+therefore keep their PREPARE-time common domain.
 
 ### 5.2 Execution owner
 
@@ -213,8 +215,12 @@ Per prepared statement, the additional bound is:
 - one compile and its fixed worker topology;
 - no value-indexed map, history, or input-sized integer allocation.
 
-Exponent parsing is linear in input length and bounds the net exponent before decimal
-type construction.
+A complete binary DECIMAL lexeme is scanned once to produce both normalized and
+wire-visible domains, with no input-length temporary allocation. Exponent parsing is
+linear in input length. Nonzero values and effective negative scale remain bounded by
+DECIMAL(76); zero with an arbitrarily large positive exponent normalizes to
+DECIMAL(1,0), while an effective scale above 76 is rejected. Invalid-input diagnostics
+report payload length rather than echoing an unbounded raw lexeme.
 
 ## 8. Invalidation and retry
 
