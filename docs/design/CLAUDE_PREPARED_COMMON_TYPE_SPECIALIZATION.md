@@ -1,10 +1,17 @@
 # Prepared Common-Type Specialization Design
 
-- Status: Proposed — distinct design approval required before merge
-- Tracking issue: [#27088](https://github.com/matrixorigin/matrixone/issues/27088)
-- Implementation PR: [#27483](https://github.com/matrixorigin/matrixone/pull/27483)
+- Status: #27483 baseline approved; #27713 direct-result amendment proposed and
+  awaiting independent design approval
+- Tracking issues: [#27088](https://github.com/matrixorigin/matrixone/issues/27088),
+  [#27290](https://github.com/matrixorigin/matrixone/issues/27290)
+- Implementation PRs: [#27483](https://github.com/matrixorigin/matrixone/pull/27483)
+  (common-type baseline), [#27713](https://github.com/matrixorigin/matrixone/pull/27713)
+  (direct-result metadata amendment)
 - Baseline: `1d7b6311ce91df0968da435bb405f3d68137c595`
-- Implementation review revision: `de771947ab1ccf47c1c2f194e3dbdd2ef948a895`
+- Approved baseline implementation revision: `3f8768aee19c261dee4052660f640ebb3db7b0f0`
+- Approved baseline design blob: `0b49bfa791d1cef115206d2ba34e1d33cc0d1d6a`
+- Direct-result implementation review revision: `0bec5d48c6d09d84bc1d5d4db7497d5f3ecd3836`
+- Direct-result design review: PR #27713, pending on the exact amended document revision
 - Wire capability: MORPC v30
 
 ## 1. Summary
@@ -44,7 +51,9 @@ keyed by stable runtime semantic categories rather than concrete values.
 - Globally treating arbitrary VARCHAR expressions as DECIMAL.
 - Reopening arithmetic coercion completed by #25705.
 - Mutating the cached PREPARE plan.
-- Caching every runtime type or concrete DECIMAL width/scale.
+- Keeping an unbounded multi-entry cache by runtime type, concrete value, or DECIMAL
+  width/scale. A direct result's visible `(OID, width, scale)` tuple is a semantic
+  metadata category, but only the single current category is retained.
 - Replacing the binary-string semantic contract owned by #27214 and #27215-#27218.
 
 ## 3. Alternatives considered
@@ -180,10 +189,19 @@ and compile-resource ownership remain constant.
 
 ## 7. Cache key and resource bounds
 
-The key is derived from parameter position, conversion kind, and normalized runtime
-physical category (OID, width, and scale). Equivalent spellings such as trailing-zero
-DECIMAL forms normalize to the same category. Unrelated parameters are included by
-stable category so their values can change without embedding stale literals.
+The key is consumer-specific because common-type execution and direct-result metadata
+observe different semantic domains:
+
+- A common-type consumer keys every parameter by position, conversion kind, and its
+  normalized runtime physical category. Equivalent DECIMAL spellings whose trailing
+  zeros do not change the selected common domain use the same category. Unrelated
+  parameters are included by stable category so their values can change without
+  embedding stale literals.
+- A direct-result consumer keys only direct-result positions by position, conversion
+  kind, and the complete visible `(OID, width, scale)` metadata tuple. Trailing-zero
+  scale is public MySQL metadata, so `9.0` and `9.00` intentionally use different
+  categories, while `9.0` and `8.0` share one category. Alternating metadata domains
+  may recompile, but the one-entry cache keeps ownership bounded.
 
 NULL without a stable runtime type is not cached. Unsupported values take the existing
 rebuild/error path.
@@ -283,8 +301,9 @@ Required automated coverage includes:
 - generations: fresh, same-category reuse, category replacement, value-to-NULL,
   NULL-to-value, schema retry, protocol upgrade/rollback, and Close;
 - metadata: stable result types for numeric and nonnumeric scalar-subquery domains;
-  direct BIGINT/DECIMAL result markers; fixed-scale and exponent zero; and
-  value-to-NULL-to-value reuse without stale column definitions;
+  direct BIGINT/DECIMAL result markers; fixed-scale and exponent zero; distinct
+  direct-result cache categories for `9.0` versus `9.00`; and value-to-NULL-to-value
+  reuse without stale column definitions;
 - lifecycle: old compile release, failed replacement, retry replay, and no cached
   literal values;
 - performance: ordinary fast-path benchmark, repeated COM_STMT cache hit, repeated SQL
@@ -292,14 +311,26 @@ Required automated coverage includes:
 
 ## 12. Approval and implementation conformance
 
-This document is intentionally marked Proposed until a reviewer distinct from the
-implementation author approves the architecture. Implementation review alone does not
+### 12.1 Approved common-type baseline
+
+The common-type architecture was independently approved by `XuPeng-SH` on PR #27483
+at exact implementation head `3f8768aee19c261dee4052660f640ebb3db7b0f0` and design
+blob `0b49bfa791d1cef115206d2ba34e1d33cc0d1d6a`. The traceable decision is
+[review 5030323401](https://github.com/matrixorigin/matrixone/pull/27483#pullrequestreview-5030323401).
+
+### 12.2 Proposed direct-result amendment
+
+PR #27713 extends the approved cache and compile lifecycle to direct-result metadata.
+That extension changes a public metadata category: unlike normalized common-type
+coercion, direct DECIMAL scale participates in the cache key. This amended artifact
+therefore remains proposed until a reviewer distinct from the implementation author
+approves it on the exact PR #27713 revision. Implementation review alone does not
 constitute design approval.
 
-Before merge:
+Before PR #27713 merges:
 
-1. obtain explicit design approval on this versioned artifact;
-2. record the approved document revision in PR #27483;
-3. verify the implementation diff and test matrix against the approved revision;
+1. obtain explicit independent design approval on the exact amended artifact;
+2. record the approved document/head revision in PR #27713's review history;
+3. verify the implementation diff and test matrix against that approved revision;
 4. re-review any architectural deviation rather than silently updating code or this
    contract.

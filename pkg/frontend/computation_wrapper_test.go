@@ -988,6 +988,23 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
 }
 
+func TestPreparedDirectResultSemanticKeyPreservesDecimalMetadataDomain(t *testing.T) {
+	decimal := func(value string, width, scale int32) []any {
+		return []any{plan2.ParamValue{
+			Value: value, PrepareParamKind: vector.PrepareParamDecimal,
+			RuntimeType: types.New(types.T_decimal64, width, scale), HasRuntimeType: true,
+		}}
+	}
+	positions := []int32{0}
+	fixedScale := preparedDirectResultSemanticKey(decimal("9.0", 2, 1), positions)
+	sameMetadataDomain := preparedDirectResultSemanticKey(decimal("8.0", 2, 1), positions)
+	trailingZeroScale := preparedDirectResultSemanticKey(decimal("9.00", 3, 2), positions)
+
+	require.Equal(t, fixedScale, sameMetadataDomain)
+	require.NotEqual(t, fixedScale, trailingZeroScale,
+		"direct DECIMAL scale is visible metadata and must participate in the cache category")
+}
+
 func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
 	defer prepareStmt.Close()
