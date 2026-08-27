@@ -1486,6 +1486,32 @@ func TestRoutineHandleSessionCommandRejectsResetPayload(t *testing.T) {
 	require.Same(t, session, routine.getSession(), "malformed reset must not replace the session")
 }
 
+func TestRoutineHandleSessionCommandRejectsInvalidStateAndPayload(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := newTestSession(t, ctrl)
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), session.GetResponser().MysqlRrWr(), parameters)
+	t.Cleanup(func() {
+		session.Close()
+		routine.cancelRoutineFunc()
+	})
+
+	err := routine.handleSessionCommand(context.Background(), &Request{cmd: COM_RESET_CONNECTION})
+	require.ErrorContains(t, err, "cannot reset a missing session")
+
+	routine.setSession(session)
+	err = routine.handleSessionCommand(context.Background(), &Request{cmd: COM_QUERY})
+	require.ErrorContains(t, err, "unsupported session command")
+
+	err = routine.handleSessionCommand(context.Background(), &Request{
+		cmd:  COM_CHANGE_USER,
+		data: "not a change-user packet",
+	})
+	require.NoError(t, err, "malformed change-user payload must return an ERR packet")
+	require.Same(t, session, routine.getSession(), "malformed change-user payload must not replace the session")
+}
+
 func mysqlNativePasswordResponse(password, salt []byte) []byte {
 	hash1 := HashSha1(password)
 	hash2 := HashSha1(hash1)
