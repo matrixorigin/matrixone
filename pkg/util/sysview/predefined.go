@@ -154,16 +154,13 @@ var (
 )
 
 // informationSchemaMetadataVisibilityCTE limits user-object metadata to the
-// objects visible to the session's single active role and roles directly
-// granted to it. Keeping this relation non-recursive avoids distributed
-// recursive pipelines in every information_schema query. System schemas remain
-// universally visible for MySQL/tooling compatibility.
+// objects visible to the session's active role and its full inherited-role
+// closure. The closure is produced locally by mo_current_roles(), avoiding
+// distributed recursive pipelines in every information_schema query. System
+// schemas remain universally visible for MySQL/tooling compatibility.
 func informationSchemaMetadataVisibilityCTE() string {
 	return "WITH __mo_active_roles(role_id) AS (" +
-		"SELECT cast(current_role_id() AS bigint) " +
-		"UNION " +
-		"SELECT cast(rg.granted_id AS bigint) FROM mo_catalog.mo_role_grant rg " +
-		"WHERE rg.grantee_id = current_role_id()), " +
+		"SELECT role_id FROM mo_current_roles() role_closure), " +
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
@@ -180,7 +177,18 @@ func informationSchemaMetadataVisibilityCTE() string {
 		"OR (rp.privilege_level IN ('d.t','t') AND rp.obj_id = tbl.rel_logical_id))) " +
 		"OR (rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
 		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
-		"OR (rp.privilege_level = 'd' AND rp.obj_id = tbl.reldatabase_id)))))) "
+		"OR (rp.privilege_level = 'd' AND rp.obj_id = tbl.reldatabase_id)))))), " +
+		"__mo_visible_databases AS (" +
+		"SELECT db.account_id, db.dat_id, db.datname, db.owner FROM mo_catalog.mo_database db " +
+		"WHERE (db.account_id = current_account_id() AND (" +
+		"db.datname IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
+		"OR db.owner IN (SELECT role_id FROM __mo_active_roles) " +
+		"OR EXISTS (SELECT 1 FROM __mo_visible_tables tbl WHERE tbl.reldatabase_id = db.dat_id) " +
+		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_role_privs rp JOIN __mo_active_roles ar ON rp.role_id = ar.role_id " +
+		"WHERE rp.obj_type = 'database' AND rp.privilege_name IN ('show tables','database all','database ownership') AND (" +
+		"(rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0) " +
+		"OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))))) " +
+		"OR (db.account_id = 0 AND db.datname = 'mo_catalog')) "
 }
 
 // `information_schema` database
@@ -298,14 +306,15 @@ var (
 		"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS SELECT " +
+	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS DEFAULT_COLLATION_NAME," +
 		"if(true, NULL, '') AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
-		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))"
+		"FROM __mo_visible_databases"
 
 	InformationSchemaCharacterSetsDDL = "CREATE TABLE information_schema.CHARACTER_SETS (" +
 		"CHARACTER_SET_NAME varchar(64)," +

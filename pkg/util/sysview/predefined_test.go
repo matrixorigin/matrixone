@@ -66,15 +66,16 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		{name: "check constraints", ddl: InformationSchemaCheckConstraintsDDL},
 		{name: "views", ddl: InformationSchemaViewsDDL},
 		{name: "partitions", ddl: InformationSchemaPartitionsDDL},
+		{name: "schemata", ddl: InformationSchemaSchemataDDL},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for _, expected := range []string{
 				"WITH __mo_active_roles(role_id)",
-				"SELECT cast(current_role_id() AS bigint)",
-				"WHERE rg.grantee_id = current_role_id()",
+				"SELECT role_id FROM mo_current_roles() role_closure",
 				"__mo_visible_tables AS",
+				"__mo_visible_databases AS",
 				"tbl.account_id = current_account_id()",
 				"tbl.owner IN (SELECT role_id FROM __mo_active_roles)",
 				"db.owner = ar.role_id",
@@ -87,7 +88,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 				assert.Contains(t, test.ddl, expected)
 			}
 			assert.NotContains(t, test.ddl, "WITH RECURSIVE")
-			assert.NotContains(t, test.ddl, "JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id")
+			assert.NotContains(t, test.ddl, "mo_catalog.mo_role_grant")
 			assert.NotContains(t, test.ddl, "SELECT tbl.*")
 			assert.NotContains(t, test.ddl, "current_role()")
 			assert.NotContains(t, test.ddl, "FROM mo_catalog.mo_role ")
@@ -115,6 +116,10 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
+	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
+	assert.Contains(t, InformationSchemaSchemataDDL, "db.owner IN (SELECT role_id FROM __mo_active_roles)")
+	assert.Contains(t, InformationSchemaSchemataDDL,
+		"EXISTS (SELECT 1 FROM __mo_visible_tables tbl WHERE tbl.reldatabase_id = db.dat_id)")
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {

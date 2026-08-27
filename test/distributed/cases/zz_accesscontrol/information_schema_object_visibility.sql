@@ -3,7 +3,7 @@ set global enable_privilege_cache = off;
 
 drop database if exists metadata_visibility_db;
 drop user if exists metadata_visibility_user;
-drop role if exists metadata_visibility_primary, metadata_visibility_reader;
+drop role if exists metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 
 create database metadata_visibility_db;
 create table metadata_visibility_db.allowed_table (
@@ -24,7 +24,7 @@ create table metadata_visibility_db.hidden_table (
 );
 create view metadata_visibility_db.hidden_view as
 select id, secret, payload from metadata_visibility_db.hidden_table;
-create role metadata_visibility_primary, metadata_visibility_reader;
+create role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 create user metadata_visibility_user identified by '123456' default role metadata_visibility_primary;
 grant connect on account * to metadata_visibility_primary;
 
@@ -41,6 +41,9 @@ where table_schema = 'metadata_visibility_db';
 select count(*) = 0 as constraints_hidden
 from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
+select count(*) = 0 as schema_hidden
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
 select
     (select count(*) = 0 from information_schema.check_constraints
      where constraint_schema = 'metadata_visibility_db') as check_constraints_hidden,
@@ -57,16 +60,23 @@ select
      where table_schema = 'information_schema')
     and
     (select count(*) > 0 from information_schema.columns
-     where table_schema = 'information_schema') as system_metadata_visible;
+     where table_schema = 'information_schema')
+    and
+    (select count(*) = 1 from information_schema.schemata
+     where schema_name = 'information_schema') as system_metadata_visible;
 -- @session
 
 grant select on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
-grant metadata_visibility_reader to metadata_visibility_primary;
+grant metadata_visibility_reader to metadata_visibility_middle;
+grant metadata_visibility_middle to metadata_visibility_primary;
+grant select on table metadata_visibility_db.hidden_parent to metadata_visibility_primary;
 
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
 select
     (select count(*) = 1 from information_schema.tables
-     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as allowed_visible,
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as inherited_table_visible,
+    (select count(*) = 1 from information_schema.tables
+     where table_schema = 'metadata_visibility_db' and table_name = 'hidden_parent') as direct_table_visible,
     (select count(*) = 0 from information_schema.tables
      where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_stays_hidden;
 select
@@ -103,6 +113,9 @@ select
     (select count(*) = 0 from information_schema.views
      where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view')
         as hidden_view_hidden;
+select count(*) = 1 as inherited_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
 -- @session
 
 alter role metadata_visibility_primary rename to metadata_visibility_primary_renamed;
@@ -158,13 +171,29 @@ select
      where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
     (select count(*) from information_schema.table_constraints
      where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+select count(*) = 0 as schema_hidden_after_set_role
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
 deallocate prepare metadata_visibility_prepared;
 set role metadata_visibility_primary;
 -- @session
 
+grant create database on account * to metadata_visibility_primary;
+
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+create database metadata_visibility_owned_db;
+select count(*) = 1 as owned_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_owned_db';
+-- @session
+
+drop database metadata_visibility_owned_db;
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+select count(*) = 1 as database_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
 select count(*) = 2 as database_tables_visible
 from information_schema.tables
 where table_schema = 'metadata_visibility_db'
@@ -194,6 +223,9 @@ select
      where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as database_partitions_visible;
 -- @session
 
+select count(*) = 1 as admin_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
 select count(*) = 2 as admin_tables_visible
 from information_schema.tables
 where table_schema = 'metadata_visibility_db'
@@ -224,5 +256,5 @@ select
 
 drop database metadata_visibility_db;
 drop user metadata_visibility_user;
-drop role metadata_visibility_primary, metadata_visibility_reader;
+drop role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 set global enable_privilege_cache = on;

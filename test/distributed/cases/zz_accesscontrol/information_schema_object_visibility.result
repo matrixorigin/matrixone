@@ -1,7 +1,7 @@
 set global enable_privilege_cache = off;
 drop database if exists metadata_visibility_db;
 drop user if exists metadata_visibility_user;
-drop role if exists metadata_visibility_primary, metadata_visibility_reader;
+drop role if exists metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 create database metadata_visibility_db;
 create table metadata_visibility_db.allowed_table (
 id int primary key,
@@ -21,7 +21,7 @@ constraint fk_hidden_parent foreign key (id) references metadata_visibility_db.h
 );
 create view metadata_visibility_db.hidden_view as
 select id, secret, payload from metadata_visibility_db.hidden_table;
-create role metadata_visibility_primary, metadata_visibility_reader;
+create role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 create user metadata_visibility_user identified by '123456' default role metadata_visibility_primary;
 grant connect on account * to metadata_visibility_primary;
 select count(*) = 0 as tables_hidden
@@ -44,6 +44,11 @@ from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
 ➤ constraints_hidden[-7,1,0]  𝄀
 1
+select count(*) = 0 as schema_hidden
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ schema_hidden[-7,1,0]  𝄀
+1
 select
 (select count(*) = 0 from information_schema.check_constraints
 where constraint_schema = 'metadata_visibility_db') as check_constraints_hidden,
@@ -62,18 +67,25 @@ select
 where table_schema = 'information_schema')
 and
 (select count(*) > 0 from information_schema.columns
-where table_schema = 'information_schema') as system_metadata_visible;
+where table_schema = 'information_schema')
+and
+(select count(*) = 1 from information_schema.schemata
+where schema_name = 'information_schema') as system_metadata_visible;
 ➤ system_metadata_visible[-7,1,0]  𝄀
 1
 grant select on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
-grant metadata_visibility_reader to metadata_visibility_primary;
+grant metadata_visibility_reader to metadata_visibility_middle;
+grant metadata_visibility_middle to metadata_visibility_primary;
+grant select on table metadata_visibility_db.hidden_parent to metadata_visibility_primary;
 select
 (select count(*) = 1 from information_schema.tables
-where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as allowed_visible,
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as inherited_table_visible,
+(select count(*) = 1 from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_parent') as direct_table_visible,
 (select count(*) = 0 from information_schema.tables
 where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_stays_hidden;
-➤ allowed_visible[-7,1,0]  ¦  hidden_stays_hidden[-7,1,0]  𝄀
-1  ¦  1
+➤ inherited_table_visible[-7,1,0]  ¦  direct_table_visible[-7,1,0]  ¦  hidden_stays_hidden[-7,1,0]  𝄀
+1  ¦  1  ¦  1
 select
 (select count(*) = 3 from information_schema.columns
 where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as allowed_columns_visible,
@@ -116,6 +128,11 @@ where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view')
 as hidden_view_hidden;
 ➤ allowed_check_metadata_visible[-7,1,0]  ¦  allowed_partition_metadata_visible[-7,1,0]  ¦  hidden_fk_columns_hidden[-7,1,0]  ¦  hidden_fk_constraint_hidden[-7,1,0]  ¦  hidden_view_hidden[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1  ¦  1
+select count(*) = 1 as inherited_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ inherited_schema_visible[-7,1,0]  𝄀
+1
 alter role metadata_visibility_primary rename to metadata_visibility_primary_renamed;
 select count(*) = 1 as table_visible_after_active_role_rename
 from information_schema.tables
@@ -176,9 +193,27 @@ where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') 
 where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
 ➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
 0  ¦  0  ¦  0  ¦  0
+select count(*) = 0 as schema_hidden_after_set_role
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ schema_hidden_after_set_role[-7,1,0]  𝄀
+1
 deallocate prepare metadata_visibility_prepared;
 set role metadata_visibility_primary;
+grant create database on account * to metadata_visibility_primary;
+create database metadata_visibility_owned_db;
+select count(*) = 1 as owned_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_owned_db';
+➤ owned_schema_visible[-7,1,0]  𝄀
+1
+drop database metadata_visibility_owned_db;
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
+select count(*) = 1 as database_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ database_schema_visible[-7,1,0]  𝄀
+1
 select count(*) = 2 as database_tables_visible
 from information_schema.tables
 where table_schema = 'metadata_visibility_db'
@@ -216,6 +251,11 @@ where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as
 where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as database_partitions_visible;
 ➤ database_checks_visible[-7,1,0]  ¦  database_fk_columns_visible[-7,1,0]  ¦  database_fk_constraints_visible[-7,1,0]  ¦  database_view_visible[-7,1,0]  ¦  database_partitions_visible[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1  ¦  1
+select count(*) = 1 as admin_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ admin_schema_visible[-7,1,0]  𝄀
+1
 select count(*) = 2 as admin_tables_visible
 from information_schema.tables
 where table_schema = 'metadata_visibility_db'
@@ -255,5 +295,5 @@ where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') 
 1  ¦  1  ¦  1  ¦  1  ¦  1
 drop database metadata_visibility_db;
 drop user metadata_visibility_user;
-drop role metadata_visibility_primary, metadata_visibility_reader;
+drop role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
 set global enable_privilege_cache = on;

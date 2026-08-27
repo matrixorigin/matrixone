@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 28)
+	require.Len(t, tenantUpgEntries, 29)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -128,21 +128,19 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.collation_character_set_applicability")
 
 	metadataViews := []struct {
-		name             string
-		ddl              string
-		requiredProtocol int64
+		name string
+		ddl  string
 	}{
 		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
 		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
-		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL,
-			requiredProtocol: defines.MORPCVersion16},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
 		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
 		{name: "REFERENTIAL_CONSTRAINTS", ddl: sysview.InformationSchemaReferentialConstraintsDDL},
-		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL,
-			requiredProtocol: defines.MORPCVersion16},
+		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
 		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
 		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
 	}
 	for i, view := range metadataViews {
 		entry := tenantUpgEntries[19+i]
@@ -150,7 +148,7 @@ func TestUpgradeEntries(t *testing.T) {
 		require.Equal(t, view.name, entry.TableName)
 		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 		require.Equal(t, view.ddl, entry.UpgSql)
-		require.Equal(t, view.requiredProtocol, entry.RequiredProtocolVersion)
+		require.Equal(t, int64(defines.MORPCVersion33), entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
 			"drop view if exists information_schema."+strings.ToLower(view.name))
 	}
@@ -170,6 +168,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
 		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
 		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
 	}
 	checkErr := errors.New("check metadata view definition failed")
 
@@ -249,7 +248,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 28)
+	require.Len(t, tenantUpgEntries, 29)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -631,6 +630,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaViewsDDL, nil
 			case "PARTITIONS":
 				return true, sysview.InformationSchemaPartitionsDDL, nil
+			case "SCHEMATA":
+				return true, sysview.InformationSchemaSchemataDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}

@@ -56,31 +56,29 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityCheckConstraints(),
 	upgradeInformationSchemaMetadataVisibilityView("VIEWS", sysview.InformationSchemaViewsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
+	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: viewName,
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    viewDDL,
-		CheckFunc: checkViewDefinition(viewName, viewDDL),
-		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		Schema:                  sysview.InformationDBConst,
+		TableName:               viewName,
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  viewDDL,
+		CheckFunc:               checkViewDefinition(viewName, viewDDL),
+		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		RequiredProtocolVersion: defines.MORPCVersion33,
 	}
 }
 
 func upgradeInformationSchemaMetadataVisibilityTableConstraints() versions.UpgradeEntry {
-	entry := upgradeInformationSchemaMetadataVisibilityView(
+	return upgradeInformationSchemaMetadataVisibilityView(
 		"TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL)
-	entry.RequiredProtocolVersion = defines.MORPCVersion16
-	return entry
 }
 
 func upgradeInformationSchemaMetadataVisibilityCheckConstraints() versions.UpgradeEntry {
-	entry := upgradeInformationSchemaMetadataVisibilityView(
+	return upgradeInformationSchemaMetadataVisibilityView(
 		"CHECK_CONSTRAINTS", sysview.InformationSchemaCheckConstraintsDDL)
-	entry.RequiredProtocolVersion = defines.MORPCVersion16
-	return entry
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
