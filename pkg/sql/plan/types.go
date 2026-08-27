@@ -365,6 +365,7 @@ type QueryBuilder struct {
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.
 	userWindowNodes          map[int32]struct{}
+	internalTopNWindows      map[int32]struct{}
 	partitionTopNWindowNodes map[int32]struct{}
 
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,

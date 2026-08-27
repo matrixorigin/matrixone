@@ -21,8 +21,8 @@ import (
 // Session implements process.KafkaSessionState: the Kafka external-table
 // reader records the offset of the last message a completed scan returned,
 // and LAST_KAFKA_MESSAGE_ID() reads it back so a consumer can chain reads
-// exactly-once (last id -> next __mo_read_start_id). The value is plain
-// session state: it does not survive a proxy connection migration (the
+// without overlap or gaps (last id -> next __mo_read_start_id). The value is
+// plain session state: it does not survive a proxy connection migration (the
 // builtin then returns NULL until the next scan).
 var _ process.KafkaSessionState = (*Session)(nil)
 
@@ -47,22 +47,11 @@ func (ses *Session) EnqueueKafkaProgress(finalize func(publish bool)) {
 	ses.kafkaProgressQueue = append(ses.kafkaProgressQueue, finalize)
 }
 
-// sessionFinalizeKafkaProgress finalizes deferred Kafka progress from a
-// transaction terminal; sessions without the capability have nothing queued.
-func sessionFinalizeKafkaProgress(execCtx *ExecCtx, publish bool) {
-	if execCtx == nil || execCtx.ses == nil {
-		return
-	}
-	if ses, ok := execCtx.ses.(*Session); ok {
-		ses.FinalizeKafkaProgress(publish)
-	}
-}
-
 // FinalizeKafkaProgress runs every queued Kafka progress finalizer with the
 // statement's outcome and clears the queue. Called from the statement
 // terminal (executeStmtWithResponse) with publish = statement succeeded, and
 // from Session.Close with publish=false (an interrupted statement must not
-// advance the exactly-once chain).
+// advance the chain).
 func (ses *Session) FinalizeKafkaProgress(publish bool) {
 	ses.lastKafkaMessageMu.Lock()
 	queue := ses.kafkaProgressQueue

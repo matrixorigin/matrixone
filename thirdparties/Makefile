@@ -98,7 +98,7 @@ init:
 	mkdir -p install
 	mkdir -p install/include install/lib
 
-usearch: stringzilla fp16 simsimd install/include/usearch.h
+usearch: install/include/usearch.h
 
 stringzilla: install/include/stringzilla/stringzilla.h
 
@@ -110,28 +110,28 @@ simsimd: install/include/simsimd/simsimd.h
 
 xxhash: install/include/xxhash.h
 
-install/include/xxhash.h:
+install/include/xxhash.h: | init
 	mkdir -p $(XXHASH_TMP)
-	tar zxvf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
+	tar zxf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
 	cp $(XXHASH_TMP)/xxhash.h install/include
 	rm -rf $(XXHASH_TMP)
 
-install/include/fp16.h:
+install/include/fp16.h: | init
 	rm -rf $(FP16_DIR)
 	mkdir -p $(FP16_DIR)
-	tar zxvf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
+	tar zxf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
 	cp -r $(FP16_DIR)/include/* install/include
 
-install/include/simsimd/simsimd.h:
+install/include/simsimd/simsimd.h: | init
 	rm -rf $(SIMSIMD_DIR)
 	mkdir -p $(SIMSIMD_DIR)
-	tar zxvf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
+	tar zxf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
 	cp -r $(SIMSIMD_DIR)/include/* install/include
 
-install/include/stringzilla/stringzilla.h:
+install/include/stringzilla/stringzilla.h: | init
 	rm -rf $(STRINGZILLA_DIR)
 	mkdir -p $(STRINGZILLA_DIR)
-	tar zxvf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
+	tar zxf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
 USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include -DCMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -151,10 +151,10 @@ ifeq ($(MO_CL_SIMSIMD),1)
   endif
 endif
 
-install/include/usearch.h:
+install/include/usearch.h: install/include/fp16.h install/include/simsimd/simsimd.h install/include/stringzilla/stringzilla.h | init
 	rm -rf $(USEARCH_DIR)
 	mkdir -p $(USEARCH_DIR)
-	tar zxvf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
+	tar zxf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
 	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
@@ -183,7 +183,7 @@ jemalloc: install/lib/libjemalloc.a
 # jemalloc is statically linked into mo-service and all public symbols are
 # prefixed with mo_je_. This keeps Memory Cache's allocator independent from
 # libc malloc and the C/C++ dependencies already linked into MatrixOne.
-install/lib/libjemalloc.a:
+install/lib/libjemalloc.a: | init
 	@actual="$$(shasum -a 256 $(JEMALLOC_TAR) | awk '{print $$1}')"; \
 	if [ "$$actual" != "$(JEMALLOC_SHA256)" ]; then \
 		echo "jemalloc tarball checksum mismatch: $$actual" >&2; \
@@ -200,7 +200,7 @@ install/lib/libjemalloc.a:
 
 # Build CRoaring as a static lib from its single-file amalgamation, and install
 # the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
-install/lib/libroaring.a:
+install/lib/libroaring.a: | init
 	rm -rf $(CROARING_TMP)
 	mkdir -p $(CROARING_TMP)
 	tar zxf $(CROARING_TAR) -C $(CROARING_TMP) --strip-components=1

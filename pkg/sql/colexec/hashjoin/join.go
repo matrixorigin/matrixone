@@ -446,7 +446,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	if buildErr := dep.BuildError(); buildErr != nil {
 		// A terminal BuildError is a failed dependency, never an empty build.
 		// Return before consuming probe input so no successful rows can escape.
-		return buildErr.AsMoErr()
+		return buildErr.AsError()
 	}
 	// Close the previous metadata generation before adopting a different
 	// JoinMap. Reset normally makes this empty; keeping the transition local
