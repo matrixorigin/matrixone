@@ -63,7 +63,7 @@ shape as `sqldatastream.ParseTableOptions`).
 |---|---|---|---|
 | `config` | optional | optional | The **same JSON** that `esql_tvf_connect(config)` / `sql_tvf_connect(config)` accept: a whitelisted elasticsearch config JSON for ESQL (`addresses`, `username`, `password`, `cloudid`, `apikey`, `servicetoken`, `certificatefingerprint`, `cacert` — lifecycle/global library knobs are rejected), `{"driver": "...", "dsn": "..."}` for SQL.  Passed verbatim to `foreigntvf.Connect(kind, configJSON)`.  All connection info comes from user input or the session — query processing never reads the CN process environment. If omitted, the scan uses `@esql_tvf_config` / `@sql_tvf_config` of the querying session (exactly `foreigntvf.ConfigFromSessionVar`); error if neither is set. |
 | `query` | optional | optional | Default query text, used when a `SELECT` has no `__mo_query` predicate (see §2).  Plain text, no placeholders. |
-| `pushdown` | rejected | optional | `false` (the default) sends the query text verbatim; `true` also lets MO wrap it so the source applies the predicates MO can render (§2.5).  MO evaluates every predicate itself either way.  ESQL rejects the option. |
+| `pushdown` | rejected | optional | `false` (the default) sends the query text verbatim and MO evaluates every predicate itself; `true` wraps the text so the source applies the predicates MO can render, and MO then stops evaluating exactly those (§2.5).  Whatever could not be rendered stays local.  ESQL rejects the option. |
 
 No other options.  Any `URL`/`FORMAT`/`INFILE` clause is rejected for these
 engines, as for DATASTREAM.
@@ -208,9 +208,21 @@ sent — the source has no counterpart for it.
 Identifiers are written **bare**.  The quoting character is dialect-specific
 (MySQL backticks, standard double quotes) while a bare identifier is accepted
 by both, and `sql_tvf` speaks to PostgreSQL as well as MySQL.  The cost is that
-a column whose name needs quoting — a reserved word, a space — is simply not
-pushed.  The derived-table alias is MO's own, spelled from `[a-z0-9_]`, so it
-needs no quoting either.
+a column whose name needs quoting is not pushed at all: `isBareIdentifier`
+requires `[A-Za-z_][A-Za-z0-9_]*` **and** refuses the union of the words MySQL
+and PostgreSQL reserve, so a column called `order` keeps its conjunct local
+rather than producing `where order > 3`, which no dialect parses.  Refusing on
+the union is deliberate — the renderer does not know which source the text is
+bound for, and refusing costs only the optimization.  The derived-table alias
+is MO's own, spelled from `[a-z0-9_]`, so it needs no quoting either.
+
+One dialect difference survives and is worth stating rather than papering over:
+the declared-column check below compares names case-insensitively, which
+matches MySQL, where a bare `id` also resolves against a column projected as
+`ID`.  PostgreSQL folds an unquoted `id` to lower case and will not match a
+column the source projected as `AS "ID"`, so on PostgreSQL such a query fails
+at the source before the check runs.  Project lower-case (or unquoted) aliases
+there.
 
 #### The contract: opting in means the source returns the declared columns
 

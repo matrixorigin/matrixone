@@ -57,11 +57,11 @@ type Config struct {
 	// DefaultQuery is the query text used when a SELECT has no
 	// __mo_query = '...' predicate; "" means no default.
 	DefaultQuery string
-	// Pushdown false (the default) sends the query text verbatim; true lets
-	// MO also wrap it so the source applies the predicates MO can render.
-	// MO evaluates every predicate itself either way -- the flag only permits
-	// narrowing the remote query, never skipping local work.  SQL only:
-	// ENGINE = ESQL rejects the option.
+	// Pushdown false (the default) sends the query text verbatim and MO
+	// evaluates every predicate itself.  True wraps the text so the source
+	// applies the predicates MO can render, and MO then stops evaluating
+	// exactly those -- the source owns them.  Whatever could not be rendered
+	// stays local.  SQL only: ENGINE = ESQL rejects the option.
 	Pushdown bool
 }
 

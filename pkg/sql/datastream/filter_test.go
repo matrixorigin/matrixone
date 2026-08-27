@@ -324,6 +324,36 @@ func TestDeparseFiltersBareIdents(t *testing.T) {
 	require.Equal(t, "", bare)
 	require.Equal(t, []bool{false}, pushed)
 
+	// nor is a RESERVED word, which is spelled like an identifier but is not
+	// one: `where order > 3` is a syntax error, and unlike a column the source
+	// merely does not have, nothing downstream can turn that into a working
+	// query -- so it must not be pushed in the first place
+	for _, word := range []string{"order", "select", "user", "limit", "ORDER", "Table"} {
+		reserved := []*plan.ColDef{{Name: word, Typ: plan.Type{Id: int32(types.T_int64)}}}
+		bare, pushed = DeparseFiltersBareIdents([]*plan.Expr{gt(0, 3)}, reserved, time.UTC)
+		require.Equal(t, "", bare, "%q must not be rendered bare", word)
+		require.Equal(t, []bool{false}, pushed, "%q", word)
+
+		// quoted rendering is unaffected: DATASTREAM speaks MySQL and quotes
+		quoted, _ := DeparseFilters([]*plan.Expr{gt(0, 3)}, reserved, time.UTC)
+		require.Equal(t, "(`"+word+"` > 3)", quoted)
+	}
+
+	// a word reserved by only ONE dialect is refused for both: the renderer
+	// does not know which source the text is bound for
+	for _, word := range []string{"variadic", "ilike", "zerofill", "rlike"} {
+		reserved := []*plan.ColDef{{Name: word, Typ: plan.Type{Id: int32(types.T_int64)}}}
+		bare, _ = DeparseFiltersBareIdents([]*plan.Expr{gt(0, 3)}, reserved, time.UTC)
+		require.Equal(t, "", bare, "%q", word)
+	}
+
+	// ordinary names that merely LOOK sql-ish still push
+	for _, word := range []string{"status", "name", "id", "created_at", "orders", "selected"} {
+		okCols := []*plan.ColDef{{Name: word, Typ: plan.Type{Id: int32(types.T_int64)}}}
+		bare, _ = DeparseFiltersBareIdents([]*plan.Expr{gt(0, 3)}, okCols, time.UTC)
+		require.Equal(t, "("+word+" > 3)", bare, "%q must still push", word)
+	}
+
 	// string literals keep their own quoting either way
 	eq := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{ObjName: "="},
