@@ -280,6 +280,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.proc = proc
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.applyPlanSnapshot()
+	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
 	c.sql = sql
@@ -380,6 +381,46 @@ func (c *Compile) bindPlanSnapshotForCompile() {
 	c.applyPlanSnapshot()
 }
 
+// captureStringShuffleHashAlgorithm starts a new execution owner-mapping
+// generation. MOProtocolVersion is consulted exactly once; operators consume
+// only the frozen Process value afterwards.
+func (c *Compile) captureStringShuffleHashAlgorithm() {
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	if supportsStableStringShuffleHash(c.proc.GetService()) {
+		c.stringShuffleHashAlgorithm = process.StringShuffleHashComplete
+	}
+	c.stringShuffleHashAlgorithmFrozen = true
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) applyStringShuffleHashAlgorithm() {
+	c.proc.SetStringShuffleHashAlgorithm(c.stringShuffleHashAlgorithm)
+}
+
+func (c *Compile) inheritStringShuffleHashAlgorithm(from *Compile) {
+	c.stringShuffleHashAlgorithm = from.stringShuffleHashAlgorithm
+	c.stringShuffleHashAlgorithmFrozen = from.stringShuffleHashAlgorithmFrozen
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) bindStringShuffleHashAlgorithmForCompile() {
+	if !c.stringShuffleHashAlgorithmFrozen {
+		c.captureStringShuffleHashAlgorithm()
+		return
+	}
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func supportsStableStringShuffleHash(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion33
+}
+
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
 	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
@@ -437,6 +478,8 @@ func (c *Compile) clear() {
 	c.planSnapshotTS = timestamp.Timestamp{}
 	c.hasPlanSnapshotTS = false
 	c.planGenerationReused = false
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	c.stringShuffleHashAlgorithmFrozen = false
 	c.resultMetadataFrozen = false
 	c.planGenerationRebuilt = false
 

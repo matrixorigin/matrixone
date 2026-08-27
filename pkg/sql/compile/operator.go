@@ -484,6 +484,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.StringHashKey = sourceArg.StringHashKey
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -2018,6 +2019,7 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.BucketNum = bucketNum
+	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
@@ -2043,6 +2045,7 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.BucketNum = bucketNum
+	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
@@ -2050,6 +2053,15 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
+}
+
+func isStringShuffleKeyType(typ int32) bool {
+	switch types.T(typ) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 // cross-cn dispath  will send same batch to all register
