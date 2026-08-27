@@ -139,8 +139,9 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
-		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year,
+		types.T_uuid,
 		types.T_TS, types.T_Rowid, types.T_Blockid:
 		if len(data) != typ.TypeSize() {
 			return moerr.NewInternalErrorNoCtx(
@@ -190,6 +191,8 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 		return writeValue(types.DecodeDecimal64(data).Format(typ.Scale))
 	case types.T_decimal128:
 		return writeValue(types.DecodeDecimal128(data).Format(typ.Scale))
+	case types.T_decimal256:
+		return writeValue(types.DecodeDecimal256(data).Format(typ.Scale))
 	case types.T_date:
 		return writeValue(util.UnsafeFromBytes[types.Date](data).String())
 	case types.T_datetime:
@@ -198,12 +201,18 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 		return writeValue(util.UnsafeFromBytes[types.Timestamp](data).String())
 	case types.T_time:
 		return writeValue(util.UnsafeFromBytes[types.Time](data).String())
+	case types.T_year:
+		return writeValue(util.UnsafeFromBytes[types.MoYear](data).String())
+	case types.T_uuid:
+		return writeValue(types.DecodeUuid(data).String())
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
 		types.T_char, types.T_varchar, types.T_enum, types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		if err := isValidGroupConcatUnit(data); err != nil {
 			return err
 		}
+		return writeBytes(data)
+	case types.T_geometry, types.T_geometry32:
 		return writeBytes(data)
 	case types.T_json:
 		if err := isValidGroupConcatUnit(data); err != nil {
