@@ -55,8 +55,9 @@ func TestMongoDBLocalE2EKeyfileMountUsesDirectory(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	script, err := os.ReadFile(filepath.Join(repoRoot, "optools", "mongodb_ci.bash"))
 	require.NoError(t, err)
-	require.Contains(t, string(script), "MONGODB_KEYFILE_DIR=\"$TMP_DIR/mongodb-key-source\"")
+	require.Contains(t, string(script), "MONGODB_KEYFILE_DIR=\"$(mktemp -d \"$ROOT_DIR/../.mo-mongodb-key-source.XXXXXX\")\"")
 	require.Contains(t, string(script), "MONGODB_KEYFILE=\"$MONGODB_KEYFILE_DIR/mongodb-keyfile\"")
+	require.Contains(t, string(script), "$(basename \"$MONGODB_KEYFILE_DIR\")\" == mo-mongodb-key-source.*")
 
 	compose, err := os.ReadFile(filepath.Join(repoRoot, "etc", "launch-mongodb-local", "compose.yaml"))
 	require.NoError(t, err)
