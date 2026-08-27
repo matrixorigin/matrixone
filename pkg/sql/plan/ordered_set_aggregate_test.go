@@ -155,6 +155,11 @@ func TestBuildMedianWithinGroupRejectsInvalidShape(t *testing.T) {
 			buildError: "median requires exactly one WITHIN GROUP ORDER BY expression",
 		},
 		{
+			name:       "invalid order expression",
+			sql:        "select median() within group (order by missing_column) from select_test.bind_select",
+			buildError: "missing_column",
+		},
+		{
 			name:       "window form",
 			sql:        "select median() within group (order by a) over () from select_test.bind_select",
 			buildError: "function-local ORDER BY in window function",
