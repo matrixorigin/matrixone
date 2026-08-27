@@ -91,19 +91,42 @@ where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
 
 alter role metadata_visibility_primary_renamed rename to metadata_visibility_primary;
 
--- @session:id=3&user=sys:metadata_visibility_user:public&password=123456
-select count(*) = 0 as tables_hidden_with_public_role
-from information_schema.tables
-where table_schema = 'metadata_visibility_db';
-select count(*) = 0 as columns_hidden_with_public_role
-from information_schema.columns
-where table_schema = 'metadata_visibility_db';
-select count(*) = 0 as statistics_hidden_with_public_role
-from information_schema.statistics
-where table_schema = 'metadata_visibility_db';
-select count(*) = 0 as constraints_hidden_with_public_role
-from information_schema.table_constraints
-where table_schema = 'metadata_visibility_db';
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+prepare metadata_visibility_prepared from "select
+    (select count(*) from information_schema.tables
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+    (select count(*) from information_schema.columns
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+    (select count(*) from information_schema.statistics
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+    (select count(*) from information_schema.table_constraints
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count";
+execute metadata_visibility_prepared;
+select
+    (select count(*) from information_schema.tables
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+    (select count(*) from information_schema.columns
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+    (select count(*) from information_schema.statistics
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+    (select count(*) from information_schema.table_constraints
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+set role public;
+-- @session
+
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+execute metadata_visibility_prepared;
+select
+    (select count(*) from information_schema.tables
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+    (select count(*) from information_schema.columns
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+    (select count(*) from information_schema.statistics
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+    (select count(*) from information_schema.table_constraints
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+deallocate prepare metadata_visibility_prepared;
+set role metadata_visibility_primary;
 -- @session
 
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;

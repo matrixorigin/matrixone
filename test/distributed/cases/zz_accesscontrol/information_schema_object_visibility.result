@@ -101,26 +101,46 @@ where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
 ➤ constraints_visible_after_active_role_rename[-7,1,0]  𝄀
 1
 alter role metadata_visibility_primary_renamed rename to metadata_visibility_primary;
-select count(*) = 0 as tables_hidden_with_public_role
-from information_schema.tables
-where table_schema = 'metadata_visibility_db';
-➤ tables_hidden_with_public_role[-7,1,0]  𝄀
-1
-select count(*) = 0 as columns_hidden_with_public_role
-from information_schema.columns
-where table_schema = 'metadata_visibility_db';
-➤ columns_hidden_with_public_role[-7,1,0]  𝄀
-1
-select count(*) = 0 as statistics_hidden_with_public_role
-from information_schema.statistics
-where table_schema = 'metadata_visibility_db';
-➤ statistics_hidden_with_public_role[-7,1,0]  𝄀
-1
-select count(*) = 0 as constraints_hidden_with_public_role
-from information_schema.table_constraints
-where table_schema = 'metadata_visibility_db';
-➤ constraints_hidden_with_public_role[-7,1,0]  𝄀
-1
+prepare metadata_visibility_prepared from "select
+(select count(*) from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+(select count(*) from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+(select count(*) from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+(select count(*) from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count";
+execute metadata_visibility_prepared;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+1  ¦  3  ¦  2  ¦  3
+select
+(select count(*) from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+(select count(*) from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+(select count(*) from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+(select count(*) from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+1  ¦  3  ¦  2  ¦  3
+set role public;
+execute metadata_visibility_prepared;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+select
+(select count(*) from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+(select count(*) from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+(select count(*) from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+(select count(*) from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+deallocate prepare metadata_visibility_prepared;
+set role metadata_visibility_primary;
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 select count(*) = 2 as database_tables_visible
 from information_schema.tables
