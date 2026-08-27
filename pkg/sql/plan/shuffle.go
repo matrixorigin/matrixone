@@ -1174,6 +1174,14 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	if len(node.GroupBy) == 0 {
 		return
 	}
+	// Non-COUNT DISTINCT states cannot be combined by MergeGroup today. DOP
+	// planning therefore keeps the complete aggregate on one CN. A shuffle in
+	// front of that single owner adds hashing and dispatch without exposing any
+	// parallel aggregate owner, so it is never a useful group-shuffle topology.
+	if RequiresSingleStageDistinctAgg(node) {
+		node.Stats.HashmapStats.Shuffle = false
+		return
+	}
 
 	child := builder.qry.Nodes[node.Children[0]]
 
@@ -1193,12 +1201,17 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	distinctStateNDV := countDistinctStateNDV(node, builder)
 	distinctStateShuffle := false
 	if distinctStateNDV > 0 && child.Stats.Outcnt > 0 {
-		// Base-column NDV can exceed the filtered child cardinality. The exact
-		// state cannot retain more distinct tuples than rows reaching this node.
-		distinctStateRows := min(distinctStateNDV, child.Stats.Outcnt)
-		distinctRatio := distinctStateRows / child.Stats.Outcnt
-		distinctFactor := 1 / math.Pow(distinctRatio, 0.8)
-		distinctStateShuffle = distinctStateRows >= threshHoldForShuffleGroup*distinctFactor
+		// Base-column statistics are not conditional on filters or joins. Apply
+		// the same selectivity exponent used by aggregate cardinality costing,
+		// then cap by rows reaching this node. This keeps the rule conservative
+		// when a globally high-NDV column becomes low-NDV after selection.
+		distinctStateRows := estimateNDVAfterSelection(
+			distinctStateNDV, child.Stats)
+		if distinctStateRows > 0 {
+			distinctRatio := distinctStateRows / child.Stats.Outcnt
+			distinctFactor := 1 / math.Pow(distinctRatio, 0.8)
+			distinctStateShuffle = distinctStateRows >= threshHoldForShuffleGroup*distinctFactor
+		}
 	}
 	if !standardShuffle && !distinctStateShuffle {
 		return
@@ -1222,6 +1235,7 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		// Hash/range shuffle then sends every row for one logical group to exactly
 		// one Group operator, removing the exact-state MergeGroup altogether.
 		minimumGroupNDV = shuffleDistinctGroupMinNDV
+		highestNDV = estimateNDVAfterSelection(highestNDV, child.Stats)
 	}
 	if highestNDV < minimumGroupNDV {
 		return
@@ -1298,6 +1312,23 @@ func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
 		}
 	}
 	return maxNDV
+}
+
+func estimateNDVAfterSelection(ndv float64, stats *plan.Stats) float64 {
+	if ndv <= 0 || math.IsNaN(ndv) || math.IsInf(ndv, 0) ||
+		stats == nil || stats.Outcnt <= 0 ||
+		math.IsNaN(stats.Outcnt) || math.IsInf(stats.Outcnt, 0) {
+		return -1
+	}
+	estimate := min(ndv, stats.Outcnt)
+	selectivity := stats.Selectivity
+	// Zero is also the protobuf/default value for an unavailable estimate. Do
+	// not turn missing statistics into a certain empty result.
+	if selectivity > 0 && selectivity < 1 &&
+		!math.IsNaN(selectivity) && !math.IsInf(selectivity, 0) {
+		estimate = min(estimate, ndv*math.Pow(selectivity, 0.8))
+	}
+	return estimate
 }
 
 // default shuffle type for scan is hash

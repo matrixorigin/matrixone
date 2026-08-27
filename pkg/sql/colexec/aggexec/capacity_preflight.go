@@ -200,7 +200,21 @@ func (ag *aggState) preflightArgumentCapacity(
 	if err != nil {
 		return err
 	}
+	fallbackCapacity, err := nextLinearArgumentArenaCapacity(
+		uint64(len(ag.argbuf)), required)
+	if err != nil {
+		return err
+	}
 	next, err := ag.allocation.allocArgumentArena(mp, int(capacity))
+	if err != nil && capacity != fallbackCapacity &&
+		mpool.IsRetryableAllocationCapacity(err) {
+		// Geometric growth keeps repeated relocation linear in the final state
+		// size, but the old arena remains charged until relocation publishes.
+		// Under memory pressure, retain the former chunked-growth availability
+		// envelope instead of failing a query solely because of speculative
+		// spare capacity.
+		next, err = ag.allocation.allocArgumentArena(mp, int(fallbackCapacity))
+	}
 	if err != nil {
 		return err
 	}
@@ -234,6 +248,27 @@ func nextArgumentArenaCapacity(current, required uint64) (uint64, error) {
 		}
 	}
 	if capacity > uint64(math.MaxInt) {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return capacity, nil
+}
+
+func nextLinearArgumentArenaCapacity(current, required uint64) (uint64, error) {
+	if required <= current {
+		return current, nil
+	}
+	if current > math.MaxUint32 || required > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	missing := required - current
+	chunk := uint64(kAggArgArenaSize)
+	steps := (missing + chunk - 1) / chunk
+	grow := steps * chunk
+	capacity := uint64(math.MaxUint32)
+	if grow <= math.MaxUint32-current {
+		capacity = current + grow
+	}
+	if capacity < required || capacity > uint64(math.MaxInt) {
 		return 0, mpool.ErrAllocationAllocatorLimit
 	}
 	return capacity, nil
