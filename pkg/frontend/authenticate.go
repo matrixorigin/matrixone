@@ -5321,10 +5321,6 @@ func getTableIdWithSnapshot(
 	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 }
 
-func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {
-	return getViewIdWithLock(ctx, bh, dbName, viewName, false)
-}
-
 func getViewIdWithLock(
 	ctx context.Context,
 	bh BackgroundExec,

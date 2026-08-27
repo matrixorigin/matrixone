@@ -224,6 +224,9 @@ type FeTxnOption struct {
 	// transaction created to execute the SET statement itself.
 	activeTxnAtStart      bool
 	activeTxnAtStartKnown bool
+	// forcePessimisticObjectLifecycle marks statements that delete catalog
+	// objects and therefore must share GRANT's pessimistic lifecycle protocol.
+	forcePessimisticObjectLifecycle bool
 }
 
 func (opt *FeTxnOption) Close() {
@@ -233,6 +236,7 @@ func (opt *FeTxnOption) Close() {
 	opt.byRollback = false
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
+	opt.forcePessimisticObjectLifecycle = false
 }
 
 const (
@@ -509,6 +513,15 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle &&
+		th.inActiveTxnUnsafe() &&
+		!th.txnOp.Txn().IsPessimistic() {
+		return moerr.NewNotSupported(
+			execCtx.reqCtx,
+			"object lifecycle statements cannot run in an existing optimistic transaction",
+		)
+	}
+
 	// check BEGIN stmt
 	if execCtx.txnOpt.byBegin || !th.inActiveTxnUnsafe() {
 		//commit existed txn anyway
@@ -600,9 +613,11 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 }
 
 func requiresPessimisticObjectLifecycleTxn(stmt tree.Statement) bool {
-	switch stmt.(type) {
+	switch st := stmt.(type) {
 	case *tree.DropDatabase, *tree.DropTable, *tree.DropView:
 		return true
+	case *tree.CreateView:
+		return st.Replace
 	default:
 		return false
 	}
@@ -688,20 +703,21 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	// quota check and clone. Apply the required mode to that owning transaction;
 	// shared explicit transactions keep their configured semantics and are
 	// validated by the quota checker instead.
-	consumeNextTxnIsolation := false
+	selectedIsolation, hasSelectedIsolation, consumeNextTxnIsolation := th.txnIsolationUnsafe(
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
+	)
 	backSes, forceBackgroundPessimistic := execCtx.ses.(*backSession)
-	if requiresPessimisticObjectLifecycleTxn(execCtx.stmt) ||
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle ||
 		(forceBackgroundPessimistic && backSes.forcePessimisticRC) {
-		// DROP and object-scoped GRANT must participate in one catalog-row lock
-		// protocol even when the deployment default is optimistic/SI.
+		// DROP, CREATE OR REPLACE VIEW, and object-scoped GRANT must
+		// participate in one catalog-row lock protocol even when the deployment
+		// default is optimistic/SI. The selector above still consumes a pending
+		// one-shot isolation setting for this transaction generation.
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
-	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
-	); ok {
-		opts = append(opts, txnclient.WithTxnIsolation(isolation))
-		consumeNextTxnIsolation = consumeNext
+	} else if hasSelectedIsolation {
+		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}
 
 	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)

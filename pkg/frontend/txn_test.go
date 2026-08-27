@@ -2088,8 +2088,38 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.DropDatabase{},
 		&tree.DropTable{},
 		&tree.DropView{},
+		&tree.CreateView{Replace: true},
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(stmt))
 	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(&tree.CreateView{}))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(&tree.Select{}))
+}
+
+func TestObjectLifecycleRejectsExistingOptimisticTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active, Mode: txn.TxnMode_Optimistic}
+	handler.txnOp = op
+	handler.txnCtx = ctx
+
+	err := handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	})
+	require.ErrorContains(t, err, "cannot run in an existing optimistic transaction")
+	require.Same(t, op, handler.GetTxn())
+
+	op.meta.Mode = txn.TxnMode_Pessimistic
+	require.NoError(t, handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	}))
+	require.Same(t, op, handler.GetTxn())
 }

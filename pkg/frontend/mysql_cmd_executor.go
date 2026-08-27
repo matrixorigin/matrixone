@@ -4884,6 +4884,33 @@ func executeStmtWithTxn(ses FeSession,
 	return
 }
 
+func effectiveStatementForTxn(
+	ctx context.Context,
+	ses FeSession,
+	stmt tree.Statement,
+) (tree.Statement, error) {
+	seen := make(map[string]struct{})
+	for {
+		execute, ok := stmt.(*tree.Execute)
+		if !ok {
+			return stmt, nil
+		}
+		name := strings.ToLower(string(execute.Name))
+		if _, ok = seen[name]; ok {
+			return nil, moerr.NewInternalError(ctx, "cyclic prepared EXECUTE reference")
+		}
+		seen[name] = struct{}{}
+		prepared, err := ses.GetPrepareStmt(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if prepared == nil || prepared.PrepareStmt == nil {
+			return nil, moerr.NewInternalError(ctx, "prepared statement has no executable statement")
+		}
+		stmt = prepared.PrepareStmt
+	}
+}
+
 func executeStmtWithWorkspace(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
@@ -4919,6 +4946,11 @@ func executeStmtWithWorkspace(ses FeSession,
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
 	execCtx.txnOpt.Close()
+	effectiveStmt, err := effectiveStatementForTxn(execCtx.reqCtx, ses, execCtx.stmt)
+	if err != nil {
+		return err
+	}
+	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(effectiveStmt)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {

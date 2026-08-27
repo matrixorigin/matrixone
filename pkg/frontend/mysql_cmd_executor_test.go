@@ -906,6 +906,73 @@ func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
 	})
 }
 
+func TestForcedObjectLifecycleTxnConsumesNextIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		handler := ses.GetTxnHandler()
+		require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+			stmt:   &tree.DropTable{},
+			txnOpt: FeTxnOption{
+				autoCommit:                      true,
+				forcePessimisticObjectLifecycle: true,
+			},
+		}
+
+		handler.mu.Lock()
+		err := handler.createTxnOpUnsafe(execCtx)
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.Equal(t, txn.TxnMode_Pessimistic, op.Txn().Mode)
+		require.Equal(t, txn.TxnIsolation_RC, op.Txn().Isolation)
+		require.NoError(t, op.Rollback(ctx))
+		_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+		require.False(t, hasNextIsolation)
+	})
+}
+
+func TestEffectiveStatementForTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newSes(nil, ctrl)
+	require.NoError(t, ses.SetPrepareStmt(ctx, "drop_stmt", &PrepareStmt{
+		Name:        "drop_stmt",
+		PrepareStmt: &tree.DropTable{},
+	}))
+
+	effective, err := effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "drop_stmt"})
+	require.NoError(t, err)
+	require.IsType(t, &tree.DropTable{}, effective)
+	require.True(t, requiresPessimisticObjectLifecycleTxn(effective))
+
+	selectStmt := &tree.Select{}
+	effective, err = effectiveStatementForTxn(ctx, ses, selectStmt)
+	require.NoError(t, err)
+	require.Same(t, selectStmt, effective)
+
+	_, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "missing"})
+	require.Error(t, err)
+
+	require.NoError(t, ses.SetPrepareStmt(ctx, "cycle", &PrepareStmt{
+		Name:        "cycle",
+		PrepareStmt: &tree.Execute{Name: "cycle"},
+	}))
+	_, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "cycle"})
+	require.ErrorContains(t, err, "cyclic prepared EXECUTE reference")
+}
+
 func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {
 	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
