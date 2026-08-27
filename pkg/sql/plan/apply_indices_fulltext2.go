@@ -14,8 +14,8 @@
 
 // fulltext2-specific pieces of the MATCH query rewrite. fulltext2 reuses the
 // classic MATCH(col) AGAINST(...) surface (fulltext_match), so it is resolved by
-// findMatchFullTextIndex and chained by applyJoinFullTextIndices exactly like a
-// classic fulltext index — the only difference is the per-match TVF: this file's
+// findMatchFullTextIndex and routed through the shared join rewrite exactly like
+// a classic fulltext index — the only difference is the per-match TVF: this file's
 // buildFulltext2SearchTableFunc emits a fulltext2_search TVF (WAND positional
 // engine) instead of fulltext_index_scan. Both emit (doc_id, score), so the
 // downstream join/sort/limit is unchanged.

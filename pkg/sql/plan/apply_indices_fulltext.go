@@ -298,17 +298,6 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
-	paginationLimit, paginationOffset *plan.Expr,
-	filterids []int32, filter_indexDefs []*plan.IndexDef,
-	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
-	joinID, filterIDs, projIDs, _, err := builder.applyJoinFullTextIndicesWithWrapped(nodeID, projNode, scanNode,
-		paginationLimit, paginationOffset, filterids, filter_indexDefs, projids, proj_indexDefs,
-		nil, nil, eqmap, colRefCnt, idxColMap)
-	return joinID, filterIDs, projIDs, err
-}
-
 func (builder *QueryBuilder) applyJoinFullTextIndicesWithWrapped(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
