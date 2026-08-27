@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -2154,8 +2155,12 @@ func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
 	if ses == nil || inputErr == nil {
 		return false
 	}
-	me, ok := inputErr.(*moerr.Error)
-	if !ok || !me.IsRealError() {
+	// Only moerr distinguishes an error from a warning, and only a warning is
+	// exempt. Anything that is NOT a moerr has no warning form to be -- it is
+	// a failure -- so it must roll back like any other error, or the setting
+	// would silently mean "any error MO happens to have wrapped".
+	var me *moerr.Error
+	if errors.As(inputErr, &me) && !me.IsRealError() {
 		return false
 	}
 	val, err := ses.GetSessionSysVar("mo_rollback_txn_on_error")

@@ -89,6 +89,13 @@ warning-coded result — an over-long value is a real error in strict mode
 accepted silently in non-strict mode — so the exemption is defensive, and it is
 asserted in Go rather than in BVT.
 
+The exemption belongs to `moerr`, not to the frontend. A failure that is **not**
+a moerr has no warning form to be, so it rolls back like any other error; the
+alternative would make the setting mean "any error MO happens to have wrapped",
+which is not a distinction a user can see or predict. And the test is
+`errors.As`, not a type assertion, so a warning keeps its exemption however
+many layers it arrives under.
+
 ### Why a session variable and not the static set
 
 Every member of `errCodeRollbackWholeTxn` is an *infrastructure* failure.
@@ -136,6 +143,12 @@ if err != None and err.code == 1062:           # the error CLASS
 | `bool(err)` | `True` |
 | `err == None` | `False` on failure, `True` on success |
 | `out_param = err` | the message string |
+| `err.startswith(...)`, `err.split(...)`, any other string method | asked of the message |
+
+The last row is the compatibility rule: `Attr` answers `code`/`sqlstate`/
+`message` itself and delegates everything else to `starlark.String(message)`.
+A procedure written against the old return value — which WAS that string —
+keeps working, and `dir(err)` lists both halves.
 
 Everything a procedure could already do with the value keeps working — it is
 truthy, concatenates with strings, and converts to its message when assigned to

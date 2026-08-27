@@ -254,10 +254,18 @@ func (e *sqlError) Attr(name string) (starlark.Value, error) {
 	case "message":
 		return starlark.String(e.message), nil
 	}
-	return nil, nil
+	// Anything else is asked of the message, because this value used to BE
+	// that string: a procedure written against the old return value calls
+	// err.startswith(...) or err.split(...), and those have to keep working.
+	return starlark.String(e.message).Attr(name)
 }
 
-func (e *sqlError) AttrNames() []string { return []string{"code", "message", "sqlstate"} }
+func (e *sqlError) AttrNames() []string {
+	// the string's own methods are reachable too (see Attr), so dir(err) and
+	// starlark's "no .x field" hint list what actually exists
+	return append([]string{"code", "message", "sqlstate"},
+		starlark.String(e.message).AttrNames()...)
+}
 
 // Binary keeps `"prefix: " + err` and `err + " suffix"` working, which is how
 // a procedure built an error string before this value carried its codes.

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -87,7 +88,6 @@ func TestSQLErrorStaysAString(t *testing.T) {
 
 func TestSQLErrorAttrs(t *testing.T) {
 	e := newSQLError(moerr.NewDuplicateEntryNoCtx("1", "PRIMARY"))
-	require.Equal(t, []string{"code", "message", "sqlstate"}, e.AttrNames())
 
 	code, err := e.Attr("code")
 	require.NoError(t, err)
@@ -101,9 +101,30 @@ func TestSQLErrorAttrs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, starlark.String(e.message), msg)
 
-	// an unknown attribute is not an error here: returning (nil, nil) lets
-	// starlark raise its own "no .foo field" with the names it knows
-	v, err := e.Attr("nope")
+	// an attribute that is not one of ours is asked of the message, because
+	// this value used to BE that string: a procedure written against the old
+	// return value calls err.startswith(...) and must keep working
+	starts, err := e.Attr("startswith")
+	require.NoError(t, err)
+	require.NotNil(t, starts, "string methods must survive")
+
+	res, err := starlark.Call(&starlark.Thread{}, starts,
+		starlark.Tuple{starlark.String("Duplicate")}, nil)
+	require.NoError(t, err)
+	require.Equal(t, starlark.Bool(strings.HasPrefix(e.message, "Duplicate")), res)
+
+	split, err := e.Attr("split")
+	require.NoError(t, err)
+	require.NotNil(t, split)
+
+	// and dir(err) lists both halves, so the codes are discoverable without
+	// hiding what the string could already do
+	names := e.AttrNames()
+	require.Subset(t, names, []string{"code", "message", "sqlstate"})
+	require.Subset(t, names, starlark.String("").AttrNames())
+
+	// something that is neither still yields starlark's own "no .x field"
+	v, err := e.Attr("definitely_not_a_method")
 	require.NoError(t, err)
 	require.Nil(t, v)
 }

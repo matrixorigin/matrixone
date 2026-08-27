@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -136,4 +138,37 @@ func TestUnreadableSettingKeepsMySQLBehaviour(t *testing.T) {
 	ses := &unknownVarSession{}
 	require.False(t, sessionRollsBackTxnOnError(ses, moerr.NewDuplicateEntryNoCtx("1", "a")))
 	require.False(t, sessionRollsBackTxnOnError(ses, moerr.NewInternalErrorNoCtx("boom")))
+}
+
+// TestNonMoerrIsStillAnError: the setting says "any error", and an error that
+// MO did not wrap in moerr is still an error. Only moerr can be a warning, so
+// only moerr gets the exemption -- otherwise the switch would silently mean
+// "any error MO happens to have wrapped", which is not a distinction a user
+// can see or predict.
+func TestNonMoerrIsStillAnError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := context.Background()
+
+	plain := errors.New("driver went away")
+	wrapped := fmt.Errorf("while committing: %w", plain)
+
+	// default is still MySQL behaviour for these too
+	require.False(t, sessionRollsBackTxnOnError(ses, plain))
+	require.False(t, sessionRollsBackTxnOnError(ses, wrapped))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(1)))
+	require.True(t, sessionRollsBackTxnOnError(ses, plain))
+	require.True(t, sessionRollsBackTxnOnError(ses, wrapped))
+
+	// a WRAPPED warning keeps its exemption: the exemption is about what the
+	// error IS, not about how many layers it arrived under -- which is why the
+	// check is errors.As and not a type assertion
+	warning := moerr.NewWarn(ctx, "data truncated")
+	require.False(t, warning.IsRealError())
+	require.False(t, sessionRollsBackTxnOnError(ses, fmt.Errorf("while inserting: %w", warning)))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
 }
