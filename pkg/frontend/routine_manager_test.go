@@ -342,9 +342,9 @@ func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
 	}}
 
 	probes := 0
-	rm.cancelDisconnectedRequests(now, grace, func(conn net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, grace, func(conn *Conn) (bool, error) {
 		probes++
-		return conn == longServer, nil
+		return conn.RawConn() == longServer, nil
 	})
 
 	require.Equal(t, 1, probes, "only requests beyond the grace period should be probed")
@@ -359,7 +359,7 @@ func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
 	default:
 	}
 
-	rm.cancelDisconnectedRequests(now, grace, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, grace, func(*Conn) (bool, error) {
 		probes++
 		return true, nil
 	})
@@ -384,7 +384,7 @@ func TestClientDisconnectProbePolicyCoversNewRequests(t *testing.T) {
 	conn := &Conn{conn: serverConn, remoteAddr: "new-request"}
 	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
 	probes := 0
-	rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, func(*Conn) (bool, error) {
 		probes++
 		return true, nil
 	})
@@ -414,7 +414,7 @@ func TestRoutineManagerProbeErrorDoesNotCancelRequest(t *testing.T) {
 
 	conn := &Conn{conn: serverConn}
 	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
-	rm.cancelDisconnectedRequests(now, 30*time.Second, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, 30*time.Second, func(*Conn) (bool, error) {
 		return false, errors.New("probe failed")
 	})
 
@@ -467,7 +467,8 @@ func BenchmarkRoutineManagerLongRunningRequests(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = rm.longRunningRequests(now, 30*time.Second)
+				requests := rm.appendLongRunningRequests(nil, now, 30*time.Second)
+				clear(requests)
 			}
 		})
 	}
