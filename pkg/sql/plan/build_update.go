@@ -44,7 +44,7 @@ func isSyncMaintainedIrregularIndex(idxDef *plan.IndexDef) bool {
 	if p.Catalog().SyncDescriptor().AlwaysAsync {
 		return false
 	}
-	async, _ := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+	async, _ := catalog.IndexParamAsync(idxDef.IndexAlgoParams)
 	return !async
 }
 

@@ -16,6 +16,7 @@ package sqlexec
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -114,6 +115,87 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 		return string(valbj.GetString()), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("invalid configuration type")
+}
+
+// sessionSystemVarDefaults is the authoritative enumeration of the session/system
+// variables a background reindex resolves that its captured Metadata does NOT
+// hold, each mapped to the correct background default. It is deliberately an
+// explicit whitelist, not a catch-all: a var that is neither captured nor listed
+// here fails fast (see ResolveVariableWithSessionDefaults) so a newly-plumbed
+// dependency surfaces loudly, by name, and gets a deliberate default rather than
+// silently resolving to nil.
+//
+//   - sql_mode: "" — #25438 wired it into the zero-temporal-date write-policy
+//     check (process/eval_expr_util.RejectZeroTemporalWritePolicy). "" (no strict /
+//     no zero-date modes) is the correct permissive value for a background reindex,
+//     matching backSession.GetSessionSysVar, and safer than capturing the user's
+//     real (possibly strict) sql_mode, which could make the rebuild reject rows
+//     already living in the base table.
+//   - lock_wait_timeout: nil — its callers (lockop, process_codec) fall back to
+//     their own context-aware default (txnTimeout / procSessionLockWaitTimeout) on
+//     nil, which a fixed value would wrongly override; this matches backSession,
+//     which returns nil for it too.
+var sessionSystemVarDefaults = map[string]any{
+	"sql_mode":          "",
+	"lock_wait_timeout": nil,
+}
+
+// captured reports whether varName was written into this blob's cfg — i.e. it is
+// one of the algo build knobs snapshotted at CREATE. An uncaptured name is a
+// session/system var the Metadata was never meant to hold.
+func (m *Metadata) captured(varName string) bool {
+	if m.bj.IsNull() {
+		return false
+	}
+	path, err := bytejson.ParseJsonPath("$.cfg." + varName)
+	if err != nil {
+		return false
+	}
+	out := m.bj.QuerySimple([]*bytejson.Path{&path})
+	return !out.IsNull()
+}
+
+// ResolveVariableWithSessionDefaults is the ResolveVariableFunc to install for a
+// background job that runs through a captured Metadata (the idxcron reindex
+// hook). A background reindex resolves session/system vars its capture blob never
+// held — sql_mode, lock_wait_timeout, and whatever the next release plumbs in —
+// and the strict ResolveVariableFunc would error "key X not found" on every one,
+// aborting the reindex the moment a non-graceful caller (like the sql_mode
+// write-policy check) hits it.
+//
+// Resolution order:
+//  1. CAPTURED var → resolve strictly; a malformed algo knob still errors, so a
+//     genuine build-config bug surfaces loudly.
+//  2. Known session var (sessionSystemVarDefaults) → its background default.
+//  3. Otherwise FAIL FAST, naming the var. This is deliberate: rather than
+//     silently defaulting an un-enumerated var to nil, we force a newly-plumbed
+//     session-var dependency to surface with a clear reason so it gets added to
+//     sessionSystemVarDefaults with a correct, deliberate default.
+func (m *Metadata) ResolveVariableWithSessionDefaults(varName string, isSystemVar, isGlobalVar bool) (any, error) {
+	if m.captured(varName) {
+		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
+	}
+	if def, ok := sessionSystemVarDefaults[strings.ToLower(varName)]; ok {
+		return def, nil
+	}
+	return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+		"idxcron reindex resolved un-enumerated session variable %q: add it to "+
+			"sqlexec.sessionSystemVarDefaults with the correct background default",
+		varName))
+}
+
+// ResolveVariableSoft resolves a captured var and returns (nil, nil) for any var
+// the blob does not hold — no error, no log. It is for consumers that treat
+// "absent" as "use the caller's own default" and must NOT emit spurious error
+// logs, e.g. indexplugin.AlgoParamInt (flat key → session var → default), which
+// already handles nil gracefully. This is deliberately distinct from
+// ResolveVariableWithSessionDefaults (the idxcron reindex resolver), which
+// fail-fasts on an un-enumerated var to surface new session-var dependencies.
+func (m *Metadata) ResolveVariableSoft(varName string, isSystemVar, isGlobalVar bool) (any, error) {
+	if m.captured(varName) {
+		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
+	}
+	return nil, nil
 }
 
 func (m *Metadata) Modify(varName string, v any) error {

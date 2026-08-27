@@ -225,7 +225,7 @@ func TestRowFromVector(t *testing.T) {
 	sql := make([]byte, 0, 1024)
 
 	for i, vec := range bat.Vecs {
-		err := extractRowFromVector(ctx, vec, 0, res, 0)
+		err := extractRowFromVector(ctx, vec, 0, res, 0, ReprSQLString)
 		require.Nil(t, err)
 
 		sql, err := convertColIntoSql(ctx, res[0], vec.GetType(), sql)
@@ -235,4 +235,67 @@ func TestRowFromVector(t *testing.T) {
 		sql = sql[:0]
 	}
 
+}
+
+// TestExtractRowNativeRepr covers the ReprNative path added for binary CDC consumers
+// (the WAND retrieval index): the temporal / decimal / uuid types must come out as
+// their exact native Go value under ReprNative, while ReprSQLString keeps yielding the
+// SQL-display string; a non-differing control type (int64) must be identical in both.
+func TestExtractRowNativeRepr(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	ctx := context.Background()
+
+	mk := func(typ types.Type, appendFn func(v *vector.Vector)) *vector.Vector {
+		v := vector.NewVec(typ)
+		appendFn(v)
+		return v
+	}
+
+	cases := []struct {
+		name    string
+		vec     *vector.Vector
+		native  any  // expected value under ReprNative
+		differs bool // native form differs from the SQL-display string (so ReprSQLString is a string)
+	}{
+		{"datetime", mk(types.New(types.T_datetime, 8, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Datetime(0x0123456789ABCDEF), false, proc.Mp())
+		}), types.Datetime(0x0123456789ABCDEF), true},
+		{"time", mk(types.New(types.T_time, 8, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Time(0x0011223344556677), false, proc.Mp())
+		}), types.Time(0x0011223344556677), true},
+		{"timestamp", mk(types.New(types.T_timestamp, 8, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Timestamp(0x7FFFFFFFFFFFFFFF), false, proc.Mp())
+		}), types.Timestamp(0x7FFFFFFFFFFFFFFF), true},
+		{"decimal64", mk(types.New(types.T_decimal64, 8, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Decimal64(1000), false, proc.Mp())
+		}), types.Decimal64(1000), true},
+		{"decimal128", mk(types.New(types.T_decimal128, 16, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Decimal128{B0_63: 1000, B64_127: 7}, false, proc.Mp())
+		}), types.Decimal128{B0_63: 1000, B64_127: 7}, true},
+		{"uuid", mk(types.New(types.T_uuid, 16, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}), false, proc.Mp())
+		}), types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}), true},
+		// control: int64 is native in both modes, so the two reprs must agree.
+		{"int64", mk(types.New(types.T_int64, 8, 0), func(v *vector.Vector) {
+			vector.AppendFixed[int64](v, int64(100), false, proc.Mp())
+		}), int64(100), false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			nat := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, c.vec, 0, nat, 0, ReprNative))
+			require.Equal(t, c.native, nat[0], "ReprNative must yield the exact native value")
+
+			str := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, c.vec, 0, str, 0, ReprSQLString))
+			if c.differs {
+				_, ok := str[0].(string)
+				require.Truef(t, ok, "ReprSQLString must yield a string for %s, got %T", c.name, str[0])
+			} else {
+				require.Equal(t, nat[0], str[0], "a non-differing type must be identical across reprs")
+			}
+		})
+	}
 }

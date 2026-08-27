@@ -155,8 +155,11 @@ type Hooks interface {
 
 	// HandleReindex is the ALTER … REINDEX path. forceSync mirrors the
 	// existing IVF-FLAT semantics (run synchronously inside the txn) and is
-	// ignored by algorithms that do not support it.
-	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error
+	// ignored by algorithms that do not support it. merge requests incremental
+	// compaction (fold + tiered merge of already-built segments) instead of a
+	// full rebuild-from-source; only the bm25 index honors it, every other
+	// algorithm ignores it and rebuilds.
+	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, merge bool) error
 
 	// RestoreInitSQL returns (startFromNow, initSQL) for the restored index's
 	// CDC. initSQL rebuilds the index from the cloned rows — run post-commit by
@@ -208,6 +211,13 @@ type ReindexParamUpdate struct {
 	// Sourced from the parse tree (c.stmt) at the compile site, so no plan
 	// proto field is needed to carry them. nil/empty means none specified.
 	Params map[string]string
+
+	// Merge is true when the reindex is a MERGE (compact the CDC tail into the
+	// base in place) rather than a full REBUILD (re-derive the base from the
+	// source table). A plugin uses it to reject params that a MERGE cannot honor
+	// — e.g. fulltext2 forbids changing POSITION_FREE on a MERGE, since a
+	// tail-into-base compaction cannot re-derive positions the base does not hold.
+	Merge bool
 }
 
 // MergeReindexParams is the shared body for a plugin's

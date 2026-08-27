@@ -804,9 +804,12 @@ const (
 	MAX_BY          = 559
 	MAX_BY_NON_NULL = 560
 
+	// LOAD_TEXT returns extracted datalink text for FULLTEXT2 maintenance.
+	LOAD_TEXT = 562
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 562
+	FUNCTION_END_NUMBER = 563
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1125,6 +1128,7 @@ var functionIdRegister = map[string]int32{
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,

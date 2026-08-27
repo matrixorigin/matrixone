@@ -446,9 +446,8 @@ func (f *fakeCachedIndex) Search(_ *sqlexec.SqlProcess, _ any, _ vectorindex.Run
 func (f *fakeCachedIndex) SearchFloat32(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ []int64, _ []float32) error {
 	return nil
 }
-func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error               { return nil }
-func (f *fakeCachedIndex) UpdateConfig(_ cache.VectorIndexSearchIf) error { return nil }
-func (f *fakeCachedIndex) Destroy()                                       { f.destroyed.Store(true) }
+func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error { return nil }
+func (f *fakeCachedIndex) Destroy()                         { f.destroyed.Store(true) }
 
 // seedCache parks a fake index under the given cache key and returns it.
 func seedCache(key string) *fakeCachedIndex {
@@ -619,4 +618,8 @@ func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 		},
 	})
 	require.Error(t, err)
+}
+
+func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
 }

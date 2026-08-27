@@ -258,6 +258,28 @@ func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {
 	require.Contains(t, got, "KEY `idx_vec` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)")
 }
 
+func Test_ShowCreateTableTrimsFulltext2OptionPadding(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE fulltext2_padding (
+		id BIGINT NOT NULL,
+		body TEXT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "ft",
+		Parts:           []string{"body"},
+		IndexAlgo:       catalog.MoIndexFullText2Algo.ToString(),
+		IndexAlgoParams: `{"parser":"ngram","max_index_capacity":"2"}`,
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, " FULLTEXT2 `ft`(`body`) WITH PARSER ngram max_index_capacity = 2\n)")
+	require.NotContains(t, got, "max_index_capacity = 2 \n)")
+}
+
 func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_reserved (

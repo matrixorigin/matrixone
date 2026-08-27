@@ -529,7 +529,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		sb.WriteString("  ")
 		fullText := isFullTextKey(key)
 		if fullText {
-			sb.WriteString("FULLTEXT ")
+			if isFullText2Key(key) {
+				sb.WriteString("FULLTEXT2 ")
+			} else {
+				sb.WriteString("FULLTEXT ")
+			}
 		} else if key.Unique {
 			sb.WriteString("UNIQUE ")
 		}
@@ -4855,7 +4859,15 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	sb.WriteString(" ADD ")
 	fullText := isFullTextIndex(info)
 	if fullText {
-		sb.WriteString("FULLTEXT ")
+		// fulltext2 is a DISTINCT engine (WAND positional / position-free), not classic
+		// fulltext — emit FULLTEXT2 so a checkpoint-restore rebuild keeps the engine
+		// instead of silently downgrading it to classic FULLTEXT (which ignores the
+		// positional/position-free build and its capacity/scheduling options).
+		if catalog.IsFullText2IndexAlgo(info.algo) {
+			sb.WriteString("FULLTEXT2 ")
+		} else {
+			sb.WriteString("FULLTEXT ")
+		}
 	} else if strings.EqualFold(info.indexType, "UNIQUE") {
 		sb.WriteString("UNIQUE ")
 	}
@@ -4887,11 +4899,22 @@ func isFullTextIndex(info *indexDDLInfo) bool {
 	if info == nil {
 		return false
 	}
-	return catalog.IsFullTextIndexAlgo(info.algo) || strings.EqualFold(info.indexType, "FULLTEXT")
+	return catalog.IsFullTextIndexAlgo(info.algo) || catalog.IsFullText2IndexAlgo(info.algo) ||
+		strings.EqualFold(info.indexType, "FULLTEXT")
 }
 
 func isFullTextKey(key TableUniqueKey) bool {
-	return catalog.IsFullTextIndexAlgo(key.Algo)
+	// Both classic FULLTEXT and FULLTEXT2 render as a fulltext-family clause (no KEY/USING
+	// suffix, WITH PARSER + options). Recognizing only classic here would emit
+	// `KEY ... USING fulltext2` for a FULLTEXT2 constraint reconstructed from mo_tables,
+	// which restore routes to BuildSecondaryIndexDefs — that rejects fulltext2 (it needs
+	// BuildFullTextIndexDefs), breaking checkpoint restore. The keyword itself is chosen by
+	// isFullText2Key at the render site.
+	return catalog.IsFullTextIndexAlgo(key.Algo) || catalog.IsFullText2IndexAlgo(key.Algo)
+}
+
+func isFullText2Key(key TableUniqueKey) bool {
+	return catalog.IsFullText2IndexAlgo(key.Algo)
 }
 
 func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {
@@ -4904,10 +4927,12 @@ func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {
 
 func appendIndexTrailingOptionsDDL(sb *strings.Builder, fullText bool, algoParams, comment string) error {
 	if strings.TrimSpace(algoParams) != "" {
+		paramMap, err := catalog.IndexParamsStringToMap(algoParams)
+		if err != nil {
+			return err
+		}
 		if fullText {
-			if params, err := catalog.IndexParamsStringToMap(algoParams); err != nil {
-				return err
-			} else if parser := strings.TrimSpace(params["parser"]); parser != "" {
+			if parser := strings.TrimSpace(paramMap["parser"]); parser != "" {
 				sb.WriteString(" WITH PARSER ")
 				sb.WriteString(parser)
 			}
@@ -4918,6 +4943,30 @@ func appendIndexTrailingOptionsDDL(sb *strings.Builder, fullText bool, algoParam
 		}
 		if strings.TrimSpace(params) != "" {
 			sb.WriteString(params)
+		}
+		// INCLUDE columns are a first-class index option that IndexParamsToStringList
+		// deliberately omits (they belong to the DDL / SHOW CREATE surface). Render them here —
+		// the same appendIndexTrailingOptionsDDL feeds both DDL sources (mo_tables constraint and
+		// mo_indexes rows) — so a checkpoint-restore rebuild preserves the covering/prefilter
+		// contract. Without this a `FULLTEXT2 ft(body) INCLUDE(status)` was restored as
+		// `FULLTEXT2 ft(body)`, silently dropping the covered fast path. Uses the same
+		// comma-joined encoding + parser the rest of the system reads (catalog.IncludedColumns /
+		// ParseIncludeColumnsValue), in persisted order.
+		if joined := strings.TrimSpace(paramMap[catalog.IncludedColumns]); joined != "" {
+			cols, err := catalog.ParseIncludeColumnsValue(joined)
+			if err != nil {
+				return err
+			}
+			if len(cols) > 0 {
+				sb.WriteString(" INCLUDE (")
+				for i, c := range cols {
+					if i > 0 {
+						sb.WriteString(", ")
+					}
+					sb.WriteString(quoteDDLIdent(c))
+				}
+				sb.WriteString(")")
+			}
 		}
 	}
 	if comment != "" {

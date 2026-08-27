@@ -126,6 +126,7 @@ func buildFilterPredicateJSON(
 	scanNode *plan.Node,
 	includeColumns []string,
 	pkColName string,
+	allowStrings bool, // fulltext2 (actual-value storage, byte-compare) peels string preds; vector plugins (hashed) do not
 ) (predsJSON string, serialized []*plan.Expr, residual []*plan.Expr, err error) {
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return "", nil, filters, nil
@@ -145,7 +146,7 @@ func buildFilterPredicateJSON(
 
 	preds := make([]filterJSONPred, 0, len(filters))
 	for _, expr := range filters {
-		entries, ok, ferr := filterExprToPreds(expr, scanTag, td, colOrd, pkColName)
+		entries, ok, ferr := filterExprToPreds(expr, scanTag, td, colOrd, pkColName, allowStrings)
 		if ferr != nil {
 			return "", nil, nil, ferr
 		}
@@ -180,7 +181,7 @@ func buildFilterPredicateJSON(
 // C++ side's implicit-AND of the predicate array). ok=false means the
 // expression isn't serializable and must remain a residual filter.
 func filterExprToPreds(
-	expr *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int, pkColName string,
+	expr *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int, pkColName string, allowStrings bool,
 ) ([]filterJSONPred, bool, error) {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
@@ -189,11 +190,11 @@ func filterExprToPreds(
 	name := strings.ToLower(fn.Func.ObjName)
 
 	if name == "and" && len(fn.Args) == 2 {
-		left, okL, err := filterExprToPreds(fn.Args[0], scanTag, td, colOrd, pkColName)
+		left, okL, err := filterExprToPreds(fn.Args[0], scanTag, td, colOrd, pkColName, allowStrings)
 		if err != nil {
 			return nil, false, err
 		}
-		right, okR, err := filterExprToPreds(fn.Args[1], scanTag, td, colOrd, pkColName)
+		right, okR, err := filterExprToPreds(fn.Args[1], scanTag, td, colOrd, pkColName, allowStrings)
 		if err != nil {
 			return nil, false, err
 		}
@@ -211,11 +212,32 @@ func filterExprToPreds(
 		if flipped {
 			op = filterFlipCmpOp(op)
 		}
-		v, ok := filterLiteralToJSONValue(lit)
+		v, ok := filterLiteralToJSONValue(lit, allowStrings)
 		if !ok {
 			return nil, false, nil
 		}
 		return []filterJSONPred{{Col: ord, Op: op, Val: v}}, true, nil
+	}
+
+	// LIKE 'prefix%' on a fulltext2 INCLUDE/pk varchar column -> a byte-prefix predicate.
+	// MO rewrites a pure-prefix LIKE into prefix_eq(col, 'prefix') (the '%' already stripped);
+	// the evaluator's "prefix" op is bytes.HasPrefix, exactly equivalent for MO's byte-exact
+	// varchar compare. Only when allowStrings (the vector plugins hash strings, never emit
+	// "prefix"). A non-pure-prefix LIKE is NOT rewritten to prefix_eq, so it stays residual.
+	if allowStrings && name == "prefix_eq" && len(fn.Args) == 2 {
+		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd, pkColName)
+		if !ok {
+			return nil, false, nil
+		}
+		lit := fn.Args[1].GetLit()
+		if lit == nil || lit.Isnull {
+			return nil, false, nil
+		}
+		sv, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok {
+			return nil, false, nil
+		}
+		return []filterJSONPred{{Col: ord, Op: "prefix", Val: sv.Sval}}, true, nil
 	}
 
 	if name == "between" && len(fn.Args) == 3 {
@@ -223,8 +245,8 @@ func filterExprToPreds(
 		if !ok {
 			return nil, false, nil
 		}
-		lo, okL := filterLiteralToJSONValue(fn.Args[1].GetLit())
-		hi, okH := filterLiteralToJSONValue(fn.Args[2].GetLit())
+		lo, okL := filterLiteralToJSONValue(fn.Args[1].GetLit(), allowStrings)
+		hi, okH := filterLiteralToJSONValue(fn.Args[2].GetLit(), allowStrings)
 		if !okL || !okH {
 			return nil, false, nil
 		}
@@ -242,7 +264,7 @@ func filterExprToPreds(
 		}
 		vals := make([]any, 0, len(items))
 		for _, it := range items {
-			v, ok := filterLiteralToJSONValue(it.GetLit())
+			v, ok := filterLiteralToJSONValue(it.GetLit(), allowStrings)
 			if !ok {
 				return nil, false, nil
 			}
@@ -362,7 +384,12 @@ func filterInListItems(args []*plan.Expr) []*plan.Expr {
 // json.Marshal emits as a bare JSON number (for numerics) or string.
 // Unsupported shapes (NULL, date/time types, decimals, binary, vectors)
 // return ok=false so the caller treats the predicate as residual.
-func filterLiteralToJSONValue(lit *plan.Literal) (any, bool) {
+// filterLiteralToJSONValue converts a scalar literal to its JSON wire value. allowStrings
+// enables VARCHAR/CHAR string literals — safe ONLY for fulltext2, which stores the actual
+// value and byte-compares it (MO compares varchar byte-exact regardless of declared
+// collation, so byte-compare == SQL compare). The vector plugins hash strings to uint64,
+// so for them a string literal cannot match the stored column and stays residual.
+func filterLiteralToJSONValue(lit *plan.Literal, allowStrings bool) (any, bool) {
 	if lit == nil || lit.Isnull {
 		return nil, false
 	}
@@ -392,8 +419,13 @@ func filterLiteralToJSONValue(lit *plan.Literal) (any, bool) {
 			return int64(1), true
 		}
 		return int64(0), true
+	case *plan.Literal_Sval:
+		// fulltext2 stores the actual varchar/char value and byte-compares it; the vector
+		// plugins hash strings to uint64, so a raw string can't match their storage.
+		if allowStrings {
+			return v.Sval, true
+		}
+		return nil, false
 	}
-	// VARCHAR/string literals require FNV-1a hashing to match the
-	// UINT64-hashed column storage — deferred; treat as residual for now.
 	return nil, false
 }
