@@ -373,3 +373,42 @@ func TestExternalFileLevelFilterRejectsNestedZeroArgumentFunction(t *testing.T) 
 
 	require.False(t, isFileLevelFilter(nil, filter))
 }
+
+// TestExternalScanTolerates: the decision to keep every record column through
+// pruning is driven by the two error columns only. __mo_file_line is position
+// metadata -- a query that asks for it alone must still fail on a bad record,
+// so it must not make the scan hold the whole record.
+func TestExternalScanTolerates(t *testing.T) {
+	node := &pbplan.Node{
+		NodeType: pbplan.Node_EXTERNAL_SCAN,
+		TableDef: &pbplan.TableDef{
+			Cols: []*pbplan.ColDef{
+				{Name: "a", ColId: 1},
+				{Name: catalog.ExternalFileLine, ColId: catalog.ExternalFileLineColId},
+				{Name: catalog.ExternalErrorMessage, ColId: catalog.ExternalErrorMessageColId},
+				{Name: catalog.ExternalErrorText, ColId: catalog.ExternalErrorTextColId},
+			},
+		},
+		BindingTags: []int32{7},
+	}
+	const tag = 7
+	ref := func(idx int32) map[[2]int32]int {
+		return map[[2]int32]int{{tag, 0}: 1, {tag, idx}: 1}
+	}
+
+	require.False(t, externalScanTolerates(node, tag, map[[2]int32]int{{tag, 0}: 1}),
+		"declared columns only")
+	require.False(t, externalScanTolerates(node, tag, ref(1)),
+		"__mo_file_line alone must not switch tolerance on")
+	require.True(t, externalScanTolerates(node, tag, ref(2)), "__mo_error_message")
+	require.True(t, externalScanTolerates(node, tag, ref(3)), "__mo_error_text")
+
+	// keyed on the reserved column id, not the name: a user column that
+	// happens to carry the name cannot switch tolerance on
+	lookalike := &pbplan.Node{
+		NodeType:    pbplan.Node_EXTERNAL_SCAN,
+		TableDef:    &pbplan.TableDef{Cols: []*pbplan.ColDef{{Name: catalog.ExternalErrorMessage, ColId: 1}}},
+		BindingTags: []int32{tag},
+	}
+	require.False(t, externalScanTolerates(lookalike, tag, map[[2]int32]int{{tag, 0}: 1}))
+}
