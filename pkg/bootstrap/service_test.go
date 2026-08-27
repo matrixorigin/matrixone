@@ -303,6 +303,9 @@ func TestBootstrapWithWait(t *testing.T) {
 				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
 					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
 				}
+				if strings.HasPrefix(sql, "select state from mo_catalog.mo_version") {
+					return newBootstrapStateResult(versions.StateReady), nil
+				}
 				return executor.Result{}, nil
 			})
 
@@ -320,6 +323,7 @@ func TestBootstrapWithWait(t *testing.T) {
 
 			require.NoError(t, b.Bootstrap(ctx))
 			assert.True(t, n.Load() > 0)
+			assert.True(t, b.IsFinalVersionReady())
 		},
 	)
 }
@@ -787,6 +791,39 @@ func newBootstrapStringResult(values ...string) executor.Result {
 	memRes.NewBatchWithRowCount(len(values))
 	executor.AppendStringRows(memRes, 0, values)
 	return memRes.GetResult()
+}
+
+func newBootstrapStateResult(states ...int32) executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{types.T_int32.ToType()}, mpool.MustNewZero())
+	memRes.NewBatchWithRowCount(len(states))
+	executor.AppendFixedRows(memRes, 0, states)
+	return memRes.GetResult()
+}
+
+func TestFinalVersionReadinessRequiresExactReadyCatalogRow(t *testing.T) {
+	tests := []struct {
+		name   string
+		states []int32
+		ready  bool
+	}{
+		{name: "missing"},
+		{name: "created", states: []int32{versions.StateCreated}},
+		{name: "upgrading tenants", states: []int32{versions.StateUpgradingTenant}},
+		{name: "ready", states: []int32{versions.StateReady}, ready: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Contains(t, sql, "where version = '4.0.6'")
+				return newBootstrapStateResult(tc.states...), nil
+			})
+			svc := NewService("", &memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec)
+			require.NoError(t, svc.(*service).refreshFinalVersionReadiness(context.Background()))
+			require.Equal(t, tc.ready, svc.IsFinalVersionReady())
+		})
+	}
 }
 
 func newBootstrapTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {

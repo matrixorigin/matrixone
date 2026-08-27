@@ -201,6 +201,9 @@ message LogStoreHeartbeat {
   // ViewMetadataAdmissionSupported proves that every HAKeeper RSM hosted by
   // this LogStore can decode the durable admission update and snapshot fields.
   bool ViewMetadataAdmissionSupported = 10;
+  // ViewMetadataRefreshSupported proves that every HAKeeper RSM hosted by this
+  // LogStore understands refresh activation and its persistent state.
+  bool ViewMetadataRefreshSupported = 11;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -645,6 +648,12 @@ message ViewMetadataAdmission {
   // Admitted authorizes a CN heartbeat sender to finish local startup. Ready
   // is stronger: it also requires the CN's public ingress to be prepared.
   bool Admitted = 8;
+  // RefreshReady allows current-epoch workers to run only after every known CN
+  // advertises lifecycle support. It does not authorize public metadata reads.
+  bool RefreshReady = 9;
+  // RefreshEnabled authorizes lifecycle maintenance and public metadata reads
+  // after a durable revalidation completion for Epoch.
+  bool RefreshEnabled = 10;
 }
 
 // ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
@@ -797,6 +806,7 @@ message LogStoreInfo {
   Locality Locality = 8 [(gogoproto.nullable) = false];
   bool CommandDeliverySupported = 9;
   bool ViewMetadataAdmissionSupported = 10;
+  bool ViewMetadataRefreshSupported = 11;
 }
 
 message LogState {
@@ -917,6 +927,9 @@ message HAKeeperRSMState {
   // this liveness proof for an older process.
   map<string, uint64> ViewMetadataAdmissionCNTargetTicks = 41;
   map<string, uint64> ViewMetadataAdmissionProxyTargetTicks = 42;
+  // ViewMetadataRefreshActivated is durable history. Once true, a later
+  // lifecycle-unaware CN cannot be admitted during a required epoch.
+  bool ViewMetadataRefreshActivated = 43;
 }
 
 // ReplicaInfo contains details of a replica

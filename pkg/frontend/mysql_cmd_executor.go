@@ -4791,6 +4791,17 @@ func executeStmtWithResponse(ses *Session,
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+	lease, viewMetadataSensitive, err := acquireViewMetadataStatementLease(ses, execCtx)
+	if err != nil {
+		return err
+	}
+	execCtx.viewMetadataSensitive = viewMetadataSensitive
+	defer func() {
+		execCtx.viewMetadataSensitive = false
+		if lease != nil {
+			lease.Release()
+		}
+	}()
 	defer func() {
 		if execCtx.returning != nil {
 			if closeErr := execCtx.returning.Close(execCtx); closeErr != nil {
@@ -4933,9 +4944,15 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
+	execCtx.txnOpt.viewMetadataSensitive = execCtx.viewMetadataSensitive
 	err = ses.GetTxnHandler().Create(execCtx)
 	if err != nil {
 		return err
+	}
+	if execCtx.viewMetadataSensitive {
+		if err = validateViewMetadataTransactionEpoch(ses); err != nil {
+			return err
+		}
 	}
 
 	//skip BEGIN stmt
@@ -4987,6 +5004,80 @@ func executeStmtWithWorkspace(ses FeSession,
 	recordSessionDDL(ses, execCtx, err)
 
 	return
+}
+
+func acquireViewMetadataStatementLease(
+	ses FeSession,
+	execCtx *ExecCtx,
+) (*compile.ViewMetadataEpochLease, bool, error) {
+	if execCtx == nil {
+		return nil, false, nil
+	}
+	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	if !binaryExecute && !viewMetadataStatementNeedsLease(
+		execCtx.stmt, execCtx.sqlOfStmt, ses.GetDatabaseName()) {
+		return nil, false, nil
+	}
+	lease, _, err := compile.AcquireViewMetadataRefreshLease(
+		execCtx.reqCtx, ses.GetService())
+	return lease, true, err
+}
+
+func validateViewMetadataTransactionEpoch(ses FeSession) error {
+	return validateViewMetadataTransactionEpochs(
+		compile.ViewMetadataEpoch(ses.GetService()),
+		ses.GetTxnHandler().ViewMetadataEpoch(),
+	)
+}
+
+func validateViewMetadataTransactionEpochs(currentEpoch, transactionEpoch uint64) error {
+	if currentEpoch == 0 || transactionEpoch == currentEpoch {
+		return nil
+	}
+	return moerr.NewInvalidStateNoCtxf(
+		"transaction predates View metadata epoch: transaction=%d current=%d; rollback and retry",
+		transactionEpoch, currentEpoch)
+}
+
+func viewMetadataStatementNeedsLease(stmt tree.Statement, sql, defaultDatabase string) bool {
+	switch statement := stmt.(type) {
+	case *tree.ShowColumns:
+		return true
+	case *tree.CreateTable:
+		return statement.IsAsSelect
+	case *tree.Execute:
+		// The prepared statement owns the inner AST and plan. Acquiring for every
+		// EXECUTE keeps a cached metadata consumer inside the epoch boundary.
+		return true
+	case *tree.Select:
+		if !containsFoldASCII(sql, "columns") {
+			return false
+		}
+		compact := strings.NewReplacer(
+			"`", "", " ", "", "\t", "", "\n", "", "\r", "").
+			Replace(strings.ToLower(sql))
+		if strings.Contains(compact, "information_schema.columns") {
+			return true
+		}
+		return strings.EqualFold(defaultDatabase, "information_schema") &&
+			(strings.Contains(compact, "fromcolumns") ||
+				strings.Contains(compact, "joincolumns") ||
+				strings.Contains(compact, ",columns"))
+	default:
+		return false
+	}
+}
+
+func containsFoldASCII(value, substring string) bool {
+	if len(substring) == 0 {
+		return true
+	}
+	for index := 0; index+len(substring) <= len(value); index++ {
+		if strings.EqualFold(value[index:index+len(substring)], substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func recordSessionDDL(ses FeSession, execCtx *ExecCtx, err error) {

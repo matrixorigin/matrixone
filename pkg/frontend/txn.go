@@ -28,6 +28,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -224,6 +225,7 @@ type FeTxnOption struct {
 	// transaction created to execute the SET statement itself.
 	activeTxnAtStart      bool
 	activeTxnAtStartKnown bool
+	viewMetadataSensitive bool
 }
 
 func (opt *FeTxnOption) Close() {
@@ -233,6 +235,7 @@ func (opt *FeTxnOption) Close() {
 	opt.byRollback = false
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
+	opt.viewMetadataSensitive = false
 }
 
 const (
@@ -264,7 +267,8 @@ type TxnHandler struct {
 	txnCtx       context.Context
 	txnCtxCancel context.CancelFunc
 
-	shareTxn bool
+	shareTxn          bool
+	viewMetadataEpoch uint64
 
 	//the server status
 	serverStatus uint32
@@ -289,16 +293,23 @@ func InitTxnHandler(service string, storage engine.Engine, connCtx context.Conte
 		connCtx = context.Background()
 	}
 	ret := &TxnHandler{
-		service:      service,
-		storage:      &engine.EntireEngine{Engine: storage},
-		connCtx:      connCtx,
-		txnOp:        txnOp,
-		shareTxn:     txnOp != nil,
-		serverStatus: defaultServerStatus,
-		optionBits:   defaultOptionBits,
+		service:           service,
+		storage:           &engine.EntireEngine{Engine: storage},
+		connCtx:           connCtx,
+		txnOp:             txnOp,
+		shareTxn:          txnOp != nil,
+		viewMetadataEpoch: compile.ViewMetadataEpoch(service),
+		serverStatus:      defaultServerStatus,
+		optionBits:        defaultOptionBits,
 	}
 	ret.txnCtx, ret.txnCtxCancel = context.WithCancel(connCtx)
 	return ret
+}
+
+func (th *TxnHandler) ViewMetadataEpoch() uint64 {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.viewMetadataEpoch
 }
 
 func (th *TxnHandler) Close() {
@@ -572,6 +583,18 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeBegin)
 		}
 	}()
+	var epochLease *compile.ViewMetadataEpochLease
+	if execCtx.txnOpt.byBegin || !execCtx.txnOpt.autoCommit ||
+		execCtx.txnOpt.viewMetadataSensitive {
+		epochLease, err = compile.AcquireViewMetadataEpochLease(
+			execCtx.reqCtx, execCtx.ses.GetService())
+		if err != nil {
+			return err
+		}
+		if epochLease != nil {
+			defer epochLease.Release()
+		}
+	}
 	err = th.createTxnOpUnsafe(execCtx)
 	if err != nil {
 		return err
@@ -594,6 +617,11 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		err = disttae.CheckTxnIsValid(th.txnOp)
 		if err != nil {
 			return err
+		}
+		if epochLease == nil {
+			th.viewMetadataEpoch = 0
+		} else {
+			th.viewMetadataEpoch = epochLease.Epoch()
 		}
 	}
 	return err

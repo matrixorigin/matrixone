@@ -110,7 +110,20 @@ func (s *service) applyViewMetadataAdmission(
 	copy := *snapshot
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
-	return s.fenceViewMetadataCatalog(ctx, &copy)
+	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil {
+		return err
+	}
+	if copy.Epoch > 0 && s.viewMetadataCatalogFencedEpoch.Load() >= copy.Epoch {
+		s.viewMetadataEpochFence.MarkCatalogFenced(copy.Epoch)
+	}
+	if copy.RefreshReady && !s.viewMetadataEpochFence.MarkRefreshReady(copy.Epoch) {
+		return moerr.NewInvalidStateNoCtx("cannot prepare View metadata recovery for an unfenced epoch")
+	}
+	if copy.RefreshEnabled && !copy.RevalidationRequired &&
+		!s.viewMetadataEpochFence.EnableRefresh(copy.Epoch) {
+		return moerr.NewInvalidStateNoCtx("cannot enable View metadata refresh for an unfenced epoch")
+	}
+	return nil
 }
 
 // revokeViewMetadataGeneration fences a process that no longer owns its UUID.
@@ -157,7 +170,7 @@ func (s *service) fenceViewMetadataCatalog(
 	ctx context.Context,
 	snapshot *logservicepb.ViewMetadataAdmission,
 ) error {
-	if snapshot == nil || !snapshot.RevalidationRequired || snapshot.Epoch == 0 ||
+	if snapshot == nil || snapshot.Epoch == 0 ||
 		s.viewMetadataCatalogFencedEpoch.Load() >= snapshot.Epoch {
 		return nil
 	}
@@ -170,7 +183,8 @@ func (s *service) fenceViewMetadataCatalog(
 		s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
 		return nil
 	}
-	if !s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
+	if !snapshot.RevalidationRequired ||
+		!s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
 		return nil
 	}
 	if err := compile.RequireViewMetadataRevalidation(ctx, s.sqlExecutor); err != nil {

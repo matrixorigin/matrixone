@@ -31,6 +31,7 @@ type ViewMetadataAdmissionState struct {
 	Preparing              bool
 	Enabled                bool
 	Pending                bool
+	RefreshActivated       bool
 	HAKeeperAdmissionReady bool
 	LogReady               map[string]bool
 	CNReady                map[string]bool
@@ -86,9 +87,92 @@ func (s *stateMachine) viewMetadataAdmissionActive() bool {
 	return s.state.ViewMetadataAdmissionPreparing || s.state.ViewMetadataAdmissionEnabled
 }
 
+func (s *stateMachine) viewMetadataHAKeeperReplica(uuid string) bool {
+	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
+	if !ok {
+		return false
+	}
+	for _, member := range shard.Replicas {
+		if member == uuid {
+			return true
+		}
+	}
+	for _, member := range shard.NonVotingReplicas {
+		if member == uuid {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *stateMachine) viewMetadataRefreshLogStoresReady() bool {
+	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false
+	}
+	ready := func(uuid string) bool {
+		store, exists := s.state.LogState.Stores[uuid]
+		return exists && store.ViewMetadataRefreshSupported
+	}
+	for _, uuid := range shard.Replicas {
+		if !ready(uuid) {
+			return false
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !ready(uuid) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *stateMachine) viewMetadataRefreshReady() bool {
+	if !s.state.ViewMetadataAdmissionEnabled ||
+		s.state.ViewMetadataAdmissionEpoch == 0 ||
+		s.state.ViewMetadataCatalogFencedEpoch < s.state.ViewMetadataAdmissionEpoch ||
+		!s.viewMetadataRefreshLogStoresReady() {
+		return false
+	}
+	// Unsupported CN and HAKeeper heartbeats synchronously open a required
+	// epoch before their snapshots are published. The stable activated state
+	// therefore does not need an O(cluster-size) scan on every heartbeat.
+	if s.state.ViewMetadataRefreshActivated && !s.state.ViewMetadataRevalidationRequired {
+		return true
+	}
+	if s.state.ViewMetadataAdmissionPending {
+		return false
+	}
+	found := false
+	for _, store := range s.state.CNState.Stores {
+		found = true
+		if !store.ViewMetadataAdmissionSupported ||
+			store.ViewMetadataAdmissionGeneration == 0 ||
+			store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch ||
+			!store.ViewMetadataRefreshSupported {
+			return false
+		}
+	}
+	return found
+}
+
+func (s *stateMachine) tryCompleteViewMetadataRevalidation(hb pb.CNStoreHeartbeat) {
+	if !s.state.ViewMetadataRevalidationRequired ||
+		hb.ViewMetadataRevalidatedEpoch != s.state.ViewMetadataAdmissionEpoch ||
+		hb.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch ||
+		!s.viewMetadataRefreshReady() {
+		return
+	}
+	s.state.ViewMetadataRevalidationRequired = false
+	s.state.ViewMetadataRefreshActivated = true
+}
+
 func (s *stateMachine) cnViewMetadataAdmitted(uuid string, store pb.CNStoreInfo) bool {
 	if !s.viewMetadataAdmissionActive() {
 		return true
+	}
+	if s.state.ViewMetadataRefreshActivated && !store.ViewMetadataRefreshSupported {
+		return false
 	}
 	if !s.viewMetadataAdmissionTargetsReadyFor(uuid, false) ||
 		!store.ViewMetadataAdmissionSupported ||
@@ -507,6 +591,7 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 	}
 	s.state.CNState.Stores[hb.UUID] = store
 	s.tryPromoteViewMetadataAdmissions(nil)
+	s.tryCompleteViewMetadataRevalidation(hb)
 	return true
 }
 
@@ -561,6 +646,7 @@ func (s *stateMachine) updateProxyViewMetadataAdmission(hb pb.ProxyHeartbeat) bo
 }
 
 func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *pb.ViewMetadataAdmission {
+	refreshReady := s.viewMetadataRefreshReady()
 	snapshot := &pb.ViewMetadataAdmission{
 		Preparing:            s.state.ViewMetadataAdmissionPreparing,
 		Enabled:              s.state.ViewMetadataAdmissionEnabled,
@@ -569,6 +655,9 @@ func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *p
 		CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
 		Ready:                !s.viewMetadataAdmissionActive(),
 		Admitted:             !s.viewMetadataAdmissionActive(),
+		RefreshReady:         refreshReady,
+		RefreshEnabled: refreshReady && s.state.ViewMetadataRefreshActivated &&
+			!s.state.ViewMetadataRevalidationRequired,
 	}
 	if proxy {
 		if store, ok := s.state.ProxyState.Stores[uuid]; ok {
