@@ -334,19 +334,19 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// needsRebuild is set when execution-time retry discovers that the cached
+	// prepared plan generation is stale before frontend metadata catches up.
+	needsRebuild bool
+	// compileNeedsRebuild remembers that this statement had an eligible cached
+	// topology before it was invalidated, even after that topology is released.
+	compileNeedsRebuild bool
 	// numericPrefixConsumer is computed once per prepared-plan generation so
 	// ordinary COM_STMT Query executions never scan or copy the cached plan.
 	numericPrefixConsumer bool
 	hasPaginationParams   bool
 	hasLagLeadParams      bool
-	// directResultParamPositions records parameters that are exposed directly
-	// as result columns. Binary protocol executions may need to specialize only
-	// these positions so the result metadata follows the wire type. Explicit
-	// CAST expressions are excluded by the planner's provenance-aware scanner.
-	directResultParamPositions    []int32
-	directResultParamPositionsSet bool
-	paramKinds                    []vector.PrepareParamKind
-	paramMetadata                 []bool
+	paramKinds            []vector.PrepareParamKind
+	paramMetadata         []bool
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -359,6 +359,20 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// runtimeSpecializationPlan records the plan for which the static
+	// execute-time specialization decision was made. Most prepared DML only
+	// needs parameter values and can reuse the prepare-time compile; keeping the
+	// decision with the plan avoids copying and walking the whole plan on every
+	// EXECUTE.
+	runtimeSpecializationPlan   *plan.Plan
+	runtimeSpecializationNeeded bool
+	// directResultParamPositions is computed with the prepared plan and reused
+	// by COM_STMT_EXECUTE. A direct marker's execute-time numeric domain is also
+	// the visible result-column domain; ordinary predicates and nested
+	// expressions use the regular specialization scan instead.
+	directResultParamPositions    []int32
+	directResultParamPositionsSet bool
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -794,6 +808,23 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
+}
+
+// invalidateCachedCompile detaches and returns the old cached topology. The
+// caller owns its one Release unless it is also the currently running Compile,
+// whose normal execution cleanup owns that Release.
+func (prepareStmt *PrepareStmt) invalidateCachedCompile() *compile.Compile {
+	prepareStmt.needsRebuild = true
+	prepareStmt.compileNeedsRebuild = true
+	if prepareStmt.compile == nil {
+		return nil
+	}
+	invalidatedCompile := prepareStmt.compile
+	invalidatedCompile.FreeOperator()
+	invalidatedCompile.SetIsPrepare(false)
+	// Clear first so PrepareStmt.Close cannot release the detached owner.
+	prepareStmt.compile = nil
+	return invalidatedCompile
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {

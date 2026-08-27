@@ -521,6 +521,12 @@ type Process struct {
 	// share this immutable object, keeping the per-pipeline footprint to one
 	// pointer rather than one protobuf timestamp.
 	planSnapshotTS *timestamp.Timestamp
+	// planGenerationReused distinguishes a cached/prepared generation admitted
+	// for this execution from a plan freshly built at the transaction's current
+	// snapshot. The distinction matters only during a protocol rollback: an old
+	// lock owner cannot consume the optional plan snapshot, so a reused
+	// generation must rebuild locally before its first lock RPC.
+	planGenerationReused bool
 
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
@@ -868,12 +874,26 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 // Child pipeline processes inherit the immutable binding pointer.
 func (proc *Process) SetPlanSnapshotTS(ts timestamp.Timestamp) {
 	proc.planSnapshotTS = &ts
+	proc.planGenerationReused = false
+}
+
+// SetPlanGenerationReused records that the bound plan generation was admitted
+// from a session/prepared cache rather than built for this execution.
+func (proc *Process) SetPlanGenerationReused(reused bool) {
+	proc.planGenerationReused = reused
+}
+
+// PlanGenerationReused reports whether this execution admitted a reusable
+// logical-plan generation.
+func (proc *Process) PlanGenerationReused() bool {
+	return proc.planGenerationReused
 }
 
 // ClearPlanSnapshotTS removes the plan binding. Lock callers without a plan
 // then retain the legacy transaction-snapshot behavior.
 func (proc *Process) ClearPlanSnapshotTS() {
 	proc.planSnapshotTS = nil
+	proc.planGenerationReused = false
 }
 
 // GetPlanSnapshotTS returns the immutable plan snapshot for this execution
@@ -885,6 +905,12 @@ func (proc *Process) GetPlanSnapshotTS() (timestamp.Timestamp, bool) {
 	return *proc.planSnapshotTS, true
 }
 
+// PlanSnapshotTSForTransport returns the immutable plan binding in the pointer
+// form used by protobuf transport. Callers must not mutate the returned value.
+func (proc *Process) PlanSnapshotTSForTransport() *timestamp.Timestamp {
+	return proc.planSnapshotTS
+}
+
 // CopyPlanSnapshotFrom propagates one execution generation's binding to a
 // child or reused pipeline process without exposing the presence bit.
 func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
@@ -893,6 +919,7 @@ func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
 		return
 	}
 	proc.planSnapshotTS = parent.planSnapshotTS
+	proc.planGenerationReused = parent.planGenerationReused
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {

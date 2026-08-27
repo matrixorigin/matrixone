@@ -81,8 +81,9 @@ func (c *issue25753TraceConn) didRewriteParamAsDecimal() bool {
 }
 
 // issue25753RewriteFirstParamAsDecimal keeps the driver's length-encoded value
-// and changes only the COM_STMT_EXECUTE type descriptor. This exercises the
-// wire shape used by clients that bind a direct DECIMAL parameter.
+// and changes only its COM_STMT_EXECUTE type descriptor. This exercises the
+// same wire shape used by clients that bind a direct DECIMAL parameter, while
+// retaining the driver's real prepare/execute/result decoding path.
 func issue25753RewriteFirstParamAsDecimal(data []byte) bool {
 	const (
 		packetHeaderSize = 4
@@ -213,6 +214,35 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			directStmt, err := conn.PrepareContext(ctx, "select ? as result")
 			require.NoError(t, err)
 			defer directStmt.Close()
+
+			// The Go driver sends string arguments as MYSQL_TYPE_VAR_STRING on
+			// COM_STMT_EXECUTE.  These values are nevertheless valid numeric
+			// arguments for overloaded functions; the execute path must infer
+			// their numeric domain without changing the cached prepared plan.
+			textAbsStmt, err := conn.PrepareContext(ctx, "select abs(?)")
+			require.NoError(t, err)
+			defer textAbsStmt.Close()
+			var absResult string
+			require.NoError(t, textAbsStmt.QueryRowContext(ctx, "-1.5").Scan(&absResult))
+			require.Equal(t, "1.5", absResult)
+
+			nestedAbsStmt, err := conn.PrepareContext(ctx, "select abs(? + 0)")
+			require.NoError(t, err)
+			defer nestedAbsStmt.Close()
+			var nestedAbsResult float64
+			require.NoError(t, nestedAbsStmt.QueryRowContext(ctx, float64(-1.5)).Scan(&nestedAbsResult))
+			require.Equal(t, 1.5, nestedAbsResult)
+
+			textSleepStmt, err := conn.PrepareContext(ctx, "select sleep(?)")
+			require.NoError(t, err)
+			defer textSleepStmt.Close()
+			var sleepResult int64
+			sleepStart := time.Now()
+			require.NoError(t, textSleepStmt.QueryRowContext(ctx, "0.05").Scan(&sleepResult))
+			require.GreaterOrEqual(t, time.Since(sleepStart), 40*time.Millisecond,
+				"VAR_STRING sleep argument was not rebound to a fractional numeric value")
+			require.Equal(t, int64(0), sleepResult)
+
 			assertDirectNumeric := func(value any, databaseType string, scanTarget any) {
 				t.Helper()
 				rows, queryErr := directStmt.QueryContext(ctx, value)
@@ -229,19 +259,20 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 				require.NoError(t, rows.Err())
 			}
 
-			// The result metadata and row vector must use the same execute-time
-			// domain. Previously this returned TEXT and made numeric JDBC getters
-			// lose precision or fail binary-row decoding.
+			// A direct numeric placeholder must publish and materialize the same
+			// type. Previously the metadata was BIGINT while the value vector was
+			// VARCHAR, which made binary-row decoding fail in GetInt64.
 			var directInteger int64
 			assertDirectNumeric(int64(-42), "BIGINT", &directInteger)
 			require.Equal(t, int64(-42), directInteger)
 
-			// Rewrite only the wire type to exercise a real NEWDECIMAL bind while
-			// retaining the driver's normal server-prepared lifecycle.
+			// The Go driver normally sends decimal-looking strings as VAR_STRING;
+			// rewrite only the wire type to exercise a real DECIMAL COM_STMT bind.
 			traceConn.rewriteNextParamAsDecimal()
 			var directDecimal string
 			assertDirectNumeric("-1.5", "DECIMAL", &directDecimal)
-			require.True(t, traceConn.didRewriteParamAsDecimal())
+			require.True(t, traceConn.didRewriteParamAsDecimal(),
+				"test did not send a direct MYSQL_TYPE_NEWDECIMAL parameter")
 			require.Equal(t, "-1.5", directDecimal)
 
 			assertValue := func(left, right any, expected string) {
@@ -276,6 +307,36 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			assertValue(int64(-9007199254740993), int64(0), "-9007199254740992")
 			assertValue("9007199254740993", int64(17), "9007199254741011")
 			assertValue(uint64(9007199254740993), "29", "9007199254741023")
+
+			// CTAS is a binary prepared DDL path: the table definition is cloned
+			// for execution, then its CreateAsSelectSql is compiled as a follow-up
+			// INSERT. The runtime parameter must reach that INSERT, not merely
+			// create an empty table.
+			const ctasDB = "issue25753_prepared_ctas_db"
+			const ctasTable = ctasDB + ".issue25753_prepared_ctas"
+			_, err = conn.ExecContext(ctx, "drop database if exists "+ctasDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create database "+ctasDB)
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "drop database if exists "+ctasDB)
+			}()
+			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
+			require.NoError(t, err)
+			func() {
+				ctasStmt, prepareErr := conn.PrepareContext(ctx,
+					"create table "+ctasTable+" as select ? as value")
+				require.NoError(t, prepareErr)
+				defer ctasStmt.Close()
+				_, execErr := ctasStmt.ExecContext(ctx, int64(42))
+				require.NoError(t, execErr)
+			}()
+			var ctasValue int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select value from "+ctasTable).Scan(&ctasValue))
+			require.Equal(t, int64(42), ctasValue)
+			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
+			require.NoError(t, err)
 
 			rows, err := stmt.QueryContext(ctx, nil, int64(0))
 			require.NoError(t, err)
