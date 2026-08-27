@@ -270,6 +270,9 @@ func TestIcebergUnregisterAccessScopeAuthorization(t *testing.T) {
 	if scope, err := icebergUnregisterAccessScope(ctx, account, nil); err != nil || scope != "account" {
 		t.Fatalf("accountadmin default scope: scope=%q err=%v", scope, err)
 	}
+	if scope, err := icebergUnregisterAccessScope(ctx, sys, map[string]string{"scope": "cluster"}); err != nil || scope != "cluster" {
+		t.Fatalf("moadmin cluster scope: scope=%q err=%v", scope, err)
+	}
 	if _, err := icebergUnregisterAccessScope(ctx, account, map[string]string{"scope": "cluster"}); err == nil || !strings.Contains(err.Error(), "moadmin") {
 		t.Fatalf("expected accountadmin cluster-scope rejection, got %v", err)
 	}
