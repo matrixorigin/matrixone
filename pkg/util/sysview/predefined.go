@@ -154,18 +154,20 @@ var (
 )
 
 // informationSchemaMetadataVisibilityCTE limits user-object metadata to the
-// objects visible to the session's single active role and its inherited roles.
-// System schemas remain universally visible for MySQL/tooling compatibility.
+// objects visible to the session's single active role and roles directly
+// granted to it. Keeping this relation non-recursive avoids distributed
+// recursive pipelines in every information_schema query. System schemas remain
+// universally visible for MySQL/tooling compatibility.
 func informationSchemaMetadataVisibilityCTE() string {
-	return "WITH RECURSIVE __mo_active_roles(role_id) AS (" +
+	return "WITH __mo_active_roles(role_id) AS (" +
 		"SELECT cast(current_role_id() AS bigint) " +
 		"UNION " +
 		"SELECT cast(rg.granted_id AS bigint) FROM mo_catalog.mo_role_grant rg " +
-		"JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id), " +
+		"WHERE rg.grantee_id = current_role_id()), " +
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
-		"tbl.owner, tbl.creator, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
+		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
@@ -409,7 +411,9 @@ var (
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
-		"FROM __mo_visible_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+		"FROM mo_catalog.mo_tables tbl " +
+		"JOIN __mo_visible_tables visible_tbl ON tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id " +
+		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+

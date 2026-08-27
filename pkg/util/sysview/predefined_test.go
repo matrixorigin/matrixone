@@ -70,9 +70,9 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for _, expected := range []string{
-				"WITH RECURSIVE __mo_active_roles(role_id)",
+				"WITH __mo_active_roles(role_id)",
 				"SELECT cast(current_role_id() AS bigint)",
-				"JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id",
+				"WHERE rg.grantee_id = current_role_id()",
 				"__mo_visible_tables AS",
 				"tbl.account_id = current_account_id()",
 				"tbl.owner IN (SELECT role_id FROM __mo_active_roles)",
@@ -85,6 +85,8 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 			} {
 				assert.Contains(t, test.ddl, expected)
 			}
+			assert.NotContains(t, test.ddl, "WITH RECURSIVE")
+			assert.NotContains(t, test.ddl, "JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id")
 			assert.NotContains(t, test.ddl, "SELECT tbl.*")
 			assert.NotContains(t, test.ddl, "current_role()")
 			assert.NotContains(t, test.ddl, "FROM mo_catalog.mo_role ")
@@ -103,12 +105,14 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables tbl")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables check_tbl")
 	fkVisibilityJoin := "ON fk.db_name = fk_tbl.reldatabase AND fk.table_name = fk_tbl.relname"
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "JOIN __mo_visible_tables fk_tbl")
 	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, fkVisibilityJoin)
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL, "JOIN __mo_visible_tables fk_tbl")
 	assert.Contains(t, InformationSchemaReferentialConstraintsDDL, fkVisibilityJoin)
 	assert.NotContains(t, InformationSchemaKeyColumnUsageDDL, "fk.table_id = fk_tbl.rel_id")
 	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "fk.table_id = fk_tbl.rel_id")
 	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
-	assert.Contains(t, InformationSchemaViewsDDL, "FROM __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
 }
 
