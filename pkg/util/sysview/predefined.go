@@ -33,15 +33,25 @@ const (
 		"[[:space:]]*(?:[(][[:space:]]*" + informationSchemaViewIdentifierPattern +
 		"(?:[[:space:]]*,[[:space:]]*" + informationSchemaViewIdentifierPattern + ")*[[:space:]]*[)])?" +
 		"[[:space:]]+as[[:space:]]+"
-	informationSchemaViewDefinitionCommentSuffixPattern = "(?is)[[:space:]]*[*]/[[:space:]]*;?[[:space:]]*$"
-	informationSchemaViewStatementSQL                   = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
-	informationSchemaViewDefinitionSQL                  = "cast(trim(trailing ';' from trim(case when left(trim(" +
-		informationSchemaViewStatementSQL + "), 3) = '/*!' then " +
-		"regexp_replace(regexp_replace(" + informationSchemaViewStatementSQL + ", '" +
-		informationSchemaViewDefinitionPrefixPattern + "', '', 1, 1), '" +
-		informationSchemaViewDefinitionCommentSuffixPattern + "', '', 1, 1) else " +
-		"regexp_replace(" + informationSchemaViewStatementSQL + ", '" +
-		informationSchemaViewDefinitionPrefixPattern + "', '', 1, 1) end)) as text)"
+	informationSchemaViewDefinitionVersionCommentPrefixPattern = "(?is)^[[:space:]]*/[*]![0-9]+[[:space:]]*"
+	informationSchemaViewDefinitionCommentSuffixPattern        = "(?is)[[:space:]]*[*]/[[:space:]]*;?[[:space:]]*$"
+	informationSchemaViewStatementSQL                          = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
+	informationSchemaViewStatementWithoutTerminatorSQL         = "trim(regexp_replace(trim(" +
+		informationSchemaViewStatementSQL + "), '[;][[:space:]]*$', '', 1, 1))"
+	informationSchemaViewDefinitionPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
+		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionPrefixPattern + "'), ''))"
+	informationSchemaViewDefinitionVersionCommentPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
+		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionVersionCommentPrefixPattern + "'), ''))"
+	// Keep the persisted system-view definition free of CASE/IF, which the
+	// database-clone catalog restore cannot parse in this view definition.
+	// Prefix lengths are counted in characters so they match substr even for
+	// multibyte view identifiers. The version-comment prefix recognizes only a
+	// mysqldump wrapper, so a trailing */ is removed only for that wrapper and
+	// not for an application comment.
+	informationSchemaViewDefinitionSQL = "cast(trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
+		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
+		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
+		"2 * least(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ", 1))) as text)"
 )
 
 // `mysql` database system tables
