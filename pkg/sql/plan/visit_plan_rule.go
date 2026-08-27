@@ -931,6 +931,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
 		param := rule.params[int(exprImpl.P.Pos)]
+		if param == nil {
+			return e, nil
+		}
 		typ := e.Typ
 		// Most prepared parameters are intentionally replaced as TEXT to retain
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
@@ -1382,7 +1385,7 @@ func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool
 			break
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-		if overload != 0 {
+		if overload != 0 || fn.GetSyntaxExplicitCast() {
 			break
 		}
 		target := makeTypeByPlan2Expr(current)
@@ -1409,7 +1412,7 @@ func isExplicitPreparedCast(expr *plan.Expr) bool {
 		return false
 	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-	return overload != 0
+	return overload != 0 || fn.GetSyntaxExplicitCast()
 }
 
 func windowHasNumericPrefixDependency(

@@ -1103,12 +1103,12 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	runtimeNumericPrefixCandidate := false
 	hasNumericPrefixPacket := false
-	directResultRuntimeCandidate := binaryExecute &&
+	hasDirectResultParams := binaryExecute &&
 		prepareStmt.directResultParamPositionsSet &&
 		len(prepareStmt.directResultParamPositions) > 0
+	directResultRuntimeCandidate := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
-		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
-		directResultRuntimeCandidate
+		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
@@ -1147,9 +1147,24 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
+		var numericDirectResultPositions []int32
+		if hasDirectResultParams {
+			numericDirectResultPositions = preparedNumericDirectResultPositions(
+				prepareStmt.directResultParamPositions, prepareStmt.paramKinds)
+			directResultRuntimeCandidate = len(numericDirectResultPositions) > 0
+		}
 		needsRuntimeParamVals = needsRuntimeParamVals || runtimeNumericPrefixCandidate
+		needsRuntimeParamVals = needsRuntimeParamVals || directResultRuntimeCandidate
 		if needsRuntimeParamVals {
-			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+			directResultOnly := directResultRuntimeCandidate && !runtimeNumericPrefixCandidate &&
+				!binaryLiteralPlan && !prepareStmt.hasPaginationParams &&
+				!prepareStmt.hasLagLeadParams && !preparedExplain
+			if directResultOnly {
+				cwft.paramVals, err = preparedParamValues(
+					cwft.proc, prepareStmt.ParamTypes, numericDirectResultPositions)
+			} else {
+				cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+			}
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -1217,8 +1232,13 @@ func initExecuteStmtParamWithResolverInSession(
 	if cachedRuntimeCompile == nil &&
 		(!binaryExecute || runtimeNumericPrefixCandidate || directResultRuntimeCandidate ||
 			binaryLiteralPlan || prepareStmt.hasPaginationParams) {
+		var directResultPositions []int32
+		if directResultRuntimeCandidate {
+			directResultPositions = preparedNumericDirectResultPositions(
+				prepareStmt.directResultParamPositions, prepareStmt.paramKinds)
+		}
 		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
-			reqCtx, executionPlan, cwft.paramVals, binaryExecute, directResultRuntimeCandidate)
+			reqCtx, executionPlan, cwft.paramVals, binaryExecute, directResultPositions)
 		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
@@ -1421,7 +1441,7 @@ func specializePreparedExecutionPlan(
 	executionPlan *plan2.Plan,
 	paramVals []any,
 	binaryExecute bool,
-	directResult ...bool,
+	directResultPositions []int32,
 ) (*plan2.Plan, bool, bool, error) {
 	if len(paramVals) == 0 || executionPlan == nil ||
 		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
@@ -1430,15 +1450,24 @@ func specializePreparedExecutionPlan(
 	}
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
-	directResultProjection := len(directResult) > 0 && directResult[0]
+	directResultProjection := len(directResultPositions) > 0
 	needsNumericPrefix := plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
 	if !needsNumericPrefix && !binaryLiteralPlan && !directResultProjection &&
 		!plan2.PreparedPlanHasPaginationParams(executionPlan) {
 		return executionPlan, false, false, nil
 	}
 
-	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
-		ctx, executionPlan, paramVals)
+	var runtimePlan *plan2.Plan
+	var specialized bool
+	var err error
+	if directResultProjection && !needsNumericPrefix && !binaryLiteralPlan &&
+		!plan2.PreparedPlanHasPaginationParams(executionPlan) {
+		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithSpecializationAtPositions(
+			ctx, executionPlan, paramVals, directResultPositions)
+	} else {
+		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithSpecialization(
+			ctx, executionPlan, paramVals)
+	}
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -1607,12 +1636,21 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
+func preparedParamValues(
+	proc *process.Process,
+	paramTypes []byte,
+	runtimeTypePositions ...[]int32,
+) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
 	}
 	values := make([]any, params.Length())
+	restrictRuntimeTypes := len(runtimeTypePositions) > 0
+	var selectedRuntimeTypes []int32
+	if restrictRuntimeTypes {
+		selectedRuntimeTypes = runtimeTypePositions[0]
+	}
 	for i := range values {
 		paramValue := plan2.ParamValue{
 			IsBin:               proc.GetPrepareParamIsBin(i),
@@ -1636,16 +1674,18 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		if i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
+			attachRuntimeType := !restrictRuntimeTypes ||
+				preparedPositionSelected(selectedRuntimeTypes, int32(i))
 			// The MySQL binary protocol represents Go bool values as signed
 			// MYSQL_TYPE_TINY 0/1.  Keep the protocol type helper numeric for
 			// ordinary TINYINT callers, but restore the Boolean semantic kind
 			// before constructing the execute-time literal.  Otherwise JSON
 			// functions receive an integer 0/1 and change the stored JSON type.
-			if paramValue.PrepareParamKind == vector.PrepareParamBoolean {
+			if paramValue.PrepareParamKind == vector.PrepareParamBoolean && attachRuntimeType {
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw); ok {
-				if runtimeType.Oid != types.T_text {
+				if attachRuntimeType && runtimeType.Oid != types.T_text {
 					paramValue.RuntimeType = runtimeType
 					paramValue.HasRuntimeType = true
 				}
@@ -1661,6 +1701,29 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		values[i] = paramValue
 	}
 	return values, nil
+}
+
+func preparedPositionSelected(positions []int32, position int32) bool {
+	for _, candidate := range positions {
+		if candidate == position {
+			return true
+		}
+	}
+	return false
+}
+
+func preparedNumericDirectResultPositions(
+	directResultPositions []int32,
+	paramKinds []vector.PrepareParamKind,
+) []int32 {
+	positions := make([]int32, 0, len(directResultPositions))
+	for _, position := range directResultPositions {
+		if position >= 0 && int(position) < len(paramKinds) &&
+			paramKinds[position] != vector.PrepareParamNone {
+			positions = append(positions, position)
+		}
+	}
+	return positions
 }
 
 func buildExecuteUserParams(
@@ -1915,9 +1978,21 @@ func buildPlanForCompileRetry(
 			ctx, retryPlan, preparedRetry.paramVals)
 		return runtimePlan, err
 	}
+	var directResultPositions []int32
+	if preparedRetry.binaryExecute {
+		for _, position := range plan2.PreparedPlanDirectResultParamPositions(retryPlan) {
+			if position < 0 || int(position) >= len(preparedRetry.paramVals) {
+				continue
+			}
+			if param, ok := preparedRetry.paramVals[position].(plan2.ParamValue); ok &&
+				param.HasRuntimeType {
+				directResultPositions = append(directResultPositions, position)
+			}
+		}
+	}
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
 		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute,
-		preparedRetry.binaryExecute && plan2.PreparedPlanHasDirectResultParams(retryPlan))
+		directResultPositions)
 	if err != nil {
 		return nil, err
 	}

@@ -824,6 +824,33 @@ func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
 	require.Equal(t, int64(-42), root.ProjectList[0].GetLit().GetI64Val())
 }
 
+func TestPreparedDirectResultSpecializationIsPositionScoped(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_direct_scope from 'select ? as direct_text, ? as direct_number, abs(?) as nested_number'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().GetPlan()
+	require.Equal(t, []int32{0, 1}, PreparedPlanDirectResultParamPositions(original))
+	originalRoot := original.GetQuery().Nodes[original.GetQuery().Steps[len(original.GetQuery().Steps)-1]]
+	require.Len(t, originalRoot.ProjectList, 3)
+	originalDirectText := originalRoot.ProjectList[0].String()
+	originalNested := originalRoot.ProjectList[2].String()
+
+	runtimePlan, specialized, err := FillValuesOfParamsInPlanWithSpecializationAtPositions(
+		context.Background(), original, []any{
+			ParamValue{Value: "text", IsBinaryProtocol: true},
+			ParamValue{Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1.25", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		}, []int32{1})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	runtimeRoot := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, originalDirectText, runtimeRoot.ProjectList[0].String(),
+		"a nonnumeric direct result must retain its prepared binding")
+	require.Equal(t, int32(types.T_int64), runtimeRoot.ProjectList[1].Typ.Id)
+	require.Equal(t, originalNested, runtimeRoot.ProjectList[2].String(),
+		"a numeric packet outside the direct result must retain its prepared binding")
+}
+
 func TestPreparedDecimalRuntimeType(t *testing.T) {
 	for _, test := range []struct {
 		name      string

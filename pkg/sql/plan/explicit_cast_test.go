@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
+func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 	ctx := context.Background()
 	source := makePlan2StringConstExprWithType("1")
 	targetType := types.T_int64.ToType()
@@ -49,8 +49,20 @@ func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
 	_, syntaxExplicitOverload := function.DecodeOverloadID(syntaxExplicitFunction.GetObj())
 	require.Equal(t, int32(0), ordinaryOverload)
 	require.Equal(t, int32(1), explicitOverload)
-	require.Equal(t, int32(2), syntaxExplicitOverload)
-	require.Zero(t, syntaxExplicit.AuxId)
+	require.Equal(t, int32(0), syntaxExplicitOverload,
+		"syntax provenance must not allocate a wire-visible function overload")
+	require.True(t, syntaxExplicit.GetF().GetSyntaxExplicitCast())
+	_, err = function.GetFunctionById(ctx, syntaxExplicitFunction.GetObj())
+	require.NoError(t, err, "the expression must execute on the legacy CAST registry")
+
+	wire, err := syntaxExplicit.Marshal()
+	require.NoError(t, err)
+	roundTrip := &Expr{}
+	require.NoError(t, roundTrip.Unmarshal(wire))
+	require.True(t, roundTrip.GetF().GetSyntaxExplicitCast())
+	_, roundTripOverload := function.DecodeOverloadID(roundTrip.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(0), roundTripOverload)
+	require.True(t, DeepCopyExpr(roundTrip).GetF().GetSyntaxExplicitCast())
 }
 
 func TestUseExplicitCastOverload(t *testing.T) {

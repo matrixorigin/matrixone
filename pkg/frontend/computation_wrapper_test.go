@@ -653,6 +653,86 @@ func TestInitExecuteStmtParamKeepsCachedCompileForExplicitCast(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamIgnoresNumericParamsOutsideDirectResults(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 133, "select ? as direct_value, abs(?) as nested_value")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []int32{0}, prepareStmt.directResultParamPositions)
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"text", "7"} {
+		require.NoError(t, vector.AppendBytes(
+			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+	}
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	require.Same(t, sentinel, retComp,
+		"a nested numeric packet must not invalidate a TEXT direct result")
+	require.Same(t, originalPlan, runtimePlan,
+		"an unrelated nested packet must not allocate a specialized plan")
+	require.Nil(t, cw.paramVals,
+		"the direct-result fast path must not materialize unrelated runtime values")
+}
+
+func TestInitExecuteStmtParamEnrichesOnlyNumericDirectResults(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 135, "select ? as direct_text, ? as direct_number, abs(?) as nested_number")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"text", "7", "1.25"} {
+		require.NoError(t, vector.AppendBytes(
+			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_DOUBLE), 0,
+	}
+
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	require.Nil(t, retComp)
+	require.Len(t, cw.paramVals, 3)
+	directTextParam := cw.paramVals[0].(plan2.ParamValue)
+	directParam := cw.paramVals[1].(plan2.ParamValue)
+	nestedParam := cw.paramVals[2].(plan2.ParamValue)
+	require.False(t, directTextParam.HasRuntimeType,
+		"a nonnumeric direct result must remain outside runtime specialization")
+	require.True(t, directParam.HasRuntimeType)
+	require.Equal(t, types.T_int64, directParam.RuntimeType.Oid)
+	require.False(t, nestedParam.HasRuntimeType,
+		"numeric descriptors outside direct-result positions must stay unenriched")
+	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.NotNil(t, root.ProjectList[0].GetP(),
+		"a nonnumeric direct result must retain its prepared parameter binding")
+	require.Equal(t, int32(types.T_int64), root.ProjectList[1].Typ.Id)
+}
+
 func TestInitExecuteStmtParamSpecializesDirectDecimalResult(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 134, "select ? as result")
@@ -810,7 +890,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false)
+	}, false, nil)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)

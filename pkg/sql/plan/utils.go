@@ -3282,6 +3282,33 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	preparePlan *Plan,
 	paramVals []any,
 ) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, nil)
+}
+
+// FillValuesOfParamsInPlanWithSpecializationAtPositions restricts execute-time
+// rebinding to the listed parameter positions. Direct-result metadata uses this
+// path so unrelated nested parameters cannot invalidate a cached compile.
+func FillValuesOfParamsInPlanWithSpecializationAtPositions(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	positions []int32,
+) (*Plan, bool, error) {
+	selected := make([]bool, len(paramVals))
+	for _, position := range positions {
+		if position >= 0 && int(position) < len(selected) {
+			selected[position] = true
+		}
+	}
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, selected)
+}
+
+func fillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	selected []bool,
+) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
 		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
@@ -3296,15 +3323,24 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
-	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
+	effectiveParamVals := paramVals
+	if selected != nil {
+		effectiveParamVals = append([]any(nil), paramVals...)
+		for i := range effectiveParamVals {
+			if i >= len(selected) || !selected[i] {
+				effectiveParamVals[i] = ParamValue{}
+			}
+		}
+	}
+	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, effectiveParamVals)
 	copied := DeepCopyPlan(preparePlan)
-	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
+	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, effectiveParamVals)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
-			specialized, err := replaceParamVals(ctx, queryPlan, paramVals)
+			specialized, err := replaceParamVals(ctx, queryPlan, effectiveParamVals, selected)
 			if err != nil {
 				return nil, false, err
 			}
@@ -3312,7 +3348,7 @@ func FillValuesOfParamsInPlanWithSpecialization(
 		}
 
 	case *plan.Plan_Query, *plan.Plan_Dcl:
-		specialized, err := replaceParamVals(ctx, copied, paramVals)
+		specialized, err := replaceParamVals(ctx, copied, effectiveParamVals, selected)
 		if err != nil {
 			return nil, false, err
 		}
@@ -3569,6 +3605,9 @@ func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) 
 	// so the parameter remains a direct result source beneath this unary cast.
 	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
 		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
+		if fn.GetSyntaxExplicitCast() {
+			return false
+		}
 		_, overloadID := function.DecodeOverloadID(fn.Func.GetObj())
 		if overloadID == 0 {
 			return collectDirectResultParamFromExpr(fn.Args[0], positions)
@@ -4306,10 +4345,13 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
+func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, selected []bool) (bool, error) {
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
@@ -4371,6 +4413,9 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	paramRule.numericPrefixParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamKinds = make(map[int]types.StringConversionKind)
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		if param, ok := val.(ParamValue); ok {
 			if param.IsBinaryProtocol {
 				paramRule.inferTextParamPositions[i] = true
@@ -4387,6 +4432,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	directSelectRuntimeParam := make(map[int]bool)
 	for _, position := range PreparedPlanDirectResultParamPositions(plan0) {
 		if position >= 0 && int(position) < len(paramVals) &&
+			(selected == nil || (int(position) < len(selected) && selected[position])) &&
 			runtimeParamHasExplicitType(paramVals[position]) {
 			directSelectRuntimeParam[int(position)] = true
 		}

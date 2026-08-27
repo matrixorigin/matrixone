@@ -5628,13 +5628,19 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
 }
 
-// appendSyntaxExplicitCastBeforeExpr keeps the ordinary cast conversion
-// semantics while giving an explicit CAST written by the user a stable
-// overload identity. Planner consumers can distinguish it from an implicit
-// reconciliation cast without overloading Expr.AuxId, whose negative values
-// have execution-time memoization semantics.
+// appendSyntaxExplicitCastBeforeExpr keeps the legacy CAST overload on the
+// wire while recording syntax provenance in an optional protobuf field. Old
+// CNs ignore that field and continue to execute overload 0, while new planners
+// can distinguish this user-written CAST from implicit reconciliation casts.
 func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
+	cast, err := appendCastBeforeExprWithOverload(ctx, expr, toType, 0)
+	if err != nil {
+		return nil, err
+	}
+	if fn := cast.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" {
+		fn.SyntaxExplicitCast = true
+	}
+	return cast, nil
 }
 
 func appendCastBeforeExprWithOverload(

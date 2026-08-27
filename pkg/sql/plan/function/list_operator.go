@@ -2836,18 +2836,6 @@ var supportedOperators = []FuncNew{
 					return NewExplicitCast
 				},
 			},
-			{
-				// Preserve NewCast semantics for explicit CAST targets that do
-				// not require MySQL's special explicit-conversion behavior, while
-				// retaining a stable syntax identity for planner provenance.
-				overloadId: 2,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
-				newOp: func() executeLogicOfOverload {
-					return NewCast
-				},
-			},
 		},
 	},
 
