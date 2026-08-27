@@ -447,22 +447,27 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 
 			case JoinSideMark:
-				if tryMark := filter.GetCol(); tryMark != nil {
-					if tryMark.RelPos == node.BindingTags[0] {
+				if isMarkColumn(filter, node.BindingTags[0]) {
+					node.JoinType = plan.Node_SEMI
+					node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+					node.BindingTags = nil
+					break
+				}
+				if fExpr := filter.GetF(); fExpr != nil {
+					funcID, _ := function.DecodeOverloadID(fExpr.Func.GetObj())
+					if funcID == function.ISTRUE && len(fExpr.Args) == 1 &&
+						isMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
 						node.JoinType = plan.Node_SEMI
 						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 						node.BindingTags = nil
 						break
 					}
-				} else if fExpr := filter.GetF(); fExpr != nil && filter.Typ.NotNullable && fExpr.Func.ObjName == "not" {
-					arg := fExpr.Args[0]
-					if tryMark := arg.GetCol(); tryMark != nil {
-						if tryMark.RelPos == node.BindingTags[0] {
-							node.JoinType = plan.Node_ANTI
-							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
-							node.BindingTags = nil
-							break
-						}
+					if filter.Typ.NotNullable && fExpr.Func.ObjName == "not" && len(fExpr.Args) == 1 &&
+						isTrueMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
+						node.JoinType = plan.Node_ANTI
+						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
+						node.BindingTags = nil
+						break
 					}
 				}
 
@@ -721,6 +726,23 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			fmt.Sprintf("pushdownFilters:after (nodeID: %d, no change, cantPushdown: %d)", nodeID, len(cantPushdown)))
 	}
 	return nodeID, cantPushdown
+}
+
+func isMarkColumn(expr *plan.Expr, markTag int32) bool {
+	col := expr.GetCol()
+	return col != nil && col.RelPos == markTag
+}
+
+func isTrueMarkColumn(expr *plan.Expr, markTag int32) bool {
+	if isMarkColumn(expr, markTag) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	return funcID == function.ISTRUE && isMarkColumn(fn.Args[0], markTag)
 }
 
 func unwrapIsTrueFromMarkJoinEqualities(

@@ -909,22 +909,27 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
 	markTag := builder.genNewBindTag()
+	existential := outerPred == nil
 
-	for i, pred := range joinPreds {
-		if !pred.Typ.NotNullable {
-			joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
-			if err != nil {
-				return
+	// EXISTS only asks whether any predicate evaluates to TRUE.  Keep its raw
+	// predicate on the MARK join so an equality remains eligible for HashJoin,
+	// then totalize the marker below.  IN/ANY/ALL still need the join predicate's
+	// three-valued result, so retain the historical per-predicate IS TRUE there.
+	if !existential {
+		for i, pred := range joinPreds {
+			if !pred.Typ.NotNullable {
+				joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
+				if err != nil {
+					return
+				}
 			}
 		}
 	}
 
-	notNull := true
-
 	if outerPred != nil {
 		joinPreds = append(joinPreds, outerPred)
-		notNull = outerPred.Typ.NotNullable
 	}
+	markNotNullable := outerPred != nil && outerPred.Typ.NotNullable
 
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
@@ -938,7 +943,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	markExpr = &plan.Expr{
 		Typ: plan.Type{
 			Id:          int32(types.T_bool),
-			NotNullable: notNull,
+			NotNullable: markNotNullable,
 		},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -946,6 +951,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 				ColPos: 0,
 			},
 		},
+	}
+
+	if existential {
+		markExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{markExpr})
+		if err != nil {
+			return
+		}
 	}
 
 	if negate {

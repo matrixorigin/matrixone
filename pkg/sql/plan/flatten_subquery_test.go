@@ -1617,7 +1617,7 @@ func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 			"ANTI join must expose its equality as a hash key")
 	})
 
-	t.Run("projected mark join preserves is true", func(t *testing.T) {
+	t.Run("projected mark join exposes equality and totalizes marker", func(t *testing.T) {
 		logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 			"select "+correlatedNotExists+" from tpch.nation n")
 		require.NoError(t, err)
@@ -1631,12 +1631,35 @@ func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 		}
 		require.NotNil(t, mark)
 		require.Len(t, mark.OnList, 1)
-		isTrue := mark.OnList[0].GetF()
-		require.NotNil(t, isTrue)
-		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
-		require.Equal(t, int32(function.ISTRUE), funcID)
-		require.Len(t, isTrue.Args, 1)
-		require.True(t, IsEqualFunc(isTrue.Args[0].GetF().Func.GetObj()))
+		equality := mark.OnList[0].GetF()
+		require.NotNil(t, equality)
+		require.True(t, IsEqualFunc(equality.Func.GetObj()),
+			"existential equality must remain visible to hash MARK lowering")
+
+		var containsIsTrue func(*plan.Expr) bool
+		containsIsTrue = func(expr *plan.Expr) bool {
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil {
+				return false
+			}
+			funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+			if funcID == function.ISTRUE {
+				return true
+			}
+			for _, arg := range fn.Args {
+				if containsIsTrue(arg) {
+					return true
+				}
+			}
+			return false
+		}
+		totalized := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range append(append([]*plan.Expr{}, node.ProjectList...), node.FilterList...) {
+				totalized = totalized || containsIsTrue(expr)
+			}
+		}
+		require.True(t, totalized, "projected NOT EXISTS must convert a NULL marker to FALSE before negation")
 	})
 }
 
