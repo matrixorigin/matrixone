@@ -257,6 +257,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			statementRuntimeIgnore: true,
 			planSnapshotTS:         timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 			hasPlanSnapshotTS:      true,
+			planGenerationReused:   true,
 			txnClient:              txnClient,
 			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
@@ -298,6 +299,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
+	require.True(t, compile.proc.PlanGenerationReused())
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -381,6 +383,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 		AffectedRows:           42,
 		StatementRuntimeIgnore: true,
 		PlanSnapshotTs:         &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+		PlanGenerationReused:   true,
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -411,6 +414,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.True(t, helper.statementRuntimeIgnore)
 	require.True(t, helper.hasPlanSnapshotTS)
 	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
+	require.True(t, helper.planGenerationReused)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
