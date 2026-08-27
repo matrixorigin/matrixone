@@ -316,6 +316,11 @@ type Compile struct {
 	// existing session/prepared generation. A definition rebuild clears it;
 	// data-only retries retain it with the same logical generation.
 	planGenerationReused bool
+	// stringShuffleHashAlgorithm is selected once per execution. Retries keep
+	// it, while a prepared pipeline's next Reset selects again from the rollout
+	// gate. This prevents equal keys from changing owners mid-query.
+	stringShuffleHashAlgorithm       process.StringShuffleHashAlgorithm
+	stringShuffleHashAlgorithmFrozen bool
 	// resultMetadataFrozen is set once a streaming consumer has materialized or
 	// sent the current result schema. A definition retry may continue only when
 	// the rebuilt logical plan exposes identical result metadata.

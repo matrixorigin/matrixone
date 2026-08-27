@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -108,6 +109,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetAffectedRows(42)
 	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
 	proc.SetPlanGenerationReused(true)
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashComplete)
 	return proc, txnOp
 }
 
@@ -587,6 +589,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, decodedPlanSnapshot)
 	require.True(t, decodedProc.PlanGenerationReused())
+	require.Equal(t, StringShuffleHashComplete, decodedProc.StringShuffleHashAlgorithm())
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())
@@ -594,12 +597,24 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 
 	info.PlanSnapshotTs = nil // simulate a sender from before the fields existed
 	info.PlanGenerationReused = false
+	info.StringShuffleHashAlgorithm = 0
 	legacyProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	_, ok = legacyProc.GetPlanSnapshotTS()
 	require.False(t, ok)
 	require.False(t, legacyProc.PlanGenerationReused())
+	require.Equal(t, StringShuffleHashLegacy, legacyProc.StringShuffleHashAlgorithm())
 	require.NotPanics(t, legacyProc.Free)
+
+	for _, invalid := range []uint32{2, 99, 257} {
+		info.StringShuffleHashAlgorithm = invalid
+		_, err = svc.Decode(context.Background(), info)
+		require.ErrorContains(t, err,
+			fmt.Sprintf("string shuffle hash algorithm %d is not supported", invalid))
+	}
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashAlgorithm(99))
+	_, err = proc.BuildProcessInfo("select invalid hash algorithm")
+	require.ErrorContains(t, err, "string shuffle hash algorithm 99 is not supported")
 
 	rtSvc := "codec-test-svc"
 	runtime := rt.DefaultRuntime()
@@ -641,6 +656,25 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	require.False(t, ok)
 	require.False(t, legacyChild.PlanGenerationReused())
 	proc.Free()
+}
+
+func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashComplete)
+
+	child := proc.NewNoContextChildProc(0)
+	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	require.Equal(t, StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashComplete, channelChild.StringShuffleHashAlgorithm())
+
+	// Selecting the next execution after rollback cannot mutate processes that
+	// already belong to the running execution.
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashLegacy)
+	require.Equal(t, StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashComplete, channelChild.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashLegacy,
+		proc.NewNoContextChildProc(0).StringShuffleHashAlgorithm())
 }
 
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
