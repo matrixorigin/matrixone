@@ -51,6 +51,19 @@ func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
 	}
 }
 
+func TestMongoDBLocalE2EKeyfileMountUsesDirectory(t *testing.T) {
+	repoRoot := mongoDBTestRepoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repoRoot, "optools", "mongodb_ci.bash"))
+	require.NoError(t, err)
+	require.Contains(t, string(script), "MONGODB_KEYFILE_DIR=\"$TMP_DIR/mongodb-key-source\"")
+	require.Contains(t, string(script), "MONGODB_KEYFILE=\"$MONGODB_KEYFILE_DIR/mongodb-keyfile\"")
+
+	compose, err := os.ReadFile(filepath.Join(repoRoot, "etc", "launch-mongodb-local", "compose.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(compose), "cp /run/key-source/mongodb-keyfile /tmp/mongodb-keyfile")
+	require.Contains(t, string(compose), "${MONGODB_KEYFILE_DIR}:/run/key-source:ro")
+}
+
 func TestMongoDBLocalE2EPortPlanUsesOneReservedBlock(t *testing.T) {
 	for range 5 {
 		ports, output, err := runMongoDBPortPlan(t, nil)
@@ -369,6 +382,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "4")
 	expectMongoDBE2EScalar(mock, "0")
 	expectMongoDBE2EScalar(mock, "5")
+	mock.ExpectQuery("truncate table mongodb_ci.events").WillReturnError(
+		errors.New("invalid input: cannot insert/update/delete from external table"))
+	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
 		require.Len(t, row, 6)
@@ -450,6 +466,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"show-create-redaction-roundtrip",
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
+		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
 		"insert-select-primary-key-targets",
