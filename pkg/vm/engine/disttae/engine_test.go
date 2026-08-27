@@ -349,6 +349,27 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 	require.Equal(t, map[string]string{"account": "app"}, labels)
 }
 
+func TestEngineQueryCandidateDiscoveryExcludesAdmissionPendingCN(t *testing.T) {
+	ready := newEngineNodesCNStore(
+		"ready", "ready:6001", nil, metadata.WorkState_Working, version.CommitID)
+	ready.ViewMetadataAdmissionGeneration = 7
+	ready.ViewMetadataAdmissionReady = true
+	pending := newEngineNodesCNStore(
+		"pending", "pending:6001", nil, metadata.WorkState_Working, version.CommitID)
+	pending.ViewMetadataAdmissionGeneration = 8
+
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+		ViewMetadataAdmission: &logpb.ViewMetadataAdmission{Enabled: true, Epoch: 4},
+		CNStores:              []logpb.CNStore{ready, pending},
+	})
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"ready"}, queryCandidateServiceIDs(candidates))
+	nodes, err := e.Nodes(false, "sys", "root", nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ready:6001"}, nodeAddresses(nodes))
+}
+
 func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *testing.T) {
 	appLabel := map[string]metadata.LabelList{
 		"account": {Labels: []string{"app"}},
