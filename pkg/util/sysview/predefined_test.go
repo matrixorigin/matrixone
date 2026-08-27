@@ -485,6 +485,11 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "select 1 /* application comment */",
 		},
 		{
+			name:       "line comment before as",
+			createSQL:  "create view v -- migration comment\n as select 1;",
+			definition: "select 1",
+		},
+		{
 			name:       "unrecognized metadata remains visible",
 			createSQL:  "select 1",
 			definition: "select 1",
