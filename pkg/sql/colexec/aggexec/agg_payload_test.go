@@ -215,6 +215,13 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "short-decimal256-payload", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-year-payload", typ: types.T_year.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-uuid-payload", typ: types.T_uuid.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
+		{
+			name: "unsupported-objectid",
+			typ: types.Type{
+				Oid: types.T_Objectid, Size: types.ObjectidSize,
+			},
+			data: make([]byte, types.ObjectidSize), wantErr: "unsupported type",
+		},
 	}
 
 	for _, tc := range cases {

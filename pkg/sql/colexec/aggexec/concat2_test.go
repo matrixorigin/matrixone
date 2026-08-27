@@ -498,8 +498,19 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 
 	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{types.T_blob.ToType()}))
 	require.Equal(t, types.T_text.ToType(), GroupConcatReturnType([]types.Type{types.T_int64.ToType()}))
-	require.False(t, IsGroupConcatSupported(types.Type{Oid: types.T_tuple}))
-	require.True(t, IsGroupConcatSupported(types.T_varchar.ToType()))
+	for _, oid := range []types.T{
+		types.T_varchar, types.T_decimal256, types.T_year, types.T_uuid,
+		types.T_geometry, types.T_geometry32, types.T_array_uint8,
+	} {
+		require.Truef(t, IsGroupConcatSupported(oid.ToType()), "supported type %s", oid)
+	}
+	for _, oid := range []types.T{
+		types.T_any, types.T_star, types.T_int128, types.T_uint128,
+		types.T_Objectid, types.T_tuple, types.T(255),
+	} {
+		require.Falsef(t, IsGroupConcatSupported(types.Type{Oid: oid}),
+			"unsupported type %d", oid)
+	}
 
 	left.Free(mp)
 	right.Free(mp)
@@ -621,6 +632,142 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 			require.Equal(t, tc.wkb[:20], results[0].GetBytesAt(0))
 		})
 	}
+}
+
+func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
+	typ := types.T_geometry.ToType()
+	points := make([]geo.Coord, 4096)
+	for i := range points {
+		points[i] = geo.Coord{X: float64(i), Y: float64(i + 1)}
+	}
+	wkb := geo.WriteWKB(geo.LineString{Points: points})
+	require.Equal(t, 65545, len(wkb))
+
+	tests := []struct {
+		name      string
+		ordered   bool
+		spill     bool
+		accounted bool
+	}{
+		{name: "ordered memory", ordered: true},
+		{name: "ordered spill", ordered: true, spill: true},
+		{name: "accounted input order", accounted: true},
+		{name: "accounted ordered", ordered: true, accounted: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			argTypes := []types.Type{typ}
+			if tc.ordered {
+				argTypes = append(argTypes, types.T_int64.ToType())
+			}
+			exec := newGroupConcatExec(mp, multiAggInfo{
+				aggID:     AggIdOfGroupConcat,
+				argTypes:  argTypes,
+				retType:   GroupConcatReturnType([]types.Type{typ}),
+				emptyNull: true,
+			}, "").(*groupConcatExec)
+
+			if tc.ordered {
+				require.NoError(t, exec.SetExtraInformation(
+					testGroupConcatOrderConfig(
+						1, []byte{groupConcatOrderAsc}, ""), 0))
+				exec.maxLen = 20
+			} else {
+				require.NoError(t, exec.SetExtraInformation(
+					EncodeGroupConcatConfig("", 20), 0))
+			}
+
+			var (
+				registry   *mpool.AllocationAccountRegistry
+				account    *mpool.AllocationAccount
+				allocation *AllocationAccount
+			)
+			if tc.accounted {
+				registry, account, allocation = newTestAggregateAllocation(t)
+				require.NoError(t, exec.SetAllocationAccount(allocation))
+			}
+			require.NoError(t, exec.GroupGrow(1))
+			if tc.spill {
+				ConfigureGroupConcatH0Spill(
+					exec, groupConcatMinRunSize, context.Background(),
+					func() (*os.File, error) {
+						file, err := os.CreateTemp(t.TempDir(), "group-concat-geometry-")
+						if err == nil {
+							err = os.Remove(file.Name())
+						}
+						return file, err
+					}, nil)
+			}
+
+			values := vector.NewVec(typ)
+			require.NoError(t, vector.AppendBytes(values, wkb, false, mp))
+			vectors := []*vector.Vector{values}
+			var orderKey *vector.Vector
+			if tc.ordered {
+				orderKey = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(orderKey, int64(1), false, mp))
+				vectors = append(vectors, orderKey)
+			}
+			groups := []uint64{1}
+			if tc.accounted {
+				require.NoError(t, exec.PreflightBatchFill(0, groups, vectors))
+			}
+			require.NoError(t, exec.BatchFill(0, groups, vectors))
+			if tc.spill {
+				require.True(t, exec.hasOrderedSpillRuns())
+			}
+
+			results, err := exec.FlushWithContext(context.Background())
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
+			require.Equal(t, wkb[:20], results[0].GetBytesAt(0))
+
+			results[0].Free(mp)
+			values.Free(mp)
+			if orderKey != nil {
+				orderKey.Free(mp)
+			}
+			exec.Free()
+			if tc.accounted {
+				require.NoError(t, exec.ClearAllocationAccount(allocation))
+				finishTestAggregateAllocation(t, registry, account)
+			}
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestGroupConcatMaxLenPreservesOpaqueBinaryCharset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	inputType := types.NewWithCharset(
+		types.T_varchar, 16, 0, types.CharsetBinary)
+	resultType := GroupConcatReturnType([]types.Type{inputType})
+	require.Equal(t, types.T_text, resultType.Oid)
+	require.Equal(t, types.CharsetBinary, resultType.Charset)
+	require.True(t, groupConcatResultIsBinary(resultType))
+
+	exec, err := MakeAgg(mp, AggIdOfGroupConcat, false, inputType)
+	require.NoError(t, err)
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeGroupConcatConfig("", 2), 0))
+	require.NoError(t, exec.GroupGrow(1))
+	values := vector.NewVec(inputType)
+	require.NoError(t, vector.AppendBytes(
+		values, []byte{0xff, 0xfe, 0xfd}, false, mp))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, resultType, *results[0].GetType())
+	require.Equal(t, []byte{0xff, 0xfe}, results[0].GetBytesAt(0))
+
+	results[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatPreservesTextCharsetForNestedMin(t *testing.T) {

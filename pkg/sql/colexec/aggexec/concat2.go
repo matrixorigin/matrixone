@@ -161,6 +161,10 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 	return result
 }
 
+func groupConcatResultIsBinary(result types.Type) bool {
+	return result.Charset == types.CharsetBinary
+}
+
 func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) AggFuncExec {
 	exec := &groupConcatExec{
 		distinct:     info.distinct,
@@ -879,7 +883,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 			if !first {
 				var truncated bool
 				buf, truncated = appendGroupConcatBytes(
-					buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+					buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 				)
 				if truncated {
 					break
@@ -968,7 +972,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
-				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 			)
 			if truncated {
 				break
@@ -1469,7 +1473,7 @@ func (exec *groupConcatExec) flushOrderedEntries(
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
-				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 			)
 			if truncated {
 				break
@@ -1601,7 +1605,7 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
 		if !first {
 			buf, truncated = appendGroupConcatBytes(
-				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 			)
 			if truncated {
 				return nil
@@ -1676,7 +1680,7 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 	writer := &accountedGroupConcatWriter{
 		buffer:       buffer,
 		maxLen:       exec.maxLen,
-		binaryResult: exec.retType.Oid == types.T_blob,
+		binaryResult: groupConcatResultIsBinary(exec.retType),
 	}
 	first := true
 	visit := st.iter
@@ -1812,7 +1816,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 	writer := &accountedGroupConcatWriter{
 		buffer:       buffer,
 		maxLen:       exec.maxLen,
-		binaryResult: exec.retType.Oid == types.T_blob,
+		binaryResult: groupConcatResultIsBinary(exec.retType),
 	}
 	first := true
 	for i, selector := range selectors {
@@ -1856,7 +1860,7 @@ func (exec *groupConcatExec) appendConcatPayload(
 	writer := &boundedGroupConcatSliceWriter{
 		buffer:       buf,
 		maxLen:       exec.maxLen,
-		binaryResult: exec.retType.Oid == types.T_blob,
+		binaryResult: groupConcatResultIsBinary(exec.retType),
 	}
 	err := payloadFieldIterator(
 		payload,
@@ -2164,15 +2168,27 @@ func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 	return exec.selectOrderedDistinctCandidates(candidates)
 }
 
-var GroupConcatUnsupportedTypes = []types.T{
-	types.T_tuple,
-}
-
 func IsGroupConcatSupported(t types.Type) bool {
-	for _, unsupported := range GroupConcatUnsupportedTypes {
-		if t.Oid == unsupported {
-			return false
-		}
+	// Keep planner admission fail-closed. New or internal types must not reach
+	// writeGroupConcatData until their SQL serialization contract is defined.
+	switch t.Oid {
+	case types.T_bit, types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_interval, types.T_year,
+		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
+		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_geometry, types.T_geometry32,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8:
+		return true
+	default:
+		return false
 	}
-	return true
 }
