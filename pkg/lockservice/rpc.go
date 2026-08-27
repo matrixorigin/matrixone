@@ -300,6 +300,27 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	return c.asyncSend(ctx, request, true)
 }
 
+// lookupLockServiceAddress resolves an internal lock protocol endpoint from
+// the raw CN inventory. A CN starts and identity-fences its lock RPC server
+// before it becomes eligible for new SQL work, so public admission filtering
+// must not hide an existing lock-table owner during that startup window.
+func (c *client) lookupLockServiceAddress(
+	ctx context.Context,
+	serviceID string,
+) (string, error) {
+	var address string
+	err := clusterservice.GetCNServiceRawWithContext(
+		ctx,
+		c.cluster,
+		clusterservice.NewServiceIDSelector(serviceID),
+		func(s metadata.CNService) bool {
+			address = s.LockServiceAddress
+			return false
+		},
+	)
+	return address, err
+}
+
 func (c *client) asyncSend(
 	ctx context.Context,
 	request *pb.Request,
@@ -319,18 +340,6 @@ func (c *client) asyncSend(
 		}
 		return nil, err
 	}
-	lookupCN := func(
-		selector clusterservice.Selector,
-		apply func(metadata.CNService) bool,
-	) error {
-		return clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-			ctx,
-			c.cluster,
-			selector,
-			apply,
-		)
-	}
-
 	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
@@ -338,12 +347,7 @@ func (c *client) asyncSend(
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_Lock,
 			pb.Method_Unlock,
 			pb.Method_BatchUnlock,
@@ -351,53 +355,23 @@ func (c *client) asyncSend(
 			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_ValidateService:
 			sid = getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_GetWaitingList,
 			pb.Method_GetTxnWaitingListOnLockTable:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_GetActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_CheckActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.CheckActiveTxn.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_AbortRemoteDeadlockTxn:
 			sid = getUUIDFromServiceIdentifier(request.AbortRemoteDeadlockTxn.Txn.WaiterAddress)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		default:
 			values := c.cluster.GetAllTNServices()
 			if len(values) > 0 {
@@ -427,7 +401,9 @@ func (c *client) asyncSend(
 	}
 	if address == "" {
 		var cns []string
-		if err := lookupCN(
+		if err := clusterservice.GetCNServiceRawWithContext(
+			ctx,
+			c.cluster,
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
@@ -439,7 +415,8 @@ func (c *client) asyncSend(
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
-
+		return returnError(moerr.NewBackendCannotConnectNoCtx(
+			"lockservice service " + sid + " is absent from cluster inventory"))
 	}
 	transport := c.client
 	if keeperOwnsRequest {
@@ -673,15 +650,7 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 	}
 
 	lookupAddress := func() (string, error) {
-		var address string
-		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-			ctx,
-			c.cluster,
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
+		address, err := c.lookupLockServiceAddress(ctx, sid)
 		if err != nil {
 			return "", moerr.AttachCause(ctx, err)
 		}
@@ -802,16 +771,7 @@ func (c *client) ResetValidationBackend(
 	}
 	sid := getUUIDFromServiceIdentifier(serviceID)
 	lookupAddress := func() (string, error) {
-		var address string
-		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-			ctx,
-			c.cluster,
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			},
-		)
+		address, err := c.lookupLockServiceAddress(ctx, sid)
 		if err != nil {
 			return "", moerr.AttachCause(ctx, err)
 		}

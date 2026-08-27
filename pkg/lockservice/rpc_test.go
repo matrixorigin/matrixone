@@ -86,6 +86,17 @@ type blockedClusterClient struct {
 	release chan struct{}
 }
 
+type fixedClusterClient struct {
+	details logpb.ClusterDetails
+}
+
+func (c *fixedClusterClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
+	if err := ctx.Err(); err != nil {
+		return logpb.ClusterDetails{}, err
+	}
+	return c.details, nil
+}
+
 func (c *blockedClusterClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
 	select {
 	case c.started <- struct{}{}:
@@ -1368,6 +1379,106 @@ func TestNewClientWithMOCluster(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+}
+
+func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
+	service := t.Name()
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		service,
+		&fixedClusterClient{details: logpb.ClusterDetails{
+			ViewMetadataAdmission: &logpb.ViewMetadataAdmission{
+				Enabled: true,
+				Epoch:   4,
+			},
+			CNStores: []logpb.CNStore{{
+				UUID:                            "cn-id",
+				LockServiceAddress:              "cn.example:18101",
+				WorkState:                       metadata.WorkState_Working,
+				ViewMetadataAdmissionGeneration: 11,
+			}},
+		}},
+		time.Hour,
+	)
+	defer cluster.Close()
+	require.NoError(t,
+		cluster.(clusterservice.AuthoritativeRefresher).Refresh(context.Background()))
+
+	var publicRoutes int
+	require.NoError(t, clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		context.Background(),
+		cluster,
+		clusterservice.NewServiceIDSelector("cn-id"),
+		func(metadata.CNService) bool {
+			publicRoutes++
+			return true
+		},
+	))
+	require.Zero(t, publicRoutes,
+		"a pending CN must remain unavailable to public query routing")
+
+	normalRPCClient := &closeTrackingRPCClient{}
+	activeTxnRPCClient := &closeTrackingRPCClient{}
+	validationRPCClient := &closeTrackingRPCClient{}
+	c := &client{
+		service:          service,
+		cluster:          cluster,
+		client:           normalRPCClient,
+		activeTxnClient:  activeTxnRPCClient,
+		validationClient: validationRPCClient,
+		logger:           getLogger(service),
+		recoveryBackends: make(map[string]recoveryBackend),
+		resolveBackend: func(_ context.Context, address string) (string, error) {
+			return address, nil
+		},
+	}
+	serviceID := "0000000000000000000cn-id"
+
+	_, err := c.AsyncSend(context.Background(), &lock.Request{
+		Method:    lock.Method_Unlock,
+		LockTable: lock.LockTable{ServiceID: serviceID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"cn.example:18101"}, normalRPCClient.sent)
+
+	require.NoError(t, c.ResetBackend(context.Background(), serviceID))
+	require.Equal(t,
+		[]string{"cn.example:18101", "cn.example:18101"},
+		activeTxnRPCClient.closed,
+	)
+
+	require.NoError(t, c.ResetValidationBackend(context.Background(), serviceID))
+	require.Equal(t,
+		[]string{"cn.example:18101", "cn.example:18101"},
+		validationRPCClient.closed,
+	)
+}
+
+func TestAsyncSendMissingLockServiceRouteDoesNotReachTransport(t *testing.T) {
+	service := t.Name()
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		service,
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+	)
+	defer cluster.Close()
+	transport := &closeTrackingRPCClient{}
+	c := &client{
+		service: service,
+		cluster: cluster,
+		client:  transport,
+		logger:  getLogger(service),
+	}
+
+	_, err := c.AsyncSend(context.Background(), &lock.Request{
+		Method:    lock.Method_Unlock,
+		LockTable: lock.LockTable{ServiceID: "missing"},
+	})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	require.Empty(t, transport.sent,
+		"an unresolved route must not be delegated to an RPC transport")
 }
 
 func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
