@@ -630,6 +630,32 @@ func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
 	}
 }
 
+func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey, max(l_comment) as comment
+			from lineitem group by l_suppkey
+		)
+		select a.l_suppkey, a.comment
+		from c a join c b on a.l_suppkey = b.l_suppkey
+		join c d on a.l_suppkey = d.l_suppkey`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.Equal(t, 3, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+	lineitemScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil &&
+			node.TableDef.Name == "lineitem" {
+			lineitemScans++
+		}
+	}
+	require.Equal(t, 1, lineitemScans)
+}
+
 func TestCTEMultiReferenceRejectsNonHashBuildConsumers(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	for _, test := range []struct {
@@ -670,7 +696,7 @@ func subtreeHasNodeOption(query *planpb.Query, nodeID int32, option string) bool
 	return false
 }
 
-func TestCTEReuseKeepsConsumersBoundInsideCTEInline(t *testing.T) {
+func TestCTEReuseRewritesConsumersInsideInlineCTE(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
 		with supplier_totals as (
@@ -686,7 +712,7 @@ func TestCTEReuseKeepsConsumersBoundInsideCTEInline(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
-	require.Equal(t, 0, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
 	lineitemScans := 0
 	for nodeID := range cteReachablePlanNodes(query) {
 		node := query.Nodes[nodeID]
@@ -695,7 +721,7 @@ func TestCTEReuseKeepsConsumersBoundInsideCTEInline(t *testing.T) {
 			lineitemScans++
 		}
 	}
-	require.Equal(t, 2, lineitemScans)
+	require.Equal(t, 1, lineitemScans)
 }
 
 func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
@@ -910,6 +936,25 @@ func TestCTEReuseCostGuard(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, cteReuseIsProfitable(test.producerCost, test.outcnt, test.refcnt))
+		})
+	}
+}
+
+func TestCTEReuseSpillCostSafetyFactor(t *testing.T) {
+	for _, test := range []struct {
+		name                         string
+		producerCost, outcnt, refcnt float64
+		factor                       float64
+		want                         bool
+	}{
+		{name: "wide win", producerCost: 100, outcnt: 1, refcnt: 3, factor: 2, want: true},
+		{name: "ordinary win lacks margin", producerCost: 3, outcnt: 1, refcnt: 3, factor: 2},
+		{name: "invalid factor", producerCost: 100, outcnt: 1, refcnt: 3, factor: 0},
+		{name: "infinite factor", producerCost: 100, outcnt: 1, refcnt: 3, factor: math.Inf(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, cteReuseIsProfitableWithSafetyFactor(
+				test.producerCost, test.outcnt, test.refcnt, test.factor))
 		})
 	}
 }
@@ -1145,6 +1190,23 @@ func BenchmarkInformationSchemaSchemataPlanSharesCurrentRoles(b *testing.B) {
 			b.Fatalf("expected one reachable mo_current_roles scan, got %d", scans)
 		}
 	}
+}
+
+func TestCTEReuseAcceptsGuardedNestedMaterializedSource(t *testing.T) {
+	builder := &QueryBuilder{qry: &Query{Nodes: []*Node{
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{
+			NodeType: planpb.Node_SINK, Children: []int32{0},
+			ExtraOptions: materialized.CTESinkOption,
+		},
+		{NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{2}},
+	}, Steps: []int32{1}}}
+	require.True(t, builder.cteSubtreeIsDeterministic(3, make(map[int32]bool)))
+
+	builder.qry.Nodes[1].ExtraOptions = ""
+	require.False(t, builder.cteSubtreeIsDeterministic(3, make(map[int32]bool)),
+		"an unguarded sink dependency must still fail closed")
 }
 
 func TestCTEReuseRecognizesGuardedRuntimeFilterExpression(t *testing.T) {

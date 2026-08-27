@@ -4759,17 +4759,6 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
 	}
-	// CTE reuse currently rewrites consumers reachable from the main query
-	// root. A CTE referenced while another CTE is being bound can also have
-	// consumers in separately appended steps, especially recursive anchor and
-	// member steps. Keep the referenced CTE inline until reuse can rewrite the
-	// complete step graph; otherwise the added producer and an unreplaced
-	// consumer share one mutable subtree and column remapping visits it twice.
-	// The containing CTE remains eligible for reuse: its expanded subtree is
-	// still checked for reachability, determinism, cost, and memory below.
-	if ctx.bindingCte() {
-		cteRef.hasNestedUse = true
-	}
 	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
 	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
 		types[i] = expr.Typ
