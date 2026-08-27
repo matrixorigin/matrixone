@@ -1658,6 +1658,10 @@ func (l *localLockTable) addRangeLockLocked(
 		mc.rollback()
 		return nil, Lock{}, err
 	}
+	firstBudgetCoarsening := false
+	if c.opts.replaceTxnLocks {
+		firstBudgetCoarsening = prepared.prepareMarkCoarsened()
+	}
 	defer prepared.close()
 
 	startLock, endLock := newRangeLock(l.logger, c)
@@ -1683,16 +1687,31 @@ func (l *localLockTable) addRangeLockLocked(
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 
-	if n := len(mc.mergedLocks); n > 0 {
+	if n := len(mc.mergedLocks); n > 0 || firstBudgetCoarsening {
 		h := c.txn.getHoldLocksLocked(l.bind.Group)
 		v, ok := h.tableKeys[l.bind.Table]
 		if ok {
-			l.logger.Info("range lock merged",
-				zap.Uint64("table", l.bind.OriginTable),
-				zap.String("txn", c.txn.txnKey),
-				zap.Int("merged", n),
-				zap.Int("current", v.mustGet().len()),
-			)
+			if firstBudgetCoarsening || (!c.opts.replaceTxnLocks && n > 0) {
+				// Keep one production-visible signal for capacity diagnosis. Later
+				// budget extensions are routine and stay at Debug to avoid bulk-DML
+				// log amplification proportional to the number of execution batches.
+				// Explicit user ranges retain their existing Info observability.
+				l.logger.Info("range lock merged",
+					zap.Uint64("table", l.bind.OriginTable),
+					zap.String("txn", c.txn.txnKey),
+					zap.Bool("budget-coarsening", c.opts.replaceTxnLocks),
+					zap.Int("merged", n),
+					zap.Int("current", v.mustGet().len()),
+				)
+			} else if l.logger.Enabled(zap.DebugLevel) {
+				l.logger.Debug("range lock merged",
+					zap.Uint64("table", l.bind.OriginTable),
+					zap.String("txn", c.txn.txnKey),
+					zap.Bool("budget-coarsening", c.opts.replaceTxnLocks),
+					zap.Int("merged", n),
+					zap.Int("current", v.mustGet().len()),
+				)
+			}
 		}
 	}
 

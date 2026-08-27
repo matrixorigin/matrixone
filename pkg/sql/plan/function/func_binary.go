@@ -1166,41 +1166,46 @@ func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	from := vector.GenerateFunctionFixedTypeParameter[types.TS](ivecs[0])
 	scale := int32(6)
-	if len(ivecs) == 2 && !ivecs[1].IsConstNull() {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+	if len(ivecs) == 2 {
+		if ivecs[1].IsConstNull() {
+			rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		if !ivecs[1].IsConst() {
+			return moerr.NewInvalidInput(proc.Ctx, "the precision argument of ts_to_time must be constant")
+		}
+		precision := vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
+		if precision < 0 || precision > 6 {
+			return moerr.NewErrTooBigPrecision(proc.Ctx, precision, "ts_to_time", 6)
+		}
+		scale = int32(precision)
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 	for i := 0; i < length; i++ {
 		tsVal, null := from.GetValue(uint64(i))
 		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		physical := tsVal.Physical()
-		seconds := int64(physical / 1e9)
-		nanos := int64(physical % 1e9)
-		t := time.Unix(seconds, nanos).UTC()
-		timeStr := t.Format("2006-01-02 15:04:05.999999")
-
-		zone := time.Local
-		if proc != nil {
-			zone = proc.GetSessionInfo().TimeZone
-		}
-		val, err := types.ParseTimestamp(zone, timeStr, scale)
-		if err != nil {
+		if err := rs.Append(timestampFromTransactionTS(tsVal, scale), false); err != nil {
 			return err
 		}
-
-		if err = rs.Append(val, false); err != nil {
-			return err
-		}
-
 	}
 
 	return nil
+}
+
+// timestampFromTransactionTS converts the physical component of an HLC
+// transaction timestamp to the SQL TIMESTAMP representation. Both values are
+// absolute instants, so a session time zone must not participate in the
+// conversion. The logical component only orders events at the same physical
+// instant and therefore has no SQL TIMESTAMP representation.
+func timestampFromTransactionTS(ts types.TS, scale int32) types.Timestamp {
+	return types.UnixNanoToTimestamp(ts.Physical()).TruncateToScale(scale)
 }
 
 func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
