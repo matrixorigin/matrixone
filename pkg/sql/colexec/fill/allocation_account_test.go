@@ -261,6 +261,321 @@ func TestAccountedFillLinearSpillLifecycle(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func makeAccountedLinearEndpointBatch(
+	t testing.TB,
+	proc *process.Process,
+	value int64,
+	isNull bool,
+) *batch.Batch {
+	t.Helper()
+	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(value), isNull, proc.Mp()))
+	bat := batch.NewWithSize(2)
+	bat.SetVector(0, vec)
+	bat.SetVector(1, testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()))
+	bat.SetRowCount(1)
+	return bat
+}
+
+func makeAccountedDecimal256Batch(
+	t testing.TB,
+	proc *process.Process,
+	values []int64,
+	nulls map[int]bool,
+) *batch.Batch {
+	t.Helper()
+	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	for row, value := range values {
+		require.NoError(t, vector.AppendFixed(
+			vec, types.Decimal256FromInt64(value), nulls[row], proc.Mp(),
+		))
+	}
+	bat := batch.NewWithSize(2)
+	bat.SetVector(0, vec)
+	bat.SetVector(1, testutil.MakeInt64Vector(
+		make([]int64, len(values)), nil, proc.Mp(),
+	))
+	bat.SetRowCount(len(values))
+	return bat
+}
+
+func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0)},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 76, 0)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
+			state := installFillTestAllocation(t, op, proc, 64<<20)
+			input := batch.NewWithSize(1)
+			vec := vector.NewVec(test.typ)
+			if test.typ.Oid == types.T_decimal256 {
+				require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(100), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(130), false, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixed(vec, types.Decimal128FromInt64(100), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(vec, types.Decimal128FromInt64(130), false, proc.Mp()))
+			}
+			input.SetVector(0, vec)
+			input.SetRowCount(2)
+
+			result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
+			require.NoError(t, err)
+			require.True(t, owned)
+			require.Same(t, op.ctr.expressionAllocation, result.AllocationAccountSelection())
+			if test.typ.Oid == types.T_decimal256 {
+				require.Equal(t, types.Decimal256FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
+			} else {
+				require.Equal(t, types.Decimal128FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0))
+			}
+			owner, ok := state.account.OwnerUsage(mpool.AllocationOwnerFill)
+			require.True(t, ok)
+			require.Positive(t, owner.Peak)
+
+			result.Free(proc.Mp())
+			input.Clean(proc.Mp())
+			op.Free(proc, false, nil)
+			finalizeFillTestAllocation(t, op, state)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
+	op.ctr.expressionAllocation = new(vector.AllocationAccountSelection)
+	input := makeAccountedDecimal256Batch(t, proc, []int64{100, 130}, nil)
+
+	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	require.Nil(t, result)
+	require.False(t, owned)
+
+	input.Clean(proc.Mp())
+	op.ctr.expressionAllocation = nil
+	op.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
+	input := batch.NewWithSize(1)
+	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(100), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(130), false, proc.Mp()))
+	input.SetVector(0, vec)
+	input.SetRowCount(2)
+
+	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
+	require.NoError(t, err)
+	require.True(t, owned)
+	require.Nil(t, result.AllocationAccountSelection())
+	require.Equal(t, types.Decimal256FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
+	result.Free(proc.Mp())
+	input.Clean(proc.Mp())
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func runAccountedDecimal256LinearValue(t *testing.T, capacity uint64) (uint64, error) {
+	t.Helper()
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
+	state := installFillTestAllocation(t, op, proc, capacity)
+	typ := types.New(types.T_decimal256, 76, 0)
+	input := batch.NewWithSize(1)
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(100), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(130), false, proc.Mp()))
+	input.SetVector(0, vec)
+	input.SetRowCount(2)
+	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
+	if err != nil {
+		require.Nil(t, result)
+		require.False(t, owned)
+	} else {
+		require.NotNil(t, result)
+		require.True(t, owned)
+	}
+	if result != nil && owned {
+		result.Free(proc.Mp())
+	}
+	owner, ok := state.account.OwnerUsage(mpool.AllocationOwnerFill)
+	require.True(t, ok)
+	peak := owner.Peak
+	input.Clean(proc.Mp())
+	op.Free(proc, err != nil, err)
+	finalizeFillTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+	return peak, err
+}
+
+func TestAccountedFillLinearDecimal256BudgetBoundary(t *testing.T) {
+	amplePeak, err := runAccountedDecimal256LinearValue(t, 64<<20)
+	require.NoError(t, err)
+	require.Positive(t, amplePeak)
+
+	exactPeak, err := runAccountedDecimal256LinearValue(t, amplePeak)
+	require.NoError(t, err)
+	require.Equal(t, amplePeak, exactPeak)
+
+	_, err = runAccountedDecimal256LinearValue(t, amplePeak-1)
+	require.Error(t, err)
+	require.True(t, mpool.IsRetryableAllocationCapacity(err))
+}
+
+func TestAccountedFillLinearDecimal256ResidentAndSpill(t *testing.T) {
+	tests := []struct {
+		name           string
+		spillThreshold int64
+		values         []int64
+		expected       []types.Decimal256
+		spills         bool
+	}{
+		{name: "resident", spillThreshold: 1 << 30, values: []int64{100, 0, 130}, expected: []types.Decimal256{
+			types.Decimal256FromInt64(100), types.Decimal256FromInt64(115), types.Decimal256FromInt64(130),
+		}},
+		{name: "spill", spillThreshold: 1, values: []int64{100, 0, 130}, expected: []types.Decimal256{
+			types.Decimal256FromInt64(100), types.Decimal256FromInt64(115), types.Decimal256FromInt64(130),
+		}, spills: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}, SpillThreshold: test.spillThreshold}
+			state := installFillTestAllocation(t, op, proc, 64<<20)
+			batches := make([]*batch.Batch, 0, len(test.values))
+			for i, value := range test.values {
+				batches = append(batches, makeAccountedLinearEndpointBatch(t, proc, value, i != 0 && i != len(test.values)-1))
+			}
+			child := colexec.NewMockOperator().WithBatchs(batches)
+			op.AppendChild(child)
+			require.NoError(t, op.Prepare(proc))
+			var got []types.Decimal256
+			for {
+				result, err := vm.Exec(op, proc)
+				require.NoError(t, err)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				got = append(got, vector.MustFixedColNoTypeCheck[types.Decimal256](result.Batch.Vecs[0])...)
+			}
+			require.Equal(t, test.expected, got)
+			if test.spills {
+				require.Positive(t, op.OpAnalyzer.GetOpStats().SpillSize)
+			} else {
+				require.Zero(t, op.OpAnalyzer.GetOpStats().SpillSize)
+			}
+			child.Free(proc, false, nil)
+			op.Reset(proc, false, nil)
+			require.Zero(t, state.account.Snapshot().Used)
+			require.Zero(t, state.generation.SpillDiskUsed())
+			require.Zero(t, state.generation.SpillFDUsed())
+			op.Free(proc, false, nil)
+			finalizeFillTestAllocation(t, op, state)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+type decimal256LinearOperatorResult struct {
+	peak      uint64
+	spillSize int64
+	values    []types.Decimal256
+}
+
+func runAccountedDecimal256LinearOperator(
+	t *testing.T,
+	capacity uint64,
+	spillThreshold int64,
+	trailingCount int,
+) (decimal256LinearOperatorResult, error) {
+	t.Helper()
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := &Fill{
+		ColLen:          1,
+		FillType:        plan.Node_LINEAR,
+		PartitionColIdx: []int32{1},
+		SpillThreshold:  spillThreshold,
+	}
+	state := installFillTestAllocation(t, op, proc, capacity)
+	trailingValues := make([]int64, trailingCount)
+	for i := range trailingValues {
+		trailingValues[i] = 130 + int64(i)
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeAccountedDecimal256Batch(t, proc, []int64{100, 0}, map[int]bool{1: true}),
+		makeAccountedDecimal256Batch(t, proc, trailingValues, nil),
+	})
+	op.AppendChild(child)
+	err := op.Prepare(proc)
+	var values []types.Decimal256
+	if err == nil {
+		for {
+			result, callErr := vm.Exec(op, proc)
+			if callErr != nil {
+				err = callErr
+				break
+			}
+			if result.Batch == nil || result.Status == vm.ExecStop {
+				break
+			}
+			values = append(values,
+				vector.MustFixedColNoTypeCheck[types.Decimal256](result.Batch.Vecs[0])...)
+		}
+	}
+	owner, ok := state.account.OwnerUsage(mpool.AllocationOwnerFill)
+	require.True(t, ok)
+	result := decimal256LinearOperatorResult{
+		peak:      owner.Peak,
+		spillSize: op.OpAnalyzer.GetOpStats().SpillSize,
+		values:    values,
+	}
+	child.Free(proc, err != nil, err)
+	op.Free(proc, err != nil, err)
+	finalizeFillTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+	return result, err
+}
+
+func TestAccountedFillLinearDecimal256CapacityFallbackUsesSpill(t *testing.T) {
+	baseline, err := runAccountedDecimal256LinearOperator(t, 64<<20, 1<<30, 4)
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal256{
+		types.Decimal256FromInt64(100), types.Decimal256FromInt64(115),
+	}, baseline.values[:2])
+	require.Equal(t, []types.Decimal256{
+		types.Decimal256FromInt64(100), types.Decimal256FromInt64(115),
+		types.Decimal256FromInt64(130), types.Decimal256FromInt64(131),
+		types.Decimal256FromInt64(132), types.Decimal256FromInt64(133),
+	}, baseline.values)
+	require.Zero(t, baseline.spillSize)
+	require.Positive(t, baseline.peak)
+
+	exact, err := runAccountedDecimal256LinearOperator(t, baseline.peak, 1<<30, 4)
+	require.NoError(t, err)
+	require.Equal(t, baseline.values, exact.values)
+	require.Zero(t, exact.spillSize)
+
+	short, err := runAccountedDecimal256LinearOperator(t, baseline.peak-1, 1, 4)
+	require.NoError(t, err)
+	require.Equal(t, baseline.values, short.values)
+	require.Positive(t, short.spillSize)
+}
+
 type fillRunResult struct {
 	peak      uint64
 	spillSize int64

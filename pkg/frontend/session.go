@@ -2118,21 +2118,21 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//the default_role in the mo_user table.
-	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
+	// The catalog value may be NULL or stale after a prior REVOKE. Do not use
+	// it as an active role until the implicit-login path validates the grant.
+	defaultRoleID, defaultRoleIDValid, err := readStoredDefaultRoleID(tenantCtx, userRsset[0])
 	if err != nil {
 		return nil, err
 	}
 
 	tenant.SetUserID(uint32(userID))
-	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	ses.timestampMap[TSCheckUserEnd] = time.Now()
 	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
 		1.get the default_role of the user in mo_user
+		2.validate that the role is still granted, otherwise use the public grant
 
 		login case 2: tenant:user:role
 		1.check the role has been granted to the user
@@ -2182,21 +2182,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
-		//the get name of default_role from mo_role
-		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
+		ses.Debugf(tenantCtx, "validate implicit default role of user %s.", tenant)
+		defaultRoleID, defaultRole, err = resolveImplicitDefaultRole(
+			tenantCtx, bh, userID, defaultRoleID, defaultRoleIDValid)
 		if err != nil {
 			return nil, err
 		}
-		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
-		}
-
-		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 		tenant.SetDefaultRole(defaultRole)
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
@@ -2358,6 +2350,72 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
+}
+
+func readStoredDefaultRoleID(ctx context.Context, userResult ExecResult) (int64, bool, error) {
+	isNull, err := userResult.ColumnIsNull(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if isNull {
+		return 0, false, nil
+	}
+
+	roleID, err := userResult.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if roleID < 0 || roleID > int64(^uint32(0)) {
+		return 0, false, nil
+	}
+	return roleID, true, nil
+}
+
+// resolveImplicitDefaultRole returns a role that is currently granted to the
+// user. A stale, NULL, invalid, or missing catalog default falls back to the
+// user's public grant; it is never activated directly from mo_user metadata.
+func resolveImplicitDefaultRole(
+	ctx context.Context,
+	bh BackgroundExec,
+	userID int64,
+	storedRoleID int64,
+	storedRoleIDValid bool,
+) (int64, string, error) {
+	roleID := storedRoleID
+	if !storedRoleIDValid {
+		roleID = publicRoleID
+	}
+
+	for {
+		sql := getSqlForRoleNameOfUserRole(userID, roleID)
+		rsset, err := executeSQLInBackgroundSession(ctx, bh, sql)
+		if err != nil {
+			return 0, "", err
+		}
+		if execResultArrayHasData(rsset) {
+			roleNameIsNull, err := rsset[0].ColumnIsNull(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleName, err := rsset[0].GetString(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleNameValid := !roleNameIsNull && roleName != ""
+			if roleID == publicRoleID {
+				roleNameValid = roleNameValid && isPublicRole(roleName)
+			}
+			if roleNameValid {
+				return roleID, roleName, nil
+			}
+		}
+
+		if roleID == publicRoleID {
+			return 0, "", moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID)
+		}
+		roleID = publicRoleID
+	}
 }
 
 func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
