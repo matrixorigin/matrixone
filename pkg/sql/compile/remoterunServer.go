@@ -744,6 +744,7 @@ type processHelper struct {
 	statementRuntimeIgnore bool
 	planSnapshotTS         timestamp.Timestamp
 	hasPlanSnapshotTS      bool
+	planGenerationReused   bool
 	prepareParams          pipeline.PrepareParamInfo
 	affectedRows           int64
 	remoteFragmentCounts   map[string]uint32
@@ -920,6 +921,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
+		proc.SetPlanGenerationReused(pHelper.planGenerationReused)
 	}
 	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
 		proc.GetService(),
@@ -1094,7 +1096,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 	var transport bytes.Buffer
 	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
-		&transport, false, version >= defines.MORPCVersion32)
+		&transport, false, version >= defines.MORPCVersion33)
 	if err != nil {
 		return err
 	}
@@ -1226,6 +1228,7 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if procInfo.PlanSnapshotTs != nil {
 		result.planSnapshotTS = *procInfo.PlanSnapshotTs
 		result.hasPlanSnapshotTS = true
+		result.planGenerationReused = procInfo.PlanGenerationReused
 	}
 	if len(procInfo.RemoteExecutionId) > 0 {
 		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)

@@ -107,6 +107,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetPrepareParamsWithMetadata(vec, []bool{true, false}, []bool{false, true})
 	proc.SetAffectedRows(42)
 	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
+	proc.SetPlanGenerationReused(true)
 	return proc, txnOp
 }
 
@@ -345,12 +346,12 @@ func TestStringSourcePrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 		}
 	}()
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion31)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion32)
 	metadata, err := StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
 	require.NoError(t, err)
 	require.Nil(t, metadata, "old peers must receive a source-free compatible payload")
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion32)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion33)
 	metadata, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 4}, metadata)
@@ -451,6 +452,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, info.PlanSnapshotTs)
+	require.True(t, info.PlanGenerationReused)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
@@ -616,16 +618,19 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	decodedPlanSnapshot, ok := decodedProc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, decodedPlanSnapshot)
+	require.True(t, decodedProc.PlanGenerationReused())
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())
 	require.Nil(t, decodedParams.GetArea())
 
-	info.PlanSnapshotTs = nil // simulate a sender from before the field existed
+	info.PlanSnapshotTs = nil // simulate a sender from before the fields existed
+	info.PlanGenerationReused = false
 	legacyProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	_, ok = legacyProc.GetPlanSnapshotTS()
 	require.False(t, ok)
+	require.False(t, legacyProc.PlanGenerationReused())
 	require.NotPanics(t, legacyProc.Free)
 
 	rtSvc := "codec-test-svc"
@@ -640,11 +645,13 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	firstSnapshot := timestamp.Timestamp{PhysicalTime: 10}
 	secondSnapshot := timestamp.Timestamp{PhysicalTime: 20}
 	proc.SetPlanSnapshotTS(firstSnapshot)
+	proc.SetPlanGenerationReused(true)
 
 	child := proc.NewNoContextChildProc(0)
 	got, ok := child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, firstSnapshot, got)
+	require.True(t, child.PlanGenerationReused())
 	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
 	got, ok = channelChild.GetPlanSnapshotTS()
 	require.True(t, ok)
@@ -654,14 +661,17 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	// pipeline generation because setting a generation installs a new immutable
 	// binding rather than mutating the prior one.
 	proc.SetPlanSnapshotTS(secondSnapshot)
+	require.False(t, proc.PlanGenerationReused())
 	got, ok = child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, firstSnapshot, got)
+	require.True(t, child.PlanGenerationReused())
 
 	proc.ClearPlanSnapshotTS()
 	legacyChild := proc.NewNoContextChildProc(0)
 	_, ok = legacyChild.GetPlanSnapshotTS()
 	require.False(t, ok)
+	require.False(t, legacyChild.PlanGenerationReused())
 	proc.Free()
 }
 
