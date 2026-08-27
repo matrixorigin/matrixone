@@ -311,11 +311,10 @@ func (c *ServiceConfig) validateClockConfiguration() error {
 }
 
 func (c *ServiceConfig) validateAuthenticationClockBudget() error {
-	serviceType, err := c.getServiceType()
-	if err != nil {
-		return err
+	if !strings.EqualFold(c.ServiceType, metadata.ServiceType_CN.String()) {
+		return nil
 	}
-	return c.validateAuthenticationClockBudgetFor(serviceType)
+	return c.validateAuthenticationClockBudgetFor(metadata.ServiceType_CN)
 }
 
 func (c *ServiceConfig) validateAuthenticationClockBudgetFor(
