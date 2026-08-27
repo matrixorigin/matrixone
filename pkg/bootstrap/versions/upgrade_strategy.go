@@ -143,6 +143,7 @@ type UpgradeEntry struct {
 	// installs. The check is performed only when the entry still needs work, so
 	// an already-completed upgrade remains idempotent during a rolling restart.
 	RequiredProtocolVersion int64
+	AllowMoColumnsUpdate    bool
 	PreSql                  string
 	PostSql                 string
 }
@@ -150,6 +151,9 @@ type UpgradeEntry struct {
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
 	statementOption := UpgradeStatementOption(accountId)
+	if u.AllowMoColumnsUpdate {
+		statementOption = statementOption.WithMoColumnsUpdate()
+	}
 
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
@@ -249,6 +253,13 @@ func checkCommonProtocolVersion(txn executor.TxnExecutor, required int64) error 
 		}
 	}
 	return nil
+}
+
+// CheckCommonProtocolVersion verifies the protocol generation used by a
+// tenant-upgrade snapshot. Callers must perform this check before enumerating
+// tenant IDs so old writers cannot create rows outside the snapshot ranges.
+func CheckCommonProtocolVersion(txn executor.TxnExecutor, required int64) error {
+	return checkCommonProtocolVersion(txn, required)
 }
 
 // UpgradeStatementOption executes upgrade SQL as the administrator of the
