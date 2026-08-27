@@ -172,3 +172,46 @@ func TestNonMoerrIsStillAnError(t *testing.T) {
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
 }
+
+// TestPreExecutionRollbackIsGuarded covers the decision applied to failures
+// that never reach the executor. The guards matter more than the rollback:
+// this runs on EVERY COM_QUERY error, including the ones finishTxnFunc already
+// handled, so anything it does when it should not do it would roll back a
+// second time or roll back a transaction nobody opted to discard.
+func TestPreExecutionRollbackIsGuarded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := context.Background()
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	boom := moerr.NewInternalErrorNoCtx("boom")
+
+	// not opted in: the default must not touch the transaction at all
+	require.NotPanics(t, func() { rollbackWholeTxnOnPreExecutionError(ses, execCtx, boom) })
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(1)))
+
+	// opted in, but autocommit: there is no multi-statement transaction to
+	// discard, so a failed statement stands alone as it always did
+	require.False(t, ses.GetTxnHandler().InMultiStmtTransactionMode())
+	require.NotPanics(t, func() { rollbackWholeTxnOnPreExecutionError(ses, execCtx, boom) })
+
+	// opted in and in multi-statement mode, but no transaction is active --
+	// which is the state a statement that ALREADY rolled back leaves behind,
+	// so this is the case that keeps the two call sites from doubling up
+	ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
+	require.True(t, ses.GetTxnHandler().InMultiStmtTransactionMode())
+	require.False(t, ses.GetTxnHandler().InActiveTxn())
+	require.NotPanics(t, func() { rollbackWholeTxnOnPreExecutionError(ses, execCtx, boom) })
+
+	// a warning still never discards a transaction, on this path either
+	require.NotPanics(t, func() {
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, moerr.NewWarn(ctx, "truncated"))
+	})
+
+	// and a nil error is not a failure
+	require.NotPanics(t, func() { rollbackWholeTxnOnPreExecutionError(ses, execCtx, nil) })
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
+}

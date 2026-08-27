@@ -5331,6 +5331,35 @@ func countUpdateChangedRows(ses *Session) bool {
 	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
 }
 
+// rollbackWholeTxnOnPreExecutionError applies mo_rollback_txn_on_error to a
+// failure that never reached the executor.
+//
+// A parse error or a privilege rejection returns from doComQuery long before
+// finishTxnFunc, which is where the setting is otherwise honoured. Without this
+// the setting would quietly mean "any error the executor produced", exempting
+// the ones that never got that far: with it on,
+// `BEGIN; INSERT ...; selec 1; COMMIT;` would still COMMIT the row.
+//
+// It is called from the defer every COM_QUERY error path converges on. A
+// statement that already rolled back has left no active transaction, so the
+// guard below makes this a no-op for the errors finishTxnFunc handled, rather
+// than rolling back twice.
+func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
+	if !sessionRollsBackTxnOnError(ses, retErr) {
+		return
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
+		return
+	}
+	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
+		// The statement's own error is what the client asked about; a failure
+		// to roll back is logged, not substituted for it.
+		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
+			zap.Error(rbErr), zap.Error(retErr))
+	}
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
@@ -5430,27 +5459,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		markRowCountFailed(ses, proc)
 
-		// A failure BEFORE the statement executes -- a parse error, a
-		// privilege rejection -- never reaches finishTxnFunc, which is where
-		// mo_rollback_txn_on_error is honoured. Without this the setting would
-		// mean "any error the executor produced", silently exempting the ones
-		// that never got that far: `BEGIN; INSERT ...; selec 1; COMMIT;` would
-		// commit the row. Every COM_QUERY error path converges here, and a
-		// statement that already rolled back has left no active transaction,
-		// so this is the one place that covers the rest without double work.
-		if !sessionRollsBackTxnOnError(ses, retErr) {
-			return
-		}
-		txnHandler := ses.GetTxnHandler()
-		if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
-			return
-		}
-		if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
-			// The statement's own error is what the client asked about; a
-			// failure to roll back is logged, not substituted for it.
-			ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
-				zap.Error(rbErr), zap.Error(retErr))
-		}
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
 	}()
 
 	if ses.GetTenantInfo() != nil {

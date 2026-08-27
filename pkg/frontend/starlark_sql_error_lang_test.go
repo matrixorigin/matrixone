@@ -15,8 +15,13 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/golang/mock/gomock"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"go.starlark.net/starlarkstruct"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -143,4 +148,80 @@ func TestEveryFailableBuiltinResetsAndRecords(t *testing.T) {
 			"%s must clear the previous call's code", c.name)
 		require.Equal(t, "", si.lastErr.sqlstate, "%s", c.name)
 	}
+}
+
+// TestModuleExposesTheCodeAccessors pins that the two accessors are actually
+// reachable from a procedure -- a helper nothing registers is dead -- and that
+// every builtin is registered under its OWN name, so a failure inside setvar
+// does not report itself as getvar.
+func TestModuleExposesTheCodeAccessors(t *testing.T) {
+	si := &starlarkInterpreter{}
+	mod, ok := si.buildModule().(*starlarkstruct.Module)
+	require.True(t, ok)
+
+	for _, name := range []string{"sql", "jq", "quote", "getvar", "setvar",
+		"llm_connect", "llm_chat", "errno", "sqlstate"} {
+		member, found := mod.Members[name]
+		require.True(t, found, "mo.%s must be registered", name)
+		b, isBuiltin := member.(*starlark.Builtin)
+		require.True(t, isBuiltin, "mo.%s", name)
+		require.Equal(t, "mo."+name, b.Name(),
+			"mo.%s is registered under the wrong name, so its errors misreport", name)
+	}
+}
+
+// TestCodeAccessorsRejectArguments: both report state and take none. Accepting
+// an argument silently would let `mo.errno(err)` look meaningful.
+func TestCodeAccessorsRejectArguments(t *testing.T) {
+	si := &starlarkInterpreter{}
+	for name, fn := range map[string]func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error){
+		"mo.errno":    si.moErrno,
+		"mo.sqlstate": si.moSqlstate,
+	} {
+		_, err := fn(nil, starlark.NewBuiltin(name, fn), starlark.Tuple{starlark.String("x")}, nil)
+		require.Error(t, err, "%s must reject arguments", name)
+	}
+}
+
+// TestFailuresBeyondArgumentUnpackingAlsoRecord covers the exits that need a
+// session: a builtin that fails DEEPER than argument unpacking must record the
+// codes too, or mo.errno() would answer only for the shallowest failures.
+func TestFailuresBeyondArgumentUnpackingAlsoRecord(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	si := &starlarkInterpreter{interp: &Interpreter{
+		ctx: context.Background(), ses: ses, bh: bh,
+	}}
+
+	// mo.sql: the statement itself fails at the source
+	bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+		Return(moerr.NewDuplicateEntryNoCtx("1", "a")).Times(1)
+
+	v, err := si.moSql(nil, starlark.NewBuiltin("mo.sql", si.moSql),
+		starlark.Tuple{starlark.String("insert into t values (1)")}, nil)
+	require.NoError(t, err)
+	okSlot := v.(*starlark.List).Index(1)
+	_, isString := okSlot.(starlark.String)
+	require.True(t, isString, "an exec failure is still reported as a string")
+	require.Equal(t, uint16(1062), si.lastErr.code, "and its class is recorded")
+	require.Equal(t, "23000", si.lastErr.sqlstate)
+
+	// mo.getvar: the variable lookup fails
+	v, err = si.moGetVar(nil, starlark.NewBuiltin("mo.getvar", si.moGetVar),
+		starlark.Tuple{starlark.String("no_such_user_variable")}, nil)
+	require.NoError(t, err)
+	require.Equal(t, starlark.None, v.(*starlark.List).Index(0))
+
+	// mo.setvar: the VALUE cannot be converted, which is a failure after the
+	// arguments unpacked cleanly
+	v, err = si.moSetVar(nil, starlark.NewBuiltin("mo.setvar", si.moSetVar),
+		starlark.Tuple{starlark.String("v"), starlark.NewBuiltin("opaque", si.moErrno)}, nil)
+	require.NoError(t, err)
+	_, isString = v.(*starlark.List).Index(1).(starlark.String)
+	require.True(t, isString, "a conversion failure is reported as a string too")
 }

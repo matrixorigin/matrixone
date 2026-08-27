@@ -271,7 +271,7 @@ func (si *starlarkInterpreter) buildModule() starlark.Value {
 			"jq":          starlark.NewBuiltin("mo.jq", si.moJq),
 			"quote":       starlark.NewBuiltin("mo.quote", si.moQuote),
 			"getvar":      starlark.NewBuiltin("mo.getvar", si.moGetVar),
-			"setvar":      starlark.NewBuiltin("mo.getvar", si.moSetVar),
+			"setvar":      starlark.NewBuiltin("mo.setvar", si.moSetVar),
 			"llm_connect": starlark.NewBuiltin("mo.llm_connect", si.moLlmConnect),
 			"llm_chat":    starlark.NewBuiltin("mo.llm_chat", si.moLlmChat),
 			"errno":       starlark.NewBuiltin("mo.errno", si.moErrno),
