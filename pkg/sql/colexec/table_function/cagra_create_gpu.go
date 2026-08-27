@@ -157,7 +157,7 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 		// shard's bytes to the card holding a different shard, rejects the build
 		// for good.
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			demand, cuvs.BudgetFor(u.idxcfg.Type),
+			demand, len(demand), true, cuvs.BudgetFor(u.idxcfg.Type),
 		); aerr != nil {
 			return aerr
 		}
@@ -287,6 +287,13 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			proc.GetResolveVariableFunc(), "quantizer_train_limit", 0); err != nil {
 			return err
 		} else if qLimit > 0 {
+			// Reject rather than clamp -- see the ivfpq create path.
+			if max := cuvs.MaxQuantizerTrainLimit(); uint64(qLimit) > max {
+				return moerr.NewInvalidInputf(proc.Ctx,
+					"cagra: quantizer_train_limit %d exceeds the maximum of %d rows; the sample "+
+						"retains RAW base rows, so it costs dim * base-element bytes each and a "+
+						"larger one buys no accuracy", qLimit, max)
+			}
 			u.idxcfg.CuvsCagra.QuantizerTrainLimit = uint64(qLimit)
 		}
 

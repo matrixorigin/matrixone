@@ -123,6 +123,10 @@ func TestHostRowsFittingReservesBeforeCapacity(t *testing.T) {
 	_, _, err = HostRowsFitting(100, budget)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "quantizer_train_limit")
+	// Both escapes must be named. The sample is capped by a sub-index's capacity,
+	// so lowering max_index_capacity is a real remedy and an operator told only
+	// about the train limit would not find it.
+	require.Contains(t, err.Error(), "max_index_capacity")
 
 	_, _, err = HostRowsFitting(100, budget+1)
 	require.Error(t, err)

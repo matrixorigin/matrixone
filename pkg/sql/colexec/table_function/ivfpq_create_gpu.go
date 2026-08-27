@@ -169,7 +169,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 		// shard's bytes to the card holding a different shard, rejects the build
 		// for good.
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			demand, cuvs.BudgetFor(u.idxcfg.Type),
+			demand, len(demand), true, cuvs.BudgetFor(u.idxcfg.Type),
 		); aerr != nil {
 			return aerr
 		}
@@ -401,6 +401,16 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return err
 		}
 		if qLimit > 0 {
+			// Reject rather than clamp. The native sample resolution caps at the
+			// same ceiling, which is the right backstop, but silently handing a
+			// DDL statement less than it asked for is not: the operator would
+			// believe they had a sample they do not have.
+			if max := cuvs.MaxQuantizerTrainLimit(); uint64(qLimit) > max {
+				return moerr.NewInvalidInputf(proc.Ctx,
+					"ivfpq: quantizer_train_limit %d exceeds the maximum of %d rows; the sample "+
+						"retains RAW base rows, so it costs dim * base-element bytes each and a "+
+						"larger one buys no accuracy", qLimit, max)
+			}
 			u.idxcfg.CuvsIvfpq.QuantizerTrainLimit = uint64(qLimit)
 		}
 

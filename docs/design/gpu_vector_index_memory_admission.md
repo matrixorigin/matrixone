@@ -57,12 +57,65 @@ This is a deliberate limitation, not a defect:
 - CAGRA remains supported as a single index at row counts whose footprint fits
   one card.
 
-**Known gap, tracked separately.** The aggregate hardware gate currently runs in
-`end()`, after every sub-index has been built and packed. An unsupported
-configuration is therefore refused *after* paying the whole build cost, and
-CREATE persists nothing. The refusal is correct; its timing is not. Moving the
-check to planning time — where the per-row cost and device totals are already
-known — is a follow-up, not a change to the supported scope.
+**Refused early, not after the whole build.** The aggregate hardware gate runs
+after each sub-index is packed, not only at the end. `PerDeviceDemand` is
+monotone -- a sub-index only ever adds bytes to a device -- so a running total
+already over the ceiling guarantees the finished one is, and every sub-index
+packed after that point would be work thrown away. The gate is better suited to
+this than its load-path twin: its ceiling is total VRAM and does not move
+between checks, where the load gate re-samples free memory and can refuse
+transiently.
+
+A partial refusal is worded differently from a final one ("needs at least N,
+after K sub-index(es)"), so an operator does not size a fix from a figure that
+is still rising.
+
+SHARDED never reaches the incremental path: `planCapacity` refuses to combine it
+with a split, since each sub-index would be packed as a sharded index and could
+not be reloaded. It is therefore always one sub-index, and the completed check
+is the only one that runs.
+
+## Reference hardware
+
+The admission rules are designed, tuned and reviewed against this baseline:
+
+| | |
+|---|---|
+| host RAM | 512 GB → host budget (75%) **384 GB** |
+| GPU | NVIDIA L40S, 48 GB VRAM → device budget (75%) **36 GB**, IVF-PQ build peak (65%) **31.2 GB** |
+| CPU | 64 cores |
+| host : VRAM ratio | **~10.7 : 1** |
+
+The ratio is the part that matters for review, and "host memory" means what the
+governor measures: the cgroup limit where one applies, not the DIMMs. A CN
+capped at a gigabyte on a 512 GB host is therefore expressible -- that is
+precisely why availability is read from the cgroup -- but it is not a
+configuration this feature targets. A CN driving an L40S is not deployed under a
+few tens of GB: at that size a single 1M-row int8 index (768 MB) plus its build
+buffers already dominates the budget, so such a build fails for a more basic
+reason than whatever a counterexample is trying to demonstrate.
+
+**Counterexamples must be reachable from this envelope, or from documented
+defaults, to be actionable** -- and one that depends on an unusual
+host-to-VRAM ratio should say so, since the ratio is doing the work rather than
+the rule under discussion.
+
+For scale against the baseline: the largest staging arena the hard ceiling
+permits (`kMaxQuantizerTrainLimit` = 1,000,000 rows, dim 768, f32 base) is
+**2.86 GB — 0.75% of the host budget.** Sizing failures attributable to the
+quantizer sample are therefore not reachable on the reference machine; they
+require both a raised `quantizer_train_limit` and a host far smaller than this.
+
+Defaults are the reviewed configuration. Tuned knobs (`quantizer_train_limit`,
+`max_index_capacity`, `kmeans_train_percent`) shift cost onto the operator by
+design, and the refusal messages name the knob and the direction to move it.
+
+`quantizer_train_limit` additionally has a HARD ceiling
+(`kMaxQuantizerTrainLimit` = 1,000,000 rows), enforced in `quantizer_staging_rows`
+so it binds at every entry point rather than only at the DDL parameter. CREATE
+INDEX rejects a larger value outright rather than clamping silently: handing a
+statement less than it asked for would leave the operator believing they have a
+sample they do not have.
 
 ## Ownership
 

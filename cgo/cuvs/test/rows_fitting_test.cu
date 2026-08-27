@@ -260,3 +260,33 @@ TEST(IndexCost, ShardedAggregateSurvivesThe32RowAlignment) {
     ASSERT_EQ(ivf_pq_cost::sharded_aggregate(31, 4), (int64_t)124);
     ASSERT_TRUE(ivf_pq_cost::sharded_aggregate(31, 4) > 0);
 }
+
+// quantizer_train_limit must not be settable to an effectively unlimited value.
+// The device budget alone is not a bound: on a large card it permits millions of
+// rows, so `quantizer_train_limit = 100000000` was taken literally and the host
+// was asked for the result -- 300 GB of raw base rows at dim 768 f32.
+//
+// Enforced in quantizer_staging_rows because that is the one function both the
+// Go planner and the native index resolve the sample through.
+TEST(IndexCost, QuantizerTrainLimitIsHardCapped) {
+    const size_t per_train_row = 768 * sizeof(float);  // dim 768, f32 base
+    const size_t pct = 75;
+
+    // An absurd request is capped at the ceiling, not honoured.
+    const uint64_t absurd = matrixone::quantizer_staging_rows(per_train_row, 100000000ull, pct);
+    ASSERT_TRUE(absurd <= matrixone::kMaxQuantizerTrainLimit);
+
+    // The default is well under the ceiling and must pass through untouched
+    // (subject only to the device budget, which on any supported card holds it).
+    const uint64_t deflt = matrixone::quantizer_staging_rows(per_train_row, 0, pct);
+    ASSERT_TRUE(deflt <= matrixone::kDefaultQuantizerTrainLimit);
+
+    // A request between the default and the ceiling is still honoured, so the
+    // cap bounds abuse without flattening every setting to the default.
+    const uint64_t mid = matrixone::quantizer_staging_rows(per_train_row, 500000ull, pct);
+    ASSERT_TRUE(mid <= 500000ull);
+    ASSERT_TRUE(mid >= matrixone::kDefaultQuantizerTrainLimit);
+
+    // Never zero: a dimension wider than the ceiling still trains on one row.
+    ASSERT_TRUE(matrixone::quantizer_staging_rows(per_train_row, 1, pct) >= 1);
+}

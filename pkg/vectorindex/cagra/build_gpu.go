@@ -149,6 +149,20 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 		if err := full.saveToFile(); err != nil {
 			return nil, err
 		}
+		// Check the RUNNING aggregate rather than waiting for end(). A sub-index
+		// only ever adds bytes to a device, so PerDeviceDemand is monotone: a
+		// running total already over the ceiling guarantees the finished one is,
+		// and every sub-index packed after this point is work thrown away. The
+		// ceiling is total VRAM and does not move between checks, so unlike the
+		// load gate's free-memory sampling this cannot refuse transiently.
+		//
+		// saveToFile stamped this sub-index's DeviceComponentBytes just above, and
+		// `full` is already in b.indexes, so DeviceDemand covers everything built.
+		if err := memory.DeviceAggregateFitsHardware(
+			b.DeviceDemand(), len(b.indexes), false, cuvs.BudgetFor(b.idxcfg.Type),
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	if b.current == nil {

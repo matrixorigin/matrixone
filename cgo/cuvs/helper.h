@@ -213,6 +213,25 @@ int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const 
 // high dim; 1M would be ~3-4 GB and get capped by the device bound anyway.
 inline constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
 
+// kMaxQuantizerTrainLimit is a HARD ceiling on quantizer_train_limit, so the
+// setting cannot be made effectively unlimited.
+//
+// Without it the only bound is the device budget below, which on a large card is
+// millions of rows: `quantizer_train_limit = 100000000` is then taken literally,
+// and at dim 768 f32 that is 300 GB of raw base rows the host is asked to hold.
+// The host only discovers it when the capacity model refuses the whole build.
+//
+// 1M is ~3 GB at dim 768 f32 -- ten times the default sample, which the note
+// above already calls more than enough for the quantile estimate. It is a
+// guardrail against absurd settings, not a correctness bound: a host smaller
+// than the arena still refuses, and the capacity model reports that.
+//
+// Enforced HERE rather than at the CREATE INDEX parameter, because this is the
+// one function both the Go planner and the native index resolve the sample
+// through -- clamping at the parameter would leave the other entry points
+// unbounded.
+inline constexpr uint64_t kMaxQuantizerTrainLimit = 1000000;
+
 // per_train_row is dim * sizeof(BASE element): the sample retains RAW base rows,
 // not the storage type. train_limit 0 means the default. Requires a current
 // device, since cap_rows_to_gpu_mem reads cudaMemGetInfo.
@@ -221,7 +240,8 @@ inline uint64_t quantizer_staging_rows(size_t per_train_row, uint64_t train_limi
     if (train_limit == 0) train_limit = kDefaultQuantizerTrainLimit;
     constexpr uint64_t kMaxRequestable =
         static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
-    const uint64_t want = std::min<uint64_t>(train_limit, kMaxRequestable);
+    uint64_t want = std::min<uint64_t>(train_limit, kMaxRequestable);
+    want = std::min<uint64_t>(want, kMaxQuantizerTrainLimit);
     const int64_t rows = cap_rows_to_gpu_mem(static_cast<int64_t>(want), per_train_row,
                                              "quantizer", budget_percent);
     return static_cast<uint64_t>(rows < 1 ? 1 : rows);
@@ -262,6 +282,12 @@ extern "C" {
 // Points at static storage owned by the library: do not free it, and treat it
 // as valid for the life of the process.
 const char* gpu_host_resident_components(void);
+
+// gpu_max_quantizer_train_limit hands Go the same kMaxQuantizerTrainLimit the
+// sample resolution clamps to, so CREATE INDEX can REJECT an over-large setting
+// instead of silently clamping it -- and so the ceiling is not restated in a
+// second language.
+uint64_t gpu_max_quantizer_train_limit(void);
 
 // gpu_rows_fitting_free_mem exposes rows_fitting_gpu_mem to Go. It makes device_id current
 // first: cudaMemGetInfo reports the CURRENT device, and the Go caller runs on an arbitrary

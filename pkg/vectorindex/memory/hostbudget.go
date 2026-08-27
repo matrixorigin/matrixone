@@ -139,7 +139,8 @@ func HostRowsFitting(perRowBytes uint64, reservedBytes uint64) (rows int64, avai
 			return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"host memory budget of %d bytes (75%% of %d available) cannot hold the %d bytes "+
 					"reserved before capacity (the int8/uint8 quantizer training sample); lower "+
-					"quantizer_train_limit, or free memory on this node",
+					"quantizer_train_limit, or lower max_index_capacity (the sample is capped by "+
+					"a sub-index's capacity, so a smaller one costs less), or free memory on this node",
 				budget, avail, reservedBytes))
 		}
 		budget -= reservedBytes

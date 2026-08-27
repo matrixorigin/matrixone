@@ -425,6 +425,17 @@ func hostResidentComponents() map[string]bool {
 // memory rather than being deserialized onto the GPU.
 func IsHostResidentComponent(name string) bool { return hostResidentComponents()[name] }
 
+// MaxQuantizerTrainLimit is the hard ceiling on quantizer_train_limit, read from
+// the C++ that enforces it (helper.h, kMaxQuantizerTrainLimit) rather than
+// restated here.
+//
+// The native sample resolution clamps to this silently, which is the right
+// backstop but the wrong answer for DDL: a CREATE INDEX that asks for more
+// should be told, not quietly given less. The create paths reject against this.
+func MaxQuantizerTrainLimit() uint64 {
+	return uint64(C.gpu_max_quantizer_train_limit())
+}
+
 // DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
 // not what is currently free.
 //

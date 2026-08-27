@@ -391,6 +391,10 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // resident footprint exceeds it can never be searched on this GPU no matter what
 // else is evicted, which makes it the honest basis for refusing a build outright
 // rather than deferring the failure to a query.
+uint64_t gpu_max_quantizer_train_limit(void) {
+    return matrixone::kMaxQuantizerTrainLimit;
+}
+
 const char* gpu_host_resident_components(void) {
     // Built once, then handed out as a stable pointer: Go reads it a single time
     // behind a sync.Once, so there is nothing to free and no lifetime to manage.

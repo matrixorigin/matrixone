@@ -41,14 +41,14 @@ func TestDeviceAggregateOnRealDevice(t *testing.T) {
 	require.NotNil(t, budget.RowsFitting)
 
 	// A megabyte fits on any card this code supports.
-	require.NoError(t, DeviceAggregateFitsHardware(uniform(devices, 1<<20), budget),
+	require.NoError(t, DeviceAggregateFitsHardware(uniform(devices, 1<<20), 1, true, budget),
 		"1 MiB must be admitted by the permanent gate")
 	require.NoError(t, DeviceAggregateFitsFree(uniform(devices, 1<<20), 1, 1, budget),
 		"1 MiB must be admitted by the situational gate")
 
 	// 256 TiB fits on nothing, so this exercises both refusals against real
 	// cudaMemGetInfo readings rather than a stub.
-	err = DeviceAggregateFitsHardware(uniform(devices, 1<<48), budget)
+	err = DeviceAggregateFitsHardware(uniform(devices, 1<<48), 1, true, budget)
 	require.Error(t, err, "an impossible demand must be refused")
 	require.Contains(t, err.Error(), "even when completely idle")
 
