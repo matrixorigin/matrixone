@@ -275,6 +275,51 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 	}}, values)
 }
 
+func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testing.T) {
+	for index, test := range []struct {
+		name   string
+		sql    string
+		values []string
+	}{
+		{name: "limit", sql: "select 1 limit ?", values: []string{"2"}},
+		{name: "limit offset", sql: "select 1 limit ? offset ?", values: []string{"2", "1"}},
+		{name: "offset", sql: "select 1 offset ?", values: []string{"1"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(113+index), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			// Connector/ODBC sends integer bindings as MYSQL_TYPE_STRING in
+			// COM_STMT_EXECUTE, so reproduce that wire representation directly.
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			prepareStmt.ParamTypes = make([]byte, 0, len(test.values)*2)
+			wantParamVals := make([]any, 0, len(test.values))
+			for _, value := range test.values {
+				require.NoError(t, vector.AppendBytes(
+					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+				prepareStmt.ParamTypes = append(prepareStmt.ParamTypes,
+					byte(defines.MYSQL_TYPE_STRING), 0)
+				wantParamVals = append(wantParamVals, plan2.ParamValue{
+					Value: value, IsBinaryProtocol: true, EnableNumericPrefix: true,
+				})
+			}
+
+			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.Nil(t, retComp, "pagination parameters must not reuse a value-filled compile")
+			require.Equal(t, wantParamVals, cw.paramVals)
+			if owned {
+				executionStmt.Free()
+			}
+		})
+	}
+}
+
 func TestInitExecuteStmtParamKeepsOrdinaryBinaryQueryOnCachedFastPath(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select abs(?), abs(?), abs(?), abs(?)")
 	defer func() {

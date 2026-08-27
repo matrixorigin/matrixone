@@ -3417,9 +3417,10 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
 // and OFFSET before the values are converted through the generic expression
 // cast path. MySQL accepts NULL and Boolean user variables here, but rejects
-// string, floating-point, and decimal sources even when their text is an
-// integer. Negative signed values use the unsigned-range error required by
-// EXECUTE.
+// string, floating-point, and decimal SQL-level sources even when their text
+// is an integer. Binary-protocol integer text is accepted for clients such as
+// Connector/ODBC that bind integer values as MYSQL_TYPE_STRING. Negative
+// signed values use the unsigned-range error required by EXECUTE.
 func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
 	for _, pos := range PreparedPaginationParamPositions(preparePlan) {
 		if pos < 0 || int(pos) >= len(paramVals) {
@@ -3657,9 +3658,11 @@ func collectPreparedParamPositions(expr *Expr, positions map[int32]struct{}) {
 
 func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	kind := vector.PrepareParamNone
+	isBinaryProtocol := false
 	if param, ok := value.(ParamValue); ok {
 		value = param.Value
 		kind = param.PrepareParamKind
+		isBinaryProtocol = param.IsBinaryProtocol
 	}
 	if value == nil {
 		return true, false
@@ -3685,7 +3688,12 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 		if kind == vector.PrepareParamBoolean {
 			return value == "0" || value == "1", false
 		}
-		if kind != vector.PrepareParamInteger {
+		// Connector/ODBC converts SQL_INTEGER and SQL_BIGINT values to their
+		// decimal text form and binds them as MYSQL_TYPE_STRING for server-side
+		// prepared statements. Accept that wire representation only when the
+		// value came from COM_STMT_EXECUTE. SQL PREPARE user variables and
+		// other non-binary-protocol text values keep the stricter validation.
+		if kind != vector.PrepareParamInteger && !isBinaryProtocol {
 			return false, false
 		}
 		if strings.HasPrefix(value, "-") {
