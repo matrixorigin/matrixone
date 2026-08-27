@@ -162,6 +162,10 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.fileOpened = false
 	}
 
+	// Error-mode columns are resolved from the pruned attribute list before any
+	// reader is built, so every reader sees the same decision.
+	resolveExternalErrorMode(param)
+
 	// Create reader (single dispatch point)
 	switch {
 	case param.ForeignScan != nil:
@@ -970,10 +974,22 @@ func isDirectParallelLoadType(id types.T) bool {
 	return id == types.T_array_float32 || id == types.T_array_float64
 }
 
-func getRealAttrCnt(attrs []plan.ExternAttr) int {
+// getRealAttrCnt counts the attributes that must be present as FIELDS in the
+// record. Synthesized columns — __mo_filepath and the error-mode columns — are
+// produced by the scan, not read from the record, so they must not inflate the
+// expected field count.
+func getRealAttrCnt(attrs []plan.ExternAttr, cols []*plan.ColDef) int {
 	cnt := 0
 	for i := 0; i < len(attrs); i++ {
 		if catalog.ContainExternalHidenCol(attrs[i].ColName) {
+			cnt++
+			continue
+		}
+		var colId uint64
+		if idx := int(attrs[i].ColIndex); idx < len(cols) && cols[idx] != nil {
+			colId = cols[idx].ColId
+		}
+		if catalog.IsExternalErrorCol(attrs[i].ColName, colId) {
 			cnt++
 		}
 	}
@@ -983,12 +999,12 @@ func getRealAttrCnt(attrs []plan.ExternAttr) int {
 func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
 	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 		//the column account_id of the cluster table do need to be filled here
-		if len(line)+1 != getRealAttrCnt(param.Attrs) {
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
 			return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 		}
 	} else {
 		if param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) {
-			if len(line) < getRealAttrCnt(param.Attrs) {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
 			}
 			return nil
@@ -1207,7 +1223,67 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 	}
 }
 
-func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
+// resolveExternalErrorMode decides, once per scan, whether the error-mode
+// columns survived column pruning. An attribute absent from param.Attrs was
+// pruned, so a query that does not mention these columns behaves exactly as
+// before and pays nothing per row.
+func resolveExternalErrorMode(param *ExternalParam) {
+	mode := ExternalErrorMode{}
+	for _, attr := range param.Attrs {
+		var colId uint64
+		if int(attr.ColIndex) < len(param.Cols) && param.Cols[attr.ColIndex] != nil {
+			colId = param.Cols[attr.ColIndex].ColId
+		}
+		if catalog.IsExternalErrorToleranceCol(attr.ColName, colId) {
+			mode.Tolerate = true
+		}
+		if attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId {
+			mode.WantLine = true
+		}
+	}
+	param.ErrorMode = mode
+}
+
+// isSynthesizedAttr reports whether the scan produces this column itself
+// rather than reading it out of the record.
+func isSynthesizedAttr(attr plan.ExternAttr, colId uint64, param *ExternalParam) bool {
+	switch {
+	case catalog.ContainExternalHidenCol(attr.ColName):
+		return true
+	case param.ForeignScan != nil && attr.ColName == catalog.ExternalQuery:
+		return true
+	case attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
+		return true
+	}
+	if param.KafkaScan != nil {
+		if _, ok := kafkaMetaField(attr.ColName, param); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func getFieldFromLine(line []csvparser.Field, colName string, colId uint64, param *ExternalParam, fieldIdx int32) csvparser.Field {
+	// Error-mode columns are synthesized, never read from the record. On a row
+	// that parsed, both error columns are NULL; the tolerant path overwrites
+	// them for a row that did not. __mo_file_line is position metadata and is
+	// filled whether or not the row parsed.
+	//
+	// Scoped by the reserved ColId, not by name: a table created before these
+	// names were reserved can have a REAL user column called
+	// __mo_error_message, and it has to keep reading its own data.
+	switch {
+	case colName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
+		if param.KafkaScan != nil {
+			// A Kafka record has no line in a file; __mo_message_id is what
+			// identifies it.
+			return csvparser.Field{IsNull: true}
+		}
+		return csvparser.Field{Val: strconv.FormatInt(param.ErrorMode.RecordLine, 10)}
+	case colName == catalog.ExternalErrorMessage && colId == catalog.ExternalErrorMessageColId,
+		colName == catalog.ExternalErrorText && colId == catalog.ExternalErrorTextColId:
+		return csvparser.Field{IsNull: true}
+	}
 	// __mo_filepath is synthesized by name (pre-existing behavior); __mo_query
 	// only on foreign scans, so a real __mo_query data column in a
 	// pre-existing generic external table still reads source data.
@@ -1223,7 +1299,111 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	return line[fieldIdx]
 }
 
+// getOneRowData materializes one record into the batch.
+//
+// Without error mode this is exactly the historical behaviour: the first
+// conversion failure aborts the statement.
+//
+// With error mode (the query kept __mo_error_message or __mo_error_text) a
+// record that cannot be materialized must not fail the query. Columns are
+// appended one at a time, so a failure part-way leaves the batch's vectors at
+// unequal lengths; the row is therefore rolled back to the lengths captured
+// before it and re-emitted with every user column NULL and the error columns
+// describing the failure.
 func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
+	if !param.ErrorMode.Tolerate {
+		return materializeOneRow(proc, bat, line, rowIdx, param)
+	}
+
+	mode := &param.ErrorMode
+	if cap(mode.rowLens) < len(bat.Vecs) {
+		mode.rowLens = make([]int, len(bat.Vecs))
+	}
+	lens := mode.rowLens[:len(bat.Vecs)]
+	for i, vec := range bat.Vecs {
+		lens[i] = vec.Length()
+	}
+
+	err := materializeOneRow(proc, bat, line, rowIdx, param)
+	if err == nil {
+		return nil
+	}
+	for i, vec := range bat.Vecs {
+		vec.SetLength(lens[i])
+	}
+	return appendErrorRow(proc, bat, line, rowIdx, param, err)
+}
+
+// appendErrorRow emits the replacement row for a record that failed to
+// materialize: every user column NULL, __mo_filepath and __mo_file_line as
+// usual, and the two error columns describing the failure.
+func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, cause error) error {
+	mp := proc.GetMPool()
+	message := cause.Error()
+	text := recordText(line, param)
+	for _, attr := range param.Attrs {
+		vec := bat.Vecs[attr.ColIndex]
+		var colId uint64
+		if idx := int(attr.ColIndex); idx < len(param.Cols) && param.Cols[idx] != nil {
+			colId = param.Cols[idx].ColId
+		}
+		switch {
+		case attr.ColName == catalog.ExternalErrorMessage && colId == catalog.ExternalErrorMessageColId:
+			if err := vector.AppendBytes(vec, []byte(message), false, mp); err != nil {
+				return err
+			}
+		case attr.ColName == catalog.ExternalErrorText && colId == catalog.ExternalErrorTextColId:
+			if err := vector.AppendBytes(vec, []byte(text), false, mp); err != nil {
+				return err
+			}
+		case isSynthesizedAttr(attr, colId, param):
+			// Position and source metadata -- __mo_filepath, __mo_file_line,
+			// the Kafka message columns -- describe where the record came
+			// from, which is exactly what a failed record needs to be found.
+			// They are synthesized, so they do not depend on the record
+			// having parsed; the ordinary column path fills them, typed as
+			// the catalog declares them.
+			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
+				return err
+			}
+		default:
+			// A record that failed to parse has no trustworthy value for any
+			// user column, so all of them are NULL — including the ones that
+			// happened to convert before the failure.
+			if err := vector.AppendBytes(vec, nil, true, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// recordText rebuilds the failed record as text for __mo_error_text. The
+// parser hands back decoded fields, so the reconstruction re-joins them with
+// the configured terminator: quoting and escaping are normalized rather than
+// byte-identical to the file.
+func recordText(line []csvparser.Field, param *ExternalParam) string {
+	if param.ErrorMode.RawText != "" {
+		return param.ErrorMode.RawText
+	}
+	sep := ","
+	if param.Extern != nil && param.Extern.Tail != nil && param.Extern.Tail.Fields != nil &&
+		param.Extern.Tail.Fields.Terminated != nil && param.Extern.Tail.Fields.Terminated.Value != "" {
+		sep = param.Extern.Tail.Fields.Terminated.Value
+	}
+	var sb strings.Builder
+	for i, field := range line {
+		if i > 0 {
+			sb.WriteString(sep)
+		}
+		if !field.IsNull {
+			sb.WriteString(field.Val)
+		}
+	}
+	return sb.String()
+}
+
+func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := proc.GetMPool()
 	if checkLineStrict(param) {
 		if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
@@ -1267,7 +1447,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	fieldIdx := attr.ColFieldIndex
 
-	field := getFieldFromLine(line, colName, param, fieldIdx)
+	var colId uint64
+	if col != nil {
+		colId = col.ColId
+	}
+	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
 	id := types.T(col.Typ.Id)
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
