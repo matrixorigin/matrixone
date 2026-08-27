@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -55,6 +57,41 @@ func TestTxnTableWriteTableName(t *testing.T) {
 	require.Equal(t, catalog.MO_COLUMNS, tbl.writeTableName(
 		context.WithValue(context.Background(), defines.MoColumnsUpdateKey{}, true),
 	))
+}
+
+func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
+	for _, skipTransfer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skip-transfer=%v", skipTransfer), func(t *testing.T) {
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			txn.tnStores = []DNStore{{}}
+			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
+			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
+
+			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			require.NotNil(t, tbl)
+			tbl.tableId = catalog.MO_COLUMNS_ID
+			tbl.tableName = catalog.MO_COLUMNS
+			tbl.extraInfo = &api.SchemaExtra{}
+
+			stats := objectio.NewObjectStats()
+			require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
+			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, txn.proc.Mp()))
+			bat.SetRowCount(1)
+			defer bat.Clean(txn.proc.Mp())
+
+			ctx := context.WithValue(context.Background(), defines.MoColumnsUpdateKey{}, true)
+			if skipTransfer {
+				ctx = context.WithValue(ctx, defines.SkipTransferKey{}, true)
+			}
+			require.NoError(t, tbl.Delete(ctx, bat, ""))
+			require.Len(t, txn.writes, 1)
+			require.Equal(t, catalog.MO_COLUMNS_UPDATE, txn.writes[0].tableName)
+			require.Equal(t, skipTransfer, txn.writes[0].skipTransfer)
+			txn.writes[0].bat.Clean(txn.proc.Mp())
+		})
+	}
 }
 
 func newTxnTableForTest() *txnTable {

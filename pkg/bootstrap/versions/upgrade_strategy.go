@@ -255,6 +255,13 @@ func checkCommonProtocolVersion(txn executor.TxnExecutor, required int64) error 
 	return nil
 }
 
+// CheckCommonProtocolVersion verifies the protocol generation used by a
+// tenant-upgrade snapshot. Callers must perform this check before enumerating
+// tenant IDs so old writers cannot create rows outside the snapshot ranges.
+func CheckCommonProtocolVersion(txn executor.TxnExecutor, required int64) error {
+	return checkCommonProtocolVersion(txn, required)
+}
+
 // UpgradeStatementOption executes upgrade SQL as the administrator of the
 // target account. Dynamic migrations must use the same identity as static
 // UpgradeEntries when they issue tenant DDL.

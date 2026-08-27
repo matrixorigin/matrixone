@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -40,11 +41,12 @@ const removedIndexVisibilityUpgradeOffset uint32 = 1
 
 func init() {
 	Handler = &versionHandle{metadata: versions.Version{
-		Version:           "4.0.6",
-		MinUpgradeVersion: "4.0.5",
-		UpgradeCluster:    versions.Yes,
-		UpgradeTenant:     versions.Yes,
-		VersionOffset:     uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) + removedIndexVisibilityUpgradeOffset,
+		Version:                 "4.0.6",
+		MinUpgradeVersion:       "4.0.5",
+		UpgradeCluster:          versions.Yes,
+		UpgradeTenant:           versions.Yes,
+		VersionOffset:           uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) + removedIndexVisibilityUpgradeOffset,
+		RequiredProtocolVersion: defines.MORPCVersion32,
 	}}
 }
 

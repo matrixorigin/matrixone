@@ -468,6 +468,7 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+removedIndexVisibilityUpgradeOffset, meta.VersionOffset)
+	require.Equal(t, int64(defines.MORPCVersion32), meta.RequiredProtocolVersion)
 }
 
 func TestTenantViewDefinitionChecks(t *testing.T) {
