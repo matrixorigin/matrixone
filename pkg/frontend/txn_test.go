@@ -885,6 +885,10 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 		cancelTxnCreateWithRequest: true,
 	}).(*backExec)
 	defer bh.Close()
+	require.ErrorContains(t,
+		bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{ses: bh.backSes}),
+		"request context is required for cancellable transaction creation",
+	)
 
 	reqDeadline := time.Now().Add(time.Hour)
 	reqCtx, cancel := context.WithDeadline(

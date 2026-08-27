@@ -311,26 +311,37 @@ func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
 }
 
 func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
-	cfg := newServiceConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
-	require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
-	require.NoError(t, cfg.validate())
-	require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+	validators := []struct {
+		name string
+		call func(*ServiceConfig) error
+	}{
+		{name: "validate loaded config", call: (*ServiceConfig).validate},
+		{name: "apply programmatic defaults", call: (*ServiceConfig).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(&cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
 
-	cfg = newServiceConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
-	cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
-	require.ErrorContains(t, cfg.validate(), "max-clock-offset must be positive")
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
 
-	cfg = newServiceConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
-	cfg.Clock.MaxClockOffset.Duration = time.Second
-	cfg.CN.Frontend.ConnectTimeout.Duration = 4*time.Second + time.Nanosecond
-	require.ErrorContains(t, cfg.validate(), "authentication freshness budget 4.000000001s")
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "authentication freshness clock budget 2.000000001s")
 
-	cfg.CN.Frontend.ConnectTimeout.Duration = 5 * time.Second
-	cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
-	require.NoError(t, cfg.validate())
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(&cfg))
+		})
+	}
 }
 
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {

@@ -1,7 +1,7 @@
 # Authentication Catalog Freshness Across CNs
 
 - Status: Review required
-- Base revision: `1d3483ac9717bcee54b24c2f76cb73af81e9410d`
+- Base revision: `c1fe7b4e596c81a023d5cebd1953f388b5bd8500`
 - Incident evidence: [PR #27758 CI job](https://github.com/matrixorigin/matrixone/actions/runs/33067372509/job/98502820591?pr=27758)
 - Related changes: [PR #27717](https://github.com/matrixorigin/matrixone/pull/27717), [PR #27737](https://github.com/matrixorigin/matrixone/pull/27737)
 - Last updated: 2026-08-28
@@ -147,15 +147,19 @@ CN startup therefore requires:
 
 ```text
 connectTimeout > 2 * max-clock-offset + 1ns
-                 + 1s handshake headroom
-                 + 1s logtail/application headroom
 ```
 
-The two fixed one-second reserves are explicit minimum operational policy, not
-a claim that arbitrary clients or a stalled logtail complete within one second.
-The request deadline remains the hard termination owner. The formula and
-overflow handling live once in `pkg/config`; process and embedded launchers
-delegate to that owner so their accepted configuration sets cannot drift.
+This clock geometry is the only lower bound that a CN can prove from its local
+configuration. Passing it is necessary, but does not guarantee that a login
+finishes within the deadline: client/TLS protocol work, transport delay, the
+configurable TN logtail progress cadence, and application delay all consume the
+remaining budget at runtime. Those inputs are not bounded by a CN configuration
+validator, so attaching fixed reserves would create an unverifiable admission
+policy rather than a safety proof. The request deadline remains the hard
+termination and fail-closed owner. Operators must size it for their topology,
+logtail configuration, and load. The formula and overflow handling live once in
+`pkg/config`; process and embedded launchers delegate to that owner so their
+accepted configuration sets cannot drift.
 
 ## 6. Alternatives Rejected
 
@@ -216,10 +220,12 @@ correctness under the configured external NTP/PTP assumption.
   compatibility impact, but connection-latency dashboards can show the newly
   enforced uncertainty wait after rollout.
 - A CN rejects startup when `cn.frontend.connectTimeout` is not strictly greater
-  than the checked pairwise-skew fence plus the two operational reserves above.
-  Duration arithmetic is checked before multiplication/addition. An extreme
-  offset that would overflow the budget fails startup instead of wrapping into
-  an accepted negative or small timeout.
+  than the mathematically necessary pairwise-skew fence above. This does not
+  certify an operational latency budget; the request still fails closed if
+  runtime logtail or network progress consumes the deadline. Duration
+  arithmetic is checked before multiplication/addition. An extreme offset that
+  would overflow the clock budget fails startup instead of wrapping into an
+  accepted negative or small timeout.
 
 ## 8. Performance Budget
 
@@ -258,7 +264,7 @@ correctness under the configured external NTP/PTP assumption.
 | --- | --- |
 | Fence uses the HLC uncertainty upper bound and dominates its logical range | focused frontend unit test with a deterministic clock |
 | Disabling active clock monitoring retains the configured uncertainty bound in process and embedded launchers | focused clock and launcher-config unit tests |
-| A handshake budget that cannot cover pairwise skew plus operational headroom fails during CN configuration; overflow fails closed | shared config model plus process and embedded config unit tests |
+| A handshake budget at or below the necessary pairwise clock fence fails during CN configuration, while the first representable value above it is accepted; overflow fails closed | shared config model plus process and embedded config unit tests |
 | Existing larger session minimum is never lowered | focused frontend unit test |
 | Missing runtime/clock, invalid offset, and timestamp overflow fail closed | focused frontend unit tests |
 | Authentication installs the fence before background transaction creation | focused frontend unit test at the executor seam |
@@ -286,6 +292,12 @@ would duplicate its fixture and oracles, so this change reuses it unchanged.
 
 ## 11. Decision Log
 
+- 2026-08-28: full TN progress-chain analysis showed that logtail publication
+  cadence is configurable and runtime transport/application latency has no
+  finite local bound. The validator therefore enforces only the provable
+  `2O + 1ns` clock lower bound; fixed handshake/logtail reserves were removed so
+  validation does not pretend to guarantee an operational deadline it cannot
+  observe. The connection deadline remains the runtime fail-closed owner.
 - 2026-08-28: request-changes review proved that comparing `connectTimeout` to
   one `max-clock-offset` admitted two guaranteed-failure configurations. The
   design now accounts for the `2O` pairwise CN/TN clock geometry and checked

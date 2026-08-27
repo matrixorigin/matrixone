@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -386,29 +387,50 @@ func TestMongoDBEnablementConfigDefaults(t *testing.T) {
 }
 
 func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	validators := []struct {
+		name string
+		call func(*Config) error
+	}{
+		{name: "validate loaded config", call: (*Config).validate},
+		{name: "apply programmatic defaults", call: (*Config).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "max-clock-offset must be positive")
+
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "authentication freshness clock budget 2.000000001s")
+
+			// Authentication uses the connection deadline directly. A short
+			// ordinary transaction-creation timeout must not make an otherwise
+			// valid CN fail startup.
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(cfg))
+		})
+	}
+}
+
+func TestNewLocalClockRetainsOffsetWhenMonitoringDisabled(t *testing.T) {
 	cfg := NewConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
-	require.NoError(t, cfg.validate())
-	require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
 
-	cfg = NewConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
-	cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
-	require.ErrorContains(t, cfg.validate(), "max-clock-offset must be positive")
-
-	cfg = NewConfig()
-	cfg.ServiceType = metadata.ServiceType_CN.String()
-	cfg.Clock.MaxClockOffset.Duration = time.Second
-	cfg.CN.Frontend.ConnectTimeout.Duration = 4*time.Second + time.Nanosecond
-	require.ErrorContains(t, cfg.validate(), "authentication freshness budget 4.000000001s")
-
-	// Authentication uses the connection deadline directly. A short ordinary
-	// transaction-creation timeout must not make an otherwise valid CN fail
-	// startup or guarantee that every login times out.
-	cfg.CN.Frontend.ConnectTimeout.Duration = 5 * time.Second
-	cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
-	require.NoError(t, cfg.validate())
+	s := stopper.NewStopper("clock-offset-contract")
+	t.Cleanup(func() { s.Stop() })
+	require.Equal(t, defaultMaxClockOffset, newLocalClock(cfg, s).MaxOffset())
 }
 
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {
