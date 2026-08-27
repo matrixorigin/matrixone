@@ -2835,6 +2835,66 @@ func TestInsert(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestLoadPlanUsesSingleTableLockTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"LOAD DATA INLINE FORMAT='csv', DATA='1,n,1,c' INTO TABLE nation FIELDS TERMINATED BY ','",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, plan.Query_INSERT, query.StmtType)
+	require.True(t, query.LoadTag)
+
+	var lockTargets []*plan.LockTarget
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			lockTargets = append(lockTargets, node.LockTargets...)
+		}
+	}
+	require.Len(t, lockTargets, 1)
+	require.True(t, lockTargets[0].LockTable)
+	require.Equal(t, mock.ctxt.tables["nation"].TblId, lockTargets[0].TableId)
+}
+
+func TestLoadPlanKeepsUniqueIndexRowLockTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"LOAD DATA INLINE FORMAT='csv', DATA='1,d,l' INTO TABLE dept FIELDS TERMINATED BY ','",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.True(t, query.LoadTag)
+
+	var lockTargets []*plan.LockTarget
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			lockTargets = append(lockTargets, node.LockTargets...)
+		}
+	}
+	require.Len(t, lockTargets, 2)
+	baseTableTargets := 0
+	indexRowTargets := 0
+	for _, target := range lockTargets {
+		if target.TableId == mock.ctxt.tables["dept"].TblId {
+			require.True(t, target.LockTable)
+			baseTableTargets++
+			continue
+		}
+		require.False(t, target.LockTable)
+		indexRowTargets++
+	}
+	require.Equal(t, 1, baseTableTargets)
+	require.Equal(t, 1, indexRowTargets)
+}
+
 func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 	sqls := []string{
 		"INSERT INTO NATION SELECT * FROM NATION2",

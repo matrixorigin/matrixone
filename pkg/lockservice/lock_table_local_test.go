@@ -2149,12 +2149,26 @@ func TestExclusiveLockBudgetAppliesAcrossRequests(t *testing.T) {
 					require.NoError(t, err)
 					_, err = caller.Lock(ctx, table, newTestRows(5), txnID, opts)
 					require.NoError(t, err)
+					// Once the first replacement commits, even one below-budget row must
+					// widen the previous range directly. Rebuilding exact locks here was
+					// the large-DML lock/ledger churn regression.
+					_, err = caller.Lock(ctx, table, newTestRows(6), txnID, opts)
+					require.NoError(t, err)
+					ownerTxn := owner.activeTxnHolder.getActiveTxn(txnID, false, "")
+					require.NotNil(t, ownerTxn)
+					ownerTxn.RLock()
+					require.Equal(t, 2,
+						ownerTxn.lockHolders[0].tableKeys[table].mustGet().len())
+					require.Contains(t,
+						ownerTxn.lockHolders[0].coarsenedTables(), table)
+					ownerTxn.RUnlock()
+
 					// A later generation must compact the previous range together with
 					// newly retained points, not start a fresh per-call budget.
 					_, err = caller.Lock(ctx, table, newTestRows(7, 8), txnID, opts)
 					require.NoError(t, err)
 
-					// The budget is transaction/table scoped: the owner compacts four
+					// The budget is transaction/table scoped: the owner compacts five
 					// individually small requests to one bounded physical range. A v28
 					// remote origin retains only its table-scoped cleanup route.
 					for _, service := range []*service{caller, owner} {
@@ -2243,6 +2257,14 @@ func TestExclusiveLockBudgetRemainsBoundedAcrossExecutionBatches(t *testing.T) {
 				txn.RUnlock()
 				require.LessOrEqual(t, retained, budget,
 					"retained lock keys exceeded the transaction/table budget after batch %d", batch)
+				if batch >= 2 {
+					require.Equal(t, 2, retained,
+						"a committed coarsened range regrew exact row locks after batch %d", batch)
+					txn.RLock()
+					require.Contains(t,
+						txn.lockHolders[0].coarsenedTables(), table)
+					txn.RUnlock()
+				}
 			}
 
 			txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
