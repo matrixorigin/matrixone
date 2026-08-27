@@ -725,6 +725,7 @@ type manuallyExpiringContext struct {
 	deadline time.Time
 	done     chan struct{}
 	once     sync.Once
+	err      error
 }
 
 func newManuallyExpiringContext(deadline time.Time) *manuallyExpiringContext {
@@ -732,6 +733,7 @@ func newManuallyExpiringContext(deadline time.Time) *manuallyExpiringContext {
 		Context:  context.Background(),
 		deadline: deadline,
 		done:     make(chan struct{}),
+		err:      context.DeadlineExceeded,
 	}
 }
 
@@ -746,7 +748,7 @@ func (c *manuallyExpiringContext) Done() <-chan struct{} {
 func (c *manuallyExpiringContext) Err() error {
 	select {
 	case <-c.done:
-		return context.DeadlineExceeded
+		return c.err
 	default:
 		return nil
 	}
@@ -754,6 +756,13 @@ func (c *manuallyExpiringContext) Err() error {
 
 func (c *manuallyExpiringContext) expire() {
 	c.once.Do(func() { close(c.done) })
+}
+
+func newManuallyCancelledContext(deadline time.Time) *manuallyExpiringContext {
+	ctx := newManuallyExpiringContext(deadline)
+	ctx.err = context.Canceled
+	ctx.expire()
+	return ctx
 }
 
 func TestGetTimeoutFromContextDeadlineContract(t *testing.T) {
@@ -768,6 +777,14 @@ func TestGetTimeoutFromContextDeadlineContract(t *testing.T) {
 		_, err := (RPCMessage{Ctx: ctx, internal: true}).GetTimeoutFromContext()
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
+
+	for _, internal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired %s context remains canceled", map[bool]string{false: "normal", true: "internal"}[internal]), func(t *testing.T) {
+			ctx := newManuallyCancelledContext(time.Now().Add(-time.Second))
+			_, err := (RPCMessage{Ctx: ctx, internal: internal}).GetTimeoutFromContext()
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
 
 	t.Run("one-way message keeps its fixed timeout", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

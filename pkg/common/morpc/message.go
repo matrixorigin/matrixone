@@ -42,6 +42,9 @@ func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 		if deadline, ok := m.Ctx.Deadline(); ok {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
+				if err := m.Ctx.Err(); err != nil {
+					return 0, err
+				}
 				return 0, context.DeadlineExceeded
 			}
 			if remaining < internalTimeout {
@@ -60,6 +63,9 @@ func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 	}
 	now := time.Now()
 	if !d.After(now) {
+		if err := m.Ctx.Err(); err != nil {
+			return 0, err
+		}
 		return 0, context.DeadlineExceeded
 	}
 	return d.Sub(now), nil
