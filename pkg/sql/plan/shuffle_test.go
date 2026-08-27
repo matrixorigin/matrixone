@@ -651,6 +651,25 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 	require.False(t, lowGroupNDV.Stats.HashmapStats.Shuffle,
 		"too few groups would serialize the high-cardinality distinct state")
 
+	emptyGroupingSet := newAggregate(1_000_000)
+	emptyGroupingSet.GroupingFlag = []bool{false}
+	determineShuffleForGroupBy(emptyGroupingSet, builder)
+	require.False(t, emptyGroupingSet.Stats.HashmapStats.Shuffle,
+		"an empty grouping set has no raw child key safe for pre-group shuffle")
+
+	activeGroupingKey := newAggregate(1_000_000)
+	activeGroupingKey.GroupBy = append(activeGroupingKey.GroupBy, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Ndv:  1_000_000,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	})
+	activeGroupingKey.GroupingFlag = []bool{false, true}
+	determineShuffleForGroupBy(activeGroupingKey, builder)
+	require.True(t, activeGroupingKey.Stats.HashmapStats.Shuffle,
+		"a grouping-set branch may still shuffle on an active key")
+	require.Equal(t, int32(1), activeGroupingKey.Stats.HashmapStats.ShuffleColIdx,
+		"inactive high-NDV keys must not become the distribution key")
+
 	child.Stats.Outcnt = 100_000_000
 	lowStateRatio := newAggregate(1_000_000)
 	determineShuffleForGroupBy(lowStateRatio, builder)

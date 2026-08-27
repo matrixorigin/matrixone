@@ -1221,13 +1221,25 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	// it remains a valid distribution key even when it is omitted from the
 	// local hash table. Preserve the highest-NDV choice to avoid skewing a
 	// composite primary key on one of its lower-cardinality components.
-	idx := 0
-	highestNDV := node.GroupBy[idx].Ndv
+	idx := -1
+	highestNDV := float64(0)
 	for i := range node.GroupBy {
-		if node.GroupBy[i].Ndv > highestNDV {
+		// Grouping-set branches replace inactive keys with the rollup
+		// constant inside Group. A shuffle must happen before Group, so an
+		// inactive key is not a valid distribution key: all rows would be
+		// partitioned by their raw values and then collapse to one logical
+		// group without a downstream MergeGroup. An empty grouping set has no
+		// safe key and must retain the ordinary merge topology.
+		if i < len(node.GroupingFlag) && !node.GroupingFlag[i] {
+			continue
+		}
+		if idx < 0 || node.GroupBy[i].Ndv > highestNDV {
 			highestNDV = node.GroupBy[i].Ndv
 			idx = i
 		}
+	}
+	if idx < 0 {
+		return
 	}
 	minimumGroupNDV := float64(ShuffleThreshHoldOfNDV)
 	if distinctStateShuffle {
