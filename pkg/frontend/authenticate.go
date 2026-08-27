@@ -1330,6 +1330,8 @@ const (
 	// operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
 
+	getRoleNameOfUserRoleFormat = `select r.role_name from mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_id = %d;`
+
 	getRoleIdOfUserIdFormat = `select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d;`
 
 	checkUserGrantFormat = `select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant where role_id = %d and user_id = %d;`
@@ -1868,6 +1870,10 @@ func getSqlForRoleOfUser(ctx context.Context, userID int64, roleName string) (st
 		return "", err
 	}
 	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName), nil
+}
+
+func getSqlForRoleNameOfUserRole(userID, roleID int64) string {
+	return fmt.Sprintf(getRoleNameOfUserRoleFormat, userID, roleID)
 }
 
 func getSqlForRoleIdOfUserId(userId int) string {
