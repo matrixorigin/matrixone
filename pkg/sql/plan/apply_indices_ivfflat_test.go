@@ -206,6 +206,11 @@ func TestPrepareIvfIndexContext_InvalidIndexAlgoParams(t *testing.T) {
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	assert.NoError(t, err)
 	assert.Nil(t, result)
+
+	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams = `{"op_type":123}`
+	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
 }
 
 // TestPrepareIvfIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
@@ -795,6 +800,18 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	require.NotNil(t, result)
 	// baseNprobe is 10 (from probe_limit), compensation is 2, expected nProbe = 20
 	assert.Equal(t, int64(20), result.nProbe)
+
+	// The persisted representation is quoted, while older metadata can contain
+	// a JSON number. Both forms must produce the same adaptive nprobe.
+	quotedLists := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_auto_adaptive_quoted",
+		`{"op_type":"`+metric.DistFuncOpTypes["l2_distance"]+`","lists":"100"}`,
+		[]string{"vec_col"},
+	)
+	quotedResult, err := builder.prepareIvfIndexContext(vecCtx, quotedLists)
+	require.NoError(t, err)
+	require.NotNil(t, quotedResult)
+	assert.Equal(t, result.nProbe, quotedResult.nProbe)
 
 	// Case 2: Adaptive mode disabled because totalLists is missing
 	idxAlgoParamsNoLists := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
