@@ -1999,6 +1999,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
+	tableName := tbl.writeTableName(ctx)
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
 		ctx,
 		INSERT,
@@ -2007,7 +2008,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.db.databaseName,
-		tbl.tableName,
+		tableName,
 		ibat,
 		tbl.getTxn().tnStores[0],
 		tbl.extraInfo.AutoIncrEpoch,
@@ -2183,13 +2184,13 @@ func (tbl *txnTable) Delete(
 		if skipTransfer {
 			tbl.getTxn().Lock()
 			err := tbl.getTxn().writeFileLockedSkipTransferWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
+				tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 			tbl.getTxn().Unlock()
 			return err
 		}
 
 		if err := tbl.getTxn().writeFileWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+			tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 			return err
 		}
 
@@ -2249,11 +2250,18 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 		return err
 	}
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+		tbl.db.databaseName, tbl.writeTableName(ctx), ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
 	return nil
+}
+
+func (tbl *txnTable) writeTableName(ctx context.Context) string {
+	if tbl.tableId == catalog.MO_COLUMNS_ID && ctx.Value(defines.MoColumnsUpdateKey{}) != nil {
+		return catalog.MO_COLUMNS_UPDATE
+	}
+	return tbl.tableName
 }
 
 func (tbl *txnTable) AddTableDef(ctx context.Context, def engine.TableDef) error {

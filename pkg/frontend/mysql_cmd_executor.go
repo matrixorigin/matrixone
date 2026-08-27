@@ -2884,11 +2884,10 @@ func createPrepareStmtInSession(
 		protocolVersion:    protocolVersion,
 		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
-		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
-		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
-		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
-			prepareControl.Plan),
+		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan),
 		directResultParamPositionsSet: true,
+		hasPaginationParams:           plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:              len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
 		getFromSendLongData:           make(map[int]struct{}),
 		schedulingSQLMode:             schedulingSQLMode,
 	}
