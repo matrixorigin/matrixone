@@ -334,6 +334,20 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// numericPrefixConsumer is computed once per prepared-plan generation so
+	// ordinary COM_STMT Query executions never scan or copy the cached plan.
+	numericPrefixConsumer bool
+	hasPaginationParams   bool
+	hasLagLeadParams      bool
+	paramKinds            []vector.PrepareParamKind
+	paramMetadata         []bool
+	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
+	// stable parameter semantic category. The cached runtime plan retains
+	// ParamRefs, so equivalent values reuse the compile without embedding the
+	// preceding execution's literal.
+	runtimeSpecializationKey string
+	runtimePlan              *plan.Plan
+	runtimeCompile           *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -347,6 +361,12 @@ type PrepareStmt struct {
 	// EXECUTE.
 	runtimeSpecializationPlan   *plan.Plan
 	runtimeSpecializationNeeded bool
+	// directResultParamPositions is computed with the prepared plan and reused
+	// by COM_STMT_EXECUTE. A direct marker's execute-time numeric domain is also
+	// the visible result-column domain; ordinary predicates and nested
+	// expressions use the regular specialization scan instead.
+	directResultParamPositions    []int32
+	directResultParamPositionsSet bool
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -725,6 +745,38 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	tableInfos map[string][]ColumnInfo
 //}
 
+func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
+	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
+		return
+	}
+	runtimeCompile.FreeOperator()
+	runtimeCompile.SetIsPrepare(false)
+	runtimeCompile.Release()
+}
+
+func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
+	key string,
+	runtimePlan *plan.Plan,
+	runtimeCompile *compile.Compile,
+) {
+	oldRuntimeCompile := prepareStmt.runtimeCompile
+	runtimeCompile.SetIsPrepare(true)
+	prepareStmt.runtimeSpecializationKey = key
+	prepareStmt.runtimePlan = runtimePlan
+	prepareStmt.runtimeCompile = runtimeCompile
+	if oldRuntimeCompile != runtimeCompile {
+		prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+	}
+}
+
+func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
+	oldRuntimeCompile := prepareStmt.runtimeCompile
+	prepareStmt.runtimeSpecializationKey = ""
+	prepareStmt.runtimePlan = nil
+	prepareStmt.runtimeCompile = nil
+	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+}
+
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.closeCursor()
 	if prepareStmt.params != nil {
@@ -737,6 +789,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
+	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
@@ -746,6 +799,8 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
 }
 

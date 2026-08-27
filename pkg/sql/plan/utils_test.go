@@ -431,7 +431,8 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 
 func TestPreparedRuntimeTypeFromString(t *testing.T) {
 	largeInteger := strings.Repeat("9", 80)
-	largeFraction := "." + strings.Repeat("1", 80)
+	decimal256Integer := strings.Repeat("9", 65)
+	decimal256Fraction := "." + strings.Repeat("1", 65)
 	tests := []struct {
 		name  string
 		value string
@@ -452,16 +453,14 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 		{name: "decimal64", value: "12.340", want: types.T_decimal64, ok: true},
 		{name: "decimal with leading dot", value: ".125", want: types.T_decimal64, ok: true},
 		{name: "decimal with trailing dot", value: "12.", want: types.T_decimal64, ok: true},
-		{name: "positive exponent", value: "1e3", want: types.T_float64, ok: true},
-		{name: "negative exponent", value: "1.2E-3", want: types.T_float64, ok: true},
-		{name: "large exponent", value: "1e100", want: types.T_float64, ok: true},
-		{name: "small exponent", value: "1e-100", want: types.T_float64, ok: true},
-		{name: "maximum finite exponent", value: "1.7976931348623157e308", want: types.T_float64, ok: true},
-		{name: "overflowing exponent", value: "1e309"},
-		{name: "decimal256 integer", value: largeInteger + ".", want: types.T_decimal256, ok: true},
-		{name: "decimal256 fraction", value: largeFraction, want: types.T_decimal256, ok: true},
+		{name: "decimal64 exponent", value: "1e3", want: types.T_decimal64, ok: true},
+		{name: "signed exponent", value: "1.2E-3", want: types.T_decimal64, ok: true},
+		{name: "decimal256 integer", value: decimal256Integer, want: types.T_decimal256, ok: true},
+		{name: "decimal256 fraction", value: decimal256Fraction, want: types.T_decimal256, ok: true},
 		{name: "invalid exponent", value: "1e+"},
 		{name: "invalid mantissa", value: "1.2.3"},
+		{name: "decimal overflow integer", value: largeInteger},
+		{name: "decimal overflow fraction", value: "." + largeInteger},
 		{name: "invalid text", value: "not-a-number"},
 	}
 	for _, test := range tests {
@@ -473,6 +472,119 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedRuntimeDecimalTypeBoundaries(t *testing.T) {
+	for _, digits := range []int{65, 66, 67, 76} {
+		value := strings.Repeat("9", digits)
+		for _, signed := range []string{value, "-" + value} {
+			typ, ok := PreparedRuntimeTypeFromString(signed)
+			require.True(t, ok, "digits=%d value=%s", digits, signed)
+			require.Equal(t, types.T_decimal256, typ.Oid)
+			require.Equal(t, int32(digits), typ.Width)
+			require.Zero(t, typ.Scale)
+		}
+	}
+	_, ok := PreparedRuntimeTypeFromString(strings.Repeat("9", 77))
+	require.False(t, ok)
+
+	typ, ok := PreparedRuntimeTypeFromString("." + strings.Repeat("0", 75) + "1")
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, typ.Oid)
+	require.Equal(t, int32(76), typ.Width)
+	require.Equal(t, int32(76), typ.Scale)
+
+	typ, ok = PreparedRuntimeTypeFromString("0.000000000000000000000000000000000001e100")
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, typ.Oid)
+	require.Equal(t, int32(65), typ.Width)
+	require.Zero(t, typ.Scale)
+}
+
+func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		wantOID   types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "non numeric is zero", value: "abc", wantOID: types.T_decimal64, wantWidth: 1},
+		{name: "empty is zero", value: "  ", wantOID: types.T_decimal64, wantWidth: 1},
+		{name: "suffix", value: "12.340tail", wantOID: types.T_decimal64, wantWidth: 4, wantScale: 2},
+		{name: "equivalent exponent", value: "1234e-2tail", wantOID: types.T_decimal64, wantWidth: 4, wantScale: 2},
+		{
+			name:      "decimal128",
+			value:     "9007199254740992.0001suffix",
+			wantOID:   types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 4,
+		},
+		{
+			name:      "decimal256",
+			value:     strings.Repeat("9", 39) + "." + strings.Repeat("1", 20) + "tail",
+			wantOID:   types.T_decimal256,
+			wantWidth: 59,
+			wantScale: 20,
+		},
+		{
+			name:      "large exponent compensated by fractional digits",
+			value:     "0.000000000000000000000000000000000001e100",
+			wantOID:   types.T_decimal256,
+			wantWidth: 65,
+		},
+		{name: "positive overflow", value: "1e76", wantOID: types.T_float64},
+		{name: "negative overflow", value: "1e-77", wantOID: types.T_float64},
+		{name: "huge exponent", value: "1e999999999999suffix", wantOID: types.T_float64},
+		{name: "huge negative exponent", value: "1e-999999999999suffix", wantOID: types.T_float64},
+		{name: "zero huge exponent", value: "0e999999999999suffix", wantOID: types.T_decimal64, wantWidth: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := PreparedNumericPrefixTypeFromString(test.value)
+			require.Equal(t, test.wantOID, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
+	ctx := context.Background()
+	target := types.T_int64.ToType()
+	literalCast, err := appendCastBeforeExpr(ctx, makePlan2Int32ConstExprWithType(7), makePlan2Type(&target))
+	require.NoError(t, err)
+	require.True(t, checkNoNeedCast(target, target, literalCast))
+
+	columnCast, err := appendCastBeforeExpr(ctx, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}, makePlan2Type(&target))
+	require.NoError(t, err)
+	require.False(t, checkNoNeedCast(target, target, columnCast))
+
+	uuidType := types.T_uuid.ToType()
+	uuidCast, err := appendExplicitCastBeforeExpr(
+		ctx,
+		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000001", false),
+		makePlan2Type(&uuidType),
+	)
+	require.NoError(t, err)
+	require.True(t, checkNoNeedCast(uuidType, uuidType, uuidCast), uuidCast.String())
+	secondUUIDCast, err := appendExplicitCastBeforeExpr(
+		ctx,
+		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000002", false),
+		makePlan2Type(&uuidType),
+	)
+	require.NoError(t, err)
+	uuidColumn := &plan.Expr{
+		Typ:  makePlan2Type(&uuidType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}},
+	}
+	_, err = BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{uuidColumn, {
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{uuidCast, secondUUIDCast}}},
+	}})
+	require.NoError(t, err, "same-type UUID constants must not receive a redundant UUID-to-UUID cast")
 }
 
 func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
@@ -513,7 +625,10 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		{value: "1.", want: true},
 		{value: "1e+2", want: true},
 		{value: ".1e-2", want: true},
-		{value: "1.7976931348623157e308", want: true},
+		// This finite value is valid FLOAT64 syntax, but its exponent is
+		// outside the Decimal256 domain.  preparedDecimalType must therefore
+		// reject it; preparedExponentType below covers the approximate domain.
+		{value: "1.7976931348623157e308", want: false},
 		{value: "1e309", want: false},
 		{value: "1e", want: false},
 		{value: "1e+", want: false},

@@ -33,7 +33,9 @@ func (builder *QueryBuilder) annotatePartitionTopN(nodeID int32) {
 	if node.NodeType != planpb.Node_WINDOW {
 		return
 	}
-	if _, ok := builder.userWindowNodes[nodeID]; !ok {
+	_, userWindow := builder.userWindowNodes[nodeID]
+	_, internalCandidate := builder.internalTopNWindows[nodeID]
+	if !userWindow && !internalCandidate {
 		return
 	}
 	proc := builder.compCtx.GetProcess()
