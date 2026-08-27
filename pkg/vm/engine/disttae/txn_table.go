@@ -363,36 +363,77 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 }
 
 func ForeachVisibleObjects(
+	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(obj objectio.ObjectEntry) error,
+	fn func(context.Context, objectio.ObjectEntry) error,
 	executor ConcurrentExecutor,
 	visitTombstone bool,
 ) (err error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
 	iter, err := state.NewObjectsIter(ts, true, visitTombstone)
 	if err != nil {
 		return err
 	}
 	defer iter.Close()
-	var wg sync.WaitGroup
+
+	taskCtx, cancelTasks := context.WithCancelCause(ctx)
+	defer cancelTasks(nil)
+	var (
+		wg           sync.WaitGroup
+		firstErrOnce sync.Once
+		firstErr     error
+	)
+	completeTask := func(taskErr error) {
+		if taskErr != nil {
+			firstErrOnce.Do(func() {
+				firstErr = taskErr
+				// Stop sibling object I/O and prevent further admission. Already
+				// admitted work is still joined below before its accumulator dies.
+				cancelTasks(taskErr)
+			})
+		}
+		wg.Done()
+	}
+
 	for iter.Next() {
+		if cause := context.Cause(taskCtx); cause != nil {
+			err = cause
+			break
+		}
 		entry := iter.Entry()
 		if executor != nil {
 			wg.Add(1)
-			executor.AppendTask(func() error {
-				defer wg.Done()
-				return fn(entry)
-			})
+			appendErr := executor.AppendTask(
+				taskCtx,
+				func() error { return fn(taskCtx, entry) },
+				completeTask,
+			)
+			if appendErr != nil {
+				// Ownership was not transferred to the executor.
+				completeTask(appendErr)
+				err = appendErr
+				break
+			}
 		} else {
-			if err = fn(entry); err != nil {
+			if err = fn(taskCtx, entry); err != nil {
+				cancelTasks(err)
 				break
 			}
 		}
 	}
 	if executor != nil {
 		wg.Wait()
+		if firstErr != nil {
+			return firstErr
+		}
 	}
-	return
+	if err != nil {
+		return err
+	}
+	return context.Cause(ctx)
 }
 
 // not accurate!  only used by stats
@@ -430,10 +471,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
-	onObjFn := func(obj objectio.ObjectEntry) error {
+	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		var err error
 		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+		if objMeta, err = objectio.FastLoadObjectMeta(objCtx, &location, false, fs); err != nil {
 			return err
 		}
 		updateMu.Lock()
@@ -460,6 +501,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	if err = ForeachVisibleObjects(
+		ctx,
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -516,7 +558,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
-	onObjFn := func(obj objectio.ObjectEntry) error {
+	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -548,7 +590,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 			return nil
 		}
 
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
 		if err != nil {
 			return err
 		}
@@ -578,6 +620,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 	}
 
 	if err = ForeachVisibleObjects(
+		ctx,
 		state,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -3343,7 +3386,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
-	err = ForeachVisibleObjects(state, snapshot, func(obj objectio.ObjectEntry) error {
+	err = ForeachVisibleObjects(ctx, state, snapshot, func(_ context.Context, obj objectio.ObjectEntry) error {
 		if obj.GetAppendable() {
 			return nil
 		}

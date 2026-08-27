@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"runtime"
 	"sync"
@@ -1062,7 +1063,16 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	// Execute stats update
 	samplingRatio, err := CollectAndCalculateStats(ctx, req, gs.concurrentExecutor)
 	if err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, moerr.NewInternalErrorNoCtxf("failed to update stats: %v", err)
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
 	}
 
 	// Update cache
@@ -1111,6 +1121,9 @@ func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay
 	samplingRatio, err := CollectAndCalculateStats(ctx, req, gs.concurrentExecutor)
 	if err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
+		return false, 0
+	}
+	if context.Cause(ctx) != nil {
 		return false, 0
 	}
 	v2.StatsUpdateDurationHistogram.Observe(time.Since(start).Seconds())
@@ -1247,7 +1260,7 @@ func collectTableStats(
 	var sampledRowCount float64
 	var sampledObjectCount int64
 
-	onObjFn := func(obj objectio.ObjectEntry) error {
+	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		objName := obj.ObjectShortName()
 
 		// ===== Phase 1: Get exact values from ObjectStats (no IO) =====
@@ -1278,7 +1291,7 @@ func collectTableStats(
 
 		// Sampled object: read ObjectMeta (requires IO)
 		location := obj.Location()
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
 		if err != nil {
 			return err
 		}
@@ -1417,6 +1430,7 @@ func collectTableStats(
 	}
 
 	if err := ForeachVisibleObjects(
+		ctx,
 		req.partitionState,
 		req.ts,
 		onObjFn,
