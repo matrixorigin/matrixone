@@ -239,3 +239,52 @@ func TestMakeIvfEntriesQuantizeProject(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// exprChain exists so a formula reads as a formula. Its contract is that the FIRST
+// error is kept and every later call is a no-op, so one check at the end is enough --
+// if a later failure could overwrite an earlier one, or a nil could reach a binder,
+// the single check would report the wrong cause or panic.
+func TestExprChain(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	lit := makePlan2Float64ConstExprWithType
+
+	t.Run("a clean chain returns its value", func(t *testing.T) {
+		c := &exprChain{ctx: builder.GetContext()}
+		e := c.bind("+", lit(1), lit(2))
+		require.NotNil(t, e)
+		got, err := c.result(e)
+		require.NoError(t, err)
+		require.Same(t, e, got)
+	})
+
+	t.Run("the first error is kept and later calls are no-ops", func(t *testing.T) {
+		c := &exprChain{ctx: builder.GetContext()}
+		bad := c.bind("no_such_function_at_all", lit(1))
+		require.Nil(t, bad)
+		require.Error(t, c.err)
+		first := c.err
+
+		// Later calls must not run, must not panic on the nil, and must not replace
+		// the reported cause.
+		require.Nil(t, c.bind("+", bad, lit(2)))
+		require.Nil(t, c.cast(bad, makePlan2Type(&bigIntType)))
+		require.Same(t, first, c.err)
+
+		got, err := c.result(lit(0))
+		require.Nil(t, got)
+		require.Same(t, first, err, "result must report the original failure")
+	})
+
+	t.Run("a failing cast is captured too", func(t *testing.T) {
+		c := &exprChain{ctx: builder.GetContext()}
+		// A vector type has no cast from a scalar double.
+		out := c.cast(lit(1), Type{Id: int32(types.T_array_float32), Width: 4})
+		if c.err == nil {
+			require.NotNil(t, out, "if the cast is legal it must return a value")
+			return
+		}
+		require.Nil(t, out)
+		_, err := c.result(out)
+		require.Error(t, err)
+	})
+}

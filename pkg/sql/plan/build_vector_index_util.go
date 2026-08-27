@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -252,34 +253,21 @@ func makeIvfQuantizeBoundsAgg(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef) (int32, error) {
 	metaScanId, metaCols := makeIvfFlatIndexTblScan(builder, bindCtx, indexTableDefs, idxRefs, 0)
 
+	c := &exprChain{ctx: builder.GetContext()}
 	doubleTyp := makePlan2Type(&doubleType)
 	aggList := make([]*Expr, 0, 2)
 	for _, key := range []string{
 		catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin,
 		catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax,
 	} {
-		keyEq, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-			DeepCopyExpr(metaCols[0]),
-			MakePlan2StringConstExprWithType(key),
-		})
-		if err != nil {
-			return -1, err
-		}
-		valAsDouble, err := makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(metaCols[1]), doubleTyp)
-		if err != nil {
-			return -1, err
-		}
-		picked, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*Expr{
-			keyEq, valAsDouble, makePlan2NullConstExprWithType(),
-		})
-		if err != nil {
-			return -1, err
-		}
-		agg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "max", []*Expr{picked})
-		if err != nil {
-			return -1, err
-		}
-		aggList = append(aggList, agg)
+		// MAX(CASE key WHEN <k> THEN CAST(val AS DOUBLE) END)
+		keyEq := c.bind("=", DeepCopyExpr(metaCols[0]), MakePlan2StringConstExprWithType(key))
+		picked := c.bind("case", keyEq, c.cast(DeepCopyExpr(metaCols[1]), doubleTyp),
+			makePlan2NullConstExprWithType())
+		aggList = append(aggList, c.bind("max", picked))
+	}
+	if c.err != nil {
+		return -1, c.err
 	}
 
 	aggProjection := make([]*Expr, len(aggList))
@@ -426,72 +414,78 @@ func appendIvfQuantizeBoundsJoin(builder *QueryBuilder, bindCtx *BindContext,
 // zero range divides to NULL, and an index built before the quantizer trained bounds
 // has no metadata rows at all. Search applies the same identity fallback when the
 // bounds are missing, so the two stay consistent.
+// exprChain binds a sequence of expressions, remembering the FIRST error so a formula
+// can be written as a formula. Every call after a failure is a no-op returning nil, and
+// the caller checks once at the end.
+//
+// The alternative is an `if err != nil { return }` after each of a dozen binds, which
+// buries the arithmetic it is supposed to protect and leaves a dozen branches that
+// cannot be reached with valid input.
+type exprChain struct {
+	ctx context.Context
+	err error
+}
+
+func (c *exprChain) bind(op string, args ...*Expr) *Expr {
+	if c.err != nil {
+		return nil
+	}
+	e, err := BindFuncExprImplByPlanExpr(c.ctx, op, args)
+	if err != nil {
+		c.err = err
+		return nil
+	}
+	return e
+}
+
+func (c *exprChain) cast(e *Expr, typ Type) *Expr {
+	if c.err != nil {
+		return nil
+	}
+	out, err := makePlan2CastExpr(c.ctx, e, typ)
+	if err != nil {
+		c.err = err
+		return nil
+	}
+	return out
+}
+
 func makeIvfQuantizedEntryExpr(builder *QueryBuilder, baseExpr *Expr, entryTyp Type,
 	qmin, qmax *Expr, isUint8 bool) (*Expr, error) {
-	ctx := builder.GetContext()
+	c := &exprChain{ctx: builder.GetContext()}
 	dim := entryTyp.Width
+	lit := makePlan2Float64ConstExprWithType
 
 	// Pin the affine map to float32 for both a vecf32 and a vecf64 base, so a DML row
 	// sees the same two float32 roundings as the build path and the query encoder.
-	f32Typ := plan.Type{Id: int32(types.T_array_float32), Width: dim}
-	narrowed, err := makePlan2CastExpr(ctx, baseExpr, f32Typ)
-	if err != nil {
-		return nil, err
-	}
+	narrowed := c.cast(baseExpr, plan.Type{Id: int32(types.T_array_float32), Width: dim})
 	if qmin == nil {
-		return makePlan2CastExpr(ctx, narrowed, entryTyp)
+		return c.result(c.cast(narrowed, entryTyp))
 	}
 
-	rng, err := BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{qmax, DeepCopyExpr(qmin)})
-	if err != nil {
-		return nil, err
-	}
-	span := makePlan2Float64ConstExprWithType(255.0)
-	scale, err := BindFuncExprImplByPlanExpr(ctx, "/", []*Expr{DeepCopyExpr(span), DeepCopyExpr(rng)})
-	if err != nil {
-		return nil, err
-	}
-	mul, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{
-		DeepCopyExpr(scale), makePlan2Float64ConstExprWithType(1.0),
-	})
-	if err != nil {
-		return nil, err
-	}
+	//	mul = COALESCE(255.0 / (max-min), 1.0)
+	//	add = COALESCE(0.0 - min*(255.0/(max-min)) [- 128.0], 0.0)
+	//
+	// `0.0 - min * (255.0/rng)` keeps the divide-then-multiply order of the build
+	// side's add = -min*mul before the float32 coercion, and the inner scale is the
+	// UN-coalesced division, exactly as quantizer.Int8EntrySQLFromBounds writes it.
+	rng := c.bind("-", qmax, DeepCopyExpr(qmin))
+	scale := c.bind("/", lit(255.0), rng)
+	mul := c.bind("coalesce", DeepCopyExpr(scale), lit(1.0))
 
-	// 0.0 - min * (255.0/rng) keeps the divide-then-multiply order of the build side's
-	// add = -min*mul before the float32 coercion.
-	minScaled, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{DeepCopyExpr(qmin), DeepCopyExpr(scale)})
-	if err != nil {
-		return nil, err
-	}
-	addRaw, err := BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{
-		makePlan2Float64ConstExprWithType(0.0), minScaled,
-	})
-	if err != nil {
-		return nil, err
-	}
+	addRaw := c.bind("-", lit(0.0), c.bind("*", DeepCopyExpr(qmin), DeepCopyExpr(scale)))
 	if !isUint8 {
-		addRaw, err = BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{
-			addRaw, makePlan2Float64ConstExprWithType(128.0),
-		})
-		if err != nil {
-			return nil, err
-		}
+		addRaw = c.bind("-", addRaw, lit(128.0)) // int8 also shifts onto [-128,127]
 	}
-	add, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{
-		addRaw, makePlan2Float64ConstExprWithType(0.0),
-	})
-	if err != nil {
-		return nil, err
-	}
+	add := c.bind("coalesce", addRaw, lit(0.0))
 
-	scaled, err := BindFuncExprImplByPlanExpr(ctx, "*", []*Expr{narrowed, mul})
-	if err != nil {
-		return nil, err
+	return c.result(c.cast(c.bind("+", c.bind("*", narrowed, mul), add), entryTyp))
+}
+
+// result returns e unless the chain failed, so a builder can end in one statement.
+func (c *exprChain) result(e *Expr) (*Expr, error) {
+	if c.err != nil {
+		return nil, c.err
 	}
-	shifted, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{scaled, add})
-	if err != nil {
-		return nil, err
-	}
-	return makePlan2CastExpr(ctx, shifted, entryTyp)
+	return e, nil
 }
