@@ -51,10 +51,10 @@ func TestUpdateSingleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 
 	proc, case1 = buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, true)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestUpdateTableWithUniqueKey(t *testing.T) {
@@ -62,7 +62,7 @@ func TestUpdateTableWithUniqueKey(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
@@ -616,13 +616,45 @@ func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
 	require.NoError(t, writer.free(proc))
 }
 
+func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	_, tableDef := getTestMainTable()
+	updateCtx := &MultiUpdateCtx{
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
+	}
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	update.resetMultiUpdateCtxs()
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, writer.free(proc)) }()
+
+	// Keep the full-block ownership-transfer path and its partial-block fallback
+	// in one focused test instead of making every S3 matrix case use large data.
+	bats, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+	require.NoError(t, writer.sortAndSyncOneTable(
+		proc,
+		tableDef,
+		process.NewAnalyzer(0, false, false, "multi-update-data-sync"),
+		0,
+		false,
+		bats,
+		true,
+	))
+	for _, bat := range bats {
+		require.Nil(t, bat)
+	}
+	require.NotNil(t, writer.insertBlockInfo[0])
+}
+
 // update table s3
 func TestUpdateS3SingleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestUpdateS3TableWithUniqueKey(t *testing.T) {
@@ -630,7 +662,7 @@ func TestUpdateS3TableWithUniqueKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // ----- util function ----
@@ -638,7 +670,9 @@ func buildUpdateTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl, relResetExpectErr)
 
-	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 3, hasUniqueKey, hasSecondaryKey)
+	batchs, affectRows := prepareUpdateTestBatchs(
+		proc.GetMPool(), 3, colexec.DefaultBatchSize, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, relResetExpectErr)
@@ -649,21 +683,29 @@ func buildUpdateS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, _ := prepareUpdateTestBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	batchs, _ := prepareUpdateTestBatchs(
+		proc.GetMPool(), testS3BatchCount, testS3BatchRows, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
-func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+func prepareUpdateTestBatchs(
+	mp *mpool.MPool,
+	size int,
+	rowsPerBatch int,
+	hasUniqueKey bool,
+	hasSecondaryKey bool,
+) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	mainObjectID := types.NewObjectid()
 	uniqueObjectID := types.NewObjectid()
 	secondaryObjectID := types.NewObjectid()
 	for i := 0; i < size; i++ {
-		rowCount := colexec.DefaultBatchSize
+		rowCount := rowsPerBatch
 		if i == size-1 {
 			rowCount = rowCount / 2
 		}

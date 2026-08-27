@@ -122,11 +122,11 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 		require.NoError(t, err)
 		_, err = uniqueCascadeStmt.ExecContext(ctx, 2, "still empty")
 		require.NoError(t, err)
-		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from unique_cascade_c where id=10").Scan(&count))
+		require.NoError(t, conn2.QueryRowContext(ctx, "select count(*) from unique_cascade_c where id=10").Scan(&count))
 		require.Zero(t, count)
-		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from unique_cascade_c where id=11 and pid is null").Scan(&count))
+		require.NoError(t, conn2.QueryRowContext(ctx, "select count(*) from unique_cascade_c where id=11 and pid is null").Scan(&count))
 		require.Equal(t, 1, count)
-		require.NoError(t, conn.QueryRowContext(ctx,
+		require.NoError(t, conn2.QueryRowContext(ctx,
 			"select count(*) from unique_cascade_c force index(uk_pid) where pid=3 and id=13").Scan(&count))
 		require.Equal(t, 1, count)
 		_, err = conn.ExecContext(ctx, "insert into unique_cascade_c values(14, 3)")
@@ -146,16 +146,16 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 		require.NoError(t, err)
 		_, err = uniqueSetNullStmt.ExecContext(ctx, 3, "still empty")
 		require.NoError(t, err)
-		mustExec(t, ctx, conn, "delete from unique_setnull_p where id=2")
+		mustExec(t, ctx, conn2, "delete from unique_setnull_p where id=2")
 		for _, childID := range []int{10, 11, 12} {
-			require.NoError(t, conn.QueryRowContext(ctx,
+			require.NoError(t, conn2.QueryRowContext(ctx,
 				"select count(*) from unique_setnull_c where id=? and pid is null", childID).Scan(&count))
 			require.Equal(t, 1, count)
 		}
-		require.NoError(t, conn.QueryRowContext(ctx,
+		require.NoError(t, conn2.QueryRowContext(ctx,
 			"select count(*) from unique_setnull_c force index(uk_pid_marker) where pid in (1,2)").Scan(&count))
 		require.Zero(t, count)
-		require.NoError(t, conn.QueryRowContext(ctx,
+		require.NoError(t, conn2.QueryRowContext(ctx,
 			"select count(*) from unique_setnull_c force index(uk_pid_marker) where pid=4 and marker=10").Scan(&count))
 		require.Equal(t, 1, count)
 		_, err = conn.ExecContext(ctx, "insert into unique_setnull_c values(15, 4, 10)")
@@ -177,7 +177,7 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 			defer selfStmt.Close()
 			_, execErr := selfStmt.ExecContext(ctx, 1, nil)
 			require.NoError(t, execErr)
-			require.NoError(t, conn.QueryRowContext(ctx,
+			require.NoError(t, conn2.QueryRowContext(ctx,
 				fmt.Sprintf("select count(*) from %s where id=2 and pid is null", tc.tableName)).Scan(&count))
 			require.Equal(t, 1, count)
 		}

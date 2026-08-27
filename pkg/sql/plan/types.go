@@ -79,6 +79,7 @@ type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 type DataStreamScan = plan.DataStreamScan
 type ForeignScan = plan.ForeignScan
+type KafkaScan = plan.KafkaScan
 
 const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
@@ -364,6 +365,7 @@ type QueryBuilder struct {
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.
 	userWindowNodes          map[int32]struct{}
+	internalTopNWindows      map[int32]struct{}
 	partitionTopNWindowNodes map[int32]struct{}
 
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
@@ -406,6 +408,9 @@ type QueryBuilder struct {
 	sortSpillMem int64
 
 	optimizerHints *OptimizerHints
+	// sqlCalcFoundRows disables limit pushdown that would otherwise stop a
+	// source before the complete result count can be observed.
+	sqlCalcFoundRows bool
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure

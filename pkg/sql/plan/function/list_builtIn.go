@@ -8881,7 +8881,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			if len(inputs) == 1 && inputs[0].Oid == types.T_TS {
 				return newCheckResultWithSuccess(0)
 			}
-			if len(inputs) == 2 && inputs[0].Oid == types.T_TS && inputs[1].Oid == types.T_int64 {
+			if len(inputs) == 2 && inputs[0].Oid == types.T_TS &&
+				(inputs[1].Oid == types.T_int64 || inputs[1].Oid == types.T_any) {
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -9358,6 +9359,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					// At runtime, TimestampAddDate will use TempSetType appropriately:
 					// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
 					// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
+					// The binder refines the scale when the unit literal is available.
 					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -9368,7 +9370,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDatetime
@@ -9378,7 +9380,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -9411,7 +9413,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_char, types.T_int64, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDatetime
@@ -9421,7 +9423,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -9431,7 +9433,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddString
@@ -13556,6 +13558,32 @@ var supportedOthersBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
 					return LastInsertID
+				},
+			},
+		},
+	},
+
+	// function `last_kafka_message_id`: the offset of the last message a
+	// completed Kafka external-table scan returned in this session (NULL
+	// before any scan). Feed it back as __mo_read_start_id for exactly-once
+	// chaining. See docs/cn/kafka_exttab.md.
+	{
+		functionId: LAST_KAFKA_MESSAGE_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return builtInLastKafkaMessageID
 				},
 			},
 		},

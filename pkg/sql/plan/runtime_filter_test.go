@@ -115,7 +115,7 @@ func configureRuntimeFilterCompositePK(builder *QueryBuilder) (*planpb.Node, *pl
 	probe := builder.qry.Nodes[0]
 	build := builder.qry.Nodes[1]
 	pkType := probe.TableDef.Cols[0].Typ
-	cpType := planpb.Type{Id: int32(types.T_varchar), NotNullable: true}
+	cpType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, NotNullable: true}
 	probe.TableDef.Cols = []*planpb.ColDef{
 		{Name: "a", Typ: pkType},
 		{Name: "b", Typ: pkType},
@@ -529,6 +529,42 @@ func TestExactRuntimeFilterPairRequiresMaterializableShape(t *testing.T) {
 	})
 }
 
+func TestSafeRuntimeFilterIntegerCast(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    types.T
+		target    types.T
+		narrowing bool
+		safe      bool
+	}{
+		{name: "signed widening", source: types.T_int32, target: types.T_int64, safe: true},
+		{name: "signed narrowing", source: types.T_int64, target: types.T_int32, narrowing: true, safe: true},
+		{name: "unsigned widening", source: types.T_uint8, target: types.T_uint64, safe: true},
+		{name: "unsigned narrowing", source: types.T_uint64, target: types.T_uint16, narrowing: true, safe: true},
+		{name: "reverse widening", source: types.T_int64, target: types.T_int32},
+		{name: "reverse narrowing", source: types.T_int32, target: types.T_int64, narrowing: true},
+		{name: "cross signedness", source: types.T_int64, target: types.T_uint64},
+		{name: "non integer source", source: types.T_varchar, target: types.T_int32},
+		{name: "non integer target", source: types.T_int32, target: types.T_decimal64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.safe, safeRuntimeFilterIntegerCast(
+				test.source, test.target, test.narrowing))
+		})
+	}
+}
+
+func TestSerializedRuntimeFilterComponentColRejectsForgedShape(t *testing.T) {
+	require.Nil(t, serializedRuntimeFilterComponentCol(nil))
+	require.Nil(t, serializedRuntimeFilterComponentCol(&planpb.Expr{}))
+	require.Nil(t, serializedRuntimeFilterComponentCol(&planpb.Expr{
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "plus"},
+			Args: []*planpb.Expr{GetColExpr(planpb.Type{Id: int32(types.T_int32)}, 1, 0)},
+		}},
+	}))
+}
+
 func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 	builder := newRuntimeFilterSingleTestBuilder(true)
 	sid := builder.compCtx.GetProcess().GetService()
@@ -798,13 +834,13 @@ func TestSortedMembershipFilterProtocolGate(t *testing.T) {
 	})
 
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion11)
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
 	require.True(t, localProtocolEnablesSortedMembershipFilter(sid))
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+		moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 }
 
@@ -1085,9 +1121,18 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			},
 		},
 		{
-			name: "unavailable build statistics are not an exact size bound",
+			name: "unavailable build statistics do not localize a naturally multi-CN query",
 			mutate: func(builder *QueryBuilder) {
 				builder.qry.Nodes[1].Stats = DefaultStats()
+				builder.qry.Nodes[0].Stats.Cost = float64(costThresholdForOneCN + 1)
+				builder.qry.Nodes[0].Stats.BlockNum = int32(BlockThresholdForOneCN + 1)
+			},
+		},
+		{
+			name: "forced multi-CN execution keeps unavailable build statistics on fallback",
+			mutate: func(builder *QueryBuilder) {
+				builder.qry.Nodes[1].Stats = DefaultStats()
+				builder.optimizerHints = &OptimizerHints{execType: 3}
 			},
 		},
 		{
@@ -1115,6 +1160,20 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
 		})
 	}
+
+	t.Run("unavailable build statistics use bounded runtime fallback when query is already local", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder.qry.Nodes[1].Stats = DefaultStats()
+		require.NotEqual(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+
+		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
+
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Len(t, builder.qry.Nodes[0].RuntimeFilterProbeList, 1)
+		require.True(t, builder.qry.Nodes[0].Stats.ForceOneCN)
+		require.True(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+	})
 
 	t.Run("leading cluster key remains prunable with non-PK row filtering", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
@@ -1166,17 +1225,74 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 		require.Empty(t, probe.RuntimeFilterProbeList)
 	})
 
-	t.Run("full composite filter is omitted until HashBuild can materialize it", func(t *testing.T) {
+	t.Run("full composite primary key builds serialized runtime filter", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, _ := configureRuntimeFilterCompositePK(builder)
+		probe, build := configureRuntimeFilterCompositePK(builder)
 
 		builder.generateRuntimeFilters(2)
 		builder.forceJoinOnOneCN(2, false)
 
-		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
-		require.Empty(t, probe.RuntimeFilterProbeList)
-		require.False(t, probe.Stats.ForceOneCN)
-		require.False(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+		join := builder.qry.Nodes[2]
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		require.Len(t, probe.RuntimeFilterProbeList, 1)
+		probeSpec := probe.RuntimeFilterProbeList[0]
+		buildSpec := join.RuntimeFilterBuildList[0]
+		require.Equal(t, buildSpec.Tag, probeSpec.Tag)
+		require.Equal(t, catalog.CPrimaryKeyColName, probeSpec.Expr.GetCol().Name)
+		require.Equal(t, int32(2), probeSpec.Expr.GetCol().ColPos)
+		require.Equal(t, function.SerialFunctionName, buildSpec.BuildExpr.GetF().Func.ObjName)
+		require.Equal(t, []planpb.Type{probe.TableDef.Cols[0].Typ, probe.TableDef.Cols[1].Typ},
+			buildSpec.KeyComponentProbeTypes)
+		require.Equal(t, int32(0), buildSpec.BuildExpr.GetF().Args[0].GetCol().ColPos)
+		require.Equal(t, int32(1), buildSpec.BuildExpr.GetF().Args[1].GetCol().ColPos)
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_V1, buildSpec.KeyEncoding)
+		require.True(t, probe.Stats.ForceOneCN)
+		require.True(t, build.Stats.ForceOneCN)
+	})
+
+	t.Run("wider join keys are narrowed into composite key domain", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probe, _ := configureRuntimeFilterCompositePK(builder)
+		intType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+		wideType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+		probe.TableDef.Cols[0].Typ = intType
+		probe.TableDef.Cols[1].Typ = intType
+		join := builder.qry.Nodes[2]
+		join.OnList = []*planpb.Expr{
+			makeRuntimeFilterTestEqTypes(wideType, wideType, 1, 2, 0, 0),
+			makeRuntimeFilterTestEqTypes(wideType, wideType, 1, 2, 1, 1),
+		}
+		for _, condition := range join.OnList {
+			col := condition.GetF().Args[0].GetCol()
+			casted, err := appendCastBeforeExpr(builder.GetContext(), GetColExpr(intType, col.RelPos, col.ColPos), wideType)
+			require.NoError(t, err)
+			condition.GetF().Args[0] = casted
+		}
+
+		builder.generateRuntimeFilters(2)
+
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		buildArgs := join.RuntimeFilterBuildList[0].BuildExpr.GetF().Args
+		require.Equal(t, "cast", buildArgs[0].GetF().Func.ObjName)
+		require.Equal(t, int32(types.T_int32), buildArgs[0].Typ.Id)
+		require.Equal(t, int32(0), buildArgs[0].GetF().Args[0].GetCol().ColPos)
+		require.Equal(t, int32(1), buildArgs[1].GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("composite primary key encoding follows key order", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probe, _ := configureRuntimeFilterCompositePK(builder)
+		join := builder.qry.Nodes[2]
+		join.OnList[0], join.OnList[1] = join.OnList[1], join.OnList[0]
+
+		builder.generateRuntimeFilters(2)
+
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		buildExpr := join.RuntimeFilterBuildList[0].BuildExpr.GetF()
+		require.Equal(t, int32(1), buildExpr.Args[0].GetCol().ColPos)
+		require.Equal(t, int32(0), buildExpr.Args[1].GetCol().ColPos)
+		require.Equal(t, []planpb.Type{probe.TableDef.Cols[0].Typ, probe.TableDef.Cols[1].Typ},
+			join.RuntimeFilterBuildList[0].KeyComponentProbeTypes)
 	})
 
 	t.Run("leading composite prefix is omitted until HashBuild can materialize it", func(t *testing.T) {
@@ -1201,9 +1317,9 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 
 		builder.generateRuntimeFilters(2)
 
-		require.Len(t, probe.RuntimeFilterProbeList, 1)
+		require.Len(t, probe.RuntimeFilterProbeList, 2)
 		require.Same(t, existing, probe.RuntimeFilterProbeList[0])
-		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
 	})
 }
 
