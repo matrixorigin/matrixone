@@ -310,6 +310,7 @@ func TestCommittedCoarseningRemainsMonotonicAcrossBatches(t *testing.T) {
 		rows, opts, replace := txn.coarsenLockRequest(
 			bind.Group, bind.Table, [][]byte{[]byte("h")}, exclusive, 3)
 		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, opts.Granularity)
 		require.Equal(t, [][]byte{[]byte("b"), []byte("h")}, rows)
 		require.NoError(t, txn.replaceLocks(bind.Group, bind, rows, getLogger("")))
 		require.Contains(t, txn.lockHolders[bind.Group].coarsenedTables(), bind.Table)
