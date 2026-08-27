@@ -26,11 +26,16 @@ import (
 
 const (
 	cteReuseEstimatedMaterializedBytesLimit = float64(32 * mpool.MB)
-	// Predicate-aware reuse may deliberately trade repeated base-table work for
-	// a bounded materialized spill. The execution owner still admits every byte
-	// against the statement/CN spill budget; this planner ceiling only prevents
-	// a bad estimate from selecting an unbounded shared spool.
+	// Reuse may deliberately trade repeated base-table work for a bounded
+	// materialized spill. The execution owner still admits every byte against
+	// the statement/CN spill budget; this planner ceiling only prevents a bad
+	// estimate from selecting an unbounded shared spool.
 	cteReuseEstimatedSpillBytesLimit = float64(8 * mpool.GB)
+	// Predicate-free spill reuse needs a wide estimated advantage because its
+	// producer cannot be narrowed by the consumers. Requiring both three
+	// consumers and this margin means that the choice still wins if the modeled
+	// materialization cost is underestimated by almost 2x.
+	cteReuseSpillCostSafetyFactor = float64(2)
 )
 
 // reuseMultiReferenceCTEs converts profitable, full-drain references to one
@@ -118,6 +123,15 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	ReCalcNodeStats(producerRootID, builder, true, false, true)
 	stats := builder.qry.Nodes[producerRootID].Stats
 	producerCost := builder.cteProducerCost(producerRootID, make(map[int32]bool))
+	if stats == nil || stats.Cost <= 0 || producerCost <= 0 ||
+		!finitePositive(stats.Cost) || !finitePositive(producerCost) {
+		discardProducerFilter()
+		return 0, nil, false
+	}
+	refCount := float64(len(cteRef.occurrences))
+	spillEligible := predicateAware || len(hashBuildOccurrences) > 0 ||
+		len(cteRef.occurrences) >= 3 && cteReuseIsProfitableWithSafetyFactor(
+			producerCost, stats.Outcnt, refCount, cteReuseSpillCostSafetyFactor)
 	storageStats := stats
 	storageTypes := first.types
 	if requiredTypes, narrowed := builder.cteStorageOutputTypes(rootID, cteRef.occurrences); narrowed {
@@ -126,14 +140,11 @@ func (builder *QueryBuilder) reusableCTEProducer(
 			storageStats = &planpb.Stats{Outcnt: stats.Outcnt, Rowsize: rowSize}
 		}
 	}
-	if stats == nil || stats.Cost <= 0 || producerCost <= 0 ||
-		!finitePositive(stats.Cost) || !finitePositive(producerCost) ||
-		!cteReuseFitsStorage(storageStats, storageTypes, predicateAware || len(hashBuildOccurrences) > 0) {
+	if !cteReuseFitsStorage(storageStats, storageTypes, spillEligible) {
 		discardProducerFilter()
 		return 0, nil, false
 	}
 
-	refCount := float64(len(cteRef.occurrences))
 	if !cteReuseIsProfitable(producerCost, stats.Outcnt, refCount) {
 		discardProducerFilter()
 		return 0, nil, false
@@ -275,9 +286,17 @@ func finitePositive(value float64) bool {
 }
 
 func cteReuseIsProfitable(producerCost, producerOutcnt, referenceCount float64) bool {
+	return cteReuseIsProfitableWithSafetyFactor(producerCost, producerOutcnt, referenceCount, 1)
+}
+
+func cteReuseIsProfitableWithSafetyFactor(
+	producerCost, producerOutcnt, referenceCount, safetyFactor float64,
+) bool {
 	if producerCost <= 0 || producerOutcnt <= 0 || referenceCount < 2 ||
+		safetyFactor < 1 ||
 		math.IsNaN(producerCost) || math.IsNaN(producerOutcnt) || math.IsNaN(referenceCount) ||
-		math.IsInf(producerCost, 0) || math.IsInf(producerOutcnt, 0) || math.IsInf(referenceCount, 0) {
+		math.IsNaN(safetyFactor) || math.IsInf(producerCost, 0) ||
+		math.IsInf(producerOutcnt, 0) || math.IsInf(referenceCount, 0) || math.IsInf(safetyFactor, 0) {
 		return false
 	}
 	inlineCost := referenceCount * producerCost
@@ -289,7 +308,9 @@ func cteReuseIsProfitable(producerCost, producerOutcnt, referenceCount float64) 
 	if !finitePositive(inlineCost) || !finitePositive(materializationCost) || !finitePositive(sharedCost) {
 		return false
 	}
-	return sharedCost < inlineCost
+	// Divide instead of multiplying sharedCost so the safety check cannot
+	// overflow after all individual terms have passed the finite guards.
+	return sharedCost < inlineCost/safetyFactor
 }
 
 // Node Stats.Cost is not uniformly cumulative: lightweight PROJECT nodes can
@@ -365,7 +386,11 @@ func (builder *QueryBuilder) cteSubtreeIsCurrentRoleClosure(
 }
 
 func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[int32]bool) bool {
-	return builder.subtreeIsDeterministic(nodeID, seen, false)
+	// An earlier eligible CTE may already have replaced a nested producer with
+	// a guarded materialized source. Follow that source and validate its real
+	// producer so an outer CTE can still be shared instead of forcing a choice
+	// between inner and outer reuse.
+	return builder.subtreeIsDeterministic(nodeID, seen, true)
 }
 
 func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32]bool, allowMaterializedSink bool) bool {
