@@ -435,8 +435,10 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
-		"case when left(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)), 3) = '/*!'")
-	assert.Contains(t, InformationSchemaViewsDDL, "end)) as text) AS `VIEW_DEFINITION`")
+		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
+	assert.Contains(t, InformationSchemaViewsDDL, "2 * least(char_length(coalesce(regexp_substr(")
+	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
+	assert.NotContains(t, InformationSchemaViewsDDL, "trim(if(")
 	assert.Contains(t, InformationSchemaViewsDDL, "'NO' AS `IS_UPDATABLE`")
 	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
 
