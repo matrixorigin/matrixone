@@ -17,9 +17,12 @@ package disttae
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -113,7 +116,8 @@ func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
 	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	key := pb.StatsInfoKey{AccId: 1, TableID: 42}
 
-	gs.updatingMu.updating[key] = &updateRecord{inProgress: true}
+	generation := &updateRecord{inProgress: true}
+	gs.updatingMu.updating[key] = generation
 	oldRelease, err := gs.acquireStatsRefresh(context.Background(), key)
 	require.NoError(t, err)
 
@@ -132,7 +136,7 @@ func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
 	// Waiting here after releasing forces the newer refresh to commit between
 	// release and any code that might incorrectly update the old baseline late.
 	var newerErr error
-	gs.completeStatsRefresh(key, true, 1, 1.0, func() {
+	gs.completeStatsRefresh(key, generation, true, 1, 1.0, func() {
 		oldRelease()
 		newerErr = <-newerDone
 	})
@@ -144,4 +148,57 @@ func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
 	require.False(t, record.inProgress)
 	require.Equal(t, int64(100), record.baseObjectCount)
 	require.Equal(t, 0.5, record.samplingRatio)
+}
+
+func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *testing.T) {
+	key := pb.StatsInfoKey{
+		AccId: 1, DatabaseID: 10, TableID: 42, DbName: "db", TableName: "events",
+	}
+	newStats := func() *pb.StatsInfo {
+		return &pb.StatsInfo{TableCnt: 1_000_000}
+	}
+	newGlobalStats := func() *GlobalStats {
+		gs := &GlobalStats{engine: &Engine{}}
+		gs.initStatsRefreshAdmission()
+		gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+		gs.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+		gs.mu.cond = sync.NewCond(&gs.mu)
+		return gs
+	}
+
+	fault.Enable()
+	t.Cleanup(func() { fault.Disable() })
+	removeFault, err := objectio.InjectLogging(
+		objectio.FJ_CNSubscribeTableFail, key.DbName, key.TableName, 0, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(removeFault)
+
+	t.Run("retain last successful publication", func(t *testing.T) {
+		gs := newGlobalStats()
+		lastGood := newStats()
+		gs.mu.statsInfoMap[key] = lastGood
+
+		gs.coordinateStatsUpdate(pb.StatsInfoKeyWithContext{Ctx: context.Background(), Key: key})
+
+		gs.mu.Lock()
+		got, exists := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		require.True(t, exists)
+		require.Same(t, lastGood, got,
+			"a failed automatic refresh must not erase the last successful publication")
+	})
+
+	t.Run("complete first failed generation", func(t *testing.T) {
+		gs := newGlobalStats()
+
+		gs.coordinateStatsUpdate(pb.StatsInfoKeyWithContext{Ctx: context.Background(), Key: key})
+
+		gs.mu.Lock()
+		got, exists := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		require.True(t, exists,
+			"the first failed automatic generation must still wake synchronous waiters")
+		require.Nil(t, got)
+	})
 }

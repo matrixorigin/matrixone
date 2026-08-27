@@ -66,6 +66,10 @@ It intentionally does not provide:
    has been published.
 6. Physical ownership is resolved before cache lookup. Tenant, system/cluster,
    and publisher identities must not alias solely because table IDs match.
+7. A failed automatic refresh cannot replace a previously published statistics
+   value. It may install a nil completion sentinel only when the table has no
+   prior cache entry, so first-read waiters terminate without losing last-good
+   state.
 
 ### 3.2 Liveness and ownership
 
@@ -95,6 +99,14 @@ It intentionally does not provide:
 6. Concurrent object work remains bounded by the existing worker count and
    2,048-entry executor queue. The fix must not add a channel/future allocation
    per object on the successful collection path.
+7. Engine statistics and refresh-scheduling metadata share the table cleanup
+   boundary. Once an unsubscribed table reaches `RemoveTid`, neither
+   `statsInfoMap` nor `updatingMu.updating` retains any key for that table ID,
+   and a late automatic-refresh publication/completion cannot recreate either
+   entry or write into a replacement generation. The scheduling-record pointer
+   captured at enqueue is the automatic generation's lifetime token. Logtail's
+   cache-existence check and token capture use the same cleanup lock order, so
+   removal cannot fall between those two producer steps.
 
 ## 4. Identity and visibility
 
@@ -161,6 +173,12 @@ automatic refresh commits its statistics entry and object-count/sampling
 baseline before releasing that stripe. This prevents an older refresh from
 overwriting the scheduling metadata of a newer explicit refresh.
 
+The automatic-refresh cache transition is last-good preserving. Success
+replaces the cached value; failure leaves an existing entry untouched. When the
+first automatic attempt fails, it installs a nil completion sentinel and wakes
+synchronous waiters, preserving the existing `GlobalStats.Get` termination
+contract without representing the failure as a newer publication.
+
 Frontend publication needs a separate stripe because it serializes the larger
 engine-publication-plus-generation transaction. Without it, two concurrent
 ANALYZE statements could publish engine results A then B but advance/cache their
@@ -190,7 +208,8 @@ The terminal behavior is:
 | --- | --- | --- | --- | --- |
 | derived query fails | unchanged | unchanged | unchanged | error |
 | frontend admission canceled | unchanged | unchanged | unchanged | cancellation |
-| subscribe/catalog resolution fails | unchanged | unchanged | unchanged | error |
+| explicit subscribe/catalog resolution fails | unchanged | unchanged | unchanged | error |
+| automatic subscribe/catalog resolution fails | last-good entry retained; nil completion sentinel only when absent | failed generation closed | unchanged | not an ANALYZE result |
 | task submission canceled/rejected | unchanged | failed generation closed | unchanged | error |
 | object task fails or is canceled | unchanged; local partial object discarded | failed generation closed | unchanged | error |
 | engine cache publication succeeds | replaced | committed before engine release | generation must then advance while frontend token is held | success only after remaining steps |
@@ -308,6 +327,8 @@ checks on affected plan-cache hits.
 | one successful and one failed object task rejects partial stats | concurrent visible-object UT |
 | pre-canceled, in-flight canceled, and shutdown-rejected work terminates | executor/visible-object cancellation UT |
 | same-table refresh order; unrelated-table concurrency | frontend and engine admission race UT |
+| failed automatic refresh preserves last-good stats and completes an absent first generation | injected subscribe-failure state-transition UT |
+| table cleanup reclaims both statistics and refresh-scheduling entries; late automatic publication/completion cannot recreate them | `RemoveTid` ownership UT |
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |
@@ -338,6 +359,12 @@ Decision log:
 - Wait for all admitted object work after the first failure so no callback can
   outlive its refresh-local accumulator.
 - Preserve no per-object future/channel allocation in the successful scan path.
+- Preserve the last successful automatic-refresh value on failure; use a nil
+  sentinel only to complete an otherwise absent first generation.
+- Make `RemoveTid` the common lifetime owner for published engine statistics
+  and per-table refresh-scheduling metadata; automatic publication and
+  completion require the update record as a lifetime token, so an old worker
+  cannot recreate cleanup-owned state.
 
 Open approval item: an independent reviewer must approve this exact design
 revision before the implementation is considered deliverable. There are no

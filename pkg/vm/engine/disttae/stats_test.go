@@ -1732,18 +1732,61 @@ func TestRemoveTid(t *testing.T) {
 			gs.mu.statsInfoMap[k2] = nil // simulate failed update
 			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
 			gs.mu.Unlock()
+			gs.markUpdateComplete(k1, true, 1, 1)
+			gs.markUpdateComplete(k2, false, 0, 0)
+			gs.markUpdateComplete(k3, true, 2, 1)
+			generation := gs.currentUpdateRecord(k1)
 
 			// Remove table 1001 entries
 			gs.RemoveTid(1001)
+			// A worker admitted before cleanup may finish afterward. Its stale
+			// publication or completion must not recreate table-owned state.
+			queuedAfterCleanup, enqueueAfterCleanup :=
+				gs.shouldEnqueueExistingStatsUpdateGeneration(k1, 1, false)
+			assert.False(t, enqueueAfterCleanup)
+			assert.Nil(t, queuedAfterCleanup)
+			gs.completeAutomaticStatsCacheUpdate(k1, generation, plan2.NewStatsInfo(), true)
+			gs.completeStatsRefresh(k1, generation, true, 3, 1, func() {})
 
 			gs.mu.Lock()
-			defer gs.mu.Unlock()
 			_, ok1 := gs.mu.statsInfoMap[k1]
 			_, ok2 := gs.mu.statsInfoMap[k2]
 			_, ok3 := gs.mu.statsInfoMap[k3]
+			gs.mu.Unlock()
 			assert.False(t, ok1, "k1 should be removed")
 			assert.False(t, ok2, "k2 should be removed")
 			assert.True(t, ok3, "k3 should not be removed")
+
+			gs.updatingMu.Lock()
+			_, updating1 := gs.updatingMu.updating[k1]
+			_, updating2 := gs.updatingMu.updating[k2]
+			_, updating3 := gs.updatingMu.updating[k3]
+			gs.updatingMu.Unlock()
+			assert.False(t, updating1, "k1 scheduling metadata should be removed")
+			assert.False(t, updating2, "k2 scheduling metadata should be removed")
+			assert.True(t, updating3, "unrelated scheduling metadata should remain")
+
+			// Reuse of the same table key creates a distinct generation. Neither
+			// an old queued job nor its late callbacks may publish into it.
+			replacement := &updateRecord{inProgress: true, pendingChanges: 7}
+			gs.updatingMu.Lock()
+			gs.updatingMu.updating[k1] = replacement
+			gs.updatingMu.Unlock()
+			gs.completeAutomaticStatsCacheUpdate(k1, generation, plan2.NewStatsInfo(), true)
+			gs.completeStatsRefresh(k1, generation, true, 4, 0.5, func() {})
+			_, oldGenerationStarted := gs.startAutomaticUpdate(k1, generation)
+			assert.False(t, oldGenerationStarted, "an old queued generation should be rejected")
+
+			gs.mu.Lock()
+			_, oldStatsPublished := gs.mu.statsInfoMap[k1]
+			gs.mu.Unlock()
+			assert.False(t, oldStatsPublished, "an old generation should not publish into its replacement")
+			gs.updatingMu.Lock()
+			current := gs.updatingMu.updating[k1]
+			gs.updatingMu.Unlock()
+			require.Same(t, replacement, current)
+			assert.True(t, current.inProgress)
+			assert.Equal(t, 7, current.pendingChanges)
 		})
 	})
 
@@ -1943,9 +1986,10 @@ func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
 		gs := &GlobalStats{
 			ctx:          ctx,
 			engine:       e,
-			updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+			updateC:      make(chan statsUpdateJob, 1),
 			queueWatcher: newQueueWatcher(),
 		}
+		gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
 		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
 		gs.mu.cond = sync.NewCond(&gs.mu)
 
@@ -1975,14 +2019,15 @@ func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
 
 func TestEnqueueStatsUpdateForceReturnsWhenContextCanceled(t *testing.T) {
 	gs := &GlobalStats{
-		updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+		updateC:      make(chan statsUpdateJob, 1),
 		queueWatcher: newQueueWatcher(),
 	}
+	gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
 	queued := statsinfo.StatsInfoKeyWithContext{
 		Ctx: context.Background(),
 		Key: statsinfo.StatsInfoKey{TableID: 1},
 	}
-	gs.updateC <- queued
+	gs.updateC <- statsUpdateJob{wrapKey: queued}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1991,7 +2036,7 @@ func TestEnqueueStatsUpdateForceReturnsWhenContextCanceled(t *testing.T) {
 		Key: statsinfo.StatsInfoKey{TableID: 2},
 	}, true)
 	require.False(t, accepted)
-	require.Equal(t, queued, <-gs.updateC)
+	require.Equal(t, queued, (<-gs.updateC).wrapKey)
 }
 
 func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
