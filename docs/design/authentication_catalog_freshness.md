@@ -1,7 +1,7 @@
 # Authentication Catalog Freshness Across CNs
 
 - Status: Review required
-- Base revision: `1b030d85f1103cf580c86900790897f9be58b5e4`
+- Base revision: `745d8364c589524a9e5c99772d34824fa9808203`
 - Incident evidence: [PR #27758 CI job](https://github.com/matrixorigin/matrixone/actions/runs/33067372509/job/98502820591?pr=27758)
 - Related changes: [PR #27717](https://github.com/matrixorigin/matrixone/pull/27717), [PR #27737](https://github.com/matrixorigin/matrixone/pull/27737)
 - Last updated: 2026-08-28
@@ -290,7 +290,7 @@ correctness under the configured external NTP/PTP assumption.
 | Disabling active clock monitoring retains the configured uncertainty bound in process and embedded launchers | focused clock and launcher-config unit tests |
 | A handshake budget at or below the necessary pairwise clock fence fails during CN configuration, while the first representable value above it is accepted; overflow fails closed | shared config model plus process and embedded config unit tests |
 | `skipCheckUser=true` bypasses only the unreachable authentication deadline check while general clock validation remains active | process and embedded config unit tests through both validation entry points |
-| A public embedded pre-start adjustment cannot bypass clock/authentication validation and fails before resource creation | focused embedded operator unit test plus owning-package normal/race suites |
+| A public embedded pre-start adjustment cannot bypass clock/authentication validation by changing either a budget value or the operator's immutable service type, and fails before resource creation | focused embedded operator unit tests plus owning-package normal/race suites |
 | Existing larger session minimum is never lowered | focused frontend unit test |
 | Missing runtime/clock/transaction client, invalid offset, timestamp overflow, wait failure, and a returned watermark below the fence fail closed | focused frontend unit tests |
 | Authentication applies the fence before background transaction creation and therefore before user-transaction admission | focused frontend unit test at the executor seam |
@@ -311,8 +311,10 @@ would duplicate its fixture and oracles, so this change reuses it unchanged.
    or result weakening.
 2. Authentication cannot continue when the freshness fence cannot be built or
    reached.
-3. The final diff contains no ordinary-query hot-path change and no protocol or
-   persisted-state change.
+3. The final diff contains no change to the default
+   sacrificing-freshness ordinary-query hot path and no protocol or
+   persisted-state change. The non-default freshness-preserving path adds only
+   the comparison required to honor a caller-provided minimum timestamp.
 4. Focused and owning-package frontend tests pass in normal and applicable race
    modes; formatting, vet, build, and diff checks pass for every changed Go
    package.
@@ -342,3 +344,7 @@ would duplicate its fixture and oracles, so this change reuses it unchanged.
   contract because the public pre-start callback intentionally runs after file
   parsing. Validation occurs before resource creation, so invalid programmatic
   settings fail without a partial-start cleanup obligation.
+- 2026-08-28: embedded startup validates authentication against the operator's
+  immutable service type and rejects a callback that mutates the config's copy.
+  Otherwise a CN operator could still start as a CN after presenting itself as
+  a TN to the authentication-budget validator.

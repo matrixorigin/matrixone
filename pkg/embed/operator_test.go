@@ -53,6 +53,27 @@ func TestStartRevalidatesAdjustedAuthenticationClockBudget(t *testing.T) {
 	require.False(t, op.needsCleanup(), "invalid adjusted config must fail before resource creation")
 }
 
+func TestStartRejectsAdjustedServiceTypeBeforeAuthenticationValidation(t *testing.T) {
+	cfg := newServiceConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	require.NoError(t, cfg.validate())
+
+	op := &operator{
+		cfg:         cfg,
+		serviceType: metadata.ServiceType_CN,
+		state:       stopped,
+	}
+	op.Adjust(func(cfg *ServiceConfig) {
+		// If validation trusted this mutable field, the TN value would bypass the
+		// CN authentication budget even though Start still constructs a CN.
+		cfg.ServiceType = metadata.ServiceType_TN.String()
+		cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+	})
+
+	require.ErrorContains(t, op.Start(), "service type cannot be changed")
+	require.False(t, op.needsCleanup(), "identity mismatch must fail before resource creation")
+}
+
 type testHAKClient struct {
 	cfg *cnservice.Config
 	mod int
