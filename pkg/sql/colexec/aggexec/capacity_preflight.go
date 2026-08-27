@@ -195,47 +195,93 @@ func (ag *aggState) preflightArgumentCapacity(
 		return nil
 	}
 
-	capacity := uint64(len(ag.argbuf))
-	missing := required - capacity
-	steps := (missing + kAggArgArenaSize - 1) / kAggArgArenaSize
-	if steps > (math.MaxUint32-capacity)/kAggArgArenaSize {
+	capacity, err := nextArgumentArenaCapacity(
+		uint64(len(ag.argbuf)), required)
+	if err != nil {
+		return err
+	}
+	fallbackCapacity, err := nextLinearArgumentArenaCapacity(
+		uint64(len(ag.argbuf)), required)
+	if err != nil {
+		return err
+	}
+	// Geometric growth is speculative spare capacity. Clamp both candidates to
+	// the physical single-allocation limit before admission so crossing that
+	// boundary neither logs a failed oversized allocation nor rejects a smaller
+	// arena that still satisfies required.
+	maxAllocation := mpool.MaxAllocationSize()
+	if maxAllocation <= 0 || required > uint64(maxAllocation) {
 		return mpool.ErrAllocationAllocatorLimit
 	}
-	capacity += steps * kAggArgArenaSize
-	if capacity > uint64(math.MaxInt) {
-		return mpool.ErrAllocationAllocatorLimit
+	capacity = min(capacity, uint64(maxAllocation))
+	fallbackCapacity = min(fallbackCapacity, uint64(maxAllocation))
+	next, err := ag.allocation.allocArgumentArena(mp, int(capacity))
+	if err != nil && capacity != fallbackCapacity &&
+		mpool.IsRetryableAllocationCapacity(err) {
+		// Geometric growth keeps repeated relocation linear in the final state
+		// size, but the old arena remains charged until relocation publishes.
+		// Under memory pressure, retain the former chunked-growth availability
+		// envelope instead of failing a query solely because of speculative
+		// spare capacity.
+		next, err = ag.allocation.allocArgumentArena(mp, int(fallbackCapacity))
 	}
-	for {
-		next, err := ag.allocation.allocArgumentArena(mp, int(capacity))
-		if err != nil {
-			return err
-		}
-		nextArena := arenaskl.NewArena(next)
-		nextSkiplist := arenaskl.NewSkiplist(nextArena, bytes.Compare)
-		err = nil
-		it := ag.argSkl.NewIter(nil, nil)
-		for ok, key, value := it.First(); ok; ok, key, value = it.Next() {
-			err = nextSkiplist.AddWithPlan(
-				key, value, arenaskl.MakeAddPlan(key))
-			if err != nil {
-				break
-			}
-		}
-		it.Close()
-		if err == nil {
-			old := ag.argbuf
-			ag.argbuf = next
-			ag.argSkl = nextSkiplist
-			mp.Free(old)
-			return nil
-		}
+	if err != nil {
+		return err
+	}
+	if err = ag.argSkl.GrowArena(next); err != nil {
 		mp.Free(next)
-		if err != arenaskl.ErrArenaFull ||
-			capacity > math.MaxUint32-kAggArgArenaSize {
-			return err
-		}
-		capacity += kAggArgArenaSize
+		return err
 	}
+	old := ag.argbuf
+	ag.argbuf = next
+	mp.Free(old)
+	return nil
+}
+
+func nextArgumentArenaCapacity(current, required uint64) (uint64, error) {
+	if required <= current {
+		return current, nil
+	}
+	if current > math.MaxUint32 || required > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	capacity := current
+	for capacity < required {
+		grow := max(capacity, uint64(kAggArgArenaSize))
+		if grow > math.MaxUint32-capacity {
+			capacity = math.MaxUint32
+		} else {
+			capacity += grow
+		}
+		if capacity == math.MaxUint32 && capacity < required {
+			return 0, mpool.ErrAllocationAllocatorLimit
+		}
+	}
+	if capacity > uint64(math.MaxInt) {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return capacity, nil
+}
+
+func nextLinearArgumentArenaCapacity(current, required uint64) (uint64, error) {
+	if required <= current {
+		return current, nil
+	}
+	if current > math.MaxUint32 || required > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	missing := required - current
+	chunk := uint64(kAggArgArenaSize)
+	steps := (missing + chunk - 1) / chunk
+	grow := steps * chunk
+	capacity := uint64(math.MaxUint32)
+	if grow <= math.MaxUint32-current {
+		capacity = current + grow
+	}
+	if capacity < required || capacity > uint64(math.MaxInt) {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return capacity, nil
 }
 
 func validatePreflightVectors(
@@ -880,6 +926,11 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			int(otherY) >= int(other.state[otherX].length) {
 			return mpool.ErrAllocationAccountInvariant
 		}
+		var upper [kAggArgPrefixSz]byte
+		binary.BigEndian.PutUint16(upper[:], y+1)
+		var targetIter *arenaskl.Iterator
+		var targetKey []byte
+		var targetOK bool
 		err = other.state[otherX].iter(otherY, func(key []byte) error {
 			if len(key) < kAggArgPrefixSz {
 				return mpool.ErrAllocationAccountInvariant
@@ -891,7 +942,14 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			copy(candidate, key)
 			binary.BigEndian.PutUint16(candidate[:kAggArgPrefixSz], y)
 			if ae.isDistinct {
-				if state.argSkl.Contains(candidate) {
+				if targetIter == nil {
+					targetIter = state.argSkl.NewIter(nil, upper[:])
+					targetOK, targetKey, _ = targetIter.SeekGE(candidate)
+				}
+				for targetOK && bytes.Compare(targetKey, candidate) < 0 {
+					targetOK, targetKey, _ = targetIter.Next()
+				}
+				if targetOK && bytes.Equal(targetKey, candidate) {
 					return nil
 				}
 				// A merge work unit can map several source groups into the same
@@ -936,6 +994,9 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			return addArgumentChunkCapacityWithValue(
 				&needs, &needCount, x, candidate, valueSize)
 		})
+		if targetIter != nil {
+			targetIter.Close()
+		}
 		if err != nil {
 			return err
 		}

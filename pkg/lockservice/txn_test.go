@@ -46,6 +46,7 @@ func TestTableLockHolderKeepsCommonAllocationCompact(t *testing.T) {
 	holder := &tableLockHolder{}
 	require.Nil(t, holder.extra)
 	require.Nil(t, holder.nonCoarsenableTables())
+	require.Nil(t, holder.coarsenedTables())
 	require.Nil(t, holder.ownerLocalWaitSnapshots())
 	require.Nil(t, holder.remoteUnlockRequiredTables())
 	require.Nil(t, holder.uncertainLockKeys())
@@ -289,6 +290,76 @@ func TestCoarsenLockRequestUsesTransactionTableState(t *testing.T) {
 	})
 }
 
+func TestCommittedCoarseningRemainsMonotonicAcrossBatches(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		txn := newActiveTxn([]byte("t1"), "t1", newFixedSlicePool(32), "")
+		defer reuse.Free(txn, nil)
+		bind := pb.LockTable{Group: 1, Table: 10}
+		exclusive := pb.LockOptions{
+			Granularity: pb.Granularity_Row,
+			Mode:        pb.LockMode_Exclusive,
+		}
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("b"), []byte("d"), []byte("f")},
+			exclusive,
+			getLogger(""),
+		))
+
+		rows, opts, replace := txn.coarsenLockRequest(
+			bind.Group, bind.Table, [][]byte{[]byte("h")}, exclusive, 3)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, opts.Granularity)
+		require.Equal(t, [][]byte{[]byte("b"), []byte("h")}, rows)
+		require.NoError(t, txn.replaceLocks(bind.Group, bind, rows, getLogger("")))
+		require.Contains(t, txn.lockHolders[bind.Group].coarsenedTables(), bind.Table)
+
+		// One sub-budget batch must widen the committed range immediately. It
+		// must not start accumulating another exact-key generation.
+		rows, opts, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, [][]byte{[]byte("a"), []byte("z")}, exclusive, 3)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, opts.Granularity)
+		require.Equal(t, [][]byte{[]byte("a"), []byte("z")}, rows)
+
+		// Ordinary explicit ranges do not opt into persistent widening: doing so
+		// below the budget would introduce conflicts across an unowned gap.
+		other := pb.LockTable{Group: bind.Group, Table: bind.Table + 1}
+		rangeOpts := exclusive
+		rangeOpts.Granularity = pb.Granularity_Range
+		require.NoError(t, txn.lockAdded(
+			other.Group, other, [][]byte{[]byte("a"), []byte("b")}, rangeOpts, getLogger("")))
+		row := [][]byte{[]byte("z")}
+		gotRows, gotOpts, gotReplace := txn.coarsenLockRequest(
+			other.Group, other.Table, row, exclusive, 3)
+		require.False(t, gotReplace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Equal(t, row, gotRows)
+		require.NotContains(t, txn.lockHolders[other.Group].coarsenedTables(), other.Table)
+
+		// Eligibility remains conservative after coarsening. If the transaction
+		// later acquires a Shared lock, persistent widening is disabled because
+		// the key-only ledger can no longer prove all retained ownership Exclusive.
+		shared := exclusive
+		shared.Mode = pb.LockMode_Shared
+		require.NoError(t, txn.lockAdded(
+			bind.Group, bind, [][]byte{[]byte("shared")}, shared, getLogger("")))
+		rows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, [][]byte{[]byte("zz")}, exclusive, 2)
+		require.False(t, replace)
+		require.Equal(t, [][]byte{[]byte("zz")}, rows)
+
+		// Retryable table cleanup must remove representation state together with
+		// the last ownership route so a reused transaction/table starts cleanly.
+		holder := txn.lockHolders[bind.Group]
+		locks := holder.tableKeys[bind.Table]
+		txn.removeClosedLockTable(bind.Group, bind.Table, locks)
+		require.NotContains(t, holder.coarsenedTables(), bind.Table)
+		require.NotContains(t, holder.nonCoarsenableTables(), bind.Table)
+	})
+}
+
 func TestCoarsenLockRequestRequiresCompleteExclusiveOwnership(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(32)
@@ -400,6 +471,7 @@ func TestReplaceLocksFailurePreservesOwnership(t *testing.T) {
 			getLogger(""),
 		)
 		require.ErrorIs(t, err, expectedErr)
+		require.NotContains(t, txn.lockHolders[bind.Group].coarsenedTables(), bind.Table)
 		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
 		require.Equal(t, original, locks.all())
 		locks.unref()
