@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -262,6 +263,49 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 			require.True(t, bytes.Equal(expected, capture.probes[0]))
 		})
 	}
+}
+
+func TestPkContentRejectsInvalidAccess(t *testing.T) {
+	b := NewBuilder("loaded-membership-errors", int32(types.T_int64))
+	feed(t, b, int64(1), "x")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+
+	_, err = seg.pkContent(0)
+	require.Error(t, err)
+
+	blob, err := seg.Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("loaded-membership-errors", bytes.NewReader(blob))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+	_, err = loaded.pkContent(0)
+	require.NoError(t, err)
+
+	_, err = loaded.pkContent(-1)
+	require.Error(t, err)
+	_, err = loaded.pkContent(loaded.N)
+	require.Error(t, err)
+
+	missingOffset := *loaded
+	missingOffset.pkOffsets = nil
+	_, err = missingOffset.pkContent(0)
+	require.Error(t, err)
+
+	truncated := *loaded
+	truncated.pkRaw = truncated.pkRaw[:2]
+	_, err = truncated.pkContent(0)
+	require.Error(t, err)
+	capture := &recordingMembershipFilter{}
+	require.False(t, (&docFilterMembership{seg: &truncated, f: capture}).Contains(0))
+	require.Empty(t, capture.probes)
+
+	badLength := *loaded
+	badLength.pkRaw = append([]byte(nil), loaded.pkRaw...)
+	off := int(badLength.pkOffsets[0])
+	binary.LittleEndian.PutUint32(badLength.pkRaw[off:], uint32(len(badLength.pkRaw)))
+	_, err = badLength.pkContent(0)
+	require.Error(t, err)
 }
 
 // TestIsJSONParser pins the json-family predicate.

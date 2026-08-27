@@ -54,10 +54,12 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 	// runtime-filter source vector, so probe them directly without boxing the PK
 	// and encoding it again. UUID remains on the typed path because its docmap
 	// representation is the canonical string while docfilter hashes 16 raw bytes.
-	if types.T(d.seg.PkType) != types.T_uuid {
-		if raw, ok := d.seg.pkContent(ord); ok {
-			return d.f.Test(raw)
+	if d.seg.pks == nil && types.T(d.seg.PkType) != types.T_uuid {
+		raw, err := d.seg.pkContent(ord)
+		if err != nil {
+			return false
 		}
+		return d.f.Test(raw)
 	}
 	// pk(ord) decodes on demand on a loaded segment (a small box on this WHERE-prefilter
 	// hot path); the docmap pk encoding differs from the docfilter probe encoding for some
