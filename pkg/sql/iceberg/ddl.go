@@ -72,7 +72,8 @@ const ResidencyPolicyDDL = `create table mo_catalog.mo_iceberg_residency_policy 
 	created_at timestamp not null default utc_timestamp,
 	updated_at timestamp not null default utc_timestamp,
 	version bigint unsigned not null default 1,
-	primary key(scope_type, account_id, catalog_id, allowed_catalog_uri, allowed_endpoint, allowed_region, allowed_bucket)
+	primary key(scope_type, account_id, catalog_id, allowed_catalog_uri, allowed_endpoint, allowed_region, allowed_bucket),
+	key catalog_scope_account(catalog_id, scope_type, account_id)
 )`
 
 const TablesDDL = `create table mo_catalog.mo_iceberg_tables (

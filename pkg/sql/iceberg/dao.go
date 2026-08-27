@@ -881,6 +881,14 @@ func GetCatalogByNameSQL(accountID uint32, name string) string {
 	)
 }
 
+// GetCatalogByNameForUpdateSQL returns the catalog lookup used by operations
+// that create or remove catalog-owned metadata.  The caller must execute it in
+// the same transaction as the dependent metadata change so the catalog row is
+// the lifecycle serialization point.
+func GetCatalogByNameForUpdateSQL(accountID uint32, name string) string {
+	return GetCatalogByNameSQL(accountID, name) + " for update"
+}
+
 func GetCatalogByIDSQL(accountID uint32, catalogID uint64) string {
 	return fmt.Sprintf(
 		"select account_id,catalog_id,name,type,uri,warehouse,auth_mode,token_secret_ref,capabilities_json,version from mo_catalog.%s where account_id = %d and catalog_id = %d",

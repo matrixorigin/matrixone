@@ -133,9 +133,11 @@ func TestExecuteIcebergUnregisterAccessCallCommitsAtomicCleanup(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(0, "tiera") + " for update"
-	countSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where (scope_type = 'cluster' or account_id = 0) and catalog_id = 7"
+	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and catalog_id = 7"
+	accountCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'account' and account_id = 0 and catalog_id = 7"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(0), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
-	bh.sql2result[countSQL] = icebergCallResult([]interface{}{uint64(0)})
+	bh.sql2result[clusterCountSQL] = icebergCallResult([]interface{}{uint64(0)})
+	bh.sql2result[accountCountSQL] = icebergCallResult([]interface{}{uint64(0)})
 	stub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer stub.Reset()
 
@@ -160,7 +162,8 @@ func TestExecuteIcebergUnregisterAccessCallCommitsAtomicCleanup(t *testing.T) {
 		"begin;",
 		catalogSQL,
 		"delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and (scope_type = 'cluster' or (scope_type = 'account' and account_id = 0))",
-		countSQL,
+		clusterCountSQL,
+		accountCountSQL,
 		"delete from mo_catalog.mo_iceberg_principal_map where account_id = 0 and catalog_id = 7",
 		"commit;",
 	}
@@ -201,9 +204,11 @@ func TestExecuteIcebergUnregisterAccessCallDoesNotReturnCommittedResultWhenCommi
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(0, "tiera") + " for update"
-	countSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where (scope_type = 'cluster' or account_id = 0) and catalog_id = 7"
+	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and catalog_id = 7"
+	accountCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'account' and account_id = 0 and catalog_id = 7"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(0), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
-	bh.sql2result[countSQL] = icebergCallResult([]interface{}{uint64(0)})
+	bh.sql2result[clusterCountSQL] = icebergCallResult([]interface{}{uint64(0)})
+	bh.sql2result[accountCountSQL] = icebergCallResult([]interface{}{uint64(0)})
 	bh.sql2err["commit;"] = errors.New("commit failed")
 	stub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer stub.Reset()
@@ -231,9 +236,11 @@ func TestExecuteIcebergUnregisterAccessCallKeepsPrincipalForRemainingScope(t *te
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(9, "tiera") + " for update"
-	countSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where (scope_type = 'cluster' or account_id = 9) and catalog_id = 7"
+	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and catalog_id = 7"
+	accountCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'account' and account_id = 9 and catalog_id = 7"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(9), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
-	bh.sql2result[countSQL] = icebergCallResult([]interface{}{uint64(1)})
+	bh.sql2result[clusterCountSQL] = icebergCallResult([]interface{}{uint64(0)})
+	bh.sql2result[accountCountSQL] = icebergCallResult([]interface{}{uint64(1)})
 	stub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer stub.Reset()
 
@@ -251,7 +258,8 @@ func TestExecuteIcebergUnregisterAccessCallKeepsPrincipalForRemainingScope(t *te
 		"begin;",
 		catalogSQL,
 		"delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and scope_type = 'account' and account_id = 9",
-		countSQL,
+		clusterCountSQL,
+		accountCountSQL,
 		"commit;",
 	}
 	if strings.Join(bh.executedSQLs, "\n") != strings.Join(wantSQL, "\n") {

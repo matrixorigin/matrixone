@@ -416,7 +416,7 @@ func queryIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uin
 }
 
 func queryIcebergCatalogStateForUpdate(ctx context.Context, bh BackgroundExec, accountID uint32, catalogName string) (uint64, string, string, error) {
-	sql := sqliceberg.GetCatalogByNameSQL(accountID, catalogName) + " for update"
+	sql := sqliceberg.GetCatalogByNameForUpdateSQL(accountID, catalogName)
 	results, err := ExeSqlInBgSes(ctx, bh, sql)
 	if err != nil {
 		return 0, "", "", err

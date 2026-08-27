@@ -487,6 +487,24 @@ func TestLocalE2EAccessLifecycleCaseCleansUpAfterCreateFailure(t *testing.T) {
 	}
 }
 
+func TestLocalE2EAccessLifecycleCleanupUsesFreshContextAndReportsFailures(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnError(errors.New("table cleanup failed"))
+	mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnError(errors.New("catalog cleanup failed"))
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := (&caseRunner{cfg: localE2ETestConfig(), db: db}).cleanupAccessLifecycle(canceled, "`db`.`mapping`", "catalog")
+	if err == nil || !strings.Contains(err.Error(), "table cleanup failed") || !strings.Contains(err.Error(), "catalog cleanup failed") {
+		t.Fatalf("cleanup errors were not preserved: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("canceled case context prevented fresh cleanup: %v", err)
+	}
+}
+
 func TestLocalE2EAccessLifecycleCaseCleansUpAfterRegisterFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()

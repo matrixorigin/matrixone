@@ -2256,7 +2256,11 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	if err != nil || dbID == 0 {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for iceberg mapping: %s", dbIDText)
 	}
-	catalogID, err := c.lookupIcebergCatalogID(accountID, env.Catalog)
+	// Keep the catalog row locked in the outer CREATE TABLE transaction until
+	// the mapping is inserted.  DROP ICEBERG CATALOG uses this same row as its
+	// lifecycle lock, so it cannot delete a catalog between this validation and
+	// publication of a new mapping.
+	catalogID, err := c.lookupIcebergCatalogIDForUpdate(accountID, env.Catalog)
 	if err != nil {
 		return err
 	}
@@ -2279,9 +2283,9 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	)
 }
 
-func (c *Compile) lookupIcebergCatalogID(accountID uint32, catalogName string) (uint64, error) {
+func (c *Compile) lookupIcebergCatalogIDForUpdate(accountID uint32, catalogName string) (uint64, error) {
 	res, err := c.runSqlWithResultAndOptions(
-		sqliceberg.GetCatalogByNameSQL(accountID, catalogName),
+		sqliceberg.GetCatalogByNameForUpdateSQL(accountID, catalogName),
 		NoAccountId,
 		executor.StatementOption{}.WithDisableLog(),
 	)

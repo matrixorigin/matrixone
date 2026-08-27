@@ -409,19 +409,31 @@ func icebergUnregisterResidencyWhere(scopeType string, accountID uint32) string 
 }
 
 func icebergAccessResidencyPolicyCount(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (uint64, error) {
-	results, err := ExeSqlInBgSes(ctx, bh, fmt.Sprintf(
-		"select count(*) from mo_catalog.%s where (scope_type = 'cluster' or account_id = %d) and catalog_id = %d",
-		sqliceberg.TableResidencyPolicy,
-		accountID,
-		catalogID,
-	))
-	if err != nil {
-		return 0, err
+	// Keep the OR out of this query: catalog_scope_account gives both relevant
+	// scopes catalog-leading index probes while the catalog row is locked.
+	var total uint64
+	for _, where := range []string{
+		fmt.Sprintf("scope_type = 'cluster' and catalog_id = %d", catalogID),
+		fmt.Sprintf("scope_type = 'account' and account_id = %d and catalog_id = %d", accountID, catalogID),
+	} {
+		results, err := ExeSqlInBgSes(ctx, bh, fmt.Sprintf(
+			"select count(*) from mo_catalog.%s where %s",
+			sqliceberg.TableResidencyPolicy,
+			where,
+		))
+		if err != nil {
+			return 0, err
+		}
+		if !execResultArrayHasData(results) {
+			continue
+		}
+		count, err := results[0].GetUint64(ctx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+		total += count
 	}
-	if !execResultArrayHasData(results) {
-		return 0, nil
-	}
-	return results[0].GetUint64(ctx, 0, 0)
+	return total, nil
 }
 
 func icebergAccessAccountID(ctx context.Context, ses FeSession, opts map[string]string) (uint32, error) {

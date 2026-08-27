@@ -82,10 +82,11 @@ is acquired. The procedure never accepts caller-supplied principal or policy
 fields, preventing it from becoming a general metadata mutation surface. SQL is
 formed from validated numeric IDs and fixed scope predicates.
 
-The work is cold-path catalog maintenance: it adds bounded reads/deletes for one
-catalog and no per-query background work, cache, or retained state. Existing
-frontend errors and the E2E report provide operational diagnosis; rollback
-preserves the original metadata for inspection.
+The work is cold-path catalog maintenance: residency-policy cleanup uses separate
+cluster and account catalog-leading index probes rather than an `OR` scan, and it
+adds no per-query background work, cache, or retained state. Existing frontend
+errors and the E2E report provide operational diagnosis; rollback preserves the
+original metadata for inspection.
 
 ## Alternatives
 
