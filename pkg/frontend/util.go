@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -1698,6 +1699,47 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
 	moerr.ErrBackendCannotConnect:     false,
+}
+
+// sessionRollsBackTxnOnError reports whether the session has opted into
+// treating this error as fatal to the whole transaction rather than to the
+// statement alone.
+//
+// The static errCodeRollbackWholeTxn set above is infrastructure -- deadlock,
+// lock timeout, a backend that went away -- failures after which the
+// transaction genuinely cannot continue, and it is only twelve of the ~240
+// error codes MO defines. Every other error, from a syntax error to a
+// constraint violation, rolls back the statement alone and leaves the
+// transaction open, which is MySQL's behaviour and MO's default. An
+// application that treats any failed statement as fatal to its unit of work
+// can ask for the stricter behaviour per session.
+//
+// Only real errors qualify. moerr also carries Ok signals, Info codes and
+// Warning codes; a warning such as a truncated value travels as the same type
+// but must never discard a transaction, so IsRealError gates this.
+//
+// A background session never opts in: backSession.GetSessionSysVar answers nil
+// for anything outside its small allowlist, so internal work -- catalog
+// maintenance, restores, the statement of another user's session -- keeps
+// MySQL semantics even when the variable is set globally.
+func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
+	if ses == nil || inputErr == nil {
+		return false
+	}
+	// Only moerr distinguishes an error from a warning, and only a warning is
+	// exempt. Anything that is NOT a moerr has no warning form to be -- it is
+	// a failure -- so it must roll back like any other error, or the setting
+	// would silently mean "any error MO happens to have wrapped".
+	var me *moerr.Error
+	if errors.As(inputErr, &me) && !me.IsRealError() {
+		return false
+	}
+	val, err := ses.GetSessionSysVar("mo_rollback_txn_on_error")
+	if err != nil {
+		return false
+	}
+	v, _ := val.(int8)
+	return v > 0
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
