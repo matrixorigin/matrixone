@@ -1470,6 +1470,93 @@ func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *te
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
 }
 
+func TestCompileShuffleGroupSkipsNormalShuffleWithSingleOwner(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	scope := newShuffleGroupInputScope(t, 1)
+	input := scope.RootOp
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.Same(t, input, groupOp.GetOperatorBase().GetChildren(0),
+		"one physical owner must not pay for a one-bucket shuffle and dispatch")
+}
+
+func TestCompileShuffleGroupSkipsSingleOwnerWithoutDroppingInputs(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	inputs := []*Scope{
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+	}
+
+	result := c.compileShuffleGroup(aggNode, inputs, nodes)
+
+	require.Len(t, result, 1)
+	require.IsType(t, &group.MergeGroup{}, result[0].RootOp)
+	require.Len(t, result[0].PreScopes, len(inputs))
+	for _, input := range result[0].PreScopes {
+		require.IsType(t, &group.Group{},
+			input.RootOp.GetOperatorBase().GetChildren(0))
+	}
+}
+
+func TestCompileShuffleGroupKeepsOrderedSingleOwnerSingleStage(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	scope := newShuffleGroupInputScope(t, 1)
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 1)
+	require.Same(t, scope, result[0].PreScopes[0])
+}
+
+func TestCompileShuffleGroupKeepsNormalShuffleAcrossCNsAtDopOne(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.addr = "cn-1:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-1", Addr: "cn-1:6001", Mcpu: 1},
+		{Id: "cn-2", Addr: "cn-2:6001", Mcpu: 1},
+	}
+	aggNode, nodes := newShuffleGroupTestNodes(1)
+	scope := newShuffleGroupInputScope(t, 1)
+	scope.NodeInfo = c.cnList[0]
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 2,
+		"DOP one on each CN still exposes two physical aggregate owners")
+	for _, resultScope := range result {
+		require.IsType(t, &group.Group{}, resultScope.RootOp)
+	}
+	require.Len(t, result[0].PreScopes, 1)
+	require.IsType(t, &shuffle.Shuffle{},
+		result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
 func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
