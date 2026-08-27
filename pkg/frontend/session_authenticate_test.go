@@ -143,12 +143,16 @@ func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.
 	previous := NewBackgroundExec
 	t.Cleanup(func() { NewBackgroundExec = previous })
 	var (
-		gotMinimum  timestamp.Timestamp
-		gotRealUser bool
+		gotMinimum     timestamp.Timestamp
+		gotRealUser    bool
+		gotCancellable bool
 	)
 	NewBackgroundExec = func(_ context.Context, upstream FeSession, opts ...*BackgroundExecOption) BackgroundExec {
 		gotMinimum = upstream.getLastCommitTS()
-		gotRealUser = len(opts) == 1 && opts[0] != nil && opts[0].fromRealUser
+		if len(opts) == 1 && opts[0] != nil {
+			gotRealUser = opts[0].fromRealUser
+			gotCancellable = opts[0].cancelTxnCreateWithRequest
+		}
 		return bh
 	}
 
@@ -163,6 +167,7 @@ func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.
 	require.ErrorIs(t, err, wantErr)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 121}, gotMinimum)
 	require.True(t, gotRealUser)
+	require.True(t, gotCancellable)
 }
 
 func TestResolveImplicitDefaultRole(t *testing.T) {

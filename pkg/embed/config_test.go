@@ -310,6 +310,25 @@ func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
 	require.False(t, cfg.Frontend.MongoDB.Enable)
 }
 
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	cfg := newServiceConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+	require.NoError(t, cfg.validate())
+	require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+	cfg = newServiceConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+	require.ErrorContains(t, cfg.validate(), "max-clock-offset must be positive")
+
+	cfg = newServiceConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.Clock.MaxClockOffset.Duration = time.Second
+	cfg.CN.Frontend.ConnectTimeout.Duration = time.Second
+	require.ErrorContains(t, cfg.validate(), "connectTimeout 1s must be greater than max-clock-offset 1s")
+}
+
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {
 	cfg := newServiceConfig()
 	assert.Equal(t, time.Second, cfg.HAKeeperRunningRetryInterval.Duration)

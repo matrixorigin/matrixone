@@ -111,6 +111,14 @@ the upstream session's minimum timestamp. `TxnClient.New` already passes that
 minimum to `TimestampWaiter.GetTimestamp`, which waits for local logtail and
 returns a snapshot after the applied timestamp.
 
+The configured `max-clock-offset` is the uncertainty bound even when
+`enable-check-clock-offset` is false. The boolean controls only active local
+clock-jump monitoring; it must not erase a timestamp-ordering invariant. Both
+the process launcher and embedded launcher preserve the default 500ms bound,
+reject a negative bound, and pass the monitoring decision separately to the HLC
+constructor. A deployment that disables monitoring still owns the external
+invariant that actual inter-node skew stays within the configured bound.
+
 The transaction client's freshness-preserving branch must choose
 `max(clock.Now(), caller minimum)`. It previously replaced the minimum with
 `clock.Now()`, which would silently discard the authentication fence whenever
@@ -121,6 +129,13 @@ The authentication transaction keeps the configured SI or RC isolation. In
 particular, the repair does not force RC: one fresh SI snapshot is preferable
 to several individually fresh statements because authentication is a compound
 security decision.
+
+Authentication also marks its background transaction creation as
+request-cancellable. The transaction handler continues to use its long-lived
+session context for ordinary statements, but the authentication call to
+`TxnClient.New` derives its timeout from the handshake request. This makes the
+handshake deadline the primary owner of a blocked timestamp wait, while
+`createTxnOpTimeout` remains a secondary upper bound.
 
 ## 6. Alternatives Rejected
 
@@ -150,10 +165,18 @@ and other authentication mutations would still need separate integration.
 This would impose a logtail freshness wait on every transaction, including TP
 hot paths unrelated to security. The required boundary is login, not all SQL.
 
+### Clear the offset when active monitoring is disabled
+
+Monitoring and uncertainty are different concerns. Clearing the bound makes a
+disabled watchdog equivalent to claiming zero inter-node skew, which invalidates
+the cross-CN ordering proof. Keeping the bound without the watchdog preserves
+correctness under the configured external NTP/PTP assumption.
+
 ## 7. Failure, Restart, and Compatibility Semantics
 
-- The caller's authentication context remains the deadline and cancellation
-  owner of the transaction's timestamp wait.
+- The caller's authentication context is the deadline and cancellation owner
+  of transaction creation and its timestamp wait. The existing transaction
+  client failure path aborts the unpublished operator and removes the waiter.
 - A lagging but healthy CN waits and then authenticates from the complete
   snapshot. A CN whose logtail cannot reach the fence rejects the login rather
   than authorizing stale state.
@@ -164,11 +187,17 @@ hot paths unrelated to security. The required boundary is login, not all SQL.
   upgraded CN and becomes cluster-wide after all serving CNs are upgraded.
 - Retrying a failed login creates a new, monotonic fence. Duplicate attempts do
   not accumulate state or weaken the boundary.
-- The fence inherits MatrixOne's existing HLC clock contract. When offset
-  checking is enabled, the configured maximum offset is included explicitly;
-  when it is disabled, the deployment retains the same external clock
-  synchronization assumption as the transaction client's freshness-preserving
-  snapshot path.
+- The fence inherits MatrixOne's HLC clock contract. The configured maximum
+  offset is always included; disabling the monitor changes detection only, not
+  the bound. Operators must keep actual skew within that bound.
+- This corrects prior configuration behavior: disabling offset monitoring no
+  longer changes `Clock.MaxOffset()` to zero. The default bound is 500ms and a
+  negative value is rejected during startup. There is no wire or persisted-data
+  compatibility impact, but connection-latency dashboards can show the newly
+  enforced uncertainty wait after rollout.
+- A CN rejects startup when `cn.frontend.connectTimeout` is not greater than
+  `max-clock-offset`; otherwise a healthy strict-freshness login could consume
+  its entire handshake budget before catalog authentication begins.
 
 ## 8. Performance Budget
 
@@ -179,12 +208,21 @@ hot paths unrelated to security. The required boundary is login, not all SQL.
   assignment with one timestamp comparison so its documented caller-minimum
   contract is monotonic; the default transaction hot path is unchanged.
 - Each normal login adds one local HLC read and reuses the existing transaction
-  timestamp waiter. With clock uncertainty disabled, it is normally bounded by
-  the next local logtail progress update and adds no cluster RPC.
-- When clock-offset checking is enabled, correctness may require waiting through
-  the configured uncertainty interval. This cost is isolated to connection
-  establishment and is preferable to either stale authorization or a cluster
-  RPC fan-out. Connection pooling amortizes it for TP workloads.
+  timestamp waiter; it adds no cluster RPC, goroutine, or per-login collection.
+- A healthy synchronized deployment normally adds approximately the configured
+  uncertainty interval (500ms by default) to normal-user connection setup. It
+  can be shorter when the applied logtail watermark is already ahead and longer
+  when logtail is delayed; cancellation and the existing timeouts bound broken
+  paths. The cost is intentionally isolated to connection establishment, and
+  connection pooling amortizes it for TP workloads.
+- Active clock monitoring has no per-login branch. Disabling it saves only the
+  monitor work and does not trade away the authentication correctness bound.
+- Retaining the bound also gives TN commit-deadline validation and the
+  lockservice orphan-recovery fence their configured skew tolerance. The latter
+  may add the bound to ambiguous-commit recovery, which is an unhappy path; at
+  the 500ms default it does not enlarge the lockservice's existing one-second
+  post-deadline grace. Normal lock acquisition and commit latency do not wait on
+  this fence.
 - No new process-lifetime or per-session collection is introduced.
 
 ## 9. Validation Map
@@ -192,11 +230,13 @@ hot paths unrelated to security. The required boundary is login, not all SQL.
 | Behavior | Evidence |
 | --- | --- |
 | Fence uses the HLC uncertainty upper bound and dominates its logical range | focused frontend unit test with a deterministic clock |
+| Disabling active clock monitoring retains the configured uncertainty bound in process and embedded launchers | focused clock and launcher-config unit tests |
+| A handshake budget that cannot cover the uncertainty fence fails during CN configuration | focused process and embedded config unit tests |
 | Existing larger session minimum is never lowered | focused frontend unit test |
 | Missing runtime/clock, invalid offset, and timestamp overflow fail closed | focused frontend unit tests |
 | Authentication installs the fence before background transaction creation | focused frontend unit test at the executor seam |
 | Both transaction freshness modes preserve a later caller minimum | focused txn-client unit test |
-| Transaction creation waits for the supplied minimum and honors cancellation | existing txn-client timestamp-waiter tests plus owning-package tests |
+| Authentication transaction creation waits for the supplied minimum and exits on request cancellation | deterministic frontend barrier test plus existing txn-client timestamp-waiter tests |
 | Revoke fallback and immediate regrant are visible to new implicit/explicit sessions | existing `revoked_default_role_login` BVT on multi-CN topology |
 | Public authentication behavior remains unchanged on one CN | repeated existing BVT and frontend owning-package tests |
 

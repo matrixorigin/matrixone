@@ -691,7 +691,17 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		consumeNextTxnIsolation = consumeNext
 	}
 
-	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	txnCreateCtx := th.txnCtx
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.cancelTxnCreateWithRequest {
+		if execCtx.reqCtx == nil {
+			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
+		}
+		// Authentication owns a short-lived background transaction. Do not let
+		// its timestamp wait outlive the handshake deadline. Ordinary session
+		// transaction creation intentionally keeps the long-lived txn context.
+		txnCreateCtx = execCtx.reqCtx
+	}
+	tempCtx, tempCancel := context.WithTimeoutCause(txnCreateCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
 	defer tempCancel()
 
 	txnClient := pu.TxnClient

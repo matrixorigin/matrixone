@@ -132,10 +132,11 @@ type Config struct {
 	Clock struct {
 		// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
 		Backend string `toml:"source"`
-		// MaxClockOffset max clock offset between two nodes. Default is 500ms.
-		// Only valid when enable-check-clock-offset is true
+		// MaxClockOffset is the maximum clock offset between two nodes and is
+		// part of the timestamp-ordering correctness contract. Default is 500ms.
 		MaxClockOffset tomlutil.Duration `toml:"max-clock-offset"`
-		// EnableCheckMaxClockOffset enable local clock offset checker
+		// EnableCheckMaxClockOffset enables the local clock-jump monitor. It does
+		// not disable the MaxClockOffset uncertainty bound when false.
 		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
 
@@ -221,16 +222,18 @@ func (c *Config) validate() error {
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
+	if c.Clock.MaxClockOffset.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
+	}
 	if c.Clock.Backend == "" {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
 		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
-	if !c.Clock.EnableCheckMaxClockOffset {
-		c.Clock.MaxClockOffset.Duration = 0
+	if err := c.validateAuthenticationClockBudget(); err != nil {
+		return err
 	}
-
 	// file service
 	c.setFileserviceDefaultValues()
 
@@ -257,16 +260,15 @@ func (c *Config) setDefaultValue() error {
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
+	if c.Clock.MaxClockOffset.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
+	}
 	if c.Clock.Backend == "" {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
 		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
-	if !c.Clock.EnableCheckMaxClockOffset {
-		c.Clock.MaxClockOffset.Duration = 0
-	}
-
 	// file service
 	c.setFileserviceDefaultValues()
 
@@ -295,6 +297,9 @@ func (c *Config) setDefaultValue() error {
 
 	// cn
 	c.CN.SetDefaultValue()
+	if err := c.validateAuthenticationClockBudget(); err != nil {
+		return err
+	}
 
 	//no default proxy config
 
@@ -303,6 +308,21 @@ func (c *Config) setDefaultValue() error {
 	// meta cache
 	c.initMetaCache()
 
+	return nil
+}
+
+func (c *Config) validateAuthenticationClockBudget() error {
+	if !strings.EqualFold(c.ServiceType, metadata.ServiceType_CN.String()) {
+		return nil
+	}
+	c.CN.Frontend.SetDefaultValues()
+	if c.CN.Frontend.ConnectTimeout.Duration <= c.Clock.MaxClockOffset.Duration {
+		return moerr.NewBadConfigNoCtxf(
+			"cn.frontend.connectTimeout %s must be greater than max-clock-offset %s",
+			c.CN.Frontend.ConnectTimeout.Duration,
+			c.Clock.MaxClockOffset.Duration,
+		)
+	}
 	return nil
 }
 

@@ -1912,6 +1912,43 @@ func TestCloseCancelsAdmittedSnapshotWait(t *testing.T) {
 	)
 }
 
+func TestRequestCancelCleansAdmittedSnapshotWait(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(ctx, timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("admitted transaction did not enter snapshot wait")
+			}
+			cancel()
+
+			select {
+			case err := <-errC:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("admitted snapshot wait did not return after request cancellation")
+			}
+
+			client := tc.(*txnClient)
+			require.Zero(t, client.atomic.activeTxnCount.Load())
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			require.Zero(t, client.mu.users)
+			require.Empty(t, client.mu.waitActiveTxns)
+		},
+		WithTimestampWaiter(waiter),
+	)
+}
+
 func TestCloseCancelsRealTimestampWait(t *testing.T) {
 	tw := NewTimestampWaiter(runtime.DefaultRuntime().Logger()).(*timestampWaiter)
 	defer tw.Close()

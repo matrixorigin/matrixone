@@ -385,6 +385,25 @@ func TestMongoDBEnablementConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+	require.NoError(t, cfg.validate())
+	require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+	cfg = NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+	require.ErrorContains(t, cfg.validate(), "max-clock-offset must be positive")
+
+	cfg = NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.Clock.MaxClockOffset.Duration = time.Second
+	cfg.CN.Frontend.ConnectTimeout.Duration = time.Second
+	require.ErrorContains(t, cfg.validate(), "connectTimeout 1s must be greater than max-clock-offset 1s")
+}
+
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {
 	cfg := NewConfig()
 	effective := cfg.getObservabilityConfig()

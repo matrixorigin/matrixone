@@ -853,6 +853,56 @@ func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
 	}
 }
 
+func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	t.Cleanup(func() { pu.TxnClient = previousTxnClient })
+
+	entered := make(chan struct{})
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, context.Cause(ctx)
+		},
+	)
+	pu.TxnClient = txnClient
+
+	bh := ses.InitBackExec(nil, "", fakeDataSetFetcher2, &BackgroundExecOption{
+		cancelTxnCreateWithRequest: true,
+	}).(*backExec)
+	defer bh.Close()
+
+	reqCtx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), sysAccountID))
+	defer cancel()
+	errC := make(chan error, 1)
+	go func() {
+		errC <- bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{
+			reqCtx: reqCtx,
+			ses:    bh.backSes,
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("transaction creation did not enter txn client")
+	}
+	cancel()
+
+	select {
+	case err := <-errC:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("transaction creation did not stop after request cancellation")
+	}
+}
+
 func TestTxnHandlerDoesNotOwnKafkaProgress(t *testing.T) {
 	newState := func(t *testing.T) (*Session, *ExecCtx, *testTxnOp) {
 		t.Helper()
