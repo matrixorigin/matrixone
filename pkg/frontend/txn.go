@@ -513,13 +513,14 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 
-	if execCtx.txnOpt.forcePessimisticObjectLifecycle &&
-		th.inActiveTxnUnsafe() &&
-		!th.txnOp.Txn().IsPessimistic() {
-		return moerr.NewNotSupported(
-			execCtx.reqCtx,
-			"object lifecycle statements cannot run in an existing optimistic transaction",
-		)
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle && th.inActiveTxnUnsafe() {
+		meta := th.txnOp.Txn()
+		if !meta.IsPessimistic() || meta.Isolation != pbtxn.TxnIsolation_RC {
+			return moerr.NewNotSupported(
+				execCtx.reqCtx,
+				"object lifecycle statements require an existing pessimistic RC transaction",
+			)
+		}
 	}
 
 	// check BEGIN stmt
@@ -614,8 +615,10 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 
 func requiresPessimisticObjectLifecycleTxn(stmt tree.Statement) bool {
 	switch st := stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropView:
+	case *tree.DropDatabase, *tree.DropView:
 		return true
+	case *tree.DropTable:
+		return !st.Temporary
 	case *tree.CreateView:
 		return st.Replace
 	default:

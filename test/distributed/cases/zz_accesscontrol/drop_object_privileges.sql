@@ -86,7 +86,7 @@ drop database drop_object_privileges_db;
 select count(*) as dropped_database_object_grants
 from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'
-  and obj_id in (@drop_priv_db_id, @drop_priv_new_t1_id, @drop_priv_v1_id);
+  and obj_id in (@drop_priv_db_id, @drop_priv_new_t1_id, @drop_priv_new_v1_id);
 select count(*) as preserved_account_scoped_grants
 from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'

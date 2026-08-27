@@ -663,13 +663,21 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 
 	beginErr := errors.New("begin failed")
 	backExec := &failingBeginBackgroundExec{err: beginErr}
-	stub := gostub.StubFunc(&NewBackgroundExec, backExec)
-	t.Cleanup(stub.Reset)
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return backExec
+	}
 
 	returned, cleanup, err := getBackExecutor(context.Background(), ses)
 	require.ErrorIs(t, err, beginErr)
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
+	require.True(t, forcedPessimisticRC)
 	require.Equal(t, 1, backExec.closeCalls)
 }
 

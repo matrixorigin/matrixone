@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -971,6 +972,71 @@ func TestEffectiveStatementForTxn(t *testing.T) {
 	}))
 	_, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "cycle"})
 	require.ErrorContains(t, err, "cyclic prepared EXECUTE reference")
+}
+
+func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("tenant")}, ses.GetProc())
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestLifecycleAdmissionFailurePreservesPreviousStatement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	// Model one previously completed statement. An erroneous finalizer call
+	// would remove this entry through RollbackLastStatement.
+	op.wp.stack = []uint64{0}
+	op.wp.stmtId = 1
+	handler := ses.GetTxnHandler()
+	handler.mu.Lock()
+	handler.txnOp = op
+	handler.txnCtx = ctx
+	handler.optionBits = OPTION_BEGIN
+	handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+	handler.mu.Unlock()
+
+	stmt := &tree.DropTable{}
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		stmt:   stmt,
+		ses:    ses,
+		proc:   ses.GetProc(),
+		input:  &UserInput{sql: "drop table t"},
+	}
+	execCtx.cw = InitTxnComputationWrapper(ses, stmt, execCtx.proc)
+
+	err := executeStmtWithWorkspace(ses, nil, execCtx)
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Equal(t, []uint64{0}, op.wp.stack)
+	require.Equal(t, uint64(1), op.wp.stmtId)
+	require.Zero(t, op.rollbackCalls)
+	require.Same(t, op, handler.GetTxn())
 }
 
 func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {

@@ -3009,7 +3009,10 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -4928,7 +4931,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	//it only executes select statements.
 
 	//7. pass or commit or rollback txn
-	// defer transaction state management.
+	// Admission errors occur before StartStatement and must not roll back the
+	// previous workspace statement. Enable transaction finalization only for an
+	// explicit COMMIT/ROLLBACK or after transaction admission succeeds.
+	finishTxnOnReturn := false
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
@@ -4940,7 +4946,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
-		err = finishTxnFunc(ses, err, execCtx)
+		if finishTxnOnReturn {
+			err = finishTxnFunc(ses, err, execCtx)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -4962,9 +4970,11 @@ func executeStmtWithWorkspace(ses FeSession,
 		beginStmt = true
 	case *tree.CommitTransaction:
 		execCtx.txnOpt.byCommit = true
+		finishTxnOnReturn = true
 		return nil
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
+		finishTxnOnReturn = true
 		return nil
 	case *tree.SavePoint, *tree.ReleaseSavePoint:
 		return nil
@@ -4988,6 +4998,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	if err != nil {
 		return err
 	}
+	finishTxnOnReturn = true
 
 	//skip BEGIN stmt
 	if beginStmt {
