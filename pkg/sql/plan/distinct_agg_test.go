@@ -208,7 +208,7 @@ func TestOptimizeMixedDistinctAggPathSelectionAndFallbacks(t *testing.T) {
 		{name: "inactive grouping set", groupNDV: 10, distinctNDV: 1_000_000,
 			inactiveGrouping: true, protocol: defines.MORPCLatestVersion},
 		{name: "rolling upgrade", groupNDV: 10, distinctNDV: 1_000_000,
-			protocol: defines.MORPCVersion32},
+			protocol: defines.MORPCVersion33},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, outer := newDistinctAggTestBuilder(

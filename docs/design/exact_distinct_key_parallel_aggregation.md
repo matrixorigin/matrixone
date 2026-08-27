@@ -1,6 +1,7 @@
 # Exact DISTINCT-Key Parallel Aggregation
 
-Status: approved MVP design (2026-08-27)
+Status: proposed MVP design; independent approval is tracked in implementation
+PR #27762 (2026-08-27)
 
 Owner issue: [#27720](https://github.com/matrixorigin/matrixone/issues/27720)
 
@@ -45,6 +46,13 @@ Non-goals for this MVP:
 - local pre-deduplication before exchange;
 - carrying a precomputed canonical hash between operators;
 - a second DISTINCT spill implementation. #27698 owns fallback-state spill.
+
+This PR is one deliberately narrow phase of #27720; it does not close that
+issue. Approving this MVP accepts direct unary `d` ownership as a safe
+coarsening for the target global/few-group shape while leaving canonical
+multi-column keys, local adaptive pre-deduplication, transported hash reuse,
+runtime skew adaptation, and topology observability to separately reviewed
+follow-up work.
 
 ## Alternatives and decision
 
@@ -135,6 +143,20 @@ name registry. Their state is fixed-width and owned by the existing `aggExec`:
 - partial and spill serialization reuse the existing fixed-vector codecs;
 - no goroutine, file, queue, lock, or new cleanup state is introduced.
 
+For an eligible Path B plan, the exact key owner is the ordinary inner Group on
+`(g..., d)`, not a saved-argument DISTINCT `argSkl`. Its existing `SpillMem`
+contract can partition those independent pair groups by their complete group
+hash, so one hot final group does not have to reload all of its DISTINCT values
+as one inseparable state. The outer Group retains only fixed-width ordinary
+combine state. This reuses existing Group spill ownership; it does not add a
+second DISTINCT spill format.
+
+Fallback plans are unchanged. Unsupported key shapes, multiple DISTINCT sets,
+and other DISTINCT aggregates can still retain one saved-argument state whose
+memory grows with NDV; #27698 owns bounded-memory completion for those paths.
+This MVP therefore makes no universal bounded-memory claim for #27720 or
+#27698.
+
 For `d IS NULL`, the pair stage retains `(g, NULL)` so ordinary aggregates still
 observe those rows; final `COUNT(d)` excludes the NULL pair. Empty global input
 returns zero for counts and NULL for SUM/AVG/MIN/MAX.
@@ -142,14 +164,14 @@ returns zero for counts and NULL for SUM/AVG/MIN/MAX.
 ## Compatibility and rollout
 
 The aggregate IDs travel in existing remote pipeline fields, but older CNs do
-not recognize them. MORPC version 33 is therefore the capability boundary:
+not recognize them. MORPC version 34 is therefore the capability boundary:
 
-- the planner does not select the mixed rewrite below version 33;
+- the planner does not select the mixed rewrite below version 34;
 - remote pipeline encoding validates every internal combine aggregate and fails
-  closed below version 33;
-- version 32 remains assigned to cross-transaction plan-cache generation;
+  closed below version 34;
+- version 33 remains assigned to stable complete-key string-shuffle hashing;
 - rolling upgrade keeps the old topology until the deployment-wide minimum
-  version reaches 33; rollback lowers the gate before older CNs participate.
+  version reaches 34; rollback lowers the gate before older CNs participate.
 
 There is no user setting or catalog/on-disk migration.
 
@@ -164,7 +186,7 @@ Deterministic unit coverage must prove:
 - SUM/COUNT/AVG NULL, empty, overflow, integer, float, Decimal128, and
   Decimal256 behavior;
 - aggregate-state serialization plus a real Group-to-MergeGroup round trip;
-- version 32 rejection and version 33 remote acceptance;
+- version 33 rejection and version 34 remote acceptance;
 - allocation-account cleanup with zero residual debt.
 
 No BVT is added for the optimizer selector because deterministic SQL fixtures do

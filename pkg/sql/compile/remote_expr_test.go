@@ -425,22 +425,33 @@ func TestDistinctCombineRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	combine := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
-		aggexec.AggIdOfInternalSumCombine,
-		false,
-		[]*plan.Expr{makeTestVarExpr("partial")},
-		nil,
-	)}
+	for _, tc := range []struct {
+		name string
+		id   int64
+	}{
+		{name: "sum", id: aggexec.AggIdOfInternalSumCombine},
+		{name: "count", id: aggexec.AggIdOfInternalCountCombine},
+		{name: "avg", id: aggexec.AggIdOfInternalAvgCombine},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			combine := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				tc.id,
+				false,
+				[]*plan.Expr{makeTestVarExpr("partial")},
+				nil,
+			)}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
-	require.ErrorContains(
-		t,
-		validateRemoteAggregateProtocol(proc, combine),
-		"require MORPC protocol version 33",
-	)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
+			require.ErrorContains(
+				t,
+				validateRemoteAggregateProtocol(proc, combine),
+				"require MORPC protocol version 34",
+			)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
-	require.NoError(t, validateRemoteAggregateProtocol(proc, combine))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
+			require.NoError(t, validateRemoteAggregateProtocol(proc, combine))
+		})
+	}
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {

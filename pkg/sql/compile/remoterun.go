@@ -1669,7 +1669,7 @@ func validateRemoteAggregateProtocol(
 			agg.GetAggID() == aggexec.AggIdOfInternalAvgCombine {
 			if proc == nil || !supportsRemoteDistinctCombine(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
-					"exact DISTINCT combine aggregates require MORPC protocol version 33",
+					"exact DISTINCT combine aggregates require MORPC protocol version 34",
 				)
 			}
 		}

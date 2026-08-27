@@ -6571,7 +6571,7 @@ func supportsRemoteDistinctCombine(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion33
+	return ok && protocolVersion >= defines.MORPCVersion34
 }
 
 func supportsRemoteStatementLastInsertID(service string) bool {
