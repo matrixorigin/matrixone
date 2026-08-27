@@ -19,3 +19,6 @@ invalid input: cannot insert/update/delete from view
 update direct_v set b = 1;
 invalid input: cannot insert/update/delete from view
 drop database information_schema_views_metadata;
+drop database if exists information_schema_views_clone;
+create database information_schema_views_clone clone information_schema;
+drop database information_schema_views_clone;

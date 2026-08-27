@@ -18,3 +18,8 @@ update agg_v set cnt = 1;
 update direct_v set b = 1;
 
 drop database information_schema_views_metadata;
+
+-- The stored VIEWS definition must remain executable when a system database is cloned.
+drop database if exists information_schema_views_clone;
+create database information_schema_views_clone clone information_schema;
+drop database information_schema_views_clone;
