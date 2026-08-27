@@ -1,3 +1,15 @@
+SELECT REGEXP_SUBSTR('', '^$') = '' AS default_pos_match;
+default_pos_match
+1
+SELECT REGEXP_SUBSTR('', 'x') IS NULL AS default_pos_no_match;
+default_pos_no_match
+1
+SELECT REGEXP_SUBSTR('', '^$', 1) = '' AS explicit_pos_match;
+explicit_pos_match
+1
+SELECT REGEXP_SUBSTR('', 'x', 1) IS NULL AS explicit_pos_no_match;
+explicit_pos_no_match
+1
 SELECT REGEXP_SUBSTR('Thailand or Cambodia', 'l.nd') Result;
 result
 land

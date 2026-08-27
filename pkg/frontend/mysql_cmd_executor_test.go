@@ -2711,6 +2711,70 @@ func TestRebuildStaleCachedStatementsRemapsModeTwoQualifiedColumns(t *testing.T)
 	require.Equal(t, "dstmix", insert.ColumnNames[0].DbName())
 }
 
+func TestGetComputationWrapperRestoresCachedPlanGenerationSnapshot(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.planCache = newPlanCache(1)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	stmt := &trackedStatement{}
+	cachedPlan := &plan0.Plan{}
+	planTS := timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}
+	ses.cachePlanWithSnapshots(
+		input.getHash(),
+		[]tree.Statement{stmt},
+		[]*plan0.Plan{cachedPlan},
+		[]timestamp.Timestamp{planTS},
+	)
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = input
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	tcw := cws[0].(*TxnComputationWrapper)
+	require.Same(t, cachedPlan, tcw.Plan())
+	require.True(t, tcw.stmtBorrowed)
+	require.Equal(t, input.getHash(), tcw.cachedPlanSQL)
+	require.Same(t, cachedPlan, tcw.cachedPlanGeneration)
+	require.True(t, tcw.planGenerationReused)
+	gotTS, ok := tcw.PlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, planTS, gotTS)
+
+	tcw.Free()
+	require.Zero(t, stmt.freed)
+	ses.cleanCache()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestCachedPlanReuseWaitsForPlanSnapshotProtocol(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	ses := &Session{planCache: newPlanCache(1)}
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	ses.cachePlanWithSnapshots(
+		input.getHash(),
+		[]tree.Statement{&trackedStatement{}},
+		[]*plan0.Plan{{}},
+		[]timestamp.Timestamp{{PhysicalTime: 10}},
+		defines.MORPCVersion31,
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	// The cache entry was built under the previous protocol and is evicted
+	// rather than becoming reusable when the cluster gate advances.
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -5615,10 +5679,65 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	clause.Exprs = clause.Exprs[1:]
 
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset)
+}
+
+func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select coalesce(?, ?) from dual", 1)
+	require.NoError(t, err)
+
+	retry := newPreparedExecutionRetry([]any{
+		plan.ParamValue{
+			Value:               "9007199254740992.0000000001tail",
+			IsBinaryProtocol:    true,
+			EnableNumericPrefix: true,
+		},
+		plan.ParamValue{
+			Value:               "9007199254740992.0000000000",
+			IsBinaryProtocol:    true,
+			PrepareParamKind:    vector.PrepareParamDecimal,
+			EnableNumericPrefix: true,
+		},
+	}, true)
+	retryPlan, err := buildPlanForCompileRetry(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
+	require.NoError(t, err)
+	require.Empty(t, queryParamPositions(retryPlan.GetQuery()),
+		"definition-change retry returned the prepare-time parameterized plan: %s", retryPlan.String())
+
+	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	commonValue := root.ProjectList[0]
+	require.Equal(t, "coalesce", commonValue.GetF().GetFunc().GetObjName(), commonValue.String())
+	require.True(t, types.T(commonValue.Typ.Id).IsDecimal(), commonValue.String())
+	requiresV26, err := plan0.RequiresMORPCVersion30NumericPrefix(commonValue)
+	require.NoError(t, err)
+	require.True(t, requiresV26, commonValue.String())
+}
+
+func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? from dual", 1)
+	require.NoError(t, err)
+
+	retryPlan, err := buildPlanForCompileRetry(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true,
+		newPreparedExecutionRetry([]any{plan.ParamValue{
+			Value:            "42",
+			IsBinaryProtocol: true,
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+		}}, true))
+	require.NoError(t, err)
+	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
+	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id, root.ProjectList[0].String())
+	require.Equal(t, int64(42), root.ProjectList[0].GetLit().GetI64Val())
 }
 
 func queryParamPositions(query *plan0.Query) []int32 {

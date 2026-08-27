@@ -106,7 +106,11 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	c.setAffectedRows(1)
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -2113,6 +2117,31 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		// so internal SQL stays on one CN and can see uncommitted table metadata.
 		c.setHaveDDL(true)
 		statementOption := executor.StatementOption{}.WithDisableLog()
+		numericPrefixPlan := false
+		numericPrefixPositions := make(map[int]bool)
+		if c.pn.GetDdl().GetQuery() != nil {
+			scanErr := plan.VisitExpressionsInOwner(c.pn.GetDdl().GetQuery(), func(expr *plan.Expr) error {
+				return plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+					fn := candidate.GetF()
+					if fn == nil || fn.Func.GetObjName() != "cast" || candidate.Typ.Charset != 255 {
+						return nil
+					}
+					numericPrefixPlan = true
+					return plan.VisitExprTree(candidate, func(source *plan.Expr) error {
+						if param := source.GetP(); param != nil && param.Pos >= 0 {
+							numericPrefixPositions[int(param.Pos)] = true
+						}
+						return nil
+					})
+				})
+			})
+			if scanErr != nil {
+				return scanErr
+			}
+		}
+		if !numericPrefixPlan {
+			clear(numericPrefixPositions)
+		}
 		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
@@ -2120,6 +2149,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				nulls[i] = params.IsNull(uint64(i))
 				if !nulls[i] {
 					values[i] = string(params.GetRawBytesAt(i))
+					if numericPrefixPositions[i] {
+						if prefix, ok := function.GetNumericStringPrefix(values[i]); ok {
+							values[i] = prefix
+						}
+					}
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)

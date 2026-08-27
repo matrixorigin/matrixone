@@ -350,6 +350,97 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestStringShuffleHashRemoteWireContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	arg := shuffle.NewArgument()
+	t.Cleanup(arg.Release)
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = true
+
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	_, legacyInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), legacyInstruction.Op)
+
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+	_, stableInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.ShuffleStable), stableInstruction.Op)
+	require.NotEqual(t, legacyInstruction.Op, stableInstruction.Op)
+
+	// Range ownership is unchanged by the complete string hash contract and
+	// must not reject an older receiver unnecessarily.
+	arg.ShuffleType = int32(planpb.ShuffleType_Range)
+	_, rangeInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), rangeInstruction.Op)
+
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = false
+	_, numericHashInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), numericHashInstruction.Op)
+
+	encodePipeline := func(t *testing.T, instruction *pipeline.Instruction) []byte {
+		t.Helper()
+		data, err := (&pipeline.Pipeline{
+			PipelineType:    pipeline.Pipeline_Normal,
+			InstructionList: []*pipeline.Instruction{instruction},
+		}).Marshal()
+		require.NoError(t, err)
+		return data
+	}
+	legacyData := encodePipeline(t, legacyInstruction)
+	stableData := encodePipeline(t, stableInstruction)
+	rangeData := encodePipeline(t, rangeInstruction)
+	numericHashData := encodePipeline(t, numericHashInstruction)
+
+	decode := func(algorithm process.StringShuffleHashAlgorithm, data []byte) (*Scope, error) {
+		receiverProc := testutil.NewProcess(t)
+		t.Cleanup(receiverProc.Free)
+		receiverProc.SetStringShuffleHashAlgorithm(algorithm)
+		return decodeScope(data, receiverProc, true, nil)
+	}
+
+	legacyScope, err := decode(process.StringShuffleHashLegacy, legacyData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, legacyScope.RootOp)
+	legacyScope.release()
+
+	stableScope, err := decode(process.StringShuffleHashComplete, stableData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, stableScope.RootOp)
+	require.True(t, stableScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	stableScope.release()
+	rangeScope, err := decode(process.StringShuffleHashComplete, rangeData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, rangeScope.RootOp)
+	rangeScope.release()
+	numericHashScope, err := decode(process.StringShuffleHashComplete, numericHashData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, numericHashScope.RootOp)
+	require.False(t, numericHashScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	numericHashScope.release()
+
+	_, err = decode(process.StringShuffleHashLegacy, stableData)
+	require.ErrorContains(t, err,
+		"string shuffle hash algorithm mismatch: pipeline=1 process=0")
+	_, err = decode(process.StringShuffleHashComplete, legacyData)
+	require.ErrorContains(t, err,
+		"string shuffle hash algorithm mismatch: pipeline=0 process=1")
+	invalidStableRange := *rangeInstruction
+	invalidStableRange.Op = int32(vm.ShuffleStable)
+	_, err = decode(process.StringShuffleHashComplete,
+		encodePipeline(t, &invalidStableRange))
+	require.ErrorContains(t, err,
+		"complete string shuffle hash marker requires a string-key hash shuffle")
+}
+
 func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -873,6 +964,63 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 	_, err = decodeScope(dynamicData, proc, true, nil)
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+}
+
+func TestPreparedNumericPrefixRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	makeScope := func(charset uint32) *Scope {
+		text := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "12.5tail"}}},
+		}
+		cast := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 4, Scale: 2, Charset: charset},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "cast"}, Args: []*planpb.Expr{text},
+			}},
+		}
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{cast}}},
+			}}},
+		}
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
+	_, _, _, _, err := prepareRemoteRunSendingData("", makeScope(255), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "require MORPC protocol version 30")
+	compatibleData, _, _, _, err := prepareRemoteRunSendingData("", makeScope(0), proc, nil, uuid.Nil)
+	require.NoError(t, err, "ordinary casts remain compatible with version 26")
+	compatibleScope, err := decodeScope(compatibleData, proc, true, nil)
+	require.NoError(t, err)
+	compatibleScope.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+	prefixData, _, _, _, err := prepareRemoteRunSendingData("", makeScope(255), proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	prefixScope, err := decodeScope(prefixData, proc, true, nil)
+	require.NoError(t, err)
+	prefixScope.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
+	_, err = decodeScope(prefixData, proc, true, nil)
+	require.ErrorContains(t, err, "require MORPC protocol version 30")
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

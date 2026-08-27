@@ -831,6 +831,131 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestHashmapBuilderRuntimeFilterLimitAbandonsOptionalKeysInPlace(
+	t *testing.T,
+) {
+	for _, hashOnPK := range []bool{false, true} {
+		for _, test := range []struct {
+			name         string
+			limit        int32
+			rows         int
+			wantFallback bool
+		}{
+			{
+				name:  "at-limit",
+				limit: int32(hashmap.UnitLimit),
+				rows:  hashmap.UnitLimit,
+			},
+			{
+				name:         "over-limit",
+				limit:        int32(hashmap.UnitLimit + 1),
+				rows:         hashmap.UnitLimit * 3,
+				wantFallback: true,
+			},
+		} {
+			t.Run(fmt.Sprintf("hash-on-pk=%t/%s", hashOnPK, test.name), func(t *testing.T) {
+				typ := types.T_int32.ToType()
+				tc := newTestCase(
+					t,
+					[]bool{false},
+					[]types.Type{typ},
+					[]*plan.Expr{newExpr(0, typ)},
+				)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+
+				input := newBatch([]types.Type{typ}, tc.proc, int64(test.rows))
+				require.NoError(t,
+					tc.arg.ctr.hashmapBuilder.copyBuildBatch(input, tc.proc))
+				tc.arg.ctr.hashmapBuilder.InputBatchRowCount = test.rows
+				input.Clean(tc.proc.Mp())
+
+				require.NoError(t,
+					tc.arg.ctr.hashmapBuilder.buildHashmapWithRuntimeFilterLimit(
+						hashOnPK, false, true, test.limit, tc.proc))
+				fallback, rebuildSafe :=
+					tc.arg.ctr.hashmapBuilder.runtimeFilterFallbackState()
+				require.Equal(t, test.wantFallback, fallback)
+				require.True(t, rebuildSafe)
+				if test.wantFallback {
+					require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+				} else {
+					require.Len(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys, 1)
+					require.Equal(t, test.rows,
+						tc.arg.ctr.hashmapBuilder.UniqueJoinKeys[0].Length())
+				}
+				require.Equal(t, uint64(test.rows),
+					tc.arg.ctr.hashmapBuilder.GetGroupCount(),
+					"the mandatory JoinMap must still contain every key")
+
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
+func TestHashBuildRuntimeFilterLimitFailsOpenWithoutLosingJoinKeys(
+	t *testing.T,
+) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{typ},
+		[]*plan.Expr{newExpr(0, typ)},
+	)
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		tc.arg.JoinMapTag+502, 5, typ)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	input := newBatch([]types.Type{typ}, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(input, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, int64(1),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterCollectionFallbacks"])
+
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	messages, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	runtimeFilter, ok := messages[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+
+	joinResult, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag,
+		false,
+		0,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
+	require.NoError(t, err)
+	require.True(t, joinResult.IsSuccess())
+	joinMap := joinResult.JoinMap()
+	require.NotNil(t, joinMap)
+	require.Equal(t, int64(Rows), joinMap.GetRowCount())
+	require.Equal(t, uint64(Rows), joinMap.GetGroupCount())
+	joinMap.Free()
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestDedupBatchRewriteRecollectsOptionalKeysWithoutUnsafeReplay(
 	t *testing.T,
 ) {
