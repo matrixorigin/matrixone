@@ -199,7 +199,8 @@ var (
 		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, " +
 		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
 		"FROM mo_catalog.mo_foreign_keys fk " +
-		"JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id"
+		"JOIN __mo_visible_tables fk_tbl " +
+		"ON fk.db_name = fk_tbl.reldatabase AND fk.table_name = fk_tbl.relname"
 
 	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS "+informationSchemaMetadataVisibilityCTE()+"select "+
 		"'def' as TABLE_CATALOG,"+
@@ -450,11 +451,12 @@ var (
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
 		"FROM (" +
-		"SELECT table_id, db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
+		"SELECT db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
 		"FROM mo_catalog.mo_foreign_keys " +
-		"GROUP BY table_id, db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
+		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
 		") fk " +
-		"JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id"
+		"JOIN __mo_visible_tables fk_tbl " +
+		"ON fk.db_name = fk_tbl.reldatabase AND fk.table_name = fk_tbl.relname"
 
 	// CHECK_CONSTRAINTS is backed by a table function because CHECK metadata is
 	// stored in the serialized SchemaExtra of each table.  The function decodes

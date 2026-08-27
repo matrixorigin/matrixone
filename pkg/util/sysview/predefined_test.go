@@ -102,9 +102,11 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaStatisticsDDL, "join `__mo_visible_tables` `tbl`")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables tbl")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables check_tbl")
-	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id")
-	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id")
+	fkVisibilityJoin := "ON fk.db_name = fk_tbl.reldatabase AND fk.table_name = fk_tbl.relname"
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, fkVisibilityJoin)
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL, fkVisibilityJoin)
+	assert.NotContains(t, InformationSchemaKeyColumnUsageDDL, "fk.table_id = fk_tbl.rel_id")
+	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "fk.table_id = fk_tbl.rel_id")
 	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "FROM __mo_visible_tables tbl")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")

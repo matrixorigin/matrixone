@@ -182,10 +182,12 @@ where table_schema = 'metadata_visibility_db';
 select
     (select count(*) > 0 from information_schema.check_constraints
      where constraint_schema = 'metadata_visibility_db') as database_checks_visible,
-    (select count(*) > 0 from information_schema.key_column_usage
-     where table_schema = 'metadata_visibility_db') as database_fk_columns_visible,
-    (select count(*) > 0 from information_schema.referential_constraints
-     where constraint_schema = 'metadata_visibility_db') as database_fk_constraints_visible,
+    (select count(*) = 1 from information_schema.key_column_usage
+     where table_schema = 'metadata_visibility_db'
+       and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as database_fk_columns_visible,
+    (select count(*) = 1 from information_schema.referential_constraints
+     where constraint_schema = 'metadata_visibility_db'
+       and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as database_fk_constraints_visible,
     (select count(*) = 1 from information_schema.views
      where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as database_view_visible,
     (select count(*) > 0 from information_schema.partitions
@@ -209,10 +211,12 @@ where table_schema = 'metadata_visibility_db';
 select
     (select count(*) > 0 from information_schema.check_constraints
      where constraint_schema = 'metadata_visibility_db') as admin_checks_visible,
-    (select count(*) > 0 from information_schema.key_column_usage
-     where table_schema = 'metadata_visibility_db') as admin_fk_columns_visible,
-    (select count(*) > 0 from information_schema.referential_constraints
-     where constraint_schema = 'metadata_visibility_db') as admin_fk_constraints_visible,
+    (select count(*) = 1 from information_schema.key_column_usage
+     where table_schema = 'metadata_visibility_db'
+       and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as admin_fk_columns_visible,
+    (select count(*) = 1 from information_schema.referential_constraints
+     where constraint_schema = 'metadata_visibility_db'
+       and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as admin_fk_constraints_visible,
     (select count(*) = 1 from information_schema.views
      where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as admin_view_visible,
     (select count(*) > 0 from information_schema.partitions

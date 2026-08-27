@@ -204,16 +204,18 @@ where table_schema = 'metadata_visibility_db';
 select
 (select count(*) > 0 from information_schema.check_constraints
 where constraint_schema = 'metadata_visibility_db') as database_checks_visible,
-(select count(*) > 0 from information_schema.key_column_usage
-where table_schema = 'metadata_visibility_db') as database_fk_columns_visible,
-(select count(*) > 0 from information_schema.referential_constraints
-where constraint_schema = 'metadata_visibility_db') as database_fk_constraints_visible,
+(select count(*) = 1 from information_schema.key_column_usage
+where table_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as database_fk_columns_visible,
+(select count(*) = 1 from information_schema.referential_constraints
+where constraint_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as database_fk_constraints_visible,
 (select count(*) = 1 from information_schema.views
 where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as database_view_visible,
 (select count(*) > 0 from information_schema.partitions
 where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as database_partitions_visible;
 ➤ database_checks_visible[-7,1,0]  ¦  database_fk_columns_visible[-7,1,0]  ¦  database_fk_constraints_visible[-7,1,0]  ¦  database_view_visible[-7,1,0]  ¦  database_partitions_visible[-7,1,0]  𝄀
-1  ¦  0  ¦  0  ¦  1  ¦  1
+1  ¦  1  ¦  1  ¦  1  ¦  1
 select count(*) = 2 as admin_tables_visible
 from information_schema.tables
 where table_schema = 'metadata_visibility_db'
@@ -239,16 +241,18 @@ where table_schema = 'metadata_visibility_db';
 select
 (select count(*) > 0 from information_schema.check_constraints
 where constraint_schema = 'metadata_visibility_db') as admin_checks_visible,
-(select count(*) > 0 from information_schema.key_column_usage
-where table_schema = 'metadata_visibility_db') as admin_fk_columns_visible,
-(select count(*) > 0 from information_schema.referential_constraints
-where constraint_schema = 'metadata_visibility_db') as admin_fk_constraints_visible,
+(select count(*) = 1 from information_schema.key_column_usage
+where table_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as admin_fk_columns_visible,
+(select count(*) = 1 from information_schema.referential_constraints
+where constraint_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as admin_fk_constraints_visible,
 (select count(*) = 1 from information_schema.views
 where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as admin_view_visible,
 (select count(*) > 0 from information_schema.partitions
 where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as admin_partitions_visible;
 ➤ admin_checks_visible[-7,1,0]  ¦  admin_fk_columns_visible[-7,1,0]  ¦  admin_fk_constraints_visible[-7,1,0]  ¦  admin_view_visible[-7,1,0]  ¦  admin_partitions_visible[-7,1,0]  𝄀
-1  ¦  0  ¦  0  ¦  1  ¦  1
+1  ¦  1  ¦  1  ¦  1  ¦  1
 drop database metadata_visibility_db;
 drop user metadata_visibility_user;
 drop role metadata_visibility_primary, metadata_visibility_reader;
