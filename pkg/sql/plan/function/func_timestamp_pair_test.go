@@ -254,6 +254,32 @@ func TestTimestampPairUsesStableDatetimeClockTime(t *testing.T) {
 	})
 }
 
+func TestTimestampPairCompactDatetimeString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wantedType := types.New(types.T_datetime, 6, 6)
+	date := parseTimestampPairDate(t, "2024-01-15")
+	wantedDatetime := parseTimestampPairDatetime(t, "2024-01-15 12:00:00.123456", 6)
+	wantedTime := parseTimestampPairDatetime(t, "2024-01-15 12:30:00", 6)
+
+	result := runTimestampPairCase(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_date.ToType(), []types.Date{date, date}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"20240115120000.123456",
+			"123000",
+		}, nil),
+	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
+		wantedDatetime,
+		wantedTime,
+	}, nil), nil)
+	require.Equal(t, wantedType, *result.GetType())
+
+	result = runTimestampPairCase(t, proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2024-01-15"}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"20240115120000.123456"}, nil),
+	}, NewFunctionTestResult(wantedType, false, []types.Datetime{wantedDatetime}, nil), nil)
+	require.Equal(t, wantedType, *result.GetType())
+}
+
 func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	wantedType := types.New(types.T_datetime, 6, 6)

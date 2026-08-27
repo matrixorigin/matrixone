@@ -29,6 +29,7 @@ select timestamp('2024-01-02', '1 01:00:00') as positive_day_time, timestamp('20
 select timestamp(null, '01:00:00') as null_date, timestamp('2024-01-01', null) as null_time;
 select timestamp('not-a-date', '01:00:00') as invalid_date, timestamp('2024-01-01', 'not-a-time') as invalid_time;
 select timestamp('2024-01-01', '2024-01-15 12:00:00') as datetime_shaped_time, timestamp('2024-01-01', '') as empty_time;
+select timestamp('2024-01-15', '20240115120000.123456') as compact_datetime_literal, timestamp('2024-01-15', '123000') as short_numeric_time;
 select timestamp('2024-01-01', concat(date_add(current_date, interval 1 day), ' 12:34:56.654321')) = timestamp('2024-01-01', '12:34:56.654321') as tomorrow_text_clock, timestamp('2024-01-01', cast(concat(date_add(current_date, interval 1 day), ' 12:34:56.654321') as datetime(6))) = timestamp('2024-01-01', '12:34:56.654321') as tomorrow_typed_clock;
 select timestamp('9999-12-31 23:59:59.999999', '00:00:00.000001') as upper_overflow, timestamp('0001-01-01', '-00:00:00.000001') as lower_overflow;
 

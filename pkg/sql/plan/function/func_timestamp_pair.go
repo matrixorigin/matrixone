@@ -93,6 +93,18 @@ func timestampPairDatetimeToTime(value types.Datetime) (types.Time, bool) {
 	return types.Time(timeOfDay).TruncateToScale(6), false
 }
 
+func isTimestampPairCompactDatetime(text string) bool {
+	if len(text) < 14 {
+		return false
+	}
+	for i := 0; i < 14; i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return len(text) == 14 || text[14] == '.'
+}
+
 func newTimestampPairDateReader(vec *vector.Vector, proc *process.Process) (timestampPairDateReader, error) {
 	switch vec.GetType().Oid {
 	case types.T_date:
@@ -170,6 +182,12 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 			text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
 			if text == "" {
 				return 0, true
+			}
+			if isTimestampPairCompactDatetime(text) {
+				datetime, err := types.ParseDatetime(text, 6)
+				if err == nil {
+					return timestampPairDatetimeToTime(datetime)
+				}
 			}
 			if strings.IndexByte(text, 'T') >= 0 {
 				datetime, err := types.ParseDatetime(text, 6)

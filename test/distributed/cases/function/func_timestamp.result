@@ -58,6 +58,9 @@ null  ¦  null
 select timestamp('2024-01-01', '2024-01-15 12:00:00') as datetime_shaped_time, timestamp('2024-01-01', '') as empty_time;
 ➤ datetime_shaped_time[93,26,0]  ¦  empty_time[93,26,0]  𝄀
 2024-01-01 12:00:00.000000000  ¦  null
+select timestamp('2024-01-15', '20240115120000.123456') as compact_datetime_literal, timestamp('2024-01-15', '123000') as short_numeric_time;
+➤ compact_datetime_literal[93,26,0]  ¦  short_numeric_time[93,26,0]  𝄀
+2024-01-15 12:00:00.123456000  ¦  2024-01-15 12:30:00.000000000
 select timestamp('2024-01-01', concat(date_add(current_date, interval 1 day), ' 12:34:56.654321')) = timestamp('2024-01-01', '12:34:56.654321') as tomorrow_text_clock, timestamp('2024-01-01', cast(concat(date_add(current_date, interval 1 day), ' 12:34:56.654321') as datetime(6))) = timestamp('2024-01-01', '12:34:56.654321') as tomorrow_typed_clock;
 ➤ tomorrow_text_clock[-7,1,0]  ¦  tomorrow_typed_clock[-7,1,0]  𝄀
 1  ¦  1
