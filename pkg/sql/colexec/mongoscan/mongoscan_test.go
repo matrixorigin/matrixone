@@ -284,10 +284,10 @@ func TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall(t *testi
 	// payload. A rollback before Prepare must fail before any client/driver call.
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, `{"filter":{"value":1}}`, false)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
 	scan := NewArgument().WithScan(spec)
 	scan.Dependencies = deps
-	require.ErrorContains(t, scan.Prepare(proc), "MORPC protocol version 32")
+	require.ErrorContains(t, scan.Prepare(proc), "MORPC protocol version 33")
 	require.Empty(t, collection.findSpecs)
 	require.Empty(t, collection.aggregateSpecs)
 	require.NoError(t, deps.Pool.Close(t.Context()))
@@ -568,6 +568,41 @@ func TestMongoScanCancelBlockedGetMore(t *testing.T) {
 	scan.Free(proc, true, err)
 	require.Equal(t, 1, cursor.closed)
 	require.NoError(t, cursor.closeErr, "cleanup must not inherit the canceled statement context")
+	require.NoError(t, deps.Pool.Close(context.Background()))
+	proc.Free()
+}
+
+func TestMongoScanExplicitQueryDeadlineRejectsBufferedDocument(t *testing.T) {
+	doc, err := bson.Marshal(bson.D{{Key: "value", Value: int64(11)}})
+	require.NoError(t, err)
+	cursor := &testCursor{docs: [][]byte{doc}}
+	deps, _ := testScanDependencies(cursor)
+	deps.Config.SocketTimeout = time.Nanosecond
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
+		}
+	})
+
+	spec := testScanPlan()
+	applyTestUserQueryPlan(t, spec, `{"filter":{"value":11}}`, false)
+	scan := NewArgument().WithScan(spec)
+	scan.Dependencies = deps
+	require.NoError(t, scan.Prepare(proc))
+	<-scan.ctr.queryCtx.Done()
+
+	result, err := scan.Call(proc)
+	require.ErrorContains(t, err, "MongoDB explicit query deadline exceeded")
+	require.Nil(t, result.Batch)
+	require.Zero(t, cursor.index, "a buffered document must not be emitted after the deadline")
+	require.Equal(t, 1, cursor.closed)
 	require.NoError(t, deps.Pool.Close(context.Background()))
 	proc.Free()
 }

@@ -170,6 +170,8 @@ while `$group` key cardinality remains subject to MongoDB's configured
 aggregation-memory limit. Every explicit query receives a context deadline of
 the shorter configured socket timeout or 30 seconds; that context also bounds
 every `getMore` and the MatrixOne-side lifetime of the operation. MongoDB may
+return a document already buffered locally without consulting the context, so
+the scan checks the deadline again before consuming each buffered document.
 consume CPU until it observes cancellation, so this is not represented as a
 server CPU quota. With `allowDiskUse=false`, a grouping operation that exceeds
 the server aggregation-memory limit fails rather than spilling. The accepted
@@ -201,9 +203,9 @@ not retain a prior query/cursor/client lease.
 `MongoScan` adds protobuf fields numbered 16–21.  The legacy zero values retain
 the old find behavior; newer readers treat a zero kind as no explicit query.
 Older readers ignore unknown fields and consequently cannot execute the new
-operation semantics. `MORPCVersion32` is therefore the capability gate: a
+operation semantics. `MORPCVersion33` is therefore the capability gate: a
 nonzero `user_query_kind` is rejected while the service-local oldest-live
-deployment version is below 32, rather than silently falling back to an
+deployment version is below 33, rather than silently falling back to an
 unfiltered find. The gate is checked while compiling, immediately before a
 remote scope is serialized, while it is decoded, and in `MongoScan.Prepare`.
 Deployment raises that version only after all receivers understand the payload

@@ -56,7 +56,7 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 		return moerr.NewNotSupported(proc.Ctx, "MongoDB local split execution is not enabled in the MVP")
 	}
 	if scan.Scan.UserQueryKind != int32(mongodb.UserQueryInvalid) && !supportsMongoUserQueryProtocol(proc) {
-		return moerr.NewNotSupported(proc.Ctx, "MongoDB explicit queries require MORPC protocol version 32")
+		return moerr.NewNotSupported(proc.Ctx, "MongoDB explicit queries require MORPC protocol version 33")
 	}
 	scan.ctr.userQuery, err = mongodb.UserQueryFromPlan(proc.Ctx, scan.Scan)
 	if err != nil {
@@ -204,7 +204,7 @@ func supportsMongoUserQueryProtocol(proc *process.Process) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion32
+	return ok && protocolVersion >= defines.MORPCVersion33
 }
 
 func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
@@ -244,6 +244,12 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := scan.ctr.converter.NewBatch()
 	var currentBatchBytes int64
 	for bat.RowCount() < batchRows {
+		if err := scan.explicitQueryContextError(); err != nil {
+			bat.Clean(proc.Mp())
+			scan.ctr.done = true
+			scan.closeResources(proc.Ctx)
+			return result, moerr.NewInternalErrorf(proc.Ctx, "MongoDB explicit query deadline exceeded: %v", err)
+		}
 		var raw []byte
 		if scan.ctr.pendingRaw != nil {
 			raw = scan.ctr.pendingRaw
@@ -270,6 +276,12 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			process.StopAnalyzerWait(scan.OpAnalyzer, waitStarted, resource.WaitRemote)
 			metric.MongoDBPhaseDurationHistogram.WithLabelValues("get_more_wait").Observe(time.Since(waitStarted).Seconds())
+			if err := scan.explicitQueryContextError(); err != nil {
+				bat.Clean(proc.Mp())
+				scan.ctr.done = true
+				scan.closeResources(proc.Ctx)
+				return result, moerr.NewInternalErrorf(proc.Ctx, "MongoDB explicit query deadline exceeded: %v", err)
+			}
 			raw = scan.ctr.cursor.CurrentRaw()
 		}
 		if int64(len(raw)) > maxBatchBytes || currentBatchBytes+int64(len(raw)) > maxBatchBytes && bat.RowCount() == 0 {
@@ -332,6 +344,17 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 	return result, nil
+}
+
+// explicitQueryContextError checks the deadline before consuming a driver
+// buffer. mongo-driver can return buffered documents from Cursor.Next without
+// consulting its context, so passing queryCtx to Next alone is not a lifetime
+// bound for an explicit query.
+func (scan *MongoScan) explicitQueryContextError() error {
+	if scan.ctr.queryCtx == nil {
+		return nil
+	}
+	return scan.ctr.queryCtx.Err()
 }
 
 func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch, maxBatchBytes int64) error {
