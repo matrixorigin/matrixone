@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -50,9 +51,12 @@ import (
 )
 
 type mockCompile struct {
-	runFunc     func(uint64) (*util2.RunResult, error)
-	getPlanFunc func() *plan.Plan
-	releaseFunc func()
+	runFunc               func(uint64) (*util2.RunResult, error)
+	getPlanFunc           func() *plan.Plan
+	releaseFunc           func()
+	planGenerationRebuilt bool
+	planSnapshotTS        timestamp.Timestamp
+	hasPlanSnapshotTS     bool
 }
 
 func TestResourceAttemptOwnerEligible(t *testing.T) {
@@ -65,8 +69,12 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
-func (m *mockCompile) Release()                                { m.releaseFunc() }
-func (m *mockCompile) SetOriginSQL(s string)                   {}
+func (m *mockCompile) PlanGenerationRebuilt() bool             { return m.planGenerationRebuilt }
+func (m *mockCompile) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	return m.planSnapshotTS, m.hasPlanSnapshotTS
+}
+func (m *mockCompile) Release()              { m.releaseFunc() }
+func (m *mockCompile) SetOriginSQL(s string) {}
 
 func TestTxnComputationWrapper_Run(t *testing.T) {
 	expectedResult := &util2.RunResult{AffectRows: 10}
@@ -120,6 +128,150 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 	assert.Nil(t, res)
 	assert.Equal(t, expectedPlan, cwft.plan)
 	assert.Nil(t, cwft.compile)
+}
+
+func TestTxnComputationWrapperRunMarksInvalidPreparedPlanForRebuild(t *testing.T) {
+	prepared := &PrepareStmt{}
+	mockComp := &mockCompile{
+		runFunc: func(uint64) (*util2.RunResult, error) {
+			return &util2.RunResult{}, nil
+		},
+		getPlanFunc:           func() *plan.Plan { return &plan.Plan{} },
+		releaseFunc:           func() {},
+		planGenerationRebuilt: true,
+	}
+	cwft := &TxnComputationWrapper{
+		compile:      mockComp,
+		preparedStmt: prepared,
+	}
+
+	_, err := cwft.Run(100)
+	require.NoError(t, err)
+	require.True(t, prepared.needsRebuild)
+	require.True(t, prepared.compileNeedsRebuild)
+}
+
+func TestCompleteCompileExecutionFromProductionRunnerKeepsTerminalOwnership(t *testing.T) {
+	prepared := &PrepareStmt{}
+	newPlan := &plan.Plan{}
+	newTS := timestamp.Timestamp{PhysicalTime: 20}
+	released := 0
+	running := &mockCompile{
+		runFunc:               func(uint64) (*util2.RunResult, error) { return &util2.RunResult{}, nil },
+		getPlanFunc:           func() *plan.Plan { return newPlan },
+		releaseFunc:           func() { released++ },
+		planGenerationRebuilt: true,
+		planSnapshotTS:        newTS,
+		hasPlanSnapshotTS:     true,
+	}
+	cwft := &TxnComputationWrapper{preparedStmt: prepared}
+
+	// Production runs the returned Compile directly, then invokes the terminal
+	// generation hook from executeStmt/executeStmtInBack before their sole
+	// Release. The hook must update frontend state without taking that owner.
+	_, err := running.Run(0)
+	require.NoError(t, err)
+	cwft.completeCompileExecution(running, err)
+	require.Same(t, newPlan, cwft.plan)
+	require.Equal(t, newTS, cwft.planSnapshotTS)
+	require.True(t, prepared.needsRebuild)
+	require.True(t, prepared.compileNeedsRebuild)
+	require.Zero(t, released)
+
+	running.Release()
+	require.Equal(t, 1, released)
+}
+
+func TestTxnComputationWrapperRunPublishesRebuiltSessionCachedPlan(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(1)}
+	stmt := &trackedStatement{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+	oldTS := timestamp.Timestamp{PhysicalTime: 10}
+	newTS := timestamp.Timestamp{PhysicalTime: 20}
+	ses.cachePlanWithSnapshots(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{oldPlan},
+		[]timestamp.Timestamp{oldTS})
+
+	released := 0
+	cwft := &TxnComputationWrapper{
+		stmt:                 stmt,
+		stmtBorrowed:         true,
+		plan:                 oldPlan,
+		ses:                  ses,
+		cachedPlanSQL:        "cached",
+		cachedPlanGeneration: oldPlan,
+		compile: &mockCompile{
+			runFunc: func(uint64) (*util2.RunResult, error) {
+				return &util2.RunResult{}, nil
+			},
+			getPlanFunc:           func() *plan.Plan { return newPlan },
+			releaseFunc:           func() { released++ },
+			planGenerationRebuilt: true,
+			planSnapshotTS:        newTS,
+			hasPlanSnapshotTS:     true,
+		},
+	}
+
+	_, err := cwft.Run(100)
+	require.NoError(t, err)
+	require.Equal(t, 1, released)
+	require.Same(t, newPlan, ses.planCache.get("cached").plans[0])
+	require.Equal(t, newTS, ses.planCache.get("cached").planSnapshotTS[0])
+	require.Zero(t, stmt.freed)
+
+	cwft.Free()
+	ses.cleanCache()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestTxnComputationWrapperRunLazilyInvalidatesFailedRebuild(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(1)}
+	stmt := &trackedStatement{}
+	oldPlan := &plan.Plan{}
+	ses.cachePlanWithSnapshots(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{oldPlan},
+		[]timestamp.Timestamp{{PhysicalTime: 10}})
+
+	cwft := &TxnComputationWrapper{
+		stmt:                 stmt,
+		stmtBorrowed:         true,
+		plan:                 oldPlan,
+		ses:                  ses,
+		cachedPlanSQL:        "cached",
+		cachedPlanGeneration: oldPlan,
+		compile: &mockCompile{
+			runFunc:               func(uint64) (*util2.RunResult, error) { return nil, assert.AnError },
+			getPlanFunc:           func() *plan.Plan { return oldPlan },
+			releaseFunc:           func() {},
+			planGenerationRebuilt: true,
+		},
+	}
+
+	_, err := cwft.Run(100)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, ses.isCached("cached"))
+	require.Zero(t, stmt.freed, "the running wrapper still borrows the cached AST")
+
+	cwft.Free()
+	require.Nil(t, ses.getCachedPlan("cached"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestPrepareStmtInvalidatesCachedCompileWithoutDoubleRelease(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cached := compile.NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
+	cached.SetIsPrepare(true)
+	prepared := &PrepareStmt{compile: cached}
+
+	invalidated := prepared.invalidateCachedCompile()
+	require.Same(t, cached, invalidated)
+	require.Nil(t, prepared.compile)
+	require.True(t, prepared.needsRebuild)
+	require.True(t, prepared.compileNeedsRebuild)
+
+	// The execution wrapper remains the sole owner of the matching release.
+	cached.Release()
 }
 
 // newPreparedExecuteEnv sets up a session holding a prepared "select 1" and a
@@ -383,6 +535,29 @@ func BenchmarkInitExecuteStmtParamOrdinaryBinaryQueryFastPath(b *testing.B) {
 	}
 }
 
+func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+	prepareStmt.directResultParamPositions = []int32{0}
+	prepareStmt.directResultParamPositionsSet = true
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Len(t, cw.paramVals, 1)
+	param, ok := cw.paramVals[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.Equal(t, vector.PrepareParamBoolean, param.PrepareParamKind)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
+}
+
 func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
 	binaryParam := func(value string, mysqlType defines.MysqlType) func(
 		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
@@ -413,66 +588,16 @@ func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
 		wantError bool
 		configure func(*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper) *plan.Execute
 	}{
-		{
-			name:      "binary float",
-			sql:       "select lag(1, ?) over ()",
-			wantError: true,
-			configure: binaryParam("1", defines.MYSQL_TYPE_DOUBLE),
-		},
-		{
-			name:      "binary signed tiny zero lag",
-			sql:       "select lag(1, ?) over ()",
-			wantParam: "0",
-			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
-		},
-		{
-			name:      "binary signed tiny one lag",
-			sql:       "select lag(1, ?) over ()",
-			wantParam: "1",
-			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
-		},
-		{
-			name:      "binary signed tiny zero lead",
-			sql:       "select lead(1, ?) over ()",
-			wantParam: "0",
-			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
-		},
-		{
-			name:      "binary signed tiny one lead",
-			sql:       "select lead(1, ?) over ()",
-			wantParam: "1",
-			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
-		},
-		{
-			name:      "text boolean false lag",
-			sql:       "select lag(1, ?) over ()",
-			wantParam: "0",
-			configure: textBooleanParam(false),
-		},
-		{
-			name:      "text boolean true lag",
-			sql:       "select lag(1, ?) over ()",
-			wantParam: "1",
-			configure: textBooleanParam(true),
-		},
-		{
-			name:      "text boolean false lead",
-			sql:       "select lead(1, ?) over ()",
-			wantParam: "0",
-			configure: textBooleanParam(false),
-		},
-		{
-			name:      "text boolean true lead",
-			sql:       "select lead(1, ?) over ()",
-			wantParam: "1",
-			configure: textBooleanParam(true),
-		},
-		{
-			name:      "binary integer control",
-			sql:       "select lag(1, ?) over ()",
-			wantParam: "1",
-			configure: binaryParam("1", defines.MYSQL_TYPE_LONGLONG),
-		},
+		{name: "binary float", sql: "select lag(1, ?) over ()", wantError: true, configure: binaryParam("1", defines.MYSQL_TYPE_DOUBLE)},
+		{name: "binary signed tiny zero lag", sql: "select lag(1, ?) over ()", wantParam: "0", configure: binaryParam("0", defines.MYSQL_TYPE_TINY)},
+		{name: "binary signed tiny one lag", sql: "select lag(1, ?) over ()", wantParam: "1", configure: binaryParam("1", defines.MYSQL_TYPE_TINY)},
+		{name: "binary signed tiny zero lead", sql: "select lead(1, ?) over ()", wantParam: "0", configure: binaryParam("0", defines.MYSQL_TYPE_TINY)},
+		{name: "binary signed tiny one lead", sql: "select lead(1, ?) over ()", wantParam: "1", configure: binaryParam("1", defines.MYSQL_TYPE_TINY)},
+		{name: "text boolean false lag", sql: "select lag(1, ?) over ()", wantParam: "0", configure: textBooleanParam(false)},
+		{name: "text boolean true lag", sql: "select lag(1, ?) over ()", wantParam: "1", configure: textBooleanParam(true)},
+		{name: "text boolean false lead", sql: "select lead(1, ?) over ()", wantParam: "0", configure: textBooleanParam(false)},
+		{name: "text boolean true lead", sql: "select lead(1, ?) over ()", wantParam: "1", configure: textBooleanParam(true)},
+		{name: "binary integer control", sql: "select lag(1, ?) over ()", wantParam: "1", configure: binaryParam("1", defines.MYSQL_TYPE_LONGLONG)},
 	}
 
 	for i, test := range tests {
@@ -550,6 +675,13 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 	require.Equal(t, types.T_decimal128, decimal.Oid)
 	require.Equal(t, int32(29), decimal.Width)
 	require.Equal(t, int32(9), decimal.Scale)
+	exponentDecimal, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_NEWDECIMAL,
+		false,
+		[]byte("1e3"),
+	)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal64, exponentDecimal.Oid)
 
 	for _, test := range []struct {
 		name       string
@@ -635,6 +767,94 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
 	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
 	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
+
+}
+
+func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select ?")
+	defer prepareStmt.Close()
+
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params,
+		[]byte("-12345678901234567890.123456789"),
+		false,
+		cw.proc.Mp(),
+	))
+	prepareStmt.params = params
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	prepareStmt.directResultParamPositions = []int32{0}
+	prepareStmt.directResultParamPositionsSet = true
+
+	var resultColumns []*plan.ColDef
+	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+		resultColumns = columns
+		return [][]byte{[]byte("runtime-decimal")}, nil
+	}
+
+	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, runtimePlan)
+	require.NotSame(t, originalPlan, runtimePlan)
+	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_decimal128), projectNode.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(29), projectNode.ProjectList[0].Typ.Width)
+	require.Equal(t, int32(9), projectNode.ProjectList[0].Typ.Scale)
+	require.Len(t, resultColumns, 1)
+	require.Equal(t, int32(types.T_decimal128), resultColumns[0].Typ.Id)
+	require.Equal(t, [][]byte{[]byte("runtime-decimal")}, execCtx.prepareColDef)
+	value, parseErr := types.ParseDecimal128("-12345678901234567890.123456789", 29, 9)
+	require.NoError(t, parseErr)
+	executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
+	require.NoError(t, execErr)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, evalErr)
+	require.Equal(t, types.T_decimal128, vec.GetType().Oid)
+	require.Equal(t, value, vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0))
+	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
+}
+
+func TestInitExecuteStmtParamKeepsDirectResultSpecializationAcrossNoOpPlanScan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 114, "select ?, ? = ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"7", "same", "same"} {
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	prepareStmt.directResultParamPositions = []int32{0}
+	prepareStmt.directResultParamPositionsSet = true
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	require.Nil(t, retComp, "the TEXT compile must not execute the INT64 direct-result plan")
+	require.NotSame(t, originalPlan, runtimePlan)
+	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_int64), projectNode.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(types.T_text), originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]].ProjectList[0].Typ.Id)
 }
 
 func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
@@ -771,7 +991,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false)
+	}, false, false)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
@@ -1785,6 +2005,45 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamRebuildsUntilPlanSnapshotProtocolIsActive(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 115)
+	defer prepareStmt.Close()
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	for range 2 {
+		oldPlan := prepareStmt.PreparePlan
+		oldCompile := prepareStmt.compile
+		oldCompiledPlan := oldCompile.GetPlan()
+		retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.NotNil(t, retPlan)
+		require.NotNil(t, retStmt)
+		require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+		require.Equal(t, defines.MORPCVersion31, prepareStmt.protocolVersion)
+		require.NotSame(t, oldCompiledPlan, retComp.GetPlan())
+		require.Same(t, retPlan, retComp.GetPlan())
+		require.Same(t, retComp, prepareStmt.compile)
+		require.False(t, cw.planGenerationReused)
+	}
+
+	// The protocol transition itself rebuilds once. Only the following v32
+	// execution admits that generation as reusable.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, cw.planGenerationReused)
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, cw.planGenerationReused)
+}
+
 func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 103)
 	defer prepareStmt.Close()
@@ -1844,6 +2103,25 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *t
 	require.NotNil(t, retStmt)
 	require.True(t, prepareStmt.OnlyFullGroupBy)
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
+func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 110)
+	defer prepareStmt.Close()
+
+	originalPlan := prepareStmt.PreparePlan
+	prepareStmt.needsRebuild = true
+	prepareStmt.compileNeedsRebuild = true
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+	require.False(t, prepareStmt.needsRebuild)
+	require.False(t, prepareStmt.compileNeedsRebuild)
+	require.Equal(t, prepareStmt.compile, retComp)
 }
 
 func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitSchedulingIntent(t *testing.T) {

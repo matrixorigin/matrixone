@@ -17,8 +17,10 @@ package plan
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
@@ -415,9 +417,15 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx                  context.Context
-	params               []*Expr
-	exprMemo             map[*plan.Expr]*plan.Expr
+	ctx      context.Context
+	params   []*Expr
+	exprMemo map[*plan.Expr]*plan.Expr
+	// preserveRoots contains DML write expressions whose outer shape must
+	// remain stable while nested parameters are rebound.  The write operator
+	// consumes these expressions positionally; rebuilding the outer function
+	// can change its assignment-cast contract even when the predicate needs a
+	// different execute-time overload.
+	preserveRoots        map[*plan.Expr]struct{}
 	validateFunctionArgs func(string, []*Expr) error
 	// specialized is set only when execute-time rebinding changes a function
 	// overload/result type. Literal replacement alone is not enough to require
@@ -432,6 +440,17 @@ type ResetParamRefRule struct {
 	// path used by FillValuesOfParamsInPlan callers.  COM_STMT values use the
 	// per-position map above instead of this broad fallback.
 	inferTextParamTypes bool
+	// numericComparisonTextParamPositions identifies COM_STMT text markers
+	// whose surrounding comparison has a numeric domain. Replace these leaves
+	// with an engine DOUBLE cast before rebinding any enclosing function so
+	// nested expressions, IN, and BETWEEN share MySQL numeric-string semantics.
+	numericComparisonTextParamPositions map[int]bool
+	// numericComparisonTextFallbackExprs records expressions that must remain in
+	// the common DOUBLE comparison domain. A LOCK_OP key expression must retain
+	// the primary-key physical type, so these expressions are replaced there by
+	// a typed NULL while the scan filter performs the conversion and selects the
+	// rows that the normal row-lock path must lock.
+	numericComparisonTextFallbackExprs map[*Expr]struct{}
 	// numericPrefixParamPositions is populated only after the deployment-wide
 	// protocol reaches the version that understands Charset=255 numeric-prefix
 	// casts. The map remains per-position to keep unrelated text parameters in
@@ -1459,7 +1478,13 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	if e.PreparedNumericFallback && e.GetCol() == nil && e.GetSub() == nil {
 		fallbackSource = DeepCopyExpr(e)
 	}
-	rewritten, err := rule.applyExpr(e)
+	var rewritten *plan.Expr
+	var err error
+	if _, preserve := rule.preserveRoots[e]; preserve {
+		rewritten, err = rule.applyExprPreservingRoot(e)
+	} else {
+		rewritten, err = rule.applyExpr(e)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1483,6 +1508,79 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	rule.exprMemo[e] = rewritten
 	return rewritten, nil
+}
+
+// PreserveAssignmentCast reports whether VisitPlan must leave the assignment
+// cast around this expression untouched.  It is intentionally a small,
+// optional rule hook so ordinary expression visitors retain their existing
+// behavior.
+func (rule *ResetParamRefRule) PreserveAssignmentCast(e *plan.Expr) bool {
+	_, ok := rule.preserveRoots[e]
+	return ok
+}
+
+// NormalizePreparedLockRows keeps a DOUBLE-domain text comparison out of the
+// lock executor's typed primary-key fetch path. The corresponding scan filter
+// remains responsible for MySQL conversion and row selection; NULL disables
+// only this unsafe parameter-derived pre-lock key.
+func (rule *ResetParamRefRule) NormalizePreparedLockRows(rewritten *Expr, target plan.Type) *Expr {
+	if _, ok := rule.numericComparisonTextFallbackExprs[rewritten]; !ok {
+		return rewritten
+	}
+	target.NotNullable = false
+	return &Expr{
+		Typ: target,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+		}},
+	}
+}
+
+// applyExprPreservingRoot replaces parameters below a DML write expression,
+// but keeps the root function (and its result type) intact.  A bare parameter
+// root is left parameterized so the normal ParamExpressionExecutor supplies
+// the value using the prepare-time assignment domain.
+func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_P:
+		return e, nil
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return e, nil
+		}
+		if rule.validateFunctionArgs != nil {
+			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
+				return nil, err
+			}
+		}
+		for i, arg := range exprImpl.F.Args {
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			exprImpl.F.Args[i] = rewritten
+		}
+		return e, nil
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return e, nil
+		}
+		for i, arg := range exprImpl.List.List {
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			exprImpl.List.List[i] = rewritten
+		}
+		return e, nil
+	default:
+		return e, nil
+	}
 }
 
 func (rule *ResetParamRefRule) markNumericPrefixDependent(exprs ...*plan.Expr) {
@@ -1541,7 +1639,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		needResetFunction := false
 		compareArgTypes := false
 		numericPrefixDependent := false
+		numericComparisonFallback := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
+		functionName = strings.ToLower(functionName)
+		// An implicit cast around a COM_STMT text marker is provisional.  For a
+		// numeric comparison, however, the column/literal side owns the
+		// comparison domain and must remain indexable.  Replace the provisional
+		// cast with the explicit MySQL numeric-prefix cast to that same target
+		// type, instead of stripping it and rebinding the comparison as DOUBLE
+		// (which would cast the column and can make an indexed predicate fail).
+		implicitComparisonCast := functionName == "cast" && isImplicitPreparedParamCast(e)
+		implicitComparisonCastPos := -1
+		if implicitComparisonCast {
+			if pos, ok := implicitPreparedParamPosition(e); ok {
+				implicitComparisonCastPos = pos
+			}
+		}
 		numericPrefixArgs := make([]bool, len(exprImpl.F.Args))
 		numericPrefixKinds := make([]types.StringConversionKind, len(exprImpl.F.Args))
 		numericPrefixListArgs := make([][]bool, len(exprImpl.F.Args))
@@ -1593,6 +1706,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
+			if preparedExprContainsNumericComparisonFallback(
+				rewrittenArg, rule.numericComparisonTextFallbackExprs,
+			) {
+				numericComparisonFallback = true
+			}
 			if rule.isNumericPrefixDependent(rewrittenArg) {
 				numericPrefixDependent = true
 				if unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(rewrittenArg); changed {
@@ -1616,11 +1734,65 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// decimal parameter instead of retaining a prepare-time BIGINT cast.
 				inferText := rule.inferTextParamTypes ||
 					(hasParamPos && rule.inferTextParamPositions[paramPos])
-				if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
-					boundArgs[i] = unwrapped
-					compareArgTypes = true
+				// Keep the original comparison-domain cast for text parameters. The
+				// implicit cast node itself is rewritten to the explicit prefix cast
+				// below; unwrapping it here would make the binder promote the column
+				// side to DOUBLE and lose indexability.
+				if !(isPreparedNumericComparison(functionName) && hasParamPos &&
+					rule.numericComparisonTextParamPositions[paramPos]) &&
+					(!isPreparedNumericComparison(functionName) || inferText) {
+					if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
+						boundArgs[i] = unwrapped
+						compareArgTypes = true
+					}
 				}
 			}
+		}
+		if implicitComparisonCast && implicitComparisonCastPos >= 0 &&
+			implicitComparisonCastPos < len(rule.params) &&
+			rule.numericComparisonTextParamPositions[implicitComparisonCastPos] &&
+			rule.params[implicitComparisonCastPos] != nil {
+			if literal := rule.params[implicitComparisonCastPos].GetLit(); literal != nil &&
+				preparedComparisonTextNeedsDoubleFallback(literal.GetSval(), originalTyp) {
+				// Keep the comparison in DOUBLE space when narrowing the converted
+				// text into the column domain would change MySQL's numeric comparison
+				// result. Ordinary exactly representable integer prefixes still use
+				// the column-domain cast and keep the indexed column side untouched.
+				numericType := preparedNumericComparisonTextType()
+				fallback, castErr := makePlan2CastExpr(
+					rule.ctx,
+					rule.params[implicitComparisonCastPos],
+					makePlan2Type(&numericType),
+				)
+				if castErr != nil {
+					return nil, castErr
+				}
+				if rule.numericComparisonTextFallbackExprs == nil {
+					rule.numericComparisonTextFallbackExprs = make(map[*Expr]struct{})
+				}
+				rule.numericComparisonTextFallbackExprs[fallback] = struct{}{}
+				rule.specialized = true
+				return fallback, nil
+			}
+			numericType := preparedNumericComparisonTextType()
+			numeric, castErr := makePlan2CastExpr(
+				rule.ctx,
+				rule.params[implicitComparisonCastPos],
+				makePlan2Type(&numericType),
+			)
+			if castErr != nil {
+				return nil, castErr
+			}
+			explicit, castErr := appendExplicitCastBeforeExpr(
+				rule.ctx,
+				numeric,
+				originalTyp,
+			)
+			if castErr != nil {
+				return nil, castErr
+			}
+			rule.specialized = true
+			return explicit, nil
 		}
 		if numericPrefixDependent {
 			for i, arg := range boundArgs {
@@ -1652,6 +1824,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// The execution must still use this rewritten plan copy instead of
 			// falling back to the cached prepare-time template.
 			rule.specialized = true
+		}
+		if numericComparisonFallback && isPreparedNumericComparisonContext(functionName) {
+			var castErr error
+			boundArgs, castErr = castPreparedComparisonArgsToDouble(rule.ctx, functionName, boundArgs)
+			if castErr != nil {
+				return nil, castErr
+			}
+			needResetFunction = true
+			compareArgTypes = true
 		}
 
 		if isAbs && hasPreparedAbsValue {
@@ -1738,7 +1919,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
-		param := rule.params[int(exprImpl.P.Pos)]
+		position := int(exprImpl.P.Pos)
+		param := rule.params[position]
+		if rule.numericComparisonTextParamPositions[position] &&
+			param != nil && param.Typ.Id == int32(types.T_text) && param.GetLit() != nil {
+			runtimeType := preparedNumericComparisonTextType()
+			return makePlan2CastExpr(rule.ctx, param, makePlan2Type(&runtimeType))
+		}
 		typ := e.Typ
 		// Most prepared parameters are intentionally replaced as TEXT to retain
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
@@ -1788,6 +1975,157 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) bool {
+	prefix, ok := planfunction.GetNumericStringPrefix(value)
+	if !ok {
+		// MySQL converts every string operand of a numeric comparison through its
+		// numeric (DOUBLE) prefix.  A string with no numeric prefix therefore
+		// becomes zero with a truncation warning; routing it through the
+		// prepare-time integer/DECIMAL cast would instead raise an error or use a
+		// different rounding domain.
+		return true
+	}
+	numeric, err := strconv.ParseFloat(prefix, 64)
+	if errors.Is(err, strconv.ErrRange) {
+		return true
+	}
+	if err != nil || math.IsNaN(numeric) || math.IsInf(numeric, 0) {
+		return true
+	}
+
+	// An integral column can keep its index only when the text value is an
+	// exactly representable value in that column's domain.  Converting a
+	// fractional DOUBLE through an integer cast would round it and change
+	// MySQL's numeric-comparison result (for example, 1 = '0.9'). Values outside
+	// the target range likewise need the common DOUBLE comparison domain instead
+	// of an overflowing integer cast.
+	switch types.T(target.Id) {
+	case types.T_int8:
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt8 || numeric > math.MaxInt8 ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_int16:
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt16 || numeric > math.MaxInt16 ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_int32:
+		return math.Trunc(numeric) != numeric || numeric < math.MinInt32 || numeric > math.MaxInt32 ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_int64:
+		return math.Trunc(numeric) != numeric || numeric < -math.Exp2(63) || numeric >= math.Exp2(63) ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_uint8:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint8 ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_uint16:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint16 ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_uint32:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint32 ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_uint64:
+		return math.Trunc(numeric) != numeric || numeric < 0 || numeric >= math.Exp2(64) ||
+			preparedComparisonTextLosesDoublePrecision(prefix, numeric)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		// MySQL compares a DECIMAL value with a string in the approximate DOUBLE
+		// domain. Casting the converted text back to DECIMAL can change the value
+		// first (for example, 9007199254740993 becomes 9007199254740992).
+		return true
+	default:
+		return false
+	}
+}
+
+// castPreparedComparisonArgsToDouble keeps a comparison that contains a
+// text-to-DOUBLE fallback in one common numeric domain.  Rebinding only the
+// marker is insufficient: the function binder may otherwise promote the
+// DOUBLE marker back through a DECIMAL/integer envelope.  IN-family functions
+// carry their values in a plan list, so cast list items individually while
+// preserving the list shape.
+func castPreparedComparisonArgsToDouble(
+	ctx context.Context,
+	name string,
+	args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	numericType := makePlan2Type(&types.Type{Oid: types.T_float64})
+	for i, arg := range args {
+		if arg == nil {
+			continue
+		}
+		if (name == "in" || name == "not_in" || name == "partition_in") && i == 1 {
+			if list := arg.GetList(); list != nil {
+				for j, item := range list.List {
+					if item == nil {
+						continue
+					}
+					converted, err := makePlan2CastExpr(ctx, item, numericType)
+					if err != nil {
+						return nil, err
+					}
+					list.List[j] = converted
+				}
+				// IN operators dispatch from the list expression's type. Keep it in
+				// the same DOUBLE domain as its materialized items so the binder
+				// selects the matching implementation instead of an integer operator
+				// that would assert the vector type at execution.
+				args[i].Typ = numericType
+				continue
+			}
+		}
+		converted, err := makePlan2CastExpr(ctx, arg, numericType)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = converted
+	}
+	return args, nil
+}
+
+// preparedExprContainsNumericComparisonFallback reports whether an expression
+// contains a marker that must stay in the MySQL text-to-DOUBLE comparison
+// domain.  IN/NOT IN keep their candidates in a List expression, so looking
+// up only the list node would miss a fallback marker nested in one of its
+// items and leave the enclosing operator bound to an integer implementation.
+func preparedExprContainsNumericComparisonFallback(
+	expr *plan.Expr,
+	fallbacks map[*Expr]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	if _, ok := fallbacks[expr]; ok {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedExprContainsNumericComparisonFallback(arg, fallbacks) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedExprContainsNumericComparisonFallback(item, fallbacks) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// preparedComparisonTextLosesDoublePrecision reports whether converting the
+// original numeric prefix to the runtime DOUBLE changed its value. Comparing
+// only the truncated integer parts misses fractional prefixes that round to an
+// integral DOUBLE (for example, 9007199254740992.5). Keep the original prefix
+// as an exact rational so both integer and fractional precision loss is
+// detected before the value is narrowed into an integral column domain.
+func preparedComparisonTextLosesDoublePrecision(prefix string, numeric float64) bool {
+	exact, ok := new(big.Rat).SetString(prefix)
+	if !ok {
+		return false
+	}
+	runtime, accuracy := new(big.Float).SetFloat64(numeric).Rat(nil)
+	return accuracy != big.Exact || exact.Cmp(runtime) != 0
 }
 
 func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
@@ -2279,6 +2617,26 @@ func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, re
 	return preparedExprFunctionObj(rewritten) != originalFuncObj
 }
 
+func isPreparedNumericComparison(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPreparedNumericComparisonContext(name string) bool {
+	if isPreparedNumericComparison(name) {
+		return true
+	}
+	switch name {
+	case "between", "not_between", "in", "not_in", "partition_in":
+		return true
+	default:
+		return false
+	}
+}
 func functionBindingChanged(
 	originalTyp plan.Type,
 	originalFuncObj int64,

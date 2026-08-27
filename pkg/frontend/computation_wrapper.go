@@ -55,6 +55,8 @@ var (
 type Compile interface {
 	Run(uint64) (*util2.RunResult, error)
 	GetPlan() *plan.Plan
+	PlanGenerationRebuilt() bool
+	PlanSnapshotTS() (timestamp.Timestamp, bool)
 	Release()
 	SetOriginSQL(string)
 }
@@ -87,6 +89,10 @@ type TxnComputationWrapper struct {
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
 	prepareName   string
+	// preparedStmt is the cache owner selected for this EXECUTE. It lets Run
+	// invalidate a stale prepared physical topology discovered by an internal
+	// definition-change retry.
+	preparedStmt *PrepareStmt
 
 	schedulingTrace schedule.TraceRecorder
 
@@ -109,6 +115,16 @@ type TxnComputationWrapper struct {
 	// protocolVersion is captured when plan is built. The session plan cache
 	// uses it instead of the version observed later when execution completes.
 	protocolVersion int64
+
+	// A reusable logical plan and its generation snapshot are one immutable
+	// binding. cachedPlan* identifies the session-cache slot so a definition
+	// retry can atomically publish its replacement generation.
+	planSnapshotTS       timestamp.Timestamp
+	hasPlanSnapshotTS    bool
+	planGenerationReused bool
+	cachedPlanSQL        string
+	cachedPlanIndex      int
+	cachedPlanGeneration *plan.Plan
 }
 
 func InitTxnComputationWrapper(
@@ -167,8 +183,26 @@ func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
 	return cwft.plan
 }
 
+func (cwft *TxnComputationWrapper) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if !cwft.hasPlanSnapshotTS {
+		return timestamp.Timestamp{}, false
+	}
+	return cwft.planSnapshotTS, true
+}
+
+func (cwft *TxnComputationWrapper) setPlanSnapshotTS(ts timestamp.Timestamp) {
+	cwft.planSnapshotTS = ts
+	cwft.hasPlanSnapshotTS = true
+}
+
 func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
+	cwft.planSnapshotTS = timestamp.Timestamp{}
+	cwft.hasPlanSnapshotTS = false
+	cwft.planGenerationReused = false
+	cwft.cachedPlanSQL = ""
+	cwft.cachedPlanIndex = 0
+	cwft.cachedPlanGeneration = nil
 	cwft.freeStmt()
 	cwft.stmt = stmt
 	cwft.stmtBorrowed = false
@@ -200,11 +234,18 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.paramVals = nil
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
+	cwft.preparedStmt = nil
 	cwft.remapDb = nil
 	cwft.schedulingSQL = ""
 	cwft.preparedSchedulingSQLMode = ""
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
+	cwft.planSnapshotTS = timestamp.Timestamp{}
+	cwft.hasPlanSnapshotTS = false
+	cwft.planGenerationReused = false
+	cwft.cachedPlanSQL = ""
+	cwft.cachedPlanIndex = 0
+	cwft.cachedPlanGeneration = nil
 	cwft.schedulingTrace.Reset()
 }
 
@@ -463,6 +504,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.paramVals,
 				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 			)
+			var planSnapshotTS *timestamp.Timestamp
+			if cwft.preparedStmt != nil {
+				planSnapshotTS = &cwft.preparedStmt.Ts
+			}
 			cwft.compile, err = createCompile(
 				execCtx,
 				cwft.ses,
@@ -472,6 +517,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				schedulingSQLMode,
 				cwft.stmt,
 				cwft.plan,
+				planSnapshotTS,
+				cwft.planGenerationReused,
 				fill,
 				false,
 				&cwft.schedulingTrace,
@@ -500,6 +547,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 					execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 				),
 			))
+			retComp.SetPlanGenerationReused(cwft.planGenerationReused)
 			// originSQL is the prepared statement text here; the wrapper carries
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
@@ -523,6 +571,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		   }
 		*/
 	} else {
+		var planSnapshotTS *timestamp.Timestamp
+		if cwft.hasPlanSnapshotTS {
+			planSnapshotTS = &cwft.planSnapshotTS
+		}
 		cwft.compile, err = createCompile(
 			execCtx,
 			cwft.ses,
@@ -532,6 +584,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			nil,
 			cwft.stmt,
 			cwft.plan,
+			planSnapshotTS,
+			cwft.planGenerationReused,
 			fill,
 			false,
 			&cwft.schedulingTrace,
@@ -629,10 +683,58 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	}()
 
 	runResult, err := runningCompile.Run(ts)
-	// Sync the latest plan after Run (it may have changed due to retry)
-	cwft.plan = runningCompile.GetPlan()
+	cwft.completeCompileExecution(runningCompile, err)
 	cwft.runResult = runResult
 	return runResult, err
+}
+
+// completeCompileExecution publishes or invalidates reusable frontend state at
+// the actual terminal owner of Compile.Run. Production executes the returned
+// *compile.Compile directly, so executeStmt/executeStmtInBack must call this
+// before their one Release; TxnComputationWrapper.Run keeps the same contract
+// for direct callers and tests.
+func (cwft *TxnComputationWrapper) completeCompileExecution(
+	runningCompile Compile,
+	runErr error,
+) {
+	cwft.syncCompileExecution(runningCompile)
+	if !runningCompile.PlanGenerationRebuilt() {
+		return
+	}
+
+	if cwft.preparedStmt != nil {
+		invalidatedCompile := cwft.preparedStmt.invalidateCachedCompile()
+		if invalidatedCompile != nil && runningCompile != invalidatedCompile {
+			invalidatedCompile.Release()
+		}
+	}
+	if cwft.cachedPlanSQL != "" {
+		if ses, ok := cwft.ses.(*Session); ok {
+			updated := false
+			if runErr == nil && cwft.hasPlanSnapshotTS {
+				updated = ses.updateCachedPlanGeneration(
+					cwft.cachedPlanSQL,
+					cwft.cachedPlanIndex,
+					cwft.cachedPlanGeneration,
+					cwft.plan,
+					cwft.planSnapshotTS,
+				)
+			}
+			if !updated {
+				ses.invalidateCachedPlanGeneration(
+					cwft.cachedPlanSQL,
+					cwft.cachedPlanIndex,
+					cwft.cachedPlanGeneration,
+				)
+			}
+		}
+	}
+}
+
+func (cwft *TxnComputationWrapper) syncCompileExecution(runningCompile Compile) {
+	// Sync the latest plan generation after Run (it may have changed on retry).
+	cwft.plan = runningCompile.GetPlan()
+	cwft.planSnapshotTS, cwft.hasPlanSnapshotTS = runningCompile.PlanSnapshotTS()
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
@@ -919,6 +1021,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	cwft.preparedStmt = prepareStmt
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	executionPlan := preparePlan.Plan
@@ -999,10 +1102,15 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+	needRebuild := prepareStmt.needsRebuild ||
+		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
+		!reusablePlanGenerationSupported(cwft.proc)
+	cwft.planGenerationReused = !needRebuild
 
 	// Rebuild the plan when catalog schema, session temporary-table name
-	// resolution, FK-check state, protocol, or compatibility mode changed.
+	// resolution, FK-check state, protocol, or compatibility mode changed. The
+	// rollout gate also forces a current-transaction plan until every lock owner
+	// understands the plan-generation snapshot wire contract.
 	if needRebuild {
 		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
 		if err != nil {
@@ -1029,6 +1137,8 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
+		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
@@ -1049,16 +1159,18 @@ func initExecuteStmtParamWithResolverInSession(
 		// high-watermark. A later logtail event will advance it again.
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
+		prepareStmt.needsRebuild = false
 	}
 
-	// Recreate the cached compile only when a plan dependency changed.
+	// Recreate the cached compile only when a plan dependency changed or an
+	// execution-time retry proved that its physical topology was stale.
 	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
-	// per-execution recompilation overhead that regressed TPCC. A nil cache
-	// means the statement is not eligible for prepare-time compile (e.g. AP
-	// query); recompiling would fail with ErrCantCompileForPrepare on every
-	// execution, so leave it to the regular compile path (isPrepare=false).
+	// per-execution recompilation overhead that regressed TPCC. A plain nil
+	// cache means the statement is not eligible for prepare-time compile (e.g.
+	// AP query); compileNeedsRebuild distinguishes a released stale cache that
+	// should be recreated once scheduling permits it.
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
 	if needRebuild {
 		prepareStmt.clearRuntimeSpecializationCache()
@@ -1068,15 +1180,18 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
+		prepareStmt.compileNeedsRebuild = true
+	}
 
+	if prepareStmt.compileNeedsRebuild {
 		executionIntent := querySchedulingIntentForStatementWithSQLMode(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
-		if !executionSes.IsBackgroundSession() {
+		if !executionSes.IsBackgroundSession() && !executionIntent.Explicit {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
+				shouldCachePrepareCompile(preparePlan.Plan) {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
-				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
+				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, &prepareStmt.Ts, cwft.planGenerationReused, owner.GetOutputCallback(execCtx), true, nil, nil)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 						return nil, nil, nil, "", false, err
@@ -1090,8 +1205,19 @@ func initExecuteStmtParamWithResolverInSession(
 				}
 				prepareStmt.compile = comp
 			}
+			prepareStmt.compileNeedsRebuild = false
 		}
 	}
+	// Decide from the plan shape once per prepared-plan generation. This keeps
+	// ordinary write-only statements on their cached compile while allowing
+	// domain-sensitive predicates/expressions to be rebound for each binary
+	// execution.
+	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
+		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
+		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
+	}
+	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
+		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	binaryLiteralPlan := binaryExecute &&
@@ -1107,6 +1233,7 @@ func initExecuteStmtParamWithResolverInSession(
 	// expression tree for each EXECUTE.
 	runtimeNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0 &&
 		executionPlan.GetQuery() != nil
+	runtimeTextComparisonSpecialization := false
 	hasNumericPrefixPacket := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
@@ -1117,6 +1244,11 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
+		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
+		if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
+			runtimeTextComparisonSpecialization = true
+			needsRuntimeSpecialization = true
+		}
 		if cap(prepareStmt.paramKinds) < paramCount {
 			prepareStmt.paramKinds = make([]vector.PrepareParamKind, paramCount)
 		} else {
@@ -1149,8 +1281,8 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
-		needsRuntimeParamVals = needsRuntimeParamVals || runtimeNumericPrefixCandidate ||
-			runtimeNumericOverloadCandidate
+		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
+			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate
 		if needsRuntimeParamVals {
 			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 			if err != nil {
@@ -1160,6 +1292,13 @@ func initExecuteStmtParamWithResolverInSession(
 				runtimeNumericPrefixCandidate = filterBinaryNumericPrefixCandidates(
 					executionPlan, cwft.paramVals, prepareStmt.ParamTypes)
 			}
+		}
+		// Text-vs-numeric comparisons use a plan-local DOUBLE conversion and
+		// warning semantics. Do not put that plan in the numeric-prefix cache:
+		// replacing an older cached compile would release operators that share
+		// this execution process before the new plan runs.
+		if runtimeTextComparisonSpecialization {
+			runtimeNumericPrefixCandidate = false
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
@@ -1207,13 +1346,57 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 
+	// A direct SELECT parameter is part of the result-column contract.  Only
+	// the positions cached with the prepared plan are enriched from the binary
+	// protocol descriptor; ordinary COM_STMT queries remain on the cached fast
+	// path.  Functions such as ABS(?) are intentionally handled by the regular
+	// runtime specialization scan instead of this direct-result path.
+	runtimeSpecialized := false
+	if binaryExecute && prepareStmt.directResultParamPositionsSet &&
+		len(prepareStmt.directResultParamPositions) > 0 {
+		directValues, specialized, directErr := preparedParamValuesWithRuntimeTypes(
+			cwft.proc, prepareStmt.ParamTypes, prepareStmt.directResultParamPositions)
+		if directErr != nil {
+			return nil, nil, nil, originSQL, false, directErr
+		}
+		if specialized {
+			if len(cwft.paramVals) == 0 {
+				cwft.paramVals = directValues
+			} else {
+				for _, position := range prepareStmt.directResultParamPositions {
+					if position >= 0 && int(position) < len(cwft.paramVals) && int(position) < len(directValues) {
+						cwft.paramVals[position] = directValues[position]
+					}
+				}
+			}
+			directPlan, fillErr := plan2.FillValuesOfParamsInPlan(
+				reqCtx, executionPlan, cwft.paramVals)
+			if fillErr != nil {
+				return nil, nil, nil, originSQL, false, fillErr
+			}
+			executionPlan = directPlan
+			runtimeSpecialized = true
+			columns := getPreparedResultColumnsFor(
+				prepareStmt.PrepareStmt, directPlan, sessionTxnHaveDDL(executionSes))
+			resper := execCtx.resper
+			if executionSes.IsBackgroundSession() {
+				resper = owner.GetResponser()
+			}
+			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			if metadataErr != nil {
+				return nil, nil, nil, originSQL, false, metadataErr
+			}
+			execCtx.prepareColDef = colDefData
+		}
+	}
+
 	// Only cached numeric-prefix consumers and binary literal plans enter
 	// execute-time specialization. Ordinary COM_STMT Query executions retain
 	// main's cached plan/compile fast path.
 	// SQL EXECUTE first proves that a parameter reaches a decimal-aware
 	// common-type consumer; ordinary FLOAT, NULL, aggregate, and string paths
 	// keep the cached prepare-time plan without allocating a complete copy.
-	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
+	runtimePlan, runtimePlanApplied := executionPlan, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
 	runtimeSpecializationCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate
@@ -1229,10 +1412,14 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	if cachedRuntimeCompile == nil &&
-		(!binaryExecute || runtimeSpecializationCandidate || binaryLiteralPlan || prepareStmt.hasPaginationParams) {
-		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
-			reqCtx, executionPlan, cwft.paramVals, binaryExecute, runtimeNumericOverloadCandidate)
-		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
+		(!binaryExecute || runtimeSpecializationCandidate || binaryLiteralPlan ||
+			prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
+		var laterRuntimeSpecialized bool
+		runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
+			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
+			runtimeNumericOverloadCandidate, needsRuntimeSpecialization)
+		runtimeSpecialized = runtimeSpecialized || laterRuntimeSpecialized
+		if err == nil && cacheableRuntimeQuery && laterRuntimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
 				cwft.runtimeCacheTarget = prepareStmt
@@ -1260,6 +1447,7 @@ func initExecuteStmtParamWithResolverInSession(
 			execCtx.prepareColDef = colDefData
 		}
 	}
+
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling or Sirius intent must be evaluated for this execution,
 	// so neither can reuse a native topology compiled under prepare-time defaults.
@@ -1444,9 +1632,10 @@ func specializePreparedExecutionPlan(
 	executionPlan *plan2.Plan,
 	paramVals []any,
 	binaryExecute bool,
-	forceNumericOverloadOpt ...bool,
+	forceNumericOverload bool,
+	forceSpecialization ...bool,
 ) (*plan2.Plan, bool, bool, error) {
-	forceNumericOverload := len(forceNumericOverloadOpt) > 0 && forceNumericOverloadOpt[0]
+	needsForcedSpecialization := len(forceSpecialization) > 0 && forceSpecialization[0]
 	if len(paramVals) == 0 || executionPlan == nil ||
 		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
 			executionPlan.GetDcl().GetSetVariables() == nil) {
@@ -1456,8 +1645,10 @@ func specializePreparedExecutionPlan(
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	needsNumericPrefix := !forceNumericOverload &&
 		plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
+	needsRuntimeSpecialization := needsForcedSpecialization ||
+		plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
 	if !forceNumericOverload && !needsNumericPrefix && !binaryLiteralPlan &&
-		!plan2.PreparedPlanHasPaginationParams(executionPlan) {
+		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization {
 		return executionPlan, false, false, nil
 	}
 
@@ -1468,7 +1659,7 @@ func specializePreparedExecutionPlan(
 		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithPreparedNumericOverload(
 			ctx, executionPlan, paramVals)
 	} else {
-		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithSpecialization(
+		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
 			ctx, executionPlan, paramVals)
 	}
 	if err != nil {
@@ -1639,11 +1830,15 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
+func preparedParamValues(proc *process.Process, paramTypes []byte, inferRuntime ...bool) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
 	}
+	// The regular prepared-execution path may need protocol runtime types for
+	// overloaded predicates. Direct-result handling requests a provenance-only
+	// base and enriches only the positions exposed as result columns.
+	specialize := len(inferRuntime) == 0 || inferRuntime[0]
 	values := make([]any, params.Length())
 	for i := range values {
 		paramValue := plan2.ParamValue{
@@ -1665,7 +1860,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			return nil, err
 		}
 		paramValue.Value = string(raw)
-		if i*2+1 < len(paramTypes) {
+		if specialize && i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
 			// The MySQL binary protocol represents Go bool values as signed
@@ -1693,6 +1888,77 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		values[i] = paramValue
 	}
 	return values, nil
+}
+
+// preparedParamValuesWithRuntimeTypes enriches only direct-result parameter
+// positions with the COM_STMT_EXECUTE wire type. Keeping unrelated markers as
+// text avoids turning an otherwise cacheable statement into a full plan copy
+// merely because one result column is parameter-backed.
+func preparedParamValuesWithRuntimeTypes(
+	proc *process.Process,
+	paramTypes []byte,
+	directResultPositions []int32,
+) ([]any, bool, error) {
+	values, err := preparedParamValues(proc, paramTypes, false)
+	if err != nil {
+		return nil, false, err
+	}
+	params := proc.GetPrepareParams()
+	if params == nil || len(values) == 0 {
+		return values, false, nil
+	}
+	direct := make(map[int32]struct{}, len(directResultPositions))
+	for _, position := range directResultPositions {
+		if position >= 0 {
+			direct[position] = struct{}{}
+		}
+	}
+	specialized := false
+	for i := 0; i < params.Length(); i++ {
+		if _, ok := direct[int32(i)]; !ok || params.IsNull(uint64(i)) || i*2+1 >= len(paramTypes) {
+			continue
+		}
+		raw, err := proc.GetPrepareParamsAt(i)
+		if err != nil {
+			return nil, false, err
+		}
+		mysqlType := defines.MysqlType(paramTypes[i*2])
+		isUnsigned := paramTypes[i*2+1]&0x80 != 0
+		runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw)
+		if !ok || runtimeType.Oid == types.T_text {
+			continue
+		}
+		paramValue, ok := values[i].(plan2.ParamValue)
+		if !ok {
+			continue
+		}
+		if paramValue.PrepareParamKind == vector.PrepareParamBoolean {
+			runtimeType = types.T_bool.ToType()
+		}
+		paramValue.RuntimeType = runtimeType
+		paramValue.HasRuntimeType = true
+		values[i] = paramValue
+		specialized = true
+	}
+	return values, specialized, nil
+}
+
+func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) []types.Type {
+	if params == nil || params.Length() == 0 {
+		return nil
+	}
+	runtimeTypes := make([]types.Type, params.Length())
+	for i := range runtimeTypes {
+		if params.IsNull(uint64(i)) || i*2+1 >= len(paramTypes) {
+			continue
+		}
+		mysqlType := defines.MysqlType(paramTypes[i*2])
+		isUnsigned := paramTypes[i*2+1]&0x80 != 0
+		if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, params.GetRawBytesAt(i)); ok {
+			runtimeTypes[i] = runtimeType
+		}
+	}
+	return runtimeTypes
 }
 
 func buildExecuteUserParams(
@@ -1790,6 +2056,8 @@ func createCompile(
 	schedulingSQLMode *string,
 	stmt tree.Statement,
 	plan *plan2.Plan,
+	planSnapshotTS *timestamp.Timestamp,
+	planGenerationReused bool,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
@@ -1867,6 +2135,13 @@ func createCompile(
 		retCompile.SetResourceAttemptOwnerEligible()
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
+	if planSnapshotTS != nil {
+		retCompile.SetPlanSnapshotTS(*planSnapshotTS)
+		retCompile.SetPlanGenerationReused(planGenerationReused)
+	} else if planGenerationReused {
+		return nil, moerr.NewInternalError(execCtx.reqCtx,
+			"reused plan generation is missing its snapshot binding")
+	}
 	forcePrepare := execCtx.input.isPreparedExpr()
 	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 		ses, stmt, forcePrepare, preparedRetry))
