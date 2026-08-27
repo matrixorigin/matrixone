@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,19 +74,26 @@ type simDriver struct{}
 type simConn struct {
 	lastID  int64
 	lastSet bool
-	// explicit-transaction modeling: reads inside an open transaction stage
-	// their effects; COMMIT applies them, ROLLBACK drops them
-	txnOpen     bool
-	pendLast    int64
-	pendLastSet bool
-	pendDst     int64
+	// Kafka last-id is statement/session state. Only ordinary MatrixOne rows
+	// (destination and explicit checkpoint) are staged by the transaction.
+	txnOpen           bool
+	pendDst           int64
+	pendCheckpoint    int64
+	pendCheckpointSet bool
 }
 
 // simDstRows models the kafka_e2e.dst_txn destination table.
 var simDstRows int64
 
-// simGTxOffset models the g_tx group's committed offset (-1 = none).
-var simGTxOffset int64 = -1
+var simCheckpoint int64
+
+var registerSimDriver sync.Once
+
+var registerSimPingDriver sync.Once
+
+var simExecErrContains string
+
+var simQueryErrContains string
 
 type simStmt struct {
 	conn *simConn
@@ -105,30 +113,45 @@ func (s *simStmt) Close() error                          { return nil }
 func (s *simStmt) NumInput() int                         { return 0 }
 func (s *simStmt) Exec([]driver.Value) (driver.Result, error) {
 	q := s.q
+	if simExecErrContains != "" && strings.Contains(q, simExecErrContains) {
+		return nil, fmt.Errorf("injected exec error for %q", simExecErrContains)
+	}
 	switch {
 	case q == "BEGIN":
 		s.conn.txnOpen = true
 	case q == "COMMIT":
-		if s.conn.pendLastSet {
-			s.conn.lastID, s.conn.lastSet = s.conn.pendLast, true
-			simGTxOffset = s.conn.pendLast + 1
+		if s.conn.pendCheckpointSet {
+			simCheckpoint = s.conn.pendCheckpoint
 		}
 		simDstRows += s.conn.pendDst
-		s.conn.txnOpen, s.conn.pendLastSet, s.conn.pendDst = false, false, 0
+		s.conn.txnOpen, s.conn.pendDst, s.conn.pendCheckpointSet = false, 0, false
 	case q == "ROLLBACK":
-		s.conn.txnOpen, s.conn.pendLastSet, s.conn.pendDst = false, false, 0
+		s.conn.txnOpen, s.conn.pendDst, s.conn.pendCheckpointSet = false, 0, false
+	case strings.Contains(q, "insert into kafka_e2e.kdest (id, name, amount, ts) select"):
+		// no error columns in the projection: the scan fails on the first
+		// malformed message, as it did before error mode existed
+		return nil, fmt.Errorf("internal error: the input value 'abc' is not int32 type for column 0")
 	case strings.Contains(q, "insert into kafka_e2e.dst_txn select"):
 		lo, hi, ok := simRange(q)
 		if ok {
-			s.conn.pendLast, s.conn.pendLastSet = hi, true
+			s.conn.lastID, s.conn.lastSet = hi, true
 			s.conn.pendDst += hi - lo + 1
 		}
+	case strings.Contains(q, "update kafka_e2e.kafka_checkpoint set last_id = last_kafka_message_id()"):
+		if !s.conn.lastSet {
+			return nil, fmt.Errorf("LAST_KAFKA_MESSAGE_ID() is NULL")
+		}
+		s.conn.pendCheckpoint = s.conn.lastID
+		s.conn.pendCheckpointSet = true
 	}
 	return driver.ResultNoRows, nil
 }
 
 func (s *simStmt) Query([]driver.Value) (driver.Rows, error) {
 	q := s.q
+	if simQueryErrContains != "" && strings.Contains(q, simQueryErrContains) {
+		return nil, fmt.Errorf("injected query error for %q", simQueryErrContains)
+	}
 	// server-side chaining: the builtin as the control value resolves to this
 	// session's last id
 	if strings.Contains(q, "__mo_read_start_id = last_kafka_message_id()") && s.conn.lastSet {
@@ -139,6 +162,21 @@ func (s *simStmt) Query([]driver.Value) (driver.Rows, error) {
 		return &simRows{cols: cols, rows: [][]driver.Value{vals}}, nil
 	}
 	switch {
+	case strings.Contains(q, "count(*) from kafka_e2e.kdest"):
+		return one([]string{"c"}, int64(simErrModeGood()))
+	case strings.Contains(q, "count(*) from kafka_e2e.krejects"):
+		return one([]string{"c"}, int64(len(simErrModeRejects())))
+	case strings.Contains(q, "msg_id, txt from kafka_e2e.krejects"):
+		rows := make([][]driver.Value, 0, 8)
+		for _, off := range simErrModeRejects() {
+			rows = append(rows, []driver.Value{int64(off), []byte(errModeMessages[off])})
+		}
+		return &simRows{cols: []string{"msg_id", "txt"}, rows: rows}, nil
+	case strings.Contains(q, "__mo_file_line is null"):
+		// a kafka record has no line in a file, so every failed row has NULL
+		return one([]string{"c"}, int64(len(simErrModeRejects())))
+	case strings.Contains(q, "select last_id from kafka_e2e.kafka_checkpoint"):
+		return one([]string{"last_id"}, simCheckpoint)
 	case strings.Contains(q, "count(*) from kafka_e2e.dst_txn"):
 		return one([]string{"c"}, simDstRows)
 	case strings.Contains(q, "last_kafka_message_id"):
@@ -195,7 +233,7 @@ func (r *simRows) Next(dest []driver.Value) error {
 // offset-semantics simulator: every case the real broker run records must be
 // recorded here too, in the same order.
 func TestRunAgainstSimulator(t *testing.T) {
-	sql.Register("kafka-e2e-sim", simDriver{})
+	registerSimDriver.Do(func() { sql.Register("kafka-e2e-sim", simDriver{}) })
 	db, err := sql.Open("kafka-e2e-sim", "any")
 	if err != nil {
 		t.Fatal(err)
@@ -203,24 +241,17 @@ func TestRunAgainstSimulator(t *testing.T) {
 	defer db.Close()
 	simHigh = 0
 	simDstRows = 0
-	simGTxOffset = -1
-	committedOffsetFn = func(group string) (int64, bool) {
-		if group == "g_tx" && simGTxOffset >= 0 {
-			return simGTxOffset, true
-		}
-		return 0, false
-	}
-	defer func() { committedOffsetFn = nil }()
+	simCheckpoint = -1
 
 	var r report
 	if err := run(context.Background(), db, "127.0.0.1:9092", simSeed, &r); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	want := []string{
-		"setup-seed", "read-to-end-timeout-clean", "exactly-once-chaining",
+		"setup-seed", "read-to-end-timeout-clean", "gap-free-chaining",
 		"repeated-start-id-replays", "pickup-after-produce",
 		"zero-messages-null-and-preserved", "metadata-key-null",
-		"autocommit-earliest-and-last-id", "txn-rollback-discards-commit-publishes",
+		"autocommit-earliest-and-last-id", "txn-explicit-offset-table-atomic",
 	}
 	if len(r.Cases) != len(want) {
 		t.Fatalf("cases = %v, want %v", r.Cases, want)
@@ -229,6 +260,39 @@ func TestRunAgainstSimulator(t *testing.T) {
 		if r.Cases[i] != want[i] {
 			t.Fatalf("case[%d] = %q, want %q", i, r.Cases[i], want[i])
 		}
+	}
+}
+
+func TestRunReportsManualCheckpointErrors(t *testing.T) {
+	registerSimDriver.Do(func() { sql.Register("kafka-e2e-sim", simDriver{}) })
+	tests := []struct {
+		name       string
+		execMatch  string
+		queryMatch string
+		want       string
+	}{
+		{name: "begin", execMatch: "BEGIN", want: "manual-checkpoint rollback round: injected exec error"},
+		{name: "checkpoint read", queryMatch: "select last_id from kafka_e2e.kafka_checkpoint", want: "manual-checkpoint rollback round: injected query error"},
+		{name: "destination insert", execMatch: "insert into kafka_e2e.dst_txn select", want: "manual-checkpoint txn insert: injected exec error"},
+		{name: "checkpoint update", execMatch: "update kafka_e2e.kafka_checkpoint set last_id", want: "manual checkpoint update: injected exec error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := sql.Open("kafka-e2e-sim", "any")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			simHigh, simDstRows, simCheckpoint = 0, 0, -1
+			simExecErrContains, simQueryErrContains = tc.execMatch, tc.queryMatch
+			defer func() { simExecErrContains, simQueryErrContains = "", "" }()
+
+			err = run(context.Background(), db, "127.0.0.1:9092", simSeed, &report{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("run error = %v, want substring %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -252,7 +316,7 @@ func TestWriteReportAndWaitForMO(t *testing.T) {
 		t.Fatalf("summary: %s", sum)
 	}
 
-	sql.Register("kafka-e2e-sim-ping", simDriver{})
+	registerSimPingDriver.Do(func() { sql.Register("kafka-e2e-sim-ping", simDriver{}) })
 	db, err := sql.Open("kafka-e2e-sim-ping", "any")
 	if err != nil {
 		t.Fatal(err)
@@ -304,5 +368,83 @@ func TestSeedKafka(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("message[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// simErrModeRejects lists the offsets of errModeMessages that a real scan
+// reports as failures, and simErrModeGood counts the rest. This encodes what
+// the server does with each message shape -- a non-numeric int, an unparsable
+// timestamp, too few and too many fields, and an empty value are failures --
+// so the simulator is the oracle runErrorMode's assertions are checked
+// against, exactly as simRange is for run().
+var simErrModeRejectsFn = func() []int { return []int{1, 2, 3, 4, 5, 6} }
+
+func simErrModeRejects() []int { return simErrModeRejectsFn() }
+
+func simErrModeGood() int { return len(errModeMessages) - len(simErrModeRejects()) }
+
+// TestRunErrorModeAgainstSimulator executes the error-mode scenario with no
+// MatrixOne and no broker. It proves the driver's own control flow and
+// assertions; the same script runs against a real broker in
+// optools/kafka_ci.bash, which is what proves the server behaviour.
+func TestRunErrorModeAgainstSimulator(t *testing.T) {
+	sql.Register("kafka-e2e-sim-err", simDriver{})
+	db, err := sql.Open("kafka-e2e-sim-err", "any")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var seeded []string
+	seedRawFn = func(_ context.Context, _, tp string, values []string) error {
+		if tp != errTopic {
+			t.Fatalf("seeded topic %q, want %q", tp, errTopic)
+		}
+		seeded = values
+		return nil
+	}
+	defer func() { seedRawFn = seedKafkaRaw }()
+
+	var r report
+	if err := runErrorMode(context.Background(), db, "127.0.0.1:9092", &r); err != nil {
+		t.Fatalf("runErrorMode: %v", err)
+	}
+	if len(seeded) != len(errModeMessages) {
+		t.Fatalf("seeded %d messages, want %d", len(seeded), len(errModeMessages))
+	}
+	want := []string{
+		"error-mode-split", "error-mode-message-id",
+		"error-mode-no-file-line", "error-mode-pruned-still-fails",
+	}
+	if len(r.Cases) != len(want) {
+		t.Fatalf("cases = %v, want %v", r.Cases, want)
+	}
+	for i := range want {
+		if r.Cases[i] != want[i] {
+			t.Fatalf("case[%d] = %q, want %q", i, r.Cases[i], want[i])
+		}
+	}
+}
+
+// TestRunErrorModeDetectsAWrongSplit: the assertions are load-bearing, not
+// decoration -- if the server ever stopped reporting one of the malformed
+// messages, runErrorMode must fail rather than pass quietly.
+func TestRunErrorModeDetectsAWrongSplit(t *testing.T) {
+	sql.Register("kafka-e2e-sim-err2", simDriver{})
+	db, err := sql.Open("kafka-e2e-sim-err2", "any")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seedRawFn = func(context.Context, string, string, []string) error { return nil }
+	defer func() { seedRawFn = seedKafkaRaw }()
+
+	orig := simErrModeRejectsFn
+	simErrModeRejectsFn = func() []int { return []int{1, 2, 3, 4, 5} } // one failure missed
+	defer func() { simErrModeRejectsFn = orig }()
+
+	var r report
+	if err := runErrorMode(context.Background(), db, "127.0.0.1:9092", &r); err == nil {
+		t.Fatal("runErrorMode accepted a split that lost a malformed message")
 	}
 }
