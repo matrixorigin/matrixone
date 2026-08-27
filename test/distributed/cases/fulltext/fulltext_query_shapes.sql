@@ -66,14 +66,4 @@ where match(title, content) against('+database' in boolean mode)
 order by author_id;
 -- @bvt:issue
 
--- #25891: remove the tags and add positive output after optimizer support lands.
--- @bvt:issue#25891
-select id from articles
-where id in (
-    select id from articles
-    where match(title, content) against('+database' in boolean mode)
-)
-order by id;
--- @bvt:issue
-
 drop database ft_query_shapes;

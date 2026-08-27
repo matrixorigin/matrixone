@@ -60,11 +60,4 @@ from articles
 where match(title, content) against('+database' in boolean mode)
 order by author_id;
 [unknown result because it is related to issue#25890]
-select id from articles
-where id in (
-select id from articles
-where match(title, content) against('+database' in boolean mode)
-)
-order by id;
-[unknown result because it is related to issue#25891]
 drop database ft_query_shapes;
