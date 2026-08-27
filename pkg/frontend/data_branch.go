@@ -716,7 +716,9 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getBackExecutor(
+		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -782,7 +784,9 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getBackExecutor(
+		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 

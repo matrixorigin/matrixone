@@ -589,10 +589,6 @@ func getBackExecutor(
 		}, nil
 	}
 
-	// This helper owns clone/data-branch private transactions, whose nested
-	// restore and cleanup paths can execute persistent DROP statements. Force
-	// the owner generation before BEGIN; nested admission cannot upgrade it.
-	opts = append(opts, &BackgroundExecOption{forcePessimisticRC: true})
 	bh = ses.GetBackgroundExec(ctx, opts...)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, "begin"); err != nil {

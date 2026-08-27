@@ -658,7 +658,7 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	t.Cleanup(ses.Close)
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
@@ -677,8 +677,17 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	require.ErrorIs(t, err, beginErr)
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
-	require.True(t, forcedPessimisticRC)
+	require.False(t, forcedPessimisticRC)
 	require.Equal(t, 1, backExec.closeCalls)
+
+	returned, cleanup, err = getBackExecutor(
+		context.Background(), ses, &BackgroundExecOption{forcePessimisticRC: true},
+	)
+	require.ErrorIs(t, err, beginErr)
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, 2, backExec.closeCalls)
 }
 
 func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.T) {
