@@ -2082,3 +2082,14 @@ func TestSetAutocommitStatusInResponse(t *testing.T) {
 		})
 	})
 }
+
+func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
+	for _, stmt := range []tree.Statement{
+		&tree.DropDatabase{},
+		&tree.DropTable{},
+		&tree.DropView{},
+	} {
+		require.True(t, requiresPessimisticObjectLifecycleTxn(stmt))
+	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(&tree.Select{}))
+}

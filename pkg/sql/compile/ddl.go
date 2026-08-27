@@ -3643,6 +3643,35 @@ func (c *Compile) deleteRolePrivilegesForDroppedRelation(objectID uint64) error 
 	)
 }
 
+func lockDroppedRelation(
+	c *Compile,
+	dbName string,
+	relationName string,
+	relation engine.Relation,
+	isView bool,
+) error {
+	var retryErr error
+	if err := lockMoTable(c, dbName, relationName, lock.LockMode_Exclusive); err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			return err
+		}
+		retryErr = err
+	}
+	// Views have only the mo_tables lifecycle row. Ordinary tables also lock
+	// their user-table storage before deletion.
+	if !isView {
+		if err := lockTable(c.proc.Ctx, c.e, c.proc, relation, dbName, true); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
+	}
+	return retryErr
+}
+
 func (s *Scope) DropTable(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -3756,26 +3785,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if !c.disableLock &&
 		!isTemp &&
-		!isView &&
 		!isSource &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		if err != nil {
+		if err = lockDroppedRelation(c, dbName, tblName, rel, isView); err != nil {
 			return err
 		}
 	}

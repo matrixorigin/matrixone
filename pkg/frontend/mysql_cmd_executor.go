@@ -3216,7 +3216,10 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 // handleGrantRole grants the privilege to the role
 func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx)
+	// Object lifecycle locks are part of GRANT's correctness contract. Force the
+	// private transaction into the same pessimistic RC protocol as DROP even on
+	// optimistic deployments; LockOp intentionally skips optimistic txns.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction

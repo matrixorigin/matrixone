@@ -665,6 +665,28 @@ func Test_initFunction(t *testing.T) {
 	})
 }
 
+func TestHandleGrantPrivilegeForcesPessimisticRC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+		return bh
+	}
+	ses := newSes(nil, ctrl)
+	stmt := &tree.GrantPrivilege{
+		ObjType: tree.OBJECT_TYPE_ACCOUNT,
+		Level:   &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+	}
+
+	require.NoError(t, handleGrantPrivilege(ses, &ExecCtx{reqCtx: context.Background()}, stmt))
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, []string{"begin;", "commit;"}, bh.executedSQLs)
+}
+
 func Test_initUser(t *testing.T) {
 	convey.Convey("init user", t, func() {
 		ctrl := gomock.NewController(t)

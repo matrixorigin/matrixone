@@ -1387,6 +1387,68 @@ func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
 	})
 }
 
+func TestLockDroppedRelation(t *testing.T) {
+	retryErr := moerr.NewTxnNeedRetryNoCtx()
+	catalogErr := errors.New("catalog lock failed")
+	storageErr := errors.New("storage lock failed")
+	for _, testCase := range []struct {
+		name                 string
+		isView               bool
+		catalogErr           error
+		storageErr           error
+		expectedErr          error
+		expectedStorageLocks int
+	}{
+		{name: "table locks catalog and storage", expectedStorageLocks: 1},
+		{name: "view locks catalog only", isView: true},
+		{name: "catalog failure stops before storage", catalogErr: catalogErr, expectedErr: catalogErr},
+		{
+			name: "catalog retry is returned after storage lock", catalogErr: retryErr,
+			expectedErr: retryErr, expectedStorageLocks: 1,
+		},
+		{
+			name: "storage failure is returned", storageErr: storageErr,
+			expectedErr: storageErr, expectedStorageLocks: 1,
+		},
+		{
+			name: "storage retry is returned", storageErr: retryErr,
+			expectedErr: retryErr, expectedStorageLocks: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			c := &Compile{proc: proc}
+			catalogLocks := 0
+			storageLocks := 0
+			catalogStub := gostub.Stub(&lockMoTable,
+				func(got *Compile, dbName, relationName string, mode lock.LockMode) error {
+					require.Same(t, c, got)
+					require.Equal(t, "db", dbName)
+					require.Equal(t, "rel", relationName)
+					require.Equal(t, lock.LockMode_Exclusive, mode)
+					catalogLocks++
+					return testCase.catalogErr
+				})
+			defer catalogStub.Reset()
+			storageStub := gostub.Stub(&lockTable,
+				func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+					storageLocks++
+					return testCase.storageErr
+				})
+			defer storageStub.Reset()
+
+			err := lockDroppedRelation(c, "db", "rel", nil, testCase.isView)
+			if testCase.expectedErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, testCase.expectedErr)
+			}
+			require.Equal(t, 1, catalogLocks)
+			require.Equal(t, testCase.expectedStorageLocks, storageLocks)
+		})
+	}
+}
+
 func TestScope_Database(t *testing.T) {
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,

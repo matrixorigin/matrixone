@@ -599,7 +599,16 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	return err
 }
 
-// createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn
+func requiresPessimisticObjectLifecycleTxn(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView:
+		return true
+	default:
+		return false
+	}
+}
+
+// createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn.
 func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	var err, err2 error
 	var hasRecovered bool
@@ -680,7 +689,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	// shared explicit transactions keep their configured semantics and are
 	// validated by the quota checker instead.
 	consumeNextTxnIsolation := false
-	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.forcePessimisticRC {
+	backSes, forceBackgroundPessimistic := execCtx.ses.(*backSession)
+	if requiresPessimisticObjectLifecycleTxn(execCtx.stmt) ||
+		(forceBackgroundPessimistic && backSes.forcePessimisticRC) {
+		// DROP and object-scoped GRANT must participate in one catalog-row lock
+		// protocol even when the deployment default is optimistic/SI.
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
