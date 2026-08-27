@@ -116,7 +116,7 @@ func NewService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 	options ...Option,
-) (Service, error) {
+) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -203,6 +203,14 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
+	if err = srv.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			srv.closeViewMetadataAdmission()
+		}
+	}()
 	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
@@ -392,6 +400,31 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 	return nil
 }
 
+func (s *service) checkViewMetadataGenerationRevoked() error {
+	if !s.viewMetadataGenerationRevoked.Load() {
+		return nil
+	}
+	s.viewMetadataIngressReady.Store(false)
+	s.task.runnerReady.Store(false)
+	return moerr.NewInvalidStateNoCtx("CN view metadata admission generation revoked")
+}
+
+func (s *service) startUnlessViewMetadataGenerationRevoked(start func() error) error {
+	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	if err := start(); err != nil {
+		return err
+	}
+	return s.checkViewMetadataGenerationRevoked()
+}
+
+func (s *service) startFrontendUnlessViewMetadataGenerationRevoked() error {
+	s.frontendLifecycleMu.Lock()
+	defer s.frontendLifecycleMu.Unlock()
+	return s.startUnlessViewMetadataGenerationRevoked(s.runMoServer)
+}
+
 func (s *service) Start() (err error) {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -415,28 +448,48 @@ func (s *service) Start() (err error) {
 	if err = s.bootstrap(); err != nil {
 		return err
 	}
-	if err = s.startSiriusRuntime(context.Background()); err != nil {
+	s.viewMetadataCatalogFenceReady.Store(true)
+	if err = s.waitForViewMetadataAdmission(); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
+		return s.startSiriusRuntime(context.Background())
+	}); err != nil {
 		return err
 	}
 
 	s.initSqlWriterFactory()
 
-	if err = s.queryService.Start(); err != nil {
+	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
+		return err
+	}
+	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(s.server.Start); err != nil {
 		return err
 	}
 
-	err = s.runMoServer()
-	if err != nil {
+	// Admission authorizes local initialization; it does not make this CN
+	// routable. Publish ingress readiness only after every remote entry point is
+	// listening. A failed heartbeat leaves the CN safely pending and the normal
+	// heartbeat loop will retry without tearing down already-live listeners.
+	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
-
-	if err := s.server.Start(); err != nil {
+	s.viewMetadataIngressReady.Store(true)
+	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
+	s.notifyHeartbeat()
 
-	s.task.runnerReady.Store(true)
-	s.startTaskRunner()
-	return nil
+	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	if err = s.publishTaskRunner(); err != nil {
+		return err
+	}
+	return s.checkViewMetadataGenerationRevoked()
 }
 
 func (s *service) Close() error {
@@ -454,6 +507,7 @@ func (s *service) closeService() error {
 	s.closeOnce.Do(func() {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
+		s.closeViewMetadataAdmission()
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(
@@ -461,7 +515,7 @@ func (s *service) closeService() error {
 			// auto-increment, and transaction state. Stop and drain this remote
 			// ingress before clearing any of those dependencies.
 			s.closeQueryService,
-			s.stopFrontend,
+			s.stopFrontendSerialized,
 			s.closeSiriusRuntime,
 			s.closeBootstrapService,
 			// Frontend shutdown stops accepting interactive work, while stopTask
@@ -665,6 +719,12 @@ func (s *service) stopFrontend() error {
 		s.cancelMoServerFunc()
 	}
 	return err
+}
+
+func (s *service) stopFrontendSerialized() error {
+	s.frontendLifecycleMu.Lock()
+	defer s.frontendLifecycleMu.Unlock()
+	return s.stopFrontend()
 }
 
 func (s *service) stopRPCs() error {

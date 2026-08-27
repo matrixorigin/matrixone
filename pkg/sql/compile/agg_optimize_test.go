@@ -115,6 +115,27 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 			wantColumnMapSize: 1,
 		},
 		{
+			name: "COUNT(NULL) should not rewrite to starcount",
+			node: &plan.Node{
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{}},
+				AggList: []*plan.Expr{
+					{
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{ObjName: "count"},
+								Args: []*plan.Expr{
+									{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantObjName:       "",
+			wantObj:           0,
+			wantColumnMapSize: 0,
+		},
+		{
 			name: "COUNT(DISTINCT not_null_col) should not optimize",
 			node: &plan.Node{
 				TableDef: &plan.TableDef{

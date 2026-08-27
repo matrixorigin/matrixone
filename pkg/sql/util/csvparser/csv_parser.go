@@ -151,6 +151,13 @@ type CSVParser struct {
 	// for printing error message, and the parser should not be used later,
 	// so it's ok, see readQuotedField.
 	pos int64
+	// lineNo counts the newline bytes consumed so far, and recordStartLine is
+	// lineNo at the first content byte of the record being read. Together they
+	// give the PHYSICAL line a record starts on — for a multi-line quoted field,
+	// its first line. Every byte the parser consumes passes through readByte,
+	// skipBytes or readUntil, so counting there is exact.
+	lineNo          int64
+	recordStartLine int64
 
 	// cache
 	remainBuf *bytes.Buffer
@@ -166,6 +173,8 @@ func (parser *CSVParser) Reset(reader io.Reader) {
 	parser.reader = reader
 	parser.buf = nil
 	parser.pos = 0
+	parser.lineNo = 0
+	parser.recordStartLine = 0
 	parser.isLastChunk = false
 	parser.remainBuf.Reset()
 	parser.appendBuf.Reset()
@@ -266,6 +275,13 @@ func (parser *CSVParser) Pos() int64 {
 	return parser.pos
 }
 
+// RecordLine returns the 1-based physical line the most recently read record
+// starts on. For a record whose quoted field spans several lines, this is its
+// FIRST line.
+func (parser *CSVParser) RecordLine() int64 {
+	return parser.recordStartLine + 1
+}
+
 func validDelim(r rune) bool {
 	return r != 0 && r != '"' && r != '\r' && r != '\n' && utf8.ValidRune(r) && r != utf8.RuneError
 }
@@ -358,6 +374,9 @@ const (
 	csvTokenDelimiter csvToken = 0x800
 )
 
+// newlineByte is the record/line terminator the line counter looks for.
+var newlineByte = []byte{'\n'}
+
 func (parser *CSVParser) readByte() (byte, error) {
 	if len(parser.buf) == 0 {
 		if err := parser.readBlock(); err != nil {
@@ -370,6 +389,9 @@ func (parser *CSVParser) readByte() (byte, error) {
 	b := parser.buf[0]
 	parser.buf = parser.buf[1:]
 	parser.pos++
+	if b == '\n' {
+		parser.lineNo++
+	}
 	return b, nil
 }
 
@@ -389,6 +411,7 @@ func (parser *CSVParser) peekBytes(cnt int) ([]byte, error) {
 }
 
 func (parser *CSVParser) skipBytes(n int) {
+	parser.lineNo += int64(bytes.Count(parser.buf[:n], newlineByte))
 	parser.buf = parser.buf[n:]
 	parser.pos += int64(n)
 }
@@ -528,6 +551,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	index := IndexAnyByte(parser.buf, chars)
 	if index >= 0 {
 		ret := parser.buf[:index]
+		parser.lineNo += int64(bytes.Count(ret, newlineByte))
 		parser.buf = parser.buf[index:]
 		parser.pos += int64(index)
 		return ret, parser.buf[0], nil
@@ -536,6 +560,11 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	// not found in parser.buf, need allocate and loop.
 	var buf []byte
 	for {
+		// Every byte of parser.buf is drained into buf here, so this is where
+		// its newlines are consumed. Counting only the final block's prefix
+		// below would lose the newlines of every block drained before it,
+		// which is what a quoted field spanning more than one read block does.
+		parser.lineNo += int64(bytes.Count(parser.buf, newlineByte))
 		buf = append(buf, parser.buf...)
 		if len(buf) > config.LargestEntryLimit {
 			return buf, 0, moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
@@ -550,6 +579,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 		}
 		index := IndexAnyByte(parser.buf, chars)
 		if index >= 0 {
+			parser.lineNo += int64(bytes.Count(parser.buf[:index], newlineByte))
 			buf = append(buf, parser.buf[:index]...)
 			parser.buf = parser.buf[index:]
 			parser.pos += int64(len(buf))
@@ -559,6 +589,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 }
 
 func (parser *CSVParser) readRecord() error {
+	parser.recordStartLine = parser.lineNo
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
@@ -598,6 +629,7 @@ outside:
 		// end of a line, the substring can still be dropped by rule 2.
 		if len(parser.startingBy) > 0 && !foundStartingByThisLine {
 			oldPos := parser.pos
+			oldLineNo := parser.lineNo
 			content, _, err := parser.readUntilTerminator()
 			if err != nil {
 				if len(content) == 0 {
@@ -611,9 +643,15 @@ outside:
 				continue
 			}
 			foundStartingByThisLine = true
+			// The lookahead consumed -- and counted -- a whole line. Only the
+			// prefix up to and including startingBy stays consumed; the rest is
+			// pushed back and parsed again, so the line counter has to rewind
+			// with pos or that newline is counted twice.
+			consumed := content[:idx+len(parser.startingBy)]
 			content = content[idx+len(parser.startingBy):]
 			parser.buf = append(content, parser.buf...)
 			parser.pos = oldPos + int64(idx+len(parser.startingBy))
+			parser.lineNo = oldLineNo + int64(bytes.Count(consumed, newlineByte))
 		}
 
 		content, firstByte, err := parser.readUntil(&parser.unquoteByteSet)
@@ -667,11 +705,15 @@ outside:
 			prevToken = firstToken
 			if !parser.allowEmptyLine {
 				if isEmptyLine {
+					// The record has not started yet: it begins at the first
+					// line with content, not where the scan started.
+					parser.recordStartLine = parser.lineNo
 					continue
 				}
 				// skip lines only contain whitespaces
 				if err == nil && whitespaceLine && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
 					parser.recordBuffer = parser.recordBuffer[:0]
+					parser.recordStartLine = parser.lineNo
 					continue
 				}
 			}

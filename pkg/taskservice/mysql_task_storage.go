@@ -88,6 +88,12 @@ var (
 		"create_at," +
 		"update_at) values "
 
+	// cronTaskOnDuplicate is intentionally a no-op. Built-in cron tasks are
+	// registered independently by every CN, while task_metadata_id is unique.
+	// Preserving the winner's schedule state makes that registration atomic and
+	// idempotent without hiding non-duplicate SQL errors.
+	cronTaskOnDuplicate = " on duplicate key update cron_expr=cron_expr"
+
 	selectCronTask = "select " +
 		"cron_task_id," +
 		"task_metadata_id," +
@@ -558,17 +564,9 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 			t.UpdateAt,
 		)
 	}
-	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], vals...)
+	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1]+cronTaskOnDuplicate, vals...)
 	if err != nil {
-		dup, err := removeDuplicateCronTasks(err, cronTask)
-		if err != nil {
-			return 0, err
-		}
-		add, err := m.AddCronTask(ctx, dup...)
-		if err != nil {
-			return add, err
-		}
-		return add, nil
+		return 0, err
 	}
 	affected, err := exec.RowsAffected()
 	if err != nil {
@@ -1410,23 +1408,6 @@ func sqlTaskEnabledValue(v bool) uint8 {
 }
 
 func removeDuplicateAsyncTasks(err error, tasks []task.AsyncTask) ([]task.AsyncTask, error) {
-	var me *mysql.MySQLError
-	if ok := errors.As(err, &me); !ok {
-		return nil, err
-	}
-	if me.Number != moerr.ER_DUP_ENTRY {
-		return nil, err
-	}
-	b := tasks[:0]
-	for _, t := range tasks {
-		if !strings.Contains(me.Message, t.Metadata.ID) {
-			b = append(b, t)
-		}
-	}
-	return b, nil
-}
-
-func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask, error) {
 	var me *mysql.MySQLError
 	if ok := errors.As(err, &me); !ok {
 		return nil, err
