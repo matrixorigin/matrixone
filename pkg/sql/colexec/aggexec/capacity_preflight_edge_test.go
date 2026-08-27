@@ -15,11 +15,13 @@
 package aggexec
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -375,6 +377,144 @@ func TestNonDistinctMultiArgumentPreflightRemainsPublicationFree(t *testing.T) {
 	exec.allocation = nil
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestNextArgumentArenaCapacityUsesGeometricGrowth(t *testing.T) {
+	capacity, err := nextArgumentArenaCapacity(1024, 1024)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1024), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(16<<10, 16<<10+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(16<<10+kAggArgArenaSize), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(kAggArgArenaSize, kAggArgArenaSize+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2*kAggArgArenaSize), capacity)
+
+	capacity, err = nextArgumentArenaCapacity(math.MaxUint32-1, math.MaxUint32)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint32), capacity)
+
+	_, err = nextArgumentArenaCapacity(math.MaxUint32, uint64(math.MaxUint32)+1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+
+	capacity, err = nextLinearArgumentArenaCapacity(
+		2*kAggArgArenaSize, 2*kAggArgArenaSize+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3*kAggArgArenaSize), capacity)
+
+	capacity, err = nextLinearArgumentArenaCapacity(
+		math.MaxUint32-1, math.MaxUint32)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint32), capacity)
+
+	_, err = nextLinearArgumentArenaCapacity(
+		math.MaxUint32, uint64(math.MaxUint32)+1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+}
+
+func TestArgumentArenaGrowthFallsBackUnderCapacityPressure(t *testing.T) {
+	const current = 2 * kAggArgArenaSize
+	preferred, err := nextArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	fallback, err := nextLinearArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2*current), preferred)
+	require.Equal(t, uint64(current+kAggArgArenaSize), fallback)
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	// The old arena and the linear fallback fit together exactly. The preferred
+	// geometric arena does not, proving that retry preserves availability rather
+	// than merely selecting the same capacity through another branch.
+	account, err := registry.Open(current + fallback)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	require.NoError(t, err)
+
+	buf, err := allocation.allocArgumentArena(mp, current)
+	require.NoError(t, err)
+	state := aggState{
+		allocation: allocation,
+		argbuf:     buf,
+		argSkl:     arenaskl.NewSkiplist(arenaskl.NewArena(buf), bytes.Compare),
+	}
+	require.NoError(t, state.argSkl.Add([]byte("kept"), nil))
+	used := uint64(state.argSkl.Arena().Size())
+	require.Less(t, used, uint64(current+1))
+	require.NoError(t, state.preflightArgumentCapacity(
+		mp, uint64(current+1)-used, 0))
+	require.Equal(t, int(fallback), len(state.argbuf))
+	require.True(t, state.argSkl.Contains([]byte("kept")))
+	require.Equal(t, fallback, account.Snapshot().Used)
+
+	mp.Free(state.argbuf)
+	require.Zero(t, account.Snapshot().Used)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArgumentArenaGrowthFallsBackAtAllocatorLimit(t *testing.T) {
+	const current = 2 * kAggArgArenaSize
+	preferred, err := nextArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	fallback, err := nextLinearArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	require.Greater(t, preferred, fallback)
+
+	oldCapLimit := mpool.CapLimit
+	mpool.CapLimit = int(preferred)
+	t.Cleanup(func() {
+		mpool.CapLimit = oldCapLimit
+	})
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(current + fallback)
+	require.NoError(t, err)
+	state := aggState{}
+	t.Cleanup(func() {
+		if state.argbuf != nil {
+			mp.Free(state.argbuf)
+			state.argbuf = nil
+		}
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+		require.Zero(t, mp.CurrNB())
+	})
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	require.NoError(t, err)
+
+	buf, err := allocation.allocArgumentArena(mp, current)
+	require.NoError(t, err)
+	state = aggState{
+		allocation: allocation,
+		argbuf:     buf,
+		argSkl:     arenaskl.NewSkiplist(arenaskl.NewArena(buf), bytes.Compare),
+	}
+
+	require.NoError(t, state.argSkl.Add([]byte("kept"), nil))
+	used := uint64(state.argSkl.Arena().Size())
+	require.Less(t, used, uint64(current+1))
+	require.NoError(t, state.preflightArgumentCapacity(
+		mp, uint64(current+1)-used, 0))
+	require.Equal(t, int(fallback), len(state.argbuf))
+	require.True(t, state.argSkl.Contains([]byte("kept")))
+	require.Equal(t, fallback, account.Snapshot().Used)
 }
 
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {

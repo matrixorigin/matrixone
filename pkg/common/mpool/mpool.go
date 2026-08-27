@@ -925,6 +925,14 @@ func maxAllocationSize() int64 {
 	return int64(CapLimit) - kMemHdrSz
 }
 
+// MaxAllocationSize returns the largest payload accepted by one MPool
+// allocation. Callers may use it to cap speculative growth before asking the
+// allocator; it is not a reservation and does not bypass account or pool
+// capacity admission.
+func MaxAllocationSize() int64 {
+	return maxAllocationSize()
+}
+
 // Alloc returns an MPool-owned block. The caller must eventually pass every
 // successful non-empty allocation to Free; DeleteMPool provides the terminal
 // release only for NoLock pools, whose allocations cannot outlive the pool.
