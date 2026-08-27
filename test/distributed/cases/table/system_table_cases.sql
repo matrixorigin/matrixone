@@ -93,3 +93,14 @@ USE mo_catalog;
 SHOW CREATE TABLE mo_columns;
 SHOW CREATE TABLE mo_database;
 SHOW CREATE TABLE mo_tables;
+
+-- issue #27661: mo_columns must preserve unsigned integer metadata
+drop database if exists issue_27661;
+create database issue_27661;
+use issue_27661;
+create table unsigned_flags (signed_tiny tinyint, unsigned_tiny tinyint unsigned, signed_small smallint, unsigned_small smallint unsigned, signed_int int, unsigned_int int unsigned, signed_big bigint, unsigned_big bigint unsigned, bit_col bit(8), decimal_col decimal(10,2));
+select attname, att_is_unsigned, mo_show_visible_bin(atttyp, 2) as data_type from mo_catalog.mo_columns where att_database = 'issue_27661' and att_relname = 'unsigned_flags' and att_is_hidden = 0 order by attnum;
+alter table unsigned_flags add column unsigned_added bigint unsigned;
+alter table unsigned_flags modify column signed_int int unsigned;
+select attname, att_is_unsigned, mo_show_visible_bin(atttyp, 2) as data_type from mo_catalog.mo_columns where att_database = 'issue_27661' and att_relname = 'unsigned_flags' and att_is_hidden = 0 order by attnum;
+drop database issue_27661;

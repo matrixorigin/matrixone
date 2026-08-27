@@ -47,6 +47,27 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
+	backfillMoColumnsAttIsUnsigned(),
+}
+
+const moColumnsUnsignedMismatchPredicate = "account_id = current_account_id() " +
+	"AND (att_is_unsigned IS NULL OR att_is_unsigned = 0) " +
+	"AND mo_show_visible_bin(atttyp, 2) IN ('TINYINT UNSIGNED', 'SMALLINT UNSIGNED', 'INT UNSIGNED', 'BIGINT UNSIGNED')"
+
+func backfillMoColumnsAttIsUnsigned() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  catalog.MO_CATALOG,
+		TableName:               catalog.MO_COLUMNS,
+		UpgType:                 versions.MODIFY_METADATA,
+		UpgSql:                  "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE " + moColumnsUnsignedMismatchPredicate,
+		RequiredProtocolVersion: defines.MORPCVersion32,
+		AllowMoColumnsUpdate:    true,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			mismatch, err := versions.CheckTableDataExist(txn, accountID,
+				"SELECT 1 FROM mo_catalog.mo_columns WHERE "+moColumnsUnsignedMismatchPredicate+" LIMIT 1")
+			return !mismatch, err
+		},
+	}
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed

@@ -220,6 +220,17 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+// WithMoColumnsUpdate allows an internal metadata upgrade to rewrite the
+// redundant columns-table fields without opening mo_columns to ordinary DML.
+func (opts StatementOption) WithMoColumnsUpdate() StatementOption {
+	opts.allowMoColumnsUpdate = true
+	return opts
+}
+
+func (opts StatementOption) AllowMoColumnsUpdate() bool {
+	return opts.allowMoColumnsUpdate
+}
+
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
 }

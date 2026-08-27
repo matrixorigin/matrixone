@@ -143,6 +143,7 @@ type UpgradeEntry struct {
 	// installs. The check is performed only when the entry still needs work, so
 	// an already-completed upgrade remains idempotent during a rolling restart.
 	RequiredProtocolVersion int64
+	AllowMoColumnsUpdate    bool
 	PreSql                  string
 	PostSql                 string
 }
@@ -150,6 +151,9 @@ type UpgradeEntry struct {
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
 	statementOption := UpgradeStatementOption(accountId)
+	if u.AllowMoColumnsUpdate {
+		statementOption = statementOption.WithMoColumnsUpdate()
+	}
 
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {

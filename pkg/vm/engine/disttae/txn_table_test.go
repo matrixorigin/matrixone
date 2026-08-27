@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -42,6 +43,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnTableWriteTableName(t *testing.T) {
+	tbl := &txnTable{tableId: catalog.MO_COLUMNS_ID, tableName: catalog.MO_COLUMNS}
+	require.Equal(t, catalog.MO_COLUMNS, tbl.writeTableName(context.Background()))
+	require.Equal(t, catalog.MO_COLUMNS_UPDATE, tbl.writeTableName(
+		context.WithValue(context.Background(), defines.MoColumnsUpdateKey{}, true),
+	))
+
+	tbl.tableId++
+	require.Equal(t, catalog.MO_COLUMNS, tbl.writeTableName(
+		context.WithValue(context.Background(), defines.MoColumnsUpdateKey{}, true),
+	))
+}
 
 func newTxnTableForTest() *txnTable {
 	engine := &Engine{
