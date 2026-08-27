@@ -145,6 +145,7 @@ func main() {
 
 	cases := []func(context.Context) caseResult{
 		runner.catalogAndMappingCase,
+		runner.accessLifecycleCase,
 		runner.appendReadAndTimeTravelCase,
 		runner.partitionFilterCase,
 		runner.yearPartitionDateCase,
@@ -259,6 +260,129 @@ func (r *caseRunner) catalogAndMappingCase(ctx context.Context) caseResult {
 	actual := append(append([]string{}, namespaces...), tables...)
 	actual = append(actual, showCreate...)
 	return passedCase("ICE-CI-E2E-010", "catalog-ddl-and-discovery", sqls, []string{"namespace and tables visible; inline secret rejected"}, actual, details)
+}
+
+func (r *caseRunner) accessLifecycleCase(ctx context.Context) caseResult {
+	catalogName := r.cfg.Catalog + "_lifecycle"
+	mappingName := "access_lifecycle_mapping"
+	mapping := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident(mappingName))
+	cleanupNeeded := true
+	defer func() {
+		if !cleanupNeeded {
+			return
+		}
+		_, _ = r.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+mapping)
+		_, _ = r.db.ExecContext(ctx, fmt.Sprintf("CALL iceberg_unregister_access(%s)", sqlString(catalogName)))
+		_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP ICEBERG CATALOG IF EXISTS %s", ident(catalogName)))
+	}()
+	sqls := make([]string, 0, 10)
+	fail := func(expected, actual []string, msg string) caseResult {
+		return failedCase("ICE-CI-E2E-015", "access-register-unregister-lifecycle", sqls, expected, actual, msg)
+	}
+	exec := func(stmt string) error {
+		sqls = append(sqls, stmt)
+		_, err := r.db.ExecContext(ctx, stmt)
+		return err
+	}
+
+	if err := exec(fmt.Sprintf(
+		"CREATE ICEBERG CATALOG %s WITH ('type'='rest','uri'=%s,'warehouse'=%s,'auth_mode'='none')",
+		ident(catalogName), sqlString(r.cfg.CatalogURI), sqlString(r.cfg.Warehouse),
+	)); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	if err := exec(fmt.Sprintf(
+		"CALL iceberg_register_access(%s, %s)",
+		sqlString(catalogName),
+		sqlString("scope=cluster,account_id=0,external_principal=ci-local,endpoint=localhost,region=us-east-1,bucket=mo-iceberg"),
+	)); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	catalogIDSQL := fmt.Sprintf(
+		"select catalog_id from mo_catalog.mo_iceberg_catalogs where account_id = 0 and name = %s",
+		sqlString(catalogName),
+	)
+	sqls = append(sqls, catalogIDSQL)
+	catalogIDRows, err := queryLines(ctx, r.db, catalogIDSQL)
+	if err != nil {
+		return fail(nil, catalogIDRows, err.Error())
+	}
+	if len(catalogIDRows) != 1 {
+		return fail([]string{"one catalog id"}, catalogIDRows, "lifecycle catalog id was not uniquely resolved")
+	}
+	catalogID, err := strconv.ParseUint(catalogIDRows[0], 10, 64)
+	if err != nil || catalogID == 0 {
+		return fail([]string{"non-zero catalog id"}, catalogIDRows, "lifecycle catalog id was invalid")
+	}
+
+	if err := exec(fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
+  order_id BIGINT,
+  bucket INT,
+  amount BIGINT,
+  region TEXT
+) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='append_orders','ref'='main','read_mode'='append_only','write_mode'='append_only')`,
+		mapping, sqlString(catalogName), sqlString(r.cfg.Namespace),
+	)); err != nil {
+		return fail(nil, nil, err.Error())
+	}
+	dropCatalogSQL := fmt.Sprintf("DROP ICEBERG CATALOG %s", ident(catalogName))
+	sqls = append(sqls, dropCatalogSQL)
+	dropErr := func() error {
+		_, err := r.db.ExecContext(ctx, dropCatalogSQL)
+		return err
+	}()
+	if dropErr == nil {
+		return fail([]string{"ordinary DROP rejected while table mapping exists"}, nil, "ordinary DROP removed a catalog with a live table mapping")
+	}
+	if !strings.Contains(strings.ToLower(dropErr.Error()), "table mappings") {
+		return fail([]string{"table mappings dependency error"}, []string{dropErr.Error()}, "ordinary DROP failed for an unexpected reason")
+	}
+
+	beforeSQL := fmt.Sprintf(
+		"select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_principal_map where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_residency_policy where catalog_id = %d and (scope_type = 'cluster' or account_id = 0))",
+		catalogID, catalogID, catalogID, catalogID,
+	)
+	sqls = append(sqls, beforeSQL)
+	before, err := queryLines(ctx, r.db, beforeSQL)
+	if err != nil {
+		return fail([]string{"1\t1\t1\t1"}, before, err.Error())
+	}
+	if !sameLines([]string{"1\t1\t1\t1"}, before) {
+		return fail([]string{"1\t1\t1\t1"}, before, "rejected DROP was not atomic")
+	}
+
+	if err := exec("DROP TABLE " + mapping); err != nil {
+		return fail(nil, before, err.Error())
+	}
+	if err := exec(fmt.Sprintf("CALL iceberg_unregister_access(%s)", sqlString(catalogName))); err != nil {
+		return fail(nil, before, err.Error())
+	}
+	if err := exec(dropCatalogSQL); err != nil {
+		return fail(nil, before, err.Error())
+	}
+
+	afterSQL := fmt.Sprintf(
+		"select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_principal_map where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_residency_policy where catalog_id = %d and (scope_type = 'cluster' or account_id = 0)), (select count(*) from mo_catalog.mo_iceberg_refs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_publish_jobs where account_id = 0 and target_catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_orphan_files where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_maintenance_jobs where account_id = 0 and catalog_id = %d)",
+		catalogID, catalogID, catalogID, catalogID, catalogID, catalogID, catalogID, catalogID,
+	)
+	sqls = append(sqls, afterSQL)
+	after, err := queryLines(ctx, r.db, afterSQL)
+	wantAfter := []string{"0\t0\t0\t0\t0\t0\t0\t0"}
+	if err != nil {
+		return fail(wantAfter, after, err.Error())
+	}
+	if !sameLines(wantAfter, after) {
+		return fail(wantAfter, after, "catalog-owned metadata remained after unregister and drop")
+	}
+	cleanupNeeded = false
+	return passedCase(
+		"ICE-CI-E2E-015",
+		"access-register-unregister-lifecycle",
+		sqls,
+		[]string{"1\t1\t1\t1", wantAfter[0]},
+		append(before, after...),
+		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "blocked_drop": "atomic"},
+	)
 }
 
 func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult {

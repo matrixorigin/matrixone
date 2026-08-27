@@ -33,7 +33,10 @@ import (
 
 const icebergBuiltinProcedurePrefix = "iceberg_"
 const icebergRegisterAccessProcedure = "iceberg_register_access"
+const icebergUnregisterAccessProcedure = "iceberg_unregister_access"
 const IcebergMaintenanceCallExecutorRuntimeKey = "iceberg.maintenance.call.executor"
+
+const icebergAccessScopeAll = "all"
 
 type IcebergMaintenanceCallExecutor interface {
 	ExecuteIcebergMaintenanceCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) ([]ExecResult, error)
@@ -99,9 +102,11 @@ func parseIcebergBuiltinCall(ctx context.Context, call *tree.CallStmt) (IcebergB
 			return IcebergBuiltinProcedureCall{}, true, err
 		}
 	}
-	if strings.EqualFold(name, icebergRegisterAccessProcedure) {
+	if strings.EqualFold(name, icebergRegisterAccessProcedure) || strings.EqualFold(name, icebergUnregisterAccessProcedure) {
 		if options == "" {
-			return IcebergBuiltinProcedureCall{}, true, moerr.NewInvalidInput(ctx, "Iceberg builtin procedure iceberg_register_access requires options string argument")
+			if strings.EqualFold(name, icebergRegisterAccessProcedure) {
+				return IcebergBuiltinProcedureCall{}, true, moerr.NewInvalidInput(ctx, "Iceberg builtin procedure iceberg_register_access requires options string argument")
+			}
 		}
 		return IcebergBuiltinProcedureCall{
 			Name:    name,
@@ -131,6 +136,9 @@ func executeIcebergBuiltinCall(ctx context.Context, ses FeSession, call IcebergB
 	if strings.EqualFold(call.Name, icebergRegisterAccessProcedure) {
 		return executeIcebergRegisterAccessCall(ctx, ses, call)
 	}
+	if strings.EqualFold(call.Name, icebergUnregisterAccessProcedure) {
+		return executeIcebergUnregisterAccessCall(ctx, ses, call)
+	}
 	service := ""
 	if ses != nil {
 		service = ses.GetService()
@@ -141,7 +149,7 @@ func executeIcebergBuiltinCall(ctx context.Context, ses FeSession, call IcebergB
 	return nil, moerr.NewNotSupportedf(ctx, "Iceberg builtin procedure %s for %s is recognized but not implemented in this phase", call.Name, call.Parsed.Target)
 }
 
-func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) ([]ExecResult, error) {
+func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) (result []ExecResult, err error) {
 	if ses == nil || ses.GetTenantInfo() == nil {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires a session")
 	}
@@ -202,7 +210,16 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
-	catalogID, err := queryIcebergCatalogID(ctx, bh, targetAccountID, call.Target)
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if err != nil {
+			result = nil
+		}
+	}()
+	catalogID, _, storedCatalogURI, err := queryIcebergCatalogStateForUpdate(ctx, bh, targetAccountID, call.Target)
 	if err != nil {
 		return nil, err
 	}
@@ -211,10 +228,7 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	}
 	catalogURI := strings.TrimSpace(opts["catalog_uri"])
 	if catalogURI == "" {
-		catalogURI, err = queryIcebergCatalogURI(ctx, bh, targetAccountID, catalogID)
-		if err != nil {
-			return nil, err
-		}
+		catalogURI = storedCatalogURI
 	}
 	if catalogURI == "" {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires catalog_uri")
@@ -247,7 +261,7 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	if scopeJSON == "" {
 		scopeJSON = "{}"
 	}
-	if err := bh.Exec(ctx, fmt.Sprintf(
+	if err = bh.Exec(ctx, fmt.Sprintf(
 		"insert into mo_catalog.%s(account_id,catalog_id,mo_role_id,mo_user_id,external_principal,scope_json,created_by,version) values (%d,%d,%d,%d,%s,%s,%d,1) on duplicate key update external_principal = %s, scope_json = %s, updated_at = utc_timestamp, version = version + 1",
 		sqliceberg.TablePrincipalMap,
 		targetAccountID,
@@ -262,7 +276,7 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	)); err != nil {
 		return nil, err
 	}
-	if err := bh.Exec(ctx, fmt.Sprintf(
+	if err = bh.Exec(ctx, fmt.Sprintf(
 		"insert into mo_catalog.%s(scope_type,account_id,catalog_id,allowed_catalog_uri,allowed_endpoint,allowed_region,allowed_bucket,policy_state,created_by,version) values (%s,%d,%d,%s,%s,%s,%s,%s,%d,1) on duplicate key update policy_state = %s, updated_at = utc_timestamp, version = version + 1",
 		sqliceberg.TableResidencyPolicy,
 		quoteIcebergSQLString(scopeType),
@@ -281,25 +295,133 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	return []ExecResult{icebergRegisterAccessResultSet(targetAccountID, catalogID, externalPrincipal, scopeType)}, nil
 }
 
-func queryIcebergCatalogURI(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (string, error) {
-	sql := fmt.Sprintf(
-		"select uri from mo_catalog.%s where account_id = %d and catalog_id = %d",
-		sqliceberg.TableCatalogs,
+func executeIcebergUnregisterAccessCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) (result []ExecResult, err error) {
+	if ses == nil || ses.GetTenantInfo() == nil {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg access unregistration requires a session")
+	}
+	tenant := ses.GetTenantInfo()
+	if !tenant.IsAdminRole() {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg access unregistration requires accountadmin or moadmin role")
+	}
+	opts := icebergBuiltinOptions(call.Options)
+	for key := range opts {
+		switch key {
+		case "account_id", "scope", "scope_type":
+		default:
+			return nil, moerr.NewInvalidInputf(ctx, "Iceberg access unregistration option %s is not supported", key)
+		}
+	}
+	targetAccountID, err := icebergAccessAccountID(ctx, ses, opts)
+	if err != nil {
+		return nil, err
+	}
+	if targetAccountID == 0 && !tenant.IsSysTenant() {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg access unregistration requires account_id")
+	}
+	if !tenant.IsSysTenant() && targetAccountID != ses.GetAccountId() {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg access unregistration can only target the current account")
+	}
+	scopeType, err := icebergUnregisterAccessScope(ctx, tenant, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if err != nil {
+			result = nil
+		}
+	}()
+
+	catalogID, _, _, err := queryIcebergCatalogStateForUpdate(ctx, bh, targetAccountID, call.Target)
+	if err != nil {
+		return nil, err
+	}
+	if catalogID == 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "iceberg catalog %s does not exist for account %d", call.Target, targetAccountID)
+	}
+	if err = bh.Exec(ctx, fmt.Sprintf(
+		"delete from mo_catalog.%s where catalog_id = %d and %s",
+		sqliceberg.TableResidencyPolicy,
+		catalogID,
+		icebergUnregisterResidencyWhere(scopeType, targetAccountID),
+	)); err != nil {
+		return nil, err
+	}
+
+	remainingPolicies, err := icebergAccessResidencyPolicyCount(ctx, bh, targetAccountID, catalogID)
+	if err != nil {
+		return nil, err
+	}
+	if remainingPolicies == 0 {
+		if err = bh.Exec(ctx, fmt.Sprintf(
+			"delete from mo_catalog.%s where account_id = %d and catalog_id = %d",
+			sqliceberg.TablePrincipalMap,
+			targetAccountID,
+			catalogID,
+		)); err != nil {
+			return nil, err
+		}
+	}
+	return []ExecResult{icebergUnregisterAccessResultSet(targetAccountID, catalogID, scopeType)}, nil
+}
+
+func icebergUnregisterAccessScope(ctx context.Context, tenant *TenantInfo, opts map[string]string) (string, error) {
+	scopeAlias := strings.TrimSpace(opts["scope"])
+	scopeTypeAlias := strings.TrimSpace(opts["scope_type"])
+	if scopeAlias != "" && scopeTypeAlias != "" && !strings.EqualFold(scopeAlias, scopeTypeAlias) {
+		return "", moerr.NewInvalidInput(ctx, "Iceberg access unregistration scope and scope_type must match")
+	}
+	scopeType := strings.ToLower(firstNonEmptyIcebergAccessOption(opts, "scope_type", "scope"))
+	if scopeType == "" {
+		if tenant.IsSysTenant() {
+			return icebergAccessScopeAll, nil
+		}
+		return model.ResidencyScopeAccount, nil
+	}
+	switch scopeType {
+	case model.ResidencyScopeAccount:
+		return scopeType, nil
+	case model.ResidencyScopeCluster, icebergAccessScopeAll:
+		if !tenant.IsSysTenant() {
+			return "", moerr.NewInvalidInputf(ctx, "%s Iceberg access unregistration requires moadmin role", scopeType)
+		}
+		return scopeType, nil
+	default:
+		return "", moerr.NewInvalidInput(ctx, "Iceberg access unregistration scope must be account, cluster, or all")
+	}
+}
+
+func icebergUnregisterResidencyWhere(scopeType string, accountID uint32) string {
+	switch scopeType {
+	case model.ResidencyScopeCluster:
+		return "scope_type = 'cluster'"
+	case icebergAccessScopeAll:
+		return fmt.Sprintf("(scope_type = 'cluster' or (scope_type = 'account' and account_id = %d))", accountID)
+	default:
+		return fmt.Sprintf("scope_type = 'account' and account_id = %d", accountID)
+	}
+}
+
+func icebergAccessResidencyPolicyCount(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (uint64, error) {
+	results, err := ExeSqlInBgSes(ctx, bh, fmt.Sprintf(
+		"select count(*) from mo_catalog.%s where (scope_type = 'cluster' or account_id = %d) and catalog_id = %d",
+		sqliceberg.TableResidencyPolicy,
 		accountID,
 		catalogID,
-	)
-	bh.ClearExecResultSet()
-	if err := bh.Exec(ctx, sql); err != nil {
-		return "", err
-	}
-	erArray, err := getResultSet(ctx, bh)
+	))
 	if err != nil {
-		return "", err
+		return 0, err
 	}
-	if len(erArray) == 0 || erArray[0].GetRowCount() == 0 {
-		return "", nil
+	if !execResultArrayHasData(results) {
+		return 0, nil
 	}
-	return erArray[0].GetString(ctx, 0, 0)
+	return results[0].GetUint64(ctx, 0, 0)
 }
 
 func icebergAccessAccountID(ctx context.Context, ses FeSession, opts map[string]string) (uint32, error) {
@@ -309,7 +431,7 @@ func icebergAccessAccountID(ctx context.Context, ses FeSession, opts map[string]
 	}
 	parsed, err := strconv.ParseUint(value, 10, 32)
 	if err != nil {
-		return 0, moerr.NewInvalidInput(ctx, "Iceberg access registration account_id must be an unsigned integer")
+		return 0, moerr.NewInvalidInput(ctx, "Iceberg access account_id must be an unsigned integer")
 	}
 	return uint32(parsed), nil
 }
@@ -469,6 +591,30 @@ func icebergRegisterAccessResultSet(accountID uint32, catalogID uint64, external
 		accountID,
 		catalogID,
 		externalPrincipal,
+		scopeType,
+	})
+	return mrs
+}
+
+func icebergUnregisterAccessResultSet(accountID uint32, catalogID uint64, scopeType string) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, colSpec := range []icebergShowColumn{
+		{name: "operation", typ: defines.MYSQL_TYPE_VARCHAR},
+		{name: "status", typ: defines.MYSQL_TYPE_VARCHAR},
+		{name: "account_id", typ: defines.MYSQL_TYPE_LONG},
+		{name: "catalog_id", typ: defines.MYSQL_TYPE_LONGLONG},
+		{name: "scope_type", typ: defines.MYSQL_TYPE_VARCHAR},
+	} {
+		col := new(MysqlColumn)
+		col.SetName(colSpec.name)
+		col.SetColumnType(colSpec.typ)
+		mrs.AddColumn(col)
+	}
+	mrs.AddRow([]interface{}{
+		"unregister_access",
+		"committed",
+		accountID,
+		catalogID,
 		scopeType,
 	})
 	return mrs

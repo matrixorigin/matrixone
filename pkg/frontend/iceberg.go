@@ -176,7 +176,7 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		err = finishTxn(ctx, bh, err)
 	}()
 	catalogName := string(stmt.Name)
-	catalogID, err := queryIcebergCatalogID(ctx, bh, accountID, catalogName)
+	catalogID, _, _, err := queryIcebergCatalogStateForUpdate(ctx, bh, accountID, catalogName)
 	if err != nil {
 		return err
 	}

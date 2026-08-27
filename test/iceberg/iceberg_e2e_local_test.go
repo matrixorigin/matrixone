@@ -437,6 +437,39 @@ func TestLocalE2ECatalogAndMappingCase(t *testing.T) {
 	}
 }
 
+func TestLocalE2EAccessLifecycleCase(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	cfg := localE2ETestConfig()
+
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("CALL iceberg_register_access").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DROP ICEBERG CATALOG").WillReturnError(errors.New("still has dependent metadata: table mappings"))
+	mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables", "principals", "policies"}).
+			AddRow(1, 1, 1, 1))
+	mock.ExpectExec("DROP TABLE").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DROP ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables", "principals", "policies", "refs", "publish", "orphans", "maintenance"}).
+			AddRow(0, 0, 0, 0, 0, 0, 0, 0))
+
+	result := (&caseRunner{cfg: cfg, db: db}).accessLifecycleCase(context.Background())
+	if result.Status != "passed" {
+		t.Fatalf("access lifecycle case failed: %+v", result)
+	}
+	if result.Details["catalog_id"] != "42" || result.Details["blocked_drop"] != "atomic" {
+		t.Fatalf("unexpected lifecycle details: %+v", result.Details)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestLocalE2EPartitionFilterCaseReportsInsertFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
