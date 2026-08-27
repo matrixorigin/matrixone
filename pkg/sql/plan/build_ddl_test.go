@@ -5305,6 +5305,20 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t,
+		"create table timestamp_pair_ctas as select "+
+			"timestamp(cast('2024-01-15' as date), cast('12:30:00.123456' as time(6))) as pair_value")
+	require.NoError(t, err)
+
+	column := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+	require.Equal(t, int32(types.T_datetime), column.Typ.Id)
+	require.Equal(t, int32(6), column.Typ.Width)
+	require.Equal(t, int32(6), column.Typ.Scale)
+	require.True(t, column.GetDefault().GetNullAbility())
+}
+
 func TestCreateTableAsSelectPreservesTimeWindowMicrosecondBoundaryScale(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mockTimeWindowScaleTable(t, mock, types.T_datetime.ToTypeWithScale(0))
