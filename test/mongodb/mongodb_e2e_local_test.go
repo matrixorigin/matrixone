@@ -355,6 +355,17 @@ func mongoDBPortPlanEnv(overrides map[string]string) []string {
 	return environment
 }
 
+type testTransferMonitor struct {
+	reset             func(context.Context) error
+	documentsReturned func(context.Context) (int64, error)
+}
+
+func (m testTransferMonitor) Reset(ctx context.Context) error { return m.reset(ctx) }
+
+func (m testTransferMonitor) DocumentsReturned(ctx context.Context) (int64, error) {
+	return m.documentsReturned(ctx)
+}
+
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	previous, err := os.Getwd()
@@ -415,6 +426,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
+	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "1")
 	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
 		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
@@ -472,8 +484,22 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("alter mongodb connection mongodb_ci enable").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "5")
 
+	transferSteps := 0
+	monitor := testTransferMonitor{
+		reset: func(context.Context) error {
+			transferSteps++
+			return nil
+		},
+		documentsReturned: func(context.Context) (int64, error) {
+			transferSteps++
+			if transferSteps == 2 {
+				return 5, nil
+			}
+			return 1, nil
+		},
+	}
 	result := report{}
-	require.NoError(t, run(t.Context(), db, "127.0.0.1:27017", &result))
+	require.NoError(t, runWithDSNAndTransferMonitor(t.Context(), db, "", "127.0.0.1:27017", &result, monitor))
 	require.Equal(t, []string{
 		"secret-backed-ddl",
 		"show-connections-admin-metadata-redaction",
@@ -499,6 +525,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"credential-generation-rotation",
 		"connection-disable-enable",
 	}, result.Cases)
+	require.Equal(t, &transferEvidence{RawScanDocuments: 5, PipelineDocuments: 1}, result.Transfer)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

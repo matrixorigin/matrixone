@@ -59,7 +59,7 @@ func main() {
 		defer db.Close()
 		err = waitForMO(ctx, db)
 	}
-	var monitor *mongoTransferMonitor
+	var monitor *mongoProfiler
 	if err == nil && (mongoRootUser != "" || mongoRootPassword != "") {
 		monitor, err = newMongoTransferMonitor(ctx, host, mongoRootUser, mongoRootPassword)
 		if err == nil {
@@ -106,7 +106,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	return runWithDSNAndTransferMonitor(ctx, db, dsn, host, r, nil)
 }
 
-func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host string, r *report, monitor *mongoTransferMonitor) error {
+func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host string, r *report, monitor mongoTransferMonitor) error {
 	manifest, err := loadFixtureManifest("test/mongodb/fixture_manifest.json")
 	if err != nil {
 		return err
@@ -445,12 +445,17 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 // command monitor. It observes the MatrixOne driver's actual find/aggregate
 // and getMore replies, so this E2E assertion measures transferred documents
 // rather than using elapsed time as a proxy for reduction.
-type mongoTransferMonitor struct {
+type mongoTransferMonitor interface {
+	Reset(context.Context) error
+	DocumentsReturned(context.Context) (int64, error)
+}
+
+type mongoProfiler struct {
 	client *mongo.Client
 	db     *mongo.Database
 }
 
-func newMongoTransferMonitor(ctx context.Context, host, username, password string) (*mongoTransferMonitor, error) {
+func newMongoTransferMonitor(ctx context.Context, host, username, password string) (*mongoProfiler, error) {
 	if username == "" || password == "" {
 		return nil, errors.New("MongoDB transfer profiling requires both root credentials")
 	}
@@ -464,17 +469,17 @@ func newMongoTransferMonitor(ctx context.Context, host, username, password strin
 		_ = client.Disconnect(context.Background())
 		return nil, fmt.Errorf("ping MongoDB transfer monitor: %w", err)
 	}
-	return &mongoTransferMonitor{client: client, db: client.Database("mongodb_source")}, nil
+	return &mongoProfiler{client: client, db: client.Database("mongodb_source")}, nil
 }
 
-func (m *mongoTransferMonitor) Close(ctx context.Context) error {
+func (m *mongoProfiler) Close(ctx context.Context) error {
 	if m == nil || m.client == nil {
 		return nil
 	}
 	return m.client.Disconnect(ctx)
 }
 
-func (m *mongoTransferMonitor) Reset(ctx context.Context) error {
+func (m *mongoProfiler) Reset(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
@@ -490,7 +495,7 @@ func (m *mongoTransferMonitor) Reset(ctx context.Context) error {
 	return nil
 }
 
-func (m *mongoTransferMonitor) DocumentsReturned(ctx context.Context) (int64, error) {
+func (m *mongoProfiler) DocumentsReturned(ctx context.Context) (int64, error) {
 	if m == nil {
 		return 0, nil
 	}
