@@ -519,6 +519,17 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, windowStmt.QueryRowContext(ctx, int64(7)).Scan(&sum))
 		require.Equal(t, int64(14), sum)
 
+		mixedStmt, err := db.PrepareContext(ctx, "select ?, ? = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, mixedStmt.Close())
+		}()
+		var directValue, equalValue int64
+		require.NoError(t, mixedStmt.QueryRowContext(ctx, int64(7), "same", "same").Scan(
+			&directValue, &equalValue))
+		require.Equal(t, int64(7), directValue)
+		require.Equal(t, int64(1), equalValue)
+
 		for _, name := range []string{"max_by", "max_by_non_null"} {
 			stmt, err := db.PrepareContext(ctx, "select "+name+"(?, 1, 1)")
 			require.NoError(t, err)

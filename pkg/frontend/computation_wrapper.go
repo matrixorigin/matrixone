@@ -1280,9 +1280,11 @@ func initExecuteStmtParamWithResolverInSession(
 	if cachedRuntimeCompile == nil &&
 		(!binaryExecute || runtimeNumericPrefixCandidate || binaryLiteralPlan ||
 			prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
-		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
+		var laterRuntimeSpecialized bool
+		runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
 			reqCtx, executionPlan, cwft.paramVals, binaryExecute, needsRuntimeSpecialization)
-		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
+		runtimeSpecialized = runtimeSpecialized || laterRuntimeSpecialized
+		if err == nil && cacheableRuntimeQuery && laterRuntimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
 				cwft.runtimeCacheTarget = prepareStmt
