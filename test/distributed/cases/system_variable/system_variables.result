@@ -215,11 +215,11 @@ table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦  
-select table_name, column_name from key_column_usage limit 2;
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select table_name, column_name from key_column_usage where table_schema = '__nonexistent_schema__' limit 2;
 ➤ table_name[12,64,0]  ¦  column_name[12,64,0]
 desc columns;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀

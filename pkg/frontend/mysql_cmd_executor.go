@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -2837,7 +2838,7 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, &prepareTs, false, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -4050,6 +4051,13 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
+	if !reusablePlanGenerationSupported(ses.proc) {
+		// Evict eagerly while the rollout gate is closed. Besides releasing the
+		// owned AST, this prevents an entry from surviving an observed protocol
+		// rollback and becoming eligible again after a later upgrade.
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
 	cached := ses.getCachedPlan(input.getHash())
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
@@ -4123,6 +4131,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// to the parser pool while the cache still owns or already freed it.
 			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
+			tcw.cachedPlanSQL = execCtx.input.getHash()
+			tcw.cachedPlanIndex = i
+			tcw.cachedPlanGeneration = cached.plans[i]
+			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
+			tcw.planGenerationReused = true
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -5343,9 +5356,8 @@ func executeStmt(ses *Session,
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
 
-			// Sync the latest plan after Run (it may have changed due to retry)
 			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				txnCw.plan = c.GetPlan()
+				txnCw.completeCompileExecution(c, err)
 			}
 
 			// Serialize the execution plan as json
@@ -5616,7 +5628,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := !stagedSQLMode && input.canUsePlanCache()
+	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -5806,37 +5819,53 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	if !canCache {
+		return nil
+	}
+	cacheKey := input.getHash()
+	if ses.isCached(cacheKey) {
+		return nil
+	}
+	for _, cw := range cws {
+		if tcw, ok := cw.(*TxnComputationWrapper); ok && tcw.cachedPlanSQL == cacheKey {
+			// A publication or failed generation replacement made the entry stale
+			// while these wrappers still borrowed its AST. Do not republish the
+			// just-executed old plan without rebuilding its statistics dependencies.
+			// Wrapper cleanup runs first; the next lookup then evicts the stale owner.
+			return nil
+		}
+	}
+
 	cacheProtocolVersion := currentProtocolVersion(proc)
-	cacheStatsVersions := make(map[optimizerStatsTableKey]uint64)
-	if canCache && !ses.isCached(input.getHash()) {
-		for _, cw := range cws {
-			tcw, ok := cw.(*TxnComputationWrapper)
-			if !ok || tcw.protocolVersion != cacheProtocolVersion {
-				canCache = false
-				break
-			}
-			if !mergeOptimizerStatsVersions(cacheStatsVersions, tcw.optimizerStatsVersions) {
-				canCache = false
-				break
-			}
+	planStatsVersions := make([]map[optimizerStatsTableKey]uint64, len(cws))
+	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
+	for i, cw := range cws {
+		tcw, ok := cw.(*TxnComputationWrapper)
+		if !ok || tcw.protocolVersion != cacheProtocolVersion {
+			return nil
 		}
-	}
-	if canCache && !ses.isCached(input.getHash()) {
-		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]tree.Statement, len(cws))
-		for i, cw := range cws {
-			if checkNodeCanCache(cw.Plan()) {
-				plans[i] = cw.Plan()
-				stmts[i] = cw.GetAst()
-			} else {
-				return nil
-			}
-			cw.Clear()
+		var hasPlanSnapshotTS bool
+		planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()
+		if !hasPlanSnapshotTS {
+			return nil
 		}
-		Cached = true
-		ses.cachePlanWithStatsVersions(
-			input.getHash(), stmts, plans, cacheStatsVersions, cacheProtocolVersion)
+		planStatsVersions[i] = tcw.optimizerStatsVersions
 	}
+
+	plans := make([]*plan.Plan, len(cws))
+	stmts := make([]tree.Statement, len(cws))
+	for i, cw := range cws {
+		if checkNodeCanCache(cw.Plan()) {
+			plans[i] = cw.Plan()
+			stmts[i] = cw.GetAst()
+		} else {
+			return nil
+		}
+		cw.Clear()
+	}
+	Cached = true
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
 }

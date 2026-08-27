@@ -22,6 +22,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -127,6 +128,61 @@ func Test_DuplicateKeyRefreshesLRU(t *testing.T) {
 	pc.clean()
 	require.Equal(t, 1, secondA.freed)
 	require.Equal(t, 1, c.freed)
+}
+
+func TestPlanCacheUpdatesPlanAndSnapshotAsOneGeneration(t *testing.T) {
+	pc := newPlanCache(1)
+	firstStmt := &trackedStatement{}
+	secondStmt := &trackedStatement{}
+	firstPlan := &plan.Plan{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+	firstTS := timestamp.Timestamp{PhysicalTime: 10}
+	oldTS := timestamp.Timestamp{PhysicalTime: 20}
+	newTS := timestamp.Timestamp{PhysicalTime: 30}
+	firstStats := optimizerStatsTableKey{accountID: 1, tableID: 10}
+	secondStats := optimizerStatsTableKey{accountID: 2, tableID: 20}
+	rebuiltStats := optimizerStatsTableKey{accountID: 2, tableID: 21}
+	pc.cacheWithPlanSnapshotsAndStatsVersions(
+		"sql",
+		[]tree.Statement{firstStmt, secondStmt},
+		[]*plan.Plan{firstPlan, oldPlan},
+		[]timestamp.Timestamp{firstTS, oldTS},
+		[]map[optimizerStatsTableKey]uint64{
+			{firstStats: 1},
+			{secondStats: 2},
+		},
+	)
+
+	require.False(t, pc.updatePlanGeneration("sql", 1, firstPlan, newPlan, newTS, nil))
+	require.False(t, pc.updatePlanGeneration(
+		"sql", 1, oldPlan, newPlan, newTS,
+		map[optimizerStatsTableKey]uint64{firstStats: 3}),
+		"a replacement cannot combine two versions of one dependency")
+	require.True(t, pc.updatePlanGeneration(
+		"sql", 1, oldPlan, newPlan, newTS,
+		map[optimizerStatsTableKey]uint64{rebuiltStats: 3}))
+	cached := pc.get("sql")
+	require.Same(t, firstPlan, cached.plans[0])
+	require.Equal(t, firstTS, cached.planSnapshotTS[0])
+	require.Same(t, newPlan, cached.plans[1])
+	require.Equal(t, newTS, cached.planSnapshotTS[1])
+	require.Equal(t, map[optimizerStatsTableKey]uint64{
+		firstStats:   1,
+		rebuiltStats: 3,
+	}, cached.statsVersions)
+	require.Equal(t, map[optimizerStatsTableKey]uint64{firstStats: 1}, cached.planStatsVersions[0])
+	require.Equal(t, map[optimizerStatsTableKey]uint64{rebuiltStats: 3}, cached.planStatsVersions[1])
+
+	pc.invalidatePlanGeneration("sql", 1, oldPlan)
+	require.True(t, pc.isCached("sql"), "an obsolete generation cannot invalidate its replacement")
+	pc.invalidatePlanGeneration("sql", 1, newPlan)
+	require.False(t, pc.isCached("sql"))
+	require.Zero(t, firstStmt.freed)
+	require.Zero(t, secondStmt.freed)
+	require.Nil(t, pc.get("sql"))
+	require.Equal(t, 1, firstStmt.freed)
+	require.Equal(t, 1, secondStmt.freed)
 }
 
 func Test_CleanCache(t *testing.T) {
@@ -288,6 +344,30 @@ func TestMergeOptimizerStatsVersionsRejectsMixedGenerations(t *testing.T) {
 	require.False(t, mergeOptimizerStatsVersions(versions,
 		map[optimizerStatsTableKey]uint64{first: 11}))
 	require.Equal(t, uint64(10), versions[first])
+}
+
+func TestSessionReportsStaleStatsWithoutFreeingBorrowedCachedAST(t *testing.T) {
+	const service = "stale-stats-borrowed-ast"
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+
+	key := optimizerStatsTableKey{accountID: 7, tableID: 11}
+	stmt := &trackedStatement{}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{service: service},
+		planCache:     newPlanCache(1),
+	}
+	ses.cachePlanWithStatsVersions(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{{}},
+		map[optimizerStatsTableKey]uint64{key: 0})
+	require.True(t, ses.isCached("cached"))
+
+	advanceOptimizerStatsVersion(service, key)
+	require.False(t, ses.isCached("cached"))
+	require.Zero(t, stmt.freed, "an executing wrapper may still borrow this AST")
+
+	require.Nil(t, ses.getCachedPlan("cached"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 var optimizerStatsVersionsCurrentSink bool

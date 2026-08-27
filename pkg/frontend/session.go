@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -77,6 +78,15 @@ func currentProtocolVersion(proc *process.Process) int64 {
 		return defines.MORPCVersion4
 	}
 	return version
+}
+
+// reusablePlanGenerationSupported reports whether every live service in the
+// rollout understands the logical-plan generation snapshot carried by remote
+// pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest
+// live service, so cross-transaction plan reuse must remain disabled until the
+// version 32 wire contract is active cluster-wide.
+func reusablePlanGenerationSupported(proc *process.Process) bool {
+	return currentProtocolVersion(proc) >= defines.MORPCVersion32
 }
 
 func init() {
@@ -1507,7 +1517,9 @@ func (ses *Session) IsBackgroundSession() bool {
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
-	ses.cachePlanWithStatsVersions(sql, stmts, plans, nil, versions...)
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
 }
 
 func (ses *Session) cachePlanWithStatsVersions(
@@ -1517,10 +1529,36 @@ func (ses *Session) cachePlanWithStatsVersions(
 	statsVersions map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		planStatsVersionsFromAggregate(len(plans), statsVersions), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS,
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
 		return
 	}
-	if !optimizerStatsVersionsCurrent(ses.GetService(), statsVersions) {
+	statsVersions, versionsConsistent := aggregatePlanStatsVersions(planStatsVersions)
+	if !versionsConsistent || !optimizerStatsVersionsCurrent(ses.GetService(), statsVersions) {
 		// The plan crossed a statistics publication boundary while compiling.
 		// It may execute, but must not enter the cache with stale dependencies.
 		freeStmts(stmts)
@@ -1536,7 +1574,8 @@ func (ses *Session) cachePlanWithStatsVersions(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithStatsVersions(sql, stmts, plans, statsVersions, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -1566,13 +1605,15 @@ func (ses *Session) isCached(sql string) bool {
 	if ses.planCache == nil {
 		return false
 	}
-	cached := ses.planCache.get(sql)
-	if cached == nil {
+	if !ses.planCache.isCached(sql) {
 		return false
 	}
+	cached := ses.planCache.cachePool[sql].Value.(*cachedPlan)
 	if cached.protocolVersion != currentProtocolVersion(ses.proc) ||
 		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions) {
-		ses.planCache.remove(sql)
+		// isCached is also queried while wrappers still borrow the cached AST at
+		// the end of execution. Report staleness without releasing that owner;
+		// the next getCachedPlan lookup removes it after all borrowers are gone.
 		return false
 	}
 	return true
@@ -1586,6 +1627,41 @@ func (ses *Session) removeCachedPlan(sql string) {
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.remove(sql)
+	}
+}
+
+func (ses *Session) updateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+	statsVersions map[optimizerStatsTableKey]uint64,
+) bool {
+	if len(sql) == 0 {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
+	return ses.planCache.updatePlanGeneration(
+		sql, index, expectedPlan, newPlan, planSnapshotTS, statsVersions)
+}
+
+func (ses *Session) invalidateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidatePlanGeneration(sql, index, expectedPlan)
 	}
 }
 
