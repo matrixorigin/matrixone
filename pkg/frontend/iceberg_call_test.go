@@ -22,6 +22,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -274,6 +275,27 @@ func TestIcebergUnregisterAccessScopeAuthorization(t *testing.T) {
 	}
 	if _, err := icebergUnregisterAccessScope(ctx, sys, map[string]string{"scope": "cluster", "scope_type": "all"}); err == nil || !strings.Contains(err.Error(), "must match") {
 		t.Fatalf("expected conflicting scope alias rejection, got %v", err)
+	}
+	if _, err := icebergUnregisterAccessScope(ctx, sys, map[string]string{"scope": "tenant"}); err == nil || !strings.Contains(err.Error(), "account, cluster, or all") {
+		t.Fatalf("expected unsupported scope rejection, got %v", err)
+	}
+}
+
+func TestIcebergUnregisterResidencyWhere(t *testing.T) {
+	tests := []struct {
+		scope string
+		want  string
+	}{
+		{scope: model.ResidencyScopeCluster, want: "scope_type = 'cluster'"},
+		{scope: icebergAccessScopeAll, want: "(scope_type = 'cluster' or (scope_type = 'account' and account_id = 9))"},
+		{scope: model.ResidencyScopeAccount, want: "scope_type = 'account' and account_id = 9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.scope, func(t *testing.T) {
+			if got := icebergUnregisterResidencyWhere(tt.scope, 9); got != tt.want {
+				t.Fatalf("scope predicate = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
