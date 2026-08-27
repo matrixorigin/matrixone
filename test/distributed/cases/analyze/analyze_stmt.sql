@@ -41,6 +41,12 @@ select 'AFTER_EXPLICIT_QUOTED';
 analyze table quoted_cols;
 select 'AFTER_EXPANDED_QUOTED';
 
+-- views retain the legacy derived-query result and must not be subscribed as
+-- physical optimizer-statistics tables
+create view v_analyze as select a, b from t_analyze_01;
+analyze table v_analyze(a);
+select 'AFTER_VIEW_ANALYZE';
+
 -- quoted database, table, and column identifiers
 create database `select-db`;
 create table `select-db`.`tick``table`(`a-b` int);
@@ -120,6 +126,7 @@ show profile;
 rollback;
 
 -- cleanup
+drop view v_analyze;
 drop table t_analyze_01;
 drop table t_analyze_02;
 drop table quoted_cols;

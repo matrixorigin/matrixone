@@ -2107,16 +2107,14 @@ func refreshAnalyzeTableStats(ses *Session, ctx context.Context, entry *tree.Ana
 	if obj == nil || tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, string(entry.Table.Name()))
 	}
-	// Historical snapshots, temporary tables, and publication-backed tables do
-	// not own the current local engine statistics generation.
-	if tableDef.IsTemporary || obj.PubInfo != nil {
+	// Historical snapshots and publication-backed tables do not own the current
+	// local engine statistics generation. Non-physical relations keep the
+	// legacy derived-query result without asking disttae to subscribe to them.
+	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
 		return nil
 	}
 
-	accountID, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
+	accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
 	databaseID := tableDef.DbId
 	if databaseID == 0 {
 		databaseID, err = tcc.GetDatabaseId(obj.SchemaName, nil)
@@ -2132,6 +2130,23 @@ func refreshAnalyzeTableStats(ses *Session, ctx context.Context, entry *tree.Ana
 		TableName:  obj.ObjName,
 	}
 	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+}
+
+func analyzeTableOwnsPersistentStats(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.IsTemporary || tableDef.ViewSql != nil {
+		return false
+	}
+	switch tableDef.TableType {
+	case "",
+		catalog.SystemOrdinaryRel,
+		catalog.SystemIndexRel,
+		catalog.SystemMaterializedRel,
+		catalog.SystemClusterRel,
+		catalog.SystemPartitionRel:
+		return true
+	default:
+		return false
+	}
 }
 
 func publishAnalyzeTableStats(
@@ -2159,7 +2174,7 @@ func publishAnalyzeTableStats(
 	// this table's version invalidates only dependent session entries; unrelated
 	// table statistics and plans remain reusable.
 	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
-	ses.cachePublishedStats(key.TableID, version, stats)
+	ses.cachePublishedStats(tableKey, version, stats)
 	return nil
 }
 
@@ -5792,7 +5807,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	} // end of for
 
 	cacheProtocolVersion := currentProtocolVersion(proc)
-	cacheStatsVersions := make(map[uint64]uint64)
+	cacheStatsVersions := make(map[optimizerStatsTableKey]uint64)
 	if canCache && !ses.isCached(input.getHash()) {
 		for _, cw := range cws {
 			tcw, ok := cw.(*TxnComputationWrapper)

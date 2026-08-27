@@ -279,11 +279,15 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 }
 
 func TestMergeOptimizerStatsVersionsRejectsMixedGenerations(t *testing.T) {
-	versions := map[uint64]uint64{1: 10}
-	require.True(t, mergeOptimizerStatsVersions(versions, map[uint64]uint64{1: 10, 2: 20}))
-	require.Equal(t, map[uint64]uint64{1: 10, 2: 20}, versions)
-	require.False(t, mergeOptimizerStatsVersions(versions, map[uint64]uint64{1: 11}))
-	require.Equal(t, uint64(10), versions[1])
+	first := optimizerStatsTableKey{accountID: 7, tableID: 1}
+	second := optimizerStatsTableKey{accountID: 8, tableID: 1}
+	versions := map[optimizerStatsTableKey]uint64{first: 10}
+	require.True(t, mergeOptimizerStatsVersions(versions,
+		map[optimizerStatsTableKey]uint64{first: 10, second: 20}))
+	require.Equal(t, map[optimizerStatsTableKey]uint64{first: 10, second: 20}, versions)
+	require.False(t, mergeOptimizerStatsVersions(versions,
+		map[optimizerStatsTableKey]uint64{first: 11}))
+	require.Equal(t, uint64(10), versions[first])
 }
 
 var optimizerStatsVersionsCurrentSink bool
@@ -306,14 +310,16 @@ func BenchmarkOptimizerStatsVersionsCurrent(b *testing.B) {
 		{name: "sixteen-tables", dependency: 16},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			versions := make(map[uint64]uint64, tc.dependency)
+			versions := make(map[optimizerStatsTableKey]uint64, tc.dependency)
 			for tableID := 1; tableID <= tc.dependency; tableID++ {
-				versions[uint64(tableID)] = 0
+				versions[optimizerStatsTableKey{
+					accountID: accountID,
+					tableID:   uint64(tableID),
+				}] = 0
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				optimizerStatsVersionsCurrentSink = optimizerStatsVersionsCurrent(
-					service, accountID, versions)
+				optimizerStatsVersionsCurrentSink = optimizerStatsVersionsCurrent(service, versions)
 			}
 		})
 	}

@@ -4788,6 +4788,39 @@ func (f analyzeStatsRefresherFunc) RefreshTableStats(
 	return f(ctx, key)
 }
 
+func TestAnalyzeTableOwnsPersistentStats(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		tableDef *plan0.TableDef
+		want     bool
+	}{
+		{name: "missing definition"},
+		{name: "ordinary", tableDef: &plan0.TableDef{TableType: catalog.SystemOrdinaryRel}, want: true},
+		{name: "legacy physical kind", tableDef: &plan0.TableDef{}, want: true},
+		{name: "index", tableDef: &plan0.TableDef{TableType: catalog.SystemIndexRel}, want: true},
+		{name: "materialized", tableDef: &plan0.TableDef{TableType: catalog.SystemMaterializedRel}, want: true},
+		{name: "cluster", tableDef: &plan0.TableDef{TableType: catalog.SystemClusterRel}, want: true},
+		{name: "partition", tableDef: &plan0.TableDef{TableType: catalog.SystemPartitionRel}, want: true},
+		{name: "view kind", tableDef: &plan0.TableDef{TableType: catalog.SystemViewRel}},
+		{name: "view definition", tableDef: &plan0.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			ViewSql:   &plan0.ViewDef{View: "select 1"},
+		}},
+		{name: "external", tableDef: &plan0.TableDef{TableType: catalog.SystemExternalRel}},
+		{name: "sequence", tableDef: &plan0.TableDef{TableType: catalog.SystemSequenceRel}},
+		{name: "removed source", tableDef: &plan0.TableDef{TableType: catalog.SystemSourceRel}},
+		{name: "temporary session table", tableDef: &plan0.TableDef{
+			TableType:   catalog.SystemOrdinaryRel,
+			IsTemporary: true,
+		}},
+		{name: "legacy temporary kind", tableDef: &plan0.TableDef{TableType: catalog.SystemTemporaryTable}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, analyzeTableOwnsPersistentStats(test.tableDef))
+		})
+	}
+}
+
 func isolateOptimizerStatsTest(t *testing.T, sessions ...*Session) {
 	t.Helper()
 	service := "optimizer-stats-" + t.Name()
@@ -4813,27 +4846,63 @@ func optimizerStatsTestPlan(tableIDs ...uint64) *plan0.Plan {
 	return &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{Nodes: nodes}}}
 }
 
-func optimizerStatsVersionsForTest(ses *Session, tableIDs ...uint64) map[uint64]uint64 {
-	versions := make(map[uint64]uint64, len(tableIDs))
+func optimizerStatsVersionsForTest(
+	ses *Session,
+	tableIDs ...uint64,
+) map[optimizerStatsTableKey]uint64 {
+	keys := make([]optimizerStatsTableKey, 0, len(tableIDs))
 	for _, tableID := range tableIDs {
-		versions[tableID] = currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
+		keys = append(keys, ses.optimizerStatsKey(tableID))
+	}
+	return optimizerStatsVersionsForKeysTest(ses, keys...)
+
+}
+
+func optimizerStatsVersionsForKeysTest(
+	ses *Session,
+	keys ...optimizerStatsTableKey,
+) map[optimizerStatsTableKey]uint64 {
+	versions := make(map[optimizerStatsTableKey]uint64, len(keys))
+	for _, key := range keys {
+		versions[key] = currentOptimizerStatsVersion(ses.GetService(), key)
 	}
 	return versions
 }
 
 func cacheOptimizerPlanForTest(ses *Session, sql string, tableIDs ...uint64) {
+	keys := make([]optimizerStatsTableKey, 0, len(tableIDs))
+	for _, tableID := range tableIDs {
+		keys = append(keys, ses.optimizerStatsKey(tableID))
+	}
+	cacheOptimizerPlanForKeysTest(ses, sql, keys...)
+}
+
+func cacheOptimizerPlanForKeysTest(ses *Session, sql string, keys ...optimizerStatsTableKey) {
+	tableIDs := make([]uint64, 0, len(keys))
+	for _, key := range keys {
+		tableIDs = append(tableIDs, key.tableID)
+	}
 	ses.cachePlanWithStatsVersions(
 		sql,
 		[]tree.Statement{&tree.Select{}},
 		[]*plan0.Plan{optimizerStatsTestPlan(tableIDs...)},
-		optimizerStatsVersionsForTest(ses, tableIDs...),
+		optimizerStatsVersionsForKeysTest(ses, keys...),
 	)
 }
 
 func cacheOptimizerStatsForTest(t *testing.T, ses *Session, tableID uint64, stats *pbstats.StatsInfo) uint64 {
+	return cacheOptimizerStatsForKeyTest(t, ses, ses.optimizerStatsKey(tableID), stats)
+}
+
+func cacheOptimizerStatsForKeyTest(
+	t *testing.T,
+	ses *Session,
+	key optimizerStatsTableKey,
+	stats *pbstats.StatsInfo,
+) uint64 {
 	t.Helper()
-	version := currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
-	require.True(t, ses.cacheStatsIfCurrent(tableID, version, stats))
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	require.True(t, ses.cacheStatsIfCurrent(key, version, stats))
 	return version
 }
 
@@ -4842,6 +4911,7 @@ func TestCompilerContextRecordsTheStatsVersionActuallyRead(t *testing.T) {
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
 	isolateOptimizerStatsTest(t, ses)
+	ses.SetAccountId(7)
 
 	const tableID = uint64(42)
 	wrapper := InitTxnComputationWrapper(ses, &tree.Select{}, execCtx.proc)
@@ -4849,17 +4919,26 @@ func TestCompilerContextRecordsTheStatsVersionActuallyRead(t *testing.T) {
 	tcc.SetExecCtx(execCtx)
 	tcc.tcw = wrapper
 
-	_, firstVersion := ses.getStatsCacheWithVersion(tableID)
+	key := tcc.optimizerStatsKey(&plan0.ObjectRef{
+		Obj:        int64(tableID),
+		SchemaName: catalog.MO_SYSTEM,
+		ObjName:    catalog.MO_STATEMENT,
+	}, nil)
+	require.Equal(t, optimizerStatsTableKey{
+		accountID: catalog.System_Account,
+		tableID:   tableID,
+	}, key)
+	_, firstVersion := ses.getStatsCacheWithVersion(key)
 	require.NotContains(t, ses.statsCacheVersions, tableID,
 		"a failed or uncached stats read must not grow session version metadata")
-	_, _, recordedVersion := tcc.getStatsCacheVersion(tableID)
+	_, _, recordedVersion := tcc.getStatsCacheVersion(key)
 	require.Equal(t, firstVersion, recordedVersion)
-	require.Equal(t, firstVersion, wrapper.optimizerStatsVersions[tableID])
+	require.Equal(t, firstVersion, wrapper.optimizerStatsVersions[key])
 
-	advanceOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
-	_, _, currentVersion := tcc.getStatsCacheVersion(tableID)
+	advanceOptimizerStatsVersion(ses.GetService(), key)
+	_, _, currentVersion := tcc.getStatsCacheVersion(key)
 	require.NotEqual(t, firstVersion, currentVersion)
-	require.Equal(t, firstVersion, wrapper.optimizerStatsVersions[tableID],
+	require.Equal(t, firstVersion, wrapper.optimizerStatsVersions[key],
 		"a plan that read both sides of publication must retain its stale dependency and be rejected")
 }
 
@@ -4891,8 +4970,10 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
 	otherSes, _ := newAnalyzeHandlerTestSession(t, ctrl)
 	otherTenantSes, _ := newAnalyzeHandlerTestSession(t, ctrl)
-	isolateOptimizerStatsTest(t, ses, otherSes, otherTenantSes)
+	crossAccountSes, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses, otherSes, otherTenantSes, crossAccountSes)
 	otherTenantSes.SetAccountId(7)
+	crossAccountSes.SetAccountId(7)
 
 	const (
 		tableID      = uint64(42)
@@ -4913,12 +4994,15 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 	cacheOptimizerStatsForTest(t, otherSes, otherTableID, otherStats)
 	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
 	cacheOptimizerStatsForTest(t, otherTenantSes, tableID, oldStats)
+	physicalKey := optimizerStatsTableKey{accountID: catalog.System_Account, tableID: tableID}
+	crossAccountOldVersion := cacheOptimizerStatsForKeyTest(t, crossAccountSes, physicalKey, oldStats)
 
 	dependentPlan := optimizerStatsTestPlan(tableID)
 	compileVersions := optimizerStatsVersionsForTest(otherSes, tableID)
 	cacheOptimizerPlanForTest(otherSes, "select url from events", tableID)
 	cacheOptimizerPlanForTest(otherSes, "select id from other_table", otherTableID)
 	cacheOptimizerPlanForTest(otherTenantSes, "select url from tenant_events", tableID)
+	cacheOptimizerPlanForKeysTest(crossAccountSes, "select url from system.statement_info", physicalKey)
 
 	freshStats := plan.NewStatsInfo()
 	freshStats.AccurateObjectNumber = 8
@@ -4931,7 +5015,7 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 
 	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher))
 	require.Equal(t, key, gotKey)
-	cache, _ := ses.getStatsCacheWithVersion(tableID)
+	cache, _ := ses.getStatsCacheWithVersion(physicalKey)
 	wrapper := cache.Get(tableID)
 	require.Same(t, freshStats, wrapper.GetStats())
 	otherSes.cachePlanWithStatsVersions("compiled before analyze completed",
@@ -4943,15 +5027,20 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 		"an unrelated table publication must not flush the session plan cache")
 	require.NotNil(t, otherTenantSes.getCachedPlan("select url from tenant_events"),
 		"the same table ID in another account must keep its plan")
-	require.False(t, otherSes.cacheStatsIfCurrent(tableID, oldVersion, oldStats),
+	require.Nil(t, crossAccountSes.getCachedPlan("select url from system.statement_info"),
+		"a tenant plan must validate the system account generation that owns its statistics")
+	require.False(t, otherSes.cacheStatsIfCurrent(otherSes.optimizerStatsKey(tableID), oldVersion, oldStats),
 		"a stats read started before publication must not repopulate the table entry")
-	otherCache, currentVersion := otherSes.getStatsCacheWithVersion(tableID)
+	require.False(t, crossAccountSes.cacheStatsIfCurrent(physicalKey, crossAccountOldVersion, oldStats),
+		"a cross-account stats read must not repopulate the old physical generation")
+	otherCache, currentVersion := otherSes.getStatsCacheWithVersion(otherSes.optimizerStatsKey(tableID))
 	otherWrapper := otherCache.Get(tableID)
 	require.False(t, otherWrapper.Exists())
 	otherTableWrapper := otherCache.Get(otherTableID)
 	require.Same(t, otherStats, otherTableWrapper.GetStats(),
 		"invalidating one table must retain unrelated statistics")
-	require.True(t, otherSes.cacheStatsIfCurrent(tableID, currentVersion, freshStats))
+	require.True(t, otherSes.cacheStatsIfCurrent(
+		otherSes.optimizerStatsKey(tableID), currentVersion, freshStats))
 	currentWrapper := otherCache.Get(tableID)
 	require.Same(t, freshStats, currentWrapper.GetStats())
 }
@@ -4974,7 +5063,7 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 
 	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
 	require.ErrorIs(t, err, wantErr)
-	cache, _ := ses.getStatsCacheWithVersion(tableID)
+	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
 	wrapper := cache.Get(tableID)
 	require.Same(t, oldStats, wrapper.GetStats())
 	require.NotNil(t, ses.getCachedPlan("select url from events"))
@@ -5002,7 +5091,7 @@ func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
 	require.Equal(t, version,
 		currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID)))
 	require.Equal(t, clock, currentOptimizerStatsClock(ses.GetService()))
-	cache, _ := ses.getStatsCacheWithVersion(tableID)
+	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
 	wrapper := cache.Get(tableID)
 	require.Same(t, oldStats, wrapper.GetStats())
 	require.NotNil(t, ses.getCachedPlan("select url from events"))

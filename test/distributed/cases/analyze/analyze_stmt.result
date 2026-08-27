@@ -42,6 +42,13 @@ approx_count_distinct(select)	approx_count_distinct(a-b)	approx_count_distinct(t
 select 'AFTER_EXPANDED_QUOTED';
 AFTER_EXPANDED_QUOTED
 AFTER_EXPANDED_QUOTED
+create view v_analyze as select a, b from t_analyze_01;
+analyze table v_analyze(a);
+approx_count_distinct(a)
+2
+select 'AFTER_VIEW_ANALYZE';
+AFTER_VIEW_ANALYZE
+AFTER_VIEW_ANALYZE
 create database `select-db`;
 create table `select-db`.`tick``table`(`a-b` int);
 insert into `select-db`.`tick``table` values (1),(1),(2);
@@ -146,6 +153,7 @@ begin;
 show profile;
 not supported: SHOW PROFILE is not supported in MatrixOne
 rollback;
+drop view v_analyze;
 drop table t_analyze_01;
 drop table t_analyze_02;
 drop table quoted_cols;

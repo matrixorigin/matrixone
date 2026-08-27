@@ -704,8 +704,7 @@ func advanceOptimizerStatsVersionLocked(
 
 func optimizerStatsVersionsCurrent(
 	service string,
-	accountID uint32,
-	versions map[uint64]uint64,
+	versions map[optimizerStatsTableKey]uint64,
 ) bool {
 	if len(versions) == 0 {
 		return true
@@ -713,11 +712,8 @@ func optimizerStatsVersionsCurrent(
 	vars := getOptimizerStatsVars(service)
 	vars.optimizerStatsMu.RLock()
 	defer vars.optimizerStatsMu.RUnlock()
-	for tableID, version := range versions {
-		if currentOptimizerStatsVersionLocked(vars, optimizerStatsTableKey{
-			accountID: accountID,
-			tableID:   tableID,
-		}) != version {
+	for key, version := range versions {
+		if currentOptimizerStatsVersionLocked(vars, key) != version {
 			return false
 		}
 	}

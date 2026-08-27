@@ -26,7 +26,7 @@ type cachedPlan struct {
 	stmts           []tree.Statement
 	plans           []*plan.Plan
 	protocolVersion int64
-	statsVersions   map[uint64]uint64
+	statsVersions   map[optimizerStatsTableKey]uint64
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -60,7 +60,7 @@ func (pc *planCache) cacheWithStatsVersions(
 	sql string,
 	stmts []tree.Statement,
 	plans []*plan.Plan,
-	statsVersions map[uint64]uint64,
+	statsVersions map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
 	protocolVersion := currentProtocolVersion(nil)
@@ -106,23 +106,23 @@ func (pc *planCache) cacheWithStatsVersions(
 	}
 }
 
-func cloneStatsVersions(versions map[uint64]uint64) map[uint64]uint64 {
+func cloneStatsVersions(versions map[optimizerStatsTableKey]uint64) map[optimizerStatsTableKey]uint64 {
 	if len(versions) == 0 {
 		return nil
 	}
-	cloned := make(map[uint64]uint64, len(versions))
-	for tableID, version := range versions {
-		cloned[tableID] = version
+	cloned := make(map[optimizerStatsTableKey]uint64, len(versions))
+	for key, version := range versions {
+		cloned[key] = version
 	}
 	return cloned
 }
 
-func mergeOptimizerStatsVersions(dst, src map[uint64]uint64) bool {
-	for tableID, version := range src {
-		if prior, exists := dst[tableID]; exists && prior != version {
+func mergeOptimizerStatsVersions(dst, src map[optimizerStatsTableKey]uint64) bool {
+	for key, version := range src {
+		if prior, exists := dst[key]; exists && prior != version {
 			return false
 		}
-		dst[tableID] = version
+		dst[key] = version
 	}
 	return true
 }
