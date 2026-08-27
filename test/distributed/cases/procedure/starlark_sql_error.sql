@@ -18,12 +18,17 @@ create table plog (id int, note varchar(300));
 
 create or replace procedure sp_err() language 'starlark'
 $$
+# The error value carries its codes AND keeps behaving like the message
+# string it replaced: row 4 is its own fields, row 7 that a string method is
+# both listed and callable on it.
 rs, err = mo.sql("insert into t values (1, 'dup')")
 code = -1 if err == None else err.code
 state = "none" if err == None else err.sqlstate
 isdup = False if err == None else err.code == 1062
 truthy = False if err == None else bool(err)
-attrs = [] if err == None else dir(err)
+own = [] if err == None else [a for a in dir(err) if a in ("code", "message", "sqlstate")]
+strmeth = False if err == None else "startswith" in dir(err)
+prefixed = False if err == None else err.startswith("Duplicate entry")
 concat = "" if err == None else "concat: " + err
 same = "" if err == None else err.message
 q, qe = mo.quote(concat)
@@ -31,7 +36,8 @@ q2, qe2 = mo.quote(same)
 mo.sql("insert into plog values (1, 'code={} sqlstate={}')".format(code, state))
 mo.sql("insert into plog values (2, 'is_dup={}')".format(isdup))
 mo.sql("insert into plog values (3, 'truthy={}')".format(truthy))
-mo.sql("insert into plog values (4, 'attrs={}')".format(attrs))
+mo.sql("insert into plog values (4, 'own={}')".format(own))
+mo.sql("insert into plog values (7, 'has_string_methods={} startswith={}')".format(strmeth, prefixed))
 mo.sql("insert into plog values (5, '{}')".format(q))
 mo.sql("insert into plog values (6, '{}')".format(q2))
 $$;
