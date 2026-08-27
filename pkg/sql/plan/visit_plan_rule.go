@@ -1066,21 +1066,6 @@ func collectFlattenedPreparedNumericSourcePositions(expr *plan.Expr, positions m
 	}
 }
 
-// preparedNumericValueParamPosition is retained for callers that need only an
-// eligibility marker. Production rebinding uses the complete position set.
-func preparedNumericValueParamPosition(expr *plan.Expr) (int32, bool) {
-	positions := preparedNumericValueParamPositions(expr)
-	var selected int32
-	found := false
-	for pos := range positions {
-		if !found || pos < selected {
-			selected = pos
-			found = true
-		}
-	}
-	return selected, found
-}
-
 func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
 	if expr == nil {
 		return

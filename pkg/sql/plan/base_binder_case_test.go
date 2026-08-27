@@ -360,7 +360,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 		{name: "literal", expr: literalExpr("1"), want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, got := preparedNumericValueParamPosition(tc.expr)
+			got := len(preparedNumericValueParamPositions(tc.expr)) > 0
 			require.Equal(t, tc.want, got)
 		})
 	}

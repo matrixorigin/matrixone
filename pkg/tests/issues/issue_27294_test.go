@@ -157,6 +157,7 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			"select abs(if(1, ?, ?))",
 			"select abs(case when 1 then ? else ? end)",
 			"select abs((select ? + ?))",
+			"select abs((select ?) + (select ?))",
 		} {
 			stmt, err := db.PrepareContext(ctx, query)
 			require.NoError(t, err, query)
