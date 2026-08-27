@@ -27,6 +27,76 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestDatabaseWasCreated(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		runResult *util.RunResult
+		want      bool
+	}{
+		{name: "physical creation", runResult: &util.RunResult{AffectRows: 1}, want: true},
+		{name: "if not exists no-op", runResult: &util.RunResult{}},
+		{name: "missing run result", runResult: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, databaseWasCreated(tc.runResult))
+		})
+	}
+}
+
+type statusCreateDatabaseRunner struct {
+	result *util.RunResult
+}
+
+func (r *statusCreateDatabaseRunner) Run(uint64) (*util.RunResult, error) {
+	return r.result, nil
+}
+
+func TestExecuteStatusCreateDatabaseUsesPhysicalCreationResult(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		runResult *util.RunResult
+	}{
+		{name: "physical creation", runResult: &util.RunResult{AffectRows: 1}},
+		{name: "if not exists no-op", runResult: &util.RunResult{}},
+		{name: "missing run result", runResult: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{}
+			ses.SetTenantInfo(&TenantInfo{DefaultRoleID: moAdminRoleID})
+			execCtx := &ExecCtx{
+				reqCtx: context.Background(),
+				stmt:   &tree.CreateDatabase{Name: tree.Identifier("ownership_db")},
+				runner: &statusCreateDatabaseRunner{result: tc.runResult},
+			}
+
+			require.NoError(t, executeStatusStmt(ses, execCtx))
+			require.Equal(t, tc.runResult, execCtx.runResult)
+		})
+	}
+}
+
+func TestGrantDatabaseOwnershipAfterCreate(t *testing.T) {
+	stmt := &tree.CreateDatabase{Name: tree.Identifier("ownership_db")}
+
+	t.Run("if not exists no-op", func(t *testing.T) {
+		require.NoError(t, grantDatabaseOwnershipAfterCreate(
+			context.Background(), nil, stmt, &util.RunResult{},
+		))
+	})
+	t.Run("missing run result", func(t *testing.T) {
+		require.NoError(t, grantDatabaseOwnershipAfterCreate(
+			context.Background(), nil, stmt, nil,
+		))
+	})
+	t.Run("physical creation", func(t *testing.T) {
+		ses := &Session{}
+		ses.SetTenantInfo(&TenantInfo{DefaultRoleID: moAdminRoleID})
+		require.NoError(t, grantDatabaseOwnershipAfterCreate(
+			context.Background(), ses, stmt, &util.RunResult{AffectRows: 1},
+		))
+	})
+}
+
 func TestRespStatusCreateDatabaseWritesCompatibilityOnlyAfterCreation(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

@@ -70,3 +70,65 @@ and dat_name = 'create_database_metadata_noop'
 and variable_name = 'version_compatibility';
 ➤ compatibility_rows[-5,64,0]  𝄀
 0
+set global enable_privilege_cache = off;
+drop database if exists create_database_ownership_noop;
+drop user if exists create_database_owner_user, create_database_noop_user;
+drop role if exists create_database_owner_role, create_database_noop_role;
+create role create_database_owner_role, create_database_noop_role;
+grant create database on account * to create_database_owner_role;
+grant create database on account * to create_database_noop_role;
+create user create_database_owner_user identified by '111' default role create_database_owner_role;
+create user create_database_noop_user identified by '111' default role create_database_noop_role;
+create database create_database_ownership_noop;
+select count(*) as ownership_rows
+from mo_catalog.mo_role_privs rp
+join mo_catalog.mo_database db on rp.obj_id = db.dat_id
+where rp.role_name = 'create_database_owner_role'
+and rp.obj_type = 'database'
+and rp.privilege_name = 'database ownership'
+and db.datname = 'create_database_ownership_noop';
+➤ ownership_rows[-5,64,0]  𝄀
+1
+select count(*) as ownership_rows
+from mo_catalog.mo_role_privs rp
+join mo_catalog.mo_database db on rp.obj_id = db.dat_id
+where rp.role_name = 'create_database_noop_role'
+and rp.obj_type = 'database'
+and rp.privilege_name = 'database ownership'
+and db.datname = 'create_database_ownership_noop';
+➤ ownership_rows[-5,64,0]  𝄀
+0
+create database if not exists create_database_ownership_noop;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+0
+alter database create_database_ownership_noop set mysql_compatibility_mode = '0.9.0';
+internal error: do not have privileges to alter database config
+drop database create_database_ownership_noop;
+internal error: do not have privilege to execute the statement
+select count(*) as ownership_rows
+from mo_catalog.mo_role_privs rp
+join mo_catalog.mo_database db on rp.obj_id = db.dat_id
+where rp.role_name = 'create_database_noop_role'
+and rp.obj_type = 'database'
+and rp.privilege_name = 'database ownership'
+and db.datname = 'create_database_ownership_noop';
+➤ ownership_rows[-5,64,0]  𝄀
+0
+select count(*) as database_rows
+from mo_catalog.mo_database
+where account_id = 0
+and datname = 'create_database_ownership_noop';
+➤ database_rows[-5,64,0]  𝄀
+1
+alter database create_database_ownership_noop set mysql_compatibility_mode = '1.0.0';
+drop database create_database_ownership_noop;
+select count(*) as database_rows
+from mo_catalog.mo_database
+where account_id = 0
+and datname = 'create_database_ownership_noop';
+➤ database_rows[-5,64,0]  𝄀
+0
+drop user create_database_owner_user, create_database_noop_user;
+drop role create_database_owner_role, create_database_noop_role;
+set global enable_privilege_cache = on;

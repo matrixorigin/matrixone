@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -31,6 +33,22 @@ import (
 func isPerformStatement(stmt tree.Statement) bool {
 	selectStmt, ok := stmt.(*tree.Select)
 	return ok && selectStmt.IsPerform
+}
+
+func databaseWasCreated(runResult *util.RunResult) bool {
+	return runResult != nil && runResult.AffectRows != 0
+}
+
+func grantDatabaseOwnershipAfterCreate(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	runResult *util.RunResult,
+) error {
+	if !databaseWasCreated(runResult) {
+		return nil
+	}
+	return doGrantPrivilegeImplicitly(ctx, ses, stmt)
 }
 
 // executeStatusStmt run the statement that responses status t
@@ -232,7 +250,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
 			// must execute after run to get database id
-			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			err = grantDatabaseOwnershipAfterCreate(execCtx.reqCtx, ses, st, execCtx.runResult)
 			if err != nil {
 				return
 			}
@@ -386,7 +404,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		case *tree.CreateDatabase:
 			// CREATE DATABASE publishes one affected row only after the engine
 			// creates the database; IF NOT EXISTS no-ops stay at zero.
-			if execCtx.runResult != nil && execCtx.runResult.AffectRows != 0 {
+			if databaseWasCreated(execCtx.runResult) {
 				_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 			}
 		case *tree.DropDatabase:
