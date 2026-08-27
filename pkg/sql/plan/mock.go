@@ -462,9 +462,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 	moSchema["mo_database"] = &Schema{
 		cols: []col{
+			{"dat_id", types.T_uint64, false, 0, 0},
 			{"datname", types.T_varchar, false, 50, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
 			{"dat_createsql", types.T_varchar, false, 1024, 0},
+			{"owner", types.T_uint32, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
@@ -490,6 +492,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"rel_version", types.T_uint32, false, 32, 0},
 			{"catalog_version", types.T_uint32, false, 32, 0},
 			{"extra_info", types.T_varchar, false, 0, 0},
+			{"rel_logical_id", types.T_uint64, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0, 1},
@@ -557,6 +560,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"privilege_id", types.T_int32, false, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+	}
+	moSchema["mo_role_grant"] = &Schema{
+		cols: []col{
+			{"granted_id", types.T_int32, false, 0, 0},
+			{"grantee_id", types.T_int32, false, 0, 0},
+			{"operation_role_id", types.T_int32, false, 0, 0},
+			{"operation_user_id", types.T_int32, false, 0, 0},
+			{"granted_time", types.T_timestamp, false, 0, 0},
+			{"with_grant_option", types.T_bool, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0, 1},
 	}
 	moSchema["mo_user_defined_function"] = &Schema{
 		cols: []col{

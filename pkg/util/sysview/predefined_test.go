@@ -66,7 +66,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			for _, expected := range []string{
 				"WITH RECURSIVE __mo_active_roles(role_id)",
-				"SELECT cast(role_id AS bigint) FROM mo_catalog.mo_role WHERE role_name = current_role()",
+				"SELECT cast(current_role_id() AS bigint)",
 				"JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id",
 				"__mo_visible_tables AS",
 				"tbl.account_id = current_account_id()",
@@ -81,6 +81,8 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 				assert.Contains(t, test.ddl, expected)
 			}
 			assert.NotContains(t, test.ddl, "SELECT tbl.*")
+			assert.NotContains(t, test.ddl, "current_role()")
+			assert.NotContains(t, test.ddl, "FROM mo_catalog.mo_role ")
 
 			statements, err := mysql.Parse(context.Background(), test.ddl, 1)
 			assert.NoError(t, err)

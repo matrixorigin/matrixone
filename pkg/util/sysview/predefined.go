@@ -158,7 +158,7 @@ var (
 // System schemas remain universally visible for MySQL/tooling compatibility.
 func informationSchemaMetadataVisibilityCTE() string {
 	return "WITH RECURSIVE __mo_active_roles(role_id) AS (" +
-		"SELECT cast(role_id AS bigint) FROM mo_catalog.mo_role WHERE role_name = current_role() " +
+		"SELECT cast(current_role_id() AS bigint) " +
 		"UNION " +
 		"SELECT cast(rg.granted_id AS bigint) FROM mo_catalog.mo_role_grant rg " +
 		"JOIN __mo_active_roles ar ON rg.grantee_id = ar.role_id), " +

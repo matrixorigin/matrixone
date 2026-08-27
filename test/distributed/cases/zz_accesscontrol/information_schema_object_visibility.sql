@@ -70,21 +70,40 @@ select
        and constraint_name = 'ck_allowed_payload') as allowed_check_visible,
     (select count(*) = 0 from information_schema.table_constraints
      where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_constraints_hidden;
+-- @session
 
-set role public;
-select count(*) = 0 as tables_hidden_after_role_switch
+alter role metadata_visibility_primary rename to metadata_visibility_primary_renamed;
+
+-- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
+select count(*) = 1 as table_visible_after_active_role_rename
+from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+select count(*) = 3 as columns_visible_after_active_role_rename
+from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+select count(*) > 0 as statistics_visible_after_active_role_rename
+from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+select count(*) > 0 as constraints_visible_after_active_role_rename
+from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+-- @session
+
+alter role metadata_visibility_primary_renamed rename to metadata_visibility_primary;
+
+-- @session:id=3&user=sys:metadata_visibility_user:public&password=123456
+select count(*) = 0 as tables_hidden_with_public_role
 from information_schema.tables
 where table_schema = 'metadata_visibility_db';
-select count(*) = 0 as columns_hidden_after_role_switch
+select count(*) = 0 as columns_hidden_with_public_role
 from information_schema.columns
 where table_schema = 'metadata_visibility_db';
-select count(*) = 0 as statistics_hidden_after_role_switch
+select count(*) = 0 as statistics_hidden_with_public_role
 from information_schema.statistics
 where table_schema = 'metadata_visibility_db';
-select count(*) = 0 as constraints_hidden_after_role_switch
+select count(*) = 0 as constraints_hidden_with_public_role
 from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
-set role metadata_visibility_primary;
 -- @session
 
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;

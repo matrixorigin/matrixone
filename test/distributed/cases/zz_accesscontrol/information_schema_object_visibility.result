@@ -79,28 +79,48 @@ and constraint_name = 'ck_allowed_payload') as allowed_check_visible,
 where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_constraints_hidden;
 ➤ allowed_constraints_visible[-7,1,0]  ¦  allowed_check_visible[-7,1,0]  ¦  hidden_constraints_hidden[-7,1,0]  𝄀
 1  ¦  1  ¦  1
-set role public;
-select count(*) = 0 as tables_hidden_after_role_switch
+alter role metadata_visibility_primary rename to metadata_visibility_primary_renamed;
+select count(*) = 1 as table_visible_after_active_role_rename
+from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ table_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+select count(*) = 3 as columns_visible_after_active_role_rename
+from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ columns_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+select count(*) > 0 as statistics_visible_after_active_role_rename
+from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ statistics_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+select count(*) > 0 as constraints_visible_after_active_role_rename
+from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ constraints_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+alter role metadata_visibility_primary_renamed rename to metadata_visibility_primary;
+select count(*) = 0 as tables_hidden_with_public_role
 from information_schema.tables
 where table_schema = 'metadata_visibility_db';
-➤ tables_hidden_after_role_switch[-7,1,0]  𝄀
+➤ tables_hidden_with_public_role[-7,1,0]  𝄀
 1
-select count(*) = 0 as columns_hidden_after_role_switch
+select count(*) = 0 as columns_hidden_with_public_role
 from information_schema.columns
 where table_schema = 'metadata_visibility_db';
-➤ columns_hidden_after_role_switch[-7,1,0]  𝄀
+➤ columns_hidden_with_public_role[-7,1,0]  𝄀
 1
-select count(*) = 0 as statistics_hidden_after_role_switch
+select count(*) = 0 as statistics_hidden_with_public_role
 from information_schema.statistics
 where table_schema = 'metadata_visibility_db';
-➤ statistics_hidden_after_role_switch[-7,1,0]  𝄀
+➤ statistics_hidden_with_public_role[-7,1,0]  𝄀
 1
-select count(*) = 0 as constraints_hidden_after_role_switch
+select count(*) = 0 as constraints_hidden_with_public_role
 from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
-➤ constraints_hidden_after_role_switch[-7,1,0]  𝄀
+➤ constraints_hidden_with_public_role[-7,1,0]  𝄀
 1
-set role metadata_visibility_primary;
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 select count(*) = 2 as database_tables_visible
 from information_schema.tables
