@@ -82,10 +82,9 @@ func GetMOClusterWithContext(ctx context.Context, service string) (MOCluster, er
 	}
 }
 
-// GetCNServiceWithoutWorkingStateWithContext is the context-aware snapshot
-// counterpart of MOCluster.GetCNServiceWithoutWorkingState. The built-in
-// cluster can cancel its startup wait; external implementations retain their
-// existing synchronous contract and are checked before and after the call.
+// GetCNServiceWithoutWorkingStateWithContext is the admission-aware,
+// context-aware snapshot counterpart of MOCluster.GetCNServiceWithoutWorkingState.
+// It ignores WorkState, but never exposes a CN that is not globally routable.
 func GetCNServiceWithoutWorkingStateWithContext(
 	ctx context.Context,
 	service MOCluster,
@@ -110,7 +109,8 @@ func GetCNServiceWithoutWorkingStateWithContext(
 		}
 		services := builtIn.services.Load()
 		for _, cn := range services.cn {
-			if selector.filterCN(cn) && !apply(cn) {
+			if viewMetadataAdmissionAllowsCN(services, cn) &&
+				selector.filterCN(cn) && !apply(cn) {
 				break
 			}
 		}
@@ -118,6 +118,48 @@ func GetCNServiceWithoutWorkingStateWithContext(
 	}
 
 	service.GetCNServiceWithoutWorkingState(selector, apply)
+	return ctx.Err()
+}
+
+// GetCNServiceRawWithContext returns the unadmitted built-in inventory. It is
+// intentionally narrow: callers must be bootstrap or internal control-plane
+// protocols whose listeners are live before public admission and whose own
+// request identities fence stale service generations. Query scheduling and
+// other new-work routing must use the admission-aware inventory instead.
+func GetCNServiceRawWithContext(
+	ctx context.Context,
+	service MOCluster,
+	selector Selector,
+	apply func(metadata.CNService) bool,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if service == nil {
+		return moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	builtIn, ok := service.(*cluster)
+	if !ok {
+		// External implementations cannot expose the built-in snapshot directly.
+		// Retain their existing synchronous inventory contract and cancellation
+		// checks; implementations that apply extra admission policy remain safe.
+		service.GetCNServiceWithoutWorkingState(selector, apply)
+		return ctx.Err()
+	}
+	if err := builtIn.waitReadyWithContext(ctx); err != nil {
+		return err
+	}
+	if selector.regexpCache == nil && builtIn.regexpCache != nil {
+		selector.regexpCache = builtIn.regexpCache
+	}
+	for _, cn := range builtIn.services.Load().cn {
+		if selector.filterCN(cn) && !apply(cn) {
+			break
+		}
+	}
 	return ctx.Err()
 }
 
@@ -280,6 +322,9 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
+		if !viewMetadataAdmissionAllowsCN(s, cn) {
+			continue
+		}
 		// If the all field is false, the work state of CN service MUST be
 		// working, and then we could do the filter job. If the state is not
 		// working, means that the CN may be marked as draining and is going
@@ -304,12 +349,17 @@ func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(
 	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
-		if selector.filterCN(cn) {
+		if viewMetadataAdmissionAllowsCN(s, cn) && selector.filterCN(cn) {
 			if !apply(cn) {
 				return
 			}
 		}
 	}
+}
+
+func viewMetadataAdmissionAllowsCN(s *services, cn metadata.CNService) bool {
+	return !(s.viewMetadataAdmission.Preparing || s.viewMetadataAdmission.Enabled) ||
+		cn.ViewMetadataAdmissionReady
 }
 
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
@@ -525,6 +575,9 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 		zap.Int("dn-count", len(details.TNStores)))
 
 	new := &services{}
+	if details.ViewMetadataAdmission != nil {
+		new.viewMetadataAdmission = *details.ViewMetadataAdmission
+	}
 	for _, cn := range details.CNStores {
 		v := newCNService(cn)
 		new.addCN([]metadata.CNService{v})
@@ -579,6 +632,7 @@ func (c *cluster) copyServices() *services {
 	if old != nil {
 		new.addCN(old.cn)
 		new.addTN(old.tn)
+		new.viewMetadataAdmission = old.viewMetadataAdmission
 	}
 	return new
 }
@@ -596,8 +650,11 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		CommitID:               cn.CommitID,
 		// why set this cfg, cc https://github.com/matrixorigin/matrixone/issues/16537
 		// should be used in getCNList
-		CPUTotal: cn.Resource.CPUTotal,
-		MemTotal: cn.Resource.MemTotal,
+		CPUTotal:                        cn.Resource.CPUTotal,
+		MemTotal:                        cn.Resource.MemTotal,
+		ViewMetadataAdmissionGeneration: cn.ViewMetadataAdmissionGeneration,
+		ViewMetadataAdmissionReady:      cn.ViewMetadataAdmissionReady,
+		ViewMetadataObservedEpoch:       cn.ViewMetadataObservedEpoch,
 	}
 }
 
@@ -622,8 +679,14 @@ func newTNService(tn logpb.TNStore) metadata.TNService {
 }
 
 type services struct {
-	cn []metadata.CNService
-	tn []metadata.TNService
+	cn                    []metadata.CNService
+	tn                    []metadata.TNService
+	viewMetadataAdmission logpb.ViewMetadataAdmission
+}
+
+func (c *cluster) GetViewMetadataAdmission() logpb.ViewMetadataAdmission {
+	c.waitReady()
+	return c.services.Load().viewMetadataAdmission
 }
 
 func (s *services) addCN(values []metadata.CNService) {

@@ -102,6 +102,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -164,6 +167,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	}
 	if isRemote {
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
@@ -1628,7 +1634,7 @@ func validateRemoteAggregateProtocol(
 		if isVarianceAggregate(agg) &&
 			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
 			return moerr.NewNotSupportedNoCtx(
-				"variance remote execution requires MORPC protocol version 30",
+				"variance remote execution requires MORPC protocol version 32",
 			)
 		}
 		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
@@ -1672,7 +1678,7 @@ func procSupportsRemoteVarianceAggregates(proc *process.Process) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion30
+	return ok && version >= defines.MORPCVersion32
 }
 
 func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
@@ -1749,6 +1755,25 @@ func validateRemoteStringProvenancePipelineProtocol(
 	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
 			"cross-domain string provenance requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
+func validateRemoteNumericPrefixPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	requiresVersion30, err := plan.RequiresMORPCVersion30NumericPrefix(p)
+	if err != nil {
+		return err
+	}
+	if !requiresVersion30 {
+		return nil
+	}
+	if proc == nil || !supportsRemotePreparedNumericPrefix(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared numeric-prefix casts require MORPC protocol version 30",
 		)
 	}
 	return nil

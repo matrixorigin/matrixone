@@ -3313,18 +3313,18 @@ func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV14(t *testing.T) {
 	require.False(t, useLegacyTextMinMaxForRemote(proc))
 }
 
-func TestRemoteVarianceUsesLegacyStateBeforeProtocolV30(t *testing.T) {
+func TestRemoteVarianceUsesLegacyStateBeforeProtocolV32(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
 	require.True(t, useLegacyVarianceStateForRemote(proc))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
 	require.True(t, useLegacyVarianceStateForRemote(proc))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }

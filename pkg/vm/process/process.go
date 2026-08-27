@@ -187,6 +187,21 @@ func (proc *Process) SetPrepareParamsWithMeta(
 	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, false)
 }
 
+// SetPrepareParamsWithReusableMeta is SetPrepareParamsWithMeta with caller-owned
+// scratch storage for the packed metadata. It avoids a per-execution allocation
+// on prepared-statement hot paths. The returned slice must be retained by the
+// caller and must not be mutated while proc is evaluating the parameters.
+func (proc *Process) SetPrepareParamsWithReusableMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	metadata []bool,
+) []bool {
+	metadata = prepareParamMetadataInto(prepareParams, isBin, kinds, metadata)
+	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	return metadata
+}
+
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
 func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
 	proc.setPrepareParams(prepareParams, isBin, nil, true)
@@ -221,12 +236,21 @@ func prepareParamMetadata(
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
 ) []bool {
+	return prepareParamMetadataInto(prepareParams, isBin, kinds, nil)
+}
+
+func prepareParamMetadataInto(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	metadata []bool,
+) []bool {
 	paramCount := 0
 	if prepareParams != nil {
 		paramCount = prepareParams.Length()
 	}
 	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0) {
-		return nil
+		return metadata[:0]
 	}
 	hasMetadata := false
 	for i := 0; i < paramCount; i++ {
@@ -236,9 +260,15 @@ func prepareParamMetadata(
 		}
 	}
 	if !hasMetadata {
-		return nil
+		return metadata[:0]
 	}
-	metadata := make([]bool, paramCount*4)
+	metadataSize := paramCount * 4
+	if cap(metadata) < metadataSize {
+		metadata = make([]bool, metadataSize)
+	} else {
+		metadata = metadata[:metadataSize]
+		clear(metadata)
+	}
 	copy(metadata[:paramCount], isBin)
 	for i := 0; i < paramCount && i < len(kinds); i++ {
 		metadata[paramCount+i] = kinds[i]&1 != 0

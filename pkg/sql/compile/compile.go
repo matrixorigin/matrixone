@@ -6319,7 +6319,7 @@ func (c *Compile) supportsRemoteVarianceAggregates() bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion30
+	return ok && protocolVersion >= defines.MORPCVersion32
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
@@ -6402,6 +6402,19 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
+func supportsRemotePreparedNumericPrefix(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion30
 }
 
 func supportsRemoteStatementLastInsertID(service string) bool {
@@ -7947,7 +7960,11 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			}
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
-				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+				if lit, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(NULL) must count zero values, not all input rows.
+					if lit.Lit == nil || lit.Lit.Isnull {
+						return nil, nil, nil
+					}
 					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)

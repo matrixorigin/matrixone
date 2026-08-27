@@ -122,6 +122,20 @@ func (ins *Inserter) Add(list *Skiplist, key, value []byte) error {
 	return list.addInternal(key, value, ins, nil)
 }
 
+// AddWithPlan adds a key with a precomputed physical node plan while retaining
+// this inserter's splice cache. It is useful for a caller publishing keys in
+// sorted order after reserving their exact arena footprint.
+func (ins *Inserter) AddWithPlan(
+	list *Skiplist,
+	key, value []byte,
+	plan AddPlan,
+) error {
+	if plan.height < 1 || plan.height > maxHeight {
+		return moerr.NewInternalErrorNoCtx("invalid skiplist add plan")
+	}
+	return list.addInternal(key, value, ins, &plan)
+}
+
 var (
 	probabilities [maxHeight]uint32
 )
@@ -437,6 +451,13 @@ func (s *Skiplist) findSplice(key []byte, ins *Inserter) (found bool) {
 				// Key lies after splice.
 				level = int(listHeight)
 				break
+			}
+			if level == 0 && spl.next != s.tail &&
+				s.cmp(spl.next.getKeyBytes(s.arena), key) == 0 {
+				// The cached base-level splice brackets key, but the regular
+				// descent below starts at level-1. Check equality here so a
+				// key matching the cached successor is not inserted twice.
+				return true
 			}
 			// The splice brackets the key!
 			prev = spl.prev

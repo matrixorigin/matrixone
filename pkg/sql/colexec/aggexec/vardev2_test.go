@@ -285,7 +285,7 @@ func BenchmarkUpdateVarianceStateNormalRange(b *testing.B) {
 	}
 }
 
-func TestLegacyVarianceStateKeepsPreV30WireLayout(t *testing.T) {
+func TestLegacyVarianceStateKeepsPreV32WireLayout(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	param := types.New(types.T_decimal128, 38, 20)
