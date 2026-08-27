@@ -133,6 +133,11 @@ the test with `MO_PROXY_TEMP_TABLE_E2E_URL` set to its Proxy Connector/J URL
 (including `useServerPrepStmts=true`). The environment gate keeps ordinary
 jstfu test runs independent of a local MatrixOne cluster.
 
+The exact-head execution record is checked in as
+[`20260827_proxy_temp_table_migration_e2e.md`](20260827_proxy_temp_table_migration_e2e.md).
+It records the two-CN + Proxy launch, Connector/J server-prepare configuration,
+and all three acceptance results for `eed54db29b02a70a777fefd086871d3cda09d548`.
+
 ## Open questions
 
 No implementation-blocking question remains. The topology acceptance test is
