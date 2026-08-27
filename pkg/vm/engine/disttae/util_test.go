@@ -843,6 +843,42 @@ func TestForeachVisibleObjectsCancelsInFlightTask(t *testing.T) {
 	}
 }
 
+func TestForeachVisibleObjectsCancelsInFlightTaskOnExecutorShutdown(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	defer stopExecutor()
+	ex.Run(executorCtx)
+
+	taskStarted := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- ForeachVisibleObjects(
+			context.Background(), state, types.MaxTs(),
+			func(taskCtx context.Context, _ objectio.ObjectEntry) error {
+				close(taskStarted)
+				<-taskCtx.Done()
+				return context.Cause(taskCtx)
+			},
+			ex,
+			false,
+		)
+	}()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start the admitted visible-object task")
+	}
+	stopExecutor()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("in-flight object task outlived executor shutdown")
+	}
+}
+
 func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {
 	ctx := context.Background()
 	state := logtailreplay.NewPartitionState("", true, 42, false)

@@ -381,6 +381,18 @@ func ForeachVisibleObjects(
 
 	taskCtx, cancelTasks := context.WithCancelCause(ctx)
 	defer cancelTasks(nil)
+	if executor != nil {
+		if lifecycle := executor.LifecycleContext(); lifecycle != nil {
+			stopLifecycleWatch := context.AfterFunc(lifecycle, func() {
+				cause := context.Cause(lifecycle)
+				if cause == nil {
+					cause = context.Canceled
+				}
+				cancelTasks(cause)
+			})
+			defer stopLifecycleWatch()
+		}
+	}
 	var (
 		wg           sync.WaitGroup
 		firstErrOnce sync.Once

@@ -634,6 +634,10 @@ type ConcurrentExecutor interface {
 	AppendTask(context.Context, concurrentTask, func(error)) error
 	// Run starts receive task to execute.
 	Run(context.Context)
+	// LifecycleContext is canceled when the executor stops. A task group uses
+	// it to cancel work that a worker already owns, while queued work is rejected
+	// through the completion callback above.
+	LifecycleContext() context.Context
 	// GetConcurrency returns the concurrency of this executor.
 	GetConcurrency() int
 }
@@ -653,8 +657,9 @@ type concurrentExecutor struct {
 	// submitMu closes the race between a producer admitting work and shutdown
 	// draining the queue. Shutdown signals stopCh before taking the write lock,
 	// so a producer blocked on a full queue can always leave promptly.
-	submitMu sync.RWMutex
-	stopped  bool
+	submitMu  sync.RWMutex
+	stopped   bool
+	lifecycle context.Context
 }
 
 type queuedConcurrentTask struct {
@@ -706,12 +711,21 @@ func (e *concurrentExecutor) AppendTask(
 // Run implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) Run(ctx context.Context) {
 	e.runOnce.Do(func() {
+		e.submitMu.Lock()
+		e.lifecycle = ctx
+		e.submitMu.Unlock()
 		e.workers.Add(e.concurrency)
 		for i := 0; i < e.concurrency; i++ {
 			go e.runWorker()
 		}
 		go e.stopWhenDone(ctx)
 	})
+}
+
+func (e *concurrentExecutor) LifecycleContext() context.Context {
+	e.submitMu.RLock()
+	defer e.submitMu.RUnlock()
+	return e.lifecycle
 }
 
 func (e *concurrentExecutor) runWorker() {
