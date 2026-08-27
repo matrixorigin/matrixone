@@ -16,6 +16,7 @@ package message
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -168,6 +169,46 @@ func TestReceiveJoinMapResultMessageCancellationReturnsPipelineCause(t *testing.
 	require.ErrorIs(t, err, primaryErr)
 	var got *moerr.Error
 	require.ErrorAs(t, err, &got)
+}
+
+func TestReceiveJoinMapResultJoinedCancellationReturnsPipelineCause(t *testing.T) {
+	mb := NewMessageBoard()
+	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
+	// The pipeline cause models a multi-child cancellation tree carrying the
+	// original execution error alongside the cancellation sentinel.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errors.Join(primaryErr, context.Canceled))
+
+	SendJoinMapResult(NewJoinMapBuildErrorResult(
+		errors.Join(context.Canceled, context.Canceled),
+	), 46, false, 0, mb)
+	_, err := ReceiveJoinMapResult(46, false, 0, mb, ctx)
+	require.ErrorIs(t, err, primaryErr)
+}
+
+func TestReceiveJoinMapResultQueryInterruptedCancellationReturnsPipelineCause(t *testing.T) {
+	mb := NewMessageBoard()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
+	cancel(primaryErr)
+
+	SendJoinMapResult(NewJoinMapBuildErrorResult(
+		moerr.NewQueryInterrupted(context.Background()),
+	), 47, false, 0, mb)
+	_, err := ReceiveJoinMapResult(47, false, 0, mb, ctx)
+	require.ErrorIs(t, err, primaryErr)
+}
+
+func TestReceiveJoinMapResultIndependentDeadlineWinsOverPipelineCause(t *testing.T) {
+	mb := NewMessageBoard()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
+	cancel(primaryErr)
+
+	SendJoinMapResult(NewJoinMapBuildErrorResult(context.DeadlineExceeded), 48, false, 0, mb)
+	_, err := ReceiveJoinMapResult(48, false, 0, mb, ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, primaryErr)
 }
 
 func TestReceiveJoinMapResultTimeoutPreservesDeadline(t *testing.T) {

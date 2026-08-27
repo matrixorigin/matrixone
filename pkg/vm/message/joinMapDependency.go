@@ -55,29 +55,59 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
+	if substantive := firstJoinMapSubstantiveError(err); substantive != nil {
+		err = substantive
+	}
 	var me *moerr.Error
 	if !errors.As(err, &me) {
 		me = moerr.NewInternalErrorNoCtx(err.Error())
 	}
 	return &JoinMapBuildError{
 		err:             cloneMoErr(me),
-		wasCancellation: isPureContextError(err, context.Canceled),
-		wasDeadline:     isPureContextError(err, context.DeadlineExceeded),
+		wasCancellation: isPureJoinMapCancellation(err),
+		wasDeadline:     isPureJoinMapCancellation(err) && errors.Is(err, context.DeadlineExceeded),
 	}
 }
 
-func isPureContextError(err, target error) bool {
-	if err == target {
+func isPureJoinMapCancellation(err error) bool {
+	if err == context.Canceled || err == context.DeadlineExceeded ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
 		return true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		causes := joined.Unwrap()
-		return len(causes) == 1 && isPureContextError(causes[0], target)
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isPureJoinMapCancellation(cause) {
+				return false
+			}
+		}
+		return true
 	}
 	if cause := errors.Unwrap(err); cause != nil {
-		return isPureContextError(cause, target)
+		return isPureJoinMapCancellation(cause)
 	}
 	return false
+}
+
+func firstJoinMapSubstantiveError(err error) error {
+	if err == nil || isPureJoinMapCancellation(err) {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if substantive := firstJoinMapSubstantiveError(cause); substantive != nil {
+				return substantive
+			}
+		}
+		return nil
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return firstJoinMapSubstantiveError(cause)
+	}
+	return err
 }
 
 func (e *JoinMapBuildError) IsCancellation() bool {

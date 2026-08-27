@@ -657,7 +657,7 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return JoinMapResult{}, err
 		}
 		if ctxDone {
-			return JoinMapResult{}, resolveJoinMapCancellation(ctx, ctx.Err())
+			return JoinMapResult{}, resolveJoinMapCancellation(ctx, ctx.Err(), false)
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -678,7 +678,9 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			jm := result.JoinMap()
 			if result.IsBuildError() {
 				if result.BuildError().IsCancellation() {
-					if err := resolveJoinMapCancellation(ctx, result.Err()); err != result.Err() {
+					if err := resolveJoinMapCancellation(
+						ctx, result.Err(), result.BuildError().wasDeadline,
+					); err != result.Err() {
 						return JoinMapResult{}, err
 					}
 				}
@@ -700,16 +702,17 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 // message. Query deadlines remain classifiable as DeadlineExceeded; a
 // pipeline-local cancellation may instead carry the sibling's substantive
 // cause.
-func resolveJoinMapCancellation(ctx context.Context, err error) error {
+func resolveJoinMapCancellation(ctx context.Context, err error, preserveDeadline bool) error {
+	if preserveDeadline {
+		return context.DeadlineExceeded
+	}
 	if ctx == nil || ctx.Err() == nil {
 		return err
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	if cause := context.Cause(ctx); cause != nil &&
-		!errors.Is(cause, context.Canceled) &&
-		!errors.Is(cause, context.DeadlineExceeded) {
+	if cause := firstJoinMapSubstantiveError(context.Cause(ctx)); cause != nil {
 		return cause
 	}
 	return err
