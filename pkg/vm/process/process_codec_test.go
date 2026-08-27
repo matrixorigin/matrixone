@@ -438,6 +438,52 @@ func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
 	require.True(t, decoded.GetPrepareParamIsBinaryString(0))
 }
 
+func TestCodecServiceRejectsMalformedStringSourceMetadata(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	for _, test := range []struct {
+		name    string
+		length  int64
+		sources []uint32
+		wantErr string
+	}{
+		{
+			name:    "zero count with metadata",
+			sources: []uint32{uint32(types.StringSourceCOMStmt)},
+			wantErr: "invalid string source prepare parameter metadata length",
+		},
+		{
+			name:    "count mismatch",
+			length:  2,
+			sources: []uint32{uint32(types.StringSourceCOMStmt)},
+			wantErr: "invalid string source prepare parameter metadata length",
+		},
+		{
+			name:    "invalid enum",
+			length:  2,
+			sources: []uint32{uint32(types.StringSourceExpression), 999},
+			wantErr: "invalid string source",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := info
+			malformed.PrepareParams = pipeline.PrepareParamInfo{
+				Length:        test.length,
+				StringSources: test.sources,
+			}
+			_, err := svc.Decode(context.Background(), malformed)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	info, err := proc.BuildProcessInfo("select 1")

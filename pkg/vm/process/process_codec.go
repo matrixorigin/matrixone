@@ -258,6 +258,14 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
+	stringSources, err := StringSourcePrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.StringSources,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -297,12 +305,6 @@ func (c *codecService) Decode(
 	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
 	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
-		stringSources, err := StringSourcePrepareParamMetadataForRemote(
-			service, int(value.PrepareParams.Length), value.PrepareParams.StringSources)
-		if err != nil {
-			proc.Free()
-			return nil, err
-		}
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
 			int(value.PrepareParams.Length),
