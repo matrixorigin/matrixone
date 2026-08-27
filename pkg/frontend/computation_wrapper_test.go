@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -51,9 +52,12 @@ import (
 )
 
 type mockCompile struct {
-	runFunc     func(uint64) (*util2.RunResult, error)
-	getPlanFunc func() *plan.Plan
-	releaseFunc func()
+	runFunc               func(uint64) (*util2.RunResult, error)
+	getPlanFunc           func() *plan.Plan
+	releaseFunc           func()
+	planGenerationRebuilt bool
+	planSnapshotTS        timestamp.Timestamp
+	hasPlanSnapshotTS     bool
 }
 
 func TestResourceAttemptOwnerEligible(t *testing.T) {
@@ -66,8 +70,12 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
-func (m *mockCompile) Release()                                { m.releaseFunc() }
-func (m *mockCompile) SetOriginSQL(s string)                   {}
+func (m *mockCompile) PlanGenerationRebuilt() bool             { return m.planGenerationRebuilt }
+func (m *mockCompile) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	return m.planSnapshotTS, m.hasPlanSnapshotTS
+}
+func (m *mockCompile) Release()              { m.releaseFunc() }
+func (m *mockCompile) SetOriginSQL(s string) {}
 
 func TestTxnComputationWrapper_Run(t *testing.T) {
 	expectedResult := &util2.RunResult{AffectRows: 10}
@@ -121,6 +129,150 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 	assert.Nil(t, res)
 	assert.Equal(t, expectedPlan, cwft.plan)
 	assert.Nil(t, cwft.compile)
+}
+
+func TestTxnComputationWrapperRunMarksInvalidPreparedPlanForRebuild(t *testing.T) {
+	prepared := &PrepareStmt{}
+	mockComp := &mockCompile{
+		runFunc: func(uint64) (*util2.RunResult, error) {
+			return &util2.RunResult{}, nil
+		},
+		getPlanFunc:           func() *plan.Plan { return &plan.Plan{} },
+		releaseFunc:           func() {},
+		planGenerationRebuilt: true,
+	}
+	cwft := &TxnComputationWrapper{
+		compile:      mockComp,
+		preparedStmt: prepared,
+	}
+
+	_, err := cwft.Run(100)
+	require.NoError(t, err)
+	require.True(t, prepared.needsRebuild)
+	require.True(t, prepared.compileNeedsRebuild)
+}
+
+func TestCompleteCompileExecutionFromProductionRunnerKeepsTerminalOwnership(t *testing.T) {
+	prepared := &PrepareStmt{}
+	newPlan := &plan.Plan{}
+	newTS := timestamp.Timestamp{PhysicalTime: 20}
+	released := 0
+	running := &mockCompile{
+		runFunc:               func(uint64) (*util2.RunResult, error) { return &util2.RunResult{}, nil },
+		getPlanFunc:           func() *plan.Plan { return newPlan },
+		releaseFunc:           func() { released++ },
+		planGenerationRebuilt: true,
+		planSnapshotTS:        newTS,
+		hasPlanSnapshotTS:     true,
+	}
+	cwft := &TxnComputationWrapper{preparedStmt: prepared}
+
+	// Production runs the returned Compile directly, then invokes the terminal
+	// generation hook from executeStmt/executeStmtInBack before their sole
+	// Release. The hook must update frontend state without taking that owner.
+	_, err := running.Run(0)
+	require.NoError(t, err)
+	cwft.completeCompileExecution(running, err)
+	require.Same(t, newPlan, cwft.plan)
+	require.Equal(t, newTS, cwft.planSnapshotTS)
+	require.True(t, prepared.needsRebuild)
+	require.True(t, prepared.compileNeedsRebuild)
+	require.Zero(t, released)
+
+	running.Release()
+	require.Equal(t, 1, released)
+}
+
+func TestTxnComputationWrapperRunPublishesRebuiltSessionCachedPlan(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(1)}
+	stmt := &trackedStatement{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+	oldTS := timestamp.Timestamp{PhysicalTime: 10}
+	newTS := timestamp.Timestamp{PhysicalTime: 20}
+	ses.cachePlanWithSnapshots(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{oldPlan},
+		[]timestamp.Timestamp{oldTS})
+
+	released := 0
+	cwft := &TxnComputationWrapper{
+		stmt:                 stmt,
+		stmtBorrowed:         true,
+		plan:                 oldPlan,
+		ses:                  ses,
+		cachedPlanSQL:        "cached",
+		cachedPlanGeneration: oldPlan,
+		compile: &mockCompile{
+			runFunc: func(uint64) (*util2.RunResult, error) {
+				return &util2.RunResult{}, nil
+			},
+			getPlanFunc:           func() *plan.Plan { return newPlan },
+			releaseFunc:           func() { released++ },
+			planGenerationRebuilt: true,
+			planSnapshotTS:        newTS,
+			hasPlanSnapshotTS:     true,
+		},
+	}
+
+	_, err := cwft.Run(100)
+	require.NoError(t, err)
+	require.Equal(t, 1, released)
+	require.Same(t, newPlan, ses.planCache.get("cached").plans[0])
+	require.Equal(t, newTS, ses.planCache.get("cached").planSnapshotTS[0])
+	require.Zero(t, stmt.freed)
+
+	cwft.Free()
+	ses.cleanCache()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestTxnComputationWrapperRunLazilyInvalidatesFailedRebuild(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(1)}
+	stmt := &trackedStatement{}
+	oldPlan := &plan.Plan{}
+	ses.cachePlanWithSnapshots(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{oldPlan},
+		[]timestamp.Timestamp{{PhysicalTime: 10}})
+
+	cwft := &TxnComputationWrapper{
+		stmt:                 stmt,
+		stmtBorrowed:         true,
+		plan:                 oldPlan,
+		ses:                  ses,
+		cachedPlanSQL:        "cached",
+		cachedPlanGeneration: oldPlan,
+		compile: &mockCompile{
+			runFunc:               func(uint64) (*util2.RunResult, error) { return nil, assert.AnError },
+			getPlanFunc:           func() *plan.Plan { return oldPlan },
+			releaseFunc:           func() {},
+			planGenerationRebuilt: true,
+		},
+	}
+
+	_, err := cwft.Run(100)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, ses.isCached("cached"))
+	require.Zero(t, stmt.freed, "the running wrapper still borrows the cached AST")
+
+	cwft.Free()
+	require.Nil(t, ses.getCachedPlan("cached"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestPrepareStmtInvalidatesCachedCompileWithoutDoubleRelease(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cached := compile.NewCompile("", "", "", "", "", nil, proc, nil, false, nil, time.Now())
+	cached.SetIsPrepare(true)
+	prepared := &PrepareStmt{compile: cached}
+
+	invalidated := prepared.invalidateCachedCompile()
+	require.Same(t, cached, invalidated)
+	require.Nil(t, prepared.compile)
+	require.True(t, prepared.needsRebuild)
+	require.True(t, prepared.compileNeedsRebuild)
+
+	// The execution wrapper remains the sole owner of the matching release.
+	cached.Release()
 }
 
 // newPreparedExecuteEnv sets up a session holding a prepared "select 1" and a
@@ -1943,6 +2095,45 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamRebuildsUntilPlanSnapshotProtocolIsActive(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 115)
+	defer prepareStmt.Close()
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	for range 2 {
+		oldPlan := prepareStmt.PreparePlan
+		oldCompile := prepareStmt.compile
+		oldCompiledPlan := oldCompile.GetPlan()
+		retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.NotNil(t, retPlan)
+		require.NotNil(t, retStmt)
+		require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+		require.Equal(t, defines.MORPCVersion31, prepareStmt.protocolVersion)
+		require.NotSame(t, oldCompiledPlan, retComp.GetPlan())
+		require.Same(t, retPlan, retComp.GetPlan())
+		require.Same(t, retComp, prepareStmt.compile)
+		require.False(t, cw.planGenerationReused)
+	}
+
+	// The protocol transition itself rebuilds once. Only the following v32
+	// execution admits that generation as reusable.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, cw.planGenerationReused)
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, cw.planGenerationReused)
+}
+
 func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 103)
 	defer prepareStmt.Close()
@@ -2002,6 +2193,25 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *t
 	require.NotNil(t, retStmt)
 	require.True(t, prepareStmt.OnlyFullGroupBy)
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
+func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 110)
+	defer prepareStmt.Close()
+
+	originalPlan := prepareStmt.PreparePlan
+	prepareStmt.needsRebuild = true
+	prepareStmt.compileNeedsRebuild = true
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+	require.False(t, prepareStmt.needsRebuild)
+	require.False(t, prepareStmt.compileNeedsRebuild)
+	require.Equal(t, prepareStmt.compile, retComp)
 }
 
 func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitSchedulingIntent(t *testing.T) {

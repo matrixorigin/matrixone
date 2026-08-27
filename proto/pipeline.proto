@@ -690,6 +690,10 @@ message ProcessInfo {
   // transaction snapshot. Absent on older senders, receivers fall back to the
   // transaction snapshot for rolling-upgrade compatibility.
   timestamp.Timestamp plan_snapshot_ts = 14;
+  // True when this execution admitted the bound generation from a session or
+  // prepared cache. A receiver uses it only if the cluster protocol rolls back
+  // before locking and the optional plan timestamp is no longer safe to send.
+  bool plan_generation_reused = 15;
 }
 
 message SessionInfo {
