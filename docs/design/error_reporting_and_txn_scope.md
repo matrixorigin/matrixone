@@ -1,8 +1,7 @@
-# How a duplicate key is reported, and what it does to a transaction
+# How errors are reported, and what they do to a transaction
 
-Three changes, one story: what a client is told when a statement violates a
-unique constraint, what that does to an open transaction, and what a stored
-procedure can do about it.
+Three changes, one story: what a client is told when a statement fails, what
+that does to an open transaction, and what a stored procedure can do about it.
 
 ## 1. SQLSTATE now matches MySQL
 
@@ -42,9 +41,9 @@ misreport it; HY000 stays. The guard test skips class 01 for this reason.
 Nothing inside MO branches on SQLSTATE — it is only forwarded to the wire
 (`protocol.go`, `util.go`) — so this changes what clients see and nothing else.
 
-## 2. `mo_rollback_txn_on_duplicate_key`
+## 2. `mo_rollback_txn_on_error`
 
-A duplicate key rolls back **the failing statement**, not the transaction:
+A failed statement rolls back **the statement**, not the transaction:
 
 ```sql
 BEGIN;
@@ -54,35 +53,60 @@ INSERT INTO t VALUES (21, 'twentyone');
 COMMIT;                              -- 20 and 21 are both committed
 ```
 
-That is MySQL's behaviour and remains MO's **default**. Some applications treat
-a constraint violation as fatal to the unit of work and would rather the
-transaction end there, so a session can opt in:
+That is MySQL's behaviour and remains MO's **default**. It is also the default
+for *almost every* error: of the ~240 codes MO defines, only **twelve** abort a
+transaction, and all twelve are infrastructure failures after which it cannot
+continue anyway — `errCodeRollbackWholeTxn` in `pkg/frontend/util.go`:
+CN rolling restart, deadlock detected, the four lock-table/lock-conflict codes,
+two lock timeouts, unknown transaction state, and three backend-connection
+failures. A duplicate key is in no way special; a syntax error, a type
+conversion failure and a missing table all behave the same way.
+
+Some applications treat any failed statement as fatal to the unit of work, so a
+session can opt in:
 
 ```sql
-SET mo_rollback_txn_on_duplicate_key = 1;
+SET mo_rollback_txn_on_error = 1;
 ```
 
-With it on, the whole transaction is rolled back, including work done *before*
-the failure — in the example above, row 20 is gone too.
+With it on, **any error** rolls back the whole transaction, including work done
+*before* the failure — in the example above, row 20 is gone too.
 
 Scope: session (and global), dynamic, boolean, default `0`.
 
-**Why a session variable and not the static set.** The decision between
-statement-level and transaction-level rollback runs through
-`TxnHandler.rollback`, and the set of errors that end a transaction lives in
-`errCodeRollbackWholeTxn` (`pkg/frontend/util.go`). Every member of that set is
-an *infrastructure* failure — deadlock, lock timeout, a backend that went away,
-unknown transaction state — after which the transaction genuinely cannot
-continue. A duplicate key is a *data* error, and putting it in that set would:
+### Only errors, never warnings
+
+`moerr` carries more than failures. Its codes are banded: `0..99` are Ok
+signals (`OkExpectedEOF`, `OkStopCurrRecur`, …), `100..101` are Info, `200..201`
+are Warning (`ErrWarn`, `ErrWarnDataTruncated`), and every real error is at or
+above `ErrStart` (20100). `Error.IsRealError()` is that boundary, and
+`sessionRollsBackTxnOnError` gates on it: a warning travels as the same type
+but must never discard a user's transaction.
+
+In practice no SQL statement currently reaches the frontend with a
+warning-coded result — an over-long value is a real error in strict mode
+(`Data truncation: Can't cast ...`, which this setting *does* roll back) and is
+accepted silently in non-strict mode — so the exemption is defensive, and it is
+asserted in Go rather than in BVT.
+
+### Why a session variable and not the static set
+
+Every member of `errCodeRollbackWholeTxn` is an *infrastructure* failure.
+Moving data errors into it would:
 
 - change the default away from MySQL for everyone, breaking the common
   "try the insert, catch the duplicate, carry on" pattern;
-- apply to background and internal executors too, where a duplicate key can be
-  benign, letting it destroy an enclosing transaction.
+- apply to background and internal executors too, where an error can be benign,
+  letting it destroy an enclosing transaction.
 
 So the static set is left alone and the opt-in is consulted beside it, in
-`sessionRollsBackTxnOnError`, scoped to `ErrDuplicateEntry`. An unrelated
-statement error still rolls back only the statement, whatever the setting.
+`sessionRollsBackTxnOnError`.
+
+The second point is handled structurally, not by convention: the variable has
+global scope, but `backSession.GetSessionSysVar` answers `nil` for anything
+outside its small allowlist, so a background session never opts in even when
+the variable is set globally. Catalog maintenance, restores and other internal
+work keep MySQL semantics regardless.
 
 ## 3. `mo.sql` returns a structured error
 
@@ -133,7 +157,10 @@ repository.
 |---|---|
 | `pkg/common/moerr` `TestSqlStateMatchesMySQL` | every error carrying a MySQL error number reports MySQL's SQLSTATE, with the warning class excluded and the reason recorded |
 | `pkg/common/moerr` `TestDuplicateEntrySqlState` | 1062 / 23000 specifically |
-| `pkg/frontend` `TestSessionRollsBackTxnOnError` | the opt-in is per session, applies only to a duplicate key, and is off by default |
-| `pkg/frontend` `TestDuplicateKeyNotInStaticRollbackSet` | a duplicate key is not in the infrastructure set, while a real infrastructure error still ends the transaction |
-| BVT `pessimistic_transaction/dup_key_rollback_scope` | end to end: default keeps the transaction (rows before and after the failure commit), opted in discards it including the row inserted before, an unrelated error stays statement-scoped either way, and the setting can be turned back off |
+| `pkg/frontend` `TestSessionRollsBackTxnOnError` | the opt-in is per session, applies to any real error, and is off by default |
+| `pkg/frontend` `TestStaticRollbackSetIsInfrastructureOnly` | data errors stay out of the infrastructure set, while a real infrastructure error still ends the transaction |
+| `pkg/common/moerr` `TestIsRealError` | the Ok / Info / Warning / error bands, and that the boundary is exactly `ErrStart` |
+| `pkg/frontend` `TestWarningsNeverRollBackTxn` | a warning or info never rolls back a transaction, even with the setting on, while a real error does |
+| `pkg/frontend` `TestBackgroundSessionNeverRollsBackWholeTxn` | a background session cannot inherit the setting, even globally |
+| BVT `pessimistic_transaction/rollback_txn_on_error` | end to end: default keeps the transaction for a duplicate key *and* for an unrelated error; opted in, a duplicate key, an unknown column, a bad type conversion and a missing table each discard it including work done before; global scope is inherited by a new session but not by the setting one; and the setting can be turned back off |
 | BVT `procedure/starlark_sql_error` | `err.code` / `err.sqlstate` / `err.message`, `dir(err)`, truthiness, concatenation, `None` on success, and the OUT-parameter form still yielding the message |

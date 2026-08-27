@@ -1,0 +1,119 @@
+drop database if exists rbscope;
+create database rbscope;
+use rbscope;
+create table t (a int primary key, b varchar(10));
+insert into t values (1, 'one');
+select @@mo_rollback_txn_on_error;
+➤ @@mo_rollback_txn_on_error[-1,16383,0]  𝄀
+0
+insert into t values (1, 'dup');
+Duplicate entry '1' for key 'a'
+begin;
+insert into t values (20, 'twenty');
+insert into t values (1, 'dup');
+Duplicate entry '1' for key 'a'
+insert into t values (21, 'twentyone');
+commit;
+select a from t order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+20  𝄀
+21
+delete from t where a <> 1;
+begin;
+insert into t values (22, 'twentytwo');
+select bad_column from t;
+invalid input: column bad_column does not exist
+insert into t values (23, 'twentythree');
+Data truncation: Can't cast 'twentythree' to VARCHAR type. Src length 11 is larger than Dest length 10
+commit;
+select a as default_survives_any_error from t order by a;
+➤ default_survives_any_error[4,32,0]  𝄀
+1  𝄀
+22
+delete from t where a <> 1;
+set mo_rollback_txn_on_error = 1;
+select @@mo_rollback_txn_on_error;
+➤ @@mo_rollback_txn_on_error[-1,16383,0]  𝄀
+1
+begin;
+insert into t values (30, 'thirty');
+insert into t values (1, 'dup');
+Duplicate entry '1' for key 'a'
+select a from t order by a;
+➤ a[4,32,0]  𝄀
+1
+commit;
+select a as after_commit from t order by a;
+➤ after_commit[4,32,0]  𝄀
+1
+delete from t where a <> 1;
+begin;
+insert into t values (40, 'forty');
+select bad_column from t;
+invalid input: column bad_column does not exist
+commit;
+select a as unknown_column from t order by a;
+➤ unknown_column[4,32,0]  𝄀
+1
+delete from t where a <> 1;
+begin;
+insert into t values (41, 'fortyone');
+insert into t values ('notanint', 'x');
+invalid argument cast to int, bad value notanint
+commit;
+select a as bad_type from t order by a;
+➤ bad_type[4,32,0]  𝄀
+1
+delete from t where a <> 1;
+begin;
+insert into t values (42, 'fortytwo');
+select * from no_such_table;
+SQL parser error: table "no_such_table" does not exist
+commit;
+select a as missing_table from t order by a;
+➤ missing_table[4,32,0]  𝄀
+1
+delete from t where a <> 1;
+begin;
+insert into t values (43, 'fortythree');
+insert into t values (44, 'this string is longer than ten');
+Data truncation: Can't cast 'this string is longer than ten' to VARCHAR type. Src length 30 is larger than Dest length 10
+commit;
+select a as truncation_is_a_real_error from t order by a;
+➤ truncation_is_a_real_error[4,32,0]  𝄀
+1
+set mo_rollback_txn_on_error = 0;
+delete from t where a <> 1;
+begin;
+insert into t values (50, 'fifty');
+insert into t values (1, 'dup');
+Duplicate entry '1' for key 'a'
+commit;
+select a as back_to_mysql from t order by a;
+➤ back_to_mysql[4,32,0]  𝄀
+1  𝄀
+50
+set global mo_rollback_txn_on_error = 1;
+select @@global.mo_rollback_txn_on_error as global_value,
+@@session.mo_rollback_txn_on_error as this_session_unchanged;
+➤ global_value[-1,16383,0]  ¦  this_session_unchanged[-1,16383,0]  𝄀
+1  ¦  0
+use rbscope;
+select @@mo_rollback_txn_on_error as inherited_by_a_new_session;
+➤ inherited_by_a_new_session[-1,16383,0]  𝄀
+1
+delete from t where a <> 1;
+begin;
+insert into t values (60, 'sixty');
+insert into t values (1, 'dup');
+Duplicate entry '1' for key 'a'
+commit;
+select a as new_session_txn_discarded from t order by a;
+➤ new_session_txn_discarded[4,32,0]  𝄀
+1
+set global mo_rollback_txn_on_error = 0;
+select @@global.mo_rollback_txn_on_error as global_restored;
+➤ global_restored[-1,16383,0]  𝄀
+0
+drop database if exists rbscope;

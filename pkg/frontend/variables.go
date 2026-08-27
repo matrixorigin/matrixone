@@ -1495,17 +1495,19 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           uint64(100),
 	},
 	//whether TN does primary key uniqueness check against transaction's workspace or not.
-	// MySQL rolls back only the failing statement when an INSERT hits a
-	// duplicate key, leaving the transaction open. Turning this on makes MO
-	// roll back the whole transaction instead, for applications that treat a
-	// constraint violation as fatal to the unit of work. Off by default: the
-	// default is MySQL's behaviour.
-	"mo_rollback_txn_on_duplicate_key": {
-		Name:              "mo_rollback_txn_on_duplicate_key",
+	// MySQL rolls back only the failing statement when a statement errors,
+	// leaving the transaction open, and that is MO's default. Turning this on
+	// makes any error roll back the whole transaction instead, for
+	// applications that treat a failed statement as fatal to the unit of work.
+	//
+	// Only errors do this. A warning (a truncated value, say) is reported
+	// through the same error type but never discards a transaction.
+	"mo_rollback_txn_on_error": {
+		Name:              "mo_rollback_txn_on_error",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_duplicate_key"),
+		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_error"),
 		Default:           int8(0),
 	},
 	"mo_pk_check_by_dn": {

@@ -63,3 +63,39 @@ func TestDuplicateEntrySqlState(t *testing.T) {
 	require.Equal(t, ER_DUP_ENTRY, err.MySQLCode())
 	require.Equal(t, "23000", err.SqlState())
 }
+
+// TestIsRealError pins moerr's code taxonomy: Ok signals, Info and Warning
+// codes are carried by the same type as failures but are not failures. Callers
+// that act on an error -- aborting a transaction, for one -- must be able to
+// tell them apart, so the boundary is asserted here rather than inferred.
+func TestIsRealError(t *testing.T) {
+	notErrors := map[string]uint16{
+		"ok":                Ok,
+		"ok stop recur":     OkStopCurrRecur,
+		"ok expected eof":   OkExpectedEOF,
+		"mysql client quit": MysqlClientQuit,
+		"ok max":            OkMax,
+		"info":              ErrInfo,
+		"load info":         ErrLoadInfo,
+		"warning":           ErrWarn,
+		"data truncated":    ErrWarnDataTruncated,
+	}
+	for name, code := range notErrors {
+		require.False(t, (&Error{code: code}).IsRealError(), "%s (%d) is not a failure", name, code)
+	}
+
+	realErrors := map[string]uint16{
+		"start of the error range": ErrStart,
+		"internal":                 ErrInternal,
+		"duplicate entry":          ErrDuplicateEntry,
+		"deadlock":                 ErrDeadLockDetected,
+	}
+	for name, code := range realErrors {
+		require.True(t, (&Error{code: code}).IsRealError(), "%s (%d) is a failure", name, code)
+	}
+
+	// every code the package defines is on one side or the other, and the
+	// boundary is exactly ErrStart
+	require.False(t, (&Error{code: ErrStart - 1}).IsRealError())
+	require.True(t, (&Error{code: ErrStart}).IsRealError())
+}

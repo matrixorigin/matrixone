@@ -2133,20 +2133,32 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 // treating this error as fatal to the whole transaction rather than to the
 // statement alone.
 //
-// The static errCodeRollbackWholeTxn set above is infrastructure: deadlock,
+// The static errCodeRollbackWholeTxn set above is infrastructure -- deadlock,
 // lock timeout, a backend that went away -- failures after which the
-// transaction genuinely cannot continue. A duplicate key is different: it is a
-// data error, and MySQL rolls back only the statement, so that is MO's default
-// too. An application that treats a constraint violation as fatal to its unit
-// of work can ask for the stricter behaviour per session.
+// transaction genuinely cannot continue, and it is only twelve of the ~240
+// error codes MO defines. Every other error, from a syntax error to a
+// constraint violation, rolls back the statement alone and leaves the
+// transaction open, which is MySQL's behaviour and MO's default. An
+// application that treats any failed statement as fatal to its unit of work
+// can ask for the stricter behaviour per session.
+//
+// Only real errors qualify. moerr also carries Ok signals, Info codes and
+// Warning codes; a warning such as a truncated value travels as the same type
+// but must never discard a transaction, so IsRealError gates this.
+//
+// A background session never opts in: backSession.GetSessionSysVar answers nil
+// for anything outside its small allowlist, so internal work -- catalog
+// maintenance, restores, the statement of another user's session -- keeps
+// MySQL semantics even when the variable is set globally.
 func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
 	if ses == nil || inputErr == nil {
 		return false
 	}
-	if !moerr.IsMoErrCode(inputErr, moerr.ErrDuplicateEntry) {
+	me, ok := inputErr.(*moerr.Error)
+	if !ok || !me.IsRealError() {
 		return false
 	}
-	val, err := ses.GetSessionSysVar("mo_rollback_txn_on_duplicate_key")
+	val, err := ses.GetSessionSysVar("mo_rollback_txn_on_error")
 	if err != nil {
 		return false
 	}

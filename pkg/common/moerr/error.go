@@ -870,6 +870,18 @@ func (e *Error) Succeeded() bool {
 	return e.code < OkMax
 }
 
+// IsRealError reports whether this code denotes a failure. moerr also carries
+// codes that are not failures: the Ok signals below OkMax, the Info codes
+// (ErrInfo, ErrLoadInfo) and the Warning codes (ErrWarn,
+// ErrWarnDataTruncated). Real errors all sit at or above ErrStart.
+//
+// The distinction matters wherever a failure has consequences a warning must
+// not have -- aborting a transaction, for one: truncating a value is reported
+// through this type but is not a reason to discard a user's work.
+func (e *Error) IsRealError() bool {
+	return e.code >= ErrStart
+}
+
 // Special handling of OK code.   This code are not errors, but used to
 // signal different success conditions.  One user is StopCurrRecur.
 // TAE use it to loop over memory data structures.  They are tight,
