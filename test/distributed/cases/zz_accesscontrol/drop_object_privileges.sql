@@ -76,6 +76,16 @@ where role_name = 'drop_object_privileges_role'
   and obj_id = @drop_priv_v1_id;
 grant select on view drop_object_privileges_db.v1 to drop_object_privileges_role;
 
+-- ALTER VIEW preserves the logical object identity and its exact-view grant.
+alter view v1 as select 3 as id;
+set @drop_priv_altered_v1_id = (select rel_logical_id from mo_catalog.mo_tables
+                                 where reldatabase = 'drop_object_privileges_db' and relname = 'v1');
+select @drop_priv_altered_v1_id = @drop_priv_new_v1_id as altered_view_logical_id_preserved;
+select count(*) as altered_view_exact_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+  and obj_id = @drop_priv_altered_v1_id;
+
 select count(*) as object_grants_before_database_drop
 from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'

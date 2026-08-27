@@ -505,7 +505,11 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	// ALTER VIEW replaces the physical catalog row but preserves the logical
+	// object identity, so exact-view grants remain attached to the view.
+	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	if err = dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
@@ -3648,7 +3652,7 @@ func lockDroppedRelation(
 	dbName string,
 	relationName string,
 	relation engine.Relation,
-	isView bool,
+	lockStorage bool,
 ) error {
 	var retryErr error
 	if err := lockMoTable(c, dbName, relationName, lock.LockMode_Exclusive); err != nil {
@@ -3658,9 +3662,9 @@ func lockDroppedRelation(
 		}
 		retryErr = err
 	}
-	// Views have only the mo_tables lifecycle row. Ordinary tables also lock
-	// their user-table storage before deletion.
-	if !isView {
+	// Every persistent relation, including a source, owns a mo_tables lifecycle
+	// row. Only ordinary stored tables also have user-table storage to lock.
+	if lockStorage {
 		if err := lockTable(c.proc.Ctx, c.e, c.proc, relation, dbName, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
@@ -3785,9 +3789,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if !c.disableLock &&
 		!isTemp &&
-		!isSource &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		if err = lockDroppedRelation(c, dbName, tblName, rel, isView); err != nil {
+		if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
 			return err
 		}
 	}

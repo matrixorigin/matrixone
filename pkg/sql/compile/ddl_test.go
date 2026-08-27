@@ -1387,31 +1387,60 @@ func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
 	})
 }
 
+func TestAlterViewPreservesLogicalID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	createErr := errors.New("stop after create context is captured")
+	db.createErr = createErr
+	db.rels["v"] = &stubRelation{
+		name: "v", tableID: 101, tableDef: &plan2.TableDef{LogicalId: 77},
+	}
+	eng.dbs["db"] = db
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterView{AlterView: &plan2.AlterView{
+			Database: "db", TableDef: &plan2.TableDef{Name: "v"},
+		}},
+	}}}}
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+	c := NewCompile("test", "db", "alter view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+	err := s.AlterView(c)
+	require.ErrorIs(t, err, createErr)
+	require.NotNil(t, db.createCtx)
+	require.Equal(t, uint64(77), db.createCtx.Value(defines.LogicalIdKey{}))
+}
+
 func TestLockDroppedRelation(t *testing.T) {
 	retryErr := moerr.NewTxnNeedRetryNoCtx()
 	catalogErr := errors.New("catalog lock failed")
 	storageErr := errors.New("storage lock failed")
 	for _, testCase := range []struct {
 		name                 string
-		isView               bool
+		lockStorage          bool
 		catalogErr           error
 		storageErr           error
 		expectedErr          error
 		expectedStorageLocks int
 	}{
-		{name: "table locks catalog and storage", expectedStorageLocks: 1},
-		{name: "view locks catalog only", isView: true},
-		{name: "catalog failure stops before storage", catalogErr: catalogErr, expectedErr: catalogErr},
+		{name: "table locks catalog and storage", lockStorage: true, expectedStorageLocks: 1},
+		{name: "view or source locks catalog only"},
+		{name: "catalog failure stops before storage", lockStorage: true, catalogErr: catalogErr, expectedErr: catalogErr},
 		{
-			name: "catalog retry is returned after storage lock", catalogErr: retryErr,
+			name: "catalog retry is returned after storage lock", lockStorage: true, catalogErr: retryErr,
 			expectedErr: retryErr, expectedStorageLocks: 1,
 		},
 		{
-			name: "storage failure is returned", storageErr: storageErr,
+			name: "storage failure is returned", lockStorage: true, storageErr: storageErr,
 			expectedErr: storageErr, expectedStorageLocks: 1,
 		},
 		{
-			name: "storage retry is returned", storageErr: retryErr,
+			name: "storage retry is returned", lockStorage: true, storageErr: retryErr,
 			expectedErr: retryErr, expectedStorageLocks: 1,
 		},
 	} {
@@ -1437,7 +1466,7 @@ func TestLockDroppedRelation(t *testing.T) {
 				})
 			defer storageStub.Reset()
 
-			err := lockDroppedRelation(c, "db", "rel", nil, testCase.isView)
+			err := lockDroppedRelation(c, "db", "rel", nil, testCase.lockStorage)
 			if testCase.expectedErr == nil {
 				require.NoError(t, err)
 			} else {

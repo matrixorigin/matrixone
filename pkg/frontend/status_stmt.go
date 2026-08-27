@@ -266,9 +266,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 // the session's temporary aliases still exist. Both the pre-execution
 // ownership revoke and the post-execution dynamic-table cleanup must consume
 // this same snapshot: dropTableSingle removes temporary aliases as it runs.
-func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.TableNames {
+func capturePersistentDropTableTargets(ses FeSession, st *tree.DropTable) tree.TableNames {
 	if st == nil || st.Temporary {
 		return nil
+	}
+	if ses == nil {
+		return st.Names
 	}
 
 	targets := make(tree.TableNames, 0, len(st.Names))

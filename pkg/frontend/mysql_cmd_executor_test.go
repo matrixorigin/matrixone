@@ -949,14 +949,16 @@ func TestEffectiveStatementForTxn(t *testing.T) {
 	ctx := context.Background()
 	ses := newSes(nil, ctrl)
 	require.NoError(t, ses.SetPrepareStmt(ctx, "drop_stmt", &PrepareStmt{
-		Name:        "drop_stmt",
-		PrepareStmt: &tree.DropTable{},
+		Name: "drop_stmt",
+		PrepareStmt: &tree.DropTable{Names: tree.TableNames{
+			tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil),
+		}},
 	}))
 
 	effective, err := effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "drop_stmt"})
 	require.NoError(t, err)
 	require.IsType(t, &tree.DropTable{}, effective)
-	require.True(t, requiresPessimisticObjectLifecycleTxn(effective))
+	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, effective))
 
 	selectStmt := &tree.Select{}
 	effective, err = effectiveStatementForTxn(ctx, ses, selectStmt)
@@ -999,44 +1001,54 @@ func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
 }
 
 func TestLifecycleAdmissionFailurePreservesPreviousStatement(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
+	persistent := tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil)
+	for _, testCase := range []struct {
+		name string
+		stmt tree.Statement
+	}{
+		{name: "drop table", stmt: &tree.DropTable{Names: tree.TableNames{persistent}}},
+		{name: "alter view", stmt: &tree.AlterView{}},
+		{name: "data branch delete table", stmt: &tree.DataBranchDeleteTable{}},
+		{name: "data branch delete database", stmt: &tree.DataBranchDeleteDatabase{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
 
-	op := newTestTxnOp()
-	op.meta = txn.TxnMeta{
-		ID: []byte{1}, Status: txn.TxnStatus_Active,
-		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+			op := newTestTxnOp()
+			op.meta = txn.TxnMeta{
+				ID: []byte{1}, Status: txn.TxnStatus_Active,
+				Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+			}
+			// Model one previously completed statement. An erroneous finalizer call
+			// would remove this entry through RollbackLastStatement.
+			op.wp.stack = []uint64{0}
+			op.wp.stmtId = 1
+			handler := ses.GetTxnHandler()
+			handler.mu.Lock()
+			handler.txnOp = op
+			handler.txnCtx = ctx
+			handler.optionBits = OPTION_BEGIN
+			handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+			handler.mu.Unlock()
+
+			execCtx := &ExecCtx{
+				reqCtx: ctx,
+				stmt:   testCase.stmt,
+				ses:    ses,
+				proc:   ses.GetProc(),
+				input:  &UserInput{sql: testCase.name},
+			}
+			err := executeStmtWithWorkspace(ses, nil, execCtx)
+			require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+			require.Equal(t, []uint64{0}, op.wp.stack)
+			require.Equal(t, uint64(1), op.wp.stmtId)
+			require.Zero(t, op.rollbackCalls)
+			require.Same(t, op, handler.GetTxn())
+		})
 	}
-	// Model one previously completed statement. An erroneous finalizer call
-	// would remove this entry through RollbackLastStatement.
-	op.wp.stack = []uint64{0}
-	op.wp.stmtId = 1
-	handler := ses.GetTxnHandler()
-	handler.mu.Lock()
-	handler.txnOp = op
-	handler.txnCtx = ctx
-	handler.optionBits = OPTION_BEGIN
-	handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
-	handler.mu.Unlock()
-
-	stmt := &tree.DropTable{}
-	execCtx := &ExecCtx{
-		reqCtx: ctx,
-		stmt:   stmt,
-		ses:    ses,
-		proc:   ses.GetProc(),
-		input:  &UserInput{sql: "drop table t"},
-	}
-	execCtx.cw = InitTxnComputationWrapper(ses, stmt, execCtx.proc)
-
-	err := executeStmtWithWorkspace(ses, nil, execCtx)
-	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
-	require.Equal(t, []uint64{0}, op.wp.stack)
-	require.Equal(t, uint64(1), op.wp.stmtId)
-	require.Zero(t, op.rollbackCalls)
-	require.Same(t, op, handler.GetTxn())
 }
 
 func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {

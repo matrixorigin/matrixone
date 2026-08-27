@@ -2084,17 +2084,35 @@ func TestSetAutocommitStatusInResponse(t *testing.T) {
 }
 
 func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
+	persistent := tree.NewTableName(tree.Identifier("persistent"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
 	for _, stmt := range []tree.Statement{
 		&tree.DropDatabase{},
-		&tree.DropTable{},
+		&tree.DropTable{Names: tree.TableNames{persistent}},
 		&tree.DropView{},
+		&tree.AlterView{},
 		&tree.CreateView{Replace: true},
+		&tree.DataBranchDeleteTable{},
+		&tree.DataBranchDeleteDatabase{},
 	} {
-		require.True(t, requiresPessimisticObjectLifecycleTxn(stmt))
+		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt))
 	}
-	require.False(t, requiresPessimisticObjectLifecycleTxn(&tree.CreateView{}))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(&tree.DropTable{Temporary: true}))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(&tree.Select{}))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}))
+
+	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	ses.AddTempTable("db", "alias", "__mo_temp_alias")
+	alias := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+		Names: tree.TableNames{alias},
+	}))
+	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+		Names: tree.TableNames{alias, persistent},
+	}))
 }
 
 func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {
