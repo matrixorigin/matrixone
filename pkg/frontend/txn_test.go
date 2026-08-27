@@ -860,12 +860,20 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 
 	pu := getPu("")
 	previousTxnClient := pu.TxnClient
-	t.Cleanup(func() { pu.TxnClient = previousTxnClient })
+	previousCreateTxnOpTimeout := pu.SV.CreateTxnOpTimeout.Duration
+	t.Cleanup(func() {
+		pu.TxnClient = previousTxnClient
+		pu.SV.CreateTxnOpTimeout.Duration = previousCreateTxnOpTimeout
+	})
+	pu.SV.CreateTxnOpTimeout.Duration = time.Nanosecond
 
 	entered := make(chan struct{})
+	deadlineC := make(chan time.Time, 1)
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			deadline, _ := ctx.Deadline()
+			deadlineC <- deadline
 			close(entered)
 			<-ctx.Done()
 			return nil, context.Cause(ctx)
@@ -878,7 +886,11 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 	}).(*backExec)
 	defer bh.Close()
 
-	reqCtx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), sysAccountID))
+	reqDeadline := time.Now().Add(time.Hour)
+	reqCtx, cancel := context.WithDeadline(
+		defines.AttachAccountId(context.Background(), sysAccountID),
+		reqDeadline,
+	)
 	defer cancel()
 	errC := make(chan error, 1)
 	go func() {
@@ -893,6 +905,10 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("transaction creation did not enter txn client")
 	}
+	gotDeadline := <-deadlineC
+	require.False(t, gotDeadline.IsZero())
+	require.WithinDuration(t, reqDeadline, gotDeadline, time.Millisecond,
+		"the request deadline, not CreateTxnOpTimeout, must own authentication transaction creation")
 	cancel()
 
 	select {
@@ -901,6 +917,52 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("transaction creation did not stop after request cancellation")
 	}
+}
+
+func TestOrdinaryBackgroundTxnCreationKeepsCreateTxnTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	previousCreateTxnOpTimeout := pu.SV.CreateTxnOpTimeout.Duration
+	t.Cleanup(func() {
+		pu.TxnClient = previousTxnClient
+		pu.SV.CreateTxnOpTimeout.Duration = previousCreateTxnOpTimeout
+	})
+	const createTimeout = time.Hour
+	pu.SV.CreateTxnOpTimeout.Duration = createTimeout
+
+	deadlineC := make(chan time.Time, 1)
+	wantErr := moerr.NewInternalErrorNoCtx("stop after context capture")
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			deadline, _ := ctx.Deadline()
+			deadlineC <- deadline
+			return nil, wantErr
+		},
+	)
+	pu.TxnClient = txnClient
+
+	bh := ses.InitBackExec(nil, "", fakeDataSetFetcher2).(*backExec)
+	defer bh.Close()
+	requestCtx, cancelRequest := context.WithTimeout(
+		defines.AttachAccountId(context.Background(), sysAccountID),
+		time.Second,
+	)
+	defer cancelRequest()
+	started := time.Now()
+	err := bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{
+		reqCtx: requestCtx,
+		ses:    bh.backSes,
+	})
+	require.ErrorIs(t, err, wantErr)
+	gotDeadline := <-deadlineC
+	require.False(t, gotDeadline.IsZero())
+	require.WithinDuration(t, started.Add(createTimeout), gotDeadline, time.Second,
+		"ordinary transaction creation must retain CreateTxnOpTimeout ownership")
 }
 
 func TestTxnHandlerDoesNotOwnKafkaProgress(t *testing.T) {

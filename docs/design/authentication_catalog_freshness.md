@@ -1,10 +1,10 @@
 # Authentication Catalog Freshness Across CNs
 
-- Status: Accepted for implementation
-- Base revision: `6b8987741df912f38cece5bd026349d79672faf9`
+- Status: Review required
+- Base revision: `1d3483ac9717bcee54b24c2f76cb73af81e9410d`
 - Incident evidence: [PR #27758 CI job](https://github.com/matrixorigin/matrixone/actions/runs/33067372509/job/98502820591?pr=27758)
 - Related changes: [PR #27717](https://github.com/matrixorigin/matrixone/pull/27717), [PR #27737](https://github.com/matrixorigin/matrixone/pull/27737)
-- Last updated: 2026-08-27
+- Last updated: 2026-08-28
 
 ## 1. Summary
 
@@ -133,9 +133,29 @@ security decision.
 Authentication also marks its background transaction creation as
 request-cancellable. The transaction handler continues to use its long-lived
 session context for ordinary statements, but the authentication call to
-`TxnClient.New` derives its timeout from the handshake request. This makes the
-handshake deadline the primary owner of a blocked timestamp wait, while
-`createTxnOpTimeout` remains a secondary upper bound.
+`TxnClient.New` derives its context only from the handshake request. The
+handshake deadline is the single timeout owner of a blocked timestamp wait;
+`createTxnOpTimeout` remains the owner for ordinary transaction creation but
+must not silently shorten a connection budget already validated for strict
+authentication freshness.
+
+The configuration budget follows the complete clock geometry. Let `O` be the
+configured pairwise `max-clock-offset`. Authentication captures a fence at
+`CN-now + O + 1ns`. If that CN is `O` ahead of the TN, the TN progress clock can
+start at `CN-now - O`, so reaching the fence takes almost `2O + 1ns`, not `O`.
+CN startup therefore requires:
+
+```text
+connectTimeout > 2 * max-clock-offset + 1ns
+                 + 1s handshake headroom
+                 + 1s logtail/application headroom
+```
+
+The two fixed one-second reserves are explicit minimum operational policy, not
+a claim that arbitrary clients or a stalled logtail complete within one second.
+The request deadline remains the hard termination owner. The formula and
+overflow handling live once in `pkg/config`; process and embedded launchers
+delegate to that owner so their accepted configuration sets cannot drift.
 
 ## 6. Alternatives Rejected
 
@@ -195,9 +215,11 @@ correctness under the configured external NTP/PTP assumption.
   negative value is rejected during startup. There is no wire or persisted-data
   compatibility impact, but connection-latency dashboards can show the newly
   enforced uncertainty wait after rollout.
-- A CN rejects startup when `cn.frontend.connectTimeout` is not greater than
-  `max-clock-offset`; otherwise a healthy strict-freshness login could consume
-  its entire handshake budget before catalog authentication begins.
+- A CN rejects startup when `cn.frontend.connectTimeout` is not strictly greater
+  than the checked pairwise-skew fence plus the two operational reserves above.
+  Duration arithmetic is checked before multiplication/addition. An extreme
+  offset that would overflow the budget fails startup instead of wrapping into
+  an accepted negative or small timeout.
 
 ## 8. Performance Budget
 
@@ -217,6 +239,11 @@ correctness under the configured external NTP/PTP assumption.
   connection pooling amortizes it for TP workloads.
 - Active clock monitoring has no per-login branch. Disabling it saves only the
   monitor work and does not trade away the authentication correctness bound.
+- Removing the nested `createTxnOpTimeout` from authentication does not extend a
+  connection beyond `connectTimeout`; it removes an earlier, independently
+  configured deadline. Ordinary transaction creation retains the existing
+  timeout path. The authentication path replaces one timer context with a
+  cheaper cancel-only child context.
 - Retaining the bound also gives TN commit-deadline validation and the
   lockservice orphan-recovery fence their configured skew tolerance. The latter
   may add the bound to ambiguous-commit recovery, which is an unhappy path; at
@@ -231,12 +258,12 @@ correctness under the configured external NTP/PTP assumption.
 | --- | --- |
 | Fence uses the HLC uncertainty upper bound and dominates its logical range | focused frontend unit test with a deterministic clock |
 | Disabling active clock monitoring retains the configured uncertainty bound in process and embedded launchers | focused clock and launcher-config unit tests |
-| A handshake budget that cannot cover the uncertainty fence fails during CN configuration | focused process and embedded config unit tests |
+| A handshake budget that cannot cover pairwise skew plus operational headroom fails during CN configuration; overflow fails closed | shared config model plus process and embedded config unit tests |
 | Existing larger session minimum is never lowered | focused frontend unit test |
 | Missing runtime/clock, invalid offset, and timestamp overflow fail closed | focused frontend unit tests |
 | Authentication installs the fence before background transaction creation | focused frontend unit test at the executor seam |
 | Both transaction freshness modes preserve a later caller minimum | focused txn-client unit test |
-| Authentication transaction creation waits for the supplied minimum and exits on request cancellation | deterministic frontend barrier test plus existing txn-client timestamp-waiter tests |
+| Authentication transaction creation is owned only by the request deadline, ignores a shorter ordinary create timeout, waits for the supplied minimum, and exits on request cancellation | deterministic frontend deadline/barrier test plus existing txn-client timestamp-waiter tests |
 | Revoke fallback and immediate regrant are visible to new implicit/explicit sessions | existing `revoked_default_role_login` BVT on multi-CN topology |
 | Public authentication behavior remains unchanged on one CN | repeated existing BVT and frontend owning-package tests |
 
@@ -256,3 +283,19 @@ would duplicate its fixture and oracles, so this change reuses it unchanged.
 4. Focused and owning-package frontend tests pass in normal and applicable race
    modes; formatting, vet, build, and diff checks pass for every changed Go
    package.
+
+## 11. Decision Log
+
+- 2026-08-28: request-changes review proved that comparing `connectTimeout` to
+  one `max-clock-offset` admitted two guaranteed-failure configurations. The
+  design now accounts for the `2O` pairwise CN/TN clock geometry and checked
+  arithmetic.
+- 2026-08-28: authentication no longer composes the request deadline with
+  `createTxnOpTimeout`. Two independent timeout owners made the effective budget
+  the smaller value and forced operators to coordinate unrelated settings.
+  Keeping the handshake deadline as the sole owner preserves the public
+  connection bound, simplifies Q2 termination reasoning, and leaves ordinary
+  transactions unchanged.
+- 2026-08-28: process and embedded validation delegate to one `pkg/config`
+  budget function. Duplicating the formula at launcher boundaries would make a
+  later policy correction another cross-launcher consistency risk.

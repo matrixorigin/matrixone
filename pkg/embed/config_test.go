@@ -325,8 +325,12 @@ func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
 	cfg = newServiceConfig()
 	cfg.ServiceType = metadata.ServiceType_CN.String()
 	cfg.Clock.MaxClockOffset.Duration = time.Second
-	cfg.CN.Frontend.ConnectTimeout.Duration = time.Second
-	require.ErrorContains(t, cfg.validate(), "connectTimeout 1s must be greater than max-clock-offset 1s")
+	cfg.CN.Frontend.ConnectTimeout.Duration = 4*time.Second + time.Nanosecond
+	require.ErrorContains(t, cfg.validate(), "authentication freshness budget 4.000000001s")
+
+	cfg.CN.Frontend.ConnectTimeout.Duration = 5 * time.Second
+	cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+	require.NoError(t, cfg.validate())
 }
 
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {

@@ -691,17 +691,29 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		consumeNextTxnIsolation = consumeNext
 	}
 
-	txnCreateCtx := th.txnCtx
+	var (
+		tempCtx    context.Context
+		tempCancel context.CancelFunc
+	)
 	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.cancelTxnCreateWithRequest {
 		if execCtx.reqCtx == nil {
 			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
 		}
-		// Authentication owns a short-lived background transaction. Do not let
-		// its timestamp wait outlive the handshake deadline. Ordinary session
-		// transaction creation intentionally keeps the long-lived txn context.
-		txnCreateCtx = execCtx.reqCtx
+		// Authentication owns a short-lived background transaction. Its handshake
+		// deadline is the single timeout owner of the freshness wait; applying the
+		// ordinary CreateTxnOpTimeout here would silently shorten a configuration
+		// that was validated against ConnectTimeout. The child still guarantees
+		// prompt cleanup when TxnClient.New returns before the handshake does.
+		tempCtx, tempCancel = context.WithCancel(execCtx.reqCtx)
+	} else {
+		// Ordinary session transaction creation intentionally keeps the long-lived
+		// transaction context and its existing operation timeout.
+		tempCtx, tempCancel = context.WithTimeoutCause(
+			th.txnCtx,
+			pu.SV.CreateTxnOpTimeout.Duration,
+			moerr.CauseCreateTxnOpUnsafe,
+		)
 	}
-	tempCtx, tempCancel := context.WithTimeoutCause(txnCreateCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
 	defer tempCancel()
 
 	txnClient := pu.TxnClient

@@ -400,8 +400,15 @@ func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
 	cfg = NewConfig()
 	cfg.ServiceType = metadata.ServiceType_CN.String()
 	cfg.Clock.MaxClockOffset.Duration = time.Second
-	cfg.CN.Frontend.ConnectTimeout.Duration = time.Second
-	require.ErrorContains(t, cfg.validate(), "connectTimeout 1s must be greater than max-clock-offset 1s")
+	cfg.CN.Frontend.ConnectTimeout.Duration = 4*time.Second + time.Nanosecond
+	require.ErrorContains(t, cfg.validate(), "authentication freshness budget 4.000000001s")
+
+	// Authentication uses the connection deadline directly. A short ordinary
+	// transaction-creation timeout must not make an otherwise valid CN fail
+	// startup or guarantee that every login times out.
+	cfg.CN.Frontend.ConnectTimeout.Duration = 5 * time.Second
+	cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+	require.NoError(t, cfg.validate())
 }
 
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {

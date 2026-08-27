@@ -317,14 +317,10 @@ func (c *ServiceConfig) validateAuthenticationClockBudget() error {
 		return nil
 	}
 	c.CN.Frontend.SetDefaultValues()
-	if c.CN.Frontend.ConnectTimeout.Duration <= c.Clock.MaxClockOffset.Duration {
-		return moerr.NewBadConfigNoCtxf(
-			"cn.frontend.connectTimeout %s must be greater than max-clock-offset %s",
-			c.CN.Frontend.ConnectTimeout.Duration,
-			c.Clock.MaxClockOffset.Duration,
-		)
-	}
-	return nil
+	return config.ValidateAuthenticationFreshnessBudget(
+		c.Clock.MaxClockOffset.Duration,
+		c.CN.Frontend.ConnectTimeout.Duration,
+	)
 }
 
 func (c *ServiceConfig) initMetaCache() {
