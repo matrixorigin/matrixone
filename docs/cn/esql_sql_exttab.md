@@ -63,7 +63,7 @@ shape as `sqldatastream.ParseTableOptions`).
 |---|---|---|---|
 | `config` | optional | optional | The **same JSON** that `esql_tvf_connect(config)` / `sql_tvf_connect(config)` accept: a whitelisted elasticsearch config JSON for ESQL (`addresses`, `username`, `password`, `cloudid`, `apikey`, `servicetoken`, `certificatefingerprint`, `cacert` — lifecycle/global library knobs are rejected), `{"driver": "...", "dsn": "..."}` for SQL.  Passed verbatim to `foreigntvf.Connect(kind, configJSON)`.  All connection info comes from user input or the session — query processing never reads the CN process environment. If omitted, the scan uses `@esql_tvf_config` / `@sql_tvf_config` of the querying session (exactly `foreigntvf.ConfigFromSessionVar`); error if neither is set. |
 | `query` | optional | optional | Default query text, used when a `SELECT` has no `__mo_query` predicate (see §2).  Plain text, no placeholders. |
-| `recheck` | rejected | optional | `true` (the default) means MO evaluates every ordinary predicate itself and sends the query text verbatim; `false` opts into predicate pushdown, wrapping the text as a derived table so the source applies the deparsable conjuncts (§2.5).  ESQL rejects the option. |
+| `pushdown` | rejected | optional | `false` (the default) sends the query text verbatim; `true` also lets MO wrap it so the source applies the predicates MO can render (§2.5).  MO evaluates every predicate itself either way.  ESQL rejects the option. |
 
 No other options.  Any `URL`/`FORMAT`/`INFILE` clause is rejected for these
 engines, as for DATASTREAM.
@@ -177,7 +177,7 @@ select * from orders where __mo_query = 'select id, name from src where id > 3';
 select * from orders where __mo_query = 'select id, name from src' and id > 3;
 ```
 
-### 2.5 Predicate pushdown (`recheck` = `false`, SQL only)
+### 2.5 Predicate pushdown (`pushdown` = `true`, SQL only)
 
 `ENGINE = SQL` can push the second form down for you.  It is **opt-in**, off by
 default, and unavailable on `ENGINE = ESQL` (which rejects the option rather
@@ -185,52 +185,92 @@ than accepting a knob that would do nothing):
 
 ```
 create external table orders (id bigint, name varchar(64))
-engine = sql with ('config' = '...', 'recheck' = 'false');
+engine = sql with ('config' = '...', 'pushdown' = 'true');
 ```
 
-With it on, `compileForeignScan` deparses the row-level conjuncts with the
-DATASTREAM deparser (`datastream.DeparseFilters`: column refs, literals,
-comparisons, `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS [NOT] NULL`, `LIKE` — any
-other conjunct stays local) and wraps each query text as a derived table:
+#### The name problem, and how it is solved
+
+The result is mapped **positionally** (§3): field *i* feeds declared column
+*i*, and the source's column *names* are never read.  That is what makes
+
+```
+select * from orders where __mo_query = 'select a_id, a_name from src';
+```
+
+legal — a column declared `id` fed by a source column called `a_id`.  A `WHERE`
+clause, though, has to *name* the column it filters, and the name MO knows is
+`id`, which the source may not have at all.
+
+So MO does not guess: **it asks the source.**  Before sending a filtered query
+it probes the wrapped-but-unfiltered text for its column names —
 
 ```
 select * from (
-select id, name from src
-) `__mo_subq_1a2b3c4d` where (`id` > 3)
+select a_id, a_name from src
+) `__mo_subq_1a2b3c4d` limit 0
 ```
 
-Exactly the deparsed conjuncts leave `node.FilterList`; everything else is
-still evaluated by MO.
+— reads the result's column names (`a_id`, `a_name`), pairs them with the
+declared columns *by position*, the same correspondence the scan already
+relies on, and renders the predicate in the source's own vocabulary:
 
-Three properties of that wrapper are deliberate:
+```
+select * from (
+select a_id, a_name from src
+) `__mo_subq_1a2b3c4d` where (`a_id` > 3)
+```
 
-* **the projection stays `*`.**  Result mapping is positional (§3) — the
-  remote's column *names* are never read — so naming the columns would impose
-  a name contract on the projection that the verbatim path never had.
-* **the `WHERE` clause cannot avoid names.**  It is the one new requirement
-  pushdown adds: the query must expose the declared column names, so
-  `select a_id from src` feeding a column declared `id` works verbatim but
-  fails once wrapped.
-* **synthetic columns are masked** (`pushdownCols`): `__mo_query`,
-  `__mo_filepath` and the error-mode columns exist only inside MO, so a
-  conjunct mentioning one is never deparsed.
+`LIMIT 0` makes the probe a metadata round trip, not a scan, and it doubles as
+the check that the text can be a derived table at all: a `SHOW`, a `CALL`, or a
+projection with duplicate column names fails there, before MO has committed to
+a wrapped query.  The probe is skipped entirely when nothing was renderable
+anyway, so a scan that cannot benefit never pays for it.
 
-Why opt-in, given all that:
+#### Layering
 
-* a pushed predicate is **not provably superset-preserving across engines** —
-  the remote may drop a row MO would have kept under a different collation,
-  time zone, or coercion, and no local recheck can bring it back.  This is the
-  same reasoning, and the same option name, as DATASTREAM's `recheck`.
-* the query text must be **wrappable**: a `SHOW`, a `CALL`, or a projection
-  with duplicate column names is a valid verbatim query and an invalid derived
-  table.  (A trailing `;` and a trailing `-- comment` are handled;
-  `WrapPushdownQuery` trims the first and puts the closing paren on its own
-  line for the second.)
-* an `ORDER BY` inside a derived table is not guaranteed to survive — which
-  only matters to a query that was relying on unordered-by-MO row order
-  anyway.
+* `query_builder.go` records the opt-in on `ForeignScan.pushdown`;
+* `compileForeignScan` **offers** conjuncts — `ForeignScan.pushdown_filters` —
+  keeping only those over declared columns.  A declared column's position in
+  `TableDef.Cols` is its position in the source's result; the synthetic columns
+  (`__mo_query`, `__mo_filepath`, the error-mode columns) are appended after
+  them and have no counterpart at the source, so a conjunct touching one is
+  never offered.  Compile cannot render anything: it has no connection;
+* the **reader** (`pushdownQueryText`) probes, renders with
+  `datastream.DeparseFilters` (column refs, literals, comparisons,
+  `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS [NOT] NULL`, `LIKE` — anything else
+  keeps its conjunct local) and wraps.
 
-`SHOW CREATE TABLE` renders `"recheck" = 'false'` only when the table opted in,
+#### Everything is best-effort, and that is the safety property
+
+The offered conjuncts **stay in the scan's filter list**, so MO evaluates them
+whatever happens at the source.  Each of these ends in the verbatim query and a
+correct answer, only unoptimized:
+
+* the connection has no `PushdownProber` — today that means any driver other
+  than MySQL, since MO renders MySQL-quoted identifiers and a PostgreSQL source
+  could not parse them;
+* the probe fails, i.e. the text cannot be a derived table;
+* the source returns a different number of columns than the table declares (the
+  positional correspondence does not hold, so no name can be trusted — and the
+  scan reports that mismatch itself, against the verbatim query, in the terms
+  the user already knows);
+* nothing renders.
+
+#### Why it is opt-in even so
+
+A pushed predicate is **not provably superset-preserving across engines**: the
+source may drop a row MO would have kept under a different collation, time
+zone, or coercion, and local evaluation cannot bring back a row that never
+arrived.  This is the same reasoning as DATASTREAM's `recheck` option.  The
+name differs because the guarantee does: DATASTREAM's `recheck` = `false` also
+*stops* MO filtering locally, whereas here MO always does, and the flag only
+permits narrowing the source query.
+
+One more difference worth knowing: an `ORDER BY` inside a derived table is not
+guaranteed to survive — which only matters to a query relying on row order MO
+never guaranteed anyway.
+
+`SHOW CREATE TABLE` renders `"pushdown" = 'true'` only when the table opted in,
 so tables that never did keep rendering exactly the options their owner wrote.
 
 
@@ -345,8 +385,9 @@ Mirror DATASTREAM:
 ------------
 
 * No projection or limit pushdown, and no rewriting of the foreign query text
-  itself: `recheck` = `false` wraps the text as a derived table (§2.5), it
-  never edits it.  ESQL has no pushdown at all.
+  itself: `pushdown` = `true` wraps the text as a derived table (§2.5), it
+  never edits it.  ESQL has no pushdown at all, and neither does a non-MySQL
+  SQL source (MO renders MySQL-dialect SQL).
 * No runtime schema; no JSON-array no-schema mode.
 * No parameter binding (`?`) in the foreign text.
 * No writes (`INSERT INTO` an ESQL/SQL external table is an error); `INSERT ...

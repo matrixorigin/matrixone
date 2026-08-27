@@ -63,12 +63,18 @@ func TestPushdownAlias(t *testing.T) {
 	require.Len(t, PushdownAlias("select 1"), len("__mo_subq_")+8)
 }
 
-func TestIsPushdownWrapped(t *testing.T) {
-	require.True(t, IsPushdownWrapped(WrapPushdownQuery("select 1", "(`a` = 1)")))
-	// a query that was not wrapped -- including one the user wrote to look
-	// like the wrapper -- is not claimed as ours on a single line
-	require.False(t, IsPushdownWrapped("select 1"))
-	require.False(t, IsPushdownWrapped("select * from (select 1) t where a = 1"))
-	// nothing to push means nothing wrapped
-	require.False(t, IsPushdownWrapped(WrapPushdownQuery("select 1", "")))
+func TestWrapPushdownProbe(t *testing.T) {
+	// the probe is the same derived table, minus the filter and minus the
+	// rows: whatever cannot be wrapped fails here rather than on the real
+	// query, and whatever can tells MO its column names
+	probe := WrapPushdownProbe("select id, name from src")
+	require.Contains(t, probe, "select * from (")
+	require.Contains(t, probe, "select id, name from src")
+	require.Contains(t, probe, "` limit 0")
+	require.NotContains(t, probe, "where")
+
+	// the same alias as the real query, and the same tail handling
+	require.Contains(t, probe, PushdownAlias("select id, name from src"))
+	require.Contains(t, WrapPushdownProbe("select 1 ; "), "select 1\n)")
+	require.Contains(t, WrapPushdownProbe("select 1 -- c"), "-- c\n)")
 }

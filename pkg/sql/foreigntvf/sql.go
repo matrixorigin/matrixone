@@ -46,6 +46,10 @@ type sqlConfig struct {
 // SqlConn is a connection to a foreign SQL database opened through database/sql.
 type SqlConn struct {
 	db *sql.DB
+	// driver is the registered database/sql driver name, kept because the
+	// dialect decides what MO may render against this source (see
+	// ProbeColumns).
+	driver string
 }
 
 var _ Conn = (*SqlConn)(nil)
@@ -89,10 +93,47 @@ func connectSQL(ctx context.Context, configJSON string) (Conn, error) {
 		db.Close()
 		return nil, moerr.NewInternalErrorf(ctx, "sql_tvf: cannot connect to %s: %v", driver, err)
 	}
-	return &SqlConn{db: db}, nil
+	return &SqlConn{db: db, driver: driver}, nil
 }
 
 func (c *SqlConn) Kind() Kind { return KindSQL }
+
+// ProbeColumns reports what the source calls the columns of queryText's
+// result, in order, without transferring any rows.
+//
+// A foreign scan maps the result onto the declared columns BY POSITION, so the
+// source's names are normally irrelevant -- `select a_id from src` may feed a
+// column declared `id`.  Predicate pushdown is the one thing that needs them:
+// a WHERE clause has to name the column it filters, and only the source can
+// say what that name is.  Guessing MO's declared name instead would break
+// every query whose projection is named differently, which is precisely the
+// freedom the positional contract grants.
+//
+// queryText must already be a zero-row form (the caller wraps with LIMIT 0),
+// so this is a metadata round trip, not a scan.  It doubles as the check that
+// the text can be a derived table at all: a SHOW, a CALL, or a projection with
+// duplicate names fails here, before MO has committed to a wrapped query.
+//
+// Only MySQL is probed.  MO renders pushdown SQL with MySQL-quoted
+// identifiers, so offering it to a PostgreSQL source would produce SQL that
+// source cannot parse; the caller falls back to the verbatim query, which is
+// always correct.
+func (c *SqlConn) ProbeColumns(ctx context.Context, queryText string) ([]string, error) {
+	if c.driver != "mysql" {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"sql_tvf: predicate pushdown renders MySQL-dialect SQL and is not supported for the %s driver", c.driver)
+	}
+	rows, err := c.db.QueryContext(ctx, queryText)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	return cols, rows.Err()
+}
 
 func (c *SqlConn) Close() error { return c.db.Close() }
 

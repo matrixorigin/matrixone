@@ -1227,10 +1227,16 @@ message ForeignScan {
   // default_query is the 'query' table option ("" when not set).
   string default_query = 3;
   // pushdown is true when the table opted into predicate pushdown with
-  // 'recheck' = 'false' (SQL only).  The safe zero value is "no pushdown":
-  // MO then sends the query text verbatim and applies every predicate
-  // locally, which is correct under any remote semantics.
+  // 'pushdown' = 'true' (SQL only).  The safe zero value is "no pushdown":
+  // MO then sends the query text verbatim, which is correct against any
+  // remote.
   bool pushdown = 4;
+  // pushdown_filters are the scan conjuncts compile offered for pushdown:
+  // row-level, referencing only declared columns by position.  The READER
+  // renders them, because only it can ask the source what its columns are
+  // actually called.  MO evaluates them locally regardless, so an empty or
+  // unrenderable list only costs the optimization.
+  repeated Expr pushdown_filters = 5;
 }
 
 // KafkaScan describes a scan of a Kafka external table (CREATE EXTERNAL

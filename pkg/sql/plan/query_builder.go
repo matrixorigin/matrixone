@@ -11462,10 +11462,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Kind:         foreignCfg.Kind,
 					Config:       foreignCfg.ConfigJSON,
 					DefaultQuery: foreignCfg.DefaultQuery,
-					// The plan field is the positive form so that its zero
-					// value -- any path that forgets to set it -- is the safe
-					// "send the query verbatim, filter locally".
-					Pushdown: !foreignCfg.Recheck,
+					// Both the option and the plan field are the positive
+					// form, so the zero value -- any path that forgets to set
+					// it -- is the safe "send the query verbatim".
+					Pushdown: foreignCfg.Pushdown,
 				}
 			} else if externType == plan.ExternType_KAFKA_TB {
 				// Read-control defaults; compileKafkaScan overwrites them from

@@ -51,15 +51,6 @@ func WrapPushdownQuery(query, filter string) string {
 // pushdownPrefix opens every wrapper WrapPushdownQuery renders.
 const pushdownPrefix = "select * from ("
 
-// IsPushdownWrapped reports whether a query text is one this package wrapped,
-// rather than a user's verbatim text.  It is exact rather than a guess: the
-// prefix is the wrapper's own, and a verbatim query cannot acquire it because
-// the wrapper is the only writer of the FileList entries it applies to.  The
-// reader uses it to explain a remote failure that only wrapping can cause.
-func IsPushdownWrapped(query string) bool {
-	return strings.HasPrefix(query, pushdownPrefix+"\n")
-}
-
 // PushdownAlias derives the derived-table alias for a query text.  It is
 // content-derived so one scan always renders the same SQL -- readable remote
 // logs, reproducible tests -- while staying distinctive enough that it cannot
@@ -75,4 +66,14 @@ func PushdownAlias(query string) string {
 // inside a derived table is a syntax error.
 func trimQueryTail(query string) string {
 	return strings.TrimRight(strings.TrimSpace(query), "; \t\r\n")
+}
+
+// WrapPushdownProbe renders the zero-row form of a query, used to ask a source
+// what it calls the columns of that query's result.  It is the same derived
+// table the pushed-down query will use, so a text that cannot be wrapped fails
+// here -- before MO has committed to a wrapped query -- and MO falls back to
+// the verbatim text.
+func WrapPushdownProbe(query string) string {
+	inner := trimQueryTail(query)
+	return fmt.Sprintf("%s\n%s\n) `%s` limit 0", pushdownPrefix, inner, PushdownAlias(inner))
 }

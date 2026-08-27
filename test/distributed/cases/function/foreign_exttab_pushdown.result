@@ -10,7 +10,7 @@ insert into src values
 create external table plain (id int, name varchar(50), amount decimal(12,2), created datetime)
 engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}');
 create external table pushed (id int, name varchar(50), amount decimal(12,2), created datetime)
-engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}', 'recheck' = 'false');
+engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}', 'pushdown' = 'true');
 select id, name from plain where __mo_query = 'select id, name, amount, created from src order by id' and id > 2;
 ➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
 3  ¦  carol  𝄀
@@ -61,7 +61,7 @@ and id <> 1 order by id;
 create external table pushed_default (id int, name varchar(50), amount decimal(12,2), created datetime)
 engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}',
 'query' = 'select id, name, amount, created from src',
-'recheck' = 'false');
+'pushdown' = 'true');
 select id from pushed_default where id > 3;
 ➤ id[4,32,0]  𝄀
 4
@@ -72,7 +72,7 @@ pushed  ¦  CREATE EXTERNAL TABLE `pushed` (
   `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `created` datetime DEFAULT NULL
-) ENGINE = SQL WITH ("config" = '<redacted>', "recheck" = 'false')
+) ENGINE = SQL WITH ("config" = '<redacted>', "pushdown" = 'true')
 show create table plain;
 ➤ Table[12,5,0]  ¦  Create Table[12,237,0]  𝄀
 plain  ¦  CREATE EXTERNAL TABLE `plain` (
@@ -85,11 +85,21 @@ select id from plain where __mo_query = 'select id as ident, name as nm, amount 
 ➤ id[4,32,0]  𝄀
 4
 select id from pushed where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
-invalid input: sql external table query failed with predicate pushdown on ('recheck' = 'false'): the text ran wrapped as a derived table filtered on the DECLARED column names, so it must project them -- invalid input: sql_tvf: query failed: Error 1054 (42S22): invalid input: column id does not exist
+➤ id[4,32,0]  𝄀
+4
+select id, name from pushed
+where __mo_query = 'select id+100 as ident, upper(name) as nm, amount as amt, created as c from src'
+and id > 102 order by id;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+103  ¦  CAROL  𝄀
+104  ¦  DAVE
+select id from pushed where __mo_query = 'select id, name, amount, created from src union all select id, name, amount, created from src where 1=0' and id > 3;
+➤ id[4,32,0]  𝄀
+4
 create external table bad_esql (a int) engine = esql
-with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'recheck' = 'false');
-invalid input: the 'recheck' option is only supported by ENGINE = SQL, not esql
+with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'pushdown' = 'true');
+invalid input: the 'pushdown' option is only supported by ENGINE = SQL, not esql
 create external table bad_value (a int) engine = sql
 with ('config' = '{"driver":"mysql","dsn":"d"}', 'recheck' = 'sometimes');
-invalid input: sql option 'recheck' must be true or false, got 'sometimes'
+invalid input: unknown sql option 'recheck' (supported: config, query, pushdown)
 drop database foreign_pushdown;

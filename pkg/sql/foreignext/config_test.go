@@ -128,7 +128,7 @@ func TestRedactedConfigRejectedClearly(t *testing.T) {
 	require.Contains(t, err.Error(), "session variable")
 }
 
-func TestRecheckOption(t *testing.T) {
+func TestPushdownOption(t *testing.T) {
 	ctx := context.Background()
 	mk := func(kind string, kv ...string) *tree.ForeignTableParam {
 		p := &tree.ForeignTableParam{Kind: kind}
@@ -138,65 +138,64 @@ func TestRecheckOption(t *testing.T) {
 		return p
 	}
 
-	// the default is the pre-pushdown behavior: MO applies every predicate
+	// the default is the pre-pushdown behavior: the query text goes verbatim
 	cfg, err := ParseTableOptions(ctx, mk("SQL", "query", "select 1"))
 	require.NoError(t, err)
-	require.True(t, cfg.Recheck)
+	require.False(t, cfg.Pushdown)
 
 	cfg, err = ParseTableOptions(ctx, mk("ESQL", "query", "from idx"))
 	require.NoError(t, err)
-	require.True(t, cfg.Recheck)
+	require.False(t, cfg.Pushdown)
 
 	// opting in
-	cfg, err = ParseTableOptions(ctx, mk("SQL", "recheck", "false"))
+	cfg, err = ParseTableOptions(ctx, mk("SQL", "pushdown", "true"))
 	require.NoError(t, err)
-	require.False(t, cfg.Recheck)
+	require.True(t, cfg.Pushdown)
 
-	cfg, err = ParseTableOptions(ctx, mk("SQL", "recheck", "TRUE"))
+	cfg, err = ParseTableOptions(ctx, mk("SQL", "pushdown", "FALSE"))
 	require.NoError(t, err)
-	require.True(t, cfg.Recheck)
+	require.False(t, cfg.Pushdown)
 
 	// ESQL has no pushdown yet, and must say so rather than accept a knob
 	// that would silently do nothing
-	_, err = ParseTableOptions(ctx, mk("ESQL", "recheck", "false"))
+	_, err = ParseTableOptions(ctx, mk("ESQL", "pushdown", "true"))
 	require.ErrorContains(t, err, "only supported by ENGINE = SQL")
 
 	// a typo'd value is rejected, not coerced
-	_, err = ParseTableOptions(ctx, mk("SQL", "recheck", "no-thanks"))
+	_, err = ParseTableOptions(ctx, mk("SQL", "pushdown", "sometimes"))
 	require.ErrorContains(t, err, "must be true or false")
 
 	// the "unknown option" help text is kind-aware
 	_, err = ParseTableOptions(ctx, mk("SQL", "nope", "1"))
-	require.ErrorContains(t, err, "supported: config, query, recheck")
+	require.ErrorContains(t, err, "supported: config, query, pushdown")
 	_, err = ParseTableOptions(ctx, mk("ESQL", "nope", "1"))
 	require.ErrorContains(t, err, "supported: config, query")
-	require.NotContains(t, err.Error(), "recheck")
+	require.NotContains(t, err.Error(), "pushdown")
 }
 
-func TestEnvelopeCarriesRecheck(t *testing.T) {
+func TestEnvelopeCarriesPushdown(t *testing.T) {
 	ctx := context.Background()
 
-	for _, recheck := range []bool{true, false} {
-		cfg := Config{Kind: KindSQL, ConfigJSON: `{"driver":"mysql","dsn":"d"}`, DefaultQuery: "select 1", Recheck: recheck}
+	for _, pushdown := range []bool{true, false} {
+		cfg := Config{Kind: KindSQL, ConfigJSON: `{"driver":"mysql","dsn":"d"}`, DefaultQuery: "select 1", Pushdown: pushdown}
 		got, isForeign, err := ParseCreateSQLEnvelope(ctx, BuildCreateSQLEnvelope(cfg))
 		require.NoError(t, err)
 		require.True(t, isForeign)
 		require.Equal(t, cfg, got)
 	}
 
-	// An envelope written before pushdown existed has no recheck field. Those
-	// tables were read with every predicate applied locally, so absent must
-	// decode as the default -- never as the bool zero value, which would
-	// silently turn pushdown ON for every pre-existing table.
+	// An envelope written before pushdown existed has no pushdown field.
+	// Those tables were read with the verbatim query, which is what absent
+	// decodes to.
 	legacy := "/* " + CreateSQLEnvelopePrefix + " version=1; kind=" + CreateSQLKindForeign + "; engine=sql; config=; query=select+1 */"
 	got, isForeign, err := ParseCreateSQLEnvelope(ctx, legacy)
 	require.NoError(t, err)
 	require.True(t, isForeign)
-	require.True(t, got.Recheck, "a pre-pushdown table must not start pushing predicates")
+	require.False(t, got.Pushdown, "a pre-pushdown table must not start narrowing its source query")
 
 	// a corrupt flag is an error, not a silent default
-	bad := "/* " + CreateSQLEnvelopePrefix + " version=1; kind=" + CreateSQLKindForeign + "; engine=sql; query=select+1; recheck=maybe */"
+	bad := "/* " + CreateSQLEnvelopePrefix + " version=1; kind=" + CreateSQLKindForeign + "; engine=sql; query=select+1; pushdown=maybe */"
 	_, isForeign, err = ParseCreateSQLEnvelope(ctx, bad)
 	require.True(t, isForeign)
-	require.ErrorContains(t, err, "invalid recheck flag")
+	require.ErrorContains(t, err, "invalid pushdown flag")
 }

@@ -19,9 +19,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -116,17 +118,16 @@ func (r *ForeignScanReader) Open(param *ExternalParam, proc *process.Process) (f
 	}
 
 	queryText := param.Fileparam.Filepath
-	stream, err := conn.Query(proc.Ctx, queryText)
+	sentText, pushed := pushdownQueryText(proc, conn, fs, param, queryText)
+	stream, err := conn.Query(proc.Ctx, sentText)
 	if err != nil {
-		if foreignext.IsPushdownWrapped(queryText) {
-			// Predicate pushdown is the only thing that turns the user's own
-			// query text into something the source can reject on its own: it
-			// becomes a derived table whose WHERE names the DECLARED columns,
-			// so a query projecting different names ("select id as ident")
-			// fails here while working verbatim. Say so -- the remote's
-			// "column id does not exist" does not mention pushdown at all.
+		if pushed {
+			// The probe already ran this text's shape as a derived table, so a
+			// failure here is the source's own, not the wrapper's -- but say
+			// which text failed, or the user reads an error about a query they
+			// did not write.
 			return false, moerr.NewInvalidInputf(proc.Ctx,
-				"sql external table query failed with predicate pushdown on ('recheck' = 'false'): the text ran wrapped as a derived table filtered on the DECLARED column names, so it must project them -- %v", err)
+				"sql external table query failed with predicate pushdown on: %v (query sent: %s)", err, sentText)
 		}
 		return false, err
 	}
@@ -162,4 +163,89 @@ func (r *ForeignScanReader) Close() error {
 		return err
 	}
 	return nil
+}
+
+// pushdownQueryText decides what MO actually sends to a SQL source for one
+// query text: either the user's text verbatim, or that text wrapped as a
+// derived table filtered by the conjuncts compile offered.  The bool reports
+// which.
+//
+// The hard part is names.  A foreign scan maps the source's result onto the
+// declared columns BY POSITION, so `select a_id, a_name from src` legitimately
+// feeds columns declared (id, name) and the source may have no column called
+// `id` at all.  A WHERE clause, however, must name what it filters.  So MO
+// asks the source: it probes the wrapped-but-unfiltered query for its column
+// names, matches them to the declared columns positionally -- the very
+// correspondence the scan already relies on -- and renders the predicate in
+// the source's vocabulary.
+//
+// Everything here is best-effort.  The conjuncts stay in the scan's own filter
+// list, so if the connection cannot be probed, the query cannot be a derived
+// table, the arity disagrees, or nothing renders, MO sends the verbatim text
+// and filters the rows itself: slower, never wrong.
+func pushdownQueryText(
+	proc *process.Process, conn foreigntvf.Conn,
+	fs *plan.ForeignScan, param *ExternalParam, queryText string,
+) (string, bool) {
+	if fs == nil || !fs.Pushdown || len(fs.PushdownFilters) == 0 {
+		return queryText, false
+	}
+	prober, ok := conn.(foreigntvf.PushdownProber)
+	if !ok {
+		return queryText, false
+	}
+	declared := foreignDeclaredCols(param)
+	if len(declared) == 0 {
+		return queryText, false
+	}
+
+	// Render once against MO's own names first. It costs no I/O and answers
+	// "is anything pushable at all?", so a scan whose predicates the deparser
+	// cannot express never pays for a round trip.
+	if text, _ := sqldatastream.DeparseFilters(
+		fs.PushdownFilters, declared, proc.GetSessionInfo().TimeZone); text == "" {
+		return queryText, false
+	}
+
+	names, err := prober.ProbeColumns(proc.Ctx, foreignext.WrapPushdownProbe(queryText))
+	if err != nil || len(names) != len(declared) {
+		// An arity mismatch is not this function's error to raise: the scan
+		// itself reports it, against the verbatim query, in the terms the user
+		// already knows ("the data of row 1 contained is not equal to input
+		// columns").
+		return queryText, false
+	}
+	remote := make([]*plan.ColDef, len(declared))
+	for i, name := range names {
+		if name == "" {
+			return queryText, false
+		}
+		// Only the name is substituted: the type stays the declared one, which
+		// is what the deparser consults to render literals.
+		col := *declared[i]
+		col.Name = name
+		col.OriginName = name
+		remote[i] = &col
+	}
+
+	filter, _ := sqldatastream.DeparseFilters(fs.PushdownFilters, remote, proc.GetSessionInfo().TimeZone)
+	if filter == "" {
+		return queryText, false
+	}
+	return foreignext.WrapPushdownQuery(queryText, filter), true
+}
+
+// foreignDeclaredCols returns the scan's declared columns in DDL order -- the
+// columns the source produces, positionally. The synthetic columns
+// (__mo_query, the error-mode columns) are appended after them and are not
+// part of the source's result.
+func foreignDeclaredCols(param *ExternalParam) []*plan.ColDef {
+	out := make([]*plan.ColDef, 0, len(param.Cols))
+	for _, col := range param.Cols {
+		if col == nil || catalog.IsReservedExternalColName(col.Name) {
+			break
+		}
+		out = append(out, col)
+	}
+	return out
 }

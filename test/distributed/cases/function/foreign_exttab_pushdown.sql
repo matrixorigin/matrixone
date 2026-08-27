@@ -1,9 +1,12 @@
--- Predicate pushdown for ENGINE = SQL foreign external tables ('recheck' =
--- 'false'): the query text is wrapped as a derived table carrying the
--- deparsable conjuncts, so the source narrows the result instead of MO.
--- Covers: identical answers with and without pushdown, conjuncts the deparser
--- cannot express, query texts with a trailing ';' or line comment, IN-derived
--- query lists, SHOW CREATE round-trip, and the option's validation.
+-- Predicate pushdown for ENGINE = SQL foreign external tables ('pushdown' =
+-- 'true'): the query text is wrapped as a derived table carrying the
+-- renderable conjuncts, so the source narrows the result instead of MO.
+-- Because the result is mapped POSITIONALLY, MO asks the source what it calls
+-- its columns and filters on those names, not on the declared ones.
+-- Covers: identical answers with and without pushdown, a query whose
+-- projection is named differently from the declared columns, conjuncts the
+-- deparser cannot express, query texts with a trailing ';' or line comment,
+-- IN-derived query lists, SHOW CREATE round-trip, and option validation.
 drop database if exists foreign_pushdown;
 create database foreign_pushdown;
 use foreign_pushdown;
@@ -18,7 +21,7 @@ insert into src values
 create external table plain (id int, name varchar(50), amount decimal(12,2), created datetime)
  engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}');
 create external table pushed (id int, name varchar(50), amount decimal(12,2), created datetime)
- engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}', 'recheck' = 'false');
+ engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}', 'pushdown' = 'true');
 
 -- pushdown must not change a single answer
 select id, name from plain where __mo_query = 'select id, name, amount, created from src order by id' and id > 2;
@@ -51,21 +54,30 @@ where __mo_query in ('select id, name, amount, created from src where id < 3',
 create external table pushed_default (id int, name varchar(50), amount decimal(12,2), created datetime)
  engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}',
                     'query' = 'select id, name, amount, created from src',
-                    'recheck' = 'false');
+                    'pushdown' = 'true');
 select id from pushed_default where id > 3;
 
 -- SHOW CREATE renders the opt-in, and only the opt-in
 show create table pushed;
 show create table plain;
 
--- the wrapper filters on the DECLARED column names, so a query text that
--- projects different names works verbatim and fails once wrapped
+-- THE POSITIONAL CONTRACT: the source's column names need not be the declared
+-- ones. MO probes the source for them and filters on ITS names, so a renaming
+-- projection gives the same answer pushed or not.
 select id from plain where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
 select id from pushed where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
+-- ... including when the source has no column of that name anywhere
+select id, name from pushed
+where __mo_query = 'select id+100 as ident, upper(name) as nm, amount as amt, created as c from src'
+  and id > 102 order by id;
+
+-- a text that cannot be a derived table still works: the probe fails and MO
+-- runs it verbatim, filtering locally
+select id from pushed where __mo_query = 'select id, name, amount, created from src union all select id, name, amount, created from src where 1=0' and id > 3;
 
 -- option validation
 create external table bad_esql (a int) engine = esql
- with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'recheck' = 'false');
+ with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'pushdown' = 'true');
 create external table bad_value (a int) engine = sql
  with ('config' = '{"driver":"mysql","dsn":"d"}', 'recheck' = 'sometimes');
 

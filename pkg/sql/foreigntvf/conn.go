@@ -60,6 +60,16 @@ type Conn interface {
 
 var _ process.ForeignConn = (Conn)(nil)
 
+// PushdownProber is the OPTIONAL capability a connection implements when MO
+// may narrow its queries with a pushed-down predicate.  It is optional on
+// purpose: the answer depends on the source's dialect, not on the external
+// table, and a connection that cannot answer simply gets the verbatim query.
+type PushdownProber interface {
+	// ProbeColumns returns the result column names of queryText, in order,
+	// without transferring rows.
+	ProbeColumns(ctx context.Context, queryText string) ([]string, error)
+}
+
 // MakeHandle derives the session cache handle for a (kind, config) pair. The
 // handle is deterministic, so reconnecting with the same config reuses the
 // cached connection. The config JSON is compacted first, so whitespace-only

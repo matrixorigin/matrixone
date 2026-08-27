@@ -146,7 +146,6 @@ func TestForeignTVFParamRoundTrip(t *testing.T) {
 func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 	got := formatForeignTableOptionsForShowCreate(foreignext.Config{
 		Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"u:pw@h/db"}`, DefaultQuery: "select 1",
-		Recheck: true,
 	}, "")
 	require.Equal(t, ` ENGINE = SQL WITH ("config" = '<redacted>', "query" = 'select 1')`, got)
 	require.NotContains(t, got, "pw@h")
@@ -154,17 +153,17 @@ func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 	// only the opt-in is rendered, so a table that never asked for pushdown
 	// keeps showing exactly the options its owner wrote
 	got = formatForeignTableOptionsForShowCreate(foreignext.Config{
-		Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"u@h/db"}`, Recheck: false,
+		Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"u@h/db"}`, Pushdown: true,
 	}, "")
-	require.Equal(t, ` ENGINE = SQL WITH ("config" = '<redacted>', "recheck" = 'false')`, got)
+	require.Equal(t, ` ENGINE = SQL WITH ("config" = '<redacted>', "pushdown" = 'true')`, got)
 
 	// every config is redacted; the session-variable path needs no option
 	got = formatForeignTableOptionsForShowCreate(foreignext.Config{
-		Kind: "esql", ConfigJSON: `{"addresses":["http://h"]}`, Recheck: true,
+		Kind: "esql", ConfigJSON: `{"addresses":["http://h"]}`,
 	}, "")
 	require.Equal(t, ` ENGINE = ESQL WITH ("config" = '<redacted>')`, got)
 
-	got = formatForeignTableOptionsForShowCreate(foreignext.Config{Kind: "esql", Recheck: true}, "")
+	got = formatForeignTableOptionsForShowCreate(foreignext.Config{Kind: "esql"}, "")
 	require.Equal(t, ` ENGINE = ESQL`, got)
 }
 
@@ -234,17 +233,17 @@ func TestBuildCreateForeignTable(t *testing.T) {
 		`create external table t1 (a int, b varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'query'='select 1')`,
 		`create external table t2 (a int) engine = esql with ('config'='{"addresses":["http://es:9200"]}')`,
 		`create external table t3 (a int) engine = esql`,
-		`create external table t8 (a int) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'recheck'='false')`,
-		`create external table t9 (a int) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'recheck'='true')`,
+		`create external table t8 (a int) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'pushdown'='true')`,
+		`create external table t9 (a int) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'pushdown'='false')`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 	errSqls := []string{
 		// unknown option
 		`create external table t4 (a int) engine = sql with ('compress'='true')`,
-		// 'recheck' is SQL-only, and must not be silently ignored by ESQL
-		`create external table t10 (a int) engine = esql with ('recheck'='false')`,
+		// 'pushdown' is SQL-only, and must not be silently ignored by ESQL
+		`create external table t10 (a int) engine = esql with ('pushdown'='true')`,
 		// and it is a bool, not free text
-		`create external table t11 (a int) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'recheck'='sometimes')`,
+		`create external table t11 (a int) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'pushdown'='sometimes')`,
 		// bad inline config JSON shape
 		`create external table t5 (a int) engine = sql with ('config'='{"driver":"nope","dsn":"x"}')`,
 		`create external table t6 (a int) engine = esql with ('config'='{}')`,
