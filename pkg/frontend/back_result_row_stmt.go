@@ -53,6 +53,7 @@ func executeResultRowStmtInBack(backSes *backSession,
 	}
 
 	runBegin := time.Now()
+	freezeResultMetadata(execCtx.runner)
 	if _, err = execCtx.runner.Run(0); err != nil {
 		return
 	}
