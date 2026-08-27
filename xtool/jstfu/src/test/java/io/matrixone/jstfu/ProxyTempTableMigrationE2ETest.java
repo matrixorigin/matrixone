@@ -27,6 +27,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Properties;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -49,6 +50,9 @@ class ProxyTempTableMigrationE2ETest {
 
     private static final Duration MIGRATION_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration WORK_STATE_TIMEOUT = Duration.ofSeconds(60);
+    // Proxy retries a failed handoff every five seconds. Observe a complete
+    // interval after success so this acceptance test catches a second attempt.
+    private static final Duration RETRY_OBSERVATION_WINDOW = Duration.ofSeconds(6);
     private static final String DEFAULT_CN1 = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf";
     private static final String DEFAULT_CN2 = "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf";
 
@@ -97,16 +101,20 @@ class ProxyTempTableMigrationE2ETest {
 
                     assertEquals("beta|alpha", queryString(client,
                             "select group_concat(v order by id separator '|') from tmp where grp = 1"));
+                    assertIndexExists(client, "tmp", "idx_grp");
                     assertEquals("alpha", queryString(client, "execute sql_temp_stmt using @temp_id"));
                     binary.setInt(1, 1);
                     assertEquals("beta", queryString(binary));
 
-                    // A completed migration must stay on the new CN instead of
-                    // re-entering Proxy's five-second failed-migration loop.
-                    for (int i = 0; i < 3; i++) {
+                    // A completed migration must stay on the new CN for a full
+                    // Proxy retry interval instead of re-entering its failed-
+                    // migration loop.
+                    Instant deadline = Instant.now().plus(RETRY_OBSERVATION_WINDOW);
+                    while (Instant.now().isBefore(deadline)) {
                         assertEquals(target, serverID(client));
                         binary.setInt(1, 3);
                         assertEquals("gamma", queryString(binary));
+                        Thread.sleep(100);
                     }
                 }
             } finally {
@@ -133,8 +141,10 @@ class ProxyTempTableMigrationE2ETest {
             setWorkState(admin, source, 2);
             waitForWorkState(admin, source, "Draining");
 
-            // An active client transaction is not transferable.
-            assertEquals(source, serverID(client));
+            // An active client transaction is not transferable. Stay beyond a
+            // Proxy scaling interval so a skipped immediate handoff cannot
+            // satisfy this assertion.
+            assertRemainsOnSourceDuringTransaction(client, source);
             exec(client, boundary);
             // With autocommit disabled, every probe would immediately begin a
             // new transaction and correctly keep the handoff unsafe. Restore
@@ -154,7 +164,44 @@ class ProxyTempTableMigrationE2ETest {
     }
 
     private Connection connect() throws SQLException {
-        return DriverManager.getConnection(url);
+        Properties properties = new Properties();
+        // Do not rely on a URL supplied by the runner to select the binary
+        // protocol: this test's PreparedStatement must exercise COM_STMT.
+        properties.setProperty("useServerPrepStmts", "true");
+        return DriverManager.getConnection(url, properties);
+    }
+
+    private static void assertIndexExists(Connection conn, String table, String expectedIndex)
+            throws SQLException {
+        try (Statement statement = conn.createStatement();
+                ResultSet result = statement.executeQuery("show index from " + table)) {
+            ResultSetMetaData metadata = result.getMetaData();
+            int keyNameColumn = -1;
+            for (int column = 1; column <= metadata.getColumnCount(); column++) {
+                if ("Key_name".equalsIgnoreCase(metadata.getColumnLabel(column))) {
+                    keyNameColumn = column;
+                    break;
+                }
+            }
+            if (keyNameColumn == -1) {
+                throw new AssertionError("SHOW INDEX did not return Key_name for " + table);
+            }
+            while (result.next()) {
+                if (expectedIndex.equals(result.getString(keyNameColumn))) {
+                    return;
+                }
+            }
+        }
+        throw new AssertionError("index " + expectedIndex + " is missing from " + table);
+    }
+
+    private static void assertRemainsOnSourceDuringTransaction(Connection client, String source)
+            throws SQLException, InterruptedException {
+        Instant deadline = Instant.now().plus(RETRY_OBSERVATION_WINDOW);
+        while (Instant.now().isBefore(deadline)) {
+            assertEquals(source, serverID(client));
+            Thread.sleep(100);
+        }
     }
 
     private static String environmentOrDefault(String name, String fallback) {
