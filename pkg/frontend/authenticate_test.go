@@ -11292,6 +11292,9 @@ func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
 
 func registerEmptyBranchMetadataResult(results map[string]ExecResult) {
 	results[branchMetadataReclaimSQL()] = newMrsForShowTables([][]interface{}{})
+	results[historicalAlterLineageEdgeSQL()] = newMrsForShowTables([][]interface{}{})
+	results[historicalSnapshotSourceSQL()] = newMrsForShowTables([][]interface{}{})
+	results[historicalPitrSourceSQL()] = newMrsForShowTables([][]interface{}{})
 }
 
 func newMrsForShowDatabases(rows [][]interface{}) *MysqlResultSet {
@@ -11675,27 +11678,26 @@ func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
 
 func requireAccountOwnedMetadataCleanup(t *testing.T, bh *backgroundExecTestWithHistory, accountID int64) {
 	t.Helper()
-	found := false
-	for i, executedSQL := range bh.executedSqls {
-		if executedSQL != getSqlForDeleteFeatureLimitByAccountID(accountID) {
-			continue
+	assertSystemAccountSQL := func(sql string) {
+		for i, executedSQL := range bh.executedSqls {
+			if executedSQL != sql {
+				continue
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], executedSQL)
+			return
 		}
-		require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], executedSQL)
-		found = true
-		break
+		require.Fail(t, "expected SQL was not executed", sql)
 	}
-	require.True(t, found, getSqlForDeleteFeatureLimitByAccountID(accountID))
 
-	found = false
-	for i, executedSQL := range bh.executedSqls {
-		if executedSQL != branchMetadataReclaimSQL() {
-			continue
-		}
-		require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], executedSQL)
-		found = true
-		break
+	for _, sql := range []string{
+		getSqlForDeleteFeatureLimitByAccountID(accountID),
+		branchMetadataReclaimSQL(),
+		historicalAlterLineageEdgeSQL(),
+		historicalSnapshotSourceSQL(),
+		historicalPitrSourceSQL(),
+	} {
+		assertSystemAccountSQL(sql)
 	}
-	require.True(t, found, branchMetadataReclaimSQL())
 }
 
 // backgroundExecTestWithHistory extends backgroundExecTest to track SQL execution history

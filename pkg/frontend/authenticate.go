@@ -4346,6 +4346,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 
+		// The dropped tenant's user snapshots and PITR rows were removed above.
+		// Compact ALTER generations in this same transaction so account cleanup
+		// does not leave historical rows behind indefinitely. The shared
+		// compactor retains generations still required by an external historical
+		// source or a live descendant.
+		if rtnErr = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); rtnErr != nil {
+			return rtnErr
+		}
+
 		// mo_feature_limit is globally stored but owns rows by account_id rather
 		// than the cluster-table account_id column used by generic cleanup.
 		sql = getSqlForDeleteFeatureLimitByAccountID(accountId)
