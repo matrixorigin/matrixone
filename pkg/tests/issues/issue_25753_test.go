@@ -272,6 +272,10 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			assertWireDecimal("0e-30", 30, 30, "0."+strings.Repeat("0", 30))
 			assertWireDecimal("0e+77", 1, 0, "0")
 			assertWireDecimal("000.000e+80", 1, 0, "0")
+			assertWireDecimal(strings.Repeat("0", 100)+"1.0", 2, 1, "1.0")
+			assertWireDecimal(strings.Repeat("0", 200)+"2.0", 2, 1, "2.0")
+			leadingZeroWide := strings.Repeat("0", 100) + strings.Repeat("9", 65)
+			assertWireDecimal(leadingZeroWide, 65, 0, strings.Repeat("9", 65))
 
 			traceConn.rewriteNextParamAsDecimal()
 			err = directStmt.QueryRowContext(ctx, "0e-77").Scan(new(string))

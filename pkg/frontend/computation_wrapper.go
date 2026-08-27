@@ -1002,7 +1002,7 @@ func binaryProtocolPrepareParamType(
 	isUnsigned bool,
 	value []byte,
 ) (types.Type, bool) {
-	runtimeType, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, string(value))
+	runtimeType, _, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, string(value))
 	return runtimeType, ok
 }
 
@@ -1010,7 +1010,11 @@ func binaryProtocolPrepareParamDomains(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
 	value string,
-) (runtimeType, directResultType types.Type, hasDirectResultType, ok bool) {
+) (
+	runtimeType, directResultType types.Type,
+	materializedValue string,
+	hasDirectResultType, ok bool,
+) {
 	signed := func(signedType, unsignedType types.T) types.Type {
 		if isUnsigned {
 			return unsignedType.ToType()
@@ -1019,30 +1023,30 @@ func binaryProtocolPrepareParamDomains(
 	}
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY:
-		return signed(types.T_int8, types.T_uint8), types.Type{}, false, true
+		return signed(types.T_int8, types.T_uint8), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_SHORT:
-		return signed(types.T_int16, types.T_uint16), types.Type{}, false, true
+		return signed(types.T_int16, types.T_uint16), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
-		return signed(types.T_int32, types.T_uint32), types.Type{}, false, true
+		return signed(types.T_int32, types.T_uint32), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_LONGLONG:
-		return signed(types.T_int64, types.T_uint64), types.Type{}, false, true
+		return signed(types.T_int64, types.T_uint64), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_BIT:
-		return signed(types.T_bit, types.T_uint64), types.Type{}, false, true
+		return signed(types.T_bit, types.T_uint64), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_YEAR:
-		return types.T_year.ToType(), types.Type{}, false, true
+		return types.T_year.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_FLOAT:
-		return types.T_float32.ToType(), types.Type{}, false, true
+		return types.T_float32.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_DOUBLE:
-		return types.T_float64.ToType(), types.Type{}, false, true
+		return types.T_float64.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		normalized, visible, valid := plan2.PreparedDecimalRuntimeTypes(value)
-		return normalized, visible, valid, valid
+		normalized, visible, canonical, valid := plan2.PreparedDecimalRuntimeDomains(value)
+		return normalized, visible, canonical, valid, valid
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
-		return types.Type{}, types.Type{}, false, false
+		return types.Type{}, types.Type{}, "", false, false
 	default:
-		return types.T_text.ToType(), types.Type{}, false, true
+		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
 }
 
@@ -1892,7 +1896,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			if paramValue.PrepareParamKind == vector.PrepareParamBoolean {
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
-			} else if runtimeType, directResultType, hasDirectResultType, ok :=
+			} else if runtimeType, directResultType, materializedValue, hasDirectResultType, ok :=
 				binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, paramValue.Value.(string)); ok {
 				if runtimeType.Oid != types.T_text {
 					paramValue.RuntimeType = runtimeType
@@ -1900,6 +1904,15 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 				}
 				paramValue.DirectResultType = directResultType
 				paramValue.HasDirectResultType = hasDirectResultType
+				paramValue.MaterializedValue = materializedValue
+				if materializedValue != "" {
+					// The restored cached plan executes a typed ParamRef against this
+					// vector. Keep the raw packet spelling only in ParamValue provenance;
+					// otherwise the executor reparses input-sized leading zeroes.
+					if err = vector.SetStringAt(params, i, materializedValue, proc.Mp()); err != nil {
+						return nil, err
+					}
+				}
 			} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
 				return nil, invalidBinaryDecimalParameter(proc.Ctx, paramValue.Value)
 			}

@@ -585,6 +585,68 @@ func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		canonical string
+		visible   types.Type
+	}{
+		{
+			name: "decimal64 leading zeroes", value: strings.Repeat("0", 100) + "1.0",
+			canonical: "10e-1", visible: types.New(types.T_decimal64, 2, 1),
+		},
+		{
+			name: "signed exponent", value: "-00012.3400e+2",
+			canonical: "-123400e-2", visible: types.New(types.T_decimal64, 6, 2),
+		},
+		{
+			name: "decimal256 leading zeroes", value: strings.Repeat("0", 100) + strings.Repeat("9", 65),
+			canonical: strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
+		},
+		{
+			name: "huge exponent zero", value: "-000.000e+999999999999999999999",
+			canonical: "0", visible: types.New(types.T_decimal64, 1, 0),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
+			require.True(t, ok)
+			require.Equal(t, test.visible, visible)
+			require.Equal(t, test.canonical, canonical)
+		})
+	}
+
+	raw := strings.Repeat("0", 100) + "1.0"
+	_, visible, canonical, ok := PreparedDecimalRuntimeDomains(raw)
+	require.True(t, ok)
+	planUnderTest := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), planUnderTest, []any{ParamValue{
+			Value: raw, MaterializedValue: canonical,
+			RuntimeType: visible, HasRuntimeType: true,
+			IsBinaryProtocol: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	expr := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), expr.Typ.Id)
+	require.Equal(t, int32(2), expr.Typ.Width)
+	require.Equal(t, int32(1), expr.Typ.Scale)
+	require.Equal(t, int64(10), expr.GetLit().GetDecimal64Val().A)
+	require.Equal(t, int32(0), expr.GetLit().GetSrc().GetP().Pos)
+}
+
 func TestPreparedDecimalRuntimeTypesLargeLexemeHasBoundedAllocations(t *testing.T) {
 	value := strings.Repeat("0", 1<<20) + "1.0"
 	assertDomains := func() {
@@ -610,6 +672,38 @@ func BenchmarkPreparedDecimalRuntimeTypesLargeLexeme(b *testing.B) {
 		_, _, ok := PreparedDecimalRuntimeTypes(value)
 		if !ok {
 			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+	}
+}
+
+func BenchmarkPreparedDecimalDomainsAndMaterializationLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	ctx := context.Background()
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		_, visible, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		if !ok {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+		candidate := DeepCopyPlan(template)
+		if _, err := replaceParamVals(ctx, candidate, []any{ParamValue{
+			Value: value, MaterializedValue: canonical,
+			RuntimeType: visible, HasRuntimeType: true,
+			IsBinaryProtocol: true, RetainParamRef: true,
+		}}); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

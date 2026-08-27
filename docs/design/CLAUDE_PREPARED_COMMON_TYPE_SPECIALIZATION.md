@@ -215,10 +215,12 @@ Per prepared statement, the additional bound is:
 - one compile and its fixed worker topology;
 - no value-indexed map, history, or input-sized integer allocation.
 
-A complete binary DECIMAL lexeme is scanned once to produce both normalized and
-wire-visible domains, with no input-length temporary allocation. Exponent parsing is
-linear in input length. Nonzero values and effective negative scale remain bounded by
-DECIMAL(76); zero with an arbitrarily large positive exponent normalizes to
+A complete binary DECIMAL lexeme is scanned once to produce the normalized domain,
+wire-visible domain, and a bounded canonical coefficient/exponent lexeme used by typed
+literal materialization. The raw packet spelling remains provenance only and is never
+reparsed by the typed materializer. The scan uses no input-length temporary allocation;
+its canonical output is bounded by DECIMAL(76). Exponent parsing is linear in input
+length. Nonzero values and effective negative scale remain bounded by DECIMAL(76); zero with an arbitrarily large positive exponent normalizes to
 DECIMAL(1,0), while an effective scale above 76 is rejected. Invalid-input diagnostics
 report payload length rather than echoing an unbounded raw lexeme.
 

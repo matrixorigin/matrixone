@@ -906,6 +906,9 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 	require.True(t, value.HasRuntimeType)
 	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.DirectResultType)
 	require.True(t, value.HasDirectResultType)
+	require.Equal(t, "0", value.MaterializedValue)
+	require.Equal(t, "0", cw.proc.GetPrepareParams().GetStringAt(0),
+		"the restored typed ParamRef must execute against the bounded canonical lexeme")
 }
 
 func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
@@ -937,7 +940,7 @@ func BenchmarkBinaryDirectResultDecimalLargeLexeme(b *testing.B) {
 	b.ReportAllocs()
 	b.SetBytes(int64(len(value)))
 	for b.Loop() {
-		normalized, visible, hasVisible, ok := binaryProtocolPrepareParamDomains(
+		normalized, visible, canonical, hasVisible, ok := binaryProtocolPrepareParamDomains(
 			defines.MYSQL_TYPE_NEWDECIMAL, false, value)
 		if !ok || !hasVisible {
 			b.Fatal("large valid DECIMAL lexeme rejected")
@@ -947,6 +950,7 @@ func BenchmarkBinaryDirectResultDecimalLargeLexeme(b *testing.B) {
 		param.HasRuntimeType = true
 		param.DirectResultType = visible
 		param.HasDirectResultType = true
+		param.MaterializedValue = canonical
 		paramVals[0] = param
 		if err := applyBinaryDirectResultDecimalTypes(
 			context.Background(), paramVals, paramTypes, positions); err != nil {

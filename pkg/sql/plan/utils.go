@@ -3710,6 +3710,10 @@ type ParamValue struct {
 	// this scale-preserving domain without parsing the packet again.
 	DirectResultType    types.Type
 	HasDirectResultType bool
+	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
+	// protocol scanner. Typed literal construction uses it instead of reparsing
+	// the potentially max-packet-sized raw Value.
+	MaterializedValue string
 	// RetainParamRef records that a specialized query plan will be cached and
 	// therefore must retain this parameter as runtime provenance even when the
 	// parameter itself is unrelated to numeric-prefix specialization.
@@ -3874,20 +3878,37 @@ func absInt64Within(value, limit int64) bool {
 // performs no input-length allocation, even for a max_allowed_packet-sized
 // value.
 func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, ok bool) {
+	normalized, visible, _, ok = preparedDecimalRuntimeDomains(value, false)
+	return normalized, visible, ok
+}
+
+// PreparedDecimalRuntimeDomains additionally returns a bounded canonical
+// lexeme suitable for typed literal materialization.
+func PreparedDecimalRuntimeDomains(value string) (normalized, visible types.Type, canonical string, ok bool) {
+	return preparedDecimalRuntimeDomains(value, true)
+}
+
+func preparedDecimalRuntimeDomains(
+	value string,
+	materialize bool,
+) (normalized, visible types.Type, canonical string, ok bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 
 	pos := 0
+	negative := value[pos] == '-'
 	if value[pos] == '+' || value[pos] == '-' {
 		pos++
 	}
 	if pos == len(value) {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 
 	var digitCount, leadingZeros, fractionalDigits, trailingZeros int64
+	var coefficient [76]byte
+	coefficientLen := 0
 	seenDigit, seenPoint, seenNonZero := false, false, false
 	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
 		ch := value[pos]
@@ -3909,20 +3930,26 @@ func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, 
 			} else {
 				trailingZeros = 0
 			}
+			if seenNonZero {
+				if coefficientLen < len(coefficient) {
+					coefficient[coefficientLen] = ch
+				}
+				coefficientLen++
+			}
 		case ch == '.' && !seenPoint:
 			seenPoint = true
 		default:
-			return types.Type{}, types.Type{}, false
+			return types.Type{}, types.Type{}, "", false
 		}
 		pos++
 	}
 	if !seenDigit {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 
 	exponent, exponentState, valid := scanPreparedDecimalExponent(value[pos:])
 	if !valid {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 	coefficientDigits := digitCount - leadingZeros
 	if coefficientDigits == 0 {
@@ -3933,11 +3960,11 @@ func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, 
 		case preparedExponentHugePositive:
 			scale = 0
 		case preparedExponentHugeNegative:
-			return types.Type{}, types.Type{}, false
+			return types.Type{}, types.Type{}, "", false
 		default:
 			netExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
 			if !bounded || netExponent < -int64(types.T_decimal256.ToType().Width) {
-				return types.Type{}, types.Type{}, false
+				return types.Type{}, types.Type{}, "", false
 			}
 			if netExponent < 0 {
 				scale = -netExponent
@@ -3945,34 +3972,51 @@ func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, 
 		}
 		visible, ok = preparedDecimalTypeForWidth(max(int64(1), scale), scale)
 		if !ok {
-			return types.Type{}, types.Type{}, false
+			return types.Type{}, types.Type{}, "", false
 		}
-		return types.New(types.T_decimal64, 1, 0), visible, true
+		canonical := ""
+		if materialize {
+			canonical = "0"
+		}
+		return types.New(types.T_decimal64, 1, 0), visible, canonical, true
 	}
 	if exponentState != preparedExponentFinite {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 
 	visibleExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
 	if !bounded {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 	visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
 	if !ok {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 
 	normalizedExponent, bounded := addPreparedDecimalExponent(
 		exponent, -fractionalDigits+trailingZeros)
 	if !bounded {
-		return types.Type{}, types.Type{}, false
+		return types.Type{}, types.Type{}, "", false
 	}
 	normalized, ok = preparedDecimalTypeFromCoefficient(
 		coefficientDigits-trailingZeros, normalizedExponent)
-	if !ok {
-		return types.Type{}, types.Type{}, false
+	if !ok || coefficientLen != int(coefficientDigits) || coefficientLen > len(coefficient) {
+		return types.Type{}, types.Type{}, "", false
 	}
-	return normalized, visible, true
+	if !materialize {
+		return normalized, visible, "", true
+	}
+	var canonicalBuilder strings.Builder
+	canonicalBuilder.Grow(coefficientLen + 5)
+	if negative {
+		canonicalBuilder.WriteByte('-')
+	}
+	canonicalBuilder.Write(coefficient[:coefficientLen])
+	if visibleExponent != 0 {
+		canonicalBuilder.WriteByte('e')
+		canonicalBuilder.WriteString(strconv.FormatInt(visibleExponent, 10))
+	}
+	return normalized, visible, canonicalBuilder.String(), true
 }
 
 type preparedExponentState uint8
@@ -4418,6 +4462,9 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		retainParamRef := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
+			if param.MaterializedValue != "" {
+				val = param.MaterializedValue
+			}
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
