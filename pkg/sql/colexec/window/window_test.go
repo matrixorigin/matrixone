@@ -862,6 +862,13 @@ func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFunc
 		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
 }
 
+func newTypedMaxAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "max", []types.Type{typ})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
 func newRowNumberAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
 	return newOrderWindowAggExpr(t, "row_number")
 }
@@ -1612,6 +1619,37 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 	require.Nil(t, ctr.runningAgg)
 
 	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{3, 1, 5, 2})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedMaxAggExpr(t, 0, types.T_int32.ToType())},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int32{3, 3}, vector.MustFixedColWithTypeCheck[int32](first))
+	require.NotNil(t, ctr.runningAgg, "cumulative MIN/MAX must retain one running state")
+	first.Free(proc.Mp())
+
+	second, err := ctr.processAggregateFuncRange(0, arg, proc, 2, 4)
+	require.NoError(t, err)
+	require.Equal(t, []int32{5, 5}, vector.MustFixedColWithTypeCheck[int32](second))
+	require.Nil(t, ctr.runningAgg)
+	second.Free(proc.Mp())
+
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
