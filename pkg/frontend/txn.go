@@ -926,7 +926,7 @@ type ddlVisibilityTarget struct {
 // syncDDLCommitToBarrierReadyCNs closes both sides of CN admission. A CN publishes
 // barrier readiness before its startup frontier fence and public ingress. The
 // DDL sender refreshes membership again after fan-out and repeats if any ready
-// generation changed. Protocol v32 is a deployment gate: mixed-version
+// generation changed. Protocol v33 is a deployment gate: mixed-version
 // clusters retain legacy behavior without invoking an old receiver's fatal
 // SyncCommit path.
 func syncDDLCommitToBarrierReadyCNs(
@@ -942,7 +942,7 @@ func syncDDLCommitToBarrierReadyCNs(
 	qc := pu.QueryClient
 	protocol, ok := moruntime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	protocolVersion, valid := protocol.(int64)
-	if !ok || !valid || protocolVersion < defines.MORPCVersion32 {
+	if !ok || !valid || protocolVersion < defines.MORPCVersion33 {
 		return nil
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())

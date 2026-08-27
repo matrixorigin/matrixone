@@ -1444,6 +1444,16 @@ func TestTableDefChangedAtRetainedAfterUnlock(t *testing.T) {
 					require.Nil(t, decoded.TableDefChangedAt)
 					require.NoError(t, service.Unlock(ctx, []byte("fresh"), timestamp.Timestamp{}))
 
+					// Transaction admission and plan generation are different clocks: a
+					// fresh transaction can still execute a cached pre-DDL plan.
+					stalePlanOptions := freshOptions
+					stalePlanSnapshot := changedAt.Prev()
+					stalePlanOptions.PlanSnapshotTs = &stalePlanSnapshot
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte("stale-plan"), stalePlanOptions)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("stale-plan"), timestamp.Timestamp{}))
+
 					result, err = service.Lock(ctx, tableID, tc.rows, []byte{5}, options)
 					require.NoError(t, err)
 					require.Equal(t, changedAt, *result.TableDefChangedAt)

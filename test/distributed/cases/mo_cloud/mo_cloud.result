@@ -228,7 +228,7 @@ engines  ¦  CREATE TABLE `engines` (
 )
 SHOW CREATE TABLE information_schema.key_column_usage;
 ➤ View[12,16,0]  ¦  Create View[12,786,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
-key_column_usage  ¦  CREATE VIEW information_schema.KEY_COLUMN_USAGE AS SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_foreign_keys fk  ¦  utf8mb4  ¦  utf8mb4_general_ci
+key_column_usage  ¦  CREATE VIEW information_schema.KEY_COLUMN_USAGE AS SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(idx.name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS TABLE_SCHEMA, CAST(coalesce(tbl.relname, '') AS varchar(64)) AS TABLE_NAME, CAST(idx.column_name AS varchar(64)) AS COLUMN_NAME, CAST(idx.ordinal_position AS int unsigned) AS ORDINAL_POSITION, CAST(NULL AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(NULL AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(NULL AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(NULL AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_indexes idx JOIN mo_catalog.mo_tables tbl ON idx.table_id = tbl.rel_id WHERE tbl.account_id = current_account_id() AND idx.type IN ('PRIMARY', 'UNIQUE') AND NOT startswith(tbl.relname, '__mo_index_') AND not (tbl.relkind = 'temporary_table' or mo_is_legacy_temporary_table(coalesce(tbl.relkind, ''), coalesce(tbl.relname, ''), coalesce(tbl.reldatabase, ''), coalesce(tbl.rel_createsql, ''), coalesce(tbl.extra_info, '')) or (coalesce(tbl.relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(tbl.relname, '^__mo_tmp_[0-9a-f]{32}_'))) UNION ALL SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_foreign_keys fk  ¦  utf8mb4  ¦  utf8mb4_general_ci
 SHOW CREATE TABLE information_schema.keywords;
 ➤ Table[12,8,0]  ¦  Create Table[12,101,0]  𝄀
 keywords  ¦  CREATE TABLE `keywords` (
@@ -507,10 +507,10 @@ table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦  
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`keywords` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 WORD  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

@@ -1,0 +1,121 @@
+set experimental_ivf_index = 1;
+drop database if exists information_schema_constraint_index_contract;
+create database information_schema_constraint_index_contract;
+use information_schema_constraint_index_contract;
+create table parent (
+id int primary key,
+code varchar(20),
+unique key uq_code (code)
+);
+create table child (
+id int primary key,
+pid int,
+a int,
+b int,
+unique key uq_ab (a, b),
+key idx_b (b),
+constraint chk_a check (a >= 0),
+constraint fk_pid foreign key (pid) references parent (id)
+);
+create table composite_key (
+a int,
+b int,
+c int,
+primary key (a, b),
+key idx_c (c)
+);
+create table abmoxindexyfoo (
+id int primary key,
+code int,
+v int,
+unique key uq_collision_code (code),
+key idx_collision_v (v)
+);
+create table vec (
+id int primary key,
+embedding vecf32(3)
+);
+create index vidx using ivfflat on vec (embedding)
+lists = 2 op_type 'vector_l2_ops';
+select table_name, constraint_name, column_name, ordinal_position,
+position_in_unique_constraint, referenced_table_name, referenced_column_name
+from information_schema.key_column_usage
+where table_schema = 'information_schema_constraint_index_contract'
+order by lower(table_name), lower(constraint_name), constraint_name, ordinal_position;
+table_name    constraint_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_name    referenced_column_name
+abmoxindexyfoo    PRIMARY    id    1    null    null    null
+abmoxindexyfoo    uq_collision_code    code    1    null    null    null
+child    fk_pid    pid    1    1    parent    id
+child    PRIMARY    id    1    null    null    null
+child    uq_ab    a    1    null    null    null
+child    uq_ab    b    2    null    null    null
+composite_key    PRIMARY    a    1    null    null    null
+composite_key    PRIMARY    b    2    null    null    null
+parent    PRIMARY    id    1    null    null    null
+parent    uq_code    code    1    null    null    null
+vec    PRIMARY    id    1    null    null    null
+select table_name, constraint_name, constraint_type
+from information_schema.table_constraints
+where table_schema = 'information_schema_constraint_index_contract'
+order by table_name, constraint_type, constraint_name;
+table_name    constraint_name    constraint_type
+abmoxindexyfoo    PRIMARY    PRIMARY KEY
+abmoxindexyfoo    uq_collision_code    UNIQUE
+child    chk_a    CHECK
+child    fk_pid    FOREIGN KEY
+child    PRIMARY    PRIMARY KEY
+child    uq_ab    UNIQUE
+composite_key    PRIMARY    PRIMARY KEY
+parent    PRIMARY    PRIMARY KEY
+parent    uq_code    UNIQUE
+vec    PRIMARY    PRIMARY KEY
+select table_name, column_name, column_key
+from information_schema.columns
+where table_schema = 'information_schema_constraint_index_contract'
+and table_name in ('parent', 'child', 'composite_key', 'abmoxindexyfoo', 'vec')
+order by table_name, ordinal_position;
+table_name    column_name    column_key
+abmoxindexyfoo    id    PRI
+abmoxindexyfoo    code    UNI
+abmoxindexyfoo    v    MUL
+child    id    PRI
+child    pid
+child    a    MUL
+child    b    MUL
+composite_key    a    PRI
+composite_key    b    PRI
+composite_key    c    MUL
+parent    id    PRI
+parent    code    UNI
+vec    id    PRI
+vec    embedding    MUL
+select count(*) as hidden_column_rows
+from information_schema.columns
+where table_schema = 'information_schema_constraint_index_contract'
+and startswith(table_name, '__mo_index_');
+hidden_column_rows
+0
+select index_name, seq_in_index, column_name, non_unique, index_type
+from information_schema.statistics
+where table_schema = 'information_schema_constraint_index_contract'
+and table_name = 'vec'
+and index_name = 'vidx';
+index_name    seq_in_index    column_name    non_unique    index_type
+vidx    1    embedding    1    ivfflat
+select count(*) as logical_ivf_rows
+from information_schema.statistics
+where table_schema = 'information_schema_constraint_index_contract'
+and table_name = 'vec'
+and index_name = 'vidx';
+logical_ivf_rows
+1
+select index_name, seq_in_index, column_name, non_unique
+from information_schema.statistics
+where table_schema = 'information_schema_constraint_index_contract'
+and table_name = 'abmoxindexyfoo'
+order by lower(index_name), index_name, seq_in_index;
+index_name    seq_in_index    column_name    non_unique
+idx_collision_v    1    v    1
+PRIMARY    1    id    0
+uq_collision_code    1    code    0
+drop database information_schema_constraint_index_contract;

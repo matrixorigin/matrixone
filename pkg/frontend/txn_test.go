@@ -1037,7 +1037,7 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		defer execCtx.Close()
 		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
 			moruntime.MOProtocolVersion,
-			defines.MORPCVersion31,
+			defines.MORPCVersion32,
 		)
 
 		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
