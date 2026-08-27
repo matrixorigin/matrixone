@@ -159,13 +159,17 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			"select abs((select ? + ?))",
 			"select abs((select ?) + (select ?))",
 		} {
-			stmt, err := db.PrepareContext(ctx, query)
-			require.NoError(t, err, query)
-			var result int64
-			require.NoError(t, stmt.QueryRowContext(
-				ctx, int64(-9007199254740993), int64(0)).Scan(&result), query)
-			require.Equal(t, int64(9007199254740993), result, query)
-			require.NoError(t, stmt.Close())
+			func() {
+				stmt, err := db.PrepareContext(ctx, query)
+				require.NoError(t, err, query)
+				defer func() {
+					require.NoError(t, stmt.Close())
+				}()
+				var result int64
+				require.NoError(t, stmt.QueryRowContext(
+					ctx, int64(-9007199254740993), int64(0)).Scan(&result), query)
+				require.Equal(t, int64(9007199254740993), result, query)
+			}()
 		}
 
 		nestedControlFlow, err := db.PrepareContext(ctx, "select abs(if(1, ?, 0))")
