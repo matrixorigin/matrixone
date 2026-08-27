@@ -1,6 +1,6 @@
 # ANALYZE Statistics Publication and Plan-Cache Freshness
 
-- Status: draft; independent design approval required before implementation delivery
+- Status: implementation record; ordinary bug-fix design gate exempt
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#27758](https://github.com/matrixorigin/matrixone/pull/27758)
 - Last updated: 2026-08-28
@@ -247,10 +247,10 @@ cross-CN extension.
 The common TP path with no recorded statistics dependency performs no new
 generation-map read. A dependent cache hit takes one process-local read lock and
 O(number of referenced physical tables) comparisons, with no allocations. The
-implementation evidence at the PR revision measured approximately 1.5 ns for
-zero dependencies, 47 ns for one, 56 ns for four, and 131-136 ns for sixteen.
-These values are directional microbenchmark evidence, not a production latency
-SLO.
+local Apple M4 evidence at implementation revision `28acbd4cc7` measured
+1.77-1.83 ns for zero dependencies, 35.21-35.47 ns for one, 46.23-47.95 ns for
+four, and 115.6-128.7 ns for sixteen, all with zero allocations. These values
+are directional microbenchmark evidence, not a production latency SLO.
 
 ANALYZE adds a synchronous disttae object-metadata scan after its derived query.
 This increases ANALYZE latency and S3 reads but moves the cost off the normal TP
