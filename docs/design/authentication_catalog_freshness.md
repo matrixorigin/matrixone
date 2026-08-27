@@ -1,7 +1,7 @@
 # Authentication Catalog Freshness Across CNs
 
 - Status: Review required
-- Base revision: `c1fe7b4e596c81a023d5cebd1953f388b5bd8500`
+- Base revision: `43d361ff7710f1d5d9af7c86638a9307f1f3f67e`
 - Incident evidence: [PR #27758 CI job](https://github.com/matrixorigin/matrixone/actions/runs/33067372509/job/98502820591?pr=27758)
 - Related changes: [PR #27717](https://github.com/matrixorigin/matrixone/pull/27717), [PR #27737](https://github.com/matrixorigin/matrixone/pull/27737)
 - Last updated: 2026-08-28
