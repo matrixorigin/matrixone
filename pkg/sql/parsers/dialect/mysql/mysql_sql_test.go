@@ -763,6 +763,30 @@ func TestVarianceWindowSpec(t *testing.T) {
 	require.Len(t, window.PartitionBy, 1)
 }
 
+func TestBitXorWindowSpec(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select bit_xor(v) over (partition by grp order by id rows between unbounded preceding and current row) from t",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	fn, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "bit_xor", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+	require.NotNil(t, fn.WindowSpec)
+	require.Len(t, fn.WindowSpec.PartitionBy, 1)
+	require.Len(t, fn.WindowSpec.OrderBy, 1)
+	require.True(t, fn.WindowSpec.HasFrame)
+
+	identifierStmt, err := ParseOne(context.Background(), "select bit_xor from t", 1)
+	require.NoError(t, err)
+	defer identifierStmt.Free()
+
+	identifier, ok := firstSelectExpr(t, identifierStmt).(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "bit_xor", identifier.ColName())
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
@@ -5061,6 +5085,7 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
+		"select median() within group (order by v desc) from t",
 	} {
 		ast, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

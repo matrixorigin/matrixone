@@ -2815,7 +2815,7 @@ func tsToOthers(proc *process.Process,
 		return tsToStr(proc.Ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return tsToTimestamp(proc, source, rs, length, toType)
+		return tsToTimestamp(source, rs, length, toType)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return tsToInt64(proc.Ctx, source, rs, length, toType)
@@ -6502,12 +6502,16 @@ type warningDiagnosticAppender interface {
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
-	trimmed := strings.TrimSpace(value)
+	// Numeric prefix scanning follows MySQL's ASCII whitespace rules. Using
+	// strings.TrimSpace here would disagree with the conversion itself for
+	// inputs such as a leading non-breaking space: the value converts to zero,
+	// but the warning check would reinterpret it as a complete number.
+	trimmed := trimASCIISpace(value)
 	if trimmed == "" || isExtensionFloatCandidate(trimmed) {
 		return
 	}
 	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
-	if ok && strings.TrimSpace(prefix) == trimmed {
+	if ok && prefix == trimmed {
 		return
 	}
 	if proc == nil {
@@ -6629,6 +6633,20 @@ func skipASCIISpace(s string, i int) int {
 		}
 	}
 	return i
+}
+
+func trimASCIISpace(s string) string {
+	start := skipASCIISpace(s, 0)
+	end := len(s)
+	for end > start {
+		switch s[end-1] {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			end--
+		default:
+			return s[start:end]
+		}
+	}
+	return s[start:end]
 }
 
 func isASCIIDigit(b byte) bool {
@@ -8163,7 +8181,7 @@ func strToBit(
 	for i := 0; i < length; i++ {
 		v, null := from.GetStrValue(uint64(i))
 		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
+			if err := to.Append(0, true); err != nil {
 				return err
 			}
 		} else {
@@ -8499,35 +8517,23 @@ func tsToStr(
 	return nil
 }
 func tsToTimestamp(
-	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.TS],
 	to *vector.FunctionResult[types.Timestamp],
 	length int,
 	toType types.Type) error {
 
 	for i := 0; i < length; i++ {
-		tsVal, _ := from.GetValue(uint64(i))
-
-		physical := tsVal.Physical()
-		seconds := int64(physical / 1e9)
-		nanos := int64(physical % 1e9)
-		t := time.Unix(seconds, nanos).UTC()
-		timeStr := t.Format("2006-01-02 15:04:05.999999")
-
-		zone := time.Local
-		if proc != nil {
-			zone = proc.GetSessionInfo().TimeZone
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		val, err := types.ParseTimestamp(zone, timeStr, toType.Scale)
 
-		if err != nil {
+		if err := to.Append(timestampFromTransactionTS(tsVal, toType.Scale), false); err != nil {
 			return err
 		}
-
-		if err = to.Append(val, false); err != nil {
-			return err
-		}
-
 	}
 
 	return nil

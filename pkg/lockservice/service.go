@@ -765,6 +765,9 @@ func (s *service) Unlock(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
+	if len(mutations) == 0 {
+		s.batchRemoteUnlockTables(unlockCtx, txn, commitTS)
+	}
 	lockTableFunc := func(bind pb.LockTable) (lockTable, error) {
 		return s.getLockTableForTxnUnlock(bind), nil
 	}
@@ -896,6 +899,158 @@ func (s *service) unlockRemoteLockTable(
 			txn.removeClosedLockTable(bind.Group, bind.Table, locks)
 		}
 	}
+	return s.finalizeRemoteTxnIfClosedLocked(txnID, txn)
+}
+
+// unlockRemoteLockTables closes a bounded set of ordinary tables with one
+// owner-side admission and one transaction-generation lock. Proxy handoff
+// mutations deliberately remain on unlockRemoteLockTable because each table
+// has its own conditional ownership transition.
+func (s *service) unlockRemoteLockTables(
+	ctx context.Context,
+	binds []pb.LockTable,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+) error {
+	if len(binds) < 2 || len(binds) > maxRemoteUnlockBatchSize {
+		return moerr.NewInternalErrorNoCtx("invalid remote unlock batch size")
+	}
+
+	type tableKey struct {
+		group uint32
+		table uint64
+	}
+	seen := make(map[tableKey]struct{}, len(binds))
+	for _, bind := range binds {
+		if bind.ServiceID != s.serviceID {
+			return moerr.NewInternalErrorNoCtx(
+				"remote unlock batch contains a table owned by another service")
+		}
+		key := tableKey{group: bind.Group, table: bind.Table}
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorNoCtx(
+				"remote unlock batch contains a duplicate table")
+		}
+		seen[key] = struct{}{}
+	}
+
+	serviceCtx, admitted := s.beginTxnClosure()
+	if !admitted {
+		return nil
+	}
+	defer s.endTxnClosure()
+
+	// Once the owner admits cleanup it is durable independently of the RPC
+	// caller. Service shutdown is the only cancellation owner, matching the
+	// table-scoped remote Unlock contract.
+	unlockCtx := serviceCtx
+	if unlockCtx == nil {
+		unlockCtx = context.Background()
+	}
+	if err := s.wait(unlockCtx); err != nil {
+		return err
+	}
+	releaseClosure, err := s.acquireTxnClosureAdmission(unlockCtx, txnID, nil)
+	if err != nil {
+		return err
+	}
+	defer releaseClosure.release()
+
+	txn, txnGeneration, _ := s.lockActiveTxnGeneration(txnID)
+	if txn == nil {
+		return nil
+	}
+	defer txn.Unlock()
+
+	validate := func() error {
+		for _, bind := range binds {
+			holder := txn.lockHolders[bind.Group]
+			if holder == nil {
+				continue
+			}
+			recorded, touched := holder.tableBinds[bind.Table]
+			if !touched {
+				recorded, touched = holder.tableBindIntents[bind.Table]
+			}
+			if touched && !recorded.Equal(bind) {
+				return moerr.NewInternalErrorNoCtx(
+					"remote batch unlock does not match transaction lock-table generation")
+			}
+		}
+		return nil
+	}
+	// Reject a stale batch before sealing an otherwise live transaction.
+	if err := validate(); err != nil {
+		return err
+	}
+	txn.beginClosingLocked(s.logger)
+	if !txn.waitAsyncLockOpsLocked(txnID, txnGeneration) {
+		return nil
+	}
+	// In-flight Lock callbacks can publish ledgers while the drain yields the
+	// transaction mutex, so the whole batch must be revalidated before its first
+	// irreversible table release.
+	if err := validate(); err != nil {
+		return err
+	}
+
+	type releasePlan struct {
+		bind  pb.LockTable
+		locks *cowSlice
+		local *localLockTable
+	}
+	plans := make([]releasePlan, 0, len(binds))
+	for _, bind := range binds {
+		holder := txn.lockHolders[bind.Group]
+		if holder == nil {
+			continue
+		}
+		locks := holder.tableKeys[bind.Table]
+		if locks == nil {
+			continue
+		}
+		recorded, ok := holder.tableBinds[bind.Table]
+		if !ok || !recorded.Equal(bind) {
+			return moerr.NewInternalErrorNoCtx(
+				"remote batch unlock does not match transaction lock-table generation")
+		}
+		current := s.tableGroups.get(bind.Group, bind.Table)
+		if current != nil && recorded.Equal(current.getBind()) {
+			local, ok := current.(*localLockTable)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx(
+					"remote transaction generation resolves to a non-local lock table")
+			}
+			plans = append(plans, releasePlan{bind: bind, locks: locks, local: local})
+			continue
+		}
+		plans = append(plans, releasePlan{bind: bind, locks: locks})
+	}
+
+	// Resolve the complete batch before its first irreversible release. This
+	// keeps a corrupt or stale later table from partially unlocking an otherwise
+	// valid prefix.
+	for _, plan := range plans {
+		if plan.local != nil {
+			if err := plan.local.unlockWithContext(
+				unlockCtx,
+				txn,
+				plan.locks,
+				commitTS,
+			); err != nil {
+				return err
+			}
+		}
+		// A missing/rebound table already closed the old physical generation.
+		txn.removeClosedLockTable(plan.bind.Group, plan.bind.Table, plan.locks)
+	}
+	return s.finalizeRemoteTxnIfClosedLocked(txnID, txn)
+}
+
+func (s *service) finalizeRemoteTxnIfClosedLocked(
+	txnID []byte,
+	txn *activeTxn,
+) error {
 	if txn.hasHeldLockTablesLocked() {
 		return nil
 	}
@@ -913,6 +1068,86 @@ func (s *service) unlockRemoteLockTable(
 	s.deadlockDetector.txnClosed(txnID)
 	s.activeTxnHolder.freeActiveTxn(txn)
 	return nil
+}
+
+type remoteUnlockBatchEntry struct {
+	group  uint32
+	table  uint64
+	bind   pb.LockTable
+	locks  *cowSlice
+	remote *remoteLockTable
+}
+
+// batchRemoteUnlockTables opportunistically removes negotiated ordinary
+// remote tables from the origin ledger. Any protocol, transport or owner error
+// leaves the affected entries attached so the existing table-scoped path can
+// retry them without changing correctness semantics.
+func (s *service) batchRemoteUnlockTables(
+	ctx context.Context,
+	txn *activeTxn,
+	commitTS timestamp.Timestamp,
+) {
+	byOwner := make(map[string][]remoteUnlockBatchEntry)
+	for group, holder := range txn.lockHolders {
+		for table, locks := range holder.tableKeys {
+			if !txn.isBatchUnlockSupportedLocked(group, table) {
+				continue
+			}
+			bind, ok := holder.tableBinds[table]
+			if !ok || bind.ServiceID == s.serviceID {
+				continue
+			}
+			lockTable := s.getLockTableForTxnUnlock(bind)
+			remote, ok := lockTable.(*remoteLockTable)
+			if !ok {
+				// Proxy tables may create per-table conditional mutations and must
+				// retain their existing table-scoped transition.
+				continue
+			}
+			byOwner[bind.ServiceID] = append(byOwner[bind.ServiceID], remoteUnlockBatchEntry{
+				group:  group,
+				table:  table,
+				bind:   bind,
+				locks:  locks,
+				remote: remote,
+			})
+		}
+	}
+
+	owners := make([]string, 0, len(byOwner))
+	for owner := range byOwner {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+	for _, owner := range owners {
+		entries := byOwner[owner]
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].group != entries[j].group {
+				return entries[i].group < entries[j].group
+			}
+			return entries[i].table < entries[j].table
+		})
+		for len(entries) >= 2 {
+			n := min(len(entries), maxRemoteUnlockBatchSize)
+			binds := make([]pb.LockTable, n)
+			for idx := range n {
+				binds[idx] = entries[idx].bind
+			}
+			if err := entries[0].remote.doBatchUnlock(
+				ctx,
+				txn,
+				binds,
+				commitTS,
+			); err != nil {
+				break
+			}
+			for idx := range n {
+				entry := entries[idx]
+				txn.removeClosedLockTable(entry.group, entry.table, entry.locks)
+			}
+			entries = entries[n:]
+		}
+	}
 }
 
 // adoptRemoteHandoffLockTableRefs transfers service-drain ownership after a
@@ -1042,6 +1277,9 @@ func (s *service) unlockUnknownCommit(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
+	if len(mutations) == 0 {
+		s.batchRemoteUnlockTables(ctx, txn, commitTS)
+	}
 	if err := txn.closeWithoutFreeWithContext(
 		ctx,
 		txnID,
@@ -1121,6 +1359,9 @@ func (s *service) unlockWithContext(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
+	if len(mutations) == 0 {
+		s.batchRemoteUnlockTables(ctx, txn, commitTS)
+	}
 	err := txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, func(bind pb.LockTable) (lockTable, error) {
 		return s.getLockTableForTxnUnlock(bind), nil
 	}, s.logger, mutations...)

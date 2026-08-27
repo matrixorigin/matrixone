@@ -672,6 +672,9 @@ func executeStmtInBack(backSes *backSession,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.completeCompileExecution(c, err)
+			}
 			// Preserve the historical BackgroundExec projection for engine-backed
 			// execution. This is return-only data; the authoritative statement
 			// resource root is sealed independently and must not ingest it again.
@@ -884,6 +887,8 @@ func executeStmtInSameSession(
 	execCtx *ExecCtx,
 	stmt tree.Statement,
 	preparedExpression bool,
+	preparedParamVals []any,
+	preparedBinaryExecute bool,
 ) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
@@ -937,10 +942,12 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                 stmt,
-		isInternalInput:      true,
-		isSetExpression:      true,
-		isPreparedExpression: preparedExpression,
+		stmt:                  stmt,
+		isInternalInput:       true,
+		isSetExpression:       true,
+		isPreparedExpression:  preparedExpression,
+		preparedParamVals:     preparedParamVals,
+		preparedBinaryExecute: preparedBinaryExecute,
 	})
 }
 

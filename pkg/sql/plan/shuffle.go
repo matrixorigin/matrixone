@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -40,6 +41,7 @@ const (
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
+	shuffleDistinctGroupMinNDV      = 64
 
 	overlapThreshold = 0.95
 	uniformThreshold = 0.3
@@ -91,10 +93,21 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	if lenBytes == 1 {
 		return uint64(bytes[0]) % upperLimit
 	}
-	//sample 7 bytes
+	// Keep the legacy sampled hash for mixed-version shuffle compatibility.
 	h := ((uint64(bytes[0])+1)*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])+1) +
 		(uint64(bytes[lenBytes-1])+1)*(uint64(bytes[1])+uint64(bytes[lenBytes-2])+1))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
+}
+
+// StableCharHashToRange maps a complete logical key identically across
+// processes and CPU feature sets. MORPCVersion33 freezes this mapping for one
+// execution, and its remote Shuffle wire marker makes older CNs fail before
+// execution instead of silently choosing a different owner.
+func StableCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
+	if len(bytes) == 0 {
+		return 0
+	}
+	return hashtable.StableBytesHash(bytes) % upperLimit
 }
 
 // IVFObjectIDHashToRange maps the complete physical ObjectID to an IVF owner.
@@ -1172,6 +1185,14 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	if len(node.GroupBy) == 0 {
 		return
 	}
+	// Non-COUNT DISTINCT states cannot be combined by MergeGroup today. DOP
+	// planning therefore keeps the complete aggregate on one CN. A shuffle in
+	// front of that single owner adds hashing and dispatch without exposing any
+	// parallel aggregate owner, so it is never a useful group-shuffle topology.
+	if RequiresSingleStageDistinctAgg(node) {
+		node.Stats.HashmapStats.Shuffle = false
+		return
+	}
 
 	child := builder.qry.Nodes[node.Children[0]]
 
@@ -1181,7 +1202,29 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	factor := 1 / math.Pow((node.Stats.Outcnt/node.Stats.Selectivity/child.Stats.Outcnt), 0.8)
-	if node.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
+	standardShuffle := node.Stats.HashmapStats.HashmapSize >= threshHoldForShuffleGroup*factor
+
+	// The ordinary group estimate only accounts for the final number of groups.
+	// A mergeable COUNT(DISTINCT) also retains its exact argument set, which can
+	// be orders of magnitude larger. Compare that state with the input using the
+	// same reduction-factor model: shuffling a large input is justified only when
+	// the retained exact state is itself a material fraction of that input.
+	distinctStateNDV := countDistinctStateNDV(node, builder)
+	distinctStateShuffle := false
+	if distinctStateNDV > 0 && child.Stats.Outcnt > 0 {
+		// Base-column statistics are not conditional on filters or joins. Apply
+		// the same selectivity exponent used by aggregate cardinality costing,
+		// then cap by rows reaching this node. This keeps the rule conservative
+		// when a globally high-NDV column becomes low-NDV after selection.
+		distinctStateRows := estimateNDVAfterSelection(
+			distinctStateNDV, child.Stats)
+		if distinctStateRows > 0 {
+			distinctRatio := distinctStateRows / child.Stats.Outcnt
+			distinctFactor := 1 / math.Pow(distinctRatio, 0.8)
+			distinctStateShuffle = distinctStateRows >= threshHoldForShuffleGroup*distinctFactor
+		}
+	}
+	if !standardShuffle && !distinctStateShuffle {
 		return
 	}
 
@@ -1189,15 +1232,35 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	// it remains a valid distribution key even when it is omitted from the
 	// local hash table. Preserve the highest-NDV choice to avoid skewing a
 	// composite primary key on one of its lower-cardinality components.
-	idx := 0
-	highestNDV := node.GroupBy[idx].Ndv
+	idx := -1
+	highestNDV := float64(0)
 	for i := range node.GroupBy {
-		if node.GroupBy[i].Ndv > highestNDV {
+		// Grouping-set branches replace inactive keys with the rollup
+		// constant inside Group. A shuffle must happen before Group, so an
+		// inactive key is not a valid distribution key: all rows would be
+		// partitioned by their raw values and then collapse to one logical
+		// group without a downstream MergeGroup. An empty grouping set has no
+		// safe key and must retain the ordinary merge topology.
+		if i < len(node.GroupingFlag) && !node.GroupingFlag[i] {
+			continue
+		}
+		if idx < 0 || node.GroupBy[i].Ndv > highestNDV {
 			highestNDV = node.GroupBy[i].Ndv
 			idx = i
 		}
 	}
-	if highestNDV < ShuffleThreshHoldOfNDV {
+	if idx < 0 {
+		return
+	}
+	minimumGroupNDV := float64(ShuffleThreshHoldOfNDV)
+	if distinctStateShuffle {
+		// Keep enough logical groups to expose useful parallel ownership.
+		// Hash/range shuffle then sends every row for one logical group to exactly
+		// one Group operator, removing the exact-state MergeGroup altogether.
+		minimumGroupNDV = shuffleDistinctGroupMinNDV
+		highestNDV = estimateNDVAfterSelection(highestNDV, child.Stats)
+	}
+	if highestNDV < minimumGroupNDV {
 		return
 	}
 
@@ -1211,7 +1274,9 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		node.Stats.HashmapStats.Shuffle = true
 		determineShuffleType(hashCol, node, builder)
-		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash &&
+			node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle &&
+			!distinctStateShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 		}
 	}
@@ -1236,6 +1301,57 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
+}
+
+func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
+	maxNDV := float64(-1)
+	if node == nil {
+		return maxNDV
+	}
+	for _, expr := range node.AggList {
+		if expr == nil {
+			continue
+		}
+		agg := expr.GetF()
+		if agg == nil || agg.Func == nil ||
+			uint64(agg.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		baseID := int64(uint64(agg.Func.Obj) & function.DistinctMask)
+		functionID, _ := function.DecodeOverloadID(baseID)
+		if functionID != function.COUNT {
+			continue
+		}
+		for _, arg := range agg.Args {
+			if arg == nil {
+				continue
+			}
+			// Aggregate arguments do not normally have Expr.Ndv populated by
+			// ReCalcNodeStats. Resolve the estimate through the same table/expression
+			// statistics path used elsewhere in the planner. Retain Expr.Ndv as a
+			// fallback for remapped or synthesized expressions whose source column
+			// is no longer available in tag2Table.
+			maxNDV = max(maxNDV, arg.Ndv, getExprNdv(arg, builder))
+		}
+	}
+	return maxNDV
+}
+
+func estimateNDVAfterSelection(ndv float64, stats *plan.Stats) float64 {
+	if ndv <= 0 || math.IsNaN(ndv) || math.IsInf(ndv, 0) ||
+		stats == nil || stats.Outcnt <= 0 ||
+		math.IsNaN(stats.Outcnt) || math.IsInf(stats.Outcnt, 0) {
+		return -1
+	}
+	estimate := min(ndv, stats.Outcnt)
+	selectivity := stats.Selectivity
+	// Zero is also the protobuf/default value for an unavailable estimate. Do
+	// not turn missing statistics into a certain empty result.
+	if selectivity > 0 && selectivity < 1 &&
+		!math.IsNaN(selectivity) && !math.IsInf(selectivity, 0) {
+		estimate = min(estimate, ndv*math.Pow(selectivity, 0.8))
+	}
+	return estimate
 }
 
 // default shuffle type for scan is hash

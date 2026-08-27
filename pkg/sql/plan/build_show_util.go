@@ -1449,6 +1449,11 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode strin
 	if cfg.DefaultQuery != "" {
 		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})
 	}
+	if cfg.Pushdown {
+		// Only the non-default is rendered: a table that never opted into
+		// pushdown keeps showing exactly the options its owner wrote.
+		options = append(options, struct{ key, value string }{"pushdown", "true"})
+	}
 	if len(options) > 0 {
 		builder.WriteString(" WITH (")
 		for i, option := range options {
