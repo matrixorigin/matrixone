@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -417,7 +418,8 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		{name: "small exponent decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "1e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
 		{name: "fixed scale zero decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "0.00", wantOID: types.T_decimal64, wantWidth: 2, wantScale: 2, wantOK: true},
 		{name: "exponent zero decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "0e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
-		{name: "decimal fallback", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "not-decimal", wantOID: types.T_decimal128, wantOK: true},
+		{name: "invalid decimal", mysqlType: defines.MYSQL_TYPE_DECIMAL, value: "not-decimal", wantOID: types.T_any, wantOK: false},
+		{name: "over-width decimal", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL, value: "12345678901234567890123456789012345678901234567890123456789012345678901234567", wantOID: types.T_any, wantOK: false},
 		{name: "null", mysqlType: defines.MYSQL_TYPE_NULL, wantOID: types.T_any, wantOK: false},
 		{name: "text", mysqlType: defines.MYSQL_TYPE_VAR_STRING, value: "1", wantOID: types.T_text, wantOK: false},
 	}
@@ -502,6 +504,60 @@ func TestPreparedParamValuesWithRuntimeTypes(t *testing.T) {
 	require.False(t, specialized)
 	require.Nil(t, values)
 	cw.proc.SetPrepareParams(params)
+}
+
+func TestPreparedDirectResultRejectsInvalidDecimalDescriptor(t *testing.T) {
+	for i, value := range []string{
+		"not-a-decimal",
+		"12345678901234567890123456789012345678901234567890123456789012345678901234567",
+	} {
+		t.Run(fmt.Sprintf("invalid-%d", i), func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(130+i), "select ? as result")
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+			_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "invalid DECIMAL parameter value")
+		})
+	}
+}
+
+func TestInitExecuteStmtParamKeepsCachedCompileForExplicitCast(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 132, "select cast(? as decimal(38,9))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		prepareStmt.params, []byte("1.25"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	require.Empty(t, prepareStmt.directResultParamPositions,
+		"an explicit cast already fixes the result type")
+
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	retComp, retPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, sentinel, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
+	require.NotNil(t, retPlan)
+	require.False(t, cw.paramVals[0].(plan2.ParamValue).HasRuntimeType)
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {

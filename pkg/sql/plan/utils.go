@@ -950,7 +950,7 @@ func collectNegativeAuxIDs(expr *plan.Expr, ids map[int32]struct{}) {
 	if expr == nil {
 		return
 	}
-	if expr.AuxId < 0 {
+	if expr.AuxId < 0 && expr.AuxId != explicitCastProvenanceAuxID {
 		ids[expr.AuxId] = struct{}{}
 	}
 	switch e := expr.Expr.(type) {
@@ -3397,17 +3397,35 @@ func collectDirectResultParamPositions(
 	}
 }
 
+// explicitCastProvenanceAuxID is a planner-local expression annotation. The
+// cast execution overload is not a syntax marker: several explicit casts use
+// the ordinary overload for equivalent conversion semantics. Keep the
+// provenance on the expression instead, so direct-result tracing never treats
+// an explicit user cast as a pass-through. Negative AuxId values survive plan
+// deep copies; collectNegativeAuxIDs explicitly excludes this annotation.
+const explicitCastProvenanceAuxID int32 = -2147483648
+
+func markExplicitCastProvenance(expr *Expr) *Expr {
+	if expr != nil {
+		expr.AuxId = explicitCastProvenanceAuxID
+	}
+	return expr
+}
+
 func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) bool {
 	if expr == nil {
+		return false
+	}
+	if expr.AuxId == explicitCastProvenanceAuxID {
 		return false
 	}
 	if param := expr.GetP(); param != nil {
 		positions[param.Pos] = struct{}{}
 		return true
 	}
-	// Set-operation branches may add a projection cast to reconcile the
-	// branch types. The parameter remains a direct result source beneath that
-	// unary cast and must still participate in execute-time metadata selection.
+	// Set-operation branches may add an implicit projection cast to reconcile
+	// branch types. Unlike an explicit user cast, it has no provenance marker,
+	// so the parameter remains a direct result source beneath this unary cast.
 	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
 		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
 		return collectDirectResultParamFromExpr(fn.Args[0], positions)

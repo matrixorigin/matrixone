@@ -735,6 +735,10 @@ func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
 		{name: "order by pass through", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
 		{name: "distinct pass through", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
 		{name: "union branch", sql: "prepare direct_union from 'select ? as result union all select 1'", want: []int32{0}},
+		{name: "explicit decimal cast fixes result type", sql: "prepare direct_explicit_decimal from 'select cast(? as decimal(38,9))'", want: nil},
+		{name: "explicit integer cast fixes result type", sql: "prepare direct_explicit_integer from 'select cast(? as int)'", want: nil},
+		{name: "explicit floating cast fixes result type", sql: "prepare direct_explicit_float from 'select cast(? as double)'", want: nil},
+		{name: "explicit cast in union branch fixes result type", sql: "prepare direct_explicit_union from 'select cast(? as int) union all select 1'", want: nil},
 		{name: "nested parameter is not direct", sql: "prepare direct_nested from 'select ? as direct_value, abs(?) as nested_value'", want: []int32{0}},
 		{name: "numeric function only", sql: "prepare direct_abs from 'select abs(?)'", want: nil},
 	} {

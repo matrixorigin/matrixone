@@ -192,6 +192,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 			if rewritten {
+				markExplicitCastProvenance(expr)
 				return
 			}
 		}
@@ -199,6 +200,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
+		if err == nil {
+			markExplicitCastProvenance(expr)
 		}
 
 	case *tree.BitCastExpr:

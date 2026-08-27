@@ -753,10 +753,7 @@ func binaryProtocolPrepareParamType(
 		// no decimal point (for example "123"). Do not route that value through
 		// the generic string classifier, which quite correctly calls it INT64
 		// for ordinary string parameters but would lose the DECIMAL domain here.
-		if typ, ok := plan2.PreparedDecimalRuntimeType(string(value)); ok {
-			return typ, true
-		}
-		return types.New(types.T_decimal128, 38, 18), true
+		return plan2.PreparedDecimalRuntimeType(string(value))
 	case defines.MYSQL_TYPE_NULL:
 		return types.Type{}, false
 	default:
@@ -1257,6 +1254,11 @@ func preparedParamValuesWithRuntimeTypes(
 		if _, ok := directPositions[int32(i)]; !ok {
 			continue
 		}
+		// NULL has no decimal lexeme to validate. Keep the prepared marker as a
+		// NULL value regardless of the wire type descriptor.
+		if params.IsNull(uint64(i)) {
+			continue
+		}
 		if i*2+1 >= len(paramTypes) {
 			continue
 		}
@@ -1268,6 +1270,10 @@ func preparedParamValuesWithRuntimeTypes(
 		isUnsigned := paramTypes[i*2+1]&0x80 != 0
 		runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw)
 		if !ok {
+			if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
+				return nil, false, moerr.NewInvalidInputNoCtxf(
+					"invalid DECIMAL parameter value %q", raw)
+			}
 			continue
 		}
 		if paramValue, ok := values[i].(plan2.ParamValue); ok &&
