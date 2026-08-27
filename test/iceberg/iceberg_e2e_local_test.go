@@ -470,6 +470,23 @@ func TestLocalE2EAccessLifecycleCase(t *testing.T) {
 	}
 }
 
+func TestLocalE2EAccessLifecycleCaseCleansUpAfterCreateFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnError(errors.New("create failed"))
+	mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).accessLifecycleCase(context.Background())
+	if result.Status != "failed" || result.ID != "ICE-CI-E2E-015" || !strings.Contains(result.Error, "create failed") {
+		t.Fatalf("unexpected create-failure result: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("cleanup after create failure: %v", err)
+	}
+}
+
 func TestLocalE2EPartitionFilterCaseReportsInsertFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()

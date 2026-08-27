@@ -277,6 +277,38 @@ func TestIcebergUnregisterAccessScopeAuthorization(t *testing.T) {
 	}
 }
 
+func TestExecuteIcebergUnregisterAccessCallRejectsUnauthorizedTargetsAndOptions(t *testing.T) {
+	ctx := context.Background()
+	accountAdmin := &Session{}
+	accountAdmin.SetAccountId(9)
+	accountAdmin.SetTenantInfo(&TenantInfo{Tenant: "tenant1", DefaultRole: accountAdminRoleName})
+
+	tests := []struct {
+		name    string
+		options string
+		want    string
+	}{
+		{name: "unsupported option", options: "external_principal=ci-local", want: "not supported"},
+		{name: "system account without scope", options: "account_id=0", want: "requires account_id"},
+		{name: "different account", options: "account_id=10", want: "only target the current account"},
+		{name: "cluster scope", options: "scope=cluster", want: "requires moadmin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := executeIcebergUnregisterAccessCall(ctx, accountAdmin, IcebergBuiltinProcedureCall{
+				Name: icebergUnregisterAccessProcedure, Target: "tiera", Options: tt.options,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("unregister options %q: got %v, want error containing %q", tt.options, err, tt.want)
+			}
+		})
+	}
+
+	if _, err := executeIcebergUnregisterAccessCall(ctx, nil, IcebergBuiltinProcedureCall{Name: icebergUnregisterAccessProcedure, Target: "tiera"}); err == nil || !strings.Contains(err.Error(), "requires a session") {
+		t.Fatalf("nil session: got %v, want session error", err)
+	}
+}
+
 func icebergCallResult(row []interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	for range row {
