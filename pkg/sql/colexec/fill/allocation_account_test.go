@@ -347,6 +347,24 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 	}
 }
 
+func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
+	op.ctr.expressionAllocation = new(vector.AllocationAccountSelection)
+	input := makeAccountedDecimal256Batch(t, proc, []int64{100, 130}, nil)
+
+	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	require.Nil(t, result)
+	require.False(t, owned)
+
+	input.Clean(proc.Mp())
+	op.ctr.expressionAllocation = nil
+	op.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
