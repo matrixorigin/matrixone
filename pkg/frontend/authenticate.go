@@ -1296,7 +1296,6 @@ const (
 	lockMoAccountNameFormat = `select account_name from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
 
 	deletePitrFromMoPitrFormat          = `delete from mo_catalog.mo_pitr where create_account = %d;`
-	deleteBranchMetadataByCreatorFormat = `delete from mo_catalog.mo_branch_metadata where creator = %d;`
 	deleteFeatureLimitByAccountIDFormat = `delete from mo_catalog.mo_feature_limit where account_id = %d;`
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
@@ -1782,11 +1781,8 @@ func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
 	return fmt.Sprintf(deletePitrFromMoPitrFormat, accountId)
 }
 
-func getSqlForDeleteAccountOwnedMetadata(accountID int64) []string {
-	return []string{
-		fmt.Sprintf(deleteBranchMetadataByCreatorFormat, accountID),
-		fmt.Sprintf(deleteFeatureLimitByAccountIDFormat, accountID),
-	}
+func getSqlForDeleteFeatureLimitByAccountID(accountID int64) string {
+	return fmt.Sprintf(deleteFeatureLimitByAccountIDFormat, accountID)
 }
 
 func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
@@ -4341,15 +4337,22 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
-		// These tables are physically global but retain account-owned rows under
-		// semantic ownership columns, so they are not covered by the generic
-		// cluster-table cleanup above.
-		for _, sql = range getSqlForDeleteAccountOwnedMetadata(accountId) {
-			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
+		// mo_branch_metadata is globally stored and its creator column is a
+		// semantic ownership key. Keep deleted rows that still protect live
+		// descendants, and reclaim the edge only after its complete subtree is
+		// deleted. This also allows a later child-account drop to reclaim a
+		// retained ancestor edge.
+		if rtnErr = reclaimAccountOwnedBranchMetadataWithBH(ctx, bh, uint64(accountId)); rtnErr != nil {
+			return rtnErr
+		}
+
+		// mo_feature_limit is globally stored but owns rows by account_id rather
+		// than the cluster-table account_id column used by generic cleanup.
+		sql = getSqlForDeleteFeatureLimitByAccountID(accountId)
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		ts := time.Now().UTC().UnixNano()

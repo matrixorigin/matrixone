@@ -11290,6 +11290,10 @@ func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func registerEmptyBranchMetadataResult(results map[string]ExecResult) {
+	results[branchMetadataReclaimSQL()] = newMrsForShowTables([][]interface{}{})
+}
+
 func newMrsForShowDatabases(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -11363,6 +11367,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["drop database if exists `db1`;"] = nil
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+		registerEmptyBranchMetadataResult(bh.sql2result)
 
 		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
@@ -11412,6 +11417,7 @@ func Test_doDropAccount(t *testing.T) {
 		}
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+		registerEmptyBranchMetadataResult(bh.sql2result)
 
 		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
@@ -11513,6 +11519,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}
 
 			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+			registerEmptyBranchMetadataResult(bh.sql2result)
 
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
@@ -11583,6 +11590,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}
 
 			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+			registerEmptyBranchMetadataResult(bh.sql2result)
 
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
@@ -11655,30 +11663,39 @@ func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
 	bh.sql2result["show databases;"] = newMrsForShowDatabases([][]interface{}{})
 	bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-	cleanupSQL := getSqlForDeleteAccountOwnedMetadata(1)
+	branchMetadataSQL := branchMetadataReclaimSQL()
 	wantErr := moerr.NewInternalErrorNoCtx("account-owned metadata cleanup failed")
-	bh.sql2err[cleanupSQL[0]] = wantErr
+	bh.sql2err[branchMetadataSQL] = wantErr
 
 	err := doDropAccount(ctx, bh, ses, &dropAccount{Name: "acc"})
 	require.ErrorIs(t, err, wantErr)
 	require.True(t, bh.hasExecuted("rollback;"))
-	require.False(t, bh.hasExecuted(cleanupSQL[1]))
+	require.False(t, bh.hasExecuted(getSqlForDeleteFeatureLimitByAccountID(1)))
 }
 
 func requireAccountOwnedMetadataCleanup(t *testing.T, bh *backgroundExecTestWithHistory, accountID int64) {
 	t.Helper()
-	for _, expectedSQL := range getSqlForDeleteAccountOwnedMetadata(accountID) {
-		found := false
-		for i, executedSQL := range bh.executedSqls {
-			if executedSQL != expectedSQL {
-				continue
-			}
-			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], expectedSQL)
-			found = true
-			break
+	found := false
+	for i, executedSQL := range bh.executedSqls {
+		if executedSQL != getSqlForDeleteFeatureLimitByAccountID(accountID) {
+			continue
 		}
-		require.True(t, found, expectedSQL)
+		require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], executedSQL)
+		found = true
+		break
 	}
+	require.True(t, found, getSqlForDeleteFeatureLimitByAccountID(accountID))
+
+	found = false
+	for i, executedSQL := range bh.executedSqls {
+		if executedSQL != branchMetadataReclaimSQL() {
+			continue
+		}
+		require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[i], executedSQL)
+		found = true
+		break
+	}
+	require.True(t, found, branchMetadataReclaimSQL())
 }
 
 // backgroundExecTestWithHistory extends backgroundExecTest to track SQL execution history

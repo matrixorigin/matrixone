@@ -521,7 +521,45 @@ func TestBuildAlterLineageDeleteSQL(t *testing.T) {
 	)
 	require.Empty(t, BuildAlterLineageSnapshotDeleteSQL(nil))
 	require.Empty(t, BuildAlterLineageMetadataDeleteSQL(nil))
+	require.Equal(t,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and table_deleted = true and (level != 'alter' and level not like 'alter:%')",
+		BuildBranchMetadataDeleteSQL([]uint64{2, 3}),
+	)
+	require.Empty(t, BuildBranchMetadataDeleteSQL(nil))
 }
+
+func TestComputeAccountBranchReclaimPlan(t *testing.T) {
+	// The source table 1 is not itself a branch metadata row. The branch
+	// chain is 1 -> 2 -> 3, where 2 belongs to account A and 3 belongs to
+	// account C. Dropping A must retain 2 while C is live.
+	rows := []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 10, Level: "table", TableDeleted: true},
+		{TableID: 3, PTableID: 2, Creator: 20, Level: "table", TableDeleted: false},
+		{TableID: 4, PTableID: 99, Creator: 10, Level: "table", TableDeleted: true},
+	}
+
+	plan := ComputeAccountBranchReclaimPlan(NewBranchReclaimDag(rows), 10)
+	require.Equal(t, []uint64{4}, plan.MetadataTableIDs)
+	require.Equal(t, []string{"__mo_branch_4"}, plan.SnapshotNames)
+
+	// Once C is dropped, its walk reaches the retained A edge. Both normal
+	// edges are now reclaimable, but the unrelated A row 4 is not selected.
+	rows[1].TableDeleted = true
+	plan = ComputeAccountBranchReclaimPlan(NewBranchReclaimDag(rows), 20)
+	require.Equal(t, []uint64{2, 3}, plan.MetadataTableIDs)
+	require.Equal(t, []string{"__mo_branch_2", "__mo_branch_3"}, plan.SnapshotNames)
+
+	// ALTER generations stay with the historical-lineage compactor even when
+	// the surrounding logical branch is reclaimable.
+	rows = []DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 20, Level: "table", TableDeleted: true},
+		{TableID: 3, PTableID: 2, Creator: 20, Level: "alter", TableDeleted: true},
+	}
+	plan = ComputeAccountBranchReclaimPlan(NewBranchReclaimDag(rows), 20)
+	require.Equal(t, []uint64{2}, plan.MetadataTableIDs)
+	require.Equal(t, []string{"__mo_branch_2"}, plan.SnapshotNames)
+}
+
 func TestNewDAGCycle(t *testing.T) {
 	const childEnv = "MO_TEST_NEW_DAG_CYCLE_CHILD"
 	if os.Getenv(childEnv) == "" {
