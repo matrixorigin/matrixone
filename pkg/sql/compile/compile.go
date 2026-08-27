@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -279,6 +280,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.proc = proc
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.applyPlanSnapshot()
+	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
 	c.sql = sql
@@ -379,6 +381,46 @@ func (c *Compile) bindPlanSnapshotForCompile() {
 	c.applyPlanSnapshot()
 }
 
+// captureStringShuffleHashAlgorithm starts a new execution owner-mapping
+// generation. MOProtocolVersion is consulted exactly once; operators consume
+// only the frozen Process value afterwards.
+func (c *Compile) captureStringShuffleHashAlgorithm() {
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	if supportsStableStringShuffleHash(c.proc.GetService()) {
+		c.stringShuffleHashAlgorithm = process.StringShuffleHashComplete
+	}
+	c.stringShuffleHashAlgorithmFrozen = true
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) applyStringShuffleHashAlgorithm() {
+	c.proc.SetStringShuffleHashAlgorithm(c.stringShuffleHashAlgorithm)
+}
+
+func (c *Compile) inheritStringShuffleHashAlgorithm(from *Compile) {
+	c.stringShuffleHashAlgorithm = from.stringShuffleHashAlgorithm
+	c.stringShuffleHashAlgorithmFrozen = from.stringShuffleHashAlgorithmFrozen
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) bindStringShuffleHashAlgorithmForCompile() {
+	if !c.stringShuffleHashAlgorithmFrozen {
+		c.captureStringShuffleHashAlgorithm()
+		return
+	}
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func supportsStableStringShuffleHash(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion33
+}
+
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
 	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
@@ -436,6 +478,8 @@ func (c *Compile) clear() {
 	c.planSnapshotTS = timestamp.Timestamp{}
 	c.hasPlanSnapshotTS = false
 	c.planGenerationReused = false
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	c.stringShuffleHashAlgorithmFrozen = false
 	c.resultMetadataFrozen = false
 	c.planGenerationRebuilt = false
 
@@ -2770,6 +2814,34 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	if err != nil {
 		return nil, err
 	}
+	// Predicate pushdown, SQL only and opt-in ('pushdown' = 'true'): wrap each
+	// query text as a derived table carrying the conjuncts MO can render, and
+	// stop evaluating those locally -- the source has them now.
+	//
+	// Opting in is a statement about the source: that its result columns are
+	// the DECLARED ones, by name, because a WHERE clause has to name what it
+	// filters and MO writes the names it knows. The reader checks that claim
+	// against the columns the source actually answers with, and errors when it
+	// does not hold. Predicates MO cannot render stay local, since there is
+	// nothing to send.
+	if fs.Pushdown && fs.Kind == foreignext.KindSQL && len(residual) > 0 {
+		// Bare identifiers: the quoting character is dialect-specific, and
+		// sql_tvf speaks to PostgreSQL as well as MySQL.
+		filter, pushed := sqldatastream.DeparseFiltersBareIdents(
+			residual, pushdownCols(node.TableDef.Cols), c.proc.GetSessionInfo().TimeZone)
+		if filter != "" {
+			for i := range queryList {
+				queryList[i] = foreignext.WrapPushdownQuery(queryList[i], filter)
+			}
+			kept := make([]*plan.Expr, 0, len(residual))
+			for i, expr := range residual {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			residual = kept
+		}
+	}
 	node.FilterList = residual
 
 	param := external.ForeignExternParam(fs.Kind)
@@ -2782,6 +2854,27 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{scope}, nil
+}
+
+// pushdownCols masks the synthetic external-scan columns out of a scan's
+// column list.  They exist only inside MO -- __mo_query selects which query
+// runs, the error-mode columns are synthesized by the reader -- so a conjunct
+// mentioning one must never be rendered into the source's WHERE clause.  The
+// deparser resolves column refs by position and already refuses a nil entry,
+// so blanking the slot is enough.
+//
+// The mask is by name, which is blunter than the (name, ColId) scoping used
+// elsewhere: a pre-existing schema may hold a REAL column called __mo_query,
+// and masking it merely costs that one conjunct its pushdown.
+func pushdownCols(cols []*plan.ColDef) []*plan.ColDef {
+	masked := make([]*plan.ColDef, len(cols))
+	for i, col := range cols {
+		if col == nil || catalog.IsReservedExternalColName(col.Name) {
+			continue
+		}
+		masked[i] = col
+	}
+	return masked
 }
 
 // compileKafkaScan compiles a scan of a Kafka external table. The read

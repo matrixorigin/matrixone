@@ -93,10 +93,21 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	if lenBytes == 1 {
 		return uint64(bytes[0]) % upperLimit
 	}
-	//sample 7 bytes
+	// Keep the legacy sampled hash for mixed-version shuffle compatibility.
 	h := ((uint64(bytes[0])+1)*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])+1) +
 		(uint64(bytes[lenBytes-1])+1)*(uint64(bytes[1])+uint64(bytes[lenBytes-2])+1))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
+}
+
+// StableCharHashToRange maps a complete logical key identically across
+// processes and CPU feature sets. MORPCVersion33 freezes this mapping for one
+// execution, and its remote Shuffle wire marker makes older CNs fail before
+// execution instead of silently choosing a different owner.
+func StableCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
+	if len(bytes) == 0 {
+		return 0
+	}
+	return hashtable.StableBytesHash(bytes) % upperLimit
 }
 
 // IVFObjectIDHashToRange maps the complete physical ObjectID to an IVF owner.
