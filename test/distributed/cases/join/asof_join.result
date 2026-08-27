@@ -185,5 +185,82 @@ from (select 1 id, 1 k, cast('2026-01-01 10:01:00' as timestamp) ts) l
 asof join duplicate_config r on l.k = r.k and l.ts >= r.ts;
 id    value
 1    first
+create table constrained_readings (
+id int primary key,
+device varchar(12) not null,
+region varchar(12) not null,
+event_ts timestamp(6) not null,
+reading decimal(10,2) not null,
+constraint constrained_reading_nonnegative check (reading >= 0)
+);
+create table constrained_device_cfg (
+device varchar(12) not null,
+region varchar(12) not null,
+effective_ts timestamp(6) not null,
+setting varchar(32) not null default 'default-setting',
+primary key (device, region, effective_ts)
+);
+create index constrained_cfg_setting_idx on constrained_device_cfg (setting);
+insert into constrained_device_cfg (device, region, effective_ts, setting) values
+('a', 'west', '2026-02-01 09:59:00.000000', 'v1'),
+('a', 'west', '2026-02-01 10:01:00.000000', 'v2');
+insert into constrained_device_cfg (device, region, effective_ts) values
+('b', 'east', '2026-02-01 10:00:00.000000');
+insert into constrained_readings values
+(1, 'a', 'west', '2026-02-01 09:59:30.000000', 1.00),
+(2, 'a', 'west', '2026-02-01 10:01:00.000000', 2.00),
+(3, 'b', 'east', '2026-02-01 10:00:00.000000', 3.00);
+insert into constrained_readings values
+(4, 'a', 'west', '2026-02-01 10:02:00.000000', -1.00);
+-- @regex("(?i)check", true)
+constraint violation: Check constraint 'constrained_reading_nonnegative' is violated
+insert into constrained_device_cfg values
+(null, 'east', '2026-02-01 10:02:00.000000', 'invalid-null-key');
+-- @regex("(?i)cannot be null", true)
+constraint violation: Column 'device' cannot be null
+select r.id, c.setting
+from constrained_readings r asof left join constrained_device_cfg c
+on r.device = c.device
+and r.region = c.region
+and r.event_ts >= c.effective_ts
+order by r.id;
+➤ id[4,32,0]  ¦  setting[12,32,0]  𝄀
+1  ¦  v1  𝄀
+2  ¦  v2  𝄀
+3  ¦  default-setting
+select r.id, c.setting
+from constrained_readings r asof left join constrained_device_cfg c
+on r.device = c.device
+and r.region = c.region
+and r.event_ts >= c.effective_ts
+tolerance interval 30 second
+order by r.id;
+➤ id[4,32,0]  ¦  setting[12,32,0]  𝄀
+1  ¦  v1  𝄀
+2  ¦  v2  𝄀
+3  ¦  default-setting
+prepare constrained_asof from
+'select r.id, c.setting from constrained_readings r asof join constrained_device_cfg c on r.device = c.device and r.region = c.region and r.event_ts >= c.effective_ts where r.id = ?';
+set @constrained_id = 2;
+execute constrained_asof using @constrained_id;
+➤ id[4,32,0]  ¦  setting[12,32,0]  𝄀
+2  ¦  v2
+deallocate prepare constrained_asof;
+insert into constrained_device_cfg values
+('a', 'west', '2026-02-01 10:01:00.000000', 'duplicate');
+-- @regex("Duplicate entry", true)
+Duplicate entry '(a,west,2026-02-01 18:01:00.000000)' for key '(device,region,effective_ts)'
+select r.id
+from constrained_readings r asof join constrained_device_cfg c
+on r.event_ts >= c.effective_ts;
+-- @regex("ASOF JOIN requires at least one equality key", true)
+SQL syntax error: ASOF JOIN requires at least one equality key
+select r.id
+from constrained_readings r asof join constrained_device_cfg c
+on r.device = c.device
+and r.region = c.region
+and r.event_ts <= c.effective_ts;
+-- @regex("ASOF JOIN temporal predicate must look backward", true)
+SQL syntax error: ASOF JOIN temporal predicate must look backward (left_time >= right_time or left_time > right_time)
 drop database asof_join_db;
 set session time_zone = @saved_time_zone;

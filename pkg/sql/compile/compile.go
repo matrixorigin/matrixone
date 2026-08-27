@@ -559,12 +559,7 @@ func (c *Compile) run(s *Scope) error {
 		c.addAffectedRows(s.affectedRows())
 		return err
 	case CreateDatabase:
-		err := s.CreateDatabase(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(1)
-		return nil
+		return s.CreateDatabase(c)
 	case DropDatabase:
 		err := s.DropDatabase(c)
 		if err != nil {
