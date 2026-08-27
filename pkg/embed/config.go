@@ -615,6 +615,7 @@ func (c *ServiceConfig) setFileserviceDefaultValues() {
 		c.FileServices = append(c.FileServices, fileservice.Config{
 			Name:    defines.TmpFileServiceName,
 			Backend: "DISK-TMP",
+			DataDir: c.defaultFileServiceDataDir(defines.TmpFileServiceName),
 		})
 	}
 }
