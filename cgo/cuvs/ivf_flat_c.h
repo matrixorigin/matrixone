@@ -85,6 +85,7 @@ void gpu_ivf_flat_add_chunk_quantize(gpu_ivf_flat_c index_c, const void* base_da
 void gpu_ivf_flat_train_quantizer(gpu_ivf_flat_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_ivf_flat_set_batch_window(gpu_ivf_flat_c index_c, int64_t window_us, void* errmsg);
+
 void gpu_ivf_flat_set_dynb_conservative_dispatch(gpu_ivf_flat_c index_c, bool enable, void* errmsg);
 
 void gpu_ivf_flat_set_quantizer(gpu_ivf_flat_c index_c, float min, float max, void* errmsg);
@@ -182,6 +183,9 @@ uint64_t gpu_ivf_flat_search_quantize_with_filter_async(gpu_ivf_flat_c index_c, 
                                                       uint64_t num_queries, uint32_t query_dimension,
                                                       uint32_t limit, ivf_flat_search_params_t search_params,
                                                       const char* preds_json, void* errmsg);
+
+
+
 
 #ifdef __cplusplus
 }

@@ -1499,6 +1499,7 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 		bh.sql2result["show databases;"] = newMrsForSqlForShowDatabases([][]interface{}{})
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+		registerEmptyBranchMetadataResult(bh.sql2result)
 
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
