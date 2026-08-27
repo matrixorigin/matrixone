@@ -1538,14 +1538,19 @@ public:
         // size afterwards keeps the capacity. So by the time the claim drops, the
         // bytes it stood for are charged to the availability the next caller
         // reads, and no byte of the arena is accounted in neither place.
+        // The FULL replacement buffer, not the delta over the current capacity.
+        // A growing resize does not extend in place: it allocates the new buffer,
+        // copies, and only then frees the old one, so the transient peak is old +
+        // new. Availability already reflects the old buffer (its pages are
+        // faulted), so what still has to be admitted is the whole new one.
+        //
+        // Claiming the delta under-admits by the old buffer's size, and that gap
+        // is exactly what a peak has to cover: with an arena at S/2 resident and
+        // a target of S = 75% of initial free, the delta passes the budget while
+        // the allocation itself needs S against less free than that.
         size_t growth = 0;
-        if (grow_data) {
-            growth += (static_cast<size_t>(data_rows) * dimension - staging_data_.capacity()) *
-                      sizeof(B);
-        }
-        if (grow_ids) {
-            growth += (static_cast<size_t>(ids_rows) - staging_ids_.capacity()) * sizeof(IdT);
-        }
+        if (grow_data) growth += static_cast<size_t>(data_rows) * dimension * sizeof(B);
+        if (grow_ids) growth += static_cast<size_t>(ids_rows) * sizeof(IdT);
         host_memory_governor::reservation staging_claim;
         if (growth > 0) staging_claim = host_memory_governor::reserve(growth, "quantizer staging");
 

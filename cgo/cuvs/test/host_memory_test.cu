@@ -323,3 +323,71 @@ TEST(HostMemoryGovernor, TwoConcurrentStagingGrowthsCannotBothPass) {
     for (auto& c : claims) c.release();
     require_ledger_empty("the two-builder test");
 }
+
+// A REAL arena reallocation, which the ledger-only tests above do not exercise.
+//
+// std::vector does not grow in place: resize allocates the replacement, copies,
+// and only then frees the old buffer, so the transient peak is old + new. The
+// availability sample already reflects the old buffer (its pages are faulted),
+// so what still needs admitting is the WHOLE new buffer -- claiming
+// new-capacity-minus-old under-admits by the old buffer's size.
+//
+// The two formulas are identical on the FIRST growth, where the old capacity is
+// zero. Only a SECOND growth separates them, which is why this test stages past
+// one boundary before constraining the ledger:
+//
+//   dim 256, f32 base -> 1024 B/row
+//   first growth : max(need*2, kStagingReserveFloorRows=4096) = 4096 rows = 4.19 MB
+//   second growth: need 4097 -> 8194 rows
+//                  full replacement = 8.39 MB   <- what must be claimed
+//                  delta over old   = 4.20 MB   <- what the bug claimed
+//
+// Leaving ~6 MiB of headroom therefore refuses with the correct claim and admits
+// with the under-claim.
+TEST(HostMemoryGovernor, SecondArenaGrowthClaimsTheFullReplacement) {
+    require_ledger_empty("the start of the reallocation test");
+    if (!matrixone::host_available_bytes().measured) {
+        TEST_LOG("skipped: host availability unreadable, admission disabled by design");
+        return;
+    }
+
+    const uint32_t dim = 256;
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists               = 4;
+    std::vector<int> devices = {0};
+    matrixone::gpu_ivf_pq_t<float, int8_t> index(/*total_count=*/200000, dim,
+                                                 DistanceType_L2Expanded, bp, devices, 1,
+                                                 DistributionMode_SINGLE_GPU);
+    index.start();
+
+    // Cross the first growth boundary unconstrained, so the arena is resident at
+    // 4096 rows and the next growth is a genuine reallocation.
+    std::vector<float> row(dim, 1.0f);
+    for (int i = 0; i < 4096; ++i) index.add_chunk_quantize(row.data(), 1);
+    require_ledger_empty("staging up to the first boundary");
+
+    // Sample AFTER that arena is resident, so the hog reflects real headroom.
+    const matrixone::host_available_t avail = matrixone::host_available_bytes();
+    const size_t budget = host_memory_governor::budget_bytes(static_cast<size_t>(avail.bytes));
+    const size_t sliver = 6u << 20;  // between the 4.20 MB delta and the 8.39 MB full
+    if (budget <= sliver) {
+        TEST_LOG("skipped: host budget below the sliver this test leaves free");
+        return;
+    }
+    auto hog = host_memory_governor::reserve_against(avail, budget - sliver, "hog");
+
+    bool refused_by_governor = false;
+    try {
+        index.add_chunk_quantize(row.data(), 1);  // forces the second growth
+    } catch (const std::exception& e) {
+        const std::string what = e.what();
+        refused_by_governor = what.find("quantizer staging") != std::string::npos &&
+                              what.find("host memory admission refused") != std::string::npos;
+        if (!refused_by_governor) TEST_LOG(std::string("unexpected throw: ") + what);
+    }
+    ASSERT_TRUE(refused_by_governor);
+
+    hog.release();
+    require_ledger_empty("releasing the hog");
+    index.destroy();
+}
