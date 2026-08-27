@@ -33,6 +33,9 @@ insert into timestamp_pair_src values ('2024-01-15', '2024-01-15 10:00:00.123', 
 select timestamp(d, t6) as date_time6, timestamp(dt3, t0) as datetime3_time0, timestamp(ts3, t6) as timestamp3_time6 from timestamp_pair_src;
 ➤ date_time6[93,26,0]  ¦  datetime3_time0[93,23,0]  ¦  timestamp3_time6[93,26,0]  𝄀
 2024-01-15 02:30:00.000456000  ¦  2024-01-15 12:30:00.123000000  ¦  2024-01-15 12:30:00.123456000
+select timestamp(d, d) as date_date, timestamp(d, dt3) as date_datetime, timestamp(d, ts3) as date_timestamp from timestamp_pair_src;
+➤ date_date[93,19,0]  ¦  date_datetime[93,23,0]  ¦  date_timestamp[93,23,0]  𝄀
+2024-01-15 00:00:00  ¦  2024-01-15 10:00:00.123000000  ¦  2024-01-15 10:00:00.123000000
 set @timestamp_pair_date = '2024-01-15';
 set @timestamp_pair_time = '12:30:00.123456';
 prepare timestamp_pair_stmt from 'select timestamp(?, ?) as prepared_pair';
@@ -54,7 +57,7 @@ select timestamp('not-a-date', '01:00:00') as invalid_date, timestamp('2024-01-0
 null  ¦  null
 select timestamp('2024-01-01', '2024-01-15 12:00:00') as datetime_shaped_time, timestamp('2024-01-01', '') as empty_time;
 ➤ datetime_shaped_time[93,26,0]  ¦  empty_time[93,26,0]  𝄀
-null  ¦  null
+2024-01-01 12:00:00.000000000  ¦  null
 select timestamp('9999-12-31 23:59:59.999999', '00:00:00.000001') as upper_overflow, timestamp('0001-01-01', '-00:00:00.000001') as lower_overflow;
 ➤ upper_overflow[93,26,0]  ¦  lower_overflow[93,26,0]  𝄀
 null  ¦  null

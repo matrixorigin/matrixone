@@ -38,7 +38,8 @@ func timestampPairTypeCheck(overloads []overload, inputs []types.Type) checkResu
 			typ == types.T_timestamp || isTimestampPairString(typ)
 	}
 	validTimeInput := func(typ types.T) bool {
-		return typ == types.T_any || typ == types.T_time || isTimestampPairString(typ)
+		return typ == types.T_any || typ == types.T_time || typ == types.T_date ||
+			typ == types.T_datetime || typ == types.T_timestamp || isTimestampPairString(typ)
 	}
 	if !validDateInput(inputs[0].Oid) || !validTimeInput(inputs[1].Oid) {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -126,11 +127,30 @@ func newTimestampPairDateReader(vec *vector.Vector, proc *process.Process) (time
 	}
 }
 
-func newTimestampPairTimeReader(vec *vector.Vector) (timestampPairTimeReader, error) {
+func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (timestampPairTimeReader, error) {
 	switch vec.GetType().Oid {
 	case types.T_time:
 		parameter := vector.GenerateFunctionFixedTypeParameter[types.Time](vec)
 		return parameter.GetValue, nil
+	case types.T_date:
+		parameter := vector.GenerateFunctionFixedTypeParameter[types.Date](vec)
+		return func(row uint64) (types.Time, bool) {
+			value, isNull := parameter.GetValue(row)
+			return value.ToTime(), isNull
+		}, nil
+	case types.T_datetime:
+		parameter := vector.GenerateFunctionFixedTypeParameter[types.Datetime](vec)
+		return func(row uint64) (types.Time, bool) {
+			value, isNull := parameter.GetValue(row)
+			return value.ToTime(6), isNull
+		}, nil
+	case types.T_timestamp:
+		parameter := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](vec)
+		location := proc.GetSessionInfo().TimeZone
+		return func(row uint64) (types.Time, bool) {
+			value, isNull := parameter.GetValue(row)
+			return timestampToSessionClockTime(value, location, 6), isNull
+		}, nil
 	case types.T_char, types.T_varchar, types.T_text:
 		parameter := vector.GenerateFunctionStrParameter(vec)
 		return func(row uint64) (types.Time, bool) {
@@ -142,6 +162,13 @@ func newTimestampPairTimeReader(vec *vector.Vector) (timestampPairTimeReader, er
 			if text == "" {
 				return 0, true
 			}
+			if strings.IndexByte(text, 'T') >= 0 {
+				datetime, err := types.ParseDatetime(text, 6)
+				if err != nil || datetime == types.ZeroDatetime {
+					return 0, true
+				}
+				return datetime.ToTime(6), false
+			}
 			parseText := text
 			negativeDay := false
 			if space := strings.IndexByte(text, ' '); space >= 0 {
@@ -151,11 +178,12 @@ func newTimestampPairTimeReader(vec *vector.Vector) (timestampPairTimeReader, er
 					parseText = text[1:]
 					negativeDay = true
 				}
-				if day == "" {
-					return 0, true
-				}
 				if _, err := strconv.ParseUint(day, 10, 64); err != nil {
-					return 0, true
+					datetime, datetimeErr := types.ParseDatetime(text, 6)
+					if datetimeErr != nil || datetime == types.ZeroDatetime {
+						return 0, true
+					}
+					return datetime.ToTime(6), false
 				}
 			}
 			timeValue, err := types.ParseTime(parseText, 6)
@@ -180,7 +208,7 @@ func timestampWithTime(
 	if err != nil {
 		return err
 	}
-	timeReader, err := newTimestampPairTimeReader(parameters[1])
+	timeReader, err := newTimestampPairTimeReader(parameters[1], proc)
 	if err != nil {
 		return err
 	}

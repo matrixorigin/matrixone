@@ -4782,22 +4782,36 @@ func timestampPairLiteralFSP(expr *Expr, datetime bool) (int32, bool) {
 		if text == "" {
 			return 0, false
 		}
-		parseText := text
-		if space := strings.IndexByte(text, ' '); space >= 0 {
-			day := text[:space]
-			if strings.HasPrefix(day, "-") {
-				day = day[1:]
-				parseText = text[1:]
-			}
-			if day == "" {
+		if strings.IndexByte(text, 'T') >= 0 {
+			parsed, err := types.ParseDatetime(text, 6)
+			if err != nil || parsed == types.ZeroDatetime {
 				return 0, false
 			}
-			if _, err := strconv.ParseUint(day, 10, 64); err != nil {
-				return 0, false
+		} else {
+			parseText := text
+			dateTimeText := false
+			if space := strings.IndexByte(text, ' '); space >= 0 {
+				day := text[:space]
+				if strings.HasPrefix(day, "-") {
+					day = day[1:]
+					parseText = text[1:]
+				}
+				if day == "" {
+					return 0, false
+				}
+				if _, err := strconv.ParseUint(day, 10, 64); err != nil {
+					parsed, datetimeErr := types.ParseDatetime(text, 6)
+					if datetimeErr != nil || parsed == types.ZeroDatetime {
+						return 0, false
+					}
+					dateTimeText = true
+				}
 			}
-		}
-		if _, err := types.ParseTime(parseText, 6); err != nil {
-			return 0, false
+			if !dateTimeText {
+				if _, err := types.ParseTime(parseText, 6); err != nil {
+					return 0, false
+				}
+			}
 		}
 	}
 

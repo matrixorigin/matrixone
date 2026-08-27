@@ -5313,6 +5313,7 @@ func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
 	}{
 		{name: "string literals fsp zero", expression: "timestamp('2024-01-15', '12:30:00')", wantFSP: 0},
 		{name: "string literals fsp one", expression: "timestamp('2024-01-15 10:00:00.1', '02:30:00')", wantFSP: 1},
+		{name: "second datetime literal fsp one", expression: "timestamp('2024-01-15', '2024-01-15 12:30:00.1')", wantFSP: 1},
 		{name: "string literals fsp six", expression: "timestamp('2024-01-15', '12:30:00.123456')", wantFSP: 6},
 		{name: "typed values fsp six", expression: "timestamp(cast('2024-01-15' as date), cast('12:30:00.123456' as time(6)))", wantFSP: 6},
 	} {

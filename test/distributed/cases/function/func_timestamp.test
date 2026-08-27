@@ -16,6 +16,7 @@ select timestamp('2024-01-15', '12:30:00') as literal_fsp0, timestamp('2024-01-1
 create table timestamp_pair_src(d date, dt3 datetime(3), ts3 timestamp(3), t0 time(0), t6 time(6));
 insert into timestamp_pair_src values ('2024-01-15', '2024-01-15 10:00:00.123', '2024-01-15 10:00:00.123', '02:30:00', '02:30:00.000456');
 select timestamp(d, t6) as date_time6, timestamp(dt3, t0) as datetime3_time0, timestamp(ts3, t6) as timestamp3_time6 from timestamp_pair_src;
+select timestamp(d, d) as date_date, timestamp(d, dt3) as date_datetime, timestamp(d, ts3) as date_timestamp from timestamp_pair_src;
 
 set @timestamp_pair_date = '2024-01-15';
 set @timestamp_pair_time = '12:30:00.123456';

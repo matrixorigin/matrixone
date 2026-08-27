@@ -74,6 +74,9 @@ func TestTimestampPairTypeResolution(t *testing.T) {
 	}
 	timeTypes := []types.Type{
 		types.T_time.ToTypeWithScale(6),
+		types.T_date.ToType(),
+		types.T_datetime.ToTypeWithScale(3),
+		types.T_timestamp.ToTypeWithScale(3),
 		types.T_char.ToType(),
 		types.T_varchar.ToType(),
 		types.T_text.ToType(),
@@ -83,10 +86,14 @@ func TestTimestampPairTypeResolution(t *testing.T) {
 			fn, err := GetFunctionByName(proc.Ctx, "timestamp", []types.Type{dateType, timeType})
 			require.NoError(t, err)
 			require.Equal(t, EncodeOverloadID(TIMESTAMP, 5), fn.GetEncodedOverloadID())
-			wantScale := int32(6)
-			if dateType.Oid == types.T_datetime || dateType.Oid == types.T_timestamp {
-				if timeType.Oid == types.T_time {
-					wantScale = max(dateType.Scale, timeType.Scale)
+			wantScale := int32(0)
+			for _, parameter := range []types.Type{dateType, timeType} {
+				parameterScale := parameter.Scale
+				if parameter.Oid == types.T_any || isTimestampPairString(parameter.Oid) {
+					parameterScale = 6
+				}
+				if parameterScale > wantScale {
+					wantScale = parameterScale
 				}
 			}
 			require.Equal(t, types.New(types.T_datetime, wantScale, wantScale), fn.GetReturnType())
@@ -114,7 +121,6 @@ func TestTimestampPairTypeResolution(t *testing.T) {
 
 	for _, args := range [][]types.Type{
 		{types.T_time.ToType(), types.T_time.ToType()},
-		{types.T_date.ToType(), types.T_date.ToType()},
 		{types.T_int64.ToType(), types.T_time.ToType()},
 		{types.T_date.ToType(), types.T_int64.ToType()},
 		{types.T_blob.ToType(), types.T_time.ToType()},
@@ -172,6 +178,43 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 		parseTimestampPairDatetime(t, "2024-01-15 10:00:00.123456", 6),
 	}, nil), nil)
 	require.Equal(t, wantedType, *result.GetType())
+
+	result = runTimestampPairCase(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(dateType, []types.Date{
+			parseTimestampPairDate(t, "2024-01-15"),
+		}, nil),
+		NewFunctionTestInput(types.T_date.ToType(), []types.Date{
+			parseTimestampPairDate(t, "2024-01-02"),
+		}, nil),
+	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
+		parseTimestampPairDatetime(t, "2024-01-15 00:00:00", 6),
+	}, nil), nil)
+	require.Equal(t, wantedType, *result.GetType())
+
+	result = runTimestampPairCase(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(dateType, []types.Date{
+			parseTimestampPairDate(t, "2024-01-15"),
+		}, nil),
+		NewFunctionTestInput(datetimeType, []types.Datetime{
+			parseTimestampPairDatetime(t, "2024-01-02 12:34:56.123", 3),
+		}, nil),
+	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
+		parseTimestampPairDatetime(t, "2024-01-15 12:34:56.123000", 6),
+	}, nil), nil)
+	require.Equal(t, wantedType, *result.GetType())
+
+	proc.GetSessionInfo().TimeZone = time.UTC
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 23:45:01.654", 3)
+	require.NoError(t, err)
+	result = runTimestampPairCase(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(dateType, []types.Date{
+			parseTimestampPairDate(t, "2024-01-15"),
+		}, nil),
+		NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(3), []types.Timestamp{timestamp}, nil),
+	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
+		parseTimestampPairDatetime(t, "2024-01-15 23:45:01.654000", 6),
+	}, nil), nil)
+	require.Equal(t, wantedType, *result.GetType())
 }
 
 func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
@@ -189,7 +232,8 @@ func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
 			"2024-01-15",
 			"2024-01-02",
 			"2024-01-02",
-		}, []bool{false, false, false, false, false, true, false, false, false, false}),
+			"2024-01-15",
+		}, []bool{false, false, false, false, false, true, false, false, false, false, false}),
 		NewFunctionTestInput(types.T_text.ToType(), []string{
 			"12:30:00.123456",
 			"12:00:00",
@@ -201,6 +245,7 @@ func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
 			"",
 			"1 01:00:00",
 			"-1 01:00:00",
+			"2024-01-15T12:00:00",
 		}, nil),
 	}, NewFunctionTestResult(wantedType, false, []types.Datetime{
 		parseTimestampPairDatetime(t, "2024-01-15 12:30:00.123456", 6),
@@ -209,11 +254,12 @@ func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
 		0,
 		0,
 		0,
-		0,
+		parseTimestampPairDatetime(t, "2024-01-15 12:00:00", 6),
 		0,
 		parseTimestampPairDatetime(t, "2024-01-03 01:00:00", 6),
 		parseTimestampPairDatetime(t, "2023-12-31 23:00:00", 6),
-	}, []bool{false, true, true, true, true, true, true, true, false, false}), nil)
+		parseTimestampPairDatetime(t, "2024-01-15 12:00:00", 6),
+	}, []bool{false, true, true, true, true, true, false, true, false, false, false}), nil)
 	require.Equal(t, wantedType, *result.GetType())
 }
 
