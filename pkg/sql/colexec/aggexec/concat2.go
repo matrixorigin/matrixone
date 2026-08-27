@@ -1853,28 +1853,43 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 func (exec *groupConcatExec) appendConcatPayload(
 	buf, payload []byte,
 ) ([]byte, bool, error) {
-	truncated := false
+	writer := &boundedGroupConcatSliceWriter{
+		buffer:       buf,
+		maxLen:       exec.maxLen,
+		binaryResult: exec.retType.Oid == types.T_blob,
+	}
 	err := payloadFieldIterator(
 		payload,
 		exec.concatArgCnt,
 		func(i int, isNull bool, data []byte) error {
-			if isNull || truncated {
+			if isNull || writer.truncated {
 				return nil
 			}
-			var err error
-			buf, err = appendGroupConcatData(buf, exec.argTypes[i], data)
-			if uint64(len(buf)) > exec.maxLen {
-				truncated = true
-				buf = truncateGroupConcatBytes(
-					buf,
-					exec.maxLen,
-					exec.retType.Oid == types.T_blob,
-				)
-			}
-			return err
+			return writeGroupConcatData(writer, exec.argTypes[i], data)
 		},
 	)
-	return buf, truncated, err
+	return writer.buffer, writer.truncated, err
+}
+
+// boundedGroupConcatSliceWriter keeps legacy and spill finalization from
+// materializing a complete value when only a maxLen prefix can be published.
+// Report the complete input as consumed so fmt-based encoders preserve SQL
+// truncation semantics instead of returning io.ErrShortWrite.
+type boundedGroupConcatSliceWriter struct {
+	buffer       []byte
+	maxLen       uint64
+	binaryResult bool
+	truncated    bool
+}
+
+func (w *boundedGroupConcatSliceWriter) Write(value []byte) (int, error) {
+	written := len(value)
+	if written == 0 || w.truncated {
+		return written, nil
+	}
+	w.buffer, w.truncated = appendGroupConcatBytes(
+		w.buffer, value, w.maxLen, w.binaryResult)
+	return written, nil
 }
 
 func appendGroupConcatBytes(dst, src []byte, maxLen uint64, binaryResult bool) ([]byte, bool) {

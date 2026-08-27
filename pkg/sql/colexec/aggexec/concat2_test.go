@@ -600,6 +600,13 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.SetExtraInformation(
 				EncodeGroupConcatConfig("", 20), 0))
+			payload := appendPayloadField(nil, tc.wkb, false)
+			scratch, truncated, err := exec.(*groupConcatExec).appendConcatPayload(
+				make([]byte, 0, 64), payload)
+			require.NoError(t, err)
+			require.True(t, truncated)
+			require.Equal(t, tc.wkb[:20], scratch)
+			require.LessOrEqual(t, cap(scratch), 64)
 
 			values := vector.NewVec(tc.typ)
 			defer values.Free(mp)
