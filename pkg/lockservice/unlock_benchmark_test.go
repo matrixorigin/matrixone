@@ -293,8 +293,8 @@ func BenchmarkExclusiveLockBudgetAcrossBatches(b *testing.B) {
 			}
 
 			b.ReportAllocs()
-			b.ReportMetric(batchSize*batches, "rows/op")
 			b.ResetTimer()
+			b.ReportMetric(batchSize*batches, "rows/op")
 			b.StartTimer()
 			for _, txnID := range txnIDs {
 				for _, batch := range rows {
