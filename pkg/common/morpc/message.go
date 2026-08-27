@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,7 +42,7 @@ func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 		if deadline, ok := m.Ctx.Deadline(); ok {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
-				return 0, m.Ctx.Err()
+				return 0, context.DeadlineExceeded
 			}
 			if remaining < internalTimeout {
 				return remaining, nil
@@ -58,8 +59,8 @@ func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 		return 0, moerr.NewInvalidInputNoCtx("timeout deadline not set")
 	}
 	now := time.Now()
-	if now.After(d) {
-		return 0, moerr.NewInvalidInputNoCtx("timeout has invalid deadline")
+	if !d.After(now) {
+		return 0, context.DeadlineExceeded
 	}
 	return d.Sub(now), nil
 }

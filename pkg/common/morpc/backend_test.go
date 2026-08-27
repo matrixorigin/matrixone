@@ -720,21 +720,94 @@ func TestSkippedRequestDoesNotDrainHealthyBackend(t *testing.T) {
 	)
 }
 
+type manuallyExpiringContext struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newManuallyExpiringContext(deadline time.Time) *manuallyExpiringContext {
+	return &manuallyExpiringContext{
+		Context:  context.Background(),
+		deadline: deadline,
+		done:     make(chan struct{}),
+	}
+}
+
+func (c *manuallyExpiringContext) Deadline() (time.Time, bool) {
+	return c.deadline, true
+}
+
+func (c *manuallyExpiringContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *manuallyExpiringContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *manuallyExpiringContext) expire() {
+	c.once.Do(func() { close(c.done) })
+}
+
+func TestGetTimeoutFromContextDeadlineContract(t *testing.T) {
+	t.Run("deadline elapsed before timer signal", func(t *testing.T) {
+		ctx := newManuallyExpiringContext(time.Now().Add(-time.Second))
+		_, err := (RPCMessage{Ctx: ctx}).GetTimeoutFromContext()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("internal deadline elapsed before timer signal", func(t *testing.T) {
+		ctx := newManuallyExpiringContext(time.Now().Add(-time.Second))
+		_, err := (RPCMessage{Ctx: ctx, internal: true}).GetTimeoutFromContext()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("one-way message keeps its fixed timeout", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		timeout, err := (RPCMessage{Ctx: ctx, oneWay: true}).GetTimeoutFromContext()
+		require.NoError(t, err)
+		require.Equal(t, oneWayTimeout, timeout)
+	})
+}
+
 func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	probed := make(chan struct{}, 1)
 	testBackendSend(t,
 		func(goetty.IOSession, interface{}, uint64) error {
 			// Simulate a request accepted by the peer whose data response path
 			// never makes progress.
+			accepted <- struct{}{}
 			return nil
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-			defer cancel()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			t.Cleanup(ctx.expire)
 			f, err := b.Send(ctx, newTestMessage(1))
 			require.NoError(t, err)
+			futureClosed := false
+			defer func() {
+				if !futureClosed {
+					f.Close()
+				}
+			}()
+			select {
+			case <-accepted:
+			case <-time.After(time.Second):
+				t.Fatal("peer did not accept the request")
+			}
+			ctx.expire()
 			_, err = f.Get()
 			require.ErrorIs(t, err, context.DeadlineExceeded)
+			futureClosed = true
 			f.Close()
 
 			select {
