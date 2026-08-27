@@ -6,17 +6,19 @@
 // Command kafka_e2e_local drives the Kafka external-table end-to-end test
 // (docs/cn/kafka_exttab.md, issue #27518). It connects to a running MatrixOne
 // over a MySQL DSN and to a real Kafka broker (seeded by itself via
-// franz-go), and proves the exactly-once read semantics:
+// franz-go), and proves the explicit read-window chaining semantics:
 //
 //   - a read that drains the stream and ends by TIMEOUT is not an error and
 //     still records the correct LAST_KAFKA_MESSAGE_ID()
 //   - chaining reads by feeding LAST_KAFKA_MESSAGE_ID() back as the next
-//     __mo_read_start_id covers the stream exactly once (no overlap, no gap)
+//     __mo_read_start_id covers the stream with no overlap or gap
 //   - repeating the same __mo_read_start_id returns the same data
 //   - after new messages arrive, the next chained read picks up at the right
 //     offset
 //   - a read that returns 0 messages leaves LAST_KAFKA_MESSAGE_ID() NULL in
 //     a fresh session, and UNCHANGED in a session that read before
+//   - with autocommit=false, destination rows and an explicitly managed
+//     MatrixOne checkpoint-table row commit or roll back atomically
 //
 // LAST_KAFKA_MESSAGE_ID() is session state, so every scenario pins one
 // database/sql connection (db.Conn) — the pool must not swap sessions
@@ -195,8 +197,10 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 		"create database kafka_e2e",
 		"create external table kafka_e2e.korders (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "')",
 		"create external table kafka_e2e.korders_auto (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "', 'autocommit' = 'true', 'group' = 'g_auto')",
-		"create external table kafka_e2e.korders_tx (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "', 'autocommit' = 'true', 'group' = 'g_tx')",
+		"create external table kafka_e2e.korders_tx (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "', 'autocommit' = 'false', 'group' = 'g_tx_manual')",
 		"create table kafka_e2e.dst_txn (id bigint, name varchar(100))",
+		"create table kafka_e2e.kafka_checkpoint (source varchar(100) primary key, last_id bigint not null)",
+		"insert into kafka_e2e.kafka_checkpoint values ('orders', -1)",
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("setup %q: %w", stmt, err)
@@ -252,7 +256,7 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 	}
 	r.Cases = append(r.Cases, "read-to-end-timeout-clean")
 
-	// ---- B: exactly-once chaining — LAST_KAFKA_MESSAGE_ID() feeds the next
+	// ---- B: gap-free chaining — LAST_KAFKA_MESSAGE_ID() feeds the next
 	// __mo_read_start_id; the three reads tile the stream with no overlap
 	// and no gap ----
 	connB, err := db.Conn(ctx)
@@ -286,7 +290,7 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 	if err := expectLastID(ctx, connB, 9); err != nil {
 		return fmt.Errorf("chain r3: %w", err)
 	}
-	r.Cases = append(r.Cases, "exactly-once-chaining")
+	r.Cases = append(r.Cases, "gap-free-chaining")
 
 	// ---- C: repeating the same __mo_read_start_id returns the same data
 	// (autocommit=false commits the same position, so a retry is a replay) ----
@@ -403,110 +407,86 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 	}
 	r.Cases = append(r.Cases, "autocommit-earliest-and-last-id")
 
-	// ---- H: explicit-transaction ownership — progress publishes only when
-	// the ENCLOSING transaction commits. BEGIN; INSERT..SELECT FROM kafka;
-	// ROLLBACK must leave the chain untouched (no last id, no committed
-	// group offset); the same statement followed by COMMIT publishes both.
+	// ---- H: transaction-consistent offsets are explicit MatrixOne data, not
+	// frontend-managed Kafka transaction state. The Kafka table has
+	// autocommit=false. The application locks/reads a checkpoint row, consumes
+	// from that value, then updates the checkpoint with LAST_KAFKA_MESSAGE_ID()
+	// in the SAME transaction as the destination write.
 	connF, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer connF.Close()
-	insertSQL := "insert into kafka_e2e.dst_txn select id, name from kafka_e2e.korders_tx where __mo_read_timeout = 2"
-	if _, err := connF.ExecContext(ctx, "BEGIN"); err != nil {
+	consumeTxn := func(commit bool) error {
+		if _, err := connF.ExecContext(ctx, "BEGIN"); err != nil {
+			return err
+		}
+		var start int64
+		if err := connF.QueryRowContext(ctx,
+			"select last_id from kafka_e2e.kafka_checkpoint where source = 'orders' for update").Scan(&start); err != nil {
+			return err
+		}
+		insertSQL := fmt.Sprintf("insert into kafka_e2e.dst_txn select id, name from kafka_e2e.korders_tx where __mo_read_start_id = %d and __mo_read_timeout = 2", start)
+		if _, err := connF.ExecContext(ctx, insertSQL); err != nil {
+			return fmt.Errorf("manual-checkpoint txn insert: %w", err)
+		}
+		// LAST_KAFKA_MESSAGE_ID is statement/session state and is available to
+		// the next statement; the transaction manager never owns it.
+		if err := expectLastID(ctx, connF, 12); err != nil {
+			return fmt.Errorf("statement terminal must publish last id: %w", err)
+		}
+		if _, err := connF.ExecContext(ctx,
+			"update kafka_e2e.kafka_checkpoint set last_id = last_kafka_message_id() where source = 'orders'"); err != nil {
+			return fmt.Errorf("manual checkpoint update: %w", err)
+		}
+		terminal := "ROLLBACK"
+		if commit {
+			terminal = "COMMIT"
+		}
+		_, err := connF.ExecContext(ctx, terminal)
 		return err
-	}
-	if _, err := connF.ExecContext(ctx, insertSQL); err != nil {
-		return fmt.Errorf("txn insert: %w", err)
-	}
-	// MID-transaction: nothing may be published yet
-	if _, ok, err := lastID(ctx, connF); err != nil {
-		return err
-	} else if ok {
-		return fmt.Errorf("last_kafka_message_id must stay NULL inside an open transaction")
-	}
-	if _, err := connF.ExecContext(ctx, "ROLLBACK"); err != nil {
-		return err
-	}
-	if _, ok, err := lastID(ctx, connF); err != nil {
-		return err
-	} else if ok {
-		return fmt.Errorf("ROLLBACK must not publish the kafka last id")
-	}
-	var dstCnt int64
-	if err := connF.QueryRowContext(ctx, "select count(*) from kafka_e2e.dst_txn").Scan(&dstCnt); err != nil {
-		return err
-	}
-	if dstCnt != 0 {
-		return fmt.Errorf("rolled-back insert left %d rows", dstCnt)
-	}
-	// the rolled-back read must not have advanced the g_tx group offset
-	if committedOffset(ctx, bootstrap, "g_tx") >= 0 {
-		return fmt.Errorf("ROLLBACK must not commit the kafka group offset")
 	}
 
-	if _, err := connF.ExecContext(ctx, "BEGIN"); err != nil {
+	// Rollback must restore BOTH ordinary MatrixOne tables. Session last-id
+	// remains 12 by design and is not used as the retry checkpoint.
+	if err := consumeTxn(false); err != nil {
+		return fmt.Errorf("manual-checkpoint rollback round: %w", err)
+	}
+	var dstCnt, checkpoint int64
+	if err := connF.QueryRowContext(ctx, "select count(*) from kafka_e2e.dst_txn").Scan(&dstCnt); err != nil {
 		return err
 	}
-	if _, err := connF.ExecContext(ctx, insertSQL); err != nil {
-		return fmt.Errorf("txn insert (commit round): %w", err)
-	}
-	if _, err := connF.ExecContext(ctx, "COMMIT"); err != nil {
+	if err := connF.QueryRowContext(ctx,
+		"select last_id from kafka_e2e.kafka_checkpoint where source = 'orders'").Scan(&checkpoint); err != nil {
 		return err
+	}
+	if dstCnt != 0 || checkpoint != -1 {
+		return fmt.Errorf("rollback left destination/checkpoint = %d/%d, want 0/-1", dstCnt, checkpoint)
 	}
 	if err := expectLastID(ctx, connF, 12); err != nil {
-		return fmt.Errorf("COMMIT must publish the kafka last id: %w", err)
+		return fmt.Errorf("rollback must not pretend session state is transactional: %w", err)
+	}
+
+	// Retry from the durable table checkpoint, then commit both rows and offset.
+	if err := consumeTxn(true); err != nil {
+		return fmt.Errorf("manual-checkpoint commit round: %w", err)
 	}
 	if err := connF.QueryRowContext(ctx, "select count(*) from kafka_e2e.dst_txn").Scan(&dstCnt); err != nil {
 		return err
 	}
-	if dstCnt != 13 {
-		return fmt.Errorf("committed insert rows = %d, want 13", dstCnt)
+	if err := connF.QueryRowContext(ctx,
+		"select last_id from kafka_e2e.kafka_checkpoint where source = 'orders'").Scan(&checkpoint); err != nil {
+		return err
 	}
-	if got := committedOffset(ctx, bootstrap, "g_tx"); got != 13 {
-		return fmt.Errorf("committed g_tx offset = %d, want 13", got)
+	if dstCnt != 13 || checkpoint != 12 {
+		return fmt.Errorf("commit left destination/checkpoint = %d/%d, want 13/12", dstCnt, checkpoint)
 	}
-	r.Cases = append(r.Cases, "txn-rollback-discards-commit-publishes")
+	r.Cases = append(r.Cases, "txn-explicit-offset-table-atomic")
 
 	if _, err := db.ExecContext(ctx, "drop database kafka_e2e"); err != nil {
 		return err
 	}
 	return nil
-}
-
-// committedOffsetFn is a test seam: the broker-free simulator substitutes
-// its own committed-offset model (a real run uses the kadm lookup below).
-var committedOffsetFn func(group string) (int64, bool)
-
-// committedOffset returns the committed offset of partition 0 for group, or
-// -1 when the group has committed nothing.
-func committedOffset(ctx context.Context, bootstrap, group string) int64 {
-	if committedOffsetFn != nil {
-		if v, ok := committedOffsetFn(group); ok {
-			return v
-		}
-		return -1
-	}
-	return committedOffsetReal(ctx, bootstrap, group)
-}
-
-func committedOffsetReal(ctx context.Context, bootstrap, group string) int64 {
-	cl, err := kgo.NewClient(kgo.SeedBrokers(bootstrap))
-	if err != nil {
-		return -1
-	}
-	defer cl.Close()
-	fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	resp, err := kadm.NewClient(cl).FetchOffsets(fctx, group)
-	if err != nil {
-		return -1
-	}
-	o, ok := resp.Lookup(topic, 0)
-	if !ok || o.At < 0 {
-		return -1
-	}
-	return o.At
 }
 
 func writeReport(dir string, value report) error {

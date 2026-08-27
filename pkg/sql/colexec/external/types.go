@@ -143,7 +143,7 @@ type ExParam struct {
 	// KafkaPending is the deferred progress of a DRAINED Kafka scan: the
 	// reader hands it off at source EOF, and External.Reset publishes it
 	// only when the whole statement succeeded (discarding it on failure or
-	// cancel), so an aborted statement never advances the exactly-once chain.
+	// cancel), so an aborted statement never advances session/broker progress.
 	KafkaPending                *KafkaPendingProgress
 	Filter                      *FilterParam
 	currentPartValues           map[string]string
