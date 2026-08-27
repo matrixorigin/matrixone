@@ -3868,8 +3868,17 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	// 4. create "CrossJoinL2" on tbl x centroids
 	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, includeSourceCols, optype)
 
+	// 4b. Quantize the projected entry into the entries column's element type. The
+	// entries table is declared with the QUANTIZATION type while the base column stays
+	// wide, so the raw projection above is only correct when the two widths agree.
+	entryQuantized, err := makeIvfEntriesQuantizeProject(builder, bindCtx, indexTableDefs, idxRefs,
+		joinTblAndCentroidsUsingCrossL2Join, typeOriginVecColumn)
+	if err != nil {
+		return -1, err
+	}
+
 	// 5. Create a Project with CP Key for LockNode
-	projectWithCpKey, err := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join)
+	projectWithCpKey, err := makeFinalProject(builder, bindCtx, entryQuantized)
 	if err != nil {
 		return -1, err
 	}
