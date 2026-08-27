@@ -89,6 +89,27 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, catalog.MO_COLUMNS_UPDATE, txn.writes[0].tableName)
 			require.Equal(t, skipTransfer, txn.writes[0].skipTransfer)
+
+			protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+			require.NoError(t, err)
+			req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
+				EntryType:  api.Entry_Delete,
+				DatabaseId: catalog.MO_CATALOG_ID,
+				TableId:    catalog.MO_COLUMNS_ID,
+				TableName:  txn.writes[0].tableName,
+				Bat:        protoBat,
+			}})
+			require.NoError(t, err)
+			require.Equal(t, txn.writes[0].tableName, req.(*api.Entry).TableName)
+			require.Empty(t, remaining)
+			_, _, err = catalog.ParseEntryList([]*api.Entry{{
+				EntryType:  api.Entry_Delete,
+				DatabaseId: catalog.MO_CATALOG_ID,
+				TableId:    catalog.MO_COLUMNS_ID,
+				TableName:  catalog.MO_COLUMNS,
+				Bat:        protoBat,
+			}})
+			require.ErrorContains(t, err, "bad write format")
 			txn.writes[0].bat.Clean(txn.proc.Mp())
 		})
 	}
