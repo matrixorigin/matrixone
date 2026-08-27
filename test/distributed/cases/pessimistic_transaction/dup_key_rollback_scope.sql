@@ -55,4 +55,24 @@ insert into t values (1, 'dup');
 commit;
 select a as back_to_mysql from t order by a;
 
+-- GLOBAL scope: setting it globally leaves THIS session alone, the way MySQL
+-- treats a global assignment, and a session opened afterwards inherits it.
+set global mo_rollback_txn_on_duplicate_key = 1;
+select @@global.mo_rollback_txn_on_duplicate_key as global_value,
+       @@session.mo_rollback_txn_on_duplicate_key as this_session_unchanged;
+
+-- @session:id=1{
+use dupscope;
+select @@mo_rollback_txn_on_duplicate_key as inherited_by_a_new_session;
+delete from t where a <> 1;
+begin;
+insert into t values (60, 'sixty');
+insert into t values (1, 'dup');
+commit;
+select a as new_session_txn_discarded from t order by a;
+-- @session}
+
+set global mo_rollback_txn_on_duplicate_key = 0;
+select @@global.mo_rollback_txn_on_duplicate_key as global_restored;
+
 drop database if exists dupscope;

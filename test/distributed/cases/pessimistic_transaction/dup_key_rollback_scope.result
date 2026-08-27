@@ -57,4 +57,26 @@ select a as back_to_mysql from t order by a;
 ➤ back_to_mysql[4,32,0]  𝄀
 1  𝄀
 50
+set global mo_rollback_txn_on_duplicate_key = 1;
+select @@global.mo_rollback_txn_on_duplicate_key as global_value,
+@@session.mo_rollback_txn_on_duplicate_key as this_session_unchanged;
+➤ global_value[-1,16383,0]  ¦  this_session_unchanged[-1,16383,0]  𝄀
+1  ¦  0
+use dupscope;
+select @@mo_rollback_txn_on_duplicate_key as inherited_by_a_new_session;
+➤ inherited_by_a_new_session[-1,16383,0]  𝄀
+1
+delete from t where a <> 1;
+begin;
+insert into t values (60, 'sixty');
+insert into t values (1, 'dup');
+Duplicate entry '1' for key 'a'
+commit;
+select a as new_session_txn_discarded from t order by a;
+➤ new_session_txn_discarded[4,32,0]  𝄀
+1
+set global mo_rollback_txn_on_duplicate_key = 0;
+select @@global.mo_rollback_txn_on_duplicate_key as global_restored;
+➤ global_restored[-1,16383,0]  𝄀
+0
 drop database if exists dupscope;
