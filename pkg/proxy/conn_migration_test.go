@@ -352,7 +352,7 @@ func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
 	})
 }
 
-func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV30Target(t *testing.T) {
+func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV32Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
 		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
