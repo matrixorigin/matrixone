@@ -102,6 +102,28 @@ set @score=0;
 execute and_stmt using @term,@score;
 deallocate prepare and_stmt;
 
+-- ============ operators the literal form cannot use, the parameter form cannot either ============
+-- `MATCH(...) < c` is not membership-implying for ANY c: a relevance-0 document
+-- satisfies it whenever c > 0, and nothing satisfies it when c <= 0. The literal form
+-- therefore raises 20105 at every value, and the parameter form must do the same --
+-- otherwise binding 0 would quietly gain an evaluation path the literal never has.
+select id from docs where match(body) against('fox' in natural language mode) < 5 order by id;
+select id from docs where match(body) against('fox' in natural language mode) < 0 order by id;
+
+prepare lt_stmt from 'select id from docs where match(body) against(? in natural language mode) < ? order by id';
+set @term='fox';
+set @s=0;
+execute lt_stmt using @term,@s;
+set @s=5;
+execute lt_stmt using @term,@s;
+deallocate prepare lt_stmt;
+
+prepare le_stmt from 'select id from docs where match(body) against(? in natural language mode) <= ? order by id';
+set @term='fox';
+set @s=0;
+execute le_stmt using @term,@s;
+deallocate prepare le_stmt;
+
 -- ============ two thresholds on the same MATCH ============
 -- A relevance-0 document satisfies a CONJUNCTION only when it satisfies every part, so
 -- these must be ANDed. Combining them the other way refuses `> ? AND < ?` at (0,5),

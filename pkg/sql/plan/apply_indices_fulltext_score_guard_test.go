@@ -196,3 +196,56 @@ func TestFulltextRuntimeScoreGuard(t *testing.T) {
 		require.Nil(t, g)
 	})
 }
+
+// The runtime path must harvest exactly the shapes the literal path harvests. It
+// cannot decide the VALUE at plan time -- that is what the engine guard is for -- but
+// the OPERATOR is known at plan time on both paths, so an operator the literal path
+// refuses must be refused here too.
+//
+// Otherwise `MATCH(...) < 0` raises 20105 while `MATCH(...) < ?` bound to 0 executes
+// and returns rows, which is a difference the user can see and no comment can justify.
+func TestDrivingHarvestLiteralParameterParity(t *testing.T) {
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	fn := ftMatchFn("body", 1)
+	lit := makePlan2Float64ConstExprWithType
+
+	// Operator-level parity. The runtime path cannot decide the VALUE at plan time --
+	// that is what the engine guard is for, so it legitimately harvests `> ?` even
+	// though `> -1` is refused. But the OPERATOR is known at plan time on both paths,
+	// so an operator no literal value can ever make harvestable must be refused here
+	// too, or the parameter form gains an evaluation path the literal form lacks.
+	// `=` / `<>` are included deliberately. Neither path harvests them today, so parity
+	// is trivially true -- but that is the point: adding one path without the other is
+	// exactly how this asymmetry appeared for `<`. (They are also conservatively
+	// refused: `MATCH = 0.5` and `MATCH <> 0` ARE membership-implying and could drive
+	// the index. That is a missed optimisation, uniform across both paths.)
+	for _, op := range []string{">", ">=", "<", "<=", "=", "<>"} {
+		for _, flipped := range []bool{false, true} {
+			literalEverHarvests := false
+			for _, v := range []float64{-1, 0, 0.5, 2} {
+				if len(collectDrivingFullTextMatches(
+					ftCmp(t, b, op, ftMatchExpr(fn), lit(v), flipped), nil)) > 0 {
+					literalEverHarvests = true
+					break
+				}
+			}
+			paramHarvests := len(collectDrivingFullTextMatches(
+				ftCmp(t, b, op, ftMatchExpr(fn), ftScoreParamExpr(0), flipped), nil)) > 0
+			if paramHarvests && !literalEverHarvests {
+				t.Fatalf("op %q flipped=%v: the parameter form drives the index but NO literal "+
+					"value does, so `MATCH %s ?` executes where `MATCH %s <any literal>` raises 20105",
+					op, flipped, op, op)
+			}
+		}
+	}
+
+	// ...and the shapes that must still work are still harvested.
+	for _, op := range []string{">", ">="} {
+		got := collectDrivingFullTextMatches(
+			ftCmp(t, b, op, ftMatchExpr(fn), ftScoreParamExpr(0), false), nil)
+		require.Len(t, got, 1, "`MATCH %s ?` must still drive the index", op)
+	}
+	// `? < MATCH` mirrors to `MATCH > ?`, so it drives too.
+	require.Len(t, collectDrivingFullTextMatches(
+		ftCmp(t, b, "<", ftMatchExpr(fn), ftScoreParamExpr(0), true), nil), 1)
+}

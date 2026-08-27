@@ -1731,6 +1731,10 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 // index never returns would satisfy the predicate, so answering from the index would
 // drop exactly those rows -- the condition the planner rejects for a literal.
 //
+// This decides the VALUE only. The OPERATOR is decided at plan time by
+// collectDrivingFullTextMatches, which harvests `>` and `>=` alone, so the two paths
+// admit the same SHAPES and differ only in when the value is known.
+//
 // The conjuncts are ANDed, not ORed. `MATCH > ? AND MATCH < ?` is satisfied at
 // relevance 0 only when BOTH halves are, so ORing refuses a query the same literals
 // are accepted for (`> 0 AND < 5` returns rows). And a LITERAL conjunct counts:
@@ -1926,7 +1930,13 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 		if matchExpr == nil {
 			return out
 		}
-		if isExecutionConstantExpr(constSide) {
+		// `>` and `>=` only, matching the operators the literal test below can accept.
+		// The VALUE is what a runtime threshold hides, and the engine guard re-checks
+		// it; the OPERATOR is known here on both paths. Harvesting `<` or `<=` -- which
+		// no literal value makes membership-implying -- would give the parameter form
+		// an evaluation path the literal form does not have: `MATCH < 0` raises 20105
+		// while `MATCH < ?` at 0 would execute and return rows.
+		if (op == ">" || op == ">=") && isExecutionConstantExpr(constSide) {
 			// The bound arrives at EXECUTE, so the plan-time test below cannot run.
 			// Refusing to harvest is not the safe choice it looks like: with no driving
 			// stream the MATCH has no evaluation path at all, and EXECUTE fails with

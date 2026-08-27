@@ -110,6 +110,25 @@ execute and_stmt using @term,@score;
 2  𝄀
 3
 deallocate prepare and_stmt;
+select id from docs where match(body) against('fox' in natural language mode) < 5 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from docs where match(body) against('fox' in natural language mode) < 0 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+prepare lt_stmt from 'select id from docs where match(body) against(? in natural language mode) < ? order by id';
+set @term='fox';
+set @s=0;
+execute lt_stmt using @term,@s;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @s=5;
+execute lt_stmt using @term,@s;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare lt_stmt;
+prepare le_stmt from 'select id from docs where match(body) against(? in natural language mode) <= ? order by id';
+set @term='fox';
+set @s=0;
+execute le_stmt using @term,@s;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare le_stmt;
 select id from docs where match(body) against('fox' in natural language mode) > 0 and match(body) against('fox' in natural language mode) < 5 order by id;
 ➤ id[-5,64,0]  𝄀
 1  𝄀
