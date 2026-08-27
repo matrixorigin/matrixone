@@ -288,42 +288,56 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location, quo
 	}
 }
 
-// reservedIdents is the union of the words MySQL 8.0 and PostgreSQL reserve.
+// reservedIdents is the union of the words MySQL 8.0 and PostgreSQL 16 mark
+// reserved, transcribed from the published keyword lists:
+//
+//	https://dev.mysql.com/doc/refman/8.0/en/keywords.html          (marked "(R)")
+//	https://www.postgresql.org/docs/16/sql-keywords-appendix.html  ("reserved",
+//	    including "reserved (can be function or type name)")
+//
 // A caller rendering bare identifiers must not emit one: `where order > 3` is
 // a syntax error, and unlike a name the source merely does not have, no amount
-// of checking afterwards can turn it into a working query.
+// of checking afterwards can turn it into a working query -- the conjunct has
+// already left FilterList, so there is no local path to fall back to.
 //
 // The union is deliberate.  A word reserved by either dialect is refused for
 // both, because the renderer does not know which source the text is bound for
 // and refusing costs only the optimization -- the conjunct stays local and MO
-// answers it itself.
+// answers it itself.  For the same reason the set errs long rather than short:
+// an entry that is not really reserved anywhere costs one conjunct its
+// pushdown, while a MISSING entry costs the whole query.  Words that look like
+// oversights -- `_filename`, `x509`, `slow`, `any` -- are in the published
+// lists; check there before removing one.
 var reservedIdents = func() map[string]bool {
-	const words = `accessible add all alter analyse analyze and array as asc asensitive
-asymmetric authorization before between bigint binary blob both by call cascade case cast
-change char character check collate collation column concurrently condition constraint
-continue convert create cross cube cume_dist current_catalog current_date current_role
-current_schema current_time current_timestamp current_user cursor database databases day_hour
-day_microsecond day_minute day_second dec decimal declare default deferrable delayed delete
-dense_rank desc describe deterministic distinct distinctrow div do double drop dual each else
-elseif empty enclosed end escaped except exists exit explain false fetch first_value float
-float4 float8 for force foreign freeze from full fulltext function generated get grant group
-grouping groups having high_priority hour_microsecond hour_minute hour_second if ignore ilike
-in index infile initially inner inout insensitive insert int int1 int2 int3 int4 int8 integer
-intersect interval into io_after_gtids io_before_gtids is isnull iterate join json_table key
-keys kill lag last_value lateral lead leading leave left like limit linear lines load localtime
-localtimestamp lock long longblob longtext loop low_priority master_bind
-master_ssl_verify_server_cert match maxvalue mediumblob mediumint mediumtext middleint
-minute_microsecond minute_second mod modifies natural no_write_to_binlog not notnull nth_value
-ntile null numeric of offset on only optimize optimizer_costs option optionally or order out
-outer outfile over overlaps partition percent_rank placing precision primary procedure purge
-range rank read read_write reads real recursive references regexp release rename repeat replace
-require resignal restrict return returning revoke right rlike row row_number rows schema schemas
-second_microsecond select sensitive separator session_user set show signal similar smallint some
-spatial specific sql sql_big_result sql_calc_found_rows sql_small_result sqlexception sqlstate
-sqlwarning ssl starting stored straight_join symmetric system table tablesample terminated then
-tinyblob tinyint tinytext to trailing trigger true undo union unique unlock unsigned update usage
-use user using utc_date utc_time utc_timestamp values variadic varbinary varchar varcharacter
-varying verbose virtual when where while window with write xor year_month zerofill`
+	const words = `_filename accessible add all alter analyse analyze and any array as asc asensitive
+asymmetric authorization before between bigint binary blob both by call cascade case
+cast change char character check collate collation column concurrently condition
+constraint continue convert create cross cube cume_dist current_catalog current_date
+current_role current_schema current_time current_timestamp current_user cursor
+database databases day_hour day_microsecond day_minute day_second dec decimal declare
+default deferrable delayed delete dense_rank desc describe deterministic distinct
+distinctrow div do double drop dual each else elseif empty enclosed end escaped except
+exists exit explain false fetch first_value float float4 float8 for force foreign
+freeze from full fulltext function generated get grant group grouping groups having
+high_priority hour_microsecond hour_minute hour_second if ignore ilike in index infile
+initially inner inout insensitive insert int int1 int2 int3 int4 int8 integer
+intersect interval into io_after_gtids io_before_gtids is isnull iterate join
+json_table key keys kill lag last_value lateral lead leading leave left like limit
+linear lines load localtime localtimestamp lock long longblob longtext loop
+low_priority master_bind master_ssl_verify_server_cert match maxvalue mediumblob
+mediumint mediumtext middleint minute_microsecond minute_second mod modifies natural
+no_write_to_binlog not notnull nth_value ntile null numeric of offset on only optimize
+optimizer_costs option optionally or order out outer outfile over overlaps partition
+percent_rank placing precision primary procedure purge range rank read read_write
+reads real recursive references regexp release rename repeat replace require resignal
+restrict return returning revoke right rlike row row_number rows schema schemas
+second_microsecond select sensitive separator session_user set show signal similar
+slow smallint some spatial specific sql sql_big_result sql_calc_found_rows
+sql_small_result sqlexception sqlstate sqlwarning ssl starting stored straight_join
+symmetric system table tablesample terminated then tinyblob tinyint tinytext to
+trailing trigger true undo union unique unlock unsigned update usage use user using
+utc_date utc_time utc_timestamp values varbinary varchar varcharacter variadic varying
+verbose virtual when where while window with write x509 xor year_month zerofill`
 	m := make(map[string]bool, 320)
 	for _, w := range strings.Fields(words) {
 		m[w] = true

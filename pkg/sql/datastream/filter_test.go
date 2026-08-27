@@ -15,6 +15,7 @@
 package datastream
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -328,7 +329,14 @@ func TestDeparseFiltersBareIdents(t *testing.T) {
 	// one: `where order > 3` is a syntax error, and unlike a column the source
 	// merely does not have, nothing downstream can turn that into a working
 	// query -- so it must not be pushed in the first place
-	for _, word := range []string{"order", "select", "user", "limit", "ORDER", "Table"} {
+	// The set is only as good as its completeness: a word that is reserved but
+	// missing is not a lost optimization, it is a query that can no longer be
+	// answered.  `_filename`, `x509` and `slow` are reserved in MySQL 8.0 and
+	// look like oversights; `any` and `variadic` are PostgreSQL's.
+	for _, word := range []string{
+		"order", "select", "user", "limit", "ORDER", "Table",
+		"_filename", "x509", "slow", "any", "system", "groups",
+	} {
 		reserved := []*plan.ColDef{{Name: word, Typ: plan.Type{Id: int32(types.T_int64)}}}
 		bare, pushed = DeparseFiltersBareIdents([]*plan.Expr{gt(0, 3)}, reserved, time.UTC)
 		require.Equal(t, "", bare, "%q must not be rendered bare", word)
@@ -365,4 +373,34 @@ func TestDeparseFiltersBareIdents(t *testing.T) {
 	}}}
 	bare, _ = DeparseFiltersBareIdents([]*plan.Expr{eq}, cols, time.UTC)
 	require.Equal(t, "(id = 'a`b')", bare)
+}
+
+// TestReservedIdentsIsTranscribedNotGuessed guards the property that makes the
+// bare-identifier policy safe: the set has to be the PUBLISHED reserved words,
+// not a plausible-looking subset. A missing entry is not a lost optimization,
+// it is a conjunct that leaves FilterList and a query the source then rejects
+// with no local path left.
+func TestReservedIdentsIsTranscribedNotGuessed(t *testing.T) {
+	// spot-checks from the MySQL 8.0 list that a hand-written set tends to
+	// miss because they do not look like SQL keywords
+	for _, w := range []string{"_filename", "x509", "slow", "io_after_gtids",
+		"master_ssl_verify_server_cert", "no_write_to_binlog", "year_month",
+		"zerofill", "sql_calc_found_rows", "day_microsecond"} {
+		require.True(t, reservedIdents[w], "MySQL 8.0 reserves %q", w)
+	}
+	// and from PostgreSQL's, which MySQL does not reserve
+	for _, w := range []string{"any", "variadic", "ilike", "verbose", "freeze",
+		"concurrently", "current_catalog", "isnull", "notnull", "placing",
+		"session_user", "tablesample", "symmetric", "asymmetric"} {
+		require.True(t, reservedIdents[w], "PostgreSQL reserves %q", w)
+	}
+	// ordinary column names must NOT be in it, or pushdown would rarely fire
+	for _, w := range []string{"id", "name", "status", "amount", "created_at",
+		"orders", "selected", "username", "value", "data", "ts"} {
+		require.False(t, reservedIdents[w], "%q is an ordinary column name", w)
+	}
+	// entries are lower case, because the lookup lower-cases before probing
+	for w := range reservedIdents {
+		require.Equal(t, strings.ToLower(w), w, "entry %q must be lower case", w)
+	}
 }

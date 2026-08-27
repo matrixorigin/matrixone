@@ -224,16 +224,23 @@ MySQL.  A bare identifier is accepted by both.
 
 The accepted cost is that a name which *cannot* be written bare is not pushed
 at all.  `isBareIdentifier` requires `[A-Za-z_][A-Za-z0-9_]*` **and** refuses
-the union of the words MySQL 8.0 and PostgreSQL reserve, so a column called
-`order` keeps its conjunct local instead of producing `where order > 3`, which
-no dialect parses.
+the union of the words MySQL 8.0 and PostgreSQL 16 mark reserved, transcribed
+from the published keyword lists — the URLs are in `filter.go` beside the set —
+so a column called `order` keeps its conjunct local instead of producing
+`where order > 3`, which no dialect parses.
 
 Refusing rather than pushing-and-failing matters *because* pushed conjuncts
 leave `FilterList`: a conjunct that is sent and rejected has no local path left,
 so the predicate could never be answered at all.  A conjunct that is refused is
-merely unoptimized.  Refusing on the **union** of both dialects is deliberate
-for the same reason — the renderer does not know which source the text is bound
-for, and over-refusing costs only the optimization.
+merely unoptimized.  Refusing on the **union** of both dialects follows for the
+same reason — the renderer does not know which source the text is bound for.
+
+It also decides which way the set errs: **long, never short**.  An entry that
+is not really reserved anywhere costs one conjunct its pushdown; a MISSING
+entry costs the whole query.  Words that look like oversights — `_filename`,
+`x509`, `slow`, `any` — are in the published lists, and
+`TestReservedIdentsIsTranscribedNotGuessed` pins a sample of exactly those,
+because a hand-transcribed set is the kind of thing that silently rots.
 
 The derived-table alias is MO's own (`__mo_subq_` + crc32 hex), spelled from
 `[a-z0-9_]`, so it needs no quoting either.
