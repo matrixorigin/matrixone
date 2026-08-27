@@ -381,6 +381,12 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 
+	// Optional 6th argument: the zero-relevance guard for a MATCH score threshold that
+	// was only known at EXECUTE (a prepared '?'). See checkFulltextZeroRelevanceGuard.
+	if err := checkFulltextZeroRelevanceGuard(proc, tf.ctr.argVecs, 5, 0); err != nil {
+		return err
+	}
+
 	// Optional pushed score range (argVecs[4], a query const): the planner turns an
 	// AND-reachable `MATCH(...) <op> const` into a relevance interval the engine applies to
 	// each scored doc, so out-of-range rows never cross into the join above. Absent on a

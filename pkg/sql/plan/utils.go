@@ -4616,3 +4616,31 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 	pk := tableDef.GetPkey()
 	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
 }
+
+// isExecutionConstantExpr reports whether an expression is a value that is unknown at
+// plan time but CONSTANT for the whole execution: a prepared parameter marker,
+// optionally wrapped in monotone casts (`CAST(? AS DOUBLE)`).
+//
+// The distinction that matters is against a per-ROW expression such as a column
+// reference. Both are "not a literal", but only this kind can be constant-folded once
+// before a scan and used as a fixed bound; a column reference varies per row and must
+// stay a residual filter. Optimizer rules that want to admit `?` where they previously
+// demanded a literal should test this, never merely `GetLit() == nil`.
+func isExecutionConstantExpr(expr *plan.Expr) bool {
+	for i := 0; expr != nil && i < 8; i++ {
+		if expr.GetP() != nil {
+			return true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			return false
+		}
+		switch fn.Func.ObjName {
+		case "cast", "round", "floor", "ceil":
+			expr = fn.Args[0]
+		default:
+			return false
+		}
+	}
+	return false
+}
