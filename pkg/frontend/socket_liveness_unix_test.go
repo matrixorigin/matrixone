@@ -61,7 +61,8 @@ func tcpConnectionPairs(t testing.TB, count int) ([]net.Conn, []net.Conn) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
-	var servers, clients []net.Conn
+	servers := make([]net.Conn, 0, count)
+	clients := make([]net.Conn, 0, count)
 	t.Cleanup(func() {
 		for _, conn := range servers {
 			_ = conn.Close()
@@ -84,13 +85,11 @@ func tcpConnectionPairs(t testing.TB, count int) ([]net.Conn, []net.Conn) {
 		}
 	}()
 
-	clients = make([]net.Conn, 0, count)
 	for range count {
 		client, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
 		clients = append(clients, client)
 	}
-	servers = make([]net.Conn, 0, count)
 	for range count {
 		select {
 		case server := <-accepted:
