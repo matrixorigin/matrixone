@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -484,9 +485,12 @@ func (rt *Routine) handleSessionCommand(ctx context.Context, req *Request) error
 		resp = NewGeneralOkResponse(req.GetCmd(), status)
 	}
 	writeErr := rt.getProtocol().WriteResponse(commandCtx, resp)
-	if req.GetCmd() == COM_CHANGE_USER && commandErr != nil {
+	if commandErr != nil && (req.GetCmd() == COM_CHANGE_USER || errors.Is(commandErr, errSessionResetConnectionMustClose)) {
 		// MySQL terminates the connection after a failed change-user
-		// authentication. Do this only after the ERR packet has been attempted.
+		// authentication. A reset that has already retired part of the old
+		// generation must do the same: its retained aliases could no longer
+		// describe the physical temporary tables. Do this only after the ERR
+		// packet has been attempted.
 		disconnectErr := rt.getProtocol().Disconnect()
 		if writeErr == nil {
 			writeErr = disconnectErr

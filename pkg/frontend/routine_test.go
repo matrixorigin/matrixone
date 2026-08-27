@@ -1512,6 +1512,76 @@ func TestRoutineHandleSessionCommandRejectsInvalidStateAndPayload(t *testing.T) 
 	require.Same(t, session, routine.getSession(), "malformed change-user payload must not replace the session")
 }
 
+type disconnectRecordingProtocol struct {
+	MysqlRrWr
+	disconnects int
+}
+
+func (p *disconnectRecordingProtocol) Disconnect() error {
+	p.disconnects++
+	return p.MysqlRrWr.Disconnect()
+}
+
+func TestRoutineHandleSessionCommandClosesPartialTempTableReset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+
+	mysqlProtocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	protocol := &disconnectRecordingProtocol{MysqlRrWr: mysqlProtocol}
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	routine := NewRoutine(context.Background(), protocol, parameters)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := mysqlProtocol.GetTcpConnection()
+	rm.setRoutine(conn, mysqlProtocol.ConnectionID(), routine)
+
+	oldSession.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil)
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+	oldSession.AddTempTable("db", "first", "first_physical")
+	oldSession.AddTempTable("db", "second", "second_physical")
+
+	serviceRuntime := moruntime.ServiceRuntime(oldSession.GetService())
+	previousExecutor, hadExecutor := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	exec := &resetTempTableExecutor{failAt: 2}
+	serviceRuntime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadExecutor {
+			serviceRuntime.SetGlobalVariables(moruntime.InternalSQLExecutor, previousExecutor)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.InternalSQLExecutor, nil)
+		}
+	})
+	t.Cleanup(func() {
+		rm.deleteRoutine(conn)
+		rm.sessionManager.RemoveSession(oldSession)
+		assert.NoError(t, oldSession.resetTempTables(context.Background()))
+		oldSession.Close()
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+	require.Len(t, exec.sql, 2, "the injected failure must follow one successful physical DROP")
+	require.Equal(t, 1, protocol.disconnects, "a partially reset connection must not be reusable")
+	require.Same(t, oldSession, routine.getSession(), "the replacement generation must remain unpublished")
+}
+
 func mysqlNativePasswordResponse(password, salt []byte) []byte {
 	hash1 := HashSha1(password)
 	hash2 := HashSha1(hash1)

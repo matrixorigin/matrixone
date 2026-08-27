@@ -1859,12 +1859,16 @@ func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
 type resetTempTableExecutor struct {
 	sql      []string
 	failures int
+	failAt   int
 }
 
 func (e *resetTempTableExecutor) Exec(
 	_ context.Context, sql string, _ executor.Options,
 ) (executor.Result, error) {
 	e.sql = append(e.sql, sql)
+	if e.failAt > 0 && len(e.sql) == e.failAt {
+		return executor.Result{}, assert.AnError
+	}
 	if e.failures > 0 {
 		e.failures--
 		return executor.Result{}, assert.AnError

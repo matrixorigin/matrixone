@@ -3277,6 +3277,11 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	return prev.closeForReset(ctx)
 }
 
+// errSessionResetConnectionMustClose marks an error after the old session
+// generation has changed state. The MySQL connection must not be reused: an
+// ERR response alone cannot restore physical temporary-table state.
+var errSessionResetConnectionMustClose = errors.New("session reset must close connection")
+
 // closeForReset retires a session generation while preserving the physical
 // protocol connection. All reusable server-side state must be gone before
 // the replacement generation can be published.
@@ -3311,7 +3316,7 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 	}
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return cause
+			return errors.Join(cause, errSessionResetConnectionMustClose)
 		}
 	}
 	// Internal SQL execution requires a bounded context. The transaction cleanup
@@ -3332,7 +3337,7 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 	if err = ses.resetTempTables(tempCleanupCtx); err != nil {
 		ses.Error(tempCleanupCtx, "failed to drop temporary tables during session reset",
 			zap.Error(err))
-		return err
+		return errors.Join(err, errSessionResetConnectionMustClose)
 	}
 	// close the previous session.
 	ses.ReserveConnAndClose()
