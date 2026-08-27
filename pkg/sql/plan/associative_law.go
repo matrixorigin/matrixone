@@ -74,6 +74,92 @@ func formatStatsInfo(stats *plan.Stats) string {
 	return fmt.Sprintf("sel=%.4f,outcnt=%.2f,tablecnt=%.2f", stats.Selectivity, stats.Outcnt, stats.TableCnt)
 }
 
+// applyOuterJoinPreservedSideRule rewrites
+//
+//	(A LEFT JOIN B) INNER JOIN C
+//
+// to
+//
+//	(A INNER JOIN C) LEFT JOIN B
+//
+// when the upper join only references A and C and C is unique on the join
+// key.  The INNER JOIN can only remove rows from A, so doing it first cannot
+// increase the input of the LEFT JOIN.  This is especially important when B
+// is a large fact table and C carries a selective dimension predicate.
+func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	for i, child := range node.Children {
+		node.Children[i] = builder.applyOuterJoinPreservedSideRule(child)
+	}
+
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
+		joinNodeHasLocalSemantics(node) {
+		return nodeID
+	}
+
+	outerPos := -1
+	for i, childID := range node.Children {
+		child := builder.qry.Nodes[childID]
+		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_LEFT &&
+			!joinNodeHasLocalSemantics(child) {
+			outerPos = i
+			break
+		}
+	}
+	if outerPos == -1 {
+		return nodeID
+	}
+
+	outer := builder.qry.Nodes[node.Children[outerPos]]
+	preservedID := outer.Children[0]
+	otherID := node.Children[1-outerPos]
+
+	allowedTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(preservedID) {
+		allowedTags[tag] = true
+	}
+	for _, tag := range builder.enumerateTags(otherID) {
+		allowedTags[tag] = true
+	}
+	for _, cond := range node.OnList {
+		if !containsOnlyTags(cond, allowedTags) || ContainsVolatileFunction(cond) {
+			return nodeID
+		}
+	}
+	for _, cond := range outer.OnList {
+		if ContainsVolatileFunction(cond) {
+			return nodeID
+		}
+	}
+
+	originalChildren := append([]int32(nil), node.Children...)
+	node.Children[0] = preservedID
+	node.Children[1] = otherID
+	if node.Stats != nil && node.Stats.HashmapStats != nil {
+		node.Stats.HashmapStats.HashOnPK = false
+	}
+	determineHashOnPK(node.NodeId, builder)
+	if node.Stats == nil || node.Stats.HashmapStats == nil || !node.Stats.HashmapStats.HashOnPK {
+		node.Children = originalChildren
+		return nodeID
+	}
+
+	outer.Children[0] = node.NodeId
+	outer.IsRightJoin = false
+	ReCalcNodeStats(outer.NodeId, builder, true, false, true)
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("outer-preserved-side: inner=%d outer=%d", node.NodeId, outer.NodeId))
+	return outer.NodeId
+}
+
+func joinNodeHasLocalSemantics(node *plan.Node) bool {
+	return node.Limit != nil || node.Offset != nil || len(node.OrderBy) != 0 ||
+		len(node.ProjectList) != 0 || len(node.FilterList) != 0 ||
+		len(node.GroupBy) != 0 || len(node.AggList) != 0 || len(node.WinSpecList) != 0 ||
+		len(node.RuntimeFilterBuildList) != 0 || len(node.RuntimeFilterProbeList) != 0 ||
+		node.DedupJoinCtx != nil
+}
+
 // for A*(B*C), if C.sel>0.9 and B<C, change this to (A*B)*C
 func (builder *QueryBuilder) applyAssociativeLawRule1(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
@@ -240,6 +326,8 @@ func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
 		return nodeID
 	}
+	nodeID = builder.applyOuterJoinPreservedSideRule(nodeID)
+	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
 	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule2(nodeID)
