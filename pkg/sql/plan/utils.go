@@ -490,26 +490,20 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
 		rightEntries := make([]*rightEntry, len(rightConds))
 
-		relPos := int32(-1)
+		rightRelations := make(map[int32]struct{}, 2)
+		rightRelationsKnown := true
 		for i, cond := range rightConds {
 			h := exprStructuralHash(cond)
 			entry := &rightEntry{cond: cond, side: JoinSideRight}
 			rightEntries[i] = entry
 			rightBuckets[h] = append(rightBuckets[h], entry)
-
-			args := cond.GetF().GetArgs()
-			if len(args) != 2 {
-				continue
-			}
-			if col := args[0].GetCol(); col != nil {
-				if relPos == -1 {
-					relPos = col.RelPos
-				} else if relPos != col.RelPos {
-					relPos = -2
-				}
-			}
+			rightRelationsKnown = collectExprRelations(cond, rightRelations) && rightRelationsKnown
 		}
-		if relPos >= 0 {
+		// Keep single-table DNF intact for composite-key range folding. The old
+		// first-argument heuristic missed columns hidden in BETWEEN/IN and the
+		// second side of equalities, so a cross-table DNF could be mistaken for
+		// a single-table predicate and hide a common hash-join key.
+		if rightRelationsKnown && len(rightRelations) == 1 {
 			return expr
 		}
 
@@ -561,6 +555,65 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	}
 
 	return expr
+}
+
+func collectExprRelations(expr *plan.Expr, relations map[int32]struct{}) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col == nil || item.Col.RelPos < 0 {
+			return false
+		}
+		relations[item.Col.RelPos] = struct{}{}
+	case *plan.Expr_Corr:
+		if item.Corr == nil || item.Corr.RelPos < 0 {
+			return false
+		}
+		relations[item.Corr.RelPos] = struct{}{}
+	case *plan.Expr_F:
+		if item.F != nil {
+			for _, arg := range item.F.Args {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_List:
+		if item.List != nil {
+			for _, arg := range item.List.List {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_W:
+		if item.W != nil {
+			if !collectExprRelations(item.W.WindowFunc, relations) {
+				return false
+			}
+			for _, arg := range item.W.PartitionBy {
+				if !collectExprRelations(arg, relations) {
+					return false
+				}
+			}
+			for _, order := range item.W.OrderBy {
+				if !collectExprRelations(order.Expr, relations) {
+					return false
+				}
+			}
+		}
+	case *plan.Expr_Sub:
+		if item.Sub != nil && !collectExprRelations(item.Sub.Child, relations) {
+			return false
+		}
+	case *plan.Expr_Lit:
+		if item.Lit != nil && !collectExprRelations(item.Lit.Src, relations) {
+			return false
+		}
+	}
+	return true
 }
 
 func unionSlice(left, right []string) []string {
