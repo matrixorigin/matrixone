@@ -61,7 +61,7 @@ func backfillMoColumnsAttIsUnsigned() versions.UpgradeEntry {
 		TableName:               catalog.MO_COLUMNS,
 		UpgType:                 versions.MODIFY_METADATA,
 		UpgSql:                  "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE " + moColumnsUnsignedMismatchPredicate,
-		RequiredProtocolVersion: defines.MORPCVersion33,
+		RequiredProtocolVersion: defines.MORPCVersion34,
 		AllowMoColumnsUpdate:    true,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			mismatch, err := versions.CheckTableDataExist(txn, accountID,

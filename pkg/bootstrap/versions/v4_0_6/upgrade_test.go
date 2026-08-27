@@ -130,7 +130,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_METADATA, unsignedColumns.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, unsignedColumns.Schema)
 	require.Equal(t, catalog.MO_COLUMNS, unsignedColumns.TableName)
-	require.Equal(t, int64(defines.MORPCVersion33), unsignedColumns.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion34), unsignedColumns.RequiredProtocolVersion)
 	require.True(t, unsignedColumns.AllowMoColumnsUpdate)
 	statistics := tenantUpgEntries[20]
 	require.Equal(t, versions.MODIFY_VIEW, statistics.UpgType)
@@ -170,7 +170,7 @@ func TestMoColumnsUnsignedBackfillWaitsForAllCNsAndIsIdempotent(t *testing.T) {
 				result.NewBatchWithRowCount(1)
 				return result.GetResult(), nil
 			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:33,cn-b:32"}`), nil
+				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:34,cn-b:33"}`), nil
 			case entry.UpgSql:
 				updated = true
 			}
@@ -194,7 +194,7 @@ func TestMoColumnsUnsignedBackfillWaitsForAllCNsAndIsIdempotent(t *testing.T) {
 					return result.GetResult(), nil
 				}
 			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:33,cn-b:33"}`), nil
+				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:34,cn-b:34"}`), nil
 			case entry.UpgSql:
 				hasMismatch = false
 			}
@@ -475,7 +475,7 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+removedIndexVisibilityUpgradeOffset, meta.VersionOffset)
-	require.Equal(t, int64(defines.MORPCVersion33), meta.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion34), meta.RequiredProtocolVersion)
 }
 
 func TestTenantViewDefinitionChecks(t *testing.T) {
