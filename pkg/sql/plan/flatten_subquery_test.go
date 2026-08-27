@@ -1592,6 +1592,115 @@ func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 	}
 }
 
+func TestFilteringOrOfExistsUsesOneUnionSemiJoin(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "different inner relations",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r where r.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n2 where n2.n_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "composite correlation key",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.nation n2 where
+					n2.n_regionkey = n.n_regionkey and n2.n_name = n.n_name) or
+				exists (select 1 from tpch.nation n3 where
+					n3.n_regionkey = n.n_regionkey and n3.n_name = n.n_name)`,
+		},
+		{
+			name: "three branches",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r where r.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n2 where n2.n_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n3 where n3.n_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "independent disjunctions",
+			sql: `select n.n_name from tpch.nation n where (
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n2 where n2.n_regionkey = n.n_regionkey)
+			) and (
+				exists (select 1 from tpch.nation n3 where n3.n_nationkey = n.n_nationkey) or
+				exists (select 1 from tpch.nation n4 where n4.n_nationkey = n.n_nationkey)
+			)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.True(t, reachablePlanHasNodeType(query, plan.Node_UNION_ALL))
+			require.True(t, reachablePlanHasJoinType(query, plan.Node_SEMI))
+			require.False(t, reachablePlanHasJoinType(query, plan.Node_MARK),
+				"a filtering disjunction of positive EXISTS must not retain large marker builds")
+		})
+	}
+}
+
+func TestFilteringOrOfExistsRewriteControls(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "different outer keys",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_nationkey)`,
+		},
+		{
+			name: "negative existential",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				not exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "non equality correlation",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey > n.n_regionkey)`,
+		},
+		{
+			name: "projected boolean",
+			sql: `select
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)
+			from tpch.nation n`,
+		},
+		{
+			name: "three valued in",
+			sql: `select n.n_name from tpch.nation n where
+				n.n_regionkey in (select r1.r_regionkey from tpch.region r1) or
+				n.n_regionkey in (select r2.r_regionkey from tpch.region r2)`,
+		},
+		{
+			name: "volatile branch predicate",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where
+					r1.r_regionkey = n.n_regionkey and rand() > 0.5) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, reachablePlanHasJoinType(query, plan.Node_MARK))
+			require.False(t, reachablePlanHasNodeType(query, plan.Node_UNION_ALL))
+		})
+	}
+}
+
 func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 	const correlatedNotExists = `not exists (
 		select 1 from tpch.region r where r.r_comment = n.n_comment
@@ -2682,6 +2791,45 @@ func newRowComparisonTestColumn(relPos, colPos int32) *plan.Expr {
 func hasJoinType(query *plan.Query, joinType plan.Node_JoinType) bool {
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == joinType {
+			return true
+		}
+	}
+	return false
+}
+
+func reachablePlanHasNodeType(query *plan.Query, nodeType plan.Node_NodeType) bool {
+	return reachablePlanHasNode(query, func(node *plan.Node) bool {
+		return node.NodeType == nodeType
+	})
+}
+
+func reachablePlanHasJoinType(query *plan.Query, joinType plan.Node_JoinType) bool {
+	return reachablePlanHasNode(query, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == joinType
+	})
+}
+
+func reachablePlanHasNode(query *plan.Query, match func(*plan.Node) bool) bool {
+	visited := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return false
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		if match(node) {
+			return true
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, rootID := range query.Steps {
+		if visit(rootID) {
 			return true
 		}
 	}
