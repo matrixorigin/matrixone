@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -134,6 +135,105 @@ func TestStringToUint64(t *testing.T) {
 	require.Equal(t, bytes.Compare(s5, s6), compareUint64(u5, u6))
 	require.Equal(t, bytes.Compare(s5, s7), compareUint64(u5, u7))
 	require.Equal(t, bytes.Compare(s6, s7), compareUint64(u6, u7))
+}
+
+func TestStableCharHashToRangeUsesCompleteKey(t *testing.T) {
+	first := []byte("https://example.invalid/events/00000000.json")
+	second := append([]byte(nil), first...)
+	second[31] = '1'
+
+	const bucketCount = uint64(1 << 32)
+	require.Equal(t, hashtable.StableBytesHash(first)%bucketCount, StableCharHashToRange(first, bucketCount))
+	require.Equal(t, StableCharHashToRange(first, bucketCount), StableCharHashToRange(first, bucketCount))
+	require.NotEqual(t, StableCharHashToRange(first, bucketCount), StableCharHashToRange(second, bucketCount))
+	require.Equal(t, uint64(0), StableCharHashToRange(nil, 16))
+	require.Equal(t, hashtable.StableBytesHash([]byte{'x'})%16, StableCharHashToRange([]byte{'x'}, 16))
+	require.Equal(t, StableCharHashToRange([]byte("duplicate"), 16),
+		StableCharHashToRange([]byte("duplicate"), 16))
+}
+
+func TestSimpleCharHashToRangePreservesLegacyContract(t *testing.T) {
+	first := []byte("https://example.invalid/events/00000000.json")
+	second := append([]byte(nil), first...)
+	second[31] = '1'
+
+	require.Equal(t, SimpleCharHashToRange(first, 16), SimpleCharHashToRange(second, 16),
+		"the rollout fallback must remain byte-for-byte compatible with old CNs")
+	require.Equal(t, uint64(0), SimpleCharHashToRange(nil, 16))
+	require.Equal(t, uint64('x')%16, SimpleCharHashToRange([]byte{'x'}, 16))
+}
+
+func TestStableCharHashToRangeDistribution(t *testing.T) {
+	const keyCount = 16_384
+	keySets := map[string]func(int) []byte{
+		"pseudo-random": func(i int) []byte {
+			key := make([]byte, 32)
+			x := uint64(i) + 0x9e3779b97f4a7c15
+			for offset := 0; offset < len(key); offset += 8 {
+				x ^= x >> 12
+				x ^= x << 25
+				x ^= x >> 27
+				binary.LittleEndian.PutUint64(key[offset:], x*0x2545f4914f6cdd1d)
+			}
+			return key
+		},
+		"common-prefix-sequential-suffix": func(i int) []byte {
+			return []byte(fmt.Sprintf("https://example.invalid/events/partition/static/%08d.json", i))
+		},
+		"common-suffix": func(i int) []byte {
+			return []byte(fmt.Sprintf("%08d/static/common/suffix.json", i))
+		},
+		"utf8": func(i int) []byte {
+			return []byte(fmt.Sprintf("租户/事件/固定前缀/%08d/完成", i))
+		},
+		"binary": func(i int) []byte {
+			key := make([]byte, 32)
+			binary.BigEndian.PutUint64(key[20:28], uint64(i))
+			key[31] = 0xff
+			return key
+		},
+		"short": func(i int) []byte {
+			key := make([]byte, 4)
+			binary.LittleEndian.PutUint32(key, uint32(i))
+			return key
+		},
+	}
+
+	for name, makeKey := range keySets {
+		t.Run(name, func(t *testing.T) {
+			for _, bucketCount := range []uint64{1, 2, 8, 16} {
+				counts := make([]int, bucketCount)
+				for i := range keyCount {
+					counts[StableCharHashToRange(makeKey(i), bucketCount)]++
+				}
+
+				expected := float64(keyCount) / float64(bucketCount)
+				for bucket, count := range counts {
+					require.InDeltaf(t, expected, float64(count), expected*0.15,
+						"bucket %d owns %d keys; counts=%v", bucket, count, counts)
+				}
+			}
+		})
+	}
+}
+
+var simpleCharHashBenchmarkSink uint64
+
+func BenchmarkStableCharHashToRange(b *testing.B) {
+	for _, keyLength := range []int{8, 32, 64, 1024, 64 << 10, 1 << 20} {
+		key := make([]byte, keyLength)
+		for i := range key {
+			key[i] = byte(i*131 + 17)
+		}
+		b.Run(fmt.Sprintf("%dB", keyLength), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(keyLength))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				simpleCharHashBenchmarkSink = StableCharHashToRange(key, 16)
+			}
+		})
+	}
 }
 
 type ShuffleRangeTestCase struct {
@@ -561,6 +661,43 @@ func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
 	require.True(t, agg.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(2), agg.Stats.HashmapStats.ShuffleColIdx,
 		"a logical group column determined by the physical key remains a safe distribution key")
+}
+
+func TestDetermineShuffleForGroupByDoesNotForceUnknownNDV(t *testing.T) {
+	newAggregate := func(inputRows float64) (*plan.Node, *QueryBuilder) {
+		child := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats: &plan.Stats{
+				Outcnt:       inputRows,
+				Selectivity:  1,
+				HashmapStats: &plan.HashMapStats{},
+			},
+		}
+		agg := &plan.Node{
+			NodeType: plan.Node_AGG,
+			Children: []int32{0},
+			GroupBy: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Ndv:  -1,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: "url"}},
+			}},
+			Stats: &plan.Stats{
+				Outcnt:      1,
+				Selectivity: 1,
+				HashmapStats: &plan.HashMapStats{
+					HashmapSize: 1,
+				},
+			},
+		}
+		return agg, &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{child, agg}}}
+	}
+
+	for _, inputRows := range []float64{threshHoldForHashShuffle - 1, threshHoldForHashShuffle, 10_000_000} {
+		agg, builder := newAggregate(inputRows)
+		determineShuffleForGroupBy(agg, builder)
+		require.Falsef(t, agg.Stats.HashmapStats.Shuffle,
+			"unknown NDV must not route all raw rows by an assumed high cardinality at input=%v", inputRows)
+	}
 }
 
 func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {

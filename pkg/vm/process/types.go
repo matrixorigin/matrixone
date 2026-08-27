@@ -505,6 +505,16 @@ type BaseProcess struct {
 	IsFrontend bool
 }
 
+// StringShuffleHashAlgorithm identifies the exact owner mapping used for
+// string-key shuffle. It is execution metadata, not a service-local feature
+// flag: every local and remote pipeline in one execution must see one value.
+type StringShuffleHashAlgorithm uint32
+
+const (
+	StringShuffleHashLegacy   StringShuffleHashAlgorithm = 0
+	StringShuffleHashComplete StringShuffleHashAlgorithm = 1
+)
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
@@ -527,6 +537,11 @@ type Process struct {
 	// lock owner cannot consume the optional plan snapshot, so a reused
 	// generation must rebuild locally before its first lock RPC.
 	planGenerationReused bool
+	// stringShuffleHashAlgorithm is frozen before physical compilation and
+	// copied into every child and remote process. Keeping it on Process gives a
+	// reused prepared pipeline a fresh value per execution without allowing a
+	// mid-query protocol rollout to change the mapping.
+	stringShuffleHashAlgorithm StringShuffleHashAlgorithm
 
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
@@ -920,6 +935,46 @@ func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
 	}
 	proc.planSnapshotTS = parent.planSnapshotTS
 	proc.planGenerationReused = parent.planGenerationReused
+}
+
+// SetStringShuffleHashAlgorithm binds the immutable owner mapping for this
+// execution. Callers must set it before creating or preparing child pipelines.
+func (proc *Process) SetStringShuffleHashAlgorithm(algorithm StringShuffleHashAlgorithm) {
+	proc.stringShuffleHashAlgorithm = algorithm
+}
+
+// StringShuffleHashAlgorithm returns the owner mapping frozen for this
+// execution. The zero value intentionally preserves legacy wire behavior.
+func (proc *Process) StringShuffleHashAlgorithm() StringShuffleHashAlgorithm {
+	return proc.stringShuffleHashAlgorithm
+}
+
+// UsesCompleteStringShuffleHash reports whether string shuffle must hash the
+// complete logical key rather than the legacy sampled bytes.
+func (proc *Process) UsesCompleteStringShuffleHash() bool {
+	return proc.stringShuffleHashAlgorithm == StringShuffleHashComplete
+}
+
+// CopyStringShuffleHashAlgorithmFrom propagates one execution's immutable
+// owner mapping into a child or reused pipeline process.
+func (proc *Process) CopyStringShuffleHashAlgorithmFrom(parent *Process) {
+	if parent == nil {
+		proc.stringShuffleHashAlgorithm = StringShuffleHashLegacy
+		return
+	}
+	proc.stringShuffleHashAlgorithm = parent.stringShuffleHashAlgorithm
+}
+
+// DecodeStringShuffleHashAlgorithm rejects unknown wire values instead of
+// silently assigning equal keys to potentially different owners.
+func DecodeStringShuffleHashAlgorithm(value uint32) (StringShuffleHashAlgorithm, error) {
+	switch value {
+	case uint32(StringShuffleHashLegacy), uint32(StringShuffleHashComplete):
+		return StringShuffleHashAlgorithm(value), nil
+	default:
+		return StringShuffleHashLegacy, moerr.NewNotSupportedNoCtxf(
+			"string shuffle hash algorithm %d is not supported", value)
+	}
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {
