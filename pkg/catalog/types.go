@@ -75,6 +75,31 @@ const (
 	KafkaReadTimeout       = "__mo_read_timeout"
 	KafkaReadTimeoutColId  = ^uint64(0) - 8
 
+	// External-scan error-mode synthetic columns (issue #27517). They let a
+	// text-format scan (CSV/JSONL, whatever engine delivers the bytes) report a
+	// record it could not parse instead of failing the whole query.
+	//
+	// ExternalFileLine is the physical line the record starts on — for a
+	// multi-line quoted CSV record, its FIRST line. For engines with no file
+	// (Kafka, datastream) it is the record ordinal within the current read.
+	// It is always set, with or without an error.
+	//
+	// ExternalErrorMessage / ExternalErrorText are NULL for a record that
+	// parsed. Requesting either one is what switches the scan into error mode:
+	// a failing record then yields NULL for every user column, the reason in
+	// ExternalErrorMessage and the raw record in ExternalErrorText. Asking only
+	// for ExternalFileLine does NOT enable it — the query still fails — so a
+	// scan that never mentions the error columns keeps today's behavior and
+	// pays nothing.
+	ExternalFileLine      = "__mo_file_line"
+	ExternalFileLineColId = ^uint64(0) - 9
+
+	ExternalErrorMessage      = "__mo_error_message"
+	ExternalErrorMessageColId = ^uint64(0) - 10
+
+	ExternalErrorText      = "__mo_error_text"
+	ExternalErrorTextColId = ^uint64(0) - 11
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
@@ -82,6 +107,13 @@ const (
 	TableTailAttrCommitTs    = objectio.TombstoneAttr_CommitTs_Attr
 	TableTailAttrAborted     = objectio.TombstoneAttr_Abort_Attr
 	TableTailAttrPKVal       = objectio.TombstoneAttr_PK_Attr
+
+	// TableChanges metadata columns are reserved because table_changes exposes
+	// them in the same row shape as source-table columns.
+	TableChangesAttrChangeType    = "change_type"
+	TableChangesAttrCommitTS      = "commit_ts"
+	TableChangesAttrTableID       = "table_id"
+	TableChangesAttrSchemaVersion = "schema_version"
 
 	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
@@ -171,13 +203,44 @@ func IsKafkaHiddenCol(name string, colId uint64) bool {
 	return false
 }
 
+// IsExternalErrorCol reports whether (name, colId) is one of the SYNTHETIC
+// error-mode columns of an external scan, scoped by reserved ColId like
+// IsForeignQueryCol so a real column of the same name in a pre-existing schema
+// keeps working.
+func IsExternalErrorCol(name string, colId uint64) bool {
+	switch name {
+	case ExternalFileLine:
+		return colId == ExternalFileLineColId
+	case ExternalErrorMessage:
+		return colId == ExternalErrorMessageColId
+	case ExternalErrorText:
+		return colId == ExternalErrorTextColId
+	}
+	return false
+}
+
+// IsExternalErrorToleranceCol reports whether (name, colId) is one of the two
+// columns whose presence in a query switches the scan into error-tolerant mode.
+// ExternalFileLine is deliberately excluded: it is pure position metadata, and
+// selecting it alone must not change whether a parse error fails the query.
+func IsExternalErrorToleranceCol(name string, colId uint64) bool {
+	switch name {
+	case ExternalErrorMessage:
+		return colId == ExternalErrorMessageColId
+	case ExternalErrorText:
+		return colId == ExternalErrorTextColId
+	}
+	return false
+}
+
 // IsReservedExternalColName reports whether a column name is reserved for the
 // synthetic external-scan columns and must be rejected at CREATE/ALTER.
 func IsReservedExternalColName(name string) bool {
 	switch name {
 	case ExternalFilePath, ExternalQuery,
 		KafkaMessageID, KafkaMessageTS, KafkaMessageKey, KafkaMessageValue,
-		KafkaReadStartID, KafkaReadSize, KafkaReadTimeout:
+		KafkaReadStartID, KafkaReadSize, KafkaReadTimeout,
+		ExternalFileLine, ExternalErrorMessage, ExternalErrorText:
 		return true
 	}
 	return false
@@ -199,6 +262,18 @@ const (
 	System_Role    = uint32(0)
 	System_Account = uint32(0)
 )
+
+func IsTableChangesMetadataColumn(name string) bool {
+	switch strings.ToLower(name) {
+	case TableChangesAttrChangeType,
+		TableChangesAttrCommitTS,
+		TableChangesAttrTableID,
+		TableChangesAttrSchemaVersion:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"

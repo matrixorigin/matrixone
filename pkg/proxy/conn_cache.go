@@ -275,6 +275,13 @@ func withMaxNumPerTenant(n int) connCacheOption {
 	}
 }
 
+// withMOCluster binds the cache to the handler generation that owns it.
+func withMOCluster(mc clusterservice.MOCluster) connCacheOption {
+	return func(c *connCache) {
+		c.moCluster = mc
+	}
+}
+
 // withQueryClient is the option to set query client of connCache.
 func withQueryClient(qc client.QueryClient) connCacheOption {
 	return func(c *connCache) {
@@ -291,11 +298,6 @@ func withCanReuseCN(f func(*CNServer, clientInfo) bool) connCacheOption {
 func newConnCache(
 	ctx context.Context, sid string, logger *log.MOLogger, opts ...connCacheOption,
 ) ConnCache {
-	var mc clusterservice.MOCluster
-	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ClusterService)
-	if ok {
-		mc = v.(clusterservice.MOCluster)
-	}
 	cc := &connCache{
 		ctx:             ctx,
 		logger:          logger,
@@ -303,7 +305,6 @@ func newConnCache(
 		maxNumPerTenant: defaultMaxNumPerTenant,
 		connTimeout:     defaultConnTimeout,
 		opStrategy:      OpFIFO,
-		moCluster:       mc,
 		authConstructor: newPwdAuthenticator,
 	}
 	// Set the default resetSession function.
@@ -312,6 +313,11 @@ func newConnCache(
 	cc.mu.allConns = make(map[ServerConn]*serverConnAuth)
 	for _, opt := range opts {
 		opt(cc)
+	}
+	if cc.moCluster == nil {
+		if v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ClusterService); ok {
+			cc.moCluster = v.(clusterservice.MOCluster)
+		}
 	}
 	return cc
 }

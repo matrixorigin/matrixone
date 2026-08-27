@@ -35,6 +35,19 @@ const (
 	Cmd_SkipDSN
 )
 
+type SkipCmdVersion uint16
+
+const (
+	// SkipCmdVersionLegacy identifies V2 skip commands written before the
+	// DSN/PSN pair sorter was fixed. Their DSNs are valid, but their PSNs may
+	// have been permuted independently. The individual pairs are unreliable,
+	// while the DSN and PSN sets remain valid.
+	SkipCmdVersionLegacy SkipCmdVersion = iota
+	// SkipCmdVersionDSNPSN identifies skip commands whose sorted DSN and PSN
+	// arrays preserve the original pairs.
+	SkipCmdVersionDSNPSN
+)
+
 var emptyLogEntry = make([]byte, EmptyLogEntrySize)
 var logEntryBuffer = make([]byte, EmptyLogEntrySize)
 var skipCmdBuffer = make([]byte, EmptyLogEntrySize)
@@ -68,6 +81,7 @@ func init() {
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_Normal))
 	e = LogEntry(skipCmdBuffer)
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	e.SetSkipCmdVersion(SkipCmdVersionDSNPSN)
 }
 
 type LogEntryWriter struct {
@@ -264,6 +278,10 @@ func (e LogEntry) GetCmdType() uint16 {
 	return types.DecodeUint16(e[CmdTypeOffset:])
 }
 
+func (e LogEntry) GetSkipCmdVersion() SkipCmdVersion {
+	return SkipCmdVersion(types.DecodeUint16(e[ReservedOffset:]))
+}
+
 func (e LogEntry) GetFooter() LogEntryFooter {
 	footerOffset := e.GetFooterOffset()
 	if footerOffset == 0 {
@@ -309,6 +327,11 @@ func (e LogEntry) SetHeader(
 	copy(e[TypeOffset:], types.EncodeUint16(&typ))
 	copy(e[VersionOffset:], types.EncodeUint16(&version))
 	copy(e[CmdTypeOffset:], types.EncodeUint16(&cmdType))
+}
+
+func (e LogEntry) SetSkipCmdVersion(version SkipCmdVersion) {
+	value := uint16(version)
+	copy(e[ReservedOffset:], types.EncodeUint16(&value))
 }
 
 func (e LogEntry) SetEntryCount(count uint32) {
@@ -382,6 +405,24 @@ func (e LogEntry) ForEachEntry(
 
 type SkipCmd []byte
 
+type skipCmdSorter struct {
+	dsns []uint64
+	psns []uint64
+}
+
+func (s skipCmdSorter) Len() int {
+	return len(s.dsns)
+}
+
+func (s skipCmdSorter) Less(i, j int) bool {
+	return s.dsns[i] < s.dsns[j]
+}
+
+func (s skipCmdSorter) Swap(i, j int) {
+	s.dsns[i], s.dsns[j] = s.dsns[j], s.dsns[i]
+	s.psns[i], s.psns[j] = s.psns[j], s.psns[i]
+}
+
 func NewSkipCmd(cnt int) SkipCmd {
 	return make([]byte, 16*cnt)
 }
@@ -425,14 +466,9 @@ func (s *SkipCmd) Reset(n int) {
 }
 
 func (s SkipCmd) Sort() {
-	dsns := s.GetDSNSlice()
-	psns := s.GetPSNSlice()
-	sort.Slice(dsns, func(i, j int) bool {
-		less := dsns[i] < dsns[j]
-		if less {
-			psns[i], psns[j] = psns[j], psns[i]
-		}
-		return less
+	sort.Sort(skipCmdSorter{
+		dsns: s.GetDSNSlice(),
+		psns: s.GetPSNSlice(),
 	})
 }
 
@@ -446,6 +482,7 @@ func SkipMapToLogEntry(skipMap map[uint64]uint64) LogEntry {
 	skipCmd.Sort()
 	e := NewLogEntry()
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	e.SetSkipCmdVersion(SkipCmdVersionDSNPSN)
 	var footer LogEntryFooter
 	offset, length := e.AppendEntry(skipCmd)
 	footer.AppendEntry(offset, length)

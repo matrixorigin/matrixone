@@ -447,10 +447,29 @@ func (r *KafkaReader) ReadBatch(ctx context.Context, bat *batch.Batch, proc *pro
 			break
 		}
 		row, err := r.parseOneMessage(proc.Ctx, param, &msg)
-		if err != nil {
-			return false, err
-		}
 		param.KafkaMeta.cur = msg
+		if param.ErrorMode.Tolerate {
+			// The message value is the record as published, which is what a
+			// failed record should report -- for a conversion failure too,
+			// where the alternative is the decoded fields re-joined.
+			param.ErrorMode.RawText = msg.Value
+		}
+		if err != nil {
+			if !param.ErrorMode.Tolerate {
+				return false, err
+			}
+			// A message whose value does not parse is reported as a failed
+			// record. Its metadata columns -- __mo_message_id above all --
+			// still identify it, so the row says which message failed.
+			if err := appendErrorRow(proc, bat, nil, i, param, err); err != nil {
+				return false, err
+			}
+			curBatchSize += uint64(len(msg.Value))
+			if curBatchSize >= param.maxBatchSize {
+				break
+			}
+			continue
+		}
 		if err := getOneRowData(proc, bat, row, i, param); err != nil {
 			return false, err
 		}

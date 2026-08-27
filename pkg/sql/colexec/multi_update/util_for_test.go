@@ -53,6 +53,13 @@ var (
 	rowIdTyp   = plan.Type{Id: int32(types.T_Rowid)}
 )
 
+const (
+	// Two unequal, non-empty batches cover accumulation followed by a
+	// threshold-triggered flush without using volume as the trigger.
+	testS3BatchCount = 2
+	testS3BatchRows  = 4
+)
+
 type testCase struct {
 	op                *MultiUpdate
 	inputBatchs       []*batch.Batch
@@ -61,62 +68,94 @@ type testCase struct {
 	affectedRows      uint64
 }
 
-func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
+func runTestCase(t *testing.T, proc *process.Process, tc *testCase) {
+	t.Helper()
+	runTestCaseWithLifecycle(t, proc, tc, false)
+}
+
+// Reset/reuse is an orthogonal lifecycle dimension. Call this from the
+// maximal indexed schema for each action/sink pair instead of multiplying it
+// across every semantic case.
+func runTestCaseAfterReset(t *testing.T, proc *process.Process, tc *testCase) {
+	t.Helper()
+	runTestCaseWithLifecycle(t, proc, tc, true)
+}
+
+func runTestCaseWithLifecycle(
+	t *testing.T,
+	proc *process.Process,
+	tc *testCase,
+	checkResetAndReuse bool,
+) {
+	t.Helper()
 	var err error
 	var res vm.CallResult
 
-	for _, tc := range tcs {
-		child := colexec.NewMockOperator().WithBatchs(tc.inputBatchs)
-		tc.op.AppendChild(child)
-		err = tc.op.Prepare(proc)
-		// use small Threshold for ut
-		if tc.op.ctr.s3Writer != nil {
-			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
+	child := colexec.NewMockOperator().WithBatchs(tc.inputBatchs)
+	tc.op.AppendChild(child)
+	cleaned := false
+	pipelineFailed := false
+	var cleanupErr error
+	cleanup := func() {
+		if cleaned {
+			return
 		}
-		require.NoError(t, err)
-		for {
-			res, err = vm.Exec(tc.op, proc)
-			if tc.expectErr {
-				require.Error(t, err)
-				break
-			}
-			if res.Batch == nil || res.Status == vm.ExecStop {
-				break
-			}
-		}
+		cleaned = true
+		child.Free(proc, pipelineFailed, cleanupErr)
+		tc.op.Free(proc, pipelineFailed, cleanupErr)
+		proc.Free()
+	}
+	t.Cleanup(cleanup)
 
-		// if expect error.  only run one time
+	err = tc.op.Prepare(proc)
+	require.NoError(t, err)
+	setTestS3FlushThreshold(t, tc)
+	for {
+		res, err = vm.Exec(tc.op, proc)
 		if tc.expectErr {
-			for _, bat := range tc.inputBatchs {
-				bat.Clean(proc.GetMPool())
-			}
-			tc.op.Children[0].Free(proc, false, nil)
-			tc.op.Free(proc, true, err)
-			continue
+			require.Error(t, err)
+			break
 		}
-		require.NoError(t, err)
-		require.Equal(t, tc.affectedRows, tc.op.GetAffectedRows())
+		if res.Batch == nil || res.Status == vm.ExecStop {
+			break
+		}
+	}
 
+	// Error cases terminate on their first execution and do not have a valid
+	// reset/reuse transition to exercise.
+	if tc.expectErr {
+		for _, bat := range tc.inputBatchs {
+			bat.Clean(proc.GetMPool())
+		}
+		pipelineFailed = true
+		cleanupErr = err
+		cleanup()
+		require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+		return
+	}
+	require.NoError(t, err)
+	require.Equal(t, tc.affectedRows, tc.op.GetAffectedRows())
+
+	if checkResetAndReuse {
 		child.ResetBatchs()
 		tc.op.Children[0].Reset(proc, false, nil)
 		tc.op.Reset(proc, false, nil)
 
 		child.WithBatchs(tc.inputBatchs)
 		err = tc.op.Prepare(proc)
-		// use small Threshold for ut
-		if tc.op.ctr.s3Writer != nil {
-			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
-		}
 		if tc.relResetExpectErr {
 			require.Error(t, err)
 			for _, bat := range tc.inputBatchs {
 				bat.Clean(proc.GetMPool())
 			}
-			tc.op.Children[0].Free(proc, false, nil)
-			tc.op.Free(proc, true, err)
-			continue
+			pipelineFailed = true
+			cleanupErr = err
+			cleanup()
+			require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+			return
 		}
 		require.NoError(t, err)
+		setTestS3FlushThreshold(t, tc)
 		if tc.op.Action == UpdateWriteS3 {
 			sentinel, mapErr := hashmap.NewStrHashMap(false, proc.Mp())
 			require.NoError(t, mapErr)
@@ -139,14 +178,28 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		}
 		require.NoError(t, err)
 		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
-
-		tc.op.Children[0].Free(proc, false, nil)
-		tc.op.Free(proc, false, nil)
 	}
 
-	proc.GetFileService().Close(proc.Ctx)
-	proc.Free()
+	cleanup()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func setTestS3FlushThreshold(t *testing.T, tc *testCase) {
+	t.Helper()
+	writer := tc.op.ctr.s3Writer
+	if writer == nil {
+		return
+	}
+	require.NotEmpty(t, tc.inputBatchs)
+
+	// Keep the threshold boundary deterministic with minimum data: the first
+	// batch stays buffered and the next non-empty batch triggers a flush.
+	var firstBatchSize uint64
+	for _, idx := range writer.checkSizeCols {
+		firstBatchSize += uint64(tc.inputBatchs[0].Vecs[idx].Size())
+	}
+	require.Positive(t, firstBatchSize)
+	writer.flushThreshold = firstBatchSize + 1
 }
 
 func ptrTo[T any](v T) *T {
@@ -194,6 +247,10 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	} else {
 		proc = testutil.NewProc(t)
 	}
+	fileService := proc.GetFileService()
+	t.Cleanup(func() {
+		fileService.Close(context.Background())
+	})
 
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
