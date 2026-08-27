@@ -29,15 +29,16 @@ import (
 
 // Index Algorithm names
 const (
-	MoIndexDefaultAlgo  = tree.INDEX_TYPE_INVALID  // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo    = tree.INDEX_TYPE_BTREE    // used for Mocking MySQL behaviour.
-	MoIndexRTreeAlgo    = tree.INDEX_TYPE_RTREE    // used for Spatial Index on GEOMETRY columns
-	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
-	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
-	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
-	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
-	MoIndexCagraAlgo    = tree.INDEX_TYPE_CAGRA    // used for CAGRA Index on Vector/Array columns
-	MoIndexIvfpqAlgo    = tree.INDEX_TYPE_IVFPQ    // used for IVFPQ Index on Vector/Array columns
+	MoIndexDefaultAlgo   = tree.INDEX_TYPE_INVALID   // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo     = tree.INDEX_TYPE_BTREE     // used for Mocking MySQL behaviour.
+	MoIndexRTreeAlgo     = tree.INDEX_TYPE_RTREE     // used for Spatial Index on GEOMETRY columns
+	MoIndexIvfFlatAlgo   = tree.INDEX_TYPE_IVFFLAT   // used for IVF flat index on Vector/Array columns
+	MOIndexMasterAlgo    = tree.INDEX_TYPE_MASTER    // used for Master Index on VARCHAR columns
+	MOIndexFullTextAlgo  = tree.INDEX_TYPE_FULLTEXT  // used for Fulltext Index on VARCHAR columns
+	MoIndexFullText2Algo = tree.INDEX_TYPE_FULLTEXT2 // CREATE FULLTEXT2 INDEX: WAND positional engine on TEXT/VARCHAR columns
+	MoIndexHnswAlgo      = tree.INDEX_TYPE_HNSW      // used for HNSW Index on Vector/Array columns
+	MoIndexCagraAlgo     = tree.INDEX_TYPE_CAGRA     // used for CAGRA Index on Vector/Array columns
+	MoIndexIvfpqAlgo     = tree.INDEX_TYPE_IVFPQ     // used for IVFPQ Index on Vector/Array columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -81,6 +82,14 @@ func IsFullTextIndexAlgo(algo string) bool {
 	return _algo == MOIndexFullTextAlgo.ToString()
 }
 
+// IsFullText2IndexAlgo reports the distinct WAND fulltext engine used by
+// CREATE FULLTEXT2 INDEX. It deliberately remains separate from classic
+// FULLTEXT so planner and plugin routing cannot depend on index enumeration order.
+func IsFullText2IndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexFullText2Algo.ToString()
+}
+
 func IsHnswIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MoIndexHnswAlgo.ToString()
@@ -107,6 +116,7 @@ const (
 	AutoUpdate              = "auto_update"
 	Day                     = "day"
 	Hour                    = "hour"
+	Second                  = "second"
 	DistributionMode        = "distribution_mode"
 	Quantization            = "quantization"
 	BitsPerCode             = "bits_per_code"
@@ -128,6 +138,14 @@ const (
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
+	// IndexAlgoParamPrefixLengthsV2 stores a JSON object when a quoted column
+	// name contains a delimiter used by the legacy prefix encoding.
+	IndexAlgoParamPrefixLengthsV2     = "prefix_lengths_v2"
+	IndexAlgoParamMaxPostingsCapacity = "max_postings_capacity"
+	IndexAlgoParamPositionFree        = "position_free"
+	// IndexAlgoParamVersion identifies the index engine; v2 is the WAND
+	// FULLTEXT2 engine and absent/1 is the classic FULLTEXT engine.
+	IndexAlgoParamVersion = "version"
 )
 
 func ParseIncludeColumnsValue(raw string) ([]string, error) {
@@ -230,6 +248,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", Hour, val)
 	}
 
+	if val, ok := result[Second]; ok {
+		res += fmt.Sprintf(" %s = %s ", Second, val)
+	}
+
 	if val, ok := result[Quantization]; ok {
 		res += fmt.Sprintf(" %s '%s' ", Quantization, val)
 	}
@@ -266,8 +288,18 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
 	}
 
+	if val, ok := result[IndexAlgoParamMaxPostingsCapacity]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
+	}
+	if val, ok := result[IndexAlgoParamPositionFree]; ok && val == "true" {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamPositionFree, val)
+	}
+
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
+	}
+	if val, ok := result[IndexAlgoParamVersion]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamVersion, val)
 	}
 	return res, nil
 }
@@ -298,8 +330,16 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 }
 
 func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart) (string, error) {
-	prefixLengths := IndexPrefixLengthsToString(keyParts)
-	if prefixLengths == "" {
+	if len(keyParts) == 0 {
+		return indexParams, nil
+	}
+	prefixLengths := make(map[string]int, len(keyParts))
+	for _, keyPart := range keyParts {
+		if keyPart != nil && keyPart.ColName != nil && keyPart.Length > 0 {
+			prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
+		}
+	}
+	if len(prefixLengths) == 0 {
 		return indexParams, nil
 	}
 
@@ -311,8 +351,36 @@ func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart)
 		}
 		params = existing
 	}
-	params[IndexAlgoParamPrefixLengths] = prefixLengths
+	if err := SetIndexPrefixLengthsInParamMap(params, prefixLengths); err != nil {
+		return "", err
+	}
 	return IndexParamsMapToJsonString(params)
+}
+
+// SetIndexPrefixLengthsInParamMap keeps the legacy representation for ordinary
+// names and switches to a lossless JSON value when a quoted identifier contains
+// a legacy delimiter.
+func SetIndexPrefixLengthsInParamMap(params map[string]string, prefixLengths map[string]int) error {
+	if params == nil {
+		return moerr.NewInvalidInputNoCtx("nil index params map")
+	}
+	delete(params, IndexAlgoParamPrefixLengths)
+	delete(params, IndexAlgoParamPrefixLengthsV2)
+	if len(prefixLengths) == 0 {
+		return nil
+	}
+	for part := range prefixLengths {
+		if strings.ContainsAny(part, ":,") {
+			encoded, err := json.Marshal(prefixLengths)
+			if err != nil {
+				return err
+			}
+			params[IndexAlgoParamPrefixLengthsV2] = string(encoded)
+			return nil
+		}
+	}
+	params[IndexAlgoParamPrefixLengths] = indexPrefixLengthsMapToLegacyString(prefixLengths)
+	return nil
 }
 
 func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
@@ -331,6 +399,13 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		return ""
 	}
 
+	return indexPrefixLengthsMapToLegacyString(prefixLengths)
+}
+
+func indexPrefixLengthsMapToLegacyString(prefixLengths map[string]int) string {
+	if len(prefixLengths) == 0 {
+		return ""
+	}
 	parts := make([]string, 0, len(prefixLengths))
 	for part := range prefixLengths {
 		parts = append(parts, part)
@@ -359,6 +434,22 @@ func IndexPrefixLengthsFromParamsWithError(indexParams string) (map[string]int, 
 	params, err := IndexParamsStringToMap(indexParams)
 	if err != nil {
 		return nil, err
+	}
+
+	if encoded, ok := params[IndexAlgoParamPrefixLengthsV2]; ok {
+		if encoded == "" {
+			return nil, nil
+		}
+		prefixLengths := make(map[string]int)
+		if err := json.Unmarshal([]byte(encoded), &prefixLengths); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix lengths %q", encoded)
+		}
+		for part, length := range prefixLengths {
+			if part == "" || length <= 0 {
+				return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix length %q", encoded)
+			}
+		}
+		return prefixLengths, nil
 	}
 
 	encoded := params[IndexAlgoParamPrefixLengths]
@@ -494,6 +585,33 @@ func IsIndexAsync(indexAlgoParams string) (bool, error) {
 		return async == "true", nil
 	}
 	return false, nil
+}
+
+// IndexParamAsync is the descriptive name used by the index-plugin framework.
+// Keep IsIndexAsync above as a compatibility wrapper for existing callers.
+func IndexParamAsync(indexAlgoParams string) (bool, error) {
+	return IsIndexAsync(indexAlgoParams)
+}
+
+// IndexAlgoParamVersionOf returns the engine version recorded in algo_params.
+// Missing or malformed values are legacy/classic version 1.
+func IndexAlgoParamVersionOf(indexAlgoParams string) int64 {
+	if len(indexAlgoParams) == 0 {
+		return 1
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), IndexAlgoParamVersion)
+	if err != nil {
+		return 1
+	}
+	s, err := val.StrictString()
+	if err != nil {
+		return 1
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 1
+	}
+	return n
 }
 
 //------------------------[END] IndexAlgoParams------------------------

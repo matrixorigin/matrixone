@@ -57,33 +57,44 @@ type hnswCreateState struct {
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	var (
-		sqls []string
-		err  error
-	)
+	// The TVF owns clear+rebuild (the compile layer no longer pre-deletes on the sync path).
+	// tblcfg is populated in prepare (const-fold) so it is available even on a zero-row rebuild.
+	// Guard anyway: without table names we cannot clear (a bare "DELETE FROM " with an empty
+	// identifier is invalid), so skip rather than run malformed SQL.
+	if u.tblcfg.MetadataTable == "" || u.tblcfg.IndexTable == "" {
+		return nil
+	}
 
+	// Clear the old index unconditionally — even when nothing was built (REBUILD to zero docs must
+	// still empty the index), so the DELETEs run before the early-out on a nil builder. Cross-CN
+	// cache freshness is a per-model checksum multiset (see hnsw generation.go), so the metadata
+	// timestamp plays no role in freshness — plain wall-clock is fine here.
+	sqls := hnsw.ClearIndexSqls(u.tblcfg)
+
+	ts := time.Now().UnixMicro()
 	switch u.idxcfg.Usearch.Quantization {
 	case usearch.F32:
-		if u.buildf32 == nil {
-			return nil
-		}
-		sqls, err = u.buildf32.ToInsertSql(time.Now().UnixMicro())
-		if err != nil {
-			return err
+		if u.buildf32 != nil {
+			insertSqls, err := u.buildf32.ToInsertSql(ts)
+			if err != nil {
+				return err
+			}
+			sqls = append(sqls, insertSqls...)
 		}
 	case usearch.F64:
-		if u.buildf64 == nil {
-			return nil
-		}
-		sqls, err = u.buildf64.ToInsertSql(time.Now().UnixMicro())
-		if err != nil {
-			return err
+		if u.buildf64 != nil {
+			insertSqls, err := u.buildf64.ToInsertSql(ts)
+			if err != nil {
+				return err
+			}
+			sqls = append(sqls, insertSqls...)
 		}
 	}
 
 	for _, s := range sqls {
-		res, err := hnsw_runSql(sqlexec.NewSqlProcess(proc), s)
+		res, err := hnsw_runSql(sqlproc, s)
 		if err != nil {
 			return err
 		}
@@ -129,10 +140,26 @@ func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 	st := &hnswCreateState{}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	if err != nil {
+		return nil, err
+	}
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
-	return st, err
+	// Parse the IndexTableConfig (arg 0, a constant string) up front by const-folding it, so end()
+	// can clear the hidden tables and read the generation floor even on a ZERO-row rebuild — start()
+	// normally parses it but never runs when the source is empty, yet a REBUILD to zero docs must
+	// still clear the old index. Best-effort: on any failure st.tblcfg stays zero and end() skips
+	// the clear (start() re-parses it for the non-empty path).
+	if len(arg.ctr.executorsForArgs) > 0 {
+		if vec, e := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil); e == nil &&
+			vec != nil && vec.IsConst() && !vec.IsConstNull() && vec.GetType().Oid == types.T_varchar {
+			if cfgstr := vec.UnsafeGetStringAt(0); len(cfgstr) > 0 {
+				_ = sonic.Unmarshal([]byte(cfgstr), &st.tblcfg)
+			}
+		}
+	}
 
+	return st, err
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will

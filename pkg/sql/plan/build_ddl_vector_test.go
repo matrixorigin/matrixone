@@ -103,6 +103,7 @@ func TestValidateIncludeColumns_UnsupportedType(t *testing.T) {
 		colMap, "v", "id", includeTestSupportedTypes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported type")
+	require.Contains(t, err.Error(), "supported: INT, BIGINT, FLOAT, DOUBLE")
 }
 
 func TestValidateIncludeColumns_AllSupportedNumericTypes(t *testing.T) {
