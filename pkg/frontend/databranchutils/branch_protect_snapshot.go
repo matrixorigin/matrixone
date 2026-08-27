@@ -552,7 +552,7 @@ func ComputeAccountBranchReclaimPlan(
 // that produces a parent-cycle must never hang the drop path.
 func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []string {
 	tableIDs := branchReclaimableTableIDs(dag, deadTIDs)
-	var drops []string
+	drops := make([]string, 0, len(tableIDs))
 	for _, tableID := range tableIDs {
 		drops = append(drops, BranchSnapshotName(tableID))
 	}
