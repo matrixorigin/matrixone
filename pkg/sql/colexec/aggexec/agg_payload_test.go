@@ -157,6 +157,8 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 	require.NoError(t, err)
 	geometryVal := geo.WriteWKB(geo.Point{X: 1, Y: 2})
 	geometry32Val := geo.WriteWKBFloat32(geo.Point{X: 3, Y: 4})
+	largeGeometryVal := geo.WriteWKB(geo.LineString{Points: make([]geo.Coord, 4096)})
+	require.Equal(t, 65545, len(largeGeometryVal))
 	bj, err := bytejson.CreateByteJSONWithCheck(map[string]any{"k": "v"})
 	require.NoError(t, err)
 	jsonBytes, err := bj.Marshal()
@@ -209,7 +211,7 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "blockid", typ: types.T_Blockid.ToType(), data: blockidVal[:], want: fmt.Sprint(blockidVal)},
 		{name: "short-fixed-payload", typ: types.T_int64.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "too-long", typ: types.T_text.ToType(), data: make([]byte, math.MaxUint16+1), wantErr: "too long"},
-		{name: "too-long-geometry", typ: types.T_geometry.ToType(), data: make([]byte, math.MaxUint16+1), wantErr: "too long"},
+		{name: "large-geometry", typ: types.T_geometry.ToType(), data: largeGeometryVal, want: string(largeGeometryVal)},
 		{name: "short-decimal256-payload", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-year-payload", typ: types.T_year.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-uuid-payload", typ: types.T_uuid.ToType(), data: []byte{1}, wantErr: "fixed payload size"},

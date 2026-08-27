@@ -516,6 +516,17 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 	}))
 	wkb := geo.WriteWKB(geo.Point{X: 1, Y: 2})
 	require.Len(t, wkb, 21)
+	makeLineWKB := func(pointCount int, float32 bool) []byte {
+		points := make([]geo.Coord, pointCount)
+		for i := range points {
+			points[i] = geo.Coord{X: float64(i), Y: float64(i + 1)}
+		}
+		line := geo.LineString{Points: points}
+		if float32 {
+			return geo.WriteWKBFloat32(line)
+		}
+		return geo.WriteWKB(line)
+	}
 
 	t.Run("geometry WKB max-length boundary", func(t *testing.T) {
 		mp := mpool.MustNewZero()
@@ -563,6 +574,46 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 		expected := append([]byte("x"), wkb[:19]...)
 		require.Equal(t, expected, results[0].GetBytesAt(0))
 	})
+
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		wkb  []byte
+	}{
+		{
+			name: "geometry WKB above 64 KiB",
+			typ:  geometryType,
+			wkb:  makeLineWKB(4096, false),
+		},
+		{
+			name: "geometry32 WKB above 64 KiB",
+			typ:  geometry32Type,
+			wkb:  makeLineWKB(8192, true),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, 65545, len(tc.wkb))
+			mp := mpool.MustNewZero()
+			exec, err := MakeAgg(mp, AggIdOfGroupConcat, false, tc.typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation(
+				EncodeGroupConcatConfig("", 20), 0))
+
+			values := vector.NewVec(tc.typ)
+			defer values.Free(mp)
+			require.NoError(t, vector.AppendBytes(values, tc.wkb, false, mp))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, types.T_blob.ToType(), *results[0].GetType())
+			require.Equal(t, tc.wkb[:20], results[0].GetBytesAt(0))
+		})
+	}
 }
 
 func TestGroupConcatPreservesTextCharsetForNestedMin(t *testing.T) {
