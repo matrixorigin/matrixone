@@ -117,3 +117,23 @@ func TestStaticRollbackSetIsInfrastructureOnly(t *testing.T) {
 	// without the session variable
 	require.True(t, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 }
+
+// unknownVarSession is a FeSession whose system-variable lookup fails, which
+// is what a session in a partially-initialized or shutting-down state does.
+type unknownVarSession struct {
+	FeSession
+}
+
+func (s *unknownVarSession) GetSessionSysVar(name string) (interface{}, error) {
+	return nil, moerr.NewInternalErrorNoCtx("no such system variable")
+}
+
+// TestUnreadableSettingKeepsMySQLBehaviour: if the switch cannot be read, the
+// answer must be the DEFAULT, not the strict setting. Failing the other way
+// would discard a transaction because of an unrelated lookup failure -- data
+// loss caused by a bookkeeping error.
+func TestUnreadableSettingKeepsMySQLBehaviour(t *testing.T) {
+	ses := &unknownVarSession{}
+	require.False(t, sessionRollsBackTxnOnError(ses, moerr.NewDuplicateEntryNoCtx("1", "a")))
+	require.False(t, sessionRollsBackTxnOnError(ses, moerr.NewInternalErrorNoCtx("boom")))
+}
