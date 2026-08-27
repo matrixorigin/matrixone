@@ -936,7 +936,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
 		// carry an explicit numeric domain, represented by a non-text type on the
 		// replacement expression; preserve that domain for direct projections and
-		// for the function rebinding performed by the parent expression.
+		// for the function rebinding performed by the parent expression. This also
+		// keeps the direct-result metadata specialization's type on the replacement.
 		if param != nil && param.Typ.Id != int32(types.T_text) {
 			typ = param.Typ
 		}
