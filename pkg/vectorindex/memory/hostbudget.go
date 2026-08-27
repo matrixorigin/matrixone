@@ -122,6 +122,67 @@ const hostBudgetNumerator, hostBudgetDenominator = 3, 4
 // A reservation that swallows the whole budget is a hard error, the same as a
 // per-row cost that cannot fit: it means the requested sample alone cannot be
 // held, which is a configuration to reject, not to round down.
+// HostRowsFittingStaged solves the capacity and the quantizer staging arena
+// TOGETHER, for builds where the arena is sized per sub-index.
+//
+// HostRowsFitting takes the arena as a fixed reservation, which forces the
+// caller to size it before capacity is known. That is circular whenever the
+// HOST is the binding constraint: the arena is capped by the final per-sub-index
+// capacity (native staging_bound_rows), but that capacity is what this function
+// is being asked to produce. Charging the whole source instead can refuse a
+// rotation that fits -- 1 GiB of availability with a 1M-row train limit charges
+// 3.07 GB of staging against an 805 MB budget, though 209,279-row sub-indexes
+// fit it with room to spare.
+//
+// No fixed point is needed, because the arena is min(stageLimitRows, capacity):
+//
+//	capacity <= stageLimitRows:  budget >= capacity*(perRow + perTrainRow)
+//	                             -> capacity = budget / (perRow + perTrainRow)
+//	capacity >  stageLimitRows:  the arena is constant at stageLimitRows*perTrainRow
+//	                             -> capacity = (budget - arena) / perRow
+//
+// Exactly one branch is self-consistent, so it is solved directly. perTrainRow
+// is 0 for storage wider than a byte, where nothing stages and this reduces to
+// plain division.
+//
+// Returns (0, 0, nil) when availability cannot be measured -- the caller falls
+// back to the device bound, as with HostRowsFitting.
+func HostRowsFittingStaged(perRowBytes, perTrainRowBytes, stageLimitRows uint64) (rows int64, availBytes uint64, err error) {
+	if perRowBytes == 0 {
+		return 0, 0, nil
+	}
+	avail, measured := hostAvailFn()
+	if !measured {
+		return 0, 0, nil
+	}
+	budget := avail / hostBudgetDenominator * hostBudgetNumerator
+
+	if perTrainRowBytes == 0 || stageLimitRows == 0 {
+		rows = int64(budget / perRowBytes)
+	} else if small := budget / (perRowBytes + perTrainRowBytes); small <= stageLimitRows {
+		// The arena grows with capacity, so both scale together.
+		rows = int64(small)
+	} else {
+		// The arena is pinned at its limit; the rest of the budget is capacity.
+		//
+		// The arena cannot starve capacity here, and that falls out of the branch
+		// condition rather than needing a guard: reaching this branch means
+		// stageLimitRows < budget/(perRow + perTrainRow), so
+		// stageLimitRows*perTrainRow < budget. Solving the two together is what
+		// makes "the sample alone exceeds the budget" unreachable -- the shape
+		// that made HostRowsFitting refuse a rotation that fits.
+		rows = int64((budget - stageLimitRows*perTrainRowBytes) / perRowBytes)
+	}
+
+	if rows <= 0 {
+		return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"host memory budget of %d bytes (75%% of %d available) cannot hold one row of %d "+
+				"bytes alongside the quantizer training sample; free memory on this node or run "+
+				"the build on a larger CN", budget, avail, perRowBytes))
+	}
+	return rows, avail, nil
+}
+
 func HostRowsFitting(perRowBytes uint64, reservedBytes uint64) (rows int64, availBytes uint64, err error) {
 	if perRowBytes == 0 {
 		return 0, 0, nil

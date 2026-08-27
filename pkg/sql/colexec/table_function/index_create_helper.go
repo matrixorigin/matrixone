@@ -94,33 +94,6 @@ type capacityPlan struct {
 // numShards is the SHARDED shard count -- len(devices), including the aliases
 // gpu_multi_simulation produces, because that is what the native splitter counts
 // (index_base.hpp: num_shards = devices_.size()). Ignored unless sharded.
-// stagingRowBound is the most rows the int8/uint8 quantizer arena can ever hold
-// for ONE sub-index, which is what it is actually charged against.
-//
-// The arena is per sub-index, not per table: native staging_bound_rows() caps it
-// by this->count, and every rotated model is constructed with
-// idxcfg.IndexCapacity. Charging the whole source instead refuses split builds
-// that fit comfortably -- 88M rows at max_index_capacity 1M, dim 768 f32 base,
-// train limit 50M charges ~29.25 GiB against a 24 GiB budget, when each real
-// sub-index stages at most 1M rows (~2.86 GiB).
-//
-// Every term here is known BEFORE the capacity plan, which is what keeps this
-// out of a circle: the plan can only narrow capacity further (hostRowsFit is its
-// one remaining input), so the final capacity is never larger than this bound
-// and the charge can never come out short.
-func stagingRowBound(srcRowCount, requestedCapacity, rowsFit int64) uint64 {
-	bound := srcRowCount
-	if requestedCapacity > 0 && requestedCapacity < bound {
-		bound = requestedCapacity
-	}
-	if rowsFit > 0 && rowsFit < bound {
-		bound = rowsFit
-	}
-	if bound < 0 {
-		return 0
-	}
-	return uint64(bound)
-}
 
 func planCapacity(
 	srcRowCount, explicitCapacity, rowsFit, hostRowsFit, threshold int64,

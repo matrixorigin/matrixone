@@ -139,3 +139,77 @@ func TestHostRowsFittingReservesBeforeCapacity(t *testing.T) {
 	require.Zero(t, rows)
 	require.Zero(t, availOut)
 }
+
+// The staging arena is capped by the final per-sub-index capacity, but capacity
+// is what the host budget is being asked to produce. Sizing the arena from the
+// whole source instead refuses rotations that fit.
+//
+// The numbers are the reported repro: 1 GiB of availability (an 805,306,368-byte
+// budget), IVF-PQ vecf32(768) -> int8, 1M source rows, no INCLUDE columns, and a
+// train limit at the source row count.
+func TestHostRowsFittingStaged_SolvesCapacityAndArenaTogether(t *testing.T) {
+	const (
+		perRow      = 768*1 + 8 // int8 vector + int64 id
+		perTrainRow = 768 * 4   // the arena retains RAW f32 base rows
+	)
+	withHostAvail(t, 1<<30, true)
+
+	t.Run("arena scales with capacity when the limit is generous", func(t *testing.T) {
+		// train limit >= source rows: the arena is bounded by capacity, not by the
+		// limit, so the two scale together and share the budget.
+		rows, avail, err := HostRowsFittingStaged(perRow, perTrainRow, 1000000)
+		require.NoError(t, err, "a rotation that fits must not be refused")
+		require.Equal(t, uint64(1<<30), avail)
+		require.Equal(t, int64(209279), rows)
+
+		// It must actually fit, with the arena charged at the SAME capacity.
+		budget := uint64(1<<30) / 4 * 3
+		used := uint64(rows)*perRow + uint64(rows)*perTrainRow
+		require.LessOrEqual(t, used, budget, "capacity + its own arena must fit the budget")
+		// ...and be tight: one more row would not.
+		more := uint64(rows+1)*perRow + uint64(rows+1)*perTrainRow
+		require.Greater(t, more, budget, "the answer must be the largest that fits")
+	})
+
+	t.Run("arena is pinned when the limit binds first", func(t *testing.T) {
+		// At the 100k default the arena stops growing, and the rest of the budget
+		// is capacity -- which is why this case never failed in the first place.
+		rows, _, err := HostRowsFittingStaged(perRow, perTrainRow, 100000)
+		require.NoError(t, err)
+		require.Equal(t, int64(641889), rows)
+		budget := uint64(1<<30) / 4 * 3
+		require.LessOrEqual(t, uint64(100000)*perTrainRow+uint64(rows)*perRow, budget)
+	})
+
+	t.Run("wider storage stages nothing", func(t *testing.T) {
+		rows, _, err := HostRowsFittingStaged(perRow, 0, 1000000)
+		require.NoError(t, err)
+		require.Equal(t, int64(uint64(1<<30)/4*3/perRow), rows)
+	})
+
+	t.Run("a huge train limit cannot starve capacity", func(t *testing.T) {
+		// This is the property the joint solve buys. However large the limit, the
+		// arena is bounded by the capacity it shares the budget with, so it can
+		// never consume the budget on its own -- which is exactly what made the
+		// reserve-then-divide form refuse a rotation that fits.
+		rows, _, err := HostRowsFittingStaged(perRow, perTrainRow, 100000000)
+		require.NoError(t, err)
+		require.Equal(t, int64(209279), rows, "capacity binds the arena, not the limit")
+
+		// Same answer for any limit at or above that capacity: the limit stops
+		// mattering once capacity is the tighter of the two.
+		for _, limit := range []uint64{209279, 1000000, 1 << 40} {
+			r, _, e := HostRowsFittingStaged(perRow, perTrainRow, limit)
+			require.NoError(t, e)
+			require.Equal(t, int64(209279), r, "limit=%d", limit)
+		}
+	})
+
+	t.Run("unmeasured availability falls back to the device bound", func(t *testing.T) {
+		withHostAvail(t, 0, false)
+		rows, avail, err := HostRowsFittingStaged(perRow, perTrainRow, 1000000)
+		require.NoError(t, err)
+		require.Zero(t, rows)
+		require.Zero(t, avail)
+	})
+}

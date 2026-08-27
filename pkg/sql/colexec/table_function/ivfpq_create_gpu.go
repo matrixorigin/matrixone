@@ -528,12 +528,22 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		//
 		// Zero for any storage type wider than a byte: training is gated on
 		// sizeof(T)==1, so those builds never stage.
-		var stagingBytes uint64
+		// The staging arena and the capacity are solved TOGETHER. The arena is
+		// capped by the final per-sub-index capacity (native staging_bound_rows),
+		// so sizing it first and subtracting is circular whenever the HOST is the
+		// binding constraint -- it charges rows no sub-index could contain and can
+		// refuse a rotation that fits. HostRowsFittingStaged solves both.
+		//
+		// perTrainRow is 0 for any storage wider than a byte: training is gated on
+		// sizeof(T)==1, so those builds stage nothing and this reduces to plain
+		// division.
+		var perTrainRow, stageRows uint64
 		if (qt == metric.Quantization_INT8 || qt == metric.Quantization_UINT8) && len(u.devices) > 0 {
+			perTrainRow = dim * baseElemBytes(u.baseOid)
 			var serr error
-			stagingBytes, serr = cuvs.QuantizerStagingBytes(
-				u.devices[0], dim, baseElemBytes(u.baseOid), u.idxcfg.CuvsIvfpq.QuantizerTrainLimit,
-				stagingRowBound(srcRowCount, requestedCapacity, rowsFit), u.idxcfg.Type)
+			// Probed on the PRIMARY gpu, which is where submit_main runs.
+			stageRows, serr = cuvs.QuantizerStagingRows(u.devices[0], perTrainRow,
+				u.idxcfg.CuvsIvfpq.QuantizerTrainLimit, u.idxcfg.Type)
 			if serr != nil {
 				// No safe fallback: train_limit is 0 when unset, meaning "the C++
 				// default", so guessing charges nothing for an arena still allocated.
@@ -541,7 +551,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 					"ivfpq: cannot size the quantizer training sample: %v", serr)
 			}
 		}
-		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow, stagingBytes)
+		hostRowsFit, availBytes, herr := vimemory.HostRowsFittingStaged(hostPerRow, perTrainRow, stageRows)
 		if herr != nil {
 			// memory.HostRowsFitting errors ONLY on a successful measurement that
 			// cannot hold one row — which now includes a cgroup sitting at its

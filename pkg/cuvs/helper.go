@@ -357,32 +357,6 @@ func DeviceMaxAdmissible(deviceID int, budgetPercent uint64) (uint64, error) {
 	return uint64(maxAdm), nil
 }
 
-// QuantizerStagingBytes reports the HOST bytes the int8/uint8 staging arena will
-// occupy, from the same C++ expression prereserve_staging_arena() allocates.
-//
-// The build claim has to cover the arena, and the arena is allocated inside
-// start(); asking here rather than recomputing min(limit, device cap, rows) in Go
-// is what keeps the claim and the allocation from disagreeing.
-//
-// deviceID should be the PRIMARY gpu -- the arena is reserved under submit_main.
-// maxRows caps it by the rows that exist; pass the source row count, an upper
-// bound on the capacity the planner has not derived yet.
-func QuantizerStagingBytes(deviceID int, dim, elemSize, trainLimit, maxRows uint64, indexType string) (uint64, error) {
-	if dim == 0 || elemSize == 0 {
-		return 0, nil
-	}
-	var errmsg *C.char
-	n := C.gpu_quantizer_staging_bytes(
-		C.int(deviceID), C.uint64_t(dim), C.uint64_t(elemSize), C.uint64_t(trainLimit),
-		C.uint64_t(maxRows), C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return 0, moerr.NewInternalErrorNoCtx(errStr)
-	}
-	return uint64(n), nil
-}
-
 // hostResidentComponents are the packed components that live in HOST memory when
 // an index loads, not on the device: host_ids, the INCLUDE-column filter store,
 // the scalar-quantizer min/max, the deleted bitset, and the manifest itself.
@@ -424,6 +398,29 @@ func hostResidentComponents() map[string]bool {
 // IsHostResidentComponent reports whether a packed component stays in host
 // memory rather than being deserialized onto the GPU.
 func IsHostResidentComponent(name string) bool { return hostResidentComponents()[name] }
+
+// QuantizerStagingRows reports how many rows the int8/uint8 quantizer will stage
+// on deviceID -- matrixone::quantizer_staging_rows, i.e. the train limit after
+// the hard ceiling and the device budget, but BEFORE any per-sub-index clamp.
+//
+// That is the figure the host solver needs: it must know where the arena stops
+// growing with capacity, and the per-sub-index clamp is the very thing capacity
+// is being solved for.
+func QuantizerStagingRows(deviceID int, perTrainRow, trainLimit uint64, indexType string) (uint64, error) {
+	if perTrainRow == 0 {
+		return 0, nil
+	}
+	var errmsg *C.char
+	n := C.gpu_quantizer_staging_rows(
+		C.int(deviceID), C.uint64_t(perTrainRow), C.uint64_t(trainLimit),
+		C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return uint64(n), nil
+}
 
 // MaxQuantizerTrainLimit is the hard ceiling on quantizer_train_limit, read from
 // the C++ that enforces it (helper.h, kMaxQuantizerTrainLimit) rather than
