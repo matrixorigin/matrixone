@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2371,17 +2372,96 @@ func TestViewMetadataStatementNeedsLease(t *testing.T) {
 		{name: "ctas", stmt: &tree.CreateTable{IsAsSelect: true}, want: true},
 		{name: "plain create table", stmt: &tree.CreateTable{}},
 		{name: "prepared execution", stmt: &tree.Execute{}, want: true},
-		{name: "information schema qualified", stmt: &tree.Select{},
+		{name: "qualified with comments",
+			sql: "select * from information_schema/**/.columns", want: true},
+		{name: "qualified with quoting",
 			sql: "select * from `information_schema` . `columns`", want: true},
-		{name: "information schema default database", stmt: &tree.Select{},
-			sql: "select * from columns", defaultDatabase: "INFORMATION_SCHEMA", want: true},
-		{name: "ordinary select", stmt: &tree.Select{}, sql: "select * from db.t"},
+		{name: "default database", sql: "select * from columns",
+			defaultDatabase: "INFORMATION_SCHEMA", want: true},
+		{name: "join relation",
+			sql: "select c.* from db.t join information_schema.columns c on true", want: true},
+		{name: "scalar subquery",
+			sql: "select (select count(*) from information_schema.columns)", want: true},
+		{name: "cte body", sql: "with c as (select * from information_schema.columns) select * from c",
+			want: true},
+		{name: "union branch", sql: "select 1 union select count(*) from information_schema.columns",
+			want: true},
+		{name: "text is not relation", sql: "select 'information_schema.columns'"},
+		{name: "explicit ordinary database", sql: "select * from app.columns",
+			defaultDatabase: "information_schema"},
+		{name: "ordinary select", sql: "select * from db.t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			stmt := tc.stmt
+			if stmt == nil {
+				var err error
+				stmt, err = parsers.ParseOne(
+					context.Background(), dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, err)
+			}
 			require.Equal(t, tc.want,
-				viewMetadataStatementNeedsLease(tc.stmt, tc.sql, tc.defaultDatabase))
+				viewMetadataStatementNeedsLease(stmt, tc.defaultDatabase))
 		})
 	}
+}
+
+func waitViewMetadataAdvanceAtPublicBarrier(
+	t *testing.T,
+	fence *compile.ViewMetadataEpochFence,
+) {
+	t.Helper()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		probe, err := fence.Acquire(canceledCtx)
+		if err != nil {
+			require.ErrorIs(t, err, context.Canceled)
+			return
+		}
+		probe.Release()
+		goruntime.Gosched()
+	}
+	t.Fatal("epoch advance did not close the public acquisition barrier")
+}
+
+func TestInformationSchemaColumnsLeaseBlocksEpochAdvance(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		fence := compile.NewViewMetadataEpochFence()
+		require.NoError(t, fence.Advance(context.Background(), 1))
+		require.True(t, fence.MarkCatalogFenced(1))
+		require.True(t, fence.MarkRefreshReady(1))
+		require.True(t, fence.EnableRefresh(1))
+		rt.SetGlobalVariables(compile.ViewMetadataEpochFenceRuntimeKey, fence)
+
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+			"select * from information_schema/**/.columns", 1)
+		require.NoError(t, err)
+		ses := newSes(nil, gomock.NewController(t))
+		ses.service = t.Name()
+		lease, sensitive, err := acquireViewMetadataStatementLease(ses, &ExecCtx{
+			reqCtx: context.Background(),
+			stmt:   stmt,
+		})
+		require.NoError(t, err)
+		require.True(t, sensitive)
+		require.NotNil(t, lease)
+
+		advanceCtx, cancelAdvance := context.WithTimeout(context.Background(), time.Second)
+		defer cancelAdvance()
+		advanceDone := make(chan error, 1)
+		go func() { advanceDone <- fence.Advance(advanceCtx, 2) }()
+		waitViewMetadataAdvanceAtPublicBarrier(t, fence)
+		select {
+		case advanceErr := <-advanceDone:
+			t.Fatalf("epoch advanced before information_schema.columns lease drained: %v", advanceErr)
+		default:
+		}
+
+		lease.Release()
+		require.NoError(t, <-advanceDone)
+		require.Equal(t, uint64(2), fence.Epoch())
+	})
 }
 
 func TestValidateViewMetadataTransactionEpochs(t *testing.T) {

@@ -5015,7 +5015,7 @@ func acquireViewMetadataStatementLease(
 	}
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	if !binaryExecute && !viewMetadataStatementNeedsLease(
-		execCtx.stmt, execCtx.sqlOfStmt, ses.GetDatabaseName()) {
+		execCtx.stmt, ses.GetDatabaseName()) {
 		return nil, false, nil
 	}
 	lease, _, err := compile.AcquireViewMetadataRefreshLease(
@@ -5039,7 +5039,7 @@ func validateViewMetadataTransactionEpochs(currentEpoch, transactionEpoch uint64
 		transactionEpoch, currentEpoch)
 }
 
-func viewMetadataStatementNeedsLease(stmt tree.Statement, sql, defaultDatabase string) bool {
+func viewMetadataStatementNeedsLease(stmt tree.Statement, defaultDatabase string) bool {
 	switch statement := stmt.(type) {
 	case *tree.ShowColumns:
 		return true
@@ -5050,34 +5050,89 @@ func viewMetadataStatementNeedsLease(stmt tree.Statement, sql, defaultDatabase s
 		// EXECUTE keeps a cached metadata consumer inside the epoch boundary.
 		return true
 	case *tree.Select:
-		if !containsFoldASCII(sql, "columns") {
-			return false
-		}
-		compact := strings.NewReplacer(
-			"`", "", " ", "", "\t", "", "\n", "", "\r", "").
-			Replace(strings.ToLower(sql))
-		if strings.Contains(compact, "information_schema.columns") {
-			return true
-		}
-		return strings.EqualFold(defaultDatabase, "information_schema") &&
-			(strings.Contains(compact, "fromcolumns") ||
-				strings.Contains(compact, "joincolumns") ||
-				strings.Contains(compact, ",columns"))
+		// Relation identity, not the original SQL spelling, owns the lease
+		// decision. Comments and quoting may split lexical tokens while leaving
+		// the parsed information_schema.columns relation unchanged.
+		return viewMetadataASTReferencesColumns(
+			reflect.ValueOf(statement), defaultDatabase, make(map[uintptr]struct{}))
 	default:
 		return false
 	}
 }
 
-func containsFoldASCII(value, substring string) bool {
-	if len(substring) == 0 {
-		return true
+func viewMetadataASTReferencesColumns(
+	value reflect.Value,
+	defaultDatabase string,
+	visited map[uintptr]struct{},
+) bool {
+	if !value.IsValid() {
+		return false
 	}
-	for index := 0; index+len(substring) <= len(value); index++ {
-		if strings.EqualFold(value[index:index+len(substring)], substring) {
-			return true
+	if value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		return viewMetadataASTReferencesColumns(value.Elem(), defaultDatabase, visited)
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			if tableName, ok := value.Interface().(*tree.TableName); ok {
+				return viewMetadataTableIsColumns(tableName, defaultDatabase)
+			}
+		}
+		pointer := value.Pointer()
+		if _, ok := visited[pointer]; ok {
+			return false
+		}
+		visited[pointer] = struct{}{}
+		return viewMetadataASTReferencesColumns(value.Elem(), defaultDatabase, visited)
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			// Parser implementation markers and private caches are not semantic
+			// children. Every relation-bearing AST field is exported.
+			if valueType.Field(index).PkgPath != "" {
+				continue
+			}
+			if viewMetadataASTReferencesColumns(
+				value.Field(index), defaultDatabase, visited) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if viewMetadataASTReferencesColumns(
+				value.Index(index), defaultDatabase, visited) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if viewMetadataASTReferencesColumns(
+				iterator.Value(), defaultDatabase, visited) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func viewMetadataTableIsColumns(tableName *tree.TableName, defaultDatabase string) bool {
+	if tableName == nil || !strings.EqualFold(string(tableName.Name()), "columns") {
+		return false
+	}
+	database := string(tableName.Schema())
+	if database == "" {
+		database = defaultDatabase
+	}
+	return strings.EqualFold(database, "information_schema")
 }
 
 func recordSessionDDL(ses FeSession, execCtx *ExecCtx, err error) {
