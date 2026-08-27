@@ -23,16 +23,20 @@ import (
 
 const (
 	informationSchemaViewIdentifierPattern = "(?:`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|[^[:space:].(),]+)"
+	// GetRootSql preserves line comments, so separators in the persisted DDL must
+	// accept them wherever valid SQL permits whitespace between view tokens.
+	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|--[^\\r\\n]*(?:\\r?\\n|$))*"
+	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|--[^\\r\\n]*(?:\\r?\\n|$))+"
 	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
 	// DEFINER, and SQL SECURITY clauses as well as mysqldump's version comments.
 	informationSchemaViewDefinitionPrefixPattern = "(?is)^[[:space:]]*(?:/[*]![0-9]+[[:space:]]*)?" +
-		"(?:create(?:[[:space:]]+or[[:space:]]+replace)?|alter).*?[[:space:]]+view[[:space:]]+" +
-		"(?:if[[:space:]]+(?:not[[:space:]]+)?exists[[:space:]]+)?" +
+		"(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter).*?" + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+		"(?:if" + informationSchemaViewRequiredSeparatorPattern + "(?:not" + informationSchemaViewRequiredSeparatorPattern + ")?exists" + informationSchemaViewRequiredSeparatorPattern + ")?" +
 		informationSchemaViewIdentifierPattern +
-		"(?:[[:space:]]*[.][[:space:]]*" + informationSchemaViewIdentifierPattern + ")?" +
-		"[[:space:]]*(?:[(][[:space:]]*" + informationSchemaViewIdentifierPattern +
-		"(?:[[:space:]]*,[[:space:]]*" + informationSchemaViewIdentifierPattern + ")*[[:space:]]*[)])?" +
-		"[[:space:]]+as[[:space:]]+"
+		"(?:" + informationSchemaViewOptionalSeparatorPattern + "[.]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern + ")?" +
+		informationSchemaViewOptionalSeparatorPattern + "(?:[(]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern +
+		"(?:" + informationSchemaViewOptionalSeparatorPattern + "[,]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern + ")*" + informationSchemaViewOptionalSeparatorPattern + "[)])?" +
+		informationSchemaViewRequiredSeparatorPattern + "as" + informationSchemaViewRequiredSeparatorPattern
 	informationSchemaViewDefinitionVersionCommentPrefixPattern = "(?is)^[[:space:]]*/[*]![0-9]+[[:space:]]*"
 	informationSchemaViewDefinitionCommentSuffixPattern        = "(?is)[[:space:]]*[*]/[[:space:]]*;?[[:space:]]*$"
 	informationSchemaViewStatementSQL                          = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"

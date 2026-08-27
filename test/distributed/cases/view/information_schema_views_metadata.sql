@@ -8,6 +8,8 @@ insert into t values (1, 10), (1, 20), (2, 30);
 create view direct_v as select a, b from t;
 create view agg_v as select a, count(*) cnt from t group by a;
 /*!50001 CREATE DEFINER = `root`@`%` VIEW dump_v AS select a from t */;
+create view line_comment_v -- migration-generated view
+as select a from t;
 
 select table_name, view_definition, is_updatable
 from information_schema.views
