@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -299,6 +300,133 @@ func TestLegacyVarianceStateKeepsPreV32WireLayout(t *testing.T) {
 	defer stable.Free()
 	require.False(t, stable.legacyState)
 	require.Len(t, stable.aggInfo.stateTypes, 5)
+}
+
+func TestVarianceIntermediateStateWireLayouts(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tests := []struct {
+		name   string
+		param  types.Type
+		append func(*testing.T, *vector.Vector)
+		read   func(*vector.Vector) float64
+	}{
+		{
+			name:  "float64",
+			param: types.T_float64.ToType(),
+			append: func(t *testing.T, input *vector.Vector) {
+				for _, value := range []float64{2, 4, 6, 8} {
+					require.NoError(t, vector.AppendFixed(input, value, false, mp))
+				}
+			},
+			read: func(result *vector.Vector) float64 {
+				return vector.MustFixedColNoTypeCheck[float64](result)[0]
+			},
+		},
+		{
+			name:  "decimal128",
+			param: types.New(types.T_decimal128, 30, 6),
+			append: func(t *testing.T, input *vector.Vector) {
+				for _, value := range []float64{2, 4, 6, 8} {
+					decimal, err := types.Decimal128FromFloat64(value, 30, 6)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input, decimal, false, mp))
+				}
+			},
+			read: func(result *vector.Vector) float64 {
+				value := vector.MustFixedColNoTypeCheck[types.Decimal128](result)[0]
+				return types.Decimal128ToFloat64(value, result.GetType().Scale)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		for _, legacy := range []bool{true, false} {
+			layout := "v32"
+			if legacy {
+				layout = "legacy"
+			}
+			t.Run(tc.name+"/"+layout, func(t *testing.T) {
+				input := vector.NewVec(tc.param)
+				defer input.Free(mp)
+				tc.append(t, input)
+
+				source := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param, legacy)
+				defer source.Free()
+				require.NoError(t, source.GroupGrow(1))
+				require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+
+				var wire bytes.Buffer
+				require.NoError(t, source.SaveIntermediateResult(
+					1, [][]uint8{{1}}, &wire))
+
+				restored := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param, legacy)
+				defer restored.Free()
+				require.NoError(t, restored.UnmarshalFromReader(
+					bytes.NewReader(wire.Bytes()), mp))
+				results, err := restored.Flush()
+				require.NoError(t, err)
+				defer results[0].Free(mp)
+				require.InEpsilon(t, 5.0, tc.read(results[0]), 1e-12)
+
+				mismatched := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param, !legacy)
+				defer mismatched.Free()
+				require.Error(t, mismatched.UnmarshalFromReader(
+					bytes.NewReader(wire.Bytes()), mp),
+					"the protocol gate must prevent unlike state layouts from decoding")
+			})
+		}
+	}
+}
+
+func TestVarianceMergeRejectsDifferentWireLayouts(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	param := types.T_float64.ToType()
+
+	stable := makeVarPopExec(mp, AggIdOfVarPop, false, param)
+	legacy := makeVarPopExec(mp, AggIdOfVarPop, false, param, true)
+	defer stable.Free()
+	defer legacy.Free()
+	require.NoError(t, stable.GroupGrow(1))
+	require.NoError(t, legacy.GroupGrow(1))
+	require.ErrorContains(t, stable.Merge(legacy, 0, 0), "different wire layouts")
+	require.ErrorContains(t, legacy.Merge(stable, 0, 0), "different wire layouts")
+}
+
+func TestScaledStdDevIntermediateStateWireRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	param := types.T_float64.ToType()
+
+	input := vector.NewVec(param)
+	defer input.Free(mp)
+	for _, value := range []float64{1e200, -1e200} {
+		require.NoError(t, vector.AppendFixed(input, value, false, mp))
+	}
+
+	source := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
+	defer source.Free()
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+
+	state := source.(*varStdDevExec[float64, float64])
+	exponent := vector.MustFixedColNoTypeCheck[int64](state.state[0].vecs[3])[0]
+	require.NotZero(t, exponent, "the test must exercise the v32 exponent sidecar")
+
+	var wire bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+	restored := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
+	defer restored.Free()
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+
+	results, err := restored.Flush()
+	require.NoError(t, err)
+	defer results[0].Free(mp)
+	got := vector.MustFixedColNoTypeCheck[float64](results[0])[0]
+	require.False(t, math.IsInf(got, 0))
+	require.InEpsilon(t, 1e200, got, 1e-15)
 }
 
 func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {

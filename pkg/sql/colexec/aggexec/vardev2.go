@@ -146,6 +146,10 @@ func (exec *varStdDevExec[T, A]) Merge(next AggFuncExec, groupIdx1, groupIdx2 in
 
 func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*varStdDevExec[T, A])
+	if exec.legacyState != other.legacyState {
+		return moerr.NewInternalErrorNoCtx(
+			"cannot merge variance aggregate states with different wire layouts")
+	}
 	if exec.IsDistinct() {
 		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
 	}
@@ -200,7 +204,7 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 }
 
 // The legacy representation is count, sum, sum-of-squares. It is retained
-// only while a remote pipeline can still be executed by a pre-v30 CN.
+// only while a remote pipeline can still be executed by a pre-v32 CN.
 func (exec *varStdDevExec[T, A]) batchFillLegacy(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	scale := exec.aggInfo.argTypes[0].Scale
@@ -638,7 +642,9 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 					if err != nil {
 						return nil, err
 					}
-					vector.AppendFixed(vecs[i], z, false, exec.mp)
+					if err := vector.AppendFixed(vecs[i], z, false, exec.mp); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -651,17 +657,23 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 				if cnt <= 1 {
 					// cnt == 1 && exec is samp
 					if cnt == 0 || !exec.isPop {
-						vector.AppendNull(vecs[i], exec.mp)
+						if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+							return nil, err
+						}
 						continue
 					}
 					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
-					vector.AppendFixed(vecs[i], z, false, exec.mp)
+					if err := vector.AppendFixed(vecs[i], z, false, exec.mp); err != nil {
+						return nil, err
+					}
 				} else {
 					result, err := exec.getResult(variances[j], varianceExponents[j], cnt)
 					if err != nil {
 						return nil, err
 					}
-					vector.AppendFixed(vecs[i], result, false, exec.mp)
+					if err := vector.AppendFixed(vecs[i], result, false, exec.mp); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}

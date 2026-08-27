@@ -398,6 +398,26 @@ func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
 	}))
 }
 
+func TestVarianceRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	variance := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfVarPop,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		nil,
+	)}
+
+	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, variance),
+		"requires MORPC protocol version 32")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, variance),
+		"requires MORPC protocol version 32")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, variance))
+}
+
 func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
