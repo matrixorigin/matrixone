@@ -27,10 +27,14 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -850,6 +854,251 @@ func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
 	handler.mu.Unlock()
 	if err != nil {
 		t.Fatalf("create next transaction failed: %v", err)
+	}
+}
+
+type ddlSyncRequest struct {
+	address  string
+	method   querypb.CmdMethod
+	commitTS timestamp.Timestamp
+}
+
+type ddlSyncQueryClient struct {
+	serviceID   string
+	sendError   map[string]error
+	nilResponse map[string]bool
+	requests    []ddlSyncRequest
+	releases    int
+}
+
+func (c *ddlSyncQueryClient) ServiceID() string {
+	return c.serviceID
+}
+
+func (c *ddlSyncQueryClient) SendMessage(
+	_ context.Context,
+	address string,
+	req *querypb.Request,
+) (*querypb.Response, error) {
+	request := ddlSyncRequest{address: address, method: req.CmdMethod}
+	if req.SycnCommit != nil {
+		request.commitTS = req.SycnCommit.LatestCommitTS
+	}
+	c.requests = append(c.requests, request)
+	if err := c.sendError[address]; err != nil {
+		return nil, err
+	}
+	if c.nilResponse[address] {
+		return nil, nil
+	}
+	return &querypb.Response{}, nil
+}
+
+func (c *ddlSyncQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
+	return &querypb.Request{CmdMethod: method}
+}
+
+func (c *ddlSyncQueryClient) Release(*querypb.Response) {
+	c.releases++
+}
+
+func (c *ddlSyncQueryClient) Close() error {
+	return nil
+}
+
+func TestCommitSyncsDDLCommitToWorkingCNs(t *testing.T) {
+	const queryServiceID = "ddl-sync-commit-test"
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 90, LogicalTime: 5}
+	targets := []metadata.CNService{
+		{ServiceID: "cn-1", QueryAddress: "cn-1:6001"},
+		{ServiceID: "cn-2", QueryAddress: "cn-2:6001"},
+	}
+
+	newState := func(t *testing.T) (*Session, *testTxnOp, *ddlSyncQueryClient, *ExecCtx) {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		ses.SetFromRealUser(true)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{
+			ID:         []byte{1, 2, 3, 4},
+			Status:     txn.TxnStatus_Active,
+			SnapshotTS: snapshotTS,
+		}
+		op.commitTS = commitTS
+		op.wp.SetHaveDDL(true)
+		ses.txnHandler.txnOp = op
+		ses.txnHandler.txnCtx = ctx
+
+		qc := &ddlSyncQueryClient{
+			serviceID:   queryServiceID,
+			sendError:   make(map[string]error),
+			nilResponse: make(map[string]bool),
+		}
+		pu := getPu("")
+		previousQueryClient := pu.QueryClient
+		pu.QueryClient = qc
+		t.Cleanup(func() { pu.QueryClient = previousQueryClient })
+		moruntime.SetupServiceBasedRuntime(queryServiceID, moruntime.DefaultRuntime())
+		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
+			moruntime.ClusterService,
+			&mockMOCluster{cnServices: targets},
+		)
+
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.stmt = &tree.CreateTable{}
+		execCtx.txnOpt = FeTxnOption{autoCommit: true}
+		return ses, op, qc, execCtx
+	}
+
+	t.Run("waits for every working CN", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		}, qc.requests)
+		require.Equal(t, 2, qc.releases)
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		require.Equal(t, 1, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("does not acknowledge a membership refresh failure", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		refreshErr := moerr.NewInternalErrorNoCtx("HAKeeper unavailable")
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		cluster.refreshError = refreshErr
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorIs(t, err, refreshErr)
+		require.Equal(t, 1, cluster.refreshCalls)
+		require.Empty(t, qc.requests)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("does not acknowledge a partial barrier", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		sendErr := moerr.NewInternalErrorNoCtx("CN unavailable")
+		qc.sendError["cn-2:6001"] = sendErr
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorIs(t, err, sendErr)
+		require.Len(t, qc.requests, 2)
+		require.Equal(t, 1, qc.releases)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("rejects an empty CN response", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		qc.nilResponse["cn-1:6001"] = true
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorContains(t, err, "empty DDL visibility response")
+		require.Len(t, qc.requests, 1)
+		require.Zero(t, qc.releases)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("rejects an empty working CN set", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
+			moruntime.ClusterService,
+			&mockMOCluster{},
+		)
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorContains(t, err, "no working CN is available")
+		require.Empty(t, qc.requests)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("rejects a working CN without query address", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		moruntime.ServiceRuntime(queryServiceID).SetGlobalVariables(
+			moruntime.ClusterService,
+			&mockMOCluster{cnServices: []metadata.CNService{{ServiceID: "cn-missing-address"}}},
+		)
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorContains(t, err, "working CN cn-missing-address has no query address")
+		require.Empty(t, qc.requests)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("synchronizes the observed frontier for a DDL no-op", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		op.commitTS = timestamp.Timestamp{}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommit, commitTS: snapshotTS.Prev()},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommit, commitTS: snapshotTS.Prev()},
+		}, qc.requests)
+		require.Equal(t, 2, qc.releases)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	tests := []struct {
+		name      string
+		configure func(*Session, *testTxnOp)
+	}{
+		{
+			name: "non-DDL transaction",
+			configure: func(_ *Session, op *testTxnOp) {
+				op.wp.SetHaveDDL(false)
+			},
+		},
+		{
+			name: "internal session",
+			configure: func(ses *Session, _ *testTxnOp) {
+				ses.SetFromRealUser(false)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, _, qc, execCtx := newState(t)
+			defer ses.Close()
+			defer execCtx.Close()
+			test.configure(ses, ses.txnHandler.txnOp.(*testTxnOp))
+
+			require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+			require.Empty(t, qc.requests)
+			require.Zero(t, qc.releases)
+		})
 	}
 }
 

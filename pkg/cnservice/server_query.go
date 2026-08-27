@@ -445,7 +445,14 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 }
 
 func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
+	targetTS := req.SycnCommit.LatestCommitTS
+	if _, err := s._txnClient.WaitLogTailAppliedAt(ctx, targetTS); err != nil {
+		return err
+	}
+	// Preserve the existing CN-based latest-commit update and BVT counter. The
+	// timestamp wait above makes this call non-blocking while keeping it on the
+	// established SyncCommit path.
+	s._txnClient.SyncLatestCommitTS(targetTS)
 	return nil
 }
 

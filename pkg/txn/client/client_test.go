@@ -212,6 +212,11 @@ type snapshotTimestampWaiter struct {
 	waitForContext bool
 }
 
+type appliedTimestampWaiter struct {
+	latest   timestamp.Timestamp
+	getCalls int
+}
+
 func (w *snapshotTimestampWaiter) GetTimestamp(
 	ctx context.Context,
 	ts timestamp.Timestamp,
@@ -228,6 +233,18 @@ func (w *snapshotTimestampWaiter) GetTimestamp(
 func (*snapshotTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
 func (*snapshotTimestampWaiter) Close()                                   {}
 func (*snapshotTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+
+func (w *appliedTimestampWaiter) GetTimestamp(
+	context.Context,
+	timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	w.getCalls++
+	return w.latest.Next(), nil
+}
+
+func (*appliedTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*appliedTimestampWaiter) Close()                                   {}
+func (w *appliedTimestampWaiter) LatestTS() timestamp.Timestamp          { return w.latest }
 
 // selectedSuccessTimestampWaiter models the valid notify-vs-cancel ordering
 // where notification wins the waiter's select, but the successful return is
@@ -271,6 +288,42 @@ func TestAdjustClient(t *testing.T) {
 	for i := range c.activeTxns {
 		assert.NotNil(t, c.activeTxns[i].txns)
 	}
+}
+
+func TestSyncLatestCommitTS(t *testing.T) {
+	targetTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+
+	t.Run("without timestamp waiter", func(t *testing.T) {
+		client := &txnClient{}
+
+		client.SyncLatestCommitTS(targetTS)
+
+		require.Equal(t, targetTS, client.GetLatestCommitTS())
+		require.Equal(t, uint64(1), client.GetSyncLatestCommitTSTimes())
+	})
+
+	t.Run("skips an already applied timestamp waiter", func(t *testing.T) {
+		waiter := &appliedTimestampWaiter{latest: targetTS}
+		client := &txnClient{timestampWaiter: waiter}
+
+		client.SyncLatestCommitTS(targetTS)
+
+		require.Zero(t, waiter.getCalls)
+		require.Equal(t, targetTS, client.GetLatestCommitTS())
+		require.Equal(t, uint64(1), client.GetSyncLatestCommitTSTimes())
+	})
+
+	t.Run("waits for an unapplied timestamp", func(t *testing.T) {
+		waiter := &snapshotTimestampWaiter{}
+		client := &txnClient{timestampWaiter: waiter}
+
+		client.SyncLatestCommitTS(targetTS)
+
+		require.Equal(t, 1, waiter.called)
+		require.Equal(t, targetTS, waiter.got)
+		require.Equal(t, targetTS, client.GetLatestCommitTS())
+		require.Equal(t, uint64(1), client.GetSyncLatestCommitTSTimes())
+	})
 }
 
 func TestNewWithSnapshotWaitsForLocalLogtail(t *testing.T) {

@@ -24,9 +24,13 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -835,7 +839,14 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
-		commitTs := th.txnOp.Txn().CommitTS
+		txnMeta := th.txnOp.Txn()
+		commitTs := txnMeta.CommitTS
+		visibilityTS := timestamp.Timestamp{}
+		if !txnMeta.SnapshotTS.IsEmpty() {
+			// SnapshotTS is exclusive. A no-op DDL observed catalog state through
+			// SnapshotTS.Prev(), which is the frontier other CNs must also apply.
+			visibilityTS = txnMeta.SnapshotTS.Prev()
+		}
 		tempTxnKey := tempTableTxnKey(th.txnOp)
 		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
@@ -850,6 +861,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		// left in a state that is unsafe to inspect.
 		if !hasRecovered {
 			commitTs = th.txnOp.Txn().CommitTS
+			if !commitTs.IsEmpty() {
+				visibilityTS = commitTs
+			}
 		}
 		if err != nil {
 			err = moerr.AttachCause(ctx2, err)
@@ -889,10 +903,86 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.SetTxnId(dumpUUID[:])
 			return err
 		}
+		if err == nil && haveDDL && execCtx.ses.GetFromRealUser() && !visibilityTS.IsEmpty() {
+			// A fresh proxy connection has no session commit timestamp to carry
+			// across CNs. Do not acknowledge a client DDL until every working CN
+			// has reached the commit, or the observed catalog frontier for a no-op.
+			err = syncDDLCommitToWorkingCNs(ctx2, execCtx.ses.GetService(), visibilityTS)
+		}
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])
 	return err
+}
+
+// syncDDLCommitToWorkingCNs waits until every CN that can accept a fresh proxy
+// connection has applied the DDL visibility frontier. Embedded and test
+// frontends may omit a query client because they do not expose a multi-CN
+// routing boundary.
+func syncDDLCommitToWorkingCNs(
+	ctx context.Context,
+	service string,
+	visibilityTS timestamp.Timestamp,
+) error {
+	pu := getPuIfPresent(service)
+	if pu == nil || pu.QueryClient == nil {
+		return nil
+	}
+
+	qc := pu.QueryClient
+	cluster := clusterservice.GetMOCluster(qc.ServiceID())
+	if cluster == nil {
+		return moerr.NewInternalError(ctx, "cannot establish DDL visibility barrier: cluster service is unavailable")
+	}
+	if refresher, ok := cluster.(clusterservice.AuthoritativeRefresher); ok {
+		if err := refresher.Refresh(ctx); err != nil {
+			return errors.Join(
+				err,
+				moerr.NewInternalError(ctx, "failed to refresh CNs for DDL visibility barrier"),
+			)
+		}
+	}
+
+	addresses := make([]string, 0, 4)
+	missingAddress := ""
+	cluster.GetCNService(
+		clusterservice.NewSelector(),
+		func(cn metadata.CNService) bool {
+			if cn.QueryAddress == "" {
+				missingAddress = cn.ServiceID
+				return false
+			}
+			addresses = append(addresses, cn.QueryAddress)
+			return true
+		},
+	)
+	if missingAddress != "" {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cannot establish DDL visibility barrier: working CN %s has no query address",
+			missingAddress,
+		)
+	}
+	if len(addresses) == 0 {
+		return moerr.NewInternalError(ctx, "cannot establish DDL visibility barrier: no working CN is available")
+	}
+
+	for _, address := range addresses {
+		req := qc.NewRequest(querypb.CmdMethod_SyncCommit)
+		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: visibilityTS}
+		resp, err := qc.SendMessage(ctx, address, req)
+		if err != nil {
+			return errors.Join(
+				err,
+				moerr.NewInternalErrorf(ctx, "failed to apply DDL commit on CN %s", address),
+			)
+		}
+		if resp == nil {
+			return moerr.NewInternalErrorf(ctx, "empty DDL visibility response from CN %s", address)
+		}
+		qc.Release(resp)
+	}
+	return nil
 }
 
 // Rollback rolls back the txn

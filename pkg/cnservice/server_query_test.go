@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -66,6 +67,45 @@ import (
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
+
+func TestServiceHandleSyncCommitWaitsForAppliedLogtail(t *testing.T) {
+	targetTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+
+	t.Run("updates latest commit after logtail is applied", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).
+			Return(targetTS.Next(), nil)
+		txnClient.EXPECT().SyncLatestCommitTS(targetTS)
+
+		s := &service{_txnClient: txnClient}
+		err := s.handleSyncCommit(
+			context.Background(),
+			&query.Request{SycnCommit: &query.SyncCommitRequest{LatestCommitTS: targetTS}},
+			&query.Response{},
+			nil,
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("propagates cancellation without updating latest commit", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		txnClient.EXPECT().WaitLogTailAppliedAt(ctx, targetTS).
+			Return(timestamp.Timestamp{}, context.Canceled)
+
+		s := &service{_txnClient: txnClient}
+		err := s.handleSyncCommit(
+			ctx,
+			&query.Request{SycnCommit: &query.SyncCommitRequest{LatestCommitTS: targetTS}},
+			&query.Response{},
+			nil,
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
 
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	exec := &iscp.ISCPTaskExecutor{}
