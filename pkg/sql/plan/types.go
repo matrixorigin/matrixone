@@ -413,6 +413,9 @@ type QueryBuilder struct {
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
+	// derivedColNdv carries explicit NDV estimates for optimizer-created output
+	// columns that do not belong to a base table.
+	derivedColNdv map[[2]int32]float64
 
 	nextBindTag      int32
 	nextMsgTag       int32
