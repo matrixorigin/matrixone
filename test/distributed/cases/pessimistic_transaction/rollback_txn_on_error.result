@@ -116,4 +116,33 @@ set global mo_rollback_txn_on_error = 0;
 select @@global.mo_rollback_txn_on_error as global_restored;
 ➤ global_restored[-1,16383,0]  𝄀
 0
+set mo_rollback_txn_on_error = 1;
+delete from t;
+insert into t values (1, 'one');
+begin;
+insert into t values (70, 'seventy');
+selec 1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "selec 1;";
+commit;
+select a as parse_error_discarded_txn from t order by a;
+➤ parse_error_discarded_txn[4,32,0]  𝄀
+1
+begin;
+insert into t values (71, 'seventyone');
+select * from no_such_table_at_all;
+SQL parser error: table "no_such_table_at_all" does not exist
+commit;
+select a as unknown_table_discarded_txn from t order by a;
+➤ unknown_table_discarded_txn[4,32,0]  𝄀
+1
+set mo_rollback_txn_on_error = 0;
+begin;
+insert into t values (72, 'seventytwo');
+selec 1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "selec 1;";
+commit;
+select a as parse_error_kept_txn from t order by a;
+➤ parse_error_kept_txn[4,32,0]  𝄀
+1  𝄀
+72
 drop database if exists rbscope;

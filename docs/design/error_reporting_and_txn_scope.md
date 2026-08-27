@@ -89,6 +89,20 @@ warning-coded result — an over-long value is a real error in strict mode
 accepted silently in non-strict mode — so the exemption is defensive, and it is
 asserted in Go rather than in BVT.
 
+### Where the setting is applied
+
+Two places, because a statement can fail before it runs:
+
+* `finishTxnFunc` -> `rollbackTxnFunc` covers every failure of an executed
+  statement, alongside the static `errCodeRollbackWholeTxn` set;
+* the `doComQuery` error defer covers failures that never reach the executor —
+  a parse error, a privilege rejection. Without it the setting would quietly
+  mean "any error the executor produced", so
+  `BEGIN; INSERT ...; selec 1; COMMIT;` would **commit** the row. Every
+  COM_QUERY error path converges on that defer, and a statement that already
+  rolled back has left no active transaction, so the second place adds no
+  double work.
+
 The exemption belongs to `moerr`, not to the frontend. A failure that is **not**
 a moerr has no warning form to be, so it rolls back like any other error; the
 alternative would make the setting mean "any error MO happens to have wrapped",
@@ -115,40 +129,64 @@ outside its small allowlist, so a background session never opts in even when
 the variable is set globally. Catalog maintenance, restores and other internal
 work keep MySQL semantics regardless.
 
-## 3. `mo.sql` returns a structured error
+## 3. Error codes for stored procedures, without changing the error value
 
 Starlark has no exceptions, so MO's `mo` module returns `[result, ok]` with `ok`
-`None` on success. `ok` used to be `err.Error()` — a bare string — so a
-procedure could only match on message text:
+`None` on success. `ok` is `err.Error()` — a bare string — so a procedure could
+only match on message text:
 
 ```python
 if err != None and "Duplicate entry" in err:   # brittle
 ```
 
-The error value now carries its codes while still behaving exactly like the
-message string:
+The codes now come from two builtins, and **the `ok` value is unchanged**:
 
 ```python
 rs, err = mo.sql("insert into t values (1, 'dup')")
-if err != None and err.code == 1062:           # the error CLASS
+if err != None and mo.errno() == 1062:         # the error CLASS
     ...
 ```
 
 | expression | value |
 |---|---|
-| `err.code` | MySQL error number, e.g. `1062` (`0` when the failure is not a moerr) |
-| `err.sqlstate` | `"23000"` |
-| `err.message` | the message text |
-| `str(err)`, `"x: " + err`, `err + " y"` | the message |
-| `bool(err)` | `True` |
-| `err == None` | `False` on failure, `True` on success |
-| `out_param = err` | the message string |
-| `err.startswith(...)`, `err.split(...)`, any other string method | asked of the message |
+| `mo.errno()` | MySQL error number of the most recent `mo.*` failure, e.g. `1062`; `0` when the last call succeeded, and `0` when it failed with something that is not a moerr |
+| `mo.sqlstate()` | `"23000"`; `""` when there is none |
+| `ok` | the message string, exactly as before |
 
-The last row is the compatibility rule: `Attr` answers `code`/`sqlstate`/
-`message` itself and delegates everything else to `starlark.String(message)`.
-A procedure written against the old return value — which WAS that string —
-keeps working, and `dir(err)` lists both halves.
+Reporting does not consume the record — a procedure can read both — and every
+builtin that can fail clears it on entry, so `mo.errno()` answers for the call
+that just happened and never for a stale one.
+
+### Why the codes are not on the error value
+
+Attaching them to `ok` was implemented and abandoned. A Go value cannot be a
+drop-in for `starlark.String`, because the interpreter resolves several
+operations on the **concrete type** rather than through any interface:
+
+| operation | on a custom value |
+|---|---|
+| `err == "text"`, `sorted([err, s])`, `hash(err)`, `{err: 1}[s]` | `sameType` compares `Type()` strings, so these need `Type() == "string"` |
+| `"needle" in err` | right operand is type-switched; a `HasBinary` hook can cover it |
+| `len`, indexing, slicing | interface-dispatched, so implementable |
+| `str(err)`, `"%s" % err` | type-asserts `String`; otherwise falls back to the REPR |
+
+Claiming `Type() == "string"` to recover the first row makes the last row
+regress (`str(err)` starts returning the quoted form) and makes
+`sorted([err, "x"])` **panic** on an interface conversion inside the
+interpreter. Reporting an honest type avoids the panic but leaves equality,
+hashing, ordering and dict-interchange behaving differently from the string
+they replaced.
+
+Neither is a superset, and both are observable by procedures written before the
+codes existed — so the error value stays exactly what it was, and the codes
+live beside it. This also keeps the change to `mo.sql` alone in spirit: every
+other `mo.*` builtin returns precisely what it always did.
+
+The compatibility claim is tested at the LANGUAGE level, not by calling Go
+methods: `TestBuiltinFailureIsStillAPlainString` evaluates containment,
+equality, ordering, `len`, indexing, slicing, hashing, formatting and the
+string methods against a failing builtin's `ok` value and against the
+equivalent plain string, and requires both to agree.
 
 Everything a procedure could already do with the value keeps working — it is
 truthy, concatenates with strings, and converts to its message when assigned to
@@ -176,4 +214,4 @@ repository.
 | `pkg/frontend` `TestWarningsNeverRollBackTxn` | a warning or info never rolls back a transaction, even with the setting on, while a real error does |
 | `pkg/frontend` `TestBackgroundSessionNeverRollsBackWholeTxn` | a background session cannot inherit the setting, even globally |
 | BVT `pessimistic_transaction/rollback_txn_on_error` | end to end: default keeps the transaction for a duplicate key *and* for an unrelated error; opted in, a duplicate key, an unknown column, a bad type conversion and a missing table each discard it including work done before; global scope is inherited by a new session but not by the setting one; and the setting can be turned back off |
-| BVT `procedure/starlark_sql_error` | `err.code` / `err.sqlstate` / `err.message`, `dir(err)`, truthiness, concatenation, `None` on success, and the OUT-parameter form still yielding the message |
+| BVT `procedure/starlark_sql_error` | `mo.errno()` / `mo.sqlstate()` after a failure and after a success, the `ok` value still being an ordinary string (containment, concatenation, truthiness), `None` on success, and the OUT-parameter form yielding the message |

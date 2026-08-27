@@ -114,4 +114,32 @@ select a as new_session_txn_discarded from t order by a;
 set global mo_rollback_txn_on_error = 0;
 select @@global.mo_rollback_txn_on_error as global_restored;
 
+-- A failure BEFORE the statement runs must count too. A parse error never
+-- reaches the executor's transaction bookkeeping, so it would otherwise be
+-- silently exempt and the transaction would COMMIT.
+set mo_rollback_txn_on_error = 1;
+delete from t;
+insert into t values (1, 'one');
+begin;
+insert into t values (70, 'seventy');
+selec 1;
+commit;
+select a as parse_error_discarded_txn from t order by a;
+
+-- an unknown table is rejected before execution as well
+begin;
+insert into t values (71, 'seventyone');
+select * from no_such_table_at_all;
+commit;
+select a as unknown_table_discarded_txn from t order by a;
+
+-- and with the setting off, MySQL behaviour: the statement fails, the
+-- transaction survives, and the earlier row commits
+set mo_rollback_txn_on_error = 0;
+begin;
+insert into t values (72, 'seventytwo');
+selec 1;
+commit;
+select a as parse_error_kept_txn from t order by a;
+
 drop database if exists rbscope;

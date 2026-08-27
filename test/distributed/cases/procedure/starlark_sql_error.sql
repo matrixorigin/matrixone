@@ -18,26 +18,31 @@ create table plog (id int, note varchar(300));
 
 create or replace procedure sp_err() language 'starlark'
 $$
-# The error value carries its codes AND keeps behaving like the message
-# string it replaced: row 4 is its own fields, row 7 that a string method is
-# both listed and callable on it.
+# The codes come from mo.errno()/mo.sqlstate(); the `ok` value itself is the
+# plain message string it has always been, so rows 3-7 exercise the ordinary
+# string operations a procedure written before the codes existed would use.
 rs, err = mo.sql("insert into t values (1, 'dup')")
-code = -1 if err == None else err.code
-state = "none" if err == None else err.sqlstate
-isdup = False if err == None else err.code == 1062
+code = -1 if err == None else mo.errno()
+state = "none" if err == None else mo.sqlstate()
+isdup = False if err == None else mo.errno() == 1062
 truthy = False if err == None else bool(err)
-own = [] if err == None else [a for a in dir(err) if a in ("code", "message", "sqlstate")]
-strmeth = False if err == None else "startswith" in dir(err)
-prefixed = False if err == None else err.startswith("Duplicate entry")
+contains = False if err == None else "Duplicate entry" in err
+equals = False if err == None else err == ("" + err)
+sized = -1 if err == None else len(err)
+sliced = "" if err == None else err[0:9]
+strmeth = False if err == None else err.startswith("Duplicate entry")
 concat = "" if err == None else "concat: " + err
-same = "" if err == None else err.message
+same = "" if err == None else "%s" % err
 q, qe = mo.quote(concat)
 q2, qe2 = mo.quote(same)
+# a call that SUCCEEDS clears the record, so errno never reports a stale class
+rs2, err2 = mo.sql("select 1")
+after_ok = mo.errno()
 mo.sql("insert into plog values (1, 'code={} sqlstate={}')".format(code, state))
 mo.sql("insert into plog values (2, 'is_dup={}')".format(isdup))
-mo.sql("insert into plog values (3, 'truthy={}')".format(truthy))
-mo.sql("insert into plog values (4, 'own={}')".format(own))
-mo.sql("insert into plog values (7, 'has_string_methods={} startswith={}')".format(strmeth, prefixed))
+mo.sql("insert into plog values (3, 'truthy={} contains={} equals={}')".format(truthy, contains, equals))
+mo.sql("insert into plog values (4, 'len={} slice={}')".format(sized, sliced))
+mo.sql("insert into plog values (7, 'startswith={} errno_after_success={}')".format(strmeth, after_ok))
 mo.sql("insert into plog values (5, '{}')".format(q))
 mo.sql("insert into plog values (6, '{}')".format(q2))
 $$;
