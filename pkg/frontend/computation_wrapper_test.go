@@ -845,6 +845,58 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Same(t, textParams, cw.proc.GetPrepareParams())
 }
 
+func TestPreparedNumericOverloadSpecializationReusesRuntimeCategory(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 209, "select abs(?)")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(preparePlan)
+	require.Equal(t, []int32{0}, prepareStmt.numericOverloadParamPositions)
+
+	install := func(value string, mysqlType defines.MysqlType) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		return params
+	}
+
+	firstParams := install("-9007199254740993", defines.MYSQL_TYPE_LONGLONG)
+	retComp, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, preparePlan, firstPlan)
+	require.Same(t, firstPlan, cw.runtimeCachePlan)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+
+	cw.proc.SetPrepareParams(nil)
+	secondParams := install("-7", defines.MYSQL_TYPE_LONGLONG)
+	firstParams.Free(cw.proc.Mp())
+	retComp, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp,
+		"a repeated INT64 execution must reuse the specialized compile")
+	require.Same(t, firstPlan, secondPlan,
+		"a repeated INT64 execution must reuse the specialized plan")
+
+	cw.proc.SetPrepareParams(nil)
+	floatParams := install("-1.5", defines.MYSQL_TYPE_DOUBLE)
+	secondParams.Free(cw.proc.Mp())
+	retComp, floatPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, firstPlan, floatPlan,
+		"changing the runtime numeric category must build a new bounded variant")
+	cw.proc.SetPrepareParams(nil)
+	floatParams.Free(cw.proc.Mp())
+}
+
 func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	decimal := func(value string) plan2.ParamValue {
 		return plan2.ParamValue{Value: value, PrepareParamKind: vector.PrepareParamDecimal,

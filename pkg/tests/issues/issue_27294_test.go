@@ -53,12 +53,12 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, "drop table if exists issue_27294_numeric_src")
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, "create table issue_27294_numeric_src (v int)")
+		_, err = db.ExecContext(ctx, "create table issue_27294_numeric_src (v bigint)")
 		require.NoError(t, err)
 		defer func() {
 			_, _ = db.ExecContext(context.Background(), "drop table if exists issue_27294_numeric_src")
 		}()
-		_, err = db.ExecContext(ctx, "insert into issue_27294_numeric_src values (1)")
+		_, err = db.ExecContext(ctx, "insert into issue_27294_numeric_src values (-9007199254740993)")
 		require.NoError(t, err)
 
 		sleep, err := db.PrepareContext(ctx, "select sleep(?)")
@@ -94,15 +94,17 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		defer wide.Close()
 		wideRows, err := wide.QueryContext(ctx, int64(-9007199254740993))
 		require.NoError(t, err)
-		wideColumns, err := wideRows.ColumnTypes()
-		require.NoError(t, err)
-		require.Len(t, wideColumns, 1)
-		require.Contains(t, strings.ToUpper(wideColumns[0].DatabaseTypeName()), "INT")
 		var exact int64
-		require.True(t, wideRows.Next())
-		require.NoError(t, wideRows.Scan(&exact))
-		require.NoError(t, wideRows.Err())
-		require.NoError(t, wideRows.Close())
+		func() {
+			defer wideRows.Close()
+			wideColumns, err := wideRows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, wideColumns, 1)
+			require.Contains(t, strings.ToUpper(wideColumns[0].DatabaseTypeName()), "INT")
+			require.True(t, wideRows.Next())
+			require.NoError(t, wideRows.Scan(&exact))
+			require.NoError(t, wideRows.Err())
+		}()
 		require.Equal(t, int64(9007199254740993), exact)
 
 		nestedArithmetic, err := db.PrepareContext(ctx, "select abs(? + 0)")
@@ -129,21 +131,35 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			ctx, int64(-9007199254740993)).Scan(&nestedCaseResult))
 		require.Equal(t, int64(9007199254740993), nestedCaseResult)
 
+		conditionOnlyCase, err := db.PrepareContext(ctx,
+			"select abs(case when ? then v else v end) from issue_27294_numeric_src")
+		require.NoError(t, err)
+		defer conditionOnlyCase.Close()
+		var conditionOnlyCaseResult int64
+		require.NoError(t, conditionOnlyCase.QueryRowContext(ctx, true).Scan(&conditionOnlyCaseResult))
+		require.Equal(t, int64(9007199254740993), conditionOnlyCaseResult,
+			"a control-flow-only parameter must not coerce BIGINT value branches to DOUBLE")
+
 		unsigned, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
 		defer unsigned.Close()
 		unsignedRows, err := unsigned.QueryContext(ctx, uint64(9007199254740993))
 		require.NoError(t, err)
-		unsignedColumns, err := unsignedRows.ColumnTypes()
-		require.NoError(t, err)
-		require.Len(t, unsignedColumns, 1)
-		require.Contains(t, strings.ToUpper(unsignedColumns[0].DatabaseTypeName()), "INT")
 		var unsignedResult uint64
-		require.True(t, unsignedRows.Next())
-		require.NoError(t, unsignedRows.Scan(&unsignedResult))
-		require.NoError(t, unsignedRows.Err())
-		require.NoError(t, unsignedRows.Close())
+		func() {
+			defer unsignedRows.Close()
+			unsignedColumns, err := unsignedRows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, unsignedColumns, 1)
+			require.Contains(t, strings.ToUpper(unsignedColumns[0].DatabaseTypeName()), "INT")
+			require.True(t, unsignedRows.Next())
+			require.NoError(t, unsignedRows.Scan(&unsignedResult))
+			require.NoError(t, unsignedRows.Err())
+		}()
 		require.Equal(t, uint64(9007199254740993), unsignedResult)
+		var maxUnsignedResult uint64
+		require.NoError(t, unsigned.QueryRowContext(ctx, uint64(math.MaxUint64)).Scan(&maxUnsignedResult))
+		require.Equal(t, uint64(math.MaxUint64), maxUnsignedResult)
 
 		minInt, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
@@ -158,15 +174,17 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		const decimalValue = "12345678901234567890123456789012345.6789"
 		decimalRows, err := decimal.QueryContext(ctx, decimalValue)
 		require.NoError(t, err)
-		decimalColumns, err := decimalRows.ColumnTypes()
-		require.NoError(t, err)
-		require.Len(t, decimalColumns, 1)
-		require.Contains(t, strings.ToUpper(decimalColumns[0].DatabaseTypeName()), "DECIMAL")
 		var decimalResult string
-		require.True(t, decimalRows.Next())
-		require.NoError(t, decimalRows.Scan(&decimalResult))
-		require.NoError(t, decimalRows.Err())
-		require.NoError(t, decimalRows.Close())
+		func() {
+			defer decimalRows.Close()
+			decimalColumns, err := decimalRows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, decimalColumns, 1)
+			require.Contains(t, strings.ToUpper(decimalColumns[0].DatabaseTypeName()), "DECIMAL")
+			require.True(t, decimalRows.Next())
+			require.NoError(t, decimalRows.Scan(&decimalResult))
+			require.NoError(t, decimalRows.Err())
+		}()
 		require.Equal(t, decimalValue, decimalResult)
 
 		subquery, err := db.PrepareContext(ctx, "select abs((select ?))")

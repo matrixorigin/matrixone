@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -378,6 +379,122 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	require.False(t, integerRule.allIntegerParamRefs(literalExpr("1")))
 	integerRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamFloat})
 	require.False(t, integerRule.allIntegerParamRefs(paramExpr(0)))
+}
+
+func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		expr *planpb.Expr
+		want bool
+	}{
+		{name: "float64 integral", expr: makePlan2Float64ConstExprWithType(12), want: true},
+		{name: "float32 integral", expr: makePlan2Float32ConstExprWithType(7), want: true},
+		{name: "fractional", expr: makePlan2Float64ConstExprWithType(1.25), want: false},
+		{name: "nan", expr: makePlan2Float64ConstExprWithType(math.NaN()), want: false},
+		{name: "infinity", expr: makePlan2Float64ConstExprWithType(math.Inf(1)), want: false},
+		{name: "non-float", expr: makePlan2Int64ConstExprWithType(1), want: false},
+		{name: "nil", expr: nil, want: false},
+	} {
+		t.Run("integral "+tc.name, func(t *testing.T) {
+			converted, ok := provisionalIntegralFloatLiteral(tc.expr)
+			require.Equal(t, tc.want, ok)
+			if tc.want {
+				require.Equal(t, int32(types.T_int64), converted.Typ.Id)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		expr *planpb.Expr
+		want bool
+	}{
+		{name: "float64 fractional", expr: makePlan2Float64ConstExprWithType(1.25), want: true},
+		{name: "float64 zero", expr: makePlan2Float64ConstExprWithType(0), want: true},
+		{name: "float32 fractional", expr: makePlan2Float32ConstExprWithType(1.5), want: true},
+		{name: "nan", expr: makePlan2Float64ConstExprWithType(math.NaN()), want: false},
+		{name: "infinity", expr: makePlan2Float64ConstExprWithType(math.Inf(1)), want: false},
+		{name: "non-float", expr: makePlan2Int64ConstExprWithType(1), want: false},
+		{name: "nil", expr: nil, want: false},
+	} {
+		t.Run("decimal "+tc.name, func(t *testing.T) {
+			converted, ok, err := provisionalDecimalFloatLiteral(ctx, tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+			if tc.want {
+				require.True(t, types.T(converted.Typ.Id).IsDecimal())
+			}
+		})
+	}
+
+	floatRule := NewResetParamRefRule(ctx, nil)
+	floatRule.SetParamValues([]any{ParamValue{
+		Value:            -1.5,
+		PrepareParamKind: vector.PrepareParamFloat,
+		HasRuntimeType:   true,
+		RuntimeType:      types.T_float64.ToType(),
+		RetainParamRef:   true,
+	}})
+	bound, ok, err := floatRule.typedRuntimeParamExpr(0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_float64), bound.Typ.Id)
+	require.Equal(t, int32(0), bound.GetLit().GetSrc().GetP().Pos)
+
+	boolRule := NewResetParamRefRule(ctx, []*planpb.Expr{{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Bval{Bval: true},
+		}},
+	}})
+	boolRule.SetParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
+	runtimeType, ok := boolRule.runtimeParamType(0)
+	require.True(t, ok)
+	require.Equal(t, types.T_bool, runtimeType.Oid)
+}
+
+func TestPreparedNumericRuntimeParamValueLiteralKinds(t *testing.T) {
+	params := []*planpb.Expr{
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: -8}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: -16}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: -32}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: -64}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U8Val{U8Val: 8}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U16Val{U16Val: 16}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U32Val{U32Val: 32}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 64}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Fval{Fval: 1.25}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 2.5}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}}},
+	}
+	wants := []any{
+		int8(-8), int16(-16), int32(-32), int64(-64),
+		uint8(8), uint16(16), uint32(32), uint64(64),
+		float32(1.25), float64(2.5), true,
+	}
+	rule := NewResetParamRefRule(context.Background(), params)
+	for pos, want := range wants {
+		value, _, ok := rule.runtimeParamValue(pos)
+		require.True(t, ok, "position %d", pos)
+		require.Equal(t, want, value, "position %d", pos)
+	}
+
+	nullRule := NewResetParamRefRule(context.Background(), []*planpb.Expr{{
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+	}})
+	value, _, ok := nullRule.runtimeParamValue(0)
+	require.True(t, ok)
+	require.Nil(t, value)
+	_, _, ok = nullRule.runtimeParamValue(-1)
+	require.False(t, ok)
+	_, _, ok = nullRule.runtimeParamValue(1)
+	require.False(t, ok)
+
+	runtimeType, ok := rule.runtimeParamType(3)
+	require.True(t, ok)
+	require.Equal(t, types.T_int64, runtimeType.Oid)
 }
 
 func floatTypeExprForTest() *planpb.Expr {

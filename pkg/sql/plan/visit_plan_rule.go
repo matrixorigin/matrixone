@@ -1013,21 +1013,6 @@ func (rule *ResetParamRefRule) allDecimalParamRefs(expr *plan.Expr) bool {
 	return true
 }
 
-func collectPlanParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
-	if expr == nil {
-		return
-	}
-	if param := expr.GetP(); param != nil && param.Pos >= 0 {
-		positions[param.Pos] = struct{}{}
-	}
-	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
-		if param := candidate.GetP(); param != nil && param.Pos >= 0 {
-			positions[param.Pos] = struct{}{}
-		}
-		return nil
-	})
-}
-
 // preparedNumericValueParamPosition returns the marker that contributes a
 // value to a numeric result expression.  Control-flow conditions are not
 // value operands: a CASE/IF marker can choose between BIGINT branches without
@@ -1203,7 +1188,6 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos in
 			for i, arg := range copy.GetF().Args {
 				if integral, integralOK := provisionalIntegralFloatLiteral(arg); integralOK {
 					copy.GetF().Args[i] = integral
-					changed = true
 				}
 			}
 		} else if runtimeType, ok := rule.runtimeParamType(pos); ok && runtimeType.Oid.IsDecimal() {
@@ -1212,7 +1196,6 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos in
 					return nil, false, decimalErr
 				} else if decimalOK {
 					copy.GetF().Args[i] = decimal
-					changed = true
 				}
 			}
 		}

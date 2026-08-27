@@ -852,16 +852,21 @@ func TestDecrementParamOrdinalRuleTraversesFunctionsAndLists(t *testing.T) {
 			}},
 		}},
 	}}}
+	expr.PreparedNumericFallback = true
+	expr.PreparedNumericParamPos = 3
 	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
 
 	_, err := rule.ApplyExpr(expr)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), first.GetP().Pos)
 	require.Equal(t, int32(2), second.GetP().Pos)
+	require.Equal(t, int32(2), expr.PreparedNumericParamPos)
 
 	_, err = rule.ApplyExpr(first)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), first.GetP().Pos)
+	require.Equal(t, int32(2), expr.PreparedNumericParamPos,
+		"the same fallback expression must be decremented only once")
 
 	expr.GetF().Args[0].GetList().List = append(
 		expr.GetF().Args[0].GetList().List,
