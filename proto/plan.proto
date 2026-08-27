@@ -1077,6 +1077,11 @@ message ForeignScan {
   string config = 2;
   // default_query is the 'query' table option ("" when not set).
   string default_query = 3;
+  // pushdown is true when the table opted into predicate pushdown with
+  // 'pushdown' = 'true' (SQL only).  The safe zero value is "no pushdown":
+  // MO then sends the query text verbatim, which is correct against any
+  // remote.
+  bool pushdown = 4;
 }
 
 // KafkaScan describes a scan of a Kafka external table (CREATE EXTERNAL
