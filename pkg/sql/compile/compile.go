@@ -1699,25 +1699,14 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
-		orderedGroupConcat := hasOrderedGroupConcat(node)
-		orderedSetPercentile := hasOrderedSetPercentile(node)
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
-		if orderedGroupConcat || orderedSetPercentile {
-			ss = c.compileOrderedAggregateSingleStage(node, ss, nodes)
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-			return ss, nil
-		}
-		if c.IsSingleScope(ss) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
-			return ss, nil
-		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node,
-				c.compileMergeGroup(node, ss, nodes, distinctRequiresSingleStage))))
-			return ss, nil
-		}
+		ss = c.compileGroupWithoutShuffle(
+			node, ss, nodes, distinctRequiresSingleStage)
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+		return ss, nil
 	case plan.Node_SAMPLE:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -6168,6 +6157,22 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
+func (c *Compile) compileGroupWithoutShuffle(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) {
+		return c.compileOrderedAggregateSingleStage(node, ss, ns)
+	}
+	if c.IsSingleScope(ss) {
+		return c.compileTPGroup(node, ss, ns)
+	}
+	return c.compileMergeGroup(
+		node, ss, ns, distinctRequiresSingleStage)
+}
+
 func (c *Compile) compileMergeGroup(
 	node *plan.Node,
 	ss []*Scope,
@@ -6447,6 +6452,18 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		}
 		c.anal.isFirst = false
 		return inputSS
+	}
+	// A normal shuffle is useful only when it creates more than one physical
+	// aggregate owner. In particular, max_dop=1 on one CN would otherwise hash
+	// every row into one bucket and add a dispatch/receiver pipeline with no
+	// reduction in retained aggregate state.
+	if node.Stats.Dop <= 1 && len(stageNodes) <= 1 {
+		return c.compileGroupWithoutShuffle(
+			node,
+			inputSS,
+			nodes,
+			plan2.RequiresSingleStageDistinctAgg(node),
+		)
 	}
 	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 && inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) {
 		return c.compileLocalShuffleGroup(node, inputSS, nodes)
