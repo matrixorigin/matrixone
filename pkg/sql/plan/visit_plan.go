@@ -216,6 +216,27 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	// LockRows is evaluated by LOCK_OP before the writer consumes the row
+	// batch. Prepared DML predicates can place a parameter-derived primary-key
+	// expression here; it must receive the same execute-time coercion as the
+	// scan filter or the lock path can still run the stale strict cast.
+	for _, target := range node.LockTargets {
+		if target == nil || target.LockRows == nil {
+			continue
+		}
+		originalLockRows := target.LockRows
+		target.LockRows, err = rule.ApplyExpr(originalLockRows)
+		if err != nil {
+			return err
+		}
+		if normalizer, ok := rule.(interface {
+			NormalizePreparedLockRows(*Expr, plan.Type) *Expr
+		}); ok {
+			target.LockRows = normalizer.NormalizePreparedLockRows(
+				target.LockRows, target.PrimaryColTyp)
+		}
+	}
+
 	for i := range node.OnUpdateExprs {
 		node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
 		if err != nil {
@@ -247,10 +268,24 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
+		preserveAssignmentCast := false
+		if preserver, ok := rule.(interface {
+			PreserveAssignmentCast(*Expr) bool
+		}); ok {
+			preserveAssignmentCast = preserver.PreserveAssignmentCast(e)
+		}
 		oldType := e.Typ
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err
+		}
+		// Some prepared DML expressions are the positional values consumed by
+		// the write operator.  A runtime specialization may replace nested
+		// parameters in those expressions, but it must not rebuild the outer
+		// assignment cast: that cast carries the target-column layout and SQL
+		// mode semantics for the write path.
+		if preserveAssignmentCast {
+			return e, nil
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
 			e, err = forceCastExpr2(ctx, e, typ, targetTyp)
