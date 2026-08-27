@@ -74,9 +74,10 @@ It intentionally does not provide:
 2. Every concurrent object task is completed by exactly one owner: a worker
    executes it, or executor shutdown rejects it. A rejected queued task must
    still release the caller's completion barrier.
-3. Admission and executor submission observe caller cancellation. Executor
-   shutdown cannot leave a producer blocked on a full queue or a caller waiting
-   for abandoned queued work.
+3. Admission and executor submission observe caller cancellation. The shared
+   traversal context also observes executor lifecycle cancellation, so shutdown
+   cannot leave a producer blocked on a full queue, a running S3 task using an
+   orphaned request, or a caller waiting for abandoned queued work.
 4. Unrelated tables normally remain parallel. A bounded hash-stripe collision
    may serialize refresh control work but cannot affect query execution.
 
@@ -196,7 +197,8 @@ The terminal behavior is:
 
 The shared object executor owns queued tasks only after successful admission.
 On normal operation, a worker removes a task and executes its callback. During
-executor shutdown, new submissions fail, workers stop after their current task,
+executor shutdown, new submissions fail, the executor lifecycle cancels the
+shared context used by already-running callbacks, workers join those callbacks,
 and a shutdown owner rejects every task left in the queue. Execution and
 rejection both invoke the caller-provided completion callback exactly once.
 
@@ -304,7 +306,7 @@ checks on affected plan-cache hits.
 | successful publication and exact returned object | engine publication-boundary UT |
 | failed engine refresh does not advance/cache | frontend publisher failure UT |
 | one successful and one failed object task rejects partial stats | concurrent visible-object UT |
-| pre-canceled and shutdown-rejected work terminates | executor/visible-object cancellation UT |
+| pre-canceled, in-flight canceled, and shutdown-rejected work terminates | executor/visible-object cancellation UT |
 | same-table refresh order; unrelated-table concurrency | frontend and engine admission race UT |
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
