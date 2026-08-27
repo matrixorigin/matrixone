@@ -64,30 +64,6 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
 }
 
-func (pc *planCache) cacheWithStatsVersions(
-	sql string,
-	stmts []tree.Statement,
-	plans []*plan.Plan,
-	statsVersions map[optimizerStatsTableKey]uint64,
-	versions ...int64,
-) {
-	pc.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
-		planStatsVersionsFromAggregate(len(plans), statsVersions), versions...)
-}
-
-func (pc *planCache) cacheWithPlanSnapshots(
-	sql string,
-	stmts []tree.Statement,
-	plans []*plan.Plan,
-	planSnapshotTS []timestamp.Timestamp,
-	versions ...int64,
-) {
-	pc.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS,
-		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
-}
-
 func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 	sql string,
 	stmts []tree.Statement,
