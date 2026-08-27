@@ -511,9 +511,13 @@ func (s *service) closeService() error {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
 		s.closeViewMetadataAdmission()
+		// Stop periodic heartbeats before publishing the final false readiness.
+		// QueryService remains available until the authoritative inventory has
+		// observed the withdrawal, so healthy CNs cannot target a closed barrier.
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(
+			s.withdrawDDLVisibilityBarrier,
 			// Query commands can reach frontend, task, engine, lock, shard,
 			// auto-increment, and transaction state. Stop and drain this remote
 			// ingress before clearing any of those dependencies.

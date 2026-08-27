@@ -16,24 +16,33 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/gossip"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 type ddlVisibilityTestCluster struct {
 	cnServices   []metadata.CNService
 	refreshCalls int
+	refreshHook  func()
 }
 
 func (c *ddlVisibilityTestCluster) GetCNService(
@@ -72,6 +81,9 @@ func (c *ddlVisibilityTestCluster) forEachCN(
 func (*ddlVisibilityTestCluster) ForceRefresh(bool) {}
 func (c *ddlVisibilityTestCluster) Refresh(context.Context) error {
 	c.refreshCalls++
+	if c.refreshHook != nil {
+		c.refreshHook()
+	}
 	return nil
 }
 func (*ddlVisibilityTestCluster) Close() {}
@@ -108,6 +120,110 @@ func (*ddlVisibilityTestQueryClient) NewRequest(method query.CmdMethod) *query.R
 }
 func (c *ddlVisibilityTestQueryClient) Release(*query.Response) { c.releases++ }
 func (*ddlVisibilityTestQueryClient) Close() error              { return nil }
+
+type ddlVisibilityWithdrawalHAKeeperClient struct {
+	logservice.CNHAKeeperClient
+	cluster               *ddlVisibilityTestCluster
+	queryClosed           <-chan struct{}
+	sendErr               error
+	heartbeats            []logservicepb.CNStoreHeartbeat
+	queryClosedBeforeSend bool
+	closeCalls            int
+}
+
+func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
+	_ context.Context,
+	hb logservicepb.CNStoreHeartbeat,
+) (logservicepb.CommandBatch, error) {
+	select {
+	case <-c.queryClosed:
+		c.queryClosedBeforeSend = true
+	default:
+	}
+	c.heartbeats = append(c.heartbeats, hb)
+	if c.sendErr != nil {
+		return logservicepb.CommandBatch{}, c.sendErr
+	}
+	for i := range c.cluster.cnServices {
+		cn := &c.cluster.cnServices[i]
+		if cn.ServiceID == hb.UUID {
+			cn.ViewMetadataAdmissionGeneration = hb.ViewMetadataAdmissionGeneration
+			cn.DDLVisibilityBarrierReady = hb.DDLVisibilityBarrierReady
+		}
+	}
+	return logservicepb.CommandBatch{}, nil
+}
+
+func (c *ddlVisibilityWithdrawalHAKeeperClient) Close() error {
+	c.closeCalls++
+	return nil
+}
+
+type ddlVisibilityCloseLockService struct {
+	lockservice.LockService
+	closeCalls int
+}
+
+func (s *ddlVisibilityCloseLockService) Close() error {
+	s.closeCalls++
+	return nil
+}
+
+type ddlVisibilityCloseTestState struct {
+	service                  *service
+	hakeeperClient           *ddlVisibilityWithdrawalHAKeeperClient
+	queryService             *closeRecordingQueryService
+	lockService              *ddlVisibilityCloseLockService
+	cluster                  *ddlVisibilityTestCluster
+	queryClosedBeforeRefresh bool
+}
+
+func newDDLVisibilityCloseTestService(t *testing.T, sendErr error) *ddlVisibilityCloseTestState {
+	t.Helper()
+	const generation = uint64(7)
+	moruntime.SetupServiceBasedRuntime(t.Name(), moruntime.DefaultRuntime())
+	gossipNode, err := gossip.NewNode(context.Background(), t.Name())
+	require.NoError(t, err)
+	cfg := &Config{UUID: t.Name()}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	state := &ddlVisibilityCloseTestState{
+		queryService: &closeRecordingQueryService{closed: make(chan struct{})},
+		lockService:  &ddlVisibilityCloseLockService{},
+		cluster: &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+			ServiceID: t.Name(), QueryAddress: "self:6001",
+			ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		}}},
+	}
+	state.cluster.refreshHook = func() {
+		select {
+		case <-state.queryService.closed:
+			state.queryClosedBeforeRefresh = true
+		default:
+		}
+	}
+	state.hakeeperClient = &ddlVisibilityWithdrawalHAKeeperClient{
+		cluster: state.cluster, queryClosed: state.queryService.closed, sendErr: sendErr,
+	}
+	state.service = &service{
+		cfg:                             cfg,
+		logger:                          zap.NewNop(),
+		stopper:                         stopper.NewStopper("ddl-visibility-close-test"),
+		_hakeeperClient:                 state.hakeeperClient,
+		moCluster:                       state.cluster,
+		queryService:                    state.queryService,
+		mo:                              closeErrorMOServer{},
+		cancelMoServerFunc:              func() {},
+		server:                          closeOnlyRPCServer{},
+		lockService:                     state.lockService,
+		gossipNode:                      gossipNode,
+		config:                          util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: generation,
+	}
+	state.service.viewMetadataIngressReady.Store(true)
+	state.service.ddlVisibilityBarrierReady.Store(true)
+	return state
+}
 
 func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 	const serviceID = "ddl-visibility-startup-test"
@@ -160,7 +276,7 @@ func TestPrepareDDLVisibilityBarrierRejectsMissingProductionDependencies(t *test
 
 	err := s.prepareDDLVisibilityBarrier()
 	require.ErrorContains(t, err, "dependencies are unavailable")
-	require.True(t, s.ddlVisibilityBarrierReady.Load())
+	require.False(t, s.ddlVisibilityBarrierReady.Load())
 }
 
 func TestPrepareDDLVisibilityBarrierSkipsFrontierSyncDuringRollingUpgrade(t *testing.T) {
@@ -185,6 +301,79 @@ func TestWaitForDDLVisibilityBarrierPublicationHonorsCancellation(t *testing.T) 
 	defer cancel()
 
 	err := s.waitForDDLVisibilityBarrierPublication(ctx, time.Second)
+	require.Error(t, err)
+	require.Equal(t, 1, cluster.refreshCalls)
+}
+
+func TestServiceCloseWithdrawsDDLVisibilityBeforeQueryService(t *testing.T) {
+	state := newDDLVisibilityCloseTestService(t, nil)
+
+	require.NoError(t, state.service.Close())
+	require.False(t, state.hakeeperClient.queryClosedBeforeSend)
+	require.False(t, state.queryClosedBeforeRefresh)
+	require.Len(t, state.hakeeperClient.heartbeats, 1)
+	require.False(t, state.hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
+	require.False(t, state.hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
+	require.Equal(t, 1, state.cluster.refreshCalls)
+	require.False(t, state.cluster.cnServices[0].DDLVisibilityBarrierReady)
+	require.Equal(t, 1, state.hakeeperClient.closeCalls)
+	require.Equal(t, 2, state.lockService.closeCalls)
+	select {
+	case <-state.queryService.closed:
+	default:
+		t.Fatal("QueryService was not closed after authoritative barrier withdrawal")
+	}
+}
+
+func TestServiceCloseContinuesAfterDDLVisibilityWithdrawalFailure(t *testing.T) {
+	withdrawErr := errors.New("withdraw heartbeat failed")
+	state := newDDLVisibilityCloseTestService(t, withdrawErr)
+
+	err := state.service.Close()
+	require.ErrorIs(t, err, withdrawErr)
+	require.False(t, state.hakeeperClient.queryClosedBeforeSend)
+	require.Len(t, state.hakeeperClient.heartbeats, 1)
+	require.Zero(t, state.cluster.refreshCalls)
+	require.Equal(t, 1, state.hakeeperClient.closeCalls)
+	require.Equal(t, 2, state.lockService.closeCalls)
+	select {
+	case <-state.queryService.closed:
+	default:
+		t.Fatal("QueryService cleanup was skipped after barrier withdrawal failure")
+	}
+}
+
+func TestWaitForDDLVisibilityBarrierWithdrawalAcceptsNewerGeneration(t *testing.T) {
+	const serviceID = "ddl-visibility-newer-generation-test"
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, ViewMetadataAdmissionGeneration: 8,
+		DDLVisibilityBarrierReady: true,
+	}}}
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		moCluster:                       cluster,
+		viewMetadataAdmissionGeneration: 7,
+	}
+
+	require.NoError(t, s.waitForDDLVisibilityBarrierWithdrawal(context.Background(), time.Second))
+	require.Equal(t, 1, cluster.refreshCalls)
+}
+
+func TestWaitForDDLVisibilityBarrierWithdrawalHonorsCancellation(t *testing.T) {
+	const serviceID = "ddl-visibility-withdrawal-timeout-test"
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, ViewMetadataAdmissionGeneration: 7,
+		DDLVisibilityBarrierReady: true,
+	}}}
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		moCluster:                       cluster,
+		viewMetadataAdmissionGeneration: 7,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	err := s.waitForDDLVisibilityBarrierWithdrawal(ctx, time.Second)
 	require.Error(t, err)
 	require.Equal(t, 1, cluster.refreshCalls)
 }

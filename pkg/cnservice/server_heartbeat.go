@@ -185,15 +185,7 @@ func (s *service) notifyCommandPoll() {
 	}
 }
 
-func (s *service) heartbeat(ctx context.Context) {
-	start := time.Now()
-	defer func() {
-		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
-	defer cancel()
-
+func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:                s.cfg.UUID,
 		ServiceAddress:      s.pipelineServiceServiceAddr(),
@@ -227,7 +219,19 @@ func (s *service) heartbeat(ctx context.Context) {
 		hb.GossipAddress = s.gossipServiceAddr()
 		hb.GossipJoined = s.gossipNode.Joined()
 	}
+	return hb
+}
 
+func (s *service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
+	defer cancel()
+
+	hb := s.newCNStoreHeartbeat()
 	s.heartbeatInFlight.Store(true)
 	s.notifyCommandPoll()
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)

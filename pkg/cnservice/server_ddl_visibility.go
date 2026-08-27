@@ -38,19 +38,20 @@ func ddlVisibilityBarrierSupported(serviceID string) bool {
 // frontier held by the already-published barrier participants before public
 // SQL ingress can be admitted.
 func (s *service) prepareDDLVisibilityBarrier() error {
+	supported := ddlVisibilityBarrierSupported(s.cfg.UUID)
+	if supported && (s.moCluster == nil || s.queryClient == nil || s._txnClient == nil) {
+		// Focused service tests may construct only the dependencies relevant to
+		// their lifecycle assertion. Production NewService initializes a non-zero
+		// admission generation together with all three barrier dependencies.
+		if s.viewMetadataAdmissionGeneration != 0 {
+			return moerr.NewInternalErrorNoCtx("DDL visibility barrier dependencies are unavailable")
+		}
+	}
+
 	s.ddlVisibilityBarrierReady.Store(true)
 	s.notifyHeartbeat()
-	if !ddlVisibilityBarrierSupported(s.cfg.UUID) {
+	if !supported || s.moCluster == nil || s.queryClient == nil || s._txnClient == nil {
 		return nil
-	}
-	// Focused service tests may construct only the dependencies relevant to
-	// their lifecycle assertion. Production NewService initializes a non-zero
-	// admission generation together with all three barrier dependencies.
-	if s.moCluster == nil || s.queryClient == nil || s._txnClient == nil {
-		if s.viewMetadataAdmissionGeneration == 0 {
-			return nil
-		}
-		return moerr.NewInternalErrorNoCtx("DDL visibility barrier dependencies are unavailable")
 	}
 
 	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
@@ -68,6 +69,92 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 		return err
 	}
 	return s.syncStartupDDLVisibilityFrontier(ctx)
+}
+
+// withdrawDDLVisibilityBarrier closes both externally published gates before
+// QueryService is stopped. closeService invokes it only after the periodic
+// heartbeat task has terminated, so no previously captured ready heartbeat can
+// overwrite this final withdrawal.
+func (s *service) withdrawDDLVisibilityBarrier() error {
+	ingressWasReady := s.viewMetadataIngressReady.Swap(false)
+	barrierWasReady := s.ddlVisibilityBarrierReady.Swap(false)
+	if !ingressWasReady && !barrierWasReady {
+		return nil
+	}
+	if s.viewMetadataAdmissionGeneration == 0 {
+		return nil
+	}
+	if s.cfg == nil || s._hakeeperClient == nil || s.moCluster == nil || s.config == nil {
+		return moerr.NewInternalErrorNoCtx("DDL visibility barrier withdrawal dependencies are unavailable")
+	}
+
+	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	retryInterval := s.cfg.HAKeeper.HeatbeatInterval.Duration
+	if retryInterval < minClusterReadinessRetryInterval {
+		retryInterval = minClusterReadinessRetryInterval
+	}
+	return s.waitForDDLVisibilityBarrierWithdrawal(ctx, retryInterval)
+}
+
+func (s *service) waitForDDLVisibilityBarrierWithdrawal(
+	ctx context.Context,
+	retryInterval time.Duration,
+) error {
+	refresher, ok := s.moCluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"CN cluster service does not support authoritative DDL visibility refresh")
+	}
+
+	for {
+		if err := refresher.Refresh(ctx); err == nil {
+			withdrawn := true
+			err = clusterservice.GetCNServiceRawWithContext(
+				ctx,
+				s.moCluster,
+				clusterservice.NewServiceIDSelector(s.cfg.UUID),
+				func(cn metadata.CNService) bool {
+					if cn.ViewMetadataAdmissionGeneration < s.viewMetadataAdmissionGeneration ||
+						(cn.ViewMetadataAdmissionGeneration == s.viewMetadataAdmissionGeneration &&
+							cn.DDLVisibilityBarrierReady) {
+						withdrawn = false
+					}
+					return false
+				})
+			if err != nil {
+				return err
+			}
+			if withdrawn {
+				return nil
+			}
+		}
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return moerr.NewInternalErrorf(
+				context.Background(),
+				"CN %s DDL visibility barrier was not withdrawn before shutdown deadline: %v",
+				s.cfg.UUID,
+				ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *service) waitForDDLVisibilityBarrierPublication(
