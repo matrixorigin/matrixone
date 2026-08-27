@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -76,6 +77,15 @@ func currentProtocolVersion(proc *process.Process) int64 {
 		return defines.MORPCVersion4
 	}
 	return version
+}
+
+// reusablePlanGenerationSupported reports whether every live service in the
+// rollout understands the logical-plan generation snapshot carried by remote
+// pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest
+// live service, so cross-transaction plan reuse must remain disabled until the
+// version 32 wire contract is active cluster-wide.
+func reusablePlanGenerationSupported(proc *process.Process) bool {
+	return currentProtocolVersion(proc) >= defines.MORPCVersion32
 }
 
 func init() {
@@ -1428,6 +1438,17 @@ func (ses *Session) IsBackgroundSession() bool {
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	ses.cachePlanWithSnapshots(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
 		return
 	}
@@ -1441,7 +1462,7 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cache(sql, stmts, plans, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshots(sql, stmts, plans, planSnapshotTS, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -1481,6 +1502,40 @@ func (ses *Session) removeCachedPlan(sql string) {
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.remove(sql)
+	}
+}
+
+func (ses *Session) updateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+) bool {
+	if len(sql) == 0 {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
+	return ses.planCache.updatePlanGeneration(
+		sql, index, expectedPlan, newPlan, planSnapshotTS)
+}
+
+func (ses *Session) invalidateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidatePlanGeneration(sql, index, expectedPlan)
 	}
 }
 
