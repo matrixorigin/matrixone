@@ -218,7 +218,7 @@ ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, column_name from key_column_usage where table_schema = '__nonexistent_schema__' limit 2;
 ➤ table_name[12,64,0]  ¦  column_name[12,64,0]
 desc columns;
