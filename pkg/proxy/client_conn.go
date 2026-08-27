@@ -1042,6 +1042,18 @@ func (c *clientConn) connectToBackendContext(
 						return nil, cause
 					}
 				}
+				if sc != nil {
+					// USE is the final control read before this cached backend is
+					// handed to the long-lived tunnel. Clear its phase deadline so
+					// normal tunnel traffic is not terminated by the restore timeout.
+					if err := clearServerConnReadDeadline(sc); err != nil {
+						_ = sc.Close()
+						sc = nil
+						if cause := operationContextCause(ctx); cause != nil {
+							return nil, cause
+						}
+					}
+				}
 			}
 		}
 		if sc != nil {
