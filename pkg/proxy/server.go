@@ -17,6 +17,8 @@ package proxy
 import (
 	"context"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -51,10 +54,11 @@ const (
 )
 
 type Server struct {
-	runtime runtime.Runtime
-	stopper *stopper.Stopper
-	config  Config
-	app     goetty.NetApplication
+	runtime  runtime.Runtime
+	stopper  *stopper.Stopper
+	config   Config
+	app      goetty.NetApplication
+	listener net.Listener
 
 	// handler handles the client connection.
 	handler *handler
@@ -62,14 +66,31 @@ type Server struct {
 	counterSet     *counterSet
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
-	configData *util.ConfigData
-	test       bool
+	configData                      *util.ConfigData
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataObservedEpoch       atomic.Uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataHeartbeatWakeup     chan struct{}
+	viewMetadataAdmissionContext    context.Context
+	viewMetadataAdmissionCancel     context.CancelFunc
+	viewMetadataRevocationOnce      sync.Once
+	viewMetadataCloseFn             func() error
+	lifecycleMu                     sync.Mutex
+	started                         bool
+	closed                          bool
+	closeOnce                       sync.Once
+	closeErr                        error
+	test                            bool
 }
 
 // NewServer creates the proxy server.
 //
 // NB: runtime must be included in opts.
 func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	config.FillDefault()
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -84,9 +105,32 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		config:     config,
 		counterSet: newCounterSet(),
 	}
+	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
+	initialized := false
+	statsRegistered := false
+	haKeeperClientOwned := false
+	defer func() {
+		if initialized {
+			return
+		}
+		s.viewMetadataAdmissionCancel()
+		_ = s.closeIngress()
+		if s.handler != nil {
+			_ = s.handler.Close()
+		} else if haKeeperClientOwned && s.haKeeperClient != nil {
+			_ = s.haKeeperClient.Close()
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		if statsRegistered {
+			stats.Unregister(statsFamilyName)
+		}
+	}()
 	for _, opt := range opts {
 		opt(s)
 	}
+	haKeeperClientOwned = s.haKeeperClient != nil
 	if s.runtime == nil {
 		panic("runtime of proxy is not set")
 	}
@@ -100,6 +144,10 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		if err != nil {
 			return nil, err
 		}
+		haKeeperClientOwned = true
+	}
+	if err = s.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
 	}
 
 	logExporter := newCounterLogExporter(s.counterSet)
@@ -107,6 +155,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	// (e.g., from a previous test run or failed initialization).
 	stats.Unregister(statsFamilyName)
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
+	statsRegistered = true
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
 	h, err := newProxyHandler(
@@ -122,15 +171,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 
+	s.handler = h
+	haKeeperClientOwned = false
 	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
 
-	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
-		return nil, err
-	}
-
-	s.handler = h
 	listener, err := newProxyListener(config.ListenAddress)
 	if err != nil {
 		return nil, err
@@ -162,6 +208,14 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 	s.app = app
+	s.listener = listener
+
+	// Admission may revoke this generation immediately, so publish every ingress
+	// resource before the first heartbeat can observe an authoritative response.
+	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
+		return nil, err
+	}
+	initialized = true
 	return s, nil
 }
 
@@ -233,19 +287,51 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
+	if err := s.waitForViewMetadataAdmission(s.viewMetadataAdmissionContext); err != nil {
+		return err
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return moerr.NewInternalErrorNoCtx("proxy server is closed")
+	}
 	err := s.app.Start()
 	if err != nil {
 		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))
 	} else {
+		s.started = true
 		s.runtime.Logger().Info("proxy server started")
 	}
 	return err
 }
 
+func (s *Server) closeIngress() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.closed = true
+	if !s.started && s.listener != nil {
+		_ = s.listener.Close()
+	}
+	if s.app != nil {
+		return s.app.Stop()
+	}
+	return nil
+}
+
 // Close closes the proxy server.
 func (s *Server) Close() error {
-	_ = s.handler.Close()
-	s.stopper.Stop()
-	stats.Unregister(statsFamilyName)
-	return s.app.Stop()
+	s.closeOnce.Do(func() {
+		if s.viewMetadataAdmissionCancel != nil {
+			s.viewMetadataAdmissionCancel()
+		}
+		s.closeErr = s.closeIngress()
+		if s.handler != nil {
+			_ = s.handler.Close()
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		stats.Unregister(statsFamilyName)
+	})
+	return s.closeErr
 }

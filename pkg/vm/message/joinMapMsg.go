@@ -641,7 +641,7 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 		return nil, err
 	}
 	if buildErr := result.BuildError(); buildErr != nil {
-		return nil, buildErr.AsMoErr()
+		return nil, buildErr.AsError()
 	}
 	return result.JoinMap(), nil
 }
@@ -677,9 +677,11 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			}
 			jm := result.JoinMap()
 			if result.IsBuildError() {
-				if result.BuildError().IsCancellation() {
+				buildErr := result.BuildError()
+				if errors.Is(buildErr, context.Canceled) ||
+					errors.Is(buildErr, context.DeadlineExceeded) {
 					if err := resolveJoinMapCancellation(
-						ctx, result.Err(), result.BuildError().wasDeadline,
+						ctx, result.Err(), errors.Is(buildErr, context.DeadlineExceeded),
 					); err != result.Err() {
 						return JoinMapResult{}, err
 					}
@@ -712,7 +714,7 @@ func resolveJoinMapCancellation(ctx context.Context, err error, preserveDeadline
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	if cause := firstJoinMapSubstantiveError(context.Cause(ctx)); cause != nil {
+	if cause := firstSubstantiveMoErr(context.Cause(ctx)); cause != nil {
 		return cause
 	}
 	return err

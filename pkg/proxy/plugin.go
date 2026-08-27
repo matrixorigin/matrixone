@@ -18,10 +18,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -33,6 +35,50 @@ type pluginRouter struct {
 	Router
 	// plugin is the plugin that is used to select CN server
 	plugin Plugin
+}
+
+func (r *pluginRouter) admittedPluginCN(
+	selected *metadata.CNService,
+	ci clientInfo,
+) (*CNServer, bool) {
+	if selected == nil {
+		return nil, false
+	}
+	base, ok := r.Router.(*router)
+	if !ok || base.moCluster == nil {
+		// Test/plugin adapters without the production cluster router retain the
+		// existing contract. Production always takes the branch below.
+		return &CNServer{
+			reqLabel: ci.labelInfo,
+			cnLabel:  selected.Labels,
+			uuid:     selected.ServiceID,
+			addr:     selected.SQLAddress,
+			hash:     ci.hash,
+		}, true
+	}
+	var current metadata.CNService
+	found := false
+	base.moCluster.GetCNService(
+		clusterservice.NewServiceIDSelector(selected.ServiceID),
+		func(service metadata.CNService) bool {
+			if service.SQLAddress == selected.SQLAddress {
+				current = service
+				found = true
+			}
+			return false
+		},
+	)
+	if !found {
+		return nil, false
+	}
+	return &CNServer{
+		reqLabel:            ci.labelInfo,
+		cnLabel:             current.Labels,
+		uuid:                current.ServiceID,
+		addr:                current.SQLAddress,
+		hash:                ci.hash,
+		admissionGeneration: current.ViewMetadataAdmissionGeneration,
+	}, true
 }
 
 func newPluginRouter(sid string, r Router, p Plugin) *pluginRouter {
@@ -102,14 +148,15 @@ func (r *pluginRouter) RouteForTransfer(
 			}
 			return r.Router.Route(ctx, sid, ci, filter)
 		}
+		cn, admitted := r.admittedPluginCN(re.CN, ci)
+		if !admitted {
+			if rr, ok := r.Router.(transferRouter); ok {
+				return rr.RouteForTransfer(ctx, sid, ci, filter)
+			}
+			return r.Router.Route(ctx, sid, ci, filter)
+		}
 		v2.ProxyConnectSelectCounter.Inc()
-		return &CNServer{
-			reqLabel: ci.labelInfo,
-			cnLabel:  re.CN.Labels,
-			uuid:     re.CN.ServiceID,
-			addr:     re.CN.SQLAddress,
-			hash:     ci.hash,
-		}, nil
+		return cn, nil
 	case plugin.Reject:
 		v2.ProxyConnectRejectCounter.Inc()
 		return nil, withCode(moerr.NewInfoNoCtx(re.Message), codeAuthFailed)
@@ -153,14 +200,11 @@ func (r *pluginRouter) Route(
 		if filter != nil && filter(re.CN.SQLAddress) {
 			return r.Router.Route(ctx, sid, ci, filter)
 		}
-		v2.ProxyConnectSelectCounter.Inc()
-		cn := &CNServer{
-			reqLabel: ci.labelInfo,
-			cnLabel:  re.CN.Labels,
-			uuid:     re.CN.ServiceID,
-			addr:     re.CN.SQLAddress,
-			hash:     ci.hash,
+		cn, admitted := r.admittedPluginCN(re.CN, ci)
+		if !admitted {
+			return r.Router.Route(ctx, sid, ci, filter)
 		}
+		v2.ProxyConnectSelectCounter.Inc()
 		// In plugin mode, a plugin-selected CN must still honor the same
 		// breaker/probe gate as normal routing: a CN in active cooldown should
 		// be skipped, an expired breaker should get at most one half-open

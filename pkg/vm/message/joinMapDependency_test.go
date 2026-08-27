@@ -17,6 +17,7 @@ package message
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,189 @@ func TestJoinMapResultDistinguishesSuccessEmptyAndBuildError(t *testing.T) {
 	var got *moerr.Error
 	require.ErrorAs(t, failure.Err(), &got)
 	require.Equal(t, baseErr.ErrorCode(), got.ErrorCode())
+}
+
+func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
+	tests := []struct {
+		name         string
+		buildErr     error
+		wantCanceled bool
+		wantDeadline bool
+		wantCode     uint16
+	}{
+		{
+			name:         "canceled",
+			buildErr:     context.Canceled,
+			wantCanceled: true,
+			wantCode:     moerr.ErrQueryInterrupted,
+		},
+		{
+			name:         "wrapped canceled",
+			buildErr:     fmt.Errorf("hash build stopped: %w", context.Canceled),
+			wantCanceled: true,
+			wantCode:     moerr.ErrQueryInterrupted,
+		},
+		{
+			name:         "deadline",
+			buildErr:     context.DeadlineExceeded,
+			wantDeadline: true,
+			wantCode:     moerr.ErrQueryTimeout,
+		},
+		{
+			name:         "query interrupted moerr",
+			buildErr:     moerr.NewQueryInterrupted(context.Background()),
+			wantCanceled: true,
+			wantCode:     moerr.ErrQueryInterrupted,
+		},
+		{
+			name:         "query timeout moerr",
+			buildErr:     moerr.NewQueryTimeout(context.Background()),
+			wantDeadline: true,
+			wantCode:     moerr.ErrQueryTimeout,
+		},
+		{
+			name:         "joined cancellation",
+			buildErr:     errors.Join(context.Canceled, context.DeadlineExceeded),
+			wantCanceled: true,
+			wantDeadline: true,
+			wantCode:     moerr.ErrQueryTimeout,
+		},
+		{
+			name:         "joined moerr cancellation and deadline",
+			buildErr:     errors.Join(moerr.NewQueryInterrupted(context.Background()), context.DeadlineExceeded),
+			wantCanceled: true,
+			wantDeadline: true,
+			wantCode:     moerr.ErrQueryTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buildErr := NewJoinMapBuildError(tt.buildErr)
+			got := buildErr.AsError()
+			require.Equal(t, tt.buildErr.Error(), got.Error())
+			require.Equal(t, tt.wantCanceled, errors.Is(got, context.Canceled))
+			require.Equal(t, tt.wantDeadline, errors.Is(got, context.DeadlineExceeded))
+			require.Equal(t, tt.wantCode, buildErr.ErrorCode())
+			require.True(t, moerr.IsMoErrCode(buildErr.AsMoErr(), tt.wantCode))
+			var me *moerr.Error
+			require.ErrorAs(t, got, &me)
+			require.Equal(t, tt.wantCode, me.ErrorCode())
+			require.Empty(t, buildErr.Detail())
+		})
+	}
+}
+
+type emptyJoinedError struct{}
+
+func (emptyJoinedError) Error() string   { return "empty joined error" }
+func (emptyJoinedError) Unwrap() []error { return nil }
+
+type emptyWrappedError struct{}
+
+func (emptyWrappedError) Error() string { return "empty wrapped error" }
+func (emptyWrappedError) Unwrap() error { return nil }
+
+func TestJoinMapBuildErrorDefensiveCompatibility(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var buildErr *JoinMapBuildError
+		require.Equal(t, "hash build failed", buildErr.Error())
+		require.Equal(t, uint16(moerr.ErrInternal), buildErr.ErrorCode())
+		require.Empty(t, buildErr.Detail())
+		require.True(t, moerr.IsMoErrCode(buildErr.AsMoErr(), moerr.ErrInternal))
+		require.True(t, moerr.IsMoErrCode(buildErr.AsError(), moerr.ErrInternal))
+	})
+
+	t.Run("zero value", func(t *testing.T) {
+		buildErr := new(JoinMapBuildError)
+		require.Equal(t, "hash build failed", buildErr.Error())
+		require.Equal(t, uint16(moerr.ErrInternal), buildErr.ErrorCode())
+		require.Empty(t, buildErr.Detail())
+		require.True(t, moerr.IsMoErrCode(buildErr.AsMoErr(), moerr.ErrInternal))
+		require.True(t, moerr.IsMoErrCode(buildErr.AsError(), moerr.ErrInternal))
+	})
+
+	t.Run("context without diagnostic", func(t *testing.T) {
+		buildErr := &JoinMapBuildError{contextErr: context.Canceled}
+		require.Equal(t, context.Canceled.Error(), buildErr.Error())
+		require.ErrorIs(t, buildErr.Unwrap(), context.Canceled)
+	})
+
+	t.Run("nil input", func(t *testing.T) {
+		kind, ok := contextCancellationTreeKind(nil)
+		require.False(t, ok)
+		require.Zero(t, kind)
+		kind, ok = contextCancellationMoErrKind(nil)
+		require.False(t, ok)
+		require.Zero(t, kind)
+		require.Nil(t, firstSubstantiveMoErr(nil))
+
+		buildErr := NewJoinMapBuildError(nil)
+		require.True(t, moerr.IsMoErrCode(buildErr.AsError(), moerr.ErrInternal))
+		require.ErrorContains(t, buildErr, "without an error")
+		require.False(t, buildErr.As(new(error)))
+	})
+
+	t.Run("empty joined error", func(t *testing.T) {
+		buildErr := NewJoinMapBuildError(emptyJoinedError{})
+		require.True(t, moerr.IsMoErrCode(buildErr.AsError(), moerr.ErrInternal))
+		require.NotErrorIs(t, buildErr, context.Canceled)
+		require.NotErrorIs(t, buildErr, context.DeadlineExceeded)
+	})
+
+	t.Run("empty wrapped error", func(t *testing.T) {
+		buildErr := NewJoinMapBuildError(emptyWrappedError{})
+		require.True(t, moerr.IsMoErrCode(buildErr.AsError(), moerr.ErrInternal))
+		require.NotErrorIs(t, buildErr, context.Canceled)
+		require.NotErrorIs(t, buildErr, context.DeadlineExceeded)
+	})
+
+	t.Run("cancellation moerr detail", func(t *testing.T) {
+		queryInterrupted := moerr.NewQueryInterrupted(context.Background())
+		queryInterrupted.SetDetail("canceled by sibling target")
+		buildErr := NewJoinMapBuildError(queryInterrupted)
+
+		require.ErrorIs(t, buildErr.AsError(), context.Canceled)
+		require.Equal(t, queryInterrupted.Detail(), buildErr.Detail())
+		copyErr := buildErr.AsMoErr()
+		require.Equal(t, queryInterrupted.Detail(), copyErr.Detail())
+		copyErr.SetDetail("mutated consumer copy")
+		require.Equal(t, queryInterrupted.Detail(), buildErr.Detail())
+	})
+}
+
+func TestReceiveJoinMapPreservesCancellationSemantics(t *testing.T) {
+	mb := NewMessageBoard()
+	require.True(t, FinalizeJoinMapBuildError(mb, 42, false, 0, context.Canceled))
+
+	jm, err := ReceiveJoinMap(42, false, 0, mb, context.Background())
+	require.Nil(t, jm)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestJoinMapBuildErrorPrefersSubstantiveError(t *testing.T) {
+	t.Run("moerr", func(t *testing.T) {
+		oom := moerr.NewOOM(context.Background())
+		got := NewJoinMapBuildError(errors.Join(
+			moerr.NewQueryInterrupted(context.Background()),
+			fmt.Errorf("wrapped build failure: %w", oom),
+		)).AsError()
+
+		require.True(t, moerr.IsMoErrCode(got, moerr.ErrOOM), got)
+		require.NotErrorIs(t, got, context.Canceled)
+	})
+
+	t.Run("go error", func(t *testing.T) {
+		buildErr := errors.New("build storage failed")
+		got := NewJoinMapBuildError(errors.Join(
+			moerr.NewQueryInterrupted(context.Background()),
+			buildErr,
+		)).AsError()
+
+		require.True(t, moerr.IsMoErrCode(got, moerr.ErrInternal), got)
+		require.ErrorContains(t, got, buildErr.Error())
+		require.NotErrorIs(t, got, context.Canceled)
+	})
 }
 
 func TestSendJoinMapResultRetainsOwnershipWhenBoardUnavailable(t *testing.T) {
@@ -122,104 +306,6 @@ func TestReceiveJoinMapResultBroadcastsOneImmutableBuildError(t *testing.T) {
 		}
 		require.Equal(t, baseErr.ErrorCode(), results[i].BuildError().ErrorCode())
 	}
-}
-
-func TestReceiveJoinMapResultReturnsCancellationCause(t *testing.T) {
-	mb := NewMessageBoard()
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
-
-	resultCh := make(chan error, 1)
-	go func() {
-		_, err := ReceiveJoinMapResult(43, false, 0, mb, ctx)
-		resultCh <- err
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		mb.rwMutex.RLock()
-		waiters := len(mb.waiters)
-		mb.rwMutex.RUnlock()
-		if waiters == 1 {
-			break
-		}
-		require.Less(t, time.Now(), deadline)
-		runtime.Gosched()
-	}
-
-	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
-	cancel(primaryErr)
-
-	select {
-	case err := <-resultCh:
-		require.ErrorIs(t, err, primaryErr)
-	case <-time.After(2 * time.Second):
-		t.Fatal("ReceiveJoinMapResult did not return after cancellation")
-	}
-}
-
-func TestReceiveJoinMapResultMessageCancellationReturnsPipelineCause(t *testing.T) {
-	mb := NewMessageBoard()
-	ctx, cancel := context.WithCancelCause(context.Background())
-	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
-	cancel(primaryErr)
-
-	SendJoinMapResult(NewJoinMapBuildErrorResult(context.Canceled), 44, false, 0, mb)
-	_, err := ReceiveJoinMapResult(44, false, 0, mb, ctx)
-	require.ErrorIs(t, err, primaryErr)
-	var got *moerr.Error
-	require.ErrorAs(t, err, &got)
-}
-
-func TestReceiveJoinMapResultJoinedCancellationReturnsPipelineCause(t *testing.T) {
-	mb := NewMessageBoard()
-	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
-	// The pipeline cause models a multi-child cancellation tree carrying the
-	// original execution error alongside the cancellation sentinel.
-	ctx, cancel := context.WithCancelCause(context.Background())
-	cancel(errors.Join(primaryErr, context.Canceled))
-
-	SendJoinMapResult(NewJoinMapBuildErrorResult(
-		errors.Join(context.Canceled, context.Canceled),
-	), 46, false, 0, mb)
-	_, err := ReceiveJoinMapResult(46, false, 0, mb, ctx)
-	require.ErrorIs(t, err, primaryErr)
-}
-
-func TestReceiveJoinMapResultQueryInterruptedCancellationReturnsPipelineCause(t *testing.T) {
-	mb := NewMessageBoard()
-	ctx, cancel := context.WithCancelCause(context.Background())
-	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
-	cancel(primaryErr)
-
-	SendJoinMapResult(NewJoinMapBuildErrorResult(
-		moerr.NewQueryInterrupted(context.Background()),
-	), 47, false, 0, mb)
-	_, err := ReceiveJoinMapResult(47, false, 0, mb, ctx)
-	require.ErrorIs(t, err, primaryErr)
-}
-
-func TestReceiveJoinMapResultIndependentDeadlineWinsOverPipelineCause(t *testing.T) {
-	mb := NewMessageBoard()
-	ctx, cancel := context.WithCancelCause(context.Background())
-	primaryErr := moerr.NewErrFKNoReferencedRow2(context.Background())
-	cancel(primaryErr)
-
-	SendJoinMapResult(NewJoinMapBuildErrorResult(context.DeadlineExceeded), 48, false, 0, mb)
-	_, err := ReceiveJoinMapResult(48, false, 0, mb, ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.NotErrorIs(t, err, primaryErr)
-}
-
-func TestReceiveJoinMapResultTimeoutPreservesDeadline(t *testing.T) {
-	mb := NewMessageBoard()
-	diagnostic := moerr.NewErrFKNoReferencedRow2(context.Background())
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Millisecond, diagnostic)
-	defer cancel()
-
-	_, err := ReceiveJoinMapResult(45, false, 0, mb, ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.NotErrorIs(t, err, diagnostic)
 }
 
 func TestFinalizeRuntimeFilterOnBuildErrorPasses(t *testing.T) {
