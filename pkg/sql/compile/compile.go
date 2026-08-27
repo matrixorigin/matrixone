@@ -188,6 +188,10 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
+		// Compile owns the immutable binding. Process only carries it while this
+		// execution is active; leaving it behind can contaminate a later lock
+		// caller that has no compiled plan.
+		c.proc.ClearPlanSnapshotTS()
 	}
 	doCompileRelease(c)
 }
@@ -219,6 +223,49 @@ func (c *Compile) GetPlan() *plan.Plan {
 	return c.pn
 }
 
+// PlanGenerationRebuilt reports whether a retry rebuilt this Compile's logical
+// plan. A frontend prepared statement must then discard both the old logical
+// plan and any physical topology derived from it.
+func (c *Compile) PlanGenerationRebuilt() bool {
+	return c != nil && c.planGenerationRebuilt
+}
+
+// PlanSnapshotTS returns the snapshot bound to the current logical-plan
+// generation. The binding is immutable until a definition-change retry
+// publishes a replacement plan generation.
+func (c *Compile) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if c == nil || !c.hasPlanSnapshotTS {
+		return timestamp.Timestamp{}, false
+	}
+	return c.planSnapshotTS, true
+}
+
+// SetPlanSnapshotTS binds Compile to the snapshot of an already-built logical
+// plan. It must be called before Compile when planning and physical compilation
+// are separated, as they are for prepared statements without a cached pipeline.
+func (c *Compile) SetPlanSnapshotTS(ts timestamp.Timestamp) {
+	c.planSnapshotTS = ts
+	c.hasPlanSnapshotTS = true
+	c.planGenerationReused = false
+	c.applyPlanSnapshot()
+}
+
+// SetPlanGenerationReused marks whether the current execution admitted this
+// logical-plan generation from a session or prepared cache.
+func (c *Compile) SetPlanGenerationReused(reused bool) {
+	c.planGenerationReused = reused
+	c.applyPlanSnapshot()
+}
+
+// FreezeResultMetadata prevents a definition retry from executing a rebuilt
+// plan whose result schema differs from metadata already materialized by the
+// frontend or another streaming consumer.
+func (c *Compile) FreezeResultMetadata() {
+	if c != nil {
+		c.resultMetadataFrozen = true
+	}
+}
+
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
@@ -231,13 +278,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
-	c.reusePlanSnapshot = false
-	c.capturePlanSnapshot()
+	c.applyPlanSnapshot()
 
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
 	c.executionGeneration = 0
+	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -290,22 +337,46 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	return nil
 }
 
-// capturePlanSnapshot starts a new plan-execution generation. Definition
-// fences must be compared with this immutable timestamp, not with a mutable RC
-// transaction snapshot that an earlier lock may have advanced.
+// capturePlanSnapshot starts a new compiled-plan generation. Compile owns the
+// binding; Process only transports it to local and remote pipeline operators.
 func (c *Compile) capturePlanSnapshot() {
+	c.planGenerationReused = false
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil {
+		c.hasPlanSnapshotTS = false
+		c.planSnapshotTS = timestamp.Timestamp{}
+		c.applyPlanSnapshot()
+		return
+	}
+	c.planSnapshotTS = txnOp.Txn().SnapshotTS
+	c.hasPlanSnapshotTS = true
+	c.applyPlanSnapshot()
+}
+
+// applyPlanSnapshot binds the Process transport to this Compile's immutable
+// plan generation. In particular, Reset must apply rather than recapture it.
+func (c *Compile) applyPlanSnapshot() {
+	if !c.hasPlanSnapshotTS {
 		c.proc.ClearPlanSnapshotTS()
 		return
 	}
-	c.proc.SetPlanSnapshotTS(txnOp.Txn().SnapshotTS)
+	c.proc.SetPlanSnapshotTS(c.planSnapshotTS)
+	c.proc.SetPlanGenerationReused(c.planGenerationReused)
+}
+
+func (c *Compile) inheritPlanSnapshot(from *Compile) {
+	c.planSnapshotTS = from.planSnapshotTS
+	c.hasPlanSnapshotTS = from.hasPlanSnapshotTS
+	c.planGenerationReused = from.planGenerationReused
+	c.applyPlanSnapshot()
 }
 
 func (c *Compile) bindPlanSnapshotForCompile() {
-	if !c.reusePlanSnapshot {
+	if !c.hasPlanSnapshotTS {
 		c.capturePlanSnapshot()
+		return
 	}
+	c.applyPlanSnapshot()
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -362,7 +433,11 @@ func (c *Compile) clear() {
 
 	c.proc.Free()
 	c.proc = nil
-	c.reusePlanSnapshot = false
+	c.planSnapshotTS = timestamp.Timestamp{}
+	c.hasPlanSnapshotTS = false
+	c.planGenerationReused = false
+	c.resultMetadataFrozen = false
+	c.planGenerationRebuilt = false
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
@@ -6403,7 +6478,7 @@ func supportsRemoteDistinctCombine(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion32
+	return ok && protocolVersion >= defines.MORPCVersion33
 }
 
 func supportsRemoteStatementLastInsertID(service string) bool {

@@ -22,6 +22,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -127,6 +128,42 @@ func Test_DuplicateKeyRefreshesLRU(t *testing.T) {
 	pc.clean()
 	require.Equal(t, 1, secondA.freed)
 	require.Equal(t, 1, c.freed)
+}
+
+func TestPlanCacheUpdatesPlanAndSnapshotAsOneGeneration(t *testing.T) {
+	pc := newPlanCache(1)
+	firstStmt := &trackedStatement{}
+	secondStmt := &trackedStatement{}
+	firstPlan := &plan.Plan{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+	firstTS := timestamp.Timestamp{PhysicalTime: 10}
+	oldTS := timestamp.Timestamp{PhysicalTime: 20}
+	newTS := timestamp.Timestamp{PhysicalTime: 30}
+	pc.cacheWithPlanSnapshots(
+		"sql",
+		[]tree.Statement{firstStmt, secondStmt},
+		[]*plan.Plan{firstPlan, oldPlan},
+		[]timestamp.Timestamp{firstTS, oldTS},
+	)
+
+	require.False(t, pc.updatePlanGeneration("sql", 1, firstPlan, newPlan, newTS))
+	require.True(t, pc.updatePlanGeneration("sql", 1, oldPlan, newPlan, newTS))
+	cached := pc.get("sql")
+	require.Same(t, firstPlan, cached.plans[0])
+	require.Equal(t, firstTS, cached.planSnapshotTS[0])
+	require.Same(t, newPlan, cached.plans[1])
+	require.Equal(t, newTS, cached.planSnapshotTS[1])
+
+	pc.invalidatePlanGeneration("sql", 1, oldPlan)
+	require.True(t, pc.isCached("sql"), "an obsolete generation cannot invalidate its replacement")
+	pc.invalidatePlanGeneration("sql", 1, newPlan)
+	require.False(t, pc.isCached("sql"))
+	require.Zero(t, firstStmt.freed)
+	require.Zero(t, secondStmt.freed)
+	require.Nil(t, pc.get("sql"))
+	require.Equal(t, 1, firstStmt.freed)
+	require.Equal(t, 1, secondStmt.freed)
 }
 
 func Test_CleanCache(t *testing.T) {

@@ -55,6 +55,8 @@ var (
 type Compile interface {
 	Run(uint64) (*util2.RunResult, error)
 	GetPlan() *plan.Plan
+	PlanGenerationRebuilt() bool
+	PlanSnapshotTS() (timestamp.Timestamp, bool)
 	Release()
 	SetOriginSQL(string)
 }
@@ -87,6 +89,10 @@ type TxnComputationWrapper struct {
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
 	prepareName   string
+	// preparedStmt is the cache owner selected for this EXECUTE. It lets Run
+	// invalidate a stale prepared physical topology discovered by an internal
+	// definition-change retry.
+	preparedStmt *PrepareStmt
 
 	schedulingTrace schedule.TraceRecorder
 
@@ -109,6 +115,16 @@ type TxnComputationWrapper struct {
 	// protocolVersion is captured when plan is built. The session plan cache
 	// uses it instead of the version observed later when execution completes.
 	protocolVersion int64
+
+	// A reusable logical plan and its generation snapshot are one immutable
+	// binding. cachedPlan* identifies the session-cache slot so a definition
+	// retry can atomically publish its replacement generation.
+	planSnapshotTS       timestamp.Timestamp
+	hasPlanSnapshotTS    bool
+	planGenerationReused bool
+	cachedPlanSQL        string
+	cachedPlanIndex      int
+	cachedPlanGeneration *plan.Plan
 }
 
 func InitTxnComputationWrapper(
@@ -167,8 +183,26 @@ func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
 	return cwft.plan
 }
 
+func (cwft *TxnComputationWrapper) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if !cwft.hasPlanSnapshotTS {
+		return timestamp.Timestamp{}, false
+	}
+	return cwft.planSnapshotTS, true
+}
+
+func (cwft *TxnComputationWrapper) setPlanSnapshotTS(ts timestamp.Timestamp) {
+	cwft.planSnapshotTS = ts
+	cwft.hasPlanSnapshotTS = true
+}
+
 func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
+	cwft.planSnapshotTS = timestamp.Timestamp{}
+	cwft.hasPlanSnapshotTS = false
+	cwft.planGenerationReused = false
+	cwft.cachedPlanSQL = ""
+	cwft.cachedPlanIndex = 0
+	cwft.cachedPlanGeneration = nil
 	cwft.freeStmt()
 	cwft.stmt = stmt
 	cwft.stmtBorrowed = false
@@ -200,11 +234,18 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.paramVals = nil
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
+	cwft.preparedStmt = nil
 	cwft.remapDb = nil
 	cwft.schedulingSQL = ""
 	cwft.preparedSchedulingSQLMode = ""
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
+	cwft.planSnapshotTS = timestamp.Timestamp{}
+	cwft.hasPlanSnapshotTS = false
+	cwft.planGenerationReused = false
+	cwft.cachedPlanSQL = ""
+	cwft.cachedPlanIndex = 0
+	cwft.cachedPlanGeneration = nil
 	cwft.schedulingTrace.Reset()
 }
 
@@ -463,6 +504,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.paramVals,
 				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 			)
+			var planSnapshotTS *timestamp.Timestamp
+			if cwft.preparedStmt != nil {
+				planSnapshotTS = &cwft.preparedStmt.Ts
+			}
 			cwft.compile, err = createCompile(
 				execCtx,
 				cwft.ses,
@@ -472,6 +517,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				schedulingSQLMode,
 				cwft.stmt,
 				cwft.plan,
+				planSnapshotTS,
+				cwft.planGenerationReused,
 				fill,
 				false,
 				&cwft.schedulingTrace,
@@ -500,6 +547,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 					execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 				),
 			))
+			retComp.SetPlanGenerationReused(cwft.planGenerationReused)
 			// originSQL is the prepared statement text here; the wrapper carries
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
@@ -523,6 +571,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		   }
 		*/
 	} else {
+		var planSnapshotTS *timestamp.Timestamp
+		if cwft.hasPlanSnapshotTS {
+			planSnapshotTS = &cwft.planSnapshotTS
+		}
 		cwft.compile, err = createCompile(
 			execCtx,
 			cwft.ses,
@@ -532,6 +584,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			nil,
 			cwft.stmt,
 			cwft.plan,
+			planSnapshotTS,
+			cwft.planGenerationReused,
 			fill,
 			false,
 			&cwft.schedulingTrace,
@@ -629,10 +683,58 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	}()
 
 	runResult, err := runningCompile.Run(ts)
-	// Sync the latest plan after Run (it may have changed due to retry)
-	cwft.plan = runningCompile.GetPlan()
+	cwft.completeCompileExecution(runningCompile, err)
 	cwft.runResult = runResult
 	return runResult, err
+}
+
+// completeCompileExecution publishes or invalidates reusable frontend state at
+// the actual terminal owner of Compile.Run. Production executes the returned
+// *compile.Compile directly, so executeStmt/executeStmtInBack must call this
+// before their one Release; TxnComputationWrapper.Run keeps the same contract
+// for direct callers and tests.
+func (cwft *TxnComputationWrapper) completeCompileExecution(
+	runningCompile Compile,
+	runErr error,
+) {
+	cwft.syncCompileExecution(runningCompile)
+	if !runningCompile.PlanGenerationRebuilt() {
+		return
+	}
+
+	if cwft.preparedStmt != nil {
+		invalidatedCompile := cwft.preparedStmt.invalidateCachedCompile()
+		if invalidatedCompile != nil && runningCompile != invalidatedCompile {
+			invalidatedCompile.Release()
+		}
+	}
+	if cwft.cachedPlanSQL != "" {
+		if ses, ok := cwft.ses.(*Session); ok {
+			updated := false
+			if runErr == nil && cwft.hasPlanSnapshotTS {
+				updated = ses.updateCachedPlanGeneration(
+					cwft.cachedPlanSQL,
+					cwft.cachedPlanIndex,
+					cwft.cachedPlanGeneration,
+					cwft.plan,
+					cwft.planSnapshotTS,
+				)
+			}
+			if !updated {
+				ses.invalidateCachedPlanGeneration(
+					cwft.cachedPlanSQL,
+					cwft.cachedPlanIndex,
+					cwft.cachedPlanGeneration,
+				)
+			}
+		}
+	}
+}
+
+func (cwft *TxnComputationWrapper) syncCompileExecution(runningCompile Compile) {
+	// Sync the latest plan generation after Run (it may have changed on retry).
+	cwft.plan = runningCompile.GetPlan()
+	cwft.planSnapshotTS, cwft.hasPlanSnapshotTS = runningCompile.PlanSnapshotTS()
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
@@ -919,6 +1021,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	cwft.preparedStmt = prepareStmt
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	executionPlan := preparePlan.Plan
@@ -999,10 +1102,15 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+	needRebuild := prepareStmt.needsRebuild ||
+		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
+		!reusablePlanGenerationSupported(cwft.proc)
+	cwft.planGenerationReused = !needRebuild
 
 	// Rebuild the plan when catalog schema, session temporary-table name
-	// resolution, FK-check state, protocol, or compatibility mode changed.
+	// resolution, FK-check state, protocol, or compatibility mode changed. The
+	// rollout gate also forces a current-transaction plan until every lock owner
+	// understands the plan-generation snapshot wire contract.
 	if needRebuild {
 		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
 		if err != nil {
@@ -1047,16 +1155,18 @@ func initExecuteStmtParamWithResolverInSession(
 		// high-watermark. A later logtail event will advance it again.
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
+		prepareStmt.needsRebuild = false
 	}
 
-	// Recreate the cached compile only when a plan dependency changed.
+	// Recreate the cached compile only when a plan dependency changed or an
+	// execution-time retry proved that its physical topology was stale.
 	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
-	// per-execution recompilation overhead that regressed TPCC. A nil cache
-	// means the statement is not eligible for prepare-time compile (e.g. AP
-	// query); recompiling would fail with ErrCantCompileForPrepare on every
-	// execution, so leave it to the regular compile path (isPrepare=false).
+	// per-execution recompilation overhead that regressed TPCC. A plain nil
+	// cache means the statement is not eligible for prepare-time compile (e.g.
+	// AP query); compileNeedsRebuild distinguishes a released stale cache that
+	// should be recreated once scheduling permits it.
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
 	if needRebuild {
 		prepareStmt.clearRuntimeSpecializationCache()
@@ -1066,15 +1176,18 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
+		prepareStmt.compileNeedsRebuild = true
+	}
 
+	if prepareStmt.compileNeedsRebuild {
 		executionIntent := querySchedulingIntentForStatementWithSQLMode(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
-		if !executionSes.IsBackgroundSession() {
+		if !executionSes.IsBackgroundSession() && !executionIntent.Explicit {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
+				shouldCachePrepareCompile(preparePlan.Plan) {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
-				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
+				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, &prepareStmt.Ts, cwft.planGenerationReused, owner.GetOutputCallback(execCtx), true, nil, nil)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 						return nil, nil, nil, "", false, err
@@ -1088,6 +1201,7 @@ func initExecuteStmtParamWithResolverInSession(
 				}
 				prepareStmt.compile = comp
 			}
+			prepareStmt.compileNeedsRebuild = false
 		}
 	}
 	numParams := len(preparePlan.ParamTypes)
@@ -1748,6 +1862,8 @@ func createCompile(
 	schedulingSQLMode *string,
 	stmt tree.Statement,
 	plan *plan2.Plan,
+	planSnapshotTS *timestamp.Timestamp,
+	planGenerationReused bool,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
@@ -1825,6 +1941,13 @@ func createCompile(
 		retCompile.SetResourceAttemptOwnerEligible()
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
+	if planSnapshotTS != nil {
+		retCompile.SetPlanSnapshotTS(*planSnapshotTS)
+		retCompile.SetPlanGenerationReused(planGenerationReused)
+	} else if planGenerationReused {
+		return nil, moerr.NewInternalError(execCtx.reqCtx,
+			"reused plan generation is missing its snapshot binding")
+	}
 	forcePrepare := execCtx.input.isPreparedExpr()
 	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 		ses, stmt, forcePrepare, preparedRetry))

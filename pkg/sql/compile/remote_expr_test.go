@@ -432,14 +432,14 @@ func TestDistinctCombineRemoteProtocolValidation(t *testing.T) {
 		nil,
 	)}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, combine),
-		"require MORPC protocol version 32",
+		"require MORPC protocol version 33",
 	)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, combine))
 }
 

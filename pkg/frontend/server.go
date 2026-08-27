@@ -64,8 +64,10 @@ var initConnectionID uint32 = 1000
 var ConnIDAllocKey = "____server_conn_id"
 
 const (
-	clientDisconnectProbeInterval = 5 * time.Second
-	clientDisconnectProbeGrace    = 30 * time.Second
+	// The request handler owns the connection read loop while a statement is
+	// executing, so probe every active request from the first monitor tick.
+	clientDisconnectProbeInterval = time.Second
+	clientDisconnectProbeGrace    = 0
 )
 
 // MOServer MatrixOne Server

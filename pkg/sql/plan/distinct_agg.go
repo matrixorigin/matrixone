@@ -335,5 +335,5 @@ func (builder *QueryBuilder) localProtocolEnablesDistinctCombine() bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion32
+	return ok && valid && version >= defines.MORPCVersion33
 }
