@@ -85,6 +85,14 @@ func timestampPairReturnType(parameters []types.Type) types.Type {
 type timestampPairDateReader func(row uint64) (types.Datetime, bool)
 type timestampPairTimeReader func(row uint64) (types.Time, bool)
 
+func timestampPairDatetimeToTime(value types.Datetime) (types.Time, bool) {
+	if value == types.ZeroDatetime {
+		return 0, true
+	}
+	timeOfDay := int64(value) - int64(value.ToDate().ToDatetime())
+	return types.Time(timeOfDay).TruncateToScale(6), false
+}
+
 func newTimestampPairDateReader(vec *vector.Vector, proc *process.Process) (timestampPairDateReader, error) {
 	switch vec.GetType().Oid {
 	case types.T_date:
@@ -142,7 +150,8 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 		parameter := vector.GenerateFunctionFixedTypeParameter[types.Datetime](vec)
 		return func(row uint64) (types.Time, bool) {
 			value, isNull := parameter.GetValue(row)
-			return value.ToTime(6), isNull
+			timeValue, invalid := timestampPairDatetimeToTime(value)
+			return timeValue, isNull || invalid
 		}, nil
 	case types.T_timestamp:
 		parameter := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](vec)
@@ -164,10 +173,10 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 			}
 			if strings.IndexByte(text, 'T') >= 0 {
 				datetime, err := types.ParseDatetime(text, 6)
-				if err != nil || datetime == types.ZeroDatetime {
+				if err != nil {
 					return 0, true
 				}
-				return datetime.ToTime(6), false
+				return timestampPairDatetimeToTime(datetime)
 			}
 			parseText := text
 			negativeDay := false
@@ -180,10 +189,10 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 				}
 				if _, err := strconv.ParseUint(day, 10, 64); err != nil {
 					datetime, datetimeErr := types.ParseDatetime(text, 6)
-					if datetimeErr != nil || datetime == types.ZeroDatetime {
+					if datetimeErr != nil {
 						return 0, true
 					}
-					return datetime.ToTime(6), false
+					return timestampPairDatetimeToTime(datetime)
 				}
 			}
 			timeValue, err := types.ParseTime(parseText, 6)

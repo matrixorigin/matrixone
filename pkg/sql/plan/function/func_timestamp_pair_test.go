@@ -217,6 +217,43 @@ func TestTimestampPairTypedExecution(t *testing.T) {
 	require.Equal(t, wantedType, *result.GetType())
 }
 
+func TestTimestampPairUsesStableDatetimeClockTime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tomorrow := types.Today(time.UTC) + 1
+	year, month, day, _ := tomorrow.Calendar(true)
+	tomorrowDatetime := types.DatetimeFromClock(year, month, day, 12, 34, 56, 654321)
+
+	wantedType := types.New(types.T_datetime, 6, 6)
+	dateInput := NewFunctionTestInput(types.T_date.ToType(), []types.Date{
+		parseTimestampPairDate(t, "2024-01-15"),
+	}, nil)
+	wanted := parseTimestampPairDatetime(t, "2024-01-15 12:34:56.654321", 6)
+
+	t.Run("typed datetime", func(t *testing.T) {
+		result := runTimestampPairCase(t, proc, []FunctionTestInput{
+			dateInput,
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{tomorrowDatetime}, nil),
+		}, NewFunctionTestResult(wantedType, false, []types.Datetime{wanted}, nil), nil)
+		require.Equal(t, wantedType, *result.GetType())
+	})
+
+	t.Run("datetime-shaped text", func(t *testing.T) {
+		result := runTimestampPairCase(t, proc, []FunctionTestInput{
+			dateInput,
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tomorrowDatetime.String2(6)}, nil),
+		}, NewFunctionTestResult(wantedType, false, []types.Datetime{wanted}, nil), nil)
+		require.Equal(t, wantedType, *result.GetType())
+	})
+
+	t.Run("ISO datetime-shaped text", func(t *testing.T) {
+		result := runTimestampPairCase(t, proc, []FunctionTestInput{
+			dateInput,
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tomorrow.String() + "T12:34:56.654321"}, nil),
+		}, NewFunctionTestResult(wantedType, false, []types.Datetime{wanted}, nil), nil)
+		require.Equal(t, wantedType, *result.GetType())
+	})
+}
+
 func TestTimestampPairStringNullAndRangeHandling(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	wantedType := types.New(types.T_datetime, 6, 6)
