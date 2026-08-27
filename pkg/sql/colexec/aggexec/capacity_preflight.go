@@ -205,6 +205,16 @@ func (ag *aggState) preflightArgumentCapacity(
 	if err != nil {
 		return err
 	}
+	// Geometric growth is speculative spare capacity. Clamp both candidates to
+	// the physical single-allocation limit before admission so crossing that
+	// boundary neither logs a failed oversized allocation nor rejects a smaller
+	// arena that still satisfies required.
+	maxAllocation := mpool.MaxAllocationSize()
+	if maxAllocation <= 0 || required > uint64(maxAllocation) {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	capacity = min(capacity, uint64(maxAllocation))
+	fallbackCapacity = min(fallbackCapacity, uint64(maxAllocation))
 	next, err := ag.allocation.allocArgumentArena(mp, int(capacity))
 	if err != nil && capacity != fallbackCapacity &&
 		mpool.IsRetryableAllocationCapacity(err) {

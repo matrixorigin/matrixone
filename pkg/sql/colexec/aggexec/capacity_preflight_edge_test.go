@@ -462,6 +462,61 @@ func TestArgumentArenaGrowthFallsBackUnderCapacityPressure(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestArgumentArenaGrowthFallsBackAtAllocatorLimit(t *testing.T) {
+	const current = 2 * kAggArgArenaSize
+	preferred, err := nextArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	fallback, err := nextLinearArgumentArenaCapacity(current, current+1)
+	require.NoError(t, err)
+	require.Greater(t, preferred, fallback)
+
+	oldCapLimit := mpool.CapLimit
+	mpool.CapLimit = int(preferred)
+	t.Cleanup(func() {
+		mpool.CapLimit = oldCapLimit
+	})
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(current + fallback)
+	require.NoError(t, err)
+	state := aggState{}
+	t.Cleanup(func() {
+		if state.argbuf != nil {
+			mp.Free(state.argbuf)
+			state.argbuf = nil
+		}
+		account.Seal()
+		_, finalizeErr := registry.Finalize(account)
+		require.NoError(t, finalizeErr)
+		require.Zero(t, mp.CurrNB())
+	})
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	require.NoError(t, err)
+
+	buf, err := allocation.allocArgumentArena(mp, current)
+	require.NoError(t, err)
+	state = aggState{
+		allocation: allocation,
+		argbuf:     buf,
+		argSkl:     arenaskl.NewSkiplist(arenaskl.NewArena(buf), bytes.Compare),
+	}
+
+	require.NoError(t, state.argSkl.Add([]byte("kept"), nil))
+	used := uint64(state.argSkl.Arena().Size())
+	require.Less(t, used, uint64(current+1))
+	require.NoError(t, state.preflightArgumentCapacity(
+		mp, uint64(current+1)-used, 0))
+	require.Equal(t, int(fallback), len(state.argbuf))
+	require.True(t, state.argSkl.Contains([]byte("kept")))
+	require.Equal(t, fallback, account.Snapshot().Used)
+}
+
 func TestConcreteAggregatePreflightsRejectOversizedWorkUnits(t *testing.T) {
 	tests := []aggregateAllocationTestCase{
 		{name: "any", id: AggIdOfAny, params: []types.Type{types.T_varchar.ToType()}},
