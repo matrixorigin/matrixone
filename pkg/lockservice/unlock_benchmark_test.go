@@ -258,3 +258,69 @@ func BenchmarkLockWithoutConflict(b *testing.B) {
 		nil,
 	)
 }
+
+// BenchmarkExclusiveLockBudgetAcrossBatches measures the steady-state cost of
+// a large Exclusive transaction after it first crosses the cumulative row-lock
+// budget. Rows are intentionally delivered in sub-budget batches, matching the
+// execution shape of bulk DML such as LOAD DATA.
+func BenchmarkExclusiveLockBudgetAcrossBatches(b *testing.B) {
+	const (
+		table     = uint64(2670603)
+		budget    = 128
+		batchSize = 64
+		batches   = 32
+	)
+	runLockServiceTestsWithLevel(
+		b,
+		zapcore.ErrorLevel,
+		[]string{"s1"},
+		10*time.Second,
+		func(_ *lockTableAllocator, services []*service) {
+			b.StopTimer()
+			service := services[0]
+			ctx := context.Background()
+			rows := make([][][]byte, batches)
+			for batch := range rows {
+				rows[batch] = make([][]byte, batchSize)
+				for row := range rows[batch] {
+					rows[batch][row] = []byte(fmt.Sprintf(
+						"bulk-row-%08d", batch*batchSize+row))
+				}
+			}
+			txnIDs := make([][]byte, b.N)
+			for idx := range txnIDs {
+				txnIDs[idx] = []byte(fmt.Sprintf("bulk-lock-bench-txn-%d", idx))
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.ReportMetric(batchSize*batches, "rows/op")
+			b.StartTimer()
+			for _, txnID := range txnIDs {
+				for _, batch := range rows {
+					if _, err := service.Lock(
+						ctx,
+						table,
+						batch,
+						txnID,
+						newTestRowExclusiveOptions(),
+					); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := service.Unlock(
+					ctx,
+					txnID,
+					timestamp.Timestamp{},
+				); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = budget
+			c.MaxFixedSliceSize = 4096
+		},
+	)
+}

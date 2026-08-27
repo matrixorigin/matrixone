@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,6 +80,9 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 	require.NoError(t, err)
 	intVec := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixedList(intVec, []int64{7, 9}, nil, mp))
+	geometryVec := vector.NewVec(types.T_geometry.ToType())
+	geometryBytes := geo.WriteWKB(geo.Point{X: 1, Y: 2})
+	require.NoError(t, vector.AppendBytes(geometryVec, geometryBytes, false, mp))
 
 	payload, err := encodeGroupConcatPayload([]*vector.Vector{textVec, intVec}, 1, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()})
 	require.NoError(t, err)
@@ -102,6 +106,19 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 	payload, err = encodeGroupConcatPayload([]*vector.Vector{nullVec}, 0, []types.Type{types.T_varchar.ToType()})
 	require.NoError(t, err)
 	require.Nil(t, payload)
+	for _, typ := range []types.Type{
+		types.New(types.T_decimal256, 40, 4),
+		types.T_year.ToType(),
+		types.T_uuid.ToType(),
+		types.T_geometry.ToType(),
+		types.T_geometry32.ToType(),
+	} {
+		nullTypedVec := vector.NewConstNull(typ, 1, mp)
+		payload, err = encodeGroupConcatPayload([]*vector.Vector{nullTypedVec}, 0, []types.Type{typ})
+		require.NoError(t, err)
+		require.Nil(t, payload)
+		nullTypedVec.Free(mp)
+	}
 
 	payload, err = encodeGroupConcatPayloadWithNulls(
 		[]*vector.Vector{nullVec, intVec},
@@ -119,9 +136,11 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 
 	require.Equal(t, textVec.GetBytesAt(0), groupConcatFieldBytes(textVec, 0, types.T_varchar.ToType()))
 	require.Equal(t, intVec.GetRawBytesAt(0), groupConcatFieldBytes(intVec, 0, types.T_int64.ToType()))
+	require.Equal(t, geometryBytes, groupConcatFieldBytes(geometryVec, 0, types.T_geometry.ToType()))
 
 	textVec.Free(mp)
 	intVec.Free(mp)
+	geometryVec.Free(mp)
 	nullVec.Free(mp)
 }
 
@@ -130,6 +149,16 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 	require.NoError(t, err)
 	d128, err := types.ParseDecimal128("56.78", 20, 2)
 	require.NoError(t, err)
+	d256, err := types.ParseDecimal256("123456789012345678901234567890123456.78", 40, 2)
+	require.NoError(t, err)
+	yearVal, err := types.ParseMoYear("2024")
+	require.NoError(t, err)
+	uuidVal, err := types.ParseUuid("00000000-0000-0000-0000-000000000001")
+	require.NoError(t, err)
+	geometryVal := geo.WriteWKB(geo.Point{X: 1, Y: 2})
+	geometry32Val := geo.WriteWKBFloat32(geo.Point{X: 3, Y: 4})
+	largeGeometryVal := geo.WriteWKB(geo.LineString{Points: make([]geo.Coord, 4096)})
+	require.Equal(t, 65545, len(largeGeometryVal))
 	bj, err := bytejson.CreateByteJSONWithCheck(map[string]any{"k": "v"})
 	require.NoError(t, err)
 	jsonBytes, err := bj.Marshal()
@@ -165,11 +194,16 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "float64", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(2.5)), want: "2.5"},
 		{name: "decimal64", typ: types.New(types.T_decimal64, 10, 2), data: types.EncodeDecimal64(&d64), want: d64.Format(2)},
 		{name: "decimal128", typ: types.New(types.T_decimal128, 20, 2), data: types.EncodeDecimal128(&d128), want: d128.Format(2)},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 40, 2), data: types.EncodeDecimal256(&d256), want: d256.Format(2)},
 		{name: "date", typ: types.T_date.ToType(), data: types.EncodeDate(&dateVal), want: dateVal.String()},
 		{name: "time", typ: types.T_time.ToType(), data: types.EncodeTime(&timeVal), want: timeVal.String()},
 		{name: "datetime", typ: types.T_datetime.ToType(), data: types.EncodeDatetime(&datetimeVal), want: datetimeVal.String()},
 		{name: "timestamp", typ: types.T_timestamp.ToType(), data: types.EncodeTimestamp(&timestampVal), want: timestampVal.String()},
+		{name: "year", typ: types.T_year.ToType(), data: types.EncodeInt16(ptr(int16(yearVal))), want: yearVal.String()},
+		{name: "uuid", typ: types.T_uuid.ToType(), data: types.EncodeUuid(&uuidVal), want: uuidVal.String()},
 		{name: "text", typ: types.T_text.ToType(), data: []byte("hello"), want: "hello"},
+		{name: "geometry", typ: types.T_geometry.ToType(), data: geometryVal, want: string(geometryVal)},
+		{name: "geometry32", typ: types.T_geometry32.ToType(), data: geometry32Val, want: string(geometry32Val)},
 		{name: "json", typ: types.T_json.ToType(), data: jsonBytes, want: types.DecodeJson(jsonBytes).String()},
 		{name: "interval", typ: types.Type{Oid: types.T_interval}, data: []byte{byte(intervalVal)}, want: intervalVal.String()},
 		{name: "ts", typ: types.T_TS.ToType(), data: tsVal[:], want: tsVal.ToString()},
@@ -177,7 +211,17 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "blockid", typ: types.T_Blockid.ToType(), data: blockidVal[:], want: fmt.Sprint(blockidVal)},
 		{name: "short-fixed-payload", typ: types.T_int64.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "too-long", typ: types.T_text.ToType(), data: make([]byte, math.MaxUint16+1), wantErr: "too long"},
-		{name: "unsupported", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "unsupported type"},
+		{name: "large-geometry", typ: types.T_geometry.ToType(), data: largeGeometryVal, want: string(largeGeometryVal)},
+		{name: "short-decimal256-payload", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
+		{name: "short-year-payload", typ: types.T_year.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
+		{name: "short-uuid-payload", typ: types.T_uuid.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
+		{
+			name: "unsupported-objectid",
+			typ: types.Type{
+				Oid: types.T_Objectid, Size: types.ObjectidSize,
+			},
+			data: make([]byte, types.ObjectidSize), wantErr: "unsupported type",
+		},
 	}
 
 	for _, tc := range cases {
