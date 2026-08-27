@@ -141,6 +141,15 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return err
 	}
+	if err := expectStatementRejected(ctx, db,
+		"truncate table mongodb_ci.events",
+		"cannot insert/update/delete from external table"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
+		return fmt.Errorf("scan after rejected truncate: %w", err)
+	}
+	r.Cases = append(r.Cases, "truncate-read-only-source-preserved")
 	if err := expectRows(ctx, db,
 		"select mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL') from mongodb_ci.events order by mongo_id",
 		manifest.Rows); err != nil {
