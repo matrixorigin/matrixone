@@ -164,6 +164,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		sortSpillMem:             sortSpillMem,
 		tag2Table:                make(map[int32]*TableDef),
 		tag2NodeID:               make(map[int32]int32),
+		derivedColNdv:            make(map[[2]int32]float64),
 		isPrepareStatement:       isPrepareStatement,
 		deleteNode:               make(map[uint64]int32),
 		skipStats:                skipStats,
@@ -3709,6 +3710,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		rootID = builder.pushPartialSumsThroughUniqueDimensions(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {

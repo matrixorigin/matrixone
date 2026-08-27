@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // some restrictions for agg pushdown to make it easier to acheive
@@ -173,6 +176,390 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 	}
 
 	applyAggPushdown(node, join, leftChild, builder)
+	return nodeID
+}
+
+// partialSumPushdownCandidate describes the safe half of a late dimension
+// join rewrite. The original aggregate stays above the join, so dimension rows
+// with equal display attributes are still merged exactly as the SQL requires.
+// Only a partial SUM is inserted on the fact side.
+type partialSumPushdownCandidate struct {
+	factChildPos    int
+	factNode        *plan.Node
+	factJoinCols    []*plan.Expr
+	joinGroupPos    []int
+	partialGroup    []*plan.Expr
+	partialGroupNdv []float64
+	groupRemap      map[int]int
+	partialRows     float64
+}
+
+func appendUniqueExpr(exprs []*plan.Expr, expr *plan.Expr) ([]*plan.Expr, int) {
+	for i, existing := range exprs {
+		if exprStructuralEqual(existing, expr) {
+			return exprs, i
+		}
+	}
+	return append(exprs, DeepCopyExpr(expr)), len(exprs)
+}
+
+func directColFromTags(expr *plan.Expr, tags map[int32]bool) *plan.Expr_Col {
+	col, ok := expr.Expr.(*plan.Expr_Col)
+	if !ok || !tags[col.Col.RelPos] {
+		return nil
+	}
+	return col
+}
+
+// finiteColumnDomain returns the exact finite set forced on one column by a
+// boolean predicate. Unknown means the predicate may admit any column value.
+// This is deliberately limited to equality/IN combined with AND/OR; ranges and
+// other predicates fall back to the base NDV instead of guessing.
+func finiteColumnDomain(expr *plan.Expr, relPos, colPos int32) (map[string]struct{}, bool) {
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
+			return map[string]struct{}{}, true
+		}
+		if value, ok := lit.Value.(*plan.Literal_Bval); ok && !value.Bval {
+			return map[string]struct{}{}, true
+		}
+		return nil, false
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return nil, false
+	}
+	switch fn.Func.ObjName {
+	case "=":
+		if len(fn.Args) != 2 {
+			return nil, false
+		}
+		operand, ok := extractDomainFilterOperand(fn.Args[0])
+		value := fn.Args[1]
+		if !ok {
+			operand, ok = extractDomainFilterOperand(fn.Args[1])
+			value = fn.Args[0]
+		}
+		if _, _, literal := unwrapConstLiteral(value); !literal {
+			ok = false
+		}
+		// A narrowing cast can map many source values to one literal, so it
+		// does not bound the NDV of the underlying column.
+		if !ok || operand.hasCast || operand.relPos != relPos || operand.colPos != colPos {
+			return nil, false
+		}
+		key, ok := constLiteralKeyForOperand(value, operand)
+		if !ok {
+			return nil, false
+		}
+		return map[string]struct{}{key: {}}, true
+	case "in":
+		operand, values, ok := extractInListFilterForDomain(expr)
+		if !ok || operand.hasCast || operand.relPos != relPos || operand.colPos != colPos {
+			return nil, false
+		}
+		domain := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			key, ok := constLiteralKeyForOperand(value, operand)
+			if !ok {
+				return nil, false
+			}
+			domain[key] = struct{}{}
+		}
+		return domain, true
+	case "and":
+		var domain map[string]struct{}
+		known := false
+		for _, arg := range fn.Args {
+			argDomain, argKnown := finiteColumnDomain(arg, relPos, colPos)
+			if !argKnown {
+				continue
+			}
+			if !known {
+				domain = argDomain
+				known = true
+				continue
+			}
+			for key := range domain {
+				if _, exists := argDomain[key]; !exists {
+					delete(domain, key)
+				}
+			}
+		}
+		return domain, known
+	case "or":
+		domain := make(map[string]struct{})
+		for _, arg := range fn.Args {
+			argDomain, known := finiteColumnDomain(arg, relPos, colPos)
+			if !known {
+				return nil, false
+			}
+			for key := range argDomain {
+				domain[key] = struct{}{}
+			}
+		}
+		return domain, true
+	default:
+		return nil, false
+	}
+}
+
+func (builder *QueryBuilder) getExprNdvAfterFilters(expr *plan.Expr) float64 {
+	ndv := getExprNdv(expr, builder)
+	col := expr.GetCol()
+	if col == nil {
+		return ndv
+	}
+	scanID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok || scanID < 0 || int(scanID) >= len(builder.qry.Nodes) {
+		return ndv
+	}
+	scan := builder.qry.Nodes[scanID]
+	if scan.NodeType != plan.Node_TABLE_SCAN {
+		return ndv
+	}
+	for _, filter := range scan.FilterList {
+		domain, known := finiteColumnDomain(filter, col.RelPos, col.ColPos)
+		if known && len(domain) > 0 && (ndv <= 0 || float64(len(domain)) < ndv) {
+			ndv = float64(len(domain))
+		}
+	}
+	return ndv
+}
+
+func (builder *QueryBuilder) buildPartialSumPushdownCandidate(
+	agg, join *plan.Node,
+	factChildPos int,
+) *partialSumPushdownCandidate {
+	dimChildPos := 1 - factChildPos
+	factNode := builder.qry.Nodes[join.Children[factChildPos]]
+	dimScan := builder.qry.Nodes[join.Children[dimChildPos]]
+	if dimScan.NodeType != plan.Node_TABLE_SCAN || len(dimScan.BindingTags) != 1 || dimScan.TableDef == nil {
+		return nil
+	}
+
+	dimTag := dimScan.BindingTags[0]
+	factTags := builder.collectBindingTags(factNode)
+	if factTags[dimTag] {
+		return nil
+	}
+
+	pkPositions, ok := primaryKeyColumnPositions(dimScan.TableDef)
+	if !ok {
+		return nil
+	}
+	joinedDimColumns := make(map[int32]struct{}, len(join.OnList))
+	factJoinCols := make([]*plan.Expr, 0, len(join.OnList))
+	for _, cond := range join.OnList {
+		fn := cond.GetF()
+		if fn == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+			return nil
+		}
+		var factExpr *plan.Expr
+		var factCol, dimCol *plan.Expr_Col
+		if col := directColFromTags(fn.Args[0], factTags); col != nil {
+			factExpr = fn.Args[0]
+			factCol = col
+			if col, ok := fn.Args[1].Expr.(*plan.Expr_Col); ok && col.Col.RelPos == dimTag {
+				dimCol = col
+			}
+		} else if col := directColFromTags(fn.Args[1], factTags); col != nil {
+			factExpr = fn.Args[1]
+			factCol = col
+			if col, ok := fn.Args[0].Expr.(*plan.Expr_Col); ok && col.Col.RelPos == dimTag {
+				dimCol = col
+			}
+		}
+		if factCol == nil || dimCol == nil {
+			return nil
+		}
+		joinedDimColumns[dimCol.Col.ColPos] = struct{}{}
+		factJoinCols = append(factJoinCols, GetColExpr(factExpr.Typ, factCol.Col.RelPos, factCol.Col.ColPos))
+	}
+	for _, pkPos := range pkPositions {
+		if _, joined := joinedDimColumns[pkPos]; !joined {
+			return nil
+		}
+	}
+
+	partialGroup := make([]*plan.Expr, 0, len(agg.GroupBy)+len(factJoinCols))
+	groupRemap := make(map[int]int)
+	hasDimensionGroup := false
+	for i, groupExpr := range agg.GroupBy {
+		if ContainsVolatileFunction(groupExpr) {
+			return nil
+		}
+		side := getJoinSide(groupExpr, factTags, map[int32]bool{dimTag: true}, -1)
+		switch side {
+		case JoinSideLeft:
+			// getJoinSide's left means the factTags argument above.
+			var pos int
+			partialGroup, pos = appendUniqueExpr(partialGroup, groupExpr)
+			groupRemap[i] = pos
+		case JoinSideRight:
+			hasDimensionGroup = true
+		case 0:
+			// Only literal constants are safe here. A zero-column volatile
+			// expression (for example rand()) must not be evaluated after rows
+			// have already been collapsed by the partial aggregate.
+			if groupExpr.GetLit() == nil {
+				return nil
+			}
+		default:
+			return nil
+		}
+	}
+	if !hasDimensionGroup {
+		return nil
+	}
+
+	for _, aggExpr := range agg.AggList {
+		fn := aggExpr.GetF()
+		if fn == nil || fn.Func.ObjName != "sum" || len(fn.Args) != 1 ||
+			len(fn.AggConfig) != 0 || fn.AggConfigType != plan.AggregateConfigType_AGG_CONFIG_NONE ||
+			uint64(fn.Func.Obj)&function.Distinct != 0 ||
+			ContainsVolatileFunction(fn.Args[0]) ||
+			getJoinSide(fn.Args[0], factTags, map[int32]bool{dimTag: true}, -1) != JoinSideLeft {
+			return nil
+		}
+	}
+	if len(agg.AggList) == 0 {
+		return nil
+	}
+
+	joinGroupPos := make([]int, len(factJoinCols))
+	for i, joinCol := range factJoinCols {
+		var pos int
+		partialGroup, pos = appendUniqueExpr(partialGroup, joinCol)
+		joinGroupPos[i] = pos
+	}
+
+	// A partial aggregate adds one full pass over the fact rows. It pays for
+	// itself only if the two downstream operators (join and final aggregate)
+	// process fewer than half as many rows. Unknown NDVs reject the rewrite.
+	partialRows := 1.0
+	if factNode.Stats == nil || dimScan.Stats == nil || join.Stats == nil ||
+		factNode.Stats.Outcnt <= 0 || dimScan.Stats.Outcnt <= 0 || join.Stats.Outcnt <= 0 ||
+		math.IsNaN(factNode.Stats.Outcnt) || math.IsInf(factNode.Stats.Outcnt, 0) ||
+		math.IsNaN(dimScan.Stats.Outcnt) || math.IsInf(dimScan.Stats.Outcnt, 0) ||
+		math.IsNaN(join.Stats.Outcnt) || math.IsInf(join.Stats.Outcnt, 0) {
+		return nil
+	}
+	// A PK join proves that matched fact keys contribute at most one distinct
+	// key per dimension row. Unmatched fact keys may all be distinct, so keep
+	// them in the bound instead of blindly capping by dimension cardinality.
+	unmatchedFactRows := math.Max(factNode.Stats.Outcnt-join.Stats.Outcnt, 0)
+	joinKeyNdvUpper := math.Min(factNode.Stats.Outcnt, dimScan.Stats.Outcnt+unmatchedFactRows)
+	partialGroupNdv := make([]float64, 0, len(partialGroup))
+	for _, groupExpr := range partialGroup {
+		ndv := builder.getExprNdvAfterFilters(groupExpr)
+		if ndv <= 0 || math.IsNaN(ndv) || math.IsInf(ndv, 0) {
+			return nil
+		}
+		for _, joinCol := range factJoinCols {
+			if exprStructuralEqual(groupExpr, joinCol) {
+				ndv = math.Min(ndv, joinKeyNdvUpper)
+				break
+			}
+		}
+		partialGroupNdv = append(partialGroupNdv, ndv)
+		partialRows *= ndv
+		if partialRows >= join.Stats.Outcnt/2 {
+			return nil
+		}
+	}
+
+	return &partialSumPushdownCandidate{
+		factChildPos:    factChildPos,
+		factNode:        factNode,
+		factJoinCols:    factJoinCols,
+		joinGroupPos:    joinGroupPos,
+		partialGroup:    partialGroup,
+		partialGroupNdv: partialGroupNdv,
+		groupRemap:      groupRemap,
+		partialRows:     partialRows,
+	}
+}
+
+func (builder *QueryBuilder) applyPartialSumPushdown(
+	agg, join *plan.Node,
+	candidate *partialSumPushdownCandidate,
+) bool {
+	partialAggList := DeepCopyExprList(agg.AggList)
+	newGroupTag := builder.genNewBindTag()
+	newAggTag := builder.genNewBindTag()
+
+	finalAggList := make([]*plan.Expr, len(agg.AggList))
+	for i, original := range agg.AggList {
+		arg := GetColExpr(original.Typ, newAggTag, int32(i))
+		final, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "sum", []*plan.Expr{arg})
+		if err != nil {
+			return false
+		}
+		// A two-stage SUM is an execution strategy, not a SQL type change.
+		final.Typ = original.Typ
+		finalAggList[i] = final
+	}
+
+	partialNode := &plan.Node{
+		NodeType:    plan.Node_AGG,
+		Children:    []int32{candidate.factNode.NodeId},
+		GroupBy:     candidate.partialGroup,
+		AggList:     partialAggList,
+		BindingTags: []int32{newGroupTag, newAggTag},
+		SpillMem:    builder.aggSpillMem,
+	}
+	if builder.derivedColNdv == nil {
+		builder.derivedColNdv = make(map[[2]int32]float64)
+	}
+	for i, ndv := range candidate.partialGroupNdv {
+		builder.derivedColNdv[[2]int32{newGroupTag, int32(i)}] = ndv
+	}
+	partialNodeID := builder.appendNode(partialNode, builder.ctxByNode[join.NodeId])
+	partialNode.Stats.Outcnt = candidate.partialRows
+	builder.determineGroupByHashKey(partialNode)
+	join.Children[candidate.factChildPos] = partialNodeID
+
+	for i, joinCol := range candidate.factJoinCols {
+		col := joinCol.GetCol()
+		replaceAllColRefInExprList(join.OnList,
+			[]*plan.Expr_Col{{Col: &plan.ColRef{RelPos: col.RelPos, ColPos: col.ColPos}}},
+			[]*plan.Expr_Col{{Col: &plan.ColRef{RelPos: newGroupTag, ColPos: int32(candidate.joinGroupPos[i])}}})
+	}
+
+	for groupPos, partialPos := range candidate.groupRemap {
+		agg.GroupBy[groupPos] = GetColExpr(agg.GroupBy[groupPos].Typ, newGroupTag, int32(partialPos))
+	}
+	agg.AggList = finalAggList
+	return true
+}
+
+// pushPartialSumsThroughUniqueDimensions implements a conservative aggregate
+// pushdown after join ordering. Constraints prove correctness; statistics only
+// decide whether the extra aggregation is likely to reduce work.
+func (builder *QueryBuilder) pushPartialSumsThroughUniqueDimensions(nodeID int32) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.aggPushDown != 0 {
+		return nodeID
+	}
+	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		node.Children[i] = builder.pushPartialSumsThroughUniqueDimensions(childID)
+	}
+	if node.NodeType != plan.Node_AGG || len(node.GroupBy) == 0 || hasInactiveGroupingColumn(node.GroupingFlag) || len(node.Children) != 1 {
+		return nodeID
+	}
+	join := builder.qry.Nodes[node.Children[0]]
+	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER || len(join.OnList) == 0 || join.Stats == nil {
+		return nodeID
+	}
+
+	for factChildPos := 0; factChildPos < 2; factChildPos++ {
+		candidate := builder.buildPartialSumPushdownCandidate(node, join, factChildPos)
+		if candidate != nil && builder.applyPartialSumPushdown(node, join, candidate) {
+			break
+		}
+	}
 	return nodeID
 }
 
