@@ -40,8 +40,9 @@ const (
 	KindESQL = "esql"
 	KindSQL  = "sql"
 
-	optionConfig = "config"
-	optionQuery  = "query"
+	optionConfig  = "config"
+	optionQuery   = "query"
+	optionRecheck = "recheck"
 )
 
 // Config is the validated content of the WITH (...) option list.
@@ -56,11 +57,16 @@ type Config struct {
 	// DefaultQuery is the query text used when a SELECT has no
 	// __mo_query = '...' predicate; "" means no default.
 	DefaultQuery string
+	// Recheck true (the default) means MO applies every predicate itself and
+	// sends the query text verbatim; false opts into predicate pushdown,
+	// wrapping the query so the remote evaluates the deparsable conjuncts.
+	// SQL only -- ENGINE = ESQL rejects the option.
+	Recheck bool
 }
 
 // ParseTableOptions validates the WITH (...) list of ENGINE = ESQL|SQL.
 func ParseTableOptions(ctx context.Context, param *tree.ForeignTableParam) (Config, error) {
-	cfg := Config{Kind: strings.ToLower(param.Kind)}
+	cfg := Config{Kind: strings.ToLower(param.Kind), Recheck: true}
 	if cfg.Kind != KindESQL && cfg.Kind != KindSQL {
 		return Config{}, moerr.NewInvalidInputf(ctx, "unknown foreign external table engine '%s'", param.Kind)
 	}
@@ -87,8 +93,26 @@ func ParseTableOptions(ctx context.Context, param *tree.ForeignTableParam) (Conf
 			cfg.ConfigJSON = value
 		case optionQuery:
 			cfg.DefaultQuery = value
+		case optionRecheck:
+			// Pushdown wraps the user's query text as a MySQL-dialect
+			// derived table; ES|QL has no such form, so ESQL stays on the
+			// verbatim path until it grows a pushdown of its own.
+			if cfg.Kind != KindSQL {
+				return Config{}, moerr.NewInvalidInputf(ctx,
+					"the 'recheck' option is only supported by ENGINE = SQL, not %s", cfg.Kind)
+			}
+			recheck, err := strconv.ParseBool(strings.ToLower(value))
+			if err != nil {
+				return Config{}, moerr.NewInvalidInputf(ctx,
+					"%s option 'recheck' must be true or false, got '%s'", cfg.Kind, value)
+			}
+			cfg.Recheck = recheck
 		default:
-			return Config{}, moerr.NewInvalidInputf(ctx, "unknown %s option '%s' (supported: config, query)", cfg.Kind, key)
+			supported := "config, query"
+			if cfg.Kind == KindSQL {
+				supported = "config, query, recheck"
+			}
+			return Config{}, moerr.NewInvalidInputf(ctx, "unknown %s option '%s' (supported: %s)", cfg.Kind, key, supported)
 		}
 	}
 	return cfg, nil
@@ -102,12 +126,13 @@ func BuildCreateSQLEnvelope(cfg Config) string {
 	// build_show_util.go). Every field is url-escaped so ';' and '*/' in a DSN
 	// cannot break the envelope.
 	return fmt.Sprintf(
-		"/* %s version=1; kind=%s; engine=%s; config=%s; query=%s */",
+		"/* %s version=1; kind=%s; engine=%s; config=%s; query=%s; recheck=%t */",
 		CreateSQLEnvelopePrefix,
 		CreateSQLKindForeign,
 		url.QueryEscape(cfg.Kind),
 		url.QueryEscape(cfg.ConfigJSON),
 		url.QueryEscape(cfg.DefaultQuery),
+		cfg.Recheck,
 	)
 }
 
@@ -153,6 +178,19 @@ func ParseCreateSQLEnvelope(ctx context.Context, createSQL string) (Config, bool
 		Kind:         fields["engine"],
 		ConfigJSON:   fields["config"],
 		DefaultQuery: fields["query"],
+		// recheck is absent from envelopes written before pushdown existed;
+		// those tables were read with every predicate applied locally, which
+		// is exactly recheck=true -- so absent must decode as the default,
+		// never as the bool zero value.  (The reverse direction is safe too:
+		// an older binary ignores the field it does not know.)
+		Recheck: true,
+	}
+	if raw, ok := fields["recheck"]; ok {
+		recheck, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, true, moerr.NewInvalidInput(ctx, "foreign table rel_createsql envelope has an invalid recheck flag")
+		}
+		cfg.Recheck = recheck
 	}
 	if cfg.Kind != KindESQL && cfg.Kind != KindSQL {
 		return Config{}, true, moerr.NewInvalidInput(ctx, "foreign table rel_createsql envelope has an invalid engine")

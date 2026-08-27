@@ -56,8 +56,8 @@ func TestParseTableOptions(t *testing.T) {
 	// empty value
 	_, err = ParseTableOptions(ctx, mk("sql", "query", "  "))
 	require.Error(t, err)
-	// unknown option
-	_, err = ParseTableOptions(ctx, mk("sql", "recheck", "true"))
+	// unknown option ('recheck' is a real one: see TestRecheckOption)
+	_, err = ParseTableOptions(ctx, mk("sql", "compress", "true"))
 	require.Error(t, err)
 	// unknown kind
 	_, err = ParseTableOptions(ctx, mk("mongodb"))
@@ -126,4 +126,77 @@ func TestRedactedConfigRejectedClearly(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SHOW CREATE")
 	require.Contains(t, err.Error(), "session variable")
+}
+
+func TestRecheckOption(t *testing.T) {
+	ctx := context.Background()
+	mk := func(kind string, kv ...string) *tree.ForeignTableParam {
+		p := &tree.ForeignTableParam{Kind: kind}
+		for i := 0; i < len(kv); i += 2 {
+			p.Options = append(p.Options, tree.ForeignTableOption{Key: tree.Identifier(kv[i]), Val: kv[i+1]})
+		}
+		return p
+	}
+
+	// the default is the pre-pushdown behavior: MO applies every predicate
+	cfg, err := ParseTableOptions(ctx, mk("SQL", "query", "select 1"))
+	require.NoError(t, err)
+	require.True(t, cfg.Recheck)
+
+	cfg, err = ParseTableOptions(ctx, mk("ESQL", "query", "from idx"))
+	require.NoError(t, err)
+	require.True(t, cfg.Recheck)
+
+	// opting in
+	cfg, err = ParseTableOptions(ctx, mk("SQL", "recheck", "false"))
+	require.NoError(t, err)
+	require.False(t, cfg.Recheck)
+
+	cfg, err = ParseTableOptions(ctx, mk("SQL", "recheck", "TRUE"))
+	require.NoError(t, err)
+	require.True(t, cfg.Recheck)
+
+	// ESQL has no pushdown yet, and must say so rather than accept a knob
+	// that would silently do nothing
+	_, err = ParseTableOptions(ctx, mk("ESQL", "recheck", "false"))
+	require.ErrorContains(t, err, "only supported by ENGINE = SQL")
+
+	// a typo'd value is rejected, not coerced
+	_, err = ParseTableOptions(ctx, mk("SQL", "recheck", "no-thanks"))
+	require.ErrorContains(t, err, "must be true or false")
+
+	// the "unknown option" help text is kind-aware
+	_, err = ParseTableOptions(ctx, mk("SQL", "nope", "1"))
+	require.ErrorContains(t, err, "supported: config, query, recheck")
+	_, err = ParseTableOptions(ctx, mk("ESQL", "nope", "1"))
+	require.ErrorContains(t, err, "supported: config, query")
+	require.NotContains(t, err.Error(), "recheck")
+}
+
+func TestEnvelopeCarriesRecheck(t *testing.T) {
+	ctx := context.Background()
+
+	for _, recheck := range []bool{true, false} {
+		cfg := Config{Kind: KindSQL, ConfigJSON: `{"driver":"mysql","dsn":"d"}`, DefaultQuery: "select 1", Recheck: recheck}
+		got, isForeign, err := ParseCreateSQLEnvelope(ctx, BuildCreateSQLEnvelope(cfg))
+		require.NoError(t, err)
+		require.True(t, isForeign)
+		require.Equal(t, cfg, got)
+	}
+
+	// An envelope written before pushdown existed has no recheck field. Those
+	// tables were read with every predicate applied locally, so absent must
+	// decode as the default -- never as the bool zero value, which would
+	// silently turn pushdown ON for every pre-existing table.
+	legacy := "/* " + CreateSQLEnvelopePrefix + " version=1; kind=" + CreateSQLKindForeign + "; engine=sql; config=; query=select+1 */"
+	got, isForeign, err := ParseCreateSQLEnvelope(ctx, legacy)
+	require.NoError(t, err)
+	require.True(t, isForeign)
+	require.True(t, got.Recheck, "a pre-pushdown table must not start pushing predicates")
+
+	// a corrupt flag is an error, not a silent default
+	bad := "/* " + CreateSQLEnvelopePrefix + " version=1; kind=" + CreateSQLKindForeign + "; engine=sql; query=select+1; recheck=maybe */"
+	_, isForeign, err = ParseCreateSQLEnvelope(ctx, bad)
+	require.True(t, isForeign)
+	require.ErrorContains(t, err, "invalid recheck flag")
 }

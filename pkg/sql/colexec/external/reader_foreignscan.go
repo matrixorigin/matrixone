@@ -118,6 +118,16 @@ func (r *ForeignScanReader) Open(param *ExternalParam, proc *process.Process) (f
 	queryText := param.Fileparam.Filepath
 	stream, err := conn.Query(proc.Ctx, queryText)
 	if err != nil {
+		if foreignext.IsPushdownWrapped(queryText) {
+			// Predicate pushdown is the only thing that turns the user's own
+			// query text into something the source can reject on its own: it
+			// becomes a derived table whose WHERE names the DECLARED columns,
+			// so a query projecting different names ("select id as ident")
+			// fails here while working verbatim. Say so -- the remote's
+			// "column id does not exist" does not mention pushdown at all.
+			return false, moerr.NewInvalidInputf(proc.Ctx,
+				"sql external table query failed with predicate pushdown on ('recheck' = 'false'): the text ran wrapped as a derived table filtered on the DECLARED column names, so it must project them -- %v", err)
+		}
 		return false, err
 	}
 	parser, err := newCSVParserFromReader(param.Extern, stream)

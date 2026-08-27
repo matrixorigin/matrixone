@@ -20,10 +20,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -68,12 +70,16 @@ type fakeScanConn struct {
 	kind      foreigntvf.Kind
 	csv       string
 	lastQuery string
+	queryErr  error // when set, Query fails instead of replaying csv
 }
 
 func (c *fakeScanConn) Close() error          { return nil }
 func (c *fakeScanConn) Kind() foreigntvf.Kind { return c.kind }
 func (c *fakeScanConn) Query(ctx context.Context, q string) (io.ReadCloser, error) {
 	c.lastQuery = q
+	if c.queryErr != nil {
+		return nil, c.queryErr
+	}
 	return io.NopCloser(strings.NewReader(c.csv)), nil
 }
 
@@ -287,4 +293,36 @@ func TestForeignScanISO8601Timestamp(t *testing.T) {
 	require.NotNil(t, op.Es.Extern)
 	require.Equal(t, uint64(1), op.Es.Extern.Tail.IgnoredLines)
 	op.Free(proc, false, nil)
+}
+
+// TestForeignScanReaderExplainsPushdownFailure covers the one failure mode
+// predicate pushdown introduces: the wrapper filters on the DECLARED column
+// names, so a query text that projects different names fails at the source
+// while working verbatim. The remote's own error never mentions pushdown.
+func TestForeignScanReaderExplainsPushdownFailure(t *testing.T) {
+	open := func(query string) error {
+		proc := testutil.NewProcess(t)
+		ses := &fakeScanSession{}
+		proc.Session = ses
+		cfg := `{"driver":"nope","dsn":"unused"}`
+		conn := &fakeScanConn{kind: foreigntvf.KindSQL,
+			queryErr: moerr.NewInvalidInputNoCtx("column id does not exist")}
+		ses.PutForeignConn(context.TODO(), foreigntvf.MakeHandle(foreigntvf.KindSQL, cfg), conn)
+		param := foreignScanParam(t, "sql", cfg, foreignScanCols(), []string{"id", "name"})
+		param.Fileparam.Filepath = query
+		_, err := NewForeignScanReader(param).Open(param, proc)
+		return err
+	}
+
+	// wrapped: the source error is kept AND explained
+	err := open(foreignext.WrapPushdownQuery("select id as ident, name from src", "(`id` > 3)"))
+	require.ErrorContains(t, err, "column id does not exist")
+	require.ErrorContains(t, err, "'recheck' = 'false'")
+	require.ErrorContains(t, err, "must project them")
+
+	// verbatim: the source error is passed through untouched, with no
+	// misleading talk of a wrapper that was never built
+	err = open("select id, name from src")
+	require.ErrorContains(t, err, "column id does not exist")
+	require.NotContains(t, err.Error(), "recheck")
 }

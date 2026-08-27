@@ -63,11 +63,10 @@ shape as `sqldatastream.ParseTableOptions`).
 |---|---|---|---|
 | `config` | optional | optional | The **same JSON** that `esql_tvf_connect(config)` / `sql_tvf_connect(config)` accept: a whitelisted elasticsearch config JSON for ESQL (`addresses`, `username`, `password`, `cloudid`, `apikey`, `servicetoken`, `certificatefingerprint`, `cacert` — lifecycle/global library knobs are rejected), `{"driver": "...", "dsn": "..."}` for SQL.  Passed verbatim to `foreigntvf.Connect(kind, configJSON)`.  All connection info comes from user input or the session — query processing never reads the CN process environment. If omitted, the scan uses `@esql_tvf_config` / `@sql_tvf_config` of the querying session (exactly `foreigntvf.ConfigFromSessionVar`); error if neither is set. |
 | `query` | optional | optional | Default query text, used when a `SELECT` has no `__mo_query` predicate (see §2).  Plain text, no placeholders. |
+| `recheck` | rejected | optional | `true` (the default) means MO evaluates every ordinary predicate itself and sends the query text verbatim; `false` opts into predicate pushdown, wrapping the text as a derived table so the source applies the deparsable conjuncts (§2.5).  ESQL rejects the option. |
 
-No other options.  In particular there is **no** `recheck`: nothing but the
-query text is pushed to the source, so MO always evaluates every ordinary
-predicate locally (§2.4).  Any `URL`/`FORMAT`/`INFILE` clause is rejected for
-these engines, as for DATASTREAM.
+No other options.  Any `URL`/`FORMAT`/`INFILE` clause is rejected for these
+engines, as for DATASTREAM.
 
 
 2. `__mo_query`: the query is a pushed-down predicate
@@ -160,16 +159,79 @@ parameterize it:
   prepare parameter), but whatever it folds to is what the source receives;
 * the text must return the declared columns, in declared order (§3);
 * nothing else from the MO query (projections, other predicates, LIMIT) is
-  pushed into the text.
+  pushed into the text, unless the table opted into predicate pushdown (§2.5),
+  which wraps the text rather than rewriting it.
 
 ### 2.4 Ordinary predicates
 
-All conjuncts that touch a declared column stay in `node.FilterList` and are
-evaluated by MO on the returned rows, as for any external table.  There is no
-filter deparser / pushdown hint as in DATASTREAM: the user already wrote the
-foreign query, so pushing down is their job, in their dialect.  Consequently
-there is no `recheck` option and no cross-engine collation/time-zone
-correctness caveat.
+By default all conjuncts that touch a declared column stay in
+`node.FilterList` and are evaluated by MO on the returned rows, as for any
+external table.  The user already wrote the foreign query, so narrowing it is
+their job, in their dialect:
+
+```
+-- the selective way: the source never materializes the other rows
+select * from orders where __mo_query = 'select id, name from src where id > 3';
+
+-- the default way: the source returns every row and MO drops the rest
+select * from orders where __mo_query = 'select id, name from src' and id > 3;
+```
+
+### 2.5 Predicate pushdown (`recheck` = `false`, SQL only)
+
+`ENGINE = SQL` can push the second form down for you.  It is **opt-in**, off by
+default, and unavailable on `ENGINE = ESQL` (which rejects the option rather
+than accepting a knob that would do nothing):
+
+```
+create external table orders (id bigint, name varchar(64))
+engine = sql with ('config' = '...', 'recheck' = 'false');
+```
+
+With it on, `compileForeignScan` deparses the row-level conjuncts with the
+DATASTREAM deparser (`datastream.DeparseFilters`: column refs, literals,
+comparisons, `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS [NOT] NULL`, `LIKE` — any
+other conjunct stays local) and wraps each query text as a derived table:
+
+```
+select * from (
+select id, name from src
+) `__mo_subq_1a2b3c4d` where (`id` > 3)
+```
+
+Exactly the deparsed conjuncts leave `node.FilterList`; everything else is
+still evaluated by MO.
+
+Three properties of that wrapper are deliberate:
+
+* **the projection stays `*`.**  Result mapping is positional (§3) — the
+  remote's column *names* are never read — so naming the columns would impose
+  a name contract on the projection that the verbatim path never had.
+* **the `WHERE` clause cannot avoid names.**  It is the one new requirement
+  pushdown adds: the query must expose the declared column names, so
+  `select a_id from src` feeding a column declared `id` works verbatim but
+  fails once wrapped.
+* **synthetic columns are masked** (`pushdownCols`): `__mo_query`,
+  `__mo_filepath` and the error-mode columns exist only inside MO, so a
+  conjunct mentioning one is never deparsed.
+
+Why opt-in, given all that:
+
+* a pushed predicate is **not provably superset-preserving across engines** —
+  the remote may drop a row MO would have kept under a different collation,
+  time zone, or coercion, and no local recheck can bring it back.  This is the
+  same reasoning, and the same option name, as DATASTREAM's `recheck`.
+* the query text must be **wrappable**: a `SHOW`, a `CALL`, or a projection
+  with duplicate column names is a valid verbatim query and an invalid derived
+  table.  (A trailing `;` and a trailing `-- comment` are handled;
+  `WrapPushdownQuery` trims the first and puts the closing paren on its own
+  line for the second.)
+* an `ORDER BY` inside a derived table is not guaranteed to survive — which
+  only matters to a query that was relying on unordered-by-MO row order
+  anyway.
+
+`SHOW CREATE TABLE` renders `"recheck" = 'false'` only when the table opted in,
+so tables that never did keep rendering exactly the options their owner wrote.
 
 
 3. Schema and result mapping
@@ -282,8 +344,9 @@ Mirror DATASTREAM:
 7. Non-goals
 ------------
 
-* No predicate/projection/limit pushdown into the foreign query text; no
-  deparser; no `recheck`.
+* No projection or limit pushdown, and no rewriting of the foreign query text
+  itself: `recheck` = `false` wraps the text as a derived table (§2.5), it
+  never edits it.  ESQL has no pushdown at all.
 * No runtime schema; no JSON-array no-schema mode.
 * No parameter binding (`?`) in the foreign text.
 * No writes (`INSERT INTO` an ESQL/SQL external table is an error); `INSERT ...

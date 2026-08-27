@@ -82,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2711,6 +2712,30 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	if err != nil {
 		return nil, err
 	}
+	// Predicate pushdown is SQL-only and opt-in ('recheck' = 'false'), for the
+	// same reason it is opt-in for DATASTREAM: a pushed predicate is not
+	// provably superset-preserving across engines, so the remote may drop a
+	// row MO would have kept under a different collation, time zone, or
+	// coercion, and no amount of local rechecking can bring it back.  Wrapping
+	// adds a second requirement on top of that -- the query text becomes a
+	// derived table, so it must be a wrappable SELECT that exposes the
+	// declared column names.  Both are the table owner's assertion to make.
+	if fs.Pushdown && fs.Kind == foreignext.KindSQL && len(residual) > 0 {
+		pushedText, pushed := sqldatastream.DeparseFilters(
+			residual, pushdownCols(node.TableDef.Cols), c.proc.GetSessionInfo().TimeZone)
+		if pushedText != "" {
+			for i := range queryList {
+				queryList[i] = foreignext.WrapPushdownQuery(queryList[i], pushedText)
+			}
+			kept := make([]*plan.Expr, 0, len(residual))
+			for i, expr := range residual {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			residual = kept
+		}
+	}
 	node.FilterList = residual
 
 	param := external.ForeignExternParam(fs.Kind)
@@ -2723,6 +2748,27 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{scope}, nil
+}
+
+// pushdownCols masks the synthetic external-scan columns out of a scan's
+// column list.  They exist only inside MO -- __mo_query selects which query
+// runs, the error-mode columns are synthesized by the reader -- so a conjunct
+// mentioning one must never be deparsed into the remote's WHERE clause.
+// DeparseFilters resolves column refs by position and already refuses a nil
+// entry, so blanking the slot is enough.
+//
+// The mask is by name, which is deliberately blunter than the (name, ColId)
+// scoping used elsewhere: a pre-existing schema may hold a REAL column called
+// __mo_query, and masking it merely costs that one conjunct its pushdown.
+func pushdownCols(cols []*plan.ColDef) []*plan.ColDef {
+	masked := make([]*plan.ColDef, len(cols))
+	for i, col := range cols {
+		if col == nil || catalog.IsReservedExternalColName(col.Name) {
+			continue
+		}
+		masked[i] = col
+	}
+	return masked
 }
 
 // compileKafkaScan compiles a scan of a Kafka external table. The read

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -165,4 +166,147 @@ func TestShuffleStageNodesKeepForeignScanCN(t *testing.T) {
 	normalScope := &Scope{RootOp: merge.NewArgument()}
 	_, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
 	require.False(t, local)
+}
+
+// foreignRowFilter builds `<col at pos> <op> <int literal>`.
+func foreignRowFilter(op string, obj function.FuncExplainLayout, colPos int32, colName string, val int64) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: op, Obj: int64(obj) << 32},
+			Args: []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_int64)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: colPos, Name: colName}}},
+				{Typ: plan.Type{Id: int32(types.T_int64)},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: val}}}},
+			},
+		}},
+	}
+}
+
+// TestCompileForeignScanPushdown covers the opt-in predicate pushdown for
+// ENGINE = SQL: the query text is wrapped as a derived table carrying the
+// deparsable conjuncts, and exactly those conjuncts stop being evaluated
+// locally.
+func TestCompileForeignScanPushdown(t *testing.T) {
+	newCompile := func() *Compile {
+		c := NewMockCompile(t)
+		c.addr = "local:6001"
+		c.anal = &AnalyzeModule{qry: &plan.Query{}}
+		c.proc.Base.SessionInfo.TimeZone = time.UTC
+		return c
+	}
+	aGt5 := func() *plan.Expr { return foreignRowFilter(">", function.GREAT_THAN, 0, "a", 5) }
+
+	// DEFAULT (recheck=true): the remote gets the query verbatim and MO keeps
+	// applying the predicate itself. This is the pre-pushdown behavior and
+	// must survive untouched -- it is correct under any remote semantics.
+	c := newCompile()
+	node := foreignTestNode("", foreignQueryEq("select a from src"), aGt5())
+	scopes, err := c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	op := scopes[0].RootOp.(*external.External)
+	require.Equal(t, []string{"select a from src"}, op.Es.FileList)
+	require.Len(t, node.FilterList, 1)
+
+	// OPTED IN: the query becomes a derived table with the conjunct as its
+	// WHERE, and the conjunct leaves the local filter list
+	c = newCompile()
+	node = foreignTestNode("", foreignQueryEq("select a from src"), aGt5())
+	node.ExternScan.ForeignScan.Pushdown = true
+	scopes, err = c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	op = scopes[0].RootOp.(*external.External)
+	require.Len(t, op.Es.FileList, 1)
+	sent := op.Es.FileList[0]
+	require.Contains(t, sent, "select * from (")
+	require.Contains(t, sent, "select a from src")
+	require.Contains(t, sent, " where (`a` > 5)")
+	require.Empty(t, node.FilterList, "a pushed conjunct is not evaluated twice")
+
+	// the 'query' table option is wrapped the same way
+	c = newCompile()
+	node = foreignTestNode("select a from src", aGt5())
+	node.ExternScan.ForeignScan.Pushdown = true
+	scopes, err = c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	require.Contains(t, scopes[0].RootOp.(*external.External).Es.FileList[0], " where (`a` > 5)")
+
+	// a conjunct the deparser cannot express stays local, and the wrapper
+	// carries only what was actually pushed
+	c = newCompile()
+	unpushable := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "abs"},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "a"}}}},
+		}},
+	}
+	node = foreignTestNode("", foreignQueryEq("select a from src"), aGt5(), unpushable)
+	node.ExternScan.ForeignScan.Pushdown = true
+	scopes, err = c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	sent = scopes[0].RootOp.(*external.External).Es.FileList[0]
+	require.Contains(t, sent, " where (`a` > 5)")
+	require.NotContains(t, sent, "abs")
+	require.Len(t, node.FilterList, 1)
+	require.Equal(t, "abs", node.FilterList[0].GetF().Func.GetObjName())
+
+	// nothing deparsable at all: no wrapper, no derived table, no risk of
+	// breaking a query that cannot be one
+	c = newCompile()
+	node = foreignTestNode("", foreignQueryEq("select a from src"), unpushable)
+	node.ExternScan.ForeignScan.Pushdown = true
+	scopes, err = c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select a from src"}, scopes[0].RootOp.(*external.External).Es.FileList)
+	require.Len(t, node.FilterList, 1)
+
+	// ESQL never pushes, even if a plan somehow carries the flag: the wrapper
+	// is MySQL-dialect SQL and ES|QL cannot parse it
+	c = newCompile()
+	node = foreignTestNode("", foreignQueryEq("from idx"), aGt5())
+	node.ExternScan.ForeignScan.Kind = "esql"
+	node.ExternScan.ForeignScan.Pushdown = true
+	scopes, err = c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"from idx"}, scopes[0].RootOp.(*external.External).Es.FileList)
+	require.Len(t, node.FilterList, 1)
+}
+
+// TestCompileForeignScanPushdownMasksSyntheticCols proves a predicate on a
+// synthetic column never reaches the remote: those columns are made up inside
+// MO and no remote table has them, so pushing one would turn a working query
+// into an "Unknown column" error.
+func TestCompileForeignScanPushdownMasksSyntheticCols(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	c.proc.Base.SessionInfo.TimeZone = time.UTC
+
+	// __mo_file_line is an error-mode column synthesized by the reader; it
+	// sits before the trailing file-level __mo_query column
+	node := foreignTestNode("")
+	node.TableDef.Cols = []*plan.ColDef{
+		{Name: "a", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: catalog.ExternalFileLine, ColId: catalog.ExternalFileLineColId,
+			Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: catalog.ExternalQuery, ColId: catalog.ExternalQueryColId,
+			Typ: plan.Type{Id: int32(types.T_varchar)}},
+	}
+	queryEq := foreignQueryEq("select a from src")
+	queryEq.GetF().Args[0].GetCol().ColPos = 2
+	node.FilterList = []*plan.Expr{
+		queryEq,
+		foreignRowFilter(">", function.GREAT_THAN, 1, catalog.ExternalFileLine, 1),
+	}
+	node.ExternScan.ForeignScan.Pushdown = true
+
+	scopes, err := c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	sent := scopes[0].RootOp.(*external.External).Es.FileList[0]
+	require.Equal(t, "select a from src", sent, "a synthetic column must not be deparsed to the remote")
+	require.NotContains(t, sent, catalog.ExternalFileLine)
+	require.Len(t, node.FilterList, 1, "and it must still be applied locally")
 }

@@ -1,0 +1,95 @@
+drop database if exists foreign_pushdown;
+create database foreign_pushdown;
+use foreign_pushdown;
+create table src(id int, name varchar(50), amount decimal(12,2), created datetime);
+insert into src values
+(1,'alice',100.50,'2026-01-01 10:00:00'),
+(2,'bob',NULL,'2026-01-02 11:00:00'),
+(3,'carol',75.25,'2026-01-03 12:00:00'),
+(4,'dave',20.00,'2026-01-04 13:00:00');
+create external table plain (id int, name varchar(50), amount decimal(12,2), created datetime)
+engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}');
+create external table pushed (id int, name varchar(50), amount decimal(12,2), created datetime)
+engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}', 'recheck' = 'false');
+select id, name from plain where __mo_query = 'select id, name, amount, created from src order by id' and id > 2;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+3  ¦  carol  𝄀
+4  ¦  dave
+select id, name from pushed where __mo_query = 'select id, name, amount, created from src order by id' and id > 2;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+3  ¦  carol  𝄀
+4  ¦  dave
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and amount is null;
+➤ id[4,32,0]  𝄀
+2
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and name like 'c%';
+➤ id[4,32,0]  𝄀
+3
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and id between 2 and 3 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and id in (1,4) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and (id = 1 or name = 'dave') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and abs(id - 3) < 1;
+➤ id[4,32,0]  𝄀
+3
+select id from pushed where __mo_query = 'select id, name, amount, created from src' and id > 1 and abs(id - 3) < 2 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4
+select id from pushed where __mo_query = 'select id, name, amount, created from src ;' and id > 3;
+➤ id[4,32,0]  𝄀
+4
+select id from pushed where __mo_query = 'select id, name, amount, created from src -- every row' and id > 3;
+➤ id[4,32,0]  𝄀
+4
+select id, name from pushed
+where __mo_query in ('select id, name, amount, created from src where id < 3',
+'select id, name, amount, created from src where id > 3')
+and id <> 1 order by id;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+2  ¦  bob  𝄀
+4  ¦  dave
+create external table pushed_default (id int, name varchar(50), amount decimal(12,2), created datetime)
+engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}',
+'query' = 'select id, name, amount, created from src',
+'recheck' = 'false');
+select id from pushed_default where id > 3;
+➤ id[4,32,0]  𝄀
+4
+show create table pushed;
+➤ Table[12,6,0]  ¦  Create Table[12,259,0]  𝄀
+pushed  ¦  CREATE EXTERNAL TABLE `pushed` (
+  `id` int DEFAULT NULL,
+  `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `amount` decimal(12,2) DEFAULT NULL,
+  `created` datetime DEFAULT NULL
+) ENGINE = SQL WITH ("config" = '<redacted>', "recheck" = 'false')
+show create table plain;
+➤ Table[12,5,0]  ¦  Create Table[12,237,0]  𝄀
+plain  ¦  CREATE EXTERNAL TABLE `plain` (
+  `id` int DEFAULT NULL,
+  `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `amount` decimal(12,2) DEFAULT NULL,
+  `created` datetime DEFAULT NULL
+) ENGINE = SQL WITH ("config" = '<redacted>')
+select id from plain where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
+➤ id[4,32,0]  𝄀
+4
+select id from pushed where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
+invalid input: sql external table query failed with predicate pushdown on ('recheck' = 'false'): the text ran wrapped as a derived table filtered on the DECLARED column names, so it must project them -- invalid input: sql_tvf: query failed: Error 1054 (42S22): invalid input: column id does not exist
+create external table bad_esql (a int) engine = esql
+with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'recheck' = 'false');
+invalid input: the 'recheck' option is only supported by ENGINE = SQL, not esql
+create external table bad_value (a int) engine = sql
+with ('config' = '{"driver":"mysql","dsn":"d"}', 'recheck' = 'sometimes');
+invalid input: sql option 'recheck' must be true or false, got 'sometimes'
+drop database foreign_pushdown;
