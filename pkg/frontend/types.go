@@ -334,13 +334,16 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
-	// numericPrefixConsumer is computed once per prepared-plan generation so
-	// ordinary COM_STMT Query executions never scan or copy the cached plan.
-	numericPrefixConsumer bool
-	hasPaginationParams   bool
-	hasLagLeadParams      bool
-	paramKinds            []vector.PrepareParamKind
-	paramMetadata         []bool
+	// Static prepared-plan capabilities are computed once per plan generation so
+	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
+	// result positions identify parameters whose binary runtime type is also the
+	// visible result-column type.
+	numericPrefixConsumer      bool
+	directResultParamPositions []int32
+	hasPaginationParams        bool
+	hasLagLeadParams           bool
+	paramKinds                 []vector.PrepareParamKind
+	paramMetadata              []bool
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -735,6 +738,15 @@ func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Co
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
 		return
 	}
+	// Compile/operator release resets execution-owned process state. Keep the
+	// current COM_STMT parameter generation detached while replacing an older
+	// runtime category, then restore it for the candidate that is about to run.
+	// Without this guard, a successful category replacement can publish the new
+	// compile but execute it with an empty prepare-parameter vector.
+	if prepareStmt.proc != nil {
+		prepareParams := prepareStmt.proc.DetachPrepareParams()
+		defer prepareStmt.proc.RestorePrepareParams(prepareParams)
+	}
 	runtimeCompile.FreeOperator()
 	runtimeCompile.SetIsPrepare(false)
 	runtimeCompile.Release()
@@ -765,8 +777,15 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.closeCursor()
+	// Release the runtime compile while the current parameter vector is still
+	// valid; releaseRuntimeCompile temporarily detaches and restores it.
+	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.params != nil {
+		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
+			prepareStmt.proc.SetPrepareParams(nil)
+		}
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
+		prepareStmt.params = nil
 	}
 
 	if prepareStmt.compile != nil {
@@ -775,7 +794,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
-	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
@@ -785,6 +803,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.directResultParamPositions = nil
 	prepareStmt.remapDb = nil
 }
 

@@ -31,13 +31,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
 type issue25753TraceConn struct {
 	net.Conn
-	mu    sync.Mutex
-	reads []byte
+	mu                     sync.Mutex
+	reads                  []byte
+	rewriteNextDecimalType bool
+	rewroteDecimalType     bool
 }
 
 func (c *issue25753TraceConn) Read(data []byte) (int, error) {
@@ -48,6 +51,65 @@ func (c *issue25753TraceConn) Read(data []byte) (int, error) {
 		c.mu.Unlock()
 	}
 	return n, err
+}
+
+func (c *issue25753TraceConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	if c.rewriteNextDecimalType {
+		modified := append([]byte(nil), data...)
+		if issue25753RewriteFirstParamAsDecimal(modified) {
+			data = modified
+			c.rewriteNextDecimalType = false
+			c.rewroteDecimalType = true
+		}
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(data)
+}
+
+func (c *issue25753TraceConn) rewriteNextParamAsDecimal() {
+	c.mu.Lock()
+	c.rewriteNextDecimalType = true
+	c.rewroteDecimalType = false
+	c.mu.Unlock()
+}
+
+func (c *issue25753TraceConn) didRewriteParamAsDecimal() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewroteDecimalType
+}
+
+// issue25753RewriteFirstParamAsDecimal keeps the driver's length-encoded value
+// and changes only the COM_STMT_EXECUTE type descriptor. This exercises the
+// wire shape used by clients that bind a direct DECIMAL parameter.
+func issue25753RewriteFirstParamAsDecimal(data []byte) bool {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		paramCount       = 1
+	)
+	for pos := 0; pos+packetHeaderSize <= len(data); {
+		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
+		end := pos + packetHeaderSize + payloadLen
+		if end > len(data) {
+			return false
+		}
+		payload := data[pos+packetHeaderSize : end]
+		const nullBitmapLen = (paramCount + 7) / 8
+		const executeHeaderLen = 1 + 4 + 1 + 4
+		newTypesFlagPos := executeHeaderLen + nullBitmapLen
+		typePos := newTypesFlagPos + 1
+		if len(payload) > typePos+1 && payload[0] == stmtExecute &&
+			payload[newTypesFlagPos] == 1 &&
+			(payload[typePos] == byte(defines.MYSQL_TYPE_VAR_STRING) ||
+				payload[typePos] == byte(defines.MYSQL_TYPE_STRING)) {
+			payload[typePos] = byte(defines.MYSQL_TYPE_NEWDECIMAL)
+			return true
+		}
+		pos = end
+	}
+	return false
 }
 
 func (c *issue25753TraceConn) prepareStatementID(t *testing.T) uint32 {
@@ -145,6 +207,63 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 					_ = stmt.Close()
 				}
 			}()
+
+			directStmt, err := conn.PrepareContext(ctx, "select ? as result")
+			require.NoError(t, err)
+			defer directStmt.Close()
+			assertDirect := func(
+				value any,
+				databaseType string,
+				wantPrecision, wantScale int64,
+				scanTarget any,
+			) {
+				t.Helper()
+				rows, queryErr := directStmt.QueryContext(ctx, value)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.Equal(t, databaseType, columnTypes[0].DatabaseTypeName())
+				if wantPrecision >= 0 {
+					precision, scale, ok := columnTypes[0].DecimalSize()
+					require.True(t, ok)
+					require.Equal(t, wantPrecision, precision)
+					require.Equal(t, wantScale, scale)
+				}
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(scanTarget))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}
+
+			var directInteger int64
+			assertDirect(int64(-42), "BIGINT", -1, -1, &directInteger)
+			require.Equal(t, int64(-42), directInteger)
+
+			assertWireDecimal := func(value string, wantPrecision, wantScale int64, expected string) {
+				t.Helper()
+				traceConn.rewriteNextParamAsDecimal()
+				var actual string
+				assertDirect(value, "DECIMAL", wantPrecision, wantScale, &actual)
+				require.True(t, traceConn.didRewriteParamAsDecimal())
+				require.Equal(t, expected, actual)
+			}
+			assertWireDecimal(
+				"-12345678901234567890.123456789", 29, 9,
+				"-12345678901234567890.123456789")
+			assertWireDecimal("0.00", 2, 2, "0.00")
+			assertWireDecimal("0e-30", 30, 30, "0."+strings.Repeat("0", 30))
+			wideDecimal := strings.Repeat("9", 65)
+			assertWireDecimal(wideDecimal, 65, 0, wideDecimal)
+
+			var directNullResult sql.NullString
+			assertDirect(nil, "TEXT", -1, -1, &directNullResult)
+			require.False(t, directNullResult.Valid)
+			assertWireDecimal(
+				"-12345678901234567890.123456789", 29, 9,
+				"-12345678901234567890.123456789")
 
 			assertValue := func(left, right any, expected string) {
 				t.Helper()

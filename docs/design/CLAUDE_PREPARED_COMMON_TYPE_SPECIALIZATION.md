@@ -13,7 +13,9 @@ Prepared markers are initially bound as transport text, but SQL `EXECUTE` and bi
 `COM_STMT_EXECUTE` can later supply integer, decimal, approximate, Boolean, string,
 or NULL values. Consumers such as comparisons, `IN`, `BETWEEN`, `COALESCE`,
 `GREATEST`, and `LEAST` cannot always select the correct common type at PREPARE
-time.
+time. A directly projected binary marker has the adjacent problem that its runtime
+protocol type is also its visible result-column type; prepare-time TEXT metadata is
+not valid for a numeric execution.
 
 This design permits narrowly scoped execution-time specialization when a runtime
 parameter reaches a numeric-prefix-aware exact consumer. It preserves the ordinary
@@ -34,6 +36,8 @@ keyed by stable runtime semantic categories rather than concrete values.
 5. Keep ordinary COM_STMT execution on the prepare-time plan/compile fast path.
 6. Bound specialized cache ownership and memory independently of executed values.
 7. Support rolling upgrades without sending v30 expression semantics to older CNs.
+8. Publish direct binary result markers with metadata and vectors matching their
+   numeric protocol type, without adding work to unrelated prepared executions.
 
 ### Non-goals
 
@@ -89,7 +93,11 @@ copy specialization, and a bounded one-entry semantic-category cache.
 - whether a rewritten literal must retain its original `ParamRef` source.
 
 Source and conversion kind are not SQL types. A text packet can be eligible for
-numeric-prefix conversion without changing direct string-result metadata.
+numeric-prefix conversion without changing direct string-result metadata. Conversely,
+a numeric binary descriptor on a marker that directly supplies a visible result column
+specializes that column to the descriptor's runtime type. DECIMAL result metadata uses
+the complete wire lexeme, including zero and trailing-zero scale, rather than the
+normalized numeric-prefix cache domain.
 
 ### 4.2 Domain selection
 
@@ -119,14 +127,18 @@ included. `BETWEEN` retains SQL three-valued logic: a FALSE comparison dominates
 
 - the immutable prepare-time plan;
 - the ordinary cached compile;
-- static capability flags for numeric-prefix consumers, pagination parameters, and
-  LAG/LEAD offsets;
+- static capability flags for numeric-prefix consumers, direct-result parameter
+  positions, pagination parameters, and LAG/LEAD offsets;
 - at most one runtime specialization key;
 - at most one restored specialized runtime plan;
 - at most one runtime compile built from that plan.
 
 The prepare-time capability scan is conservative. It prevents ordinary binary Query
 execution from constructing runtime parameter objects or traversing/copying plans.
+Direct-result positions are traced once through transparent projection, sort, and
+distinct nodes; parameters nested in ordinary result functions do not enter that
+admission set. Set operations remain common-type owners rather than direct-result
+pass-throughs and therefore keep their PREPARE-time common domain.
 
 ### 5.2 Execution owner
 
@@ -236,7 +248,9 @@ MORPC v30 gates prepared numeric-prefix expression semantics across CN boundarie
 On an unchanged schema and protocol generation:
 
 1. Ordinary COM_STMT Query execution performs no execute-time plan traversal, deep copy,
-   overload rebinding, or compile creation.
+   overload rebinding, or compile creation. Cached direct-result positions add only a
+   bounded position/protocol-kind check; statements without such positions retain the
+   original fast path.
 2. Eligible SQL EXECUTE and COM_STMT executions may specialize once per current cached
    category; subsequent same-category executions reuse the same runtime plan and
    compile pointers.
@@ -269,6 +283,8 @@ Required automated coverage includes:
 - generations: fresh, same-category reuse, category replacement, value-to-NULL,
   NULL-to-value, schema retry, protocol upgrade/rollback, and Close;
 - metadata: stable result types for numeric and nonnumeric scalar-subquery domains;
+  direct BIGINT/DECIMAL result markers; fixed-scale and exponent zero; and
+  value-to-NULL-to-value reuse without stale column definitions;
 - lifecycle: old compile release, failed replacement, retry replay, and no cached
   literal values;
 - performance: ordinary fast-path benchmark, repeated COM_STMT cache hit, repeated SQL
