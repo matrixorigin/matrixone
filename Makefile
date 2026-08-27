@@ -396,7 +396,14 @@ build-typecheck: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config cgo thirdparties
+UT_PREREQUISITES := cgo thirdparties
+# CI times config separately to monitor module-proxy health. Let that caller
+# attest that the exact checkout already passed config instead of verifying the
+# same package graph twice; direct developer invocations retain the prerequisite.
+ifneq ($(UT_CONFIGURED),1)
+UT_PREREQUISITES += config
+endif
+ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
