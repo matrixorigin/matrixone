@@ -926,7 +926,9 @@ type ddlVisibilityTarget struct {
 // syncDDLCommitToBarrierReadyCNs closes both sides of CN admission. A CN publishes
 // barrier readiness before its startup frontier fence and public ingress. The
 // DDL sender refreshes membership again after fan-out and repeats if any ready
-// generation changed. Protocol v33 is a deployment gate: mixed-version
+// generation changed. A failed target is retried only after authoritative
+// revalidation proves that exact generation/address tuple has departed.
+// Protocol v33 is a deployment gate: mixed-version
 // clusters retain legacy behavior without invoking an old receiver's fatal
 // SyncCommit path.
 func syncDDLCommitToBarrierReadyCNs(
@@ -974,20 +976,37 @@ func syncDDLCommitToBarrierReadyCNs(
 			ordered = append(ordered, target)
 		}
 		sort.Slice(ordered, func(i, j int) bool { return ordered[i].serviceID < ordered[j].serviceID })
+		retryFanout := false
 		for _, target := range ordered {
 			req := qc.NewRequest(querypb.CmdMethod_SyncCommitV2)
 			req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: visibilityTS}
-			resp, err := qc.SendMessage(ctx, target.address, req)
-			if err != nil {
-				return errors.Join(
-					err,
+			resp, sendErr := qc.SendMessage(ctx, target.address, req)
+			if sendErr != nil {
+				failure := errors.Join(
+					sendErr,
 					moerr.NewInternalErrorf(ctx, "failed to apply DDL commit on CN %s", target.address),
 				)
+				retryFanout, err = revalidateDDLVisibilityTargetFailure(
+					ctx, refresher, cluster, target, failure)
+				if err != nil {
+					return err
+				}
+				break
 			}
 			if resp == nil {
-				return moerr.NewInternalErrorf(ctx, "empty DDL visibility response from CN %s", target.address)
+				failure := moerr.NewInternalErrorf(
+					ctx, "empty DDL visibility response from CN %s", target.address)
+				retryFanout, err = revalidateDDLVisibilityTargetFailure(
+					ctx, refresher, cluster, target, failure)
+				if err != nil {
+					return err
+				}
+				break
 			}
 			qc.Release(resp)
+		}
+		if retryFanout {
+			continue
 		}
 
 		if err := refresher.Refresh(ctx); err != nil {
@@ -1004,6 +1023,35 @@ func syncDDLCommitToBarrierReadyCNs(
 			return nil
 		}
 	}
+}
+
+// revalidateDDLVisibilityTargetFailure distinguishes a graceful target
+// withdrawal/replacement from a failure of a still-required barrier member.
+// Unknown membership never becomes success: refresh and inventory errors are
+// joined with the original target failure.
+func revalidateDDLVisibilityTargetFailure(
+	ctx context.Context,
+	refresher clusterservice.AuthoritativeRefresher,
+	cluster clusterservice.MOCluster,
+	failed ddlVisibilityTarget,
+	failure error,
+) (bool, error) {
+	if err := refresher.Refresh(ctx); err != nil {
+		return false, errors.Join(
+			failure,
+			err,
+			moerr.NewInternalError(ctx, "failed to revalidate CN after DDL visibility target failure"),
+		)
+	}
+	targets, err := ddlVisibilityTargets(ctx, cluster)
+	if err != nil {
+		return false, errors.Join(failure, err)
+	}
+	current, ok := targets[failed.serviceID]
+	if ok && current == failed {
+		return false, failure
+	}
+	return true, nil
 }
 
 func ddlVisibilityTargets(

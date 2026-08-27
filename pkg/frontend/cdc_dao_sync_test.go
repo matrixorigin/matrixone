@@ -84,6 +84,7 @@ type mockMOCluster struct {
 	refreshSnapshots [][]metadata.CNService
 	refreshCalls     int
 	refreshError     error
+	refreshErrors    map[int]error
 }
 
 func (m *mockMOCluster) GetCNService(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
@@ -118,6 +119,9 @@ func (m *mockMOCluster) Refresh(context.Context) error {
 	m.refreshCalls++
 	if m.refreshCalls <= len(m.refreshSnapshots) {
 		m.cnServices = m.refreshSnapshots[m.refreshCalls-1]
+	}
+	if err := m.refreshErrors[m.refreshCalls]; err != nil {
+		return err
 	}
 	return m.refreshError
 }

@@ -1031,6 +1031,55 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
 
+	t.Run("retries when a failed target withdrew after the membership snapshot", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		sendErr := moerr.NewInternalErrorNoCtx("closing CN unavailable")
+		qc.sendError["cn-2:6001"] = sendErr
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		remaining := append([]metadata.CNService{}, targets[:1]...)
+		cluster.refreshSnapshots = [][]metadata.CNService{targets, remaining, remaining, remaining}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+		}, qc.requests)
+		require.Equal(t, 2, qc.releases)
+		require.Equal(t, 4, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("retries when a failed target tuple is replaced", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		sendErr := moerr.NewInternalErrorNoCtx("replaced CN unavailable")
+		qc.sendError["cn-2:6001"] = sendErr
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		replaced := append([]metadata.CNService{}, targets...)
+		replaced[1].ViewMetadataAdmissionGeneration = 2
+		replaced[1].QueryAddress = "cn-2-new:6001"
+		cluster.refreshSnapshots = [][]metadata.CNService{targets, replaced, replaced, replaced}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2-new:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+		}, qc.requests)
+		require.Equal(t, 3, qc.releases)
+		require.Equal(t, 4, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
 	t.Run("mixed-version cluster does not call a legacy receiver", func(t *testing.T) {
 		ses, op, qc, execCtx := newState(t)
 		defer ses.Close()
@@ -1077,6 +1126,29 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.ErrorIs(t, err, sendErr)
 		require.Len(t, qc.requests, 2)
 		require.Equal(t, 1, qc.releases)
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		require.Equal(t, 2, cluster.refreshCalls)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+		require.Zero(t, op.rollbackCalls)
+		require.Nil(t, ses.GetTxnHandler().GetTxn())
+	})
+
+	t.Run("does not retry when failure revalidation cannot refresh membership", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		sendErr := moerr.NewInternalErrorNoCtx("CN unavailable")
+		refreshErr := moerr.NewInternalErrorNoCtx("HAKeeper unavailable after send failure")
+		qc.sendError["cn-2:6001"] = sendErr
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		cluster.refreshErrors = map[int]error{2: refreshErr}
+
+		err := ses.GetTxnHandler().Commit(execCtx)
+		require.ErrorIs(t, err, sendErr)
+		require.ErrorIs(t, err, refreshErr)
+		require.Len(t, qc.requests, 2)
+		require.Equal(t, 1, qc.releases)
+		require.Equal(t, 2, cluster.refreshCalls)
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Zero(t, op.rollbackCalls)
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
@@ -1092,6 +1164,8 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.ErrorContains(t, err, "empty DDL visibility response")
 		require.Len(t, qc.requests, 1)
 		require.Zero(t, qc.releases)
+		cluster := clusterservice.GetMOCluster(queryServiceID).(*mockMOCluster)
+		require.Equal(t, 2, cluster.refreshCalls)
 		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
