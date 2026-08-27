@@ -30,9 +30,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 var _ logservice.CNHAKeeperClient = new(testHAKClient)
+
+func TestStartRevalidatesAdjustedAuthenticationClockBudget(t *testing.T) {
+	cfg := newServiceConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	require.NoError(t, cfg.validate())
+
+	op := &operator{
+		cfg:         cfg,
+		serviceType: metadata.ServiceType_CN,
+		state:       stopped,
+	}
+	op.Adjust(func(cfg *ServiceConfig) {
+		cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+	})
+
+	require.ErrorContains(t, op.Start(), "authentication freshness clock budget")
+	require.False(t, op.needsCleanup(), "invalid adjusted config must fail before resource creation")
+}
 
 type testHAKClient struct {
 	cfg *cnservice.Config

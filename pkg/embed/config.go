@@ -209,17 +209,8 @@ func (c *ServiceConfig) validate() error {
 	}
 
 	// clock
-	if c.Clock.MaxClockOffset.Duration == 0 {
-		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
-	}
-	if c.Clock.MaxClockOffset.Duration < 0 {
-		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
-	}
-	if c.Clock.Backend == "" {
-		c.Clock.Backend = localClockBackend
-	}
-	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
+	if err := c.validateClockConfiguration(); err != nil {
+		return err
 	}
 	if err := c.validateAuthenticationClockBudget(); err != nil {
 		return err
@@ -254,17 +245,8 @@ func (c *ServiceConfig) setDefaultValue() error {
 	}
 
 	// clock
-	if c.Clock.MaxClockOffset.Duration == 0 {
-		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
-	}
-	if c.Clock.MaxClockOffset.Duration < 0 {
-		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
-	}
-	if c.Clock.Backend == "" {
-		c.Clock.Backend = localClockBackend
-	}
-	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
+	if err := c.validateClockConfiguration(); err != nil {
+		return err
 	}
 	if err := c.setStartupRetryIntervalsDefault(); err != nil {
 		return err
@@ -309,6 +291,22 @@ func (c *ServiceConfig) setDefaultValue() error {
 	// meta cache
 	c.initMetaCache()
 
+	return nil
+}
+
+func (c *ServiceConfig) validateClockConfiguration() error {
+	if c.Clock.MaxClockOffset.Duration == 0 {
+		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	}
+	if c.Clock.MaxClockOffset.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
+	}
+	if c.Clock.Backend == "" {
+		c.Clock.Backend = localClockBackend
+	}
+	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
+	}
 	return nil
 }
 

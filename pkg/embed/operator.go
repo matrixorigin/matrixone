@@ -177,6 +177,15 @@ func (op *operator) Start() error {
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
 	}
+	// WithPreStart and ServiceOperator.Adjust intentionally run after the
+	// configuration file is loaded. Revalidate the adjusted clock and
+	// authentication contract before creating any service-owned resources.
+	if err := op.cfg.validateClockConfiguration(); err != nil {
+		return err
+	}
+	if err := op.cfg.validateAuthenticationClockBudget(); err != nil {
+		return err
+	}
 	if op.serviceType == metadata.ServiceType_CN {
 		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
 			return err

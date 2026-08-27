@@ -239,6 +239,10 @@ correctness under the configured external NTP/PTP assumption.
   is checked before multiplication/addition. An extreme offset that would
   overflow the clock budget fails startup instead of wrapping into an accepted
   negative or small timeout.
+- Embedded `WithPreStart`/`ServiceOperator.Adjust` callbacks run after the
+  configuration file is first validated. `Start` therefore re-applies clock
+  defaulting and validates the adjusted clock/authentication budget before it
+  creates a stopper, file service, listener, or other service-owned resource.
 
 ## 8. Performance Budget
 
@@ -286,6 +290,7 @@ correctness under the configured external NTP/PTP assumption.
 | Disabling active clock monitoring retains the configured uncertainty bound in process and embedded launchers | focused clock and launcher-config unit tests |
 | A handshake budget at or below the necessary pairwise clock fence fails during CN configuration, while the first representable value above it is accepted; overflow fails closed | shared config model plus process and embedded config unit tests |
 | `skipCheckUser=true` bypasses only the unreachable authentication deadline check while general clock validation remains active | process and embedded config unit tests through both validation entry points |
+| A public embedded pre-start adjustment cannot bypass clock/authentication validation and fails before resource creation | focused embedded operator unit test plus owning-package normal/race suites |
 | Existing larger session minimum is never lowered | focused frontend unit test |
 | Missing runtime/clock/transaction client, invalid offset, timestamp overflow, wait failure, and a returned watermark below the fence fail closed | focused frontend unit tests |
 | Authentication applies the fence before background transaction creation and therefore before user-transaction admission | focused frontend unit test at the executor seam |
@@ -333,3 +338,7 @@ would duplicate its fixture and oracles, so this change reuses it unchanged.
 - 2026-08-28: process and embedded validation delegate to one `pkg/config`
   budget function. Duplicating the formula at launcher boundaries would make a
   later policy correction another cross-launcher consistency risk.
+- 2026-08-28: embedded startup revalidates the adjusted clock/authentication
+  contract because the public pre-start callback intentionally runs after file
+  parsing. Validation occurs before resource creation, so invalid programmatic
+  settings fail without a partial-start cleanup obligation.
