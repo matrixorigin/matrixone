@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -2710,10 +2711,13 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(proc, source, rs, zone, length, selectList, assignmentCast)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType,
 			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+	case types.T_datalink:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToDatalink(proc, source, rs, length, selectList)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -2811,7 +2815,7 @@ func tsToOthers(proc *process.Process,
 		return tsToStr(proc.Ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return tsToTimestamp(proc, source, rs, length, toType)
+		return tsToTimestamp(source, rs, length, toType)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return tsToInt64(proc.Ctx, source, rs, length, toType)
@@ -8090,6 +8094,37 @@ func explicitZeroTemporalCastReturnsNull(proc *process.Process) (bool, error) {
 	return process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
 }
 
+func strToDatalink(
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, _, err := datalink.ParseDatalink(convertByteSliceToString(value), proc); err != nil {
+			return err
+		}
+		if err := to.AppendBytes(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func strToStr(
 	ctx context.Context,
 	proc *process.Process,
@@ -8234,7 +8269,7 @@ func strToBit(
 	for i := 0; i < length; i++ {
 		v, null := from.GetStrValue(uint64(i))
 		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
+			if err := to.Append(0, true); err != nil {
 				return err
 			}
 		} else {
@@ -8570,35 +8605,23 @@ func tsToStr(
 	return nil
 }
 func tsToTimestamp(
-	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.TS],
 	to *vector.FunctionResult[types.Timestamp],
 	length int,
 	toType types.Type) error {
 
 	for i := 0; i < length; i++ {
-		tsVal, _ := from.GetValue(uint64(i))
-
-		physical := tsVal.Physical()
-		seconds := int64(physical / 1e9)
-		nanos := int64(physical % 1e9)
-		t := time.Unix(seconds, nanos).UTC()
-		timeStr := t.Format("2006-01-02 15:04:05.999999")
-
-		zone := time.Local
-		if proc != nil {
-			zone = proc.GetSessionInfo().TimeZone
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		val, err := types.ParseTimestamp(zone, timeStr, toType.Scale)
 
-		if err != nil {
+		if err := to.Append(timestampFromTransactionTS(tsVal, toType.Scale), false); err != nil {
 			return err
 		}
-
-		if err = to.Append(val, false); err != nil {
-			return err
-		}
-
 	}
 
 	return nil

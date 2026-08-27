@@ -26,9 +26,9 @@ select mo_ctl('dn', 'flush', 'regular_index_order_limit_cursor.t');
   ]
 }
 
-select Sleep(1);
-➤ Sleep(1)[-6,8,0]  𝄀
-0
+select table_name, table_cnt from table_stats('regular_index_order_limit_cursor.t') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+regular_index_order_limit_cursor.t  ¦  50.0
 select id
 from t
 where user_id = 'u1'

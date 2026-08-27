@@ -214,6 +214,22 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	})
 	succeed, info := mixed.Run()
 	require.True(t, succeed, info)
+
+	for _, width := range []int32{1, 8, 64} {
+		t.Run(fmt.Sprintf("null bit%d", width), func(t *testing.T) {
+			bitType := types.New(types.T_bit, width, 0)
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "1"}, []bool{true, false}),
+					NewFunctionTestInput(bitType, []uint64{}, nil),
+				},
+				NewFunctionTestResult(bitType, false, []uint64{0, 1}, []bool{true, false}), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(vector.PrepareParamInteger)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
 	run("negative string rejected", vector.PrepareParamNone,
 		[]string{"-6109877384019645241"}, bit64, nil, true)
 	run("narrow integer rejected", vector.PrepareParamInteger, []string{"-1"}, bit63, nil, true)

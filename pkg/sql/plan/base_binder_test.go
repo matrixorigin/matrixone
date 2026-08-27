@@ -1570,3 +1570,16 @@ func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
 		require.Equal(t, "day", list.List[1].GetLit().GetSval())
 	})
 }
+
+func TestNormalizeDecimalParamInArgsUsesFloatForMixedApproximateList(t *testing.T) {
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0}},
+			{Typ: plan.Type{Id: int32(types.T_float64)}},
+		}}}},
+	}
+	require.NoError(t, normalizeDecimalParamInArgs(context.Background(), "in", args))
+	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+	require.Equal(t, "cast", args[0].GetF().GetFunc().GetObjName())
+}

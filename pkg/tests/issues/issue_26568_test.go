@@ -29,7 +29,6 @@ import (
 )
 
 const (
-	issue26568Rows                = 130_000
 	issue26568TPPlanTitle         = "TP QUERY PLAN"
 	issue26568MultiCNPlanTitle    = "AP QUERY PLAN ON MULTICN("
 	issue26568MultiCNPhyPlanTitle = "AP QUERY PHYPLAN ON MULTICN("
@@ -171,10 +170,12 @@ func setupIssue26568Tables(t *testing.T, ctx context.Context, port int64, dbName
 	issue26568Exec(t, ctx, conn, "use `"+dbName+"`")
 	issue26568Exec(t, ctx, conn, "create table po_l (id bigint primary key)")
 	issue26568Exec(t, ctx, conn, "create table po_r (id bigint primary key)")
-	issue26568Exec(t, ctx, conn, fmt.Sprintf(
-		"insert into po_l select result from generate_series(1, %d) g", issue26568Rows))
-	issue26568Exec(t, ctx, conn, fmt.Sprintf(
-		"insert into po_r select result from generate_series(1, %d) g", issue26568Rows))
+	// Every attack below replaces optimizer stats and fixes execType explicitly,
+	// so row volume cannot strengthen the renderer contract. Keep two matching
+	// rows to preserve a real hash-join shape without paying to materialize
+	// 260,000 values that the optimizer is instructed to ignore.
+	issue26568Exec(t, ctx, conn, "insert into po_l values (1), (2)")
+	issue26568Exec(t, ctx, conn, "insert into po_r values (1), (2)")
 }
 
 func openIssue26568Conn(t *testing.T, ctx context.Context, port int64) *sql.Conn {

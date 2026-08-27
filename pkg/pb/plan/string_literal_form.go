@@ -146,6 +146,75 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
+// RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
+// planner-injected CAST that uses the numeric-prefix sentinel.
+func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
+	required := false
+	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
+		if !required {
+			required = expr.requiresMORPCVersion30NumericPrefix()
+		}
+		return nil
+	})
+	return required, err
+}
+
+func (m *Expr) requiresMORPCVersion30NumericPrefix() bool {
+	if m == nil {
+		return false
+	}
+	if m.Typ.Charset == 255 {
+		fn := m.GetF()
+		if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") {
+			return true
+		}
+	}
+	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion30NumericPrefix() {
+		return true
+	}
+	if fn := m.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if arg.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+	}
+	if list := m.GetList(); list != nil {
+		for _, item := range list.List {
+			if item.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+	}
+	if sub := m.GetSub(); sub != nil && sub.Child.requiresMORPCVersion30NumericPrefix() {
+		return true
+	}
+	if window := m.GetW(); window != nil {
+		if window.WindowFunc.requiresMORPCVersion30NumericPrefix() {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if item.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && order.Expr.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion30NumericPrefix() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RequiresMORPCVersion30JSONComparisonParam reports whether an owner contains
 // the internal prepared-JSON comparison function.  The function is deliberately
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an
@@ -402,6 +471,70 @@ func (p *Plan) ValidateStringLiteralForms() error {
 
 func ValidateStringLiteralFormsInOwner(owner any) error {
 	return validateStringLiteralFormsInOwner(owner)
+}
+
+// VisitExprTree visits expr and every nested expression in deterministic order.
+func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
+	if expr == nil {
+		return nil
+	}
+	if err := visitor(expr); err != nil {
+		return err
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if err := VisitExprTree(lit.Src, visitor); err != nil {
+			return err
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if err := VisitExprTree(arg, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		if err := VisitExprTree(sub.Child, visitor); err != nil {
+			return err
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
+			return err
+		}
+		for _, item := range window.PartitionBy {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				if err := VisitExprTree(order.Expr, visitor); err != nil {
+					return err
+				}
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
+					return err
+				}
+			}
+			if window.Frame.End != nil {
+				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // validateStringLiteralFormsInOwner validates every expression nested in a

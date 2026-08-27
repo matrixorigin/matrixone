@@ -640,7 +640,7 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 		return nil, err
 	}
 	if buildErr := result.BuildError(); buildErr != nil {
-		return nil, buildErr.AsMoErr()
+		return nil, buildErr.AsError()
 	}
 	return result.JoinMap(), nil
 }

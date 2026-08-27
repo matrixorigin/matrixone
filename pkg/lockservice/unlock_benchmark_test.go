@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"go.uber.org/zap/zapcore"
@@ -109,6 +111,98 @@ func BenchmarkUnlockWithoutConflict(b *testing.B) {
 					txnID,
 					timestamp.Timestamp{},
 				); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		},
+		nil,
+	)
+}
+
+// BenchmarkRemoteMultiTableUnlock isolates the regression shape from #27628:
+// one transaction releases several physical tables on the same remote owner.
+// The protocol gate provides an in-process A/B: v29 exercises the table-scoped
+// fallback and v31 exercises the bounded batch without changing workload data.
+func BenchmarkRemoteMultiTableUnlock(b *testing.B) {
+	benchmarks := []struct {
+		name    string
+		version int64
+	}{
+		{name: "legacy-v29", version: defines.MORPCVersion29},
+		{name: "batch-v31", version: defines.MORPCVersion31},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			benchmarkRemoteMultiTableUnlock(b, benchmark.version)
+		})
+	}
+}
+
+func benchmarkRemoteMultiTableUnlock(b *testing.B, protocolVersion int64) {
+	const (
+		firstTable = uint64(2762800)
+		tableCount = 8
+	)
+	runLockServiceTestsWithLevel(
+		b,
+		zapcore.ErrorLevel,
+		[]string{"owner", "origin"},
+		10*time.Second,
+		func(_ *lockTableAllocator, services []*service) {
+			b.StopTimer()
+			rt := moruntime.ServiceRuntime("")
+			if rt == nil {
+				b.Fatal("missing service runtime")
+			}
+			oldVersion, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			if !ok {
+				b.Fatal("missing protocol version")
+			}
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocolVersion)
+			defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+
+			ctx := context.Background()
+			owner := services[0]
+			origin := services[1]
+			options := newTestRowExclusiveOptions()
+
+			// Pin all physical table generations to the same owner before the
+			// measured transactions acquire them remotely.
+			for offset := range tableCount {
+				table := firstTable + uint64(offset)
+				txnID := []byte(fmt.Sprintf("remote-unlock-seed-%d", offset))
+				if _, err := owner.Lock(ctx, table, [][]byte{{0}}, txnID, options); err != nil {
+					b.Fatal(err)
+				}
+				if err := owner.Unlock(ctx, txnID, timestamp.Timestamp{}); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			txnIDs := make([][]byte, b.N)
+			for idx := range b.N {
+				txnIDs[idx] = []byte(fmt.Sprintf("remote-unlock-bench-%d", idx))
+				row := []byte(fmt.Sprintf("remote-unlock-row-%d", idx))
+				for offset := range tableCount {
+					if _, err := origin.Lock(
+						ctx,
+						firstTable+uint64(offset),
+						[][]byte{row},
+						txnIDs[idx],
+						options,
+					); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+
+			b.ReportAllocs()
+			b.ReportMetric(tableCount, "tables/op")
+			b.ResetTimer()
+			b.StartTimer()
+			for _, txnID := range txnIDs {
+				if err := origin.Unlock(ctx, txnID, timestamp.Timestamp{}); err != nil {
 					b.Fatal(err)
 				}
 			}
