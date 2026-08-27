@@ -19,6 +19,7 @@ package ivfpq
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,11 +27,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 )
 
 // IvfpqBuild manages bulk index construction across one or more IvfpqModel sub-indexes.
-// When the current sub-index reaches IndexCapacity, it is finalized (Build called) and a
-// new sub-index is created, mirroring the CagraBuild pattern.
+// When the current sub-index reaches IndexCapacity it is finalized (Build), packed to a
+// temp tar and released (saveToFile), and a new sub-index is created, mirroring the
+// CagraBuild pattern.
+//
+// Retiring a sub-index at rotation rather than at ToInsertSql is what makes IndexCapacity
+// bound the build. Build() already frees the sub-index's host dataset
+// (flattened_host_dataset, cleared at the end of cgo/cuvs/ivf_pq.hpp build()), but the
+// cuVS index and its device-side build matrix (dataset_device_ptr_) live until destroy().
+// Holding every finished sub-index to the end of the scan therefore accumulated
+// capacity*dim*sizeof(Q) of DEVICE memory per sub-index, so a lower capacity bought
+// nothing. HnswBuild has always done it this way (hnsw/build.go getIndexForAdd +
+// SaveToFile).
 //
 // IvfpqBuild carries two element types: base/quantizer-source B (the decoded
 // source column type — f32 or f16) and storage Q (the cuVS sub-index storage
@@ -46,8 +58,9 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	current *IvfpqModel[B, Q]
 	nthread uint32
 	devices []int
-	count   int64
-	idBuf   [1]int64
+
+	count int64
+	idBuf [1]int64
 
 	// (B, Q) routing tags computed once at construction. bIsHalf: the base
 	// type is f16. qIsHalf: the storage type is f16 (so a half base goes
@@ -57,6 +70,11 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 
 	// Filter column metadata (INCLUDE columns) — see CagraBuild.filterColMetaJSON.
 	filterColMetaJSON string
+
+	// tmpDir holds this build's packed tars. Destroy removes the whole directory,
+	// so a failed per-file remove cannot strand a tar, and anything orphaned by a
+	// crash carries the owning pid in its name.
+	tmpDir string
 }
 
 func NewIvfpqBuild[B, Q cuvs.VectorType](
@@ -65,7 +83,21 @@ func NewIvfpqBuild[B, Q cuvs.VectorType](
 	tblcfg vectorindex.IndexTableConfig,
 	nthread uint32,
 	devices []int,
+	spillDir string,
 ) (*IvfpqBuild[B, Q], error) {
+	// One private directory per build. Tars land here instead of directly in
+	// $TMPDIR, so Destroy reclaims them with a single RemoveAll and a crash leaves
+	// files whose name identifies the owning process.
+	// spillDir is the LOCAL fileservice's scratch directory (vectorindex.LocalSpillDir):
+	// the packed tars are whole sub-indexes, GB-scale on a large build, and the LOCAL
+	// fileservice is the provisioned data volume rather than whatever /tmp happens to
+	// be mounted on. "" means no LOCAL fileservice was attached, and os.MkdirTemp
+	// already reads that as $TMPDIR -- the previous behaviour, unchanged.
+	tmpDir, err := os.MkdirTemp(spillDir, fmt.Sprintf("mo-ivfpq-%d-", os.Getpid()))
+	if err != nil {
+		return nil, err
+	}
+
 	return &IvfpqBuild[B, Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
@@ -75,6 +107,7 @@ func NewIvfpqBuild[B, Q cuvs.VectorType](
 		devices: devices,
 		bIsHalf: cuvs.GetQuantization[B]() == cuvs.F16,
 		qIsHalf: cuvs.GetQuantization[Q]() == cuvs.F16,
+		tmpDir:  tmpDir,
 	}, nil
 }
 
@@ -85,16 +118,52 @@ func (b *IvfpqBuild[B, Q]) createKey(n int) string {
 func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 	capacity := b.idxcfg.IndexCapacity
 
-	if b.current != nil && b.count >= capacity {
-		if err := b.current.Build(); err != nil {
+	// capacity == 0 means "no rotation" (one sub-index for the whole scan). Without this
+	// guard `b.count >= 0` holds on every AddRow, which would retire and pack a sub-index
+	// per row. Today the create TVF always resolves a positive capacity, so the guard is
+	// belt-and-braces against a second provenance for the value.
+	if b.current != nil && capacity > 0 && b.count >= capacity {
+		// VRAM for this build is claimed in C++, around the device upload itself
+		// (cagra.hpp). A Go-side claim could only wrap the whole Build() call,
+		// which allocates early and then computes for minutes -- holding the
+		// budget for all of it while cudaMemGetInfo already reflected the same
+		// bytes, so every concurrent load was refused over a double count.
+		err := b.current.Build()
+		if err != nil {
 			return nil, err
 		}
-		b.indexes = append(b.indexes, b.current)
+		full := b.current
+		// Hand ownership to b.indexes BEFORE packing: if saveToFile fails, Destroy() must
+		// still be able to reach this model and free its GPU handle.
+		b.indexes = append(b.indexes, full)
 		b.current = nil
 		b.count = 0
+		// Pack to a temp tar and release the GPU/host residency now. ToSql() calls
+		// saveToFile again later, which is a no-op once Index == nil.
+		if err := full.saveToFile(); err != nil {
+			return nil, err
+		}
+		// Check the RUNNING aggregate rather than waiting for end(). A sub-index
+		// only ever adds bytes to a device, so PerDeviceDemand is monotone: a
+		// running total already over the ceiling guarantees the finished one is,
+		// and every sub-index packed after this point is work thrown away. The
+		// ceiling is total VRAM and does not move between checks, so unlike the
+		// load gate's free-memory sampling this cannot refuse transiently.
+		//
+		// saveToFile stamped this sub-index's DeviceComponentBytes just above, and
+		// `full` is already in b.indexes, so DeviceDemand covers everything built.
+		if err := memory.DeviceAggregateFitsHardware(
+			b.DeviceDemand(), len(b.indexes), cuvs.BudgetFor(b.idxcfg.Type),
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	if b.current == nil {
+		// The capacity-sized host buffers this allocates are claimed inside the
+		// native constructor (index_base.hpp, allocate_host_capacity), where the
+		// claim can wrap the allocation itself rather than the cgo call around it.
+
 		key := b.createKey(len(b.indexes))
 		m, err := NewIvfpqModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
 		if err != nil {
@@ -110,6 +179,7 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 				return nil, err
 			}
 		}
+		m.TmpDir = b.tmpDir
 		b.current = m
 		b.count = 0
 	}
@@ -159,7 +229,13 @@ func (b *IvfpqBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 
 func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
-		if err := b.current.Build(); err != nil {
+		// VRAM for this build is claimed in C++, around the device upload itself
+		// (cagra.hpp). A Go-side claim could only wrap the whole Build() call,
+		// which allocates early and then computes for minutes -- holding the
+		// budget for all of it while cudaMemGetInfo already reflected the same
+		// bytes, so every concurrent load was refused over a double count.
+		err := b.current.Build()
+		if err != nil {
 			return nil, err
 		}
 		b.indexes = append(b.indexes, b.current)
@@ -188,6 +264,32 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	return sqls, nil
 }
 
+// DeviceDemand is how many GPU-resident bytes EACH device must hold to serve
+// this index, keyed by device.
+//
+// Delegated to memory.PeakDeviceBytes because the reduction depends on the device
+// list, not just the sizes: with distinct cards each holds one shard per
+// sub-index, but under gpu_multi_simulation every rank aliases onto the same
+// physical card and it holds all of them. Reducing to a max here would under-state
+// the simulated case by the shard count.
+//
+// Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
+// reach the GPU. Valid only after ToInsertSql, which packs and stamps the sizes.
+func (b *IvfpqBuild[B, Q]) DeviceDemand() map[int]int64 {
+	comps := make([]map[string]int64, 0, len(b.indexes))
+	for _, idx := range b.indexes {
+		if len(idx.DeviceComponentBytes) > 0 {
+			comps = append(comps, idx.DeviceComponentBytes)
+		}
+	}
+	// Only the devices this index actually occupies: a SINGLE_GPU index lives on
+	// devices[0] alone, and charging its bytes to the other cards lets one of
+	// them refuse a build it would never hold. See memory.DeviceParticipants.
+	participants := memory.DeviceParticipants(b.devices,
+		b.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	return memory.PerDeviceDemand(participants, comps)
+}
+
 func (b *IvfpqBuild[B, Q]) Destroy() error {
 	var errs error
 	if b.current != nil {
@@ -202,6 +304,14 @@ func (b *IvfpqBuild[B, Q]) Destroy() error {
 		}
 	}
 	b.indexes = nil
+	// Reclaim the whole build directory in one shot: a per-file remove that failed
+	// above cannot strand a tar, and the empty directory itself goes too.
+	if b.tmpDir != "" {
+		if err := os.RemoveAll(b.tmpDir); err != nil {
+			errs = errors.Join(errs, err)
+		}
+		b.tmpDir = ""
+	}
 	return errs
 }
 
