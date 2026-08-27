@@ -1630,6 +1630,15 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if agg.GetAggID() == aggexec.AggIdOfInternalSumCombine ||
+			agg.GetAggID() == aggexec.AggIdOfInternalCountCombine ||
+			agg.GetAggID() == aggexec.AggIdOfInternalAvgCombine {
+			if proc == nil || !supportsRemoteDistinctCombine(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"exact DISTINCT combine aggregates require MORPC protocol version 32",
+				)
+			}
+		}
 		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
 			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
 			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {

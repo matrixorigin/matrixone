@@ -747,9 +747,12 @@ var predefinedFunids = map[int]int{
 	SQL_TVF_CONNECT:               574,
 	SQL_TVF_DISCONNECT:            575,
 	LAST_KAFKA_MESSAGE_ID:         576,
+	INTERNAL_SUM_COMBINE:          577,
+	INTERNAL_COUNT_COMBINE:        578,
+	INTERNAL_AVG_COMBINE:          579,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 577,
+	FUNCTION_END_NUMBER: 580,
 }
 
 func Test_funids(t *testing.T) {
@@ -767,5 +770,22 @@ func Test_funids(t *testing.T) {
 
 	for _, fid := range functionIdRegister {
 		check(int(fid))
+	}
+}
+
+func TestInternalDistinctCombineFunctionsArePlannerOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int32
+	}{
+		{name: "__mo_sum_combine", id: INTERNAL_SUM_COMBINE},
+		{name: "__mo_count_combine", id: INTERNAL_COUNT_COMBINE},
+		{name: "__mo_avg_combine", id: INTERNAL_AVG_COMBINE},
+	} {
+		_, registered := getFunctionIdByNameWithoutErr(tc.name)
+		require.False(t, registered, "%s must not be callable from SQL", tc.name)
+		overload, err := GetFunctionById(context.Background(), encodeOverloadID(tc.id, 0))
+		require.NoError(t, err)
+		require.Equal(t, tc.name, overload.aggName)
 	}
 }

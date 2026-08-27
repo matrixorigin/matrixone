@@ -716,6 +716,92 @@ var supportedAggInNewFramework = []FuncNew{
 			aggName:    "max_by_non_null",
 		}},
 	},
+	{
+		functionId: INTERNAL_SUM_COMBINE,
+		class:      plan.Function_INTERNAL | plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    internalSumCombineTypeCheck,
+		Overloads: []overload{{
+			overloadId: 0,
+			isAgg:      true,
+			retType:    ReturnFirstArgType,
+			aggName:    "__mo_sum_combine",
+		}},
+	},
+	{
+		functionId: INTERNAL_COUNT_COMBINE,
+		class:      plan.Function_INTERNAL | plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    internalCountCombineTypeCheck,
+		Overloads: []overload{{
+			overloadId: 0,
+			isAgg:      true,
+			retType: func([]types.Type) types.Type {
+				return types.T_int64.ToType()
+			},
+			aggName: "__mo_count_combine",
+		}},
+	},
+	{
+		functionId: INTERNAL_AVG_COMBINE,
+		class:      plan.Function_INTERNAL | plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    internalAvgCombineTypeCheck,
+		Overloads: []overload{{
+			overloadId: 0,
+			isAgg:      true,
+			retType: func(parameters []types.Type) types.Type {
+				return parameters[2]
+			},
+			aggName: "__mo_avg_combine",
+		}},
+	},
+}
+
+func isInternalPartialSumType(typ types.T) bool {
+	switch typ {
+	case types.T_int64, types.T_uint64, types.T_float64,
+		types.T_decimal128, types.T_decimal256:
+		return true
+	default:
+		return false
+	}
+}
+
+func internalSumCombineTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && isInternalPartialSumType(inputs[0].Oid) {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedAggParametersWrong)
+}
+
+func internalCountCombineTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_int64 {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedAggParametersWrong)
+}
+
+func internalAvgCombineTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 3 || !isInternalPartialSumType(inputs[0].Oid) ||
+		inputs[1].Oid != types.T_int64 {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+	switch inputs[0].Oid {
+	case types.T_int64, types.T_uint64, types.T_float64:
+		if inputs[2].Oid != types.T_float64 {
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		}
+	case types.T_decimal128:
+		if inputs[2].Oid != types.T_decimal128 {
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		}
+	case types.T_decimal256:
+		if inputs[2].Oid != types.T_decimal256 {
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		}
+	}
+	return newCheckResultWithSuccess(0)
 }
 
 func maxByTypeCheck(_ []overload, inputs []types.Type) checkResult {

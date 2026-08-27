@@ -33,6 +33,7 @@ func TestGetEmptyResultKind(t *testing.T) {
 				AggIdOfJsonObjectAgg, AggIdOfMax, AggIdOfMaxBy, AggIdOfMaxByNonNull,
 				AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile, AggIdOfStdDevPop,
 				AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample,
+				AggIdOfInternalSumCombine, AggIdOfInternalAvgCombine,
 			},
 			want: EmptyResultNull,
 		},
@@ -41,6 +42,7 @@ func TestGetEmptyResultKind(t *testing.T) {
 			ids: []int64{
 				AggIdOfCountColumn, AggIdOfCountStar, AggIdOfApproxCount,
 				AggIdOfApproxCountDistinct, AggIdOfBitOr, AggIdOfBitXor,
+				AggIdOfInternalCountCombine,
 			},
 			want: EmptyResultZero,
 		},

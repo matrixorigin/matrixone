@@ -367,6 +367,11 @@ type QueryBuilder struct {
 	userWindowNodes          map[int32]struct{}
 	internalTopNWindows      map[int32]struct{}
 	partitionTopNWindowNodes map[int32]struct{}
+	// distinctKeyShuffleCols records synthesized (group keys, DISTINCT key)
+	// aggregates that must partition raw rows by the DISTINCT key. The map is
+	// planner-local: determineShuffleForGroupBy consumes it before the plan is
+	// serialized, and HashMapStats carries the resulting physical decision.
+	distinctKeyShuffleCols map[*plan.Node]int32
 
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children

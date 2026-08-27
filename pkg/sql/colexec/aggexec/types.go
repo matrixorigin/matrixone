@@ -494,6 +494,27 @@ func makeSpecialAggExec(
 		return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
 	case AggIdOfAvg:
 		return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
+	case AggIdOfInternalSumCombine:
+		if isDistinct || len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx(
+				"internal SUM combine requires one non-DISTINCT argument")
+		}
+		exec, err := makeInternalSumCombineExec(mp, id, params[0])
+		return exec, true, err
+	case AggIdOfInternalCountCombine:
+		if isDistinct || len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx(
+				"internal COUNT combine requires one non-DISTINCT argument")
+		}
+		exec, err := makeInternalCountCombineExec(mp, id, params[0])
+		return exec, true, err
+	case AggIdOfInternalAvgCombine:
+		if isDistinct || len(params) != 3 {
+			return nil, true, moerr.NewInternalErrorNoCtx(
+				"internal AVG combine requires three non-DISTINCT arguments")
+		}
+		exec, err := makeInternalAvgCombineExec(mp, id, params)
+		return exec, true, err
 	case AggIdOfCountColumn:
 		return makeCount(mp, false, id, isDistinct, params), true, nil
 	case AggIdOfCountStar:

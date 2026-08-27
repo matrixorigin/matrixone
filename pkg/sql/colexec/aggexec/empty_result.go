@@ -31,7 +31,8 @@ const (
 // empty value that a planner rewrite must not synthesize.
 func GetEmptyResultKind(aggID int64) EmptyResultKind {
 	switch aggID {
-	case AggIdOfCountColumn, AggIdOfCountStar, AggIdOfApproxCount, AggIdOfApproxCountDistinct:
+	case AggIdOfCountColumn, AggIdOfCountStar, AggIdOfApproxCount,
+		AggIdOfApproxCountDistinct, AggIdOfInternalCountCombine:
 		return EmptyResultZero
 	case AggIdOfBitAnd:
 		return EmptyResultAllBitsSet
@@ -41,7 +42,8 @@ func GetEmptyResultKind(aggID int64) EmptyResultKind {
 		AggIdOfJsonObjectAgg, AggIdOfMax, AggIdOfMaxBy, AggIdOfMaxByNonNull,
 		AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile, AggIdOfPercentileCont,
 		AggIdOfPercentileDisc, AggIdOfStdDevPop,
-		AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample:
+		AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample,
+		AggIdOfInternalSumCombine, AggIdOfInternalAvgCombine:
 		return EmptyResultNull
 	case AggIdOfAvgTwCache, AggIdOfAvgTwResult, AggIdOfBitmapConstruct,
 		AggIdOfBitmapOr, AggIdOfHllAdd, AggIdOfHllMerge:
