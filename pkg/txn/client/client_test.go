@@ -2383,6 +2383,42 @@ func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
 	v.mu.Unlock()
 }
 
+func TestDetermineTxnSnapshotHonorsMinimum(t *testing.T) {
+	tests := []struct {
+		name                       string
+		enableSacrificingFreshness bool
+		minimum                    timestamp.Timestamp
+		want                       timestamp.Timestamp
+	}{
+		{
+			name:    "freshness mode preserves a later caller minimum",
+			minimum: timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7},
+			want:    timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7},
+		},
+		{
+			name:    "freshness mode advances an older caller minimum",
+			minimum: timestamp.Timestamp{PhysicalTime: 50},
+			want:    timestamp.Timestamp{PhysicalTime: 100},
+		},
+		{
+			name:                       "sacrificing freshness keeps caller minimum",
+			enableSacrificingFreshness: true,
+			minimum:                    timestamp.Timestamp{PhysicalTime: 50},
+			want:                       timestamp.Timestamp{PhysicalTime: 50},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &txnClient{
+				clock:                      clock.NewHLCClock(func() int64 { return 100 }, 0),
+				enableSacrificingFreshness: tt.enableSacrificingFreshness,
+			}
+			require.Equal(t, tt.want, client.determineTxnSnapshot(tt.minimum))
+		})
+	}
+}
+
 func TestWaitAbortMarked(t *testing.T) {
 	var fp *FootPrints
 	assert.Equal(t, "", fp.String())

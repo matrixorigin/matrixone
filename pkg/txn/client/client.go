@@ -920,13 +920,16 @@ func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) timesta
 		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
+	// Freshness-preserving mode starts no earlier than either the current clock
+	// or the caller's minimum timestamp.
 	if !client.enableSacrificingFreshness {
 		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 		// conflicts due to clock uncertainty.
 		now, _ := client.clock.Now()
-		minTS = now
+		if minTS.Less(now) {
+			minTS = now
+		}
 	} else if client.enableCNBasedConsistency {
 		minTS = client.adjustTimestamp(minTS)
 	}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -2029,6 +2030,37 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
+// advanceAuthenticationSnapshot installs a session minimum timestamp that is
+// strictly beyond the clock uncertainty window captured for this login. The
+// authentication background transaction inherits this timestamp and waits for
+// the local logtail before reading security catalog state.
+func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return moerr.NewInternalError(ctx, "missing service runtime for authentication snapshot")
+	}
+	txnClock := rt.Clock()
+	if txnClock == nil {
+		return moerr.NewInternalError(ctx, "missing transaction clock for authentication snapshot")
+	}
+	if txnClock.MaxOffset() < 0 {
+		return moerr.NewInternalError(ctx, "negative transaction clock offset for authentication snapshot")
+	}
+
+	_, upperBound := txnClock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return moerr.NewInternalError(ctx, "authentication snapshot timestamp overflow")
+	}
+
+	// HLC ordering compares the logical component when physical times are equal.
+	// Moving to the next physical tick dominates every logical timestamp at the
+	// uncertainty upper bound, including a remote commit at that exact tick.
+	ses.updateLastCommitTS(timestamp.Timestamp{
+		PhysicalTime: upperBound.PhysicalTime + 1,
+	})
+	return nil
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2074,6 +2106,9 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
+	}
+	if err = ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
