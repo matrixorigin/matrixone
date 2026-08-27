@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1170,6 +1171,44 @@ func TestFrozenResultMetadataRejectsIncompatibleDefinitionRetry(t *testing.T) {
 		err := c.validateRetryResultMetadata(context.Background(), rebuilt)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 	}
+}
+
+func TestSelectIntoRetryRevalidatesResultArity(t *testing.T) {
+	makeResultPlan := func(columnTypes ...types.T) *plan.Plan {
+		projectList := make([]*plan.Expr, len(columnTypes))
+		headings := make([]string, len(columnTypes))
+		for i, typ := range columnTypes {
+			projectList[i] = &plan.Expr{Typ: plan.Type{Id: int32(typ)}}
+			headings[i] = fmt.Sprintf("c%d", i)
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Headings: headings,
+			Nodes: []*plan.Node{{
+				ProjectList: projectList,
+			}},
+		}}}
+	}
+
+	c := &Compile{
+		pn: makeResultPlan(types.T_int64, types.T_int64),
+		stmt: &tree.Select{IntoVars: []*tree.VarExpr{
+			{Name: "a"},
+			{Name: "b"},
+		}},
+	}
+
+	// SELECT INTO consumes values rather than client result metadata, so a
+	// same-arity retry may adopt compatible type changes.
+	require.NoError(t, c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan(types.T_varchar, types.T_int64)))
+
+	// Arity is checked before the first attempt. A definition retry must repeat
+	// that check because an empty rebuilt result never invokes the row callback.
+	err := c.validateRetryResultMetadata(
+		context.Background(), makeResultPlan(types.T_int64, types.T_int64, types.T_int64))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongNumberOfColumnsInSelect), err)
 }
 
 func TestCompileReleaseClearsPlanSnapshotTransport(t *testing.T) {

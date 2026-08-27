@@ -5720,39 +5720,41 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	if !canCache {
+		return nil
+	}
+	cacheKey := input.getHash()
+	if ses.isCached(cacheKey) {
+		return nil
+	}
+
 	cacheProtocolVersion := currentProtocolVersion(proc)
 	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
-	if canCache && !ses.isCached(input.getHash()) {
-		for i, cw := range cws {
-			tcw, ok := cw.(*TxnComputationWrapper)
-			if !ok || tcw.protocolVersion != cacheProtocolVersion {
-				canCache = false
-				break
-			}
-			var hasPlanSnapshotTS bool
-			planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()
-			if !hasPlanSnapshotTS {
-				canCache = false
-				break
-			}
+	for i, cw := range cws {
+		tcw, ok := cw.(*TxnComputationWrapper)
+		if !ok || tcw.protocolVersion != cacheProtocolVersion {
+			return nil
+		}
+		var hasPlanSnapshotTS bool
+		planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()
+		if !hasPlanSnapshotTS {
+			return nil
 		}
 	}
-	if canCache && !ses.isCached(input.getHash()) {
-		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]tree.Statement, len(cws))
-		for i, cw := range cws {
-			if checkNodeCanCache(cw.Plan()) {
-				plans[i] = cw.Plan()
-				stmts[i] = cw.GetAst()
-			} else {
-				return nil
-			}
-			cw.Clear()
+
+	plans := make([]*plan.Plan, len(cws))
+	stmts := make([]tree.Statement, len(cws))
+	for i, cw := range cws {
+		if checkNodeCanCache(cw.Plan()) {
+			plans[i] = cw.Plan()
+			stmts[i] = cw.GetAst()
+		} else {
+			return nil
 		}
-		Cached = true
-		ses.cachePlanWithSnapshots(
-			input.getHash(), stmts, plans, planSnapshotTS, cacheProtocolVersion)
+		cw.Clear()
 	}
+	Cached = true
+	ses.cachePlanWithSnapshots(cacheKey, stmts, plans, planSnapshotTS, cacheProtocolVersion)
 
 	return nil
 }

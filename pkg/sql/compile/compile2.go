@@ -1006,6 +1006,13 @@ func (c *Compile) validateRetryResultMetadata(
 	ctx context.Context,
 	rebuilt *plan.Plan,
 ) error {
+	if selectStmt, ok := c.stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 &&
+		len(plan2.GetResultColumnsFromPlan(rebuilt)) != len(selectStmt.IntoVars) {
+		// SELECT INTO validates arity before the first attempt. Repeat that
+		// validation at the definition-retry boundary because an empty rebuilt
+		// result never reaches the row callback that also checks arity.
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
 	if !c.resultMetadataFrozen || sameResultMetadata(c.pn, rebuilt) {
 		return nil
 	}
