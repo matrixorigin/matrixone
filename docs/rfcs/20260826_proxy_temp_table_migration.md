@@ -125,12 +125,16 @@ two-CN + Proxy regression must run through Connector/J with server prepared
 statements. It must create a temporary indexed table, drain its owning CN, and
 prove rows/indexes, SQL `PREPARE`, and binary `COM_STMT` execution after one
 handoff; it must also cover commit/rollback admission and assert no repeated
-target migration failure. This repository does not contain the required `motr`
-JDBC topology harness, so that acceptance test is intentionally tracked as a
-required external validation artifact rather than represented by a callback
-unit test.
+target migration failure. The executable acceptance test is
+`xtool/jstfu/src/test/java/io/matrixone/jstfu/ProxyTempTableMigrationE2ETest.java`.
+For a local topology, start the existing two-CN launch configuration with
+`mo-service -with-proxy -launch etc/launch-with-proxy/launch.toml`, then run
+the test with `MO_PROXY_TEMP_TABLE_E2E_URL` set to its Proxy Connector/J URL
+(including `useServerPrepStmts=true`). The environment gate keeps ordinary
+jstfu test runs independent of a local MatrixOne cluster.
 
 ## Open questions
 
-No implementation-blocking question remains. The independent design approval
-and the topology acceptance run are required before status changes from draft.
+No implementation-blocking question remains. The topology acceptance test is
+checked in and was run against the two-CN + Proxy launch configuration; an
+independent design approval is still required before status changes from draft.
