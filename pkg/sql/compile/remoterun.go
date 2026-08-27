@@ -614,7 +614,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *shuffle.Shuffle:
 		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
-			t.ShuffleType == int32(plan.ShuffleType_Hash) {
+			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
 			// This appended wire opcode is deliberately unknown to pre-v33
 			// receivers, which then fail before execution instead of silently
 			// rebuilding a legacy-hash Shuffle.
@@ -631,6 +631,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
 		in.Shuffle.DrainAllBuckets = t.DrainAllBuckets
+		in.Shuffle.StringHashKey = t.StringHashKey
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -1167,9 +1168,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			wireAlgorithm = process.StringShuffleHashComplete
 		}
 		if wireAlgorithm == process.StringShuffleHashComplete &&
-			t.ShuffleType != int32(plan.ShuffleType_Hash) {
+			(t.ShuffleType != int32(plan.ShuffleType_Hash) || !t.StringHashKey) {
 			return nil, moerr.NewInvalidStateNoCtx(
-				"complete string shuffle hash marker requires hash shuffle")
+				"complete string shuffle hash marker requires a string-key hash shuffle")
 		}
 		processAlgorithm := process.StringShuffleHashLegacy
 		var proc *process.Process
@@ -1180,6 +1181,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			processAlgorithm = proc.StringShuffleHashAlgorithm()
 		}
 		if proc != nil && t.ShuffleType == int32(plan.ShuffleType_Hash) &&
+			t.StringHashKey &&
 			processAlgorithm != wireAlgorithm {
 			return nil, moerr.NewInvalidStateNoCtxf(
 				"string shuffle hash algorithm mismatch: pipeline=%d process=%d",
@@ -1196,6 +1198,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.ShuffleExpr = t.ShuffleExpr
 		arg.DrainAllBuckets = t.DrainAllBuckets
+		arg.StringHashKey = t.StringHashKey
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()

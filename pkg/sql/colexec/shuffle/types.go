@@ -41,6 +41,7 @@ type Shuffle struct {
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	ShuffleExpr        *plan.Expr
 	DrainAllBuckets    bool
+	StringHashKey      bool
 	vm.OperatorBase
 }
 

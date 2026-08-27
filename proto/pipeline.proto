@@ -91,6 +91,9 @@ message Shuffle {
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
   bool drain_all_buckets = 10;
+  // True when Hash shuffle routes CHAR/VARCHAR/TEXT keys and therefore needs
+  // the versioned complete-key owner contract.
+  bool string_hash_key = 11;
 }
 
 message Dispatch {

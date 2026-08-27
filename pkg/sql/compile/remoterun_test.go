@@ -356,6 +356,7 @@ func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 	arg := shuffle.NewArgument()
 	t.Cleanup(arg.Release)
 	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = true
 
 	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
 	_, legacyInstruction, err := convertToPipelineInstruction(
@@ -378,6 +379,13 @@ func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(vm.Shuffle), rangeInstruction.Op)
 
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = false
+	_, numericHashInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), numericHashInstruction.Op)
+
 	encodePipeline := func(t *testing.T, instruction *pipeline.Instruction) []byte {
 		t.Helper()
 		data, err := (&pipeline.Pipeline{
@@ -390,6 +398,7 @@ func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 	legacyData := encodePipeline(t, legacyInstruction)
 	stableData := encodePipeline(t, stableInstruction)
 	rangeData := encodePipeline(t, rangeInstruction)
+	numericHashData := encodePipeline(t, numericHashInstruction)
 
 	decode := func(algorithm process.StringShuffleHashAlgorithm, data []byte) (*Scope, error) {
 		receiverProc := testutil.NewProcess(t)
@@ -406,11 +415,17 @@ func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 	stableScope, err := decode(process.StringShuffleHashComplete, stableData)
 	require.NoError(t, err)
 	require.IsType(t, &shuffle.Shuffle{}, stableScope.RootOp)
+	require.True(t, stableScope.RootOp.(*shuffle.Shuffle).StringHashKey)
 	stableScope.release()
 	rangeScope, err := decode(process.StringShuffleHashComplete, rangeData)
 	require.NoError(t, err)
 	require.IsType(t, &shuffle.Shuffle{}, rangeScope.RootOp)
 	rangeScope.release()
+	numericHashScope, err := decode(process.StringShuffleHashComplete, numericHashData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, numericHashScope.RootOp)
+	require.False(t, numericHashScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	numericHashScope.release()
 
 	_, err = decode(process.StringShuffleHashLegacy, stableData)
 	require.ErrorContains(t, err,
@@ -423,7 +438,7 @@ func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 	_, err = decode(process.StringShuffleHashComplete,
 		encodePipeline(t, &invalidStableRange))
 	require.ErrorContains(t, err,
-		"complete string shuffle hash marker requires hash shuffle")
+		"complete string shuffle hash marker requires a string-key hash shuffle")
 }
 
 func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {

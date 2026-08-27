@@ -1209,6 +1209,7 @@ func TestStringShuffleHashCaptureIgnoresParticipantRuntimeAfterAdmission(t *test
 	arg := shuffle.NewArgument()
 	defer arg.Release()
 	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.StringHashKey = true
 	_, instruction, err := convertToPipelineInstruction(
 		arg, participantProc, &scopeContext{}, 1)
 	require.NoError(t, err)
@@ -1227,6 +1228,46 @@ func TestStringShuffleHashCaptureIgnoresParticipantRuntimeAfterAdmission(t *test
 		coordinatorProc.StringShuffleHashAlgorithm())
 	require.Equal(t, process.StringShuffleHashComplete,
 		participantProc.StringShuffleHashAlgorithm())
+}
+
+func TestShuffleConstructionMarksOnlyStringHashKeys(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		typ        types.T
+		stringHash bool
+	}{
+		{name: "varchar", typ: types.T_varchar, stringHash: true},
+		{name: "text", typ: types.T_text, stringHash: true},
+		{name: "char", typ: types.T_char, stringHash: true},
+		{name: "int64", typ: types.T_int64},
+		{name: "binary", typ: types.T_binary},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := &plan.Expr{Typ: plan.Type{Id: int32(test.typ)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}}
+			right := &plan.Expr{Typ: plan.Type{Id: int32(test.typ)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}}}
+			stats := &plan.Stats{HashmapStats: &plan.HashMapStats{
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Hash,
+			}}
+
+			groupArg := constructShuffleArgForGroup(8, &plan.Node{
+				Stats: stats, GroupBy: []*plan.Expr{left},
+			})
+			require.Equal(t, test.stringHash, groupArg.StringHashKey)
+			groupArg.Release()
+
+			joinArg := constructShuffleOperatorForJoin(8, &plan.Node{
+				Stats: stats,
+				OnList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{
+					Args: []*plan.Expr{left, right},
+				}}}},
+			}, true)
+			require.Equal(t, test.stringHash, joinArg.StringHashKey)
+			joinArg.Release()
+		})
+	}
 }
 
 func TestFrozenResultMetadataRejectsIncompatibleDefinitionRetry(t *testing.T) {
