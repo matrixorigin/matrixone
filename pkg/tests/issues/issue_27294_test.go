@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +116,56 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		require.NoError(t, nestedArithmetic.QueryRowContext(
 			ctx, int64(-9007199254740993)).Scan(&nestedArithmeticResult))
 		require.Equal(t, int64(9007199254740993), nestedArithmeticResult)
+
+		multiMarker, err := db.PrepareContext(ctx, "select abs(? + ?)")
+		require.NoError(t, err)
+		defer multiMarker.Close()
+		multiMarkerRows, err := multiMarker.QueryContext(
+			ctx, int64(-9007199254740993), int64(0))
+		require.NoError(t, err)
+		func() {
+			defer multiMarkerRows.Close()
+			columnTypes, err := multiMarkerRows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, columnTypes, 1)
+			require.Contains(t, strings.ToUpper(columnTypes[0].DatabaseTypeName()), "INT")
+			require.True(t, multiMarkerRows.Next())
+			var result int64
+			require.NoError(t, multiMarkerRows.Scan(&result))
+			require.Equal(t, int64(9007199254740993), result)
+			require.False(t, multiMarkerRows.Next())
+			require.NoError(t, multiMarkerRows.Err())
+		}()
+		multiMarkerRows, err = multiMarker.QueryContext(
+			ctx, int64(-9007199254740993), "0.5")
+		require.NoError(t, err)
+		func() {
+			defer multiMarkerRows.Close()
+			columnTypes, err := multiMarkerRows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, columnTypes, 1)
+			require.Contains(t, strings.ToUpper(columnTypes[0].DatabaseTypeName()), "DECIMAL")
+			require.True(t, multiMarkerRows.Next())
+			var result string
+			require.NoError(t, multiMarkerRows.Scan(&result))
+			require.Equal(t, "9007199254740992.5", result)
+			require.False(t, multiMarkerRows.Next())
+			require.NoError(t, multiMarkerRows.Err())
+		}()
+
+		for _, query := range []string{
+			"select abs(if(1, ?, ?))",
+			"select abs(case when 1 then ? else ? end)",
+			"select abs((select ? + ?))",
+		} {
+			stmt, err := db.PrepareContext(ctx, query)
+			require.NoError(t, err, query)
+			var result int64
+			require.NoError(t, stmt.QueryRowContext(
+				ctx, int64(-9007199254740993), int64(0)).Scan(&result), query)
+			require.Equal(t, int64(9007199254740993), result, query)
+			require.NoError(t, stmt.Close())
+		}
 
 		nestedControlFlow, err := db.PrepareContext(ctx, "select abs(if(1, ?, 0))")
 		require.NoError(t, err)
@@ -208,5 +260,57 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		var nestedExactResult int64
 		require.NoError(t, nestedExact.QueryRowContext(ctx, int64(-9007199254740993)).Scan(&nestedExactResult))
 		require.Equal(t, int64(9007199254740993), nestedExactResult)
+
+		// At v29 the numeric-prefix retention path is disabled. The deferred ABS
+		// specialization must still restore unrelated parameters before caching,
+		// otherwise the second execution reuses the first execution's literal.
+		serviceRuntime := moruntime.ServiceRuntime(cn.GetServiceConfig().CN.UUID)
+		oldProtocol, hadProtocol := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+		serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+		defer func() {
+			if hadProtocol {
+				serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+			} else {
+				serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		cacheIsolation, err := db.PrepareContext(ctx, "select abs(?), ?, ? + 0")
+		require.NoError(t, err)
+		defer cacheIsolation.Close()
+		assertCacheIsolation := func(
+			absValue, directValue, nestedValue,
+			wantAbs, wantDirect, wantNested int64,
+		) {
+			t.Helper()
+			var gotAbs, gotDirect, gotNested int64
+			require.NoError(t, cacheIsolation.QueryRowContext(
+				ctx, absValue, directValue, nestedValue).Scan(&gotAbs, &gotDirect, &gotNested))
+			require.Equal(t, wantAbs, gotAbs)
+			require.Equal(t, wantDirect, gotDirect)
+			require.Equal(t, wantNested, gotNested)
+		}
+		assertCacheIsolation(-1, 11, 111, 1, 11, 111)
+		assertCacheIsolation(-2, 22, 222, 2, 22, 222)
+
+		// Decimal256 has no literal oneof and is represented as a text literal
+		// under a DECIMAL256 cast. At v30 two values with identical metadata share
+		// the runtime cache key, so the inner literal must retain its ParamRef too.
+		serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+		decimalCacheIsolation, err := db.PrepareContext(ctx,
+			"select abs(?), cast(? as decimal(65,4))")
+		require.NoError(t, err)
+		defer decimalCacheIsolation.Close()
+		assertDecimalCacheIsolation := func(absValue int64, decimalValue string, wantAbs int64) {
+			t.Helper()
+			var gotAbs int64
+			var gotDecimal string
+			require.NoError(t, decimalCacheIsolation.QueryRowContext(
+				ctx, absValue, decimalValue).Scan(&gotAbs, &gotDecimal))
+			require.Equal(t, wantAbs, gotAbs)
+			require.Equal(t, decimalValue, gotDecimal)
+		}
+		assertDecimalCacheIsolation(-3, "1234567890123456789012345678901234567890.1234", 3)
+		assertDecimalCacheIsolation(-4, "2234567890123456789012345678901234567890.1234", 4)
 	})
 }

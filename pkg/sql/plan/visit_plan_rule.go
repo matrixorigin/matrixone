@@ -1013,62 +1013,72 @@ func (rule *ResetParamRefRule) allDecimalParamRefs(expr *plan.Expr) bool {
 	return true
 }
 
-// preparedNumericValueParamPosition returns the marker that contributes a
-// value to a numeric result expression.  Control-flow conditions are not
-// value operands: a CASE/IF marker can choose between BIGINT branches without
-// changing the domain of the value consumed by ABS.  Keeping this filtering
-// in one helper prevents a condition-only marker from making an enclosing
-// numeric function eligible for overload rebinding.
-func preparedNumericValueParamPosition(expr *plan.Expr) (int32, bool) {
+// preparedNumericValueParamPositions returns every marker that contributes a
+// value to a numeric result expression. Control-flow conditions are not value
+// operands: a CASE/IF marker can choose between BIGINT branches without
+// changing the domain of the value consumed by ABS. A flattened scalar
+// subquery no longer contains its ParamRefs, so its explicit source marker is
+// the only safe fallback in that shape.
+func preparedNumericValueParamPositions(expr *plan.Expr) map[int32]struct{} {
+	positions := make(map[int32]struct{})
+	collectNumericValueParamPositions(expr, positions)
+	collectFlattenedPreparedNumericSourcePositions(expr, positions)
+	return positions
+}
+
+func collectFlattenedPreparedNumericSourcePositions(expr *plan.Expr, positions map[int32]struct{}) {
 	if expr == nil {
-		return 0, false
+		return
 	}
-	if expr.PreparedNumericFallback && expr.PreparedNumericParamPos >= 0 {
-		return expr.PreparedNumericParamPos, true
-	}
-	if param := expr.GetP(); param != nil && param.Pos >= 0 {
-		return param.Pos, true
+	if expr.GetCol() != nil && expr.PreparedNumericFallbackSource && expr.PreparedNumericParamPos >= 0 {
+		positions[expr.PreparedNumericParamPos] = struct{}{}
+		return
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		name := strings.ToLower(fn.Func.GetObjName())
 		if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
 			for _, index := range indexes {
 				if index >= 0 && index < len(fn.Args) {
-					if pos, found := preparedNumericValueParamPosition(fn.Args[index]); found {
-						return pos, true
-					}
+					collectFlattenedPreparedNumericSourcePositions(fn.Args[index], positions)
 				}
 			}
-			return 0, false
+			return
 		}
 		if name == "case" {
 			for index, arg := range fn.Args {
-				if !numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
-					continue
-				}
-				if pos, found := preparedNumericValueParamPosition(arg); found {
-					return pos, true
+				if numericFunctionArgKeepsContext(name, index, len(fn.Args)) {
+					collectFlattenedPreparedNumericSourcePositions(arg, positions)
 				}
 			}
-			return 0, false
+			return
 		}
 		for _, arg := range fn.Args {
-			if pos, found := preparedNumericValueParamPosition(arg); found {
-				return pos, true
-			}
+			collectFlattenedPreparedNumericSourcePositions(arg, positions)
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			if pos, found := preparedNumericValueParamPosition(item); found {
-				return pos, true
-			}
+			collectFlattenedPreparedNumericSourcePositions(item, positions)
 		}
 	}
 	if sub := expr.GetSub(); sub != nil {
-		return preparedNumericValueParamPosition(sub.Child)
+		collectFlattenedPreparedNumericSourcePositions(sub.Child, positions)
 	}
-	return 0, false
+}
+
+// preparedNumericValueParamPosition is retained for callers that need only an
+// eligibility marker. Production rebinding uses the complete position set.
+func preparedNumericValueParamPosition(expr *plan.Expr) (int32, bool) {
+	positions := preparedNumericValueParamPositions(expr)
+	var selected int32
+	found := false
+	for pos := range positions {
+		if !found || pos < selected {
+			selected = pos
+			found = true
+		}
+	}
+	return selected, found
 }
 
 func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
@@ -1122,25 +1132,31 @@ func preparedNumericFallbackSource(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, true
 }
 
-func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos int) (*Expr, bool, error) {
+func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
+	expr *plan.Expr,
+	positions map[int32]struct{},
+) (*Expr, bool, error) {
 	if expr == nil {
 		return nil, false, nil
 	}
 	if param := expr.GetP(); param != nil {
-		if int(param.Pos) != pos {
+		if _, ok := positions[param.Pos]; !ok {
 			return expr, false, nil
 		}
-		bound, ok, err := rule.typedRuntimeParamExpr(pos)
+		bound, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
 		return bound, ok, err
 	}
 	if isImplicitPreparedParamCast(expr) {
-		if param, ok := implicitPreparedParam(expr); ok && int(param.Pos) == pos {
-			bound, changed, err := rule.rebindPreparedNumericExpr(expr.GetF().Args[0], pos)
+		if param, ok := implicitPreparedParam(expr); ok {
+			if _, selected := positions[param.Pos]; !selected {
+				return expr, false, nil
+			}
+			bound, changed, err := rule.rebindPreparedNumericExpr(expr.GetF().Args[0], positions)
 			return bound, changed, err
 		}
 	}
 	if sub := expr.GetSub(); sub != nil {
-		child, changed, err := rule.rebindPreparedNumericExpr(sub.Child, pos)
+		child, changed, err := rule.rebindPreparedNumericExpr(sub.Child, positions)
 		if err != nil || !changed {
 			return expr, false, err
 		}
@@ -1153,7 +1169,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos in
 		copy := DeepCopyExpr(expr)
 		changed := false
 		for i, item := range list.List {
-			bound, itemChanged, err := rule.rebindPreparedNumericExpr(item, pos)
+			bound, itemChanged, err := rule.rebindPreparedNumericExpr(item, positions)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1169,7 +1185,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos in
 		copy := DeepCopyExpr(expr)
 		changed := false
 		for i, arg := range fn.Args {
-			bound, argChanged, err := rule.rebindPreparedNumericExpr(arg, pos)
+			bound, argChanged, err := rule.rebindPreparedNumericExpr(arg, positions)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1184,13 +1200,14 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos in
 		// packet must also remove integral DOUBLE literals introduced by that
 		// provisional context (for example the `0` in ABS(? + 0)); otherwise the
 		// enclosing arithmetic function remains on its lossy DOUBLE overload.
-		if runtimeType, ok := rule.runtimeParamType(pos); ok && runtimeType.Oid.IsInteger() {
+		runtimeDomain := rule.preparedNumericRuntimeDomain(positions)
+		if runtimeDomain == preparedNumericRuntimeInteger {
 			for i, arg := range copy.GetF().Args {
 				if integral, integralOK := provisionalIntegralFloatLiteral(arg); integralOK {
 					copy.GetF().Args[i] = integral
 				}
 			}
-		} else if runtimeType, ok := rule.runtimeParamType(pos); ok && runtimeType.Oid.IsDecimal() {
+		} else if runtimeDomain == preparedNumericRuntimeDecimal {
 			for i, arg := range copy.GetF().Args {
 				if decimal, decimalOK, decimalErr := provisionalDecimalFloatLiteral(rule.ctx, arg); decimalErr != nil {
 					return nil, false, decimalErr
@@ -1221,12 +1238,49 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(expr *plan.Expr, pos in
 	if expr.GetCol() != nil && expr.PreparedNumericFallbackSource {
 		return expr, false, nil
 	}
-	if expr.PreparedNumericFallback && expr.PreparedNumericParamPos == int32(pos) {
-		if bound, ok, err := rule.typedRuntimeParamExpr(pos); err != nil || ok {
+	if expr.PreparedNumericFallback && expr.PreparedNumericParamPos >= 0 {
+		if _, selected := positions[expr.PreparedNumericParamPos]; !selected {
+			return expr, false, nil
+		}
+		if bound, ok, err := rule.typedRuntimeParamExpr(int(expr.PreparedNumericParamPos)); err != nil || ok {
 			return bound, ok, err
 		}
 	}
 	return expr, false, nil
+}
+
+type preparedNumericRuntimeDomain uint8
+
+const (
+	preparedNumericRuntimeUnknown preparedNumericRuntimeDomain = iota
+	preparedNumericRuntimeInteger
+	preparedNumericRuntimeDecimal
+	preparedNumericRuntimeFloat
+)
+
+func (rule *ResetParamRefRule) preparedNumericRuntimeDomain(
+	positions map[int32]struct{},
+) preparedNumericRuntimeDomain {
+	domain := preparedNumericRuntimeInteger
+	if len(positions) == 0 {
+		return preparedNumericRuntimeUnknown
+	}
+	for pos := range positions {
+		runtimeType, ok := rule.runtimeParamType(int(pos))
+		if !ok {
+			return preparedNumericRuntimeUnknown
+		}
+		switch {
+		case runtimeType.Oid.IsFloat():
+			return preparedNumericRuntimeFloat
+		case runtimeType.Oid.IsDecimal():
+			domain = preparedNumericRuntimeDecimal
+		case runtimeType.Oid.IsInteger():
+		default:
+			return preparedNumericRuntimeUnknown
+		}
+	}
+	return domain
 }
 
 func provisionalIntegralFloatLiteral(expr *plan.Expr) (*Expr, bool) {
@@ -1295,19 +1349,19 @@ func provisionalDecimalFloatLiteral(ctx context.Context, expr *plan.Expr) (*Expr
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
-	pos, ok := preparedNumericValueParamPosition(expr)
-	if !ok {
+	positions := preparedNumericValueParamPositions(expr)
+	if len(positions) == 0 {
 		return expr, false, nil
 	}
-	return rule.rebindPreparedNumericExpr(expr, int(pos))
+	return rule.rebindPreparedNumericExpr(expr, positions)
 }
 
 func (rule *ResetParamRefRule) rebindPreparedDecimalExpr(expr *plan.Expr) (*Expr, bool, error) {
-	pos, ok := preparedNumericValueParamPosition(expr)
-	if !ok {
+	positions := preparedNumericValueParamPositions(expr)
+	if len(positions) == 0 {
 		return expr, false, nil
 	}
-	return rule.rebindPreparedNumericExpr(expr, int(pos))
+	return rule.rebindPreparedNumericExpr(expr, positions)
 }
 
 func (rule *ResetParamRefRule) preparedNumericSourceType(expr *plan.Expr) (plan.Type, bool) {
@@ -1426,8 +1480,9 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	if fallbackSource != nil {
 		if source, ok := preparedNumericFallbackSource(fallbackSource); ok {
-			if pos, posOK := preparedNumericValueParamPosition(fallbackSource); posOK {
-				bound, changed, bindErr := rule.rebindPreparedNumericExpr(source, int(pos))
+			positions := preparedNumericValueParamPositions(fallbackSource)
+			if len(positions) > 0 {
+				bound, changed, bindErr := rule.rebindPreparedNumericExpr(source, positions)
 				if bindErr != nil {
 					return nil, bindErr
 				}
@@ -1477,7 +1532,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// the explicit fallback metadata; the copy is the provenance source
 			// for the final ABS overload decision.
 			originalAbsArg = DeepCopyExpr(exprImpl.F.Args[0])
-			_, hasPreparedAbsValue = preparedNumericValueParamPosition(originalAbsArg)
+			hasPreparedAbsValue = len(preparedNumericValueParamPositions(originalAbsArg)) > 0
 		}
 		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) {
 			rule.markSerializedDecimalParamTypes(e)
@@ -1639,9 +1694,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 			source, sourceOK := preparedNumericFallbackSource(originalAbsArg)
-			pos, posOK := preparedNumericValueParamPosition(originalAbsArg)
-			if sourceOK && posOK {
-				rebound, changed, reboundErr := rule.rebindPreparedNumericExpr(source, int(pos))
+			positions := preparedNumericValueParamPositions(originalAbsArg)
+			if sourceOK && len(positions) > 0 {
+				rebound, changed, reboundErr := rule.rebindPreparedNumericExpr(source, positions)
 				if reboundErr != nil {
 					return nil, reboundErr
 				}

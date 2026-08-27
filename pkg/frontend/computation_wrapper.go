@@ -1184,8 +1184,11 @@ func initExecuteStmtParamWithResolverInSession(
 			preparedParamValuesEnableNumericPrefix(cwft.paramVals)
 	}
 	if runtimeNumericOverloadCandidate {
-		retainPreparedRuntimeParamRefsAtPositions(
-			cwft.paramVals, prepareStmt.numericOverloadParamPositions)
+		// Specialization materializes every ParamRef in the copied plan, not only
+		// the positions that select ABS's runtime overload. Preserve provenance
+		// for every parameter before caching so a same-category cache hit cannot
+		// retain an unrelated value from the first execution.
+		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
 	if runtimeNumericPrefixCandidate {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
@@ -1330,23 +1333,6 @@ func retainPreparedRuntimeParamRefs(paramVals []any) {
 		}
 		param.RetainParamRef = true
 		paramVals[i] = param
-	}
-}
-
-func retainPreparedRuntimeParamRefsAtPositions(paramVals []any, positions []int32) {
-	if len(paramVals) == 0 || len(positions) == 0 {
-		return
-	}
-	for _, position := range positions {
-		if position < 0 || int(position) >= len(paramVals) {
-			continue
-		}
-		param, ok := paramVals[position].(plan2.ParamValue)
-		if !ok {
-			continue
-		}
-		param.RetainParamRef = true
-		paramVals[position] = param
 	}
 }
 

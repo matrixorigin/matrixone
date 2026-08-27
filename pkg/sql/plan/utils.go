@@ -1013,7 +1013,7 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
 			return nil
 		}
-		if pos, ok := preparedNumericFallbackParamPosition(fn.Args[0]); ok {
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
 			positions[pos] = struct{}{}
 		}
 		return nil
@@ -1027,33 +1027,6 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
-}
-
-func preparedNumericFallbackParamPosition(expr *plan.Expr) (int32, bool) {
-	if expr == nil {
-		return 0, false
-	}
-	if expr.PreparedNumericFallback && expr.PreparedNumericParamPos >= 0 {
-		return expr.PreparedNumericParamPos, true
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if pos, ok := preparedNumericFallbackParamPosition(arg); ok {
-				return pos, true
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if pos, ok := preparedNumericFallbackParamPosition(item); ok {
-				return pos, true
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		return preparedNumericFallbackParamPosition(sub.Child)
-	}
-	return 0, false
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {

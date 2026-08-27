@@ -518,6 +518,34 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
 	require.Equal(t, int64(-9007199254740993), fn.GetF().Args[0].GetLit().GetI64Val())
 
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_multi_exact from 'select abs(? + ?)'")
+	require.NoError(t, err)
+	queryPlan = prepared.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(queryPlan))
+	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+		ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamInteger},
+	})
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(filled, "abs")
+	require.NotNil(t, fn)
+	require.Equal(t, int32(types.T_int64), fn.Typ.Id)
+	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_abs_multi_decimal from 'select abs(? + ?)'")
+	require.NoError(t, err)
+	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: "-9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
+		ParamValue{Value: "0.5", PrepareParamKind: vector.PrepareParamDecimal},
+	})
+	require.NoError(t, err)
+	fn = findPlanFunctionExpr(filled, "abs")
+	require.NotNil(t, fn)
+	require.True(t, types.T(fn.Typ.Id).IsDecimal())
+	require.True(t, types.T(fn.GetF().Args[0].Typ.Id).IsDecimal())
+
 	for _, sql := range []string{
 		"prepare stmt_abs_nested_arithmetic from 'select abs(? + 0)'",
 		"prepare stmt_abs_nested_if from 'select abs(if(1, ?, 0))'",
