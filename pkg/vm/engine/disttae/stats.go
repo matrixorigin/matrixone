@@ -915,14 +915,17 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 	var updated bool
 	var actualObjectCount int64
 	var samplingRatio float64
-	defer func() {
-		gs.markUpdateComplete(wrapKey.Key, updated, actualObjectCount, samplingRatio)
-	}()
 	release, err := gs.acquireStatsRefresh(wrapKey.Ctx, wrapKey.Key)
 	if err != nil {
+		// shouldExecuteUpdate opened this generation before admission. Close it
+		// even when cancellation prevents this worker from acquiring the stripe.
+		gs.markUpdateComplete(wrapKey.Key, false, 0, 0)
 		return
 	}
-	defer release()
+	defer func() {
+		gs.completeStatsRefresh(
+			wrapKey.Key, updated, actualObjectCount, samplingRatio, release)
+	}()
 
 	broadcastWithoutUpdate := func() {
 		gs.mu.Lock()
@@ -982,11 +985,38 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 	gs.mu.cond.Broadcast()
 }
 
+// completeStatsRefresh commits the automatic-refresh scheduling metadata
+// before another same-table refresh can enter. The statistics cache and its
+// object-count/sampling baseline therefore advance in one serialized order.
+func (gs *GlobalStats) completeStatsRefresh(
+	key pb.StatsInfoKey,
+	updated bool,
+	actualObjectCount int64,
+	samplingRatio float64,
+	release func(),
+) {
+	gs.markUpdateComplete(key, updated, actualObjectCount, samplingRatio)
+	release()
+}
+
 // RefreshWithMode triggers a stats refresh with the specified sampling mode
 func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey, samplingMode string) error {
+	_, err := gs.refreshStatsWithMode(ctx, key, samplingMode)
+	return err
+}
+
+// refreshStatsWithMode returns the exact statistics object published while
+// same-table refresh admission is still held. Callers that define a synchronous
+// publication boundary must use this result instead of re-reading the map after
+// admission has been released.
+func (gs *GlobalStats) refreshStatsWithMode(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	samplingMode string,
+) (*pb.StatsInfo, error) {
 	release, err := gs.acquireStatsRefresh(ctx, key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer release()
 
@@ -999,13 +1029,13 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 		key.DatabaseID,
 		key.DbName)
 	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
 	}
 
 	// Get table definition
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	if table == nil || table.TableDef == nil {
-		return moerr.NewInternalErrorNoCtx("table not found")
+		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 
 	// Create stats info
@@ -1032,7 +1062,7 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 	// Execute stats update
 	samplingRatio, err := CollectAndCalculateStats(ctx, req, gs.concurrentExecutor)
 	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("failed to update stats: %v", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to update stats: %v", err)
 	}
 
 	// Update cache
@@ -1044,7 +1074,7 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 	// Record sampling ratio in updateRecord
 	gs.markUpdateComplete(key, true, stats.AccurateObjectNumber, samplingRatio)
 
-	return nil
+	return stats, nil
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {

@@ -146,6 +146,20 @@ AFTER_TXN_MULTI
 AFTER_TXN_MULTI
 rollback;
 begin;
+create table txn_created_analyze(a int);
+insert into txn_created_analyze values (1), (2);
+analyze table txn_created_analyze(a);
+approx_count_distinct(a)
+2
+rollback;
+drop table if exists txn_created_analyze;
+begin;
+insert into t_analyze_01 values (3, 30);
+analyze table t_analyze_01(a);
+approx_count_distinct(a)
+3
+rollback;
+begin;
 check table t_analyze_01;
 not supported: CHECK TABLE is not supported in MatrixOne
 rollback;

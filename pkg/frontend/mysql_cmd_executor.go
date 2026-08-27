@@ -2075,7 +2075,7 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		if err != nil {
 			return err
 		}
-		if err := refreshAnalyzeTableStats(ses, execCtx.reqCtx, entry); err != nil {
+		if err := refreshAnalyzeTableStats(ses, execCtx, entry); err != nil {
 			return err
 		}
 		results = append(results, result)
@@ -2084,7 +2084,16 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	return nil
 }
 
-func refreshAnalyzeTableStats(ses *Session, ctx context.Context, entry *tree.AnalyzeTableEntry) error {
+func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.AnalyzeTableEntry) error {
+	// The derived ANALYZE query observes the transaction workspace. The engine
+	// statistics cache is process-global and observes only committed catalog and
+	// object state, so publishing while a user transaction was already active
+	// would mix two visibility domains. Preserve the legacy derived result and
+	// leave global publication to an ANALYZE statement outside that transaction.
+	if !analyzeStatsPublicationAllowed(execCtx) {
+		return nil
+	}
+	ctx := execCtx.reqCtx
 	if entry == nil || entry.Table == nil || entry.Table.AtTsExpr != nil {
 		return nil
 	}
@@ -2131,6 +2140,12 @@ func refreshAnalyzeTableStats(ses *Session, ctx context.Context, entry *tree.Ana
 		TableName:  obj.ObjName,
 	}
 	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+}
+
+func analyzeStatsPublicationAllowed(execCtx *ExecCtx) bool {
+	return execCtx != nil &&
+		execCtx.txnOpt.activeTxnAtStartKnown &&
+		!execCtx.txnOpt.activeTxnAtStart
 }
 
 func analyzeTableOwnsPersistentStats(tableDef *plan.TableDef) bool {

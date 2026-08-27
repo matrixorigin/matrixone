@@ -4885,6 +4885,28 @@ func TestAnalyzeTableOwnsPersistentStats(t *testing.T) {
 	}
 }
 
+func TestAnalyzeStatsPublicationRequiresStatementOwnedTransaction(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		execCtx *ExecCtx
+		want    bool
+	}{
+		{name: "missing execution context"},
+		{name: "unknown transaction owner", execCtx: &ExecCtx{}},
+		{name: "statement-owned transaction", execCtx: &ExecCtx{txnOpt: FeTxnOption{
+			activeTxnAtStartKnown: true,
+		}}, want: true},
+		{name: "pre-existing user transaction", execCtx: &ExecCtx{txnOpt: FeTxnOption{
+			activeTxnAtStartKnown: true,
+			activeTxnAtStart:      true,
+		}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, analyzeStatsPublicationAllowed(test.execCtx))
+		})
+	}
+}
+
 func isolateOptimizerStatsTest(t *testing.T, sessions ...*Session) {
 	t.Helper()
 	service := "optimizer-stats-" + t.Name()

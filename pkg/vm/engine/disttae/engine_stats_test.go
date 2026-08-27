@@ -28,21 +28,16 @@ type optimizerStatsStoreStub struct {
 	refreshErr error
 	key        pb.StatsInfoKey
 	mode       string
-	getCalled  bool
-	getSync    bool
 }
 
-func (s *optimizerStatsStoreStub) RefreshWithMode(_ context.Context, key pb.StatsInfoKey, mode string) error {
+func (s *optimizerStatsStoreStub) refreshStatsWithMode(
+	_ context.Context,
+	key pb.StatsInfoKey,
+	mode string,
+) (*pb.StatsInfo, error) {
 	s.key = key
 	s.mode = mode
-	return s.refreshErr
-}
-
-func (s *optimizerStatsStoreStub) Get(_ context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	s.getCalled = true
-	s.key = key
-	s.getSync = sync
-	return s.stats
+	return s.stats, s.refreshErr
 }
 
 func TestRefreshTableStatsDefinesPublicationBoundary(t *testing.T) {
@@ -56,8 +51,6 @@ func TestRefreshTableStatsDefinesPublicationBoundary(t *testing.T) {
 		require.Same(t, fresh, got)
 		require.Equal(t, key, store.key)
 		require.Equal(t, "auto", store.mode)
-		require.True(t, store.getCalled)
-		require.False(t, store.getSync)
 	})
 
 	t.Run("refresh failure is not published", func(t *testing.T) {
@@ -67,7 +60,6 @@ func TestRefreshTableStatsDefinesPublicationBoundary(t *testing.T) {
 		got, err := refreshTableStats(context.Background(), key, store)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, got)
-		require.False(t, store.getCalled)
 	})
 }
 
@@ -113,4 +105,43 @@ func TestCoordinateStatsUpdateCancellationReleasesUpdateGeneration(t *testing.T)
 	require.NotNil(t, record)
 	require.False(t, record.inProgress,
 		"cancellation while waiting for refresh admission must close the update generation")
+}
+
+func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
+	gs := &GlobalStats{}
+	gs.initStatsRefreshAdmission()
+	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+	key := pb.StatsInfoKey{AccId: 1, TableID: 42}
+
+	gs.updatingMu.updating[key] = &updateRecord{inProgress: true}
+	oldRelease, err := gs.acquireStatsRefresh(context.Background(), key)
+	require.NoError(t, err)
+
+	newerDone := make(chan error, 1)
+	go func() {
+		newRelease, acquireErr := gs.acquireStatsRefresh(context.Background(), key)
+		if acquireErr != nil {
+			newerDone <- acquireErr
+			return
+		}
+		gs.markUpdateComplete(key, true, 100, 0.5)
+		newRelease()
+		newerDone <- nil
+	}()
+
+	// Waiting here after releasing forces the newer refresh to commit between
+	// release and any code that might incorrectly update the old baseline late.
+	var newerErr error
+	gs.completeStatsRefresh(key, true, 1, 1.0, func() {
+		oldRelease()
+		newerErr = <-newerDone
+	})
+	require.NoError(t, newerErr)
+
+	gs.updatingMu.Lock()
+	record := *gs.updatingMu.updating[key]
+	gs.updatingMu.Unlock()
+	require.False(t, record.inProgress)
+	require.Equal(t, int64(100), record.baseObjectCount)
+	require.Equal(t, 0.5, record.samplingRatio)
 }

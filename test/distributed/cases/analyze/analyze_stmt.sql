@@ -117,6 +117,22 @@ analyze table t_analyze_01, t_analyze_02;
 select 'AFTER_TXN_MULTI';
 rollback;
 
+-- A transaction-local table is visible to the derived ANALYZE query but not
+-- to the process-global optimizer statistics refresher.
+begin;
+create table txn_created_analyze(a int);
+insert into txn_created_analyze values (1), (2);
+analyze table txn_created_analyze(a);
+rollback;
+drop table if exists txn_created_analyze;
+
+-- The result includes uncommitted workspace rows, while global optimizer
+-- statistics remain at the committed visibility boundary.
+begin;
+insert into t_analyze_01 values (3, 30);
+analyze table t_analyze_01(a);
+rollback;
+
 begin;
 check table t_analyze_01;
 rollback;

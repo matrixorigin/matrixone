@@ -1286,15 +1286,11 @@ func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*p
 }
 
 type optimizerStatsStore interface {
-	RefreshWithMode(context.Context, pb.StatsInfoKey, string) error
-	Get(context.Context, pb.StatsInfoKey, bool) *pb.StatsInfo
+	refreshStatsWithMode(context.Context, pb.StatsInfoKey, string) (*pb.StatsInfo, error)
 }
 
 func refreshTableStats(ctx context.Context, key pb.StatsInfoKey, store optimizerStatsStore) (*pb.StatsInfo, error) {
-	if err := store.RefreshWithMode(ctx, key, "auto"); err != nil {
-		return nil, err
-	}
-	return store.Get(ctx, key, false), nil
+	return store.refreshStatsWithMode(ctx, key, "auto")
 }
 
 // GetGlobalStats returns the GlobalStats instance
