@@ -350,6 +350,97 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestStringShuffleHashRemoteWireContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	arg := shuffle.NewArgument()
+	t.Cleanup(arg.Release)
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = true
+
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	_, legacyInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), legacyInstruction.Op)
+
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+	_, stableInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.ShuffleStable), stableInstruction.Op)
+	require.NotEqual(t, legacyInstruction.Op, stableInstruction.Op)
+
+	// Range ownership is unchanged by the complete string hash contract and
+	// must not reject an older receiver unnecessarily.
+	arg.ShuffleType = int32(planpb.ShuffleType_Range)
+	_, rangeInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), rangeInstruction.Op)
+
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = false
+	_, numericHashInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), numericHashInstruction.Op)
+
+	encodePipeline := func(t *testing.T, instruction *pipeline.Instruction) []byte {
+		t.Helper()
+		data, err := (&pipeline.Pipeline{
+			PipelineType:    pipeline.Pipeline_Normal,
+			InstructionList: []*pipeline.Instruction{instruction},
+		}).Marshal()
+		require.NoError(t, err)
+		return data
+	}
+	legacyData := encodePipeline(t, legacyInstruction)
+	stableData := encodePipeline(t, stableInstruction)
+	rangeData := encodePipeline(t, rangeInstruction)
+	numericHashData := encodePipeline(t, numericHashInstruction)
+
+	decode := func(algorithm process.StringShuffleHashAlgorithm, data []byte) (*Scope, error) {
+		receiverProc := testutil.NewProcess(t)
+		t.Cleanup(receiverProc.Free)
+		receiverProc.SetStringShuffleHashAlgorithm(algorithm)
+		return decodeScope(data, receiverProc, true, nil)
+	}
+
+	legacyScope, err := decode(process.StringShuffleHashLegacy, legacyData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, legacyScope.RootOp)
+	legacyScope.release()
+
+	stableScope, err := decode(process.StringShuffleHashComplete, stableData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, stableScope.RootOp)
+	require.True(t, stableScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	stableScope.release()
+	rangeScope, err := decode(process.StringShuffleHashComplete, rangeData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, rangeScope.RootOp)
+	rangeScope.release()
+	numericHashScope, err := decode(process.StringShuffleHashComplete, numericHashData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, numericHashScope.RootOp)
+	require.False(t, numericHashScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	numericHashScope.release()
+
+	_, err = decode(process.StringShuffleHashLegacy, stableData)
+	require.ErrorContains(t, err,
+		"string shuffle hash algorithm mismatch: pipeline=1 process=0")
+	_, err = decode(process.StringShuffleHashComplete, legacyData)
+	require.ErrorContains(t, err,
+		"string shuffle hash algorithm mismatch: pipeline=0 process=1")
+	invalidStableRange := *rangeInstruction
+	invalidStableRange.Op = int32(vm.ShuffleStable)
+	_, err = decode(process.StringShuffleHashComplete,
+		encodePipeline(t, &invalidStableRange))
+	require.ErrorContains(t, err,
+		"complete string shuffle hash marker requires a string-key hash shuffle")
+}
+
 func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
