@@ -4000,6 +4000,39 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 	})
 }
 
+func TestDeleteSetNullMaintainsCompositeSecondaryIndexEntry(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+	emp := mock.ctxt.tables["emp"]
+	require.Len(t, emp.Indexes, 2)
+	emp.Indexes = emp.Indexes[1:]
+	require.False(t, emp.Indexes[0].Unique)
+	emp.Indexes[0].Parts = []string{"deptno", "ename", catalog.AliasPrefix + "empno"}
+
+	logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_SK),
+		"a composite secondary index retains a row whose key has a NULL component")
+}
+
+func TestDeleteSetNullDropsSingleColumnSecondaryIndexEntry(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+	emp := mock.ctxt.tables["emp"]
+	require.Len(t, emp.Indexes, 2)
+	emp.Indexes = emp.Indexes[1:]
+	require.False(t, emp.Indexes[0].Unique)
+	emp.Indexes[0].Parts = []string{"deptno", catalog.AliasPrefix + "empno"}
+
+	logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 10")
+	require.NoError(t, err)
+	require.Zero(t, countUpdateFkPlanNodes(logicPlan.GetQuery(), plan.Node_PRE_INSERT_SK),
+		"a single-column secondary index compacts the NULL replacement key")
+}
+
 func TestPreparedInsertForeignKeyPlansRemainSensitiveAcrossChecks(t *testing.T) {
 	statements := []struct {
 		name string
