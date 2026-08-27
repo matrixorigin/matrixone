@@ -62,6 +62,14 @@ import (
 // alone overcommits the host budget.
 const HostIDBytesPerRow = 8
 
+// HostStagedIDBytesPerRow is the host cost of ONE staged id: sizeof(IdT) in
+// staging_ids_, the vector stage_rows_locked grows beside staging_data_ whenever
+// the caller supplies ids. It is deliberately separate from HostIDBytesPerRow --
+// they happen to agree today, but they describe different arenas (permanent
+// identity bookkeeping vs the transient quantizer training sample) and are free
+// to diverge.
+const HostStagedIDBytesPerRow = 8
+
 // hostAvailFn is the availability source, indirected so the budgeting rule is
 // testable without depending on the machine's live memory.
 var hostAvailFn = system.MemoryAvailableIncludingCache
@@ -131,19 +139,49 @@ const hostBudgetNumerator, hostBudgetDenominator = 3, 4
 // capacity (native staging_bound_rows), but that capacity is what this function
 // is being asked to produce. Charging the whole source instead can refuse a
 // rotation that fits -- 1 GiB of availability with a 1M-row train limit charges
-// 3.07 GB of staging against an 805 MB budget, though 209,279-row sub-indexes
+// 3.07 GB of staging against an 805 MB budget, though 116,105-row sub-indexes
 // fit it with room to spare.
 //
 // No fixed point is needed, because the arena is min(stageLimitRows, capacity):
 //
-//	capacity <= stageLimitRows:  budget >= capacity*(perRow + perTrainRow)
-//	                             -> capacity = budget / (perRow + perTrainRow)
-//	capacity >  stageLimitRows:  the arena is constant at stageLimitRows*perTrainRow
+//	capacity <= stageLimitRows:  budget >= capacity*(perRow + stagedPeak)
+//	                             -> capacity = budget / (perRow + stagedPeak)
+//	capacity >  stageLimitRows:  the arena is constant at stageLimitRows*stagedPeak
 //	                             -> capacity = (budget - arena) / perRow
 //
 // Exactly one branch is self-consistent, so it is solved directly. perTrainRow
 // is 0 for storage wider than a byte, where nothing stages and this reduces to
 // plain division.
+//
+// stagedPeak, not perTrainRow, is what has to be charged. Two things separate
+// them, and a plan that ignores either is one the native side refuses:
+//
+//   - The arena stages IDs beside the raw vectors. stage_rows_locked grows
+//     staging_ids_ whenever the caller supplies them, and the production IVF-PQ
+//     and CAGRA build paths always do (one row per call, with idBuf). Charging
+//     only the raw bytes under-counts every staged row by HostStagedIDBytesPerRow.
+//
+//   - The arena grows GEOMETRICALLY, and a growing resize does not extend in
+//     place: it allocates the new buffer, copies, and only then frees the old
+//     one. stage_rows_locked therefore claims the FULL replacement while the old
+//     buffer is still resident, against 75% of the availability remaining at that
+//     moment -- with capacity and the old arena already faulted in. Charging the
+//     final arena models the steady state, not that peak.
+//
+// Charging 2x covers the peak for every growth in the sequence, because the old
+// buffer can never exceed the bound: with C = budget - 2*L*s (s = per-staged-row
+// peak cost, L = arena rows) and an old buffer of at most L*s, the availability
+// left at the final growth is at least A - C - L*s = 0.25*A + L*s, so the native
+// 75% budget is at least 0.1875*A + 0.75*L*s, which covers the L*s claim as long
+// as L*s <= 0.75*A. Admitting any rows already requires 2*L*s < 0.75*A, so that
+// holds with a factor of two to spare.
+//
+// Note what that argument does NOT depend on: the growth SCHEDULE. It uses only
+// "at most one old buffer is resident, and the claim is its replacement", so the
+// factor stays correct if the native side changes its doubling ratio or its
+// reserve floor. What would invalidate it is keeping more than one superseded
+// buffer alive, or claiming more than the replacement -- so stage_rows_locked
+// carries a pointer back here.
 //
 // Returns (0, 0, nil) when availability cannot be measured -- the caller falls
 // back to the device bound, as with HostRowsFitting.
@@ -157,9 +195,13 @@ func HostRowsFittingStaged(perRowBytes, perTrainRowBytes, stageLimitRows uint64)
 	}
 	budget := avail / hostBudgetDenominator * hostBudgetNumerator
 
+	// Per staged row at the geometric replacement peak: the raw vector, the ID
+	// staged beside it, and a second copy for the buffer being replaced.
+	stagedPeak := 2 * (perTrainRowBytes + HostStagedIDBytesPerRow)
+
 	if perTrainRowBytes == 0 || stageLimitRows == 0 {
 		rows = int64(budget / perRowBytes)
-	} else if small := budget / (perRowBytes + perTrainRowBytes); small <= stageLimitRows {
+	} else if small := budget / (perRowBytes + stagedPeak); small <= stageLimitRows {
 		// The arena grows with capacity, so both scale together.
 		rows = int64(small)
 	} else {
@@ -167,11 +209,11 @@ func HostRowsFittingStaged(perRowBytes, perTrainRowBytes, stageLimitRows uint64)
 		//
 		// The arena cannot starve capacity here, and that falls out of the branch
 		// condition rather than needing a guard: reaching this branch means
-		// stageLimitRows < budget/(perRow + perTrainRow), so
-		// stageLimitRows*perTrainRow < budget. Solving the two together is what
+		// stageLimitRows < budget/(perRow + stagedPeak), so
+		// stageLimitRows*stagedPeak < budget. Solving the two together is what
 		// makes "the sample alone exceeds the budget" unreachable -- the shape
 		// that made HostRowsFitting refuse a rotation that fits.
-		rows = int64((budget - stageLimitRows*perTrainRowBytes) / perRowBytes)
+		rows = int64((budget - stageLimitRows*stagedPeak) / perRowBytes)
 	}
 
 	if rows <= 0 {

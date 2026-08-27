@@ -101,10 +101,12 @@ host-to-VRAM ratio should say so, since the ratio is doing the work rather than
 the rule under discussion.
 
 For scale against the baseline: the largest staging arena the hard ceiling
-permits (`kMaxQuantizerTrainLimit` = 1,000,000 rows, dim 768, f32 base) is
-**2.86 GB — 0.75% of the host budget.** Sizing failures attributable to the
-quantizer sample are therefore not reachable on the reference machine; they
-require both a raised `quantizer_train_limit` and a host far smaller than this.
+permits (`kMaxQuantizerTrainLimit` = 1,000,000 rows, dim 768, f32 base) holds
+2.86 GB of raw rows, and the figure the planner charges is its **replacement
+peak with staged ids — 5.74 GB, 1.5% of the host budget.** Sizing failures
+attributable to the quantizer sample are therefore not reachable on the
+reference machine; they require both a raised `quantizer_train_limit` and a
+host far smaller than this.
 
 Defaults are the reviewed configuration. Tuned knobs (`quantizer_train_limit`,
 `max_index_capacity`, `kmeans_train_percent`) shift cost onto the operator by
@@ -158,6 +160,16 @@ to relieve it.
    aggregate is aligned to the 32-row shard split before being multiplied, so
    the last shard — which absorbs the remainder — never exceeds the per-card
    figure it was derived from.
+
+   "Bound" means the *peak the native side actually claims*, not the final size.
+   The staging arena grows geometrically, and a growing `resize()` allocates the
+   new buffer before freeing the old, so `stage_rows_locked` claims the whole
+   replacement while the old buffer is still resident — against 75% of the
+   availability left at that moment, with capacity already faulted in. It also
+   stages ids beside the vectors whenever the caller supplies them, which the
+   production build paths always do. The planner therefore charges
+   `2 * (rawRowBytes + idBytes)` per staged row. Charging the final raw size
+   instead admitted plans the native governor then refused deterministically.
 5. **"Cannot measure" and "nothing available" are different answers.** An
    unreadable host admits without claiming (the capacity model already falls
    back to the device bound); a *measured* zero refuses. Collapsing them is what

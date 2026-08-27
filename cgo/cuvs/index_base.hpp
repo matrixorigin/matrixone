@@ -1548,6 +1548,13 @@ public:
         // is exactly what a peak has to cover: with an arena at S/2 resident and
         // a target of S = 75% of initial free, the delta passes the budget while
         // the allocation itself needs S against less free than that.
+        // The Go planner (memory.HostRowsFittingStaged) charges 2x the staged row
+        // cost so a plan it admits can always reach this bound. That factor rests
+        // on two properties of the code below, not on the doubling ratio: at most
+        // ONE superseded buffer is resident when the claim is taken, and the claim
+        // is exactly its replacement. Changing the ratio or the floor is safe;
+        // holding a second old buffer, or claiming more than the replacement, is
+        // not -- update the planner's charge with it.
         size_t growth = 0;
         if (grow_data) growth += static_cast<size_t>(data_rows) * dimension * sizeof(B);
         if (grow_ids) growth += static_cast<size_t>(ids_rows) * sizeof(IdT);
