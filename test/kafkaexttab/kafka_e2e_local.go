@@ -48,6 +48,10 @@ type report struct {
 const (
 	topic = "orders"
 	table = "kafka_e2e.korders"
+	// errTopic carries deliberately malformed messages for the error-mode
+	// scenario. It is separate from `topic` so the exactly-once scenarios,
+	// which assert exact ids and sums, are unaffected.
+	errTopic = "orders_errmix"
 )
 
 func main() {
@@ -68,6 +72,9 @@ func main() {
 	}
 	if err == nil {
 		err = run(ctx, db, bootstrap, seedKafka, &r)
+	}
+	if err == nil {
+		err = runErrorMode(ctx, db, bootstrap, &r)
 	}
 	if err == nil {
 		r.Status = "passed"
@@ -519,4 +526,177 @@ func writeReport(dir string, value report) error {
 		summary += "\nError: " + value.Error + "\n"
 	}
 	return os.WriteFile(filepath.Join(dir, "summary.md"), []byte(summary), 0o600)
+}
+
+// seedKafkaRaw produces the given values verbatim into a topic, creating it
+// first. Unlike seedKafka it does not shape the payloads, so a caller can put
+// malformed records on the stream.
+func seedKafkaRaw(ctx context.Context, bootstrap, tp string, values []string) error {
+	cl, err := kgo.NewClient(kgo.SeedBrokers(bootstrap))
+	if err != nil {
+		return fmt.Errorf("kafka client: %w", err)
+	}
+	defer cl.Close()
+	adm := kadm.NewClient(cl)
+
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		_, err = adm.CreateTopics(ctx, 1, 1, nil, tp)
+		if err == nil || strings.Contains(err.Error(), "TOPIC_ALREADY_EXISTS") {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("create topic %s: %w", tp, err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	for i, v := range values {
+		if err := cl.ProduceSync(ctx, &kgo.Record{Topic: tp, Value: []byte(v)}).FirstErr(); err != nil {
+			return fmt.Errorf("produce %d into %s: %w", i, tp, err)
+		}
+	}
+	return nil
+}
+
+// runErrorMode proves the external error-mode columns (issue #27517) on a REAL
+// Kafka stream, and that one multi-table INSERT can split a messy stream into a
+// destination table and a rejects table without failing the statement.
+//
+// It is deliberately not part of run(): run() is also executed by the
+// broker-free unit test against a SQL simulator, and teaching that simulator to
+// model multi-table INSERT would make it the oracle for a feature it does not
+// implement.
+// errModeMessages is the stream runErrorMode reads: 8 messages, 2 that parse
+// cleanly and 6 that fail in a different way each. It is package level so the
+// broker-free simulator answers from the same list the driver asserts against.
+var errModeMessages = []string{
+	"1,alpha,10.50,2024-01-01 00:00:00",      // good
+	"abc,beta,20.50,2024-01-02 00:00:00",     // id is not a number
+	"3,gamma,notanumber,2024-01-03 00:00:00", // amount is not a number
+	"4,delta,40.50,not-a-timestamp",          // ts is unparsable
+	"5,epsilon,50.50",                        // too few fields
+	"6,zeta,60.50,2024-01-06 00:00:00,extra", // too many fields
+	"",                                       // empty value: not one record
+	"8,theta,80.50,2024-01-08 00:00:00",      // good
+}
+
+// seedRawFn is a test seam, like committedOffsetFn: the broker-free simulator
+// substitutes its own producer so runErrorMode is executable without Kafka.
+var seedRawFn = seedKafkaRaw
+
+func runErrorMode(ctx context.Context, db *sql.DB, bootstrap string, r *report) error {
+	msgs := errModeMessages
+	if err := seedRawFn(ctx, bootstrap, errTopic, msgs); err != nil {
+		return err
+	}
+
+	const src = "kafka_e2e.kerr"
+	for _, stmt := range []string{
+		// run() drops its database when it finishes, so own the schema here
+		// rather than depending on what another scenario left behind.
+		"create database if not exists kafka_e2e",
+		"create external table " + src + " (id int, name varchar(20), amount decimal(10,2), ts timestamp)" +
+			" engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + errTopic + "')",
+		"create table kafka_e2e.kdest (id int, name varchar(20), amount decimal(10,2), ts timestamp)",
+		"create table kafka_e2e.krejects (msg_id bigint, msg varchar(500), txt varchar(500))",
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("error-mode setup %q: %w", stmt, err)
+		}
+	}
+
+	// LAST_KAFKA_MESSAGE_ID() is session state, and the read positions itself
+	// with __mo_read_start_id, so pin one connection.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// A message that fails to parse is a row, not a statement failure: one
+	// statement sends the good records to kdest and the bad ones to krejects.
+	// A Kafka record has no line in a file, so it is identified by
+	// __mo_message_id, and __mo_file_line is NULL.
+	if _, err := conn.ExecContext(ctx,
+		"insert first"+
+			" when errmsg is null then into kafka_e2e.kdest (id, name, amount, ts) values (id, name, amount, ts)"+
+			" else into kafka_e2e.krejects (msg_id, msg, txt) values (mid, errmsg, errtxt)"+
+			" select id, name, amount, ts, __mo_message_id as mid,"+
+			" __mo_error_message as errmsg, __mo_error_text as errtxt"+
+			" from "+src+" where __mo_read_start_id = -1 and __mo_read_timeout = 5"); err != nil {
+		return fmt.Errorf("error-mode split: %w", err)
+	}
+
+	var good, bad int64
+	if err := conn.QueryRowContext(ctx, "select count(*) from kafka_e2e.kdest").Scan(&good); err != nil {
+		return err
+	}
+	if err := conn.QueryRowContext(ctx, "select count(*) from kafka_e2e.krejects").Scan(&bad); err != nil {
+		return err
+	}
+	if good != 2 || bad != 6 {
+		return fmt.Errorf("error-mode split: kdest=%d krejects=%d, want 2 and 6", good, bad)
+	}
+	// every message is accounted for exactly once
+	if good+bad != int64(len(msgs)) {
+		return fmt.Errorf("error-mode split: %d rows for %d messages", good+bad, len(msgs))
+	}
+	r.Cases = append(r.Cases, "error-mode-split")
+
+	// the rejects carry the offset of the message that failed, in order
+	rows, err := conn.QueryContext(ctx, "select msg_id, txt from kafka_e2e.krejects order by msg_id")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	wantOffsets := []int64{1, 2, 3, 4, 5, 6}
+	var i int
+	for rows.Next() {
+		var id int64
+		var txt string
+		if err := rows.Scan(&id, &txt); err != nil {
+			return err
+		}
+		if i >= len(wantOffsets) {
+			return fmt.Errorf("error-mode: more rejects than expected")
+		}
+		if id != wantOffsets[i] {
+			return fmt.Errorf("error-mode reject %d: __mo_message_id = %d, want %d", i, id, wantOffsets[i])
+		}
+		// __mo_error_text is the message value as published
+		if txt != msgs[id] {
+			return fmt.Errorf("error-mode reject %d: text %q, want %q", i, txt, msgs[id])
+		}
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if i != len(wantOffsets) {
+		return fmt.Errorf("error-mode: %d rejects, want %d", i, len(wantOffsets))
+	}
+	r.Cases = append(r.Cases, "error-mode-message-id")
+
+	// __mo_file_line is NULL on a Kafka scan: a message has no line in a file
+	var lineNulls int64
+	if err := conn.QueryRowContext(ctx,
+		"select count(*) from "+src+
+			" where __mo_read_start_id = -1 and __mo_read_timeout = 5"+
+			" and __mo_file_line is null and __mo_error_message is not null").Scan(&lineNulls); err != nil {
+		return err
+	}
+	if lineNulls != 6 {
+		return fmt.Errorf("error-mode: %d failed rows with NULL __mo_file_line, want 6", lineNulls)
+	}
+	r.Cases = append(r.Cases, "error-mode-no-file-line")
+
+	// without the error columns the same read still fails on the first bad
+	// message, exactly as it did before error mode existed
+	if _, err := conn.ExecContext(ctx,
+		"insert into kafka_e2e.kdest (id, name, amount, ts) select id, name, amount, ts from "+src+
+			" where __mo_read_start_id = -1 and __mo_read_timeout = 5"); err == nil {
+		return fmt.Errorf("error-mode: a read without the error columns must still fail")
+	}
+	r.Cases = append(r.Cases, "error-mode-pruned-still-fails")
+	return nil
 }

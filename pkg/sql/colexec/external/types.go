@@ -108,7 +108,34 @@ type ExParamConst struct {
 	ClusterTable    *plan.ClusterTable
 }
 
+// ExternalErrorMode carries the per-scan state behind the error-mode columns
+// (issue #27517). Tolerate is resolved ONCE from the pruned attribute list, so
+// a scan that never mentions the error columns pays only this bool test.
+type ExternalErrorMode struct {
+	// Tolerate is true when the query kept __mo_error_message or
+	// __mo_error_text. Keeping only __mo_file_line does NOT set it: that column
+	// is position metadata, and asking for it must not change whether a bad
+	// record fails the query.
+	Tolerate bool
+	// WantLine is true when __mo_file_line survived pruning.
+	WantLine bool
+	// RawText overrides the reconstructed record text for __mo_error_text.
+	// The JSONLINE reader sets it to the source line, which is the record as
+	// written; the CSV reader leaves it empty and the fields are re-joined.
+	RawText string
+
+	// RecordLine is the physical line the record being materialized starts on,
+	// refreshed per record by the reader. Readers with no file (Kafka,
+	// datastream) use the record ordinal of the current read instead.
+	RecordLine int64
+	// rowLens is scratch reused across rows to snapshot the batch's vector
+	// lengths, so rolling a failed row back costs no allocation per record.
+	rowLens []int
+}
+
 type ExParam struct {
+	// ErrorMode is resolved in Prepare from the pruned attributes.
+	ErrorMode ExternalErrorMode
 	Fileparam *ExFileparam
 	// KafkaMeta carries the per-message metadata FIFO of a running Kafka
 	// scan (set by KafkaReader.Open, consumed row-by-row in makeBatchRows).
