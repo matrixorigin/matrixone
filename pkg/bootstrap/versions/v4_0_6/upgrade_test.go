@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 19)
+	require.Len(t, tenantUpgEntries, 20)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -126,6 +126,13 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, collationApplicability.UpgSql)
 	require.Contains(t, strings.ToLower(collationApplicability.PreSql),
 		"drop view if exists information_schema.collation_character_set_applicability")
+	statistics := tenantUpgEntries[19]
+	require.Equal(t, versions.MODIFY_VIEW, statistics.UpgType)
+	require.Equal(t, sysview.InformationDBConst, statistics.Schema)
+	require.Equal(t, "STATISTICS", statistics.TableName)
+	require.Equal(t, sysview.InformationSchemaStatisticsDDL, statistics.UpgSql)
+	require.Contains(t, strings.ToLower(statistics.PreSql),
+		"drop view if exists information_schema.statistics")
 }
 
 func TestInformationSchemaCollationsUpgradeCheckIsExact(t *testing.T) {
@@ -161,7 +168,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 19)
+	require.Len(t, tenantUpgEntries, 20)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -398,6 +405,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaCheckConstraints(),
 		upgradeInformationSchemaTableConstraints(),
 		upgradeInformationSchemaCollationCharacterSetApplicability(),
+		upgradeInformationSchemaStatistics(),
 	}
 
 	for _, entry := range entries {
@@ -535,6 +543,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
 				return true, sysview.InformationSchemaColumnsDDL, nil
+			case "STATISTICS":
+				return true, sysview.InformationSchemaStatisticsDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}
