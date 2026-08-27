@@ -2084,12 +2084,16 @@ type shortHandshakeServerConn struct {
 type recordingShortHandshakeServerConn struct {
 	*shortHandshakeServerConn
 	statements []internalStmt
+	execFn     func(internalStmt) (bool, error)
 }
 
 func (s *recordingShortHandshakeServerConn) ExecStmt(
 	stmt internalStmt, _ chan<- []byte,
 ) (bool, error) {
 	s.statements = append(s.statements, stmt)
+	if s.execFn != nil {
+		return s.execFn(stmt)
+	}
 	return true, nil
 }
 
@@ -2451,6 +2455,61 @@ func Test_connectToBackend_BindsOnlyAuthenticatedTenant(t *testing.T) {
 		require.Same(t, serverConn, got)
 		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, serverConn.statements)
 		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("failed database restore closes cache and falls back", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		cached := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+			},
+			execFn: func(internalStmt) (bool, error) {
+				return false, nil
+			},
+		}
+		fresh := &shortHandshakeServerConn{
+			mockServerConn: newMockServerConn(nil),
+		}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: fresh}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, fresh, got)
+		require.Equal(t, 1, cached.closeCount)
+		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, cached.statements)
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("canceled database restore closes cache and returns cause", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		cached := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+			},
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		client.ctx = ctx
+		cancel()
+
+		got, err := client.connectToBackend("")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, got)
+		require.Equal(t, 1, cached.closeCount)
+		require.Empty(t, cached.statements)
+		require.Zero(t, writer.writeCount)
 	})
 }
 
