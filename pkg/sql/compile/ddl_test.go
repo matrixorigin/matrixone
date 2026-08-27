@@ -1243,6 +1243,84 @@ func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {
 	assert.Equal(t, uint64(0), c.getAffectedRows())
 }
 
+func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
+	newCompile := func(
+		t *testing.T,
+		ctx context.Context,
+		mocker func(string) (executor.Result, error),
+	) *Compile {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(mocker),
+		)
+		return &Compile{proc: proc, pn: &plan2.Plan{}}
+	}
+
+	t.Run("table uses logical object id", func(t *testing.T) {
+		var sqls []string
+		c := newCompile(t, context.Background(), func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, c.deleteRolePrivilegesForDroppedRelation(42))
+		require.Equal(t, []string{
+			"delete from mo_catalog.mo_role_privs where obj_id = 42;",
+		}, sqls)
+	})
+
+	t.Run("database removes database and child object scopes once", func(t *testing.T) {
+		var sqls []string
+		c := newCompile(t, context.Background(), func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, c.deleteRolePrivilegesForDroppedDatabase(7, 11))
+		require.Equal(t, []string{
+			"delete from mo_catalog.mo_role_privs where obj_id = 11 or obj_id in " +
+				"(select rel_logical_id from mo_catalog.mo_tables where account_id = 7 and reldatabase_id = 11);",
+		}, sqls)
+	})
+
+	t.Run("internal bulk lifecycle skips redundant cleanup", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), defines.IgnoreForeignKey{}, true)
+		var sqls []string
+		c := newCompile(t, ctx, func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, c.deleteRolePrivilegesForDroppedRelation(42))
+		require.NoError(t, c.deleteRolePrivilegesForDroppedDatabase(7, 11))
+		require.Empty(t, sqls)
+	})
+
+	t.Run("zero ids cannot target global grants", func(t *testing.T) {
+		c := newCompile(t, context.Background(), func(string) (executor.Result, error) {
+			t.Fatal("zero object id must not execute cleanup SQL")
+			return executor.Result{}, nil
+		})
+
+		require.ErrorContains(t, c.deleteRolePrivilegesForDroppedRelation(0), "relation ID 0")
+		require.ErrorContains(t, c.deleteRolePrivilegesForDroppedDatabase(7, 0), "database ID 0")
+	})
+
+	t.Run("cleanup errors abort the drop transaction", func(t *testing.T) {
+		cleanupErr := errors.New("cleanup failed")
+		c := newCompile(t, context.Background(), func(string) (executor.Result, error) {
+			return executor.Result{}, cleanupErr
+		})
+
+		require.ErrorIs(t, c.deleteRolePrivilegesForDroppedRelation(42), cleanupErr)
+		require.ErrorIs(t, c.deleteRolePrivilegesForDroppedDatabase(7, 11), cleanupErr)
+	})
+}
+
 func TestScope_Database(t *testing.T) {
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
@@ -1820,7 +1898,10 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 
 	mockDb := mock_frontend.NewMockDatabase(ctrl)
 	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-	mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+	gomock.InOrder(
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid"),
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12"),
+	)
 	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01", "pri01"}, nil).Times(1)
 	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(nil, deletedRelErr).Times(1)
 	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
@@ -1864,8 +1945,22 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 		Plan:  cplan,
 	}
 
+	var cleanupSQLs []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			cleanupSQLs = append(cleanupSQLs, sql)
+			return executor.Result{}, nil
+		}),
+	)
+
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = cplan
 	require.ErrorIs(t, s.DropDatabase(c), deleteStopErr)
+	require.Equal(t, []string{
+		"delete from mo_catalog.mo_role_privs where obj_id = 12 or obj_id in " +
+			"(select rel_logical_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = 12);",
+	}, cleanupSQLs)
 }
 
 func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
@@ -1946,7 +2041,10 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 
 	mockDb := mock_frontend.NewMockDatabase(ctrl)
 	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-	mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+	gomock.InOrder(
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid"),
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12"),
+	)
 	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"pri01"}, nil).Times(1)
 	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
 	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01"}, nil).Times(1)

@@ -1,0 +1,84 @@
+drop database if exists drop_object_privileges_db;
+drop role if exists drop_object_privileges_role;
+create role drop_object_privileges_role;
+grant create database on account * to drop_object_privileges_role;
+create database drop_object_privileges_db;
+create table drop_object_privileges_db.t1(id int);
+create view drop_object_privileges_db.v1 as select 1 as id;
+grant select on table drop_object_privileges_db.t1 to drop_object_privileges_role;
+grant select on table drop_object_privileges_db.* to drop_object_privileges_role;
+grant select on view drop_object_privileges_db.v1 to drop_object_privileges_role;
+grant create table on database drop_object_privileges_db to drop_object_privileges_role;
+set @drop_priv_db_id = (select dat_id from mo_catalog.mo_database
+where datname = 'drop_object_privileges_db');
+set @drop_priv_t1_id = (select rel_logical_id from mo_catalog.mo_tables
+where reldatabase = 'drop_object_privileges_db' and relname = 't1');
+set @drop_priv_v1_id = (select rel_logical_id from mo_catalog.mo_tables
+where reldatabase = 'drop_object_privileges_db' and relname = 'v1');
+select count(*) as object_grants_before_drop
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id in (@drop_priv_db_id, @drop_priv_t1_id, @drop_priv_v1_id);
+➤ object_grants_before_drop[-5,64,0]  𝄀
+4
+drop table drop_object_privileges_db.t1;
+select count(*) as dropped_table_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id = @drop_priv_t1_id;
+➤ dropped_table_grants[-5,64,0]  𝄀
+0
+select count(*) as database_scoped_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id = @drop_priv_db_id;
+➤ database_scoped_grants[-5,64,0]  𝄀
+2
+select count(*) as account_scoped_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id = 0;
+➤ account_scoped_grants[-5,64,0]  𝄀
+1
+create table drop_object_privileges_db.t1(id int);
+set @drop_priv_new_t1_id = (select rel_logical_id from mo_catalog.mo_tables
+where reldatabase = 'drop_object_privileges_db' and relname = 't1');
+select @drop_priv_new_t1_id <> @drop_priv_t1_id as logical_id_changed;
+➤ logical_id_changed[-7,1,0]  𝄀
+1
+select count(*) as recreated_table_specific_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id = @drop_priv_new_t1_id;
+➤ recreated_table_specific_grants[-5,64,0]  𝄀
+0
+grant select on table drop_object_privileges_db.t1 to drop_object_privileges_role;
+select count(*) as object_grants_before_database_drop
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id in (@drop_priv_db_id, @drop_priv_new_t1_id, @drop_priv_v1_id);
+➤ object_grants_before_database_drop[-5,64,0]  𝄀
+4
+drop database drop_object_privileges_db;
+select count(*) as dropped_database_object_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id in (@drop_priv_db_id, @drop_priv_new_t1_id, @drop_priv_v1_id);
+➤ dropped_database_object_grants[-5,64,0]  𝄀
+0
+select count(*) as preserved_account_scoped_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+and obj_id = 0;
+➤ preserved_account_scoped_grants[-5,64,0]  𝄀
+1
+select count(*) as dropped_catalog_objects
+from (
+select dat_id as object_id from mo_catalog.mo_database where dat_id = @drop_priv_db_id
+union all
+select rel_logical_id as object_id from mo_catalog.mo_tables
+where rel_logical_id in (@drop_priv_new_t1_id, @drop_priv_v1_id)
+) as dropped_objects;
+➤ dropped_catalog_objects[-5,64,0]  𝄀
+0
+drop role drop_object_privileges_role;

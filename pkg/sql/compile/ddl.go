@@ -202,11 +202,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
-		droppedDatabaseID, parseErr := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
-		if parseErr != nil {
-			return parseErr
+	var droppedDatabaseID uint64
+	if !needSkipDbs[dbName] {
+		droppedDatabaseID, err = strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if err != nil {
+			return err
 		}
+	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
 		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
 		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
 			return err
@@ -259,6 +262,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		if !isIndexTable {
 			deleteTables = append(deleteTables, r)
+		}
+	}
+
+	if !needSkipDbs[dbName] {
+		if err = c.deleteRolePrivilegesForDroppedDatabase(accountId, droppedDatabaseID); err != nil {
+			return err
 		}
 	}
 
@@ -3598,6 +3607,38 @@ func (s *Scope) DropSequence(c *Compile) error {
 	return dbSource.Delete(c.proc.Ctx, tblName)
 }
 
+func (c *Compile) deleteRolePrivilegesForDroppedDatabase(accountID uint32, databaseID uint64) error {
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	// DROP ACCOUNT sets this flag and removes the tenant's privilege catalog
+	// before dropping its databases, so the outer lifecycle already owns cleanup.
+	if ignoreForeignKey {
+		return nil
+	}
+	if databaseID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "cannot clean role privileges for database ID 0")
+	}
+	return c.runSqlWithOptions(
+		fmt.Sprintf(deleteMoRolePrivsWithDatabaseIdFormat, databaseID, accountID, databaseID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) deleteRolePrivilegesForDroppedRelation(objectID uint64) error {
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	// Database recursion and ALTER/TRUNCATE replacement set this flag. The
+	// former is cleaned once by DropDatabase; the latter preserves logical ID.
+	if ignoreForeignKey {
+		return nil
+	}
+	if objectID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "cannot clean role privileges for relation ID 0")
+	}
+	return c.runSqlWithOptions(
+		fmt.Sprintf(deleteMoRolePrivsWithObjectIdFormat, objectID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
 func (s *Scope) DropTable(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -3686,6 +3727,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
+	droppedObjectID := plan2.SnapshotTableID(droppedTableDef)
 	droppedDatabaseID := droppedTableDef.GetDbId()
 	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish && !needSkipDbs[dbName] &&
 		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
@@ -3855,6 +3897,11 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
+	}
+	if !isTemp && !needSkipDbs[dbName] {
+		if err = c.deleteRolePrivilegesForDroppedRelation(droppedObjectID); err != nil {
+			return err
+		}
 	}
 	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
 		if err = c.enqueueViewsAfterRelationRemoval(
