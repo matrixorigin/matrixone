@@ -20,8 +20,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -93,12 +95,14 @@ func (c testCollection) Aggregate(context.Context, mongodb.AggregateSpec) (mongo
 }
 
 type recordingCollection struct {
-	mu             sync.Mutex
-	cursor         mongodb.Cursor
-	findErr        error
-	aggregateErr   error
-	findSpecs      []mongodb.FindSpec
-	aggregateSpecs []mongodb.AggregateSpec
+	mu                sync.Mutex
+	cursor            mongodb.Cursor
+	findErr           error
+	aggregateErr      error
+	findSpecs         []mongodb.FindSpec
+	aggregateSpecs    []mongodb.AggregateSpec
+	findContexts      []context.Context
+	aggregateContexts []context.Context
 }
 
 // minimalCarrierCollection models MongoDB applying the connector projection to
@@ -140,17 +144,19 @@ func (c *minimalCarrierCollection) cursorFor(projection bson.D) mongodb.Cursor {
 	return &testCursor{docs: [][]byte{c.source}}
 }
 
-func (c *recordingCollection) Find(_ context.Context, spec mongodb.FindSpec) (mongodb.Cursor, error) {
+func (c *recordingCollection) Find(ctx context.Context, spec mongodb.FindSpec) (mongodb.Cursor, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.findSpecs = append(c.findSpecs, spec)
+	c.findContexts = append(c.findContexts, ctx)
 	return c.cursor, c.findErr
 }
 
-func (c *recordingCollection) Aggregate(_ context.Context, spec mongodb.AggregateSpec) (mongodb.Cursor, error) {
+func (c *recordingCollection) Aggregate(ctx context.Context, spec mongodb.AggregateSpec) (mongodb.Cursor, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.aggregateSpecs = append(c.aggregateSpecs, spec)
+	c.aggregateContexts = append(c.aggregateContexts, ctx)
 	return c.cursor, c.aggregateErr
 }
 
@@ -244,6 +250,10 @@ func TestMongoScanExplicitFilterUsesFindAndPopulatesQueryColumn(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "$and", filter[0].Key)
 	require.Equal(t, int32(1), collection.findSpecs[0].BatchSize)
+	deadline, ok := collection.findContexts[0].Deadline()
+	require.True(t, ok)
+	require.LessOrEqual(t, time.Until(deadline), mongodb.MaxUserQueryExecution)
+	require.Greater(t, time.Until(deadline), mongodb.MaxUserQueryExecution-time.Second)
 
 	scan.Free(proc, false, nil)
 	require.Equal(t, 1, cursor.closed)
@@ -251,6 +261,37 @@ func TestMongoScanExplicitFilterUsesFindAndPopulatesQueryColumn(t *testing.T) {
 	require.Equal(t, 1, client.disconnect)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall(t *testing.T) {
+	cursor := &testCursor{}
+	collection := &recordingCollection{cursor: cursor}
+	deps, client := testScanDependencies(cursor)
+	client.collection = collection
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+		}
+	})
+
+	// This plan represents a statement compiled while the cluster supported the
+	// payload. A rollback before Prepare must fail before any client/driver call.
+	spec := testScanPlan()
+	applyTestUserQueryPlan(t, spec, `{"filter":{"value":1}}`, false)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+	scan := NewArgument().WithScan(spec)
+	scan.Dependencies = deps
+	require.ErrorContains(t, scan.Prepare(proc), "MORPC protocol version 32")
+	require.Empty(t, collection.findSpecs)
+	require.Empty(t, collection.aggregateSpecs)
+	require.NoError(t, deps.Pool.Close(t.Context()))
+	proc.Free()
 }
 
 func TestMongoScanExplicitPipelineUsesAggregateAndMappedOutput(t *testing.T) {

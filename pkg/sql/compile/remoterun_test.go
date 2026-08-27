@@ -4941,6 +4941,37 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	require.Equal(t, spec, restored.Scan)
 }
 
+func TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+		}
+	})
+
+	query, err := sqlmongodb.ParseUserQuery(t.Context(), `{"filter":{"value":1}}`)
+	require.NoError(t, err)
+	spec := &planpb.MongoScan{MaxParallelism: 1}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, spec))
+	scope := &Scope{Proc: proc, RootOp: mongoscan.NewArgument().WithScan(spec)}
+
+	// A statement can compile while v32 is live, then encounter a rollback
+	// before remote encoding. The sender must not serialize a payload that an
+	// older receiver would silently interpret as a legacy Find.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "MORPC protocol version 32")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "MORPC protocol version 32")
+}
+
 func TestPartitionTopNPipelineRoundTrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:    0,

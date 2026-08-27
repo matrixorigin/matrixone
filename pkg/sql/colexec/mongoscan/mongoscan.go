@@ -16,6 +16,7 @@ package mongoscan
 
 import (
 	"bytes"
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -53,6 +54,9 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 	}
 	if scan.Scan.Split != nil {
 		return moerr.NewNotSupported(proc.Ctx, "MongoDB local split execution is not enabled in the MVP")
+	}
+	if scan.Scan.UserQueryKind != int32(mongodb.UserQueryInvalid) && !supportsMongoUserQueryProtocol(proc) {
+		return moerr.NewNotSupported(proc.Ctx, "MongoDB explicit queries require MORPC protocol version 32")
 	}
 	scan.ctr.userQuery, err = mongodb.UserQueryFromPlan(proc.Ctx, scan.Scan)
 	if err != nil {
@@ -147,11 +151,20 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 	collection := lease.Client().Collection(scan.Scan.Database, scan.Scan.Collection)
 	operation := "find"
 	started := time.Now()
+	operationCtx := proc.Ctx
+	if scan.ctr.userQuery != nil {
+		maxTime := deps.Config.SocketTimeout
+		if maxTime <= 0 || maxTime > mongodb.MaxUserQueryExecution {
+			maxTime = mongodb.MaxUserQueryExecution
+		}
+		scan.ctr.queryCtx, scan.ctr.cancelQuery = context.WithTimeout(proc.Ctx, maxTime)
+		operationCtx = scan.ctr.queryCtx
+	}
 	if scan.ctr.userQuery != nil && scan.ctr.userQuery.Kind == mongodb.UserQueryPipeline {
 		operation = "aggregate"
 		pipeline := append([]bson.D(nil), scan.ctr.userQuery.Pipeline...)
 		pipeline = append(pipeline, bson.D{{Key: "$project", Value: projection}})
-		scan.ctr.cursor, err = collection.Aggregate(proc.Ctx, mongodb.AggregateSpec{
+		scan.ctr.cursor, err = collection.Aggregate(operationCtx, mongodb.AggregateSpec{
 			Pipeline:  pipeline,
 			BatchSize: batchRows,
 		})
@@ -159,7 +172,7 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 		if scan.ctr.userQuery != nil {
 			filter = mongodb.CombineFilters(scan.ctr.userQuery.Filter, filter)
 		}
-		scan.ctr.cursor, err = collection.Find(proc.Ctx, mongodb.FindSpec{
+		scan.ctr.cursor, err = collection.Find(operationCtx, mongodb.FindSpec{
 			Filter:     filter,
 			Projection: projection,
 			BatchSize:  batchRows,
@@ -180,6 +193,18 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 		return scan.PrepareProjection(proc)
 	}
 	return nil
+}
+
+func supportsMongoUserQueryProtocol(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
+	version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion32
 }
 
 func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
@@ -225,7 +250,11 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			scan.ctr.pendingRaw = nil
 		} else {
 			waitStarted := time.Now()
-			if !scan.ctr.cursor.Next(proc.Ctx) {
+			cursorCtx := proc.Ctx
+			if scan.ctr.queryCtx != nil {
+				cursorCtx = scan.ctr.queryCtx
+			}
+			if !scan.ctr.cursor.Next(cursorCtx) {
 				process.StopAnalyzerWait(scan.OpAnalyzer, waitStarted, resource.WaitRemote)
 				metric.MongoDBPhaseDurationHistogram.WithLabelValues("get_more_wait").Observe(time.Since(waitStarted).Seconds())
 				if cursorErr := scan.ctr.cursor.Err(); cursorErr != nil {

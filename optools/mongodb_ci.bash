@@ -401,7 +401,8 @@ generate_mo_config() {
 run_e2e() {
   require docker; require go; require python3; require openssl
   mkdir -p "$REPORT_DIR"
-  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-mongodb-e2e.XXXXXX")"
+  # Keep test-owned build and service artifacts out of the worktree.
+  TMP_DIR="$(mktemp -d /private/tmp/mo-mongodb-e2e.XXXXXX)"
   trap cleanup EXIT
   export COMPOSE_PROJECT_NAME="mo-mongodb-$(basename "$TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
   # Docker owns its published listener. MatrixOne treats a frontend port of 0
@@ -419,7 +420,11 @@ run_e2e() {
   openssl rand -base64 756 >"$MONGODB_KEYFILE"
   chmod 600 "$MONGODB_KEYFILE"
 
-  (cd "$ROOT_DIR" && make build)
+  # Keep the test binary in this invocation's disposable directory. A root
+  # worktree binary is both easy to mistake for source state and can leak into
+  # the next repair lane.
+  MO_SERVICE_BIN="$TMP_DIR/mo-service"
+  (cd "$ROOT_DIR" && make BIN_NAME="$MO_SERVICE_BIN" build-with-prebuilt-native)
   generate_mo_config
   docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" up -d
   MONGODB_PORT="$(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" port mongo 27017 | sed -nE 's/.*:([0-9]+)$/\1/p' | tail -1)"
@@ -442,14 +447,15 @@ run_e2e() {
 	else
 		export LD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 	fi
-  "$ROOT_DIR/mo-service" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
+  "$MO_SERVICE_BIN" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
   MO_PID=$!
   PUBLISHED_MO_PORT="$(wait_mo_port)"
   [[ "$PUBLISHED_MO_PORT" == "$MO_PORT" ]] || die "MatrixOne published frontend port $PUBLISHED_MO_PORT, expected $MO_PORT"
   export MO_PORT
   (cd "$ROOT_DIR" && go run ./test/mongodb/mongodb_e2e_local.go \
     --dsn "root:111@tcp(127.0.0.1:$MO_PORT)/?timeout=5s&readTimeout=30s&writeTimeout=30s" \
-    --mongo-host "127.0.0.1:$MONGODB_PORT" --report-dir "$REPORT_DIR")
+    --mongo-host "127.0.0.1:$MONGODB_PORT" --report-dir "$REPORT_DIR" \
+    --mongo-root-user "$MONGODB_ROOT_USER" --mongo-root-password "$MONGODB_ROOT_PASSWORD")
 }
 
 run_unit() {

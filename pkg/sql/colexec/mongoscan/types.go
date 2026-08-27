@@ -44,6 +44,8 @@ type container struct {
 	generation   uint64
 	pendingRaw   []byte
 	releaseLimit func()
+	queryCtx     context.Context
+	cancelQuery  context.CancelFunc
 }
 
 // MongoScan performs source I/O and BSON-to-vector conversion. Ordinary SQL
@@ -126,6 +128,11 @@ func (scan *MongoScan) closeResources(_ context.Context) {
 	// background context could stall pipeline teardown indefinitely.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), mongoCleanupTimeout)
 	defer cancel()
+	if scan.ctr.cancelQuery != nil {
+		scan.ctr.cancelQuery()
+		scan.ctr.cancelQuery = nil
+	}
+	scan.ctr.queryCtx = nil
 	if scan.ctr.cursor != nil {
 		_ = scan.ctr.cursor.Close(cleanupCtx)
 		metric.MongoDBCursorEventCounter.WithLabelValues("close").Inc()

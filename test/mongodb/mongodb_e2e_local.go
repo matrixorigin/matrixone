@@ -21,12 +21,21 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type report struct {
-	Status string   `json:"status"`
-	Cases  []string `json:"cases"`
-	Error  string   `json:"error,omitempty"`
+	Status   string            `json:"status"`
+	Cases    []string          `json:"cases"`
+	Transfer *transferEvidence `json:"transfer_reduction,omitempty"`
+	Error    string            `json:"error,omitempty"`
+}
+
+type transferEvidence struct {
+	RawScanDocuments  int64 `json:"raw_scan_documents"`
+	PipelineDocuments int64 `json:"pipeline_documents"`
 }
 
 type fixtureManifest struct {
@@ -34,10 +43,12 @@ type fixtureManifest struct {
 }
 
 func main() {
-	var dsn, host, reportDir string
+	var dsn, host, reportDir, mongoRootUser, mongoRootPassword string
 	flag.StringVar(&dsn, "dsn", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s", "MO DSN")
 	flag.StringVar(&host, "mongo-host", "127.0.0.1:27017", "MongoDB seed")
 	flag.StringVar(&reportDir, "report-dir", "test/mongodb/reports/local", "report directory")
+	flag.StringVar(&mongoRootUser, "mongo-root-user", "", "MongoDB root user for transfer profiling")
+	flag.StringVar(&mongoRootPassword, "mongo-root-password", "", "MongoDB root password for transfer profiling")
 	flag.Parse()
 
 	r := report{Status: "failed"}
@@ -48,8 +59,15 @@ func main() {
 		defer db.Close()
 		err = waitForMO(ctx, db)
 	}
+	var monitor *mongoTransferMonitor
+	if err == nil && (mongoRootUser != "" || mongoRootPassword != "") {
+		monitor, err = newMongoTransferMonitor(ctx, host, mongoRootUser, mongoRootPassword)
+		if err == nil {
+			defer monitor.Close(context.Background())
+		}
+	}
 	if err == nil {
-		err = runWithDSN(ctx, db, dsn, host, &r)
+		err = runWithDSNAndTransferMonitor(ctx, db, dsn, host, &r, monitor)
 	}
 	if err == nil {
 		r.Status = "passed"
@@ -85,6 +103,10 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 }
 
 func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) error {
+	return runWithDSNAndTransferMonitor(ctx, db, dsn, host, r, nil)
+}
+
+func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host string, r *report, monitor *mongoTransferMonitor) error {
 	manifest, err := loadFixtureManifest("test/mongodb/fixture_manifest.json")
 	if err != nil {
 		return err
@@ -186,10 +208,44 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	r.Cases = append(r.Cases, "explicit-filter-and-query-column")
 
 	pipelineQuery := `{"pipeline":[{"$match":{"device_id":"device-001","measurement":{"$type":"number"}}},{"$group":{"_id":"$device_id","event_count":{"$sum":1},"avg_measurement":{"$avg":"$measurement"}}},{"$project":{"_id":0,"device_id":"$_id","event_count":1,"avg_measurement":1}}]}`
+	var rawDocuments int64
+	if monitor != nil {
+		if err := monitor.Reset(ctx); err != nil {
+			return err
+		}
+		if err := expectScalar(ctx, db,
+			"select concat(device_id,'|',cast(count(*) as char),'|',cast(avg(measurement) as char)) from mongodb_ci.events where device_id = 'device-001' and measurement is not null group by device_id",
+			"device-001|4|18.5"); err != nil {
+			return err
+		}
+		rawDocuments, err = monitor.DocumentsReturned(ctx)
+		if err != nil {
+			return err
+		}
+		// The raw SQL control retains `measurement is not null` as an MO residual
+		// predicate, so MongoDB returns all five source documents and MO filters
+		// the one null measurement locally. This is the correct transfer baseline.
+		if rawDocuments != 5 {
+			return fmt.Errorf("raw-scan transfer evidence expected 5 MongoDB documents, got %d", rawDocuments)
+		}
+		if err := monitor.Reset(ctx); err != nil {
+			return err
+		}
+	}
 	if err := expectScalar(ctx, db,
 		"select concat(device_id,'|',cast(event_count as char),'|',cast(avg_measurement as char)) from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"'",
 		"device-001|4|18.5"); err != nil {
 		return err
+	}
+	if monitor != nil {
+		pipelineDocuments, monitorErr := monitor.DocumentsReturned(ctx)
+		if monitorErr != nil {
+			return monitorErr
+		}
+		if pipelineDocuments != 1 || pipelineDocuments >= rawDocuments {
+			return fmt.Errorf("reducing pipeline transfer evidence expected 1 document below raw %d, got %d", rawDocuments, pipelineDocuments)
+		}
+		r.Transfer = &transferEvidence{RawScanDocuments: rawDocuments, PipelineDocuments: pipelineDocuments}
 	}
 	if err := expectScalar(ctx, db,
 		"select count(*) from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"'", "1"); err != nil {
@@ -383,6 +439,80 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "connection-disable-enable")
 	return nil
+}
+
+// mongoTransferMonitor uses MongoDB's command profiler as a server-side
+// command monitor. It observes the MatrixOne driver's actual find/aggregate
+// and getMore replies, so this E2E assertion measures transferred documents
+// rather than using elapsed time as a proxy for reduction.
+type mongoTransferMonitor struct {
+	client *mongo.Client
+	db     *mongo.Database
+}
+
+func newMongoTransferMonitor(ctx context.Context, host, username, password string) (*mongoTransferMonitor, error) {
+	if username == "" || password == "" {
+		return nil, errors.New("MongoDB transfer profiling requires both root credentials")
+	}
+	uri := &url.URL{Scheme: "mongodb", Host: host, Path: "/", RawQuery: "authSource=admin&directConnection=true"}
+	uri.User = url.UserPassword(username, password)
+	client, err := mongo.Connect(options.Client().ApplyURI(uri.String()))
+	if err != nil {
+		return nil, fmt.Errorf("connect MongoDB transfer monitor: %w", err)
+	}
+	if err := client.Ping(ctx, nil); err != nil {
+		_ = client.Disconnect(context.Background())
+		return nil, fmt.Errorf("ping MongoDB transfer monitor: %w", err)
+	}
+	return &mongoTransferMonitor{client: client, db: client.Database("mongodb_source")}, nil
+}
+
+func (m *mongoTransferMonitor) Close(ctx context.Context) error {
+	if m == nil || m.client == nil {
+		return nil
+	}
+	return m.client.Disconnect(ctx)
+}
+
+func (m *mongoTransferMonitor) Reset(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if err := m.db.RunCommand(ctx, bson.D{{Key: "profile", Value: 0}}).Err(); err != nil {
+		return fmt.Errorf("disable MongoDB transfer profiler: %w", err)
+	}
+	if err := m.db.Collection("system.profile").Drop(ctx); err != nil {
+		return fmt.Errorf("reset MongoDB transfer profiler: %w", err)
+	}
+	if err := m.db.RunCommand(ctx, bson.D{{Key: "profile", Value: 2}, {Key: "slowms", Value: 0}}).Err(); err != nil {
+		return fmt.Errorf("enable MongoDB transfer profiler: %w", err)
+	}
+	return nil
+}
+
+func (m *mongoTransferMonitor) DocumentsReturned(ctx context.Context) (int64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	cursor, err := m.db.Collection("system.profile").Find(ctx, bson.D{{Key: "ns", Value: "mongodb_source.events"}})
+	if err != nil {
+		return 0, fmt.Errorf("read MongoDB transfer profiler: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var total int64
+	for cursor.Next(ctx) {
+		var entry struct {
+			Returned int64 `bson:"nreturned"`
+		}
+		if err := cursor.Decode(&entry); err != nil {
+			return 0, fmt.Errorf("decode MongoDB transfer profiler entry: %w", err)
+		}
+		total += entry.Returned
+	}
+	if err := cursor.Err(); err != nil {
+		return 0, fmt.Errorf("iterate MongoDB transfer profiler: %w", err)
+	}
+	return total, nil
 }
 
 func verifyPrimaryKeyInsertSelect(ctx context.Context, db *sql.DB) error {

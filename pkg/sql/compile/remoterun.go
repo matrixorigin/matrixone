@@ -111,6 +111,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -176,6 +179,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
@@ -1850,6 +1856,37 @@ func validateRemoteExpressionPipelineProtocol(
 		return moerr.NewNotSupportedNoCtx(
 			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
+	}
+	return nil
+}
+
+// validateRemoteMongoUserQueryPipelineProtocol is the final sender/receiver
+// compatibility fence for explicit MongoDB operations. Compilation can happen
+// while a rolling cluster is at a newer protocol and transmission can happen
+// after a rollback has lowered the oldest-live version. Older receivers ignore
+// the new protobuf fields and would otherwise run the broader legacy Find.
+func validateRemoteMongoUserQueryPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		scan := instruction.GetMongodbScan()
+		if scan == nil || scan.UserQueryKind == 0 {
+			continue
+		}
+		if proc == nil || !supportsRemoteMongoUserQuery(proc.GetService()) {
+			return moerr.NewNotSupportedNoCtx(
+				"MongoDB explicit-query remote execution requires MORPC protocol version 32",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteMongoUserQueryPipelineProtocol(proc, child); err != nil {
+			return err
+		}
 	}
 	return nil
 }

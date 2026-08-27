@@ -3003,8 +3003,16 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
 		return moerr.NewNotSupported(
 			c.proc.Ctx,
-			"MongoDB explicit queries require MORPC protocol version 30",
+			"MongoDB explicit queries require MORPC protocol version 32",
 		)
+	}
+	// The planner retains the selector as a local filter around an opaque
+	// aggregation pipeline. Keep the hidden carrier available even when it is
+	// not selected so that filter evaluates against the same canonical source
+	// value the scan used; otherwise a three-column pipeline batch can reach a
+	// four-column selector and panic.
+	if query.Kind == sqlmongodb.UserQueryPipeline {
+		scan.IncludeQueryColumn = true
 	}
 	return sqlmongodb.ApplyUserQueryToPlan(c.proc.Ctx, query, scan)
 }
@@ -6790,7 +6798,7 @@ func supportsRemoteMongoUserQuery(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion30
+	return ok && protocolVersion >= defines.MORPCVersion32
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {

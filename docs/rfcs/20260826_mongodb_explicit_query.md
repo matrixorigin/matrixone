@@ -115,7 +115,7 @@ SQL __mo_query constant
 | --- | --- | --- |
 | Synthetic column identity | `pkg/catalog` | Reserved hidden `__mo_query` identity is shared with query-driven external scans; existing real legacy columns are not reclassified. |
 | SQL candidate and residual separation | `pkg/sql/compile` | At most one constant selector; query predicate is removed only after selection; unsupported shapes fail before remote work. |
-| Parse, canonicalization, policy | `pkg/sql/mongodb/user_query.go` | Strict JSON, duplicate-key rejection, 1 MiB serialized bound, depth 100, at most 100 stages, allowed shape and operator validation. |
+| Parse, canonicalization, policy | `pkg/sql/mongodb/user_query.go` | Strict JSON, duplicate-key rejection, 64 KiB serialized bound, depth 32, at most 16 stages, and allowed shape/operator validation. |
 | Plan transport | `proto/plan.proto` and `pkg/pb/plan` | The producer emits validated BSON, kind, digest, and flags; execution revalidates every received payload. |
 | Remote operation and result carrier | `pkg/sql/colexec/mongoscan` | One collection operation per scan, final projection, cursor conversion, optional hidden-column output. |
 | Driver and resource control | `pkg/sql/mongodb/driver.go` | `Aggregate` is driver-neutral, uses statement context and `allowDiskUse=false`; existing client lease and limiter remain authoritative. |
@@ -133,9 +133,10 @@ The query is data, not a command language.  The parser accepts only an object
 with one supported envelope, rejects duplicate JSON/BSON keys and trailing
 values, and applies an allowlist to stages and `$` operators recursively.
 Allowed stages are `$match`, `$project`, `$set`, `$addFields`, `$unset`,
-`$group`, `$sort`, `$limit`, `$skip`, `$unwind`, and `$count`; each has a
-shape-specific validation.  Unknown stages/operators and server-side JavaScript
-BSON values are rejected.  This deliberately rejects `$out`, `$merge`,
+`$group`, `$limit`, `$skip`, and `$count`; each has a shape-specific
+validation. `$sort`, `$unwind`, `$push`, and `$addToSet` are excluded from the
+initial resource envelope. Unknown stages/operators and server-side JavaScript
+BSON values are rejected. This deliberately rejects `$out`, `$merge`,
 `$lookup`, `$graphLookup`, `$unionWith`, `$collStats`, `$indexStats`,
 `$currentOp`, and `$planCacheStats`, rather than trusting a read-only MongoDB
 credential as the only control.
@@ -161,12 +162,31 @@ or retry queue is introduced.
 
 The statement context bounds the initial driver operation and every `getMore`.
 Driver `Aggregate` explicitly sets `allowDiskUse=false`; users cannot override
-it.  Existing scan-row, raw-byte, batch-byte, conversion-error, value-size,
-and source-concurrency limits are unchanged.  The added query payload is capped
-at 1 MiB before it is put on the plan, depth is capped at 100, and pipeline
-length at 100.  Final projection limits transferred fields; a zero-column scan
-uses a bounded row carrier.  Metrics add only fixed labels (`find`/`aggregate`
-and lifecycle phases), never query content.
+it. Existing scan-row, raw-byte, batch-byte, conversion-error, value-size, and
+source-concurrency limits are unchanged. The initial envelope is deliberately
+narrowed to 64 KiB, depth 32, and 16 stages. It excludes `$sort`, `$unwind`,
+`$push`, and `$addToSet`; each permitted accumulator has scalar value state,
+while `$group` key cardinality remains subject to MongoDB's configured
+aggregation-memory limit. Every explicit query receives a context deadline of
+the shorter configured socket timeout or 30 seconds; that context also bounds
+every `getMore` and the MatrixOne-side lifetime of the operation. MongoDB may
+consume CPU until it observes cancellation, so this is not represented as a
+server CPU quota. With `allowDiskUse=false`, a grouping operation that exceeds
+the server aggregation-memory limit fails rather than spilling. The accepted
+rollout envelope is one operation per `max_parallelism=1` mapping, bounded
+input/plan memory, the existing source-concurrency limiter, and this
+client-facing 30-second budget. Final projection
+limits transferred fields; a zero-column scan uses a bounded row carrier.
+Metrics add only fixed labels (`find`/`aggregate` and lifecycle phases), never
+query content.
+
+This does not claim that a MongoDB aggregation has a universal fixed CPU or
+memory cost: `$match`, `$group`, and `$count` may scan an operator's collection
+until cancellation or a MongoDB resource limit. The rollout is therefore opt-in
+and admits only the above envelope. Any expansion to sorting, fan-out, array
+accumulators, larger input/stage/depth limits, a higher mapping parallelism, or
+a longer timeout requires a new capacity decision, workload measurement, and
+regression before allowlisting it.
 
 Cancellation before admission returns without a lease; cancellation after
 admission reaches the driver context and cleanup.  A stale/disabled or
@@ -181,11 +201,13 @@ not retain a prior query/cursor/client lease.
 `MongoScan` adds protobuf fields numbered 16–21.  The legacy zero values retain
 the old find behavior; newer readers treat a zero kind as no explicit query.
 Older readers ignore unknown fields and consequently cannot execute the new
-operation semantics.  `MORPCVersion30` is therefore the capability gate: a
+operation semantics. `MORPCVersion32` is therefore the capability gate: a
 nonzero `user_query_kind` is rejected while the service-local oldest-live
-deployment version is below 30, rather than silently falling back to an
-unfiltered find.  Deployment raises that version only after all receivers
-understand the payload and lowers it before rollback.  This follows the
+deployment version is below 32, rather than silently falling back to an
+unfiltered find. The gate is checked while compiling, immediately before a
+remote scope is serialized, while it is decoded, and in `MongoScan.Prepare`.
+Deployment raises that version only after all receivers understand the payload
+and lowers it before rollback. This follows the
 protobuf field-evolution rule to add rather than repurpose field numbers
 ([Proto3 update guidance](https://protobuf.dev/programming-guides/proto3/#updating)).
 There is no catalog/on-disk migration, so backup/restore and downgrade have no
@@ -221,7 +243,8 @@ semantic correctness.
 | Envelope parsing, canonical digest, strict duplicate/unsafe/oversize rejection | `pkg/sql/mongodb: TestParseUserQuery*`, `TestUserQueryPlanRevalidationFailsClosed` | Local MongoDB E2E filter/pipeline rejection coverage. |
 | Compile selection, residual separation, empty candidate and legacy behavior | `pkg/sql/compile: TestConfigureMongoUserQuery*` | Existing external-table execution path in CI. |
 | BSON transport revalidation and safe diagnostics | `pkg/sql/mongodb` plan round trips; `pkg/pb/plan` diagnostic tests; `pkg/sql/compile: TestCompileMongoDBQueryDiagnosticsAreRedacted` | CI UT and coverage jobs on the implementation head. |
-| Find/pipeline invocation, mapping projection, zero-column row carrier, cancellation and cleanup | `pkg/sql/colexec/mongoscan: TestMongoScan*` including filter, pipeline, large irrelevant field, reset/free/error controls | Local MongoDB E2E runner uses real driver/server and proves a reducing pipeline. |
+| Find/pipeline invocation, mapping projection, zero-column row carrier, cancellation and cleanup | `pkg/sql/colexec/mongoscan: TestMongoScan*` including filter, pipeline, large irrelevant field, reset/free/error controls | Local MongoDB E2E runner uses a real server command profiler: the raw MO aggregation returns four MongoDB documents and the reducing pipeline returns one; the JSON report records both counts. |
+| Wire rollback | `pkg/sql/compile: TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries`; `pkg/sql/colexec/mongoscan: TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall` | Compile at v32, lower to v31 before send/receive/prepare, and fail before a MongoDB operation. |
 | SQL statement/prepared/parse-failure redaction | `pkg/frontend` focused redaction/statement-recording tests | Statement telemetry and remote `ProcessInfo` diagnostic tests in dependent compile/frontend paths. |
 | External SQL contract | `test/mongodb/mongodb_e2e_local.go` with minimum fixture documents | CI compose/BVT lanes remain the service-level regression net; no new distributed case is added because the feature's real MongoDB fixture is isolated in its existing test-owned runner. |
 | Concurrency/lifecycle | focused normal and race tests for MongoDB/mongoscan/frontend; repeated reset/free controls | Existing CI UT/coverage exercises the package graph; no new global state or background worker exists. |
@@ -237,11 +260,13 @@ rebasing requires rechecking only changed base-side contracts.
 
 1. **Operator allowlist evolution:** every added MongoDB operator/stage requires
    a new security/resource semantics decision and regression before admission.
-2. **Capacity:** validate real rollout limits against intended production
-   document sizes and source concurrency; no claim of an aggregate speedup is a
-   release criterion without workload-specific measurement.
+2. **Capacity expansion:** the initial envelope and 30-second cap above are the
+   accepted rollout limit. Any broader stage/operator set or budget is a new
+   design decision owned by the MongoDB connector maintainers, with an attached
+   workload measurement; it is not an open blocker for this revision.
 
-These are blocking questions for design approval.  The approval record must
-close them, name the approved document commit, and state whether the selected
-invariants and validation plan PASS.  Until then, the design status remains
-`draft` and implementation approval is blocked.
+These are continuing admission conditions, not open design questions for this
+revision. The independent approval record must name the reviewed document
+commit and state whether the selected invariants and validation plan PASS.
+Until then, the design status remains `draft` and implementation approval is
+blocked.

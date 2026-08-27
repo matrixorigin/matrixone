@@ -99,7 +99,7 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		{name: "limit negative", source: `{"pipeline":[{"$limit":-1}]}`, want: "non-negative integer"},
 		{name: "count field path", source: `{"pipeline":[{"$count":"a.b"}]}`, want: "valid output field"},
 		{name: "unset empty", source: `{"pipeline":[{"$unset":[]}]}`, want: "field name"},
-		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "field path or object"},
+		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "stage is not allowed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -134,6 +134,8 @@ func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {
 		`{"$indexStats":{}}`,
 		`{"$currentOp":{}}`,
 		`{"$planCacheStats":{}}`,
+		`{"$sort":{"value":1}}`,
+		`{"$unwind":"$values"}`,
 		`{"$futureStage":{}}`,
 	} {
 		_, err := ParseUserQuery(t.Context(), `{"pipeline":[`+stage+`]}`)
@@ -147,6 +149,8 @@ func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {
 		`{"filter":{"value":{"$code":"function() { return true; }","$scope":{}}}}`,
 		`{"pipeline":[{"$project":{"value":{"$function":{"body":"function(){}","args":[],"lang":"js"}}}}]}`,
 		`{"pipeline":[{"$group":{"_id":null,"value":{"$accumulator":{"init":"function(){}"}}}}]}`,
+		`{"pipeline":[{"$group":{"_id":null,"value":{"$push":"$value"}}}]}`,
+		`{"pipeline":[{"$group":{"_id":null,"value":{"$addToSet":"$value"}}}]}`,
 	} {
 		_, err := ParseUserQuery(t.Context(), source)
 		if strings.Contains(source, `"$code"`) {

@@ -116,6 +116,19 @@ func TestConfigureMongoUserQueryReconstructsSourceForExplicitProjection(t *testi
 	require.Equal(t, source, restored.Source)
 }
 
+func TestConfigureMongoUserQueryPipelineKeepsHiddenCarrierForResidualFilter(t *testing.T) {
+	node := mongoUserQueryNode()
+	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
+	node.FilterList = []*plan.Expr{
+		mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"pipeline":[{"$count":"value"}]}`)),
+	}
+	compiler := &Compile{proc: testutil.NewProcess(t)}
+
+	require.NoError(t, compiler.configureMongoUserQuery(node))
+	require.True(t, node.ExternScan.MongodbScan.IncludeQueryColumn)
+	require.Equal(t, int32(mongodb.UserQueryPipeline), node.ExternScan.MongodbScan.UserQueryKind)
+}
+
 func TestConfigureMongoUserQueryRejectsUnsupportedAndUnsafeSelectors(t *testing.T) {
 	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
 	compiler := &Compile{proc: testutil.NewProcess(t)}
@@ -186,10 +199,10 @@ func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
 		}
 	})
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
 
 	err := compiler.configureMongoUserQuery(node)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)

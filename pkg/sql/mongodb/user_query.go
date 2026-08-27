@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -31,14 +32,17 @@ import (
 const (
 	// MaxUserQueryBytes bounds both compile-time parsing and the serialized
 	// execution-plan payload. The normal MongoDB scan path is unaffected.
-	MaxUserQueryBytes = 1 << 20
+	MaxUserQueryBytes = 64 << 10
 	// MaxUserPipelineStages is deliberately below MongoDB's server limit. It
 	// protects planning, plan transport, and recursive validation as well as the
 	// remote server.
-	MaxUserPipelineStages = 100
+	MaxUserPipelineStages = 16
 	// MaxUserQueryDepth bounds recursive JSON/BSON validation independently of
 	// the byte limit so adversarial nesting cannot exhaust the planner stack.
-	MaxUserQueryDepth = 100
+	MaxUserQueryDepth = 32
+	// MaxUserQueryExecution bounds the client-owned context for an explicit
+	// query. The caller's shorter statement/config deadline wins.
+	MaxUserQueryExecution = 30 * time.Second
 	// RedactedQueryDiagnostic is the complete diagnostic representation of a
 	// statement that contains an explicit MongoDB selector. It intentionally
 	// retains neither selector field names nor values.
@@ -297,8 +301,7 @@ func consumeJSONValue(decoder *json.Decoder, depth int) error {
 
 var allowedUserPipelineStages = map[string]struct{}{
 	"$match": {}, "$project": {}, "$set": {}, "$addFields": {},
-	"$unset": {}, "$group": {}, "$sort": {}, "$limit": {},
-	"$skip": {}, "$unwind": {}, "$count": {},
+	"$unset": {}, "$group": {}, "$limit": {}, "$skip": {}, "$count": {},
 }
 
 // allowedUserQueryOperators is intentionally an allowlist. It covers the
@@ -328,7 +331,7 @@ var allowedUserQueryOperators = map[string]struct{}{
 	"$minute": {}, "$second": {}, "$millisecond": {},
 	// Accumulators and document expressions.
 	"$sum": {}, "$avg": {}, "$min": {}, "$max": {}, "$first": {}, "$last": {},
-	"$push": {}, "$addToSet": {}, "$stdDevPop": {}, "$stdDevSamp": {},
+	"$stdDevPop": {}, "$stdDevSamp": {},
 	"$mergeObjects": {}, "$getField": {}, "$setField": {}, "$unsetField": {},
 }
 

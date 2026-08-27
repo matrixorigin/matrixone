@@ -60,9 +60,9 @@ WHERE __mo_query = '{
 }';
 ```
 
-The first version accepts one equality selector per scan. Prepared parameters remain gated on #27411. The query is bounded to 1 MiB, 100 nesting levels, and 100 stages. Pipelines use `allowDiskUse=false`; the statement context and driver operation timeout bound the initial command and every `getMore`.
+The first version accepts one equality selector per scan. Prepared parameters remain gated on #27411. The query is bounded to 64 KiB, 32 nesting levels, and 16 stages. Pipelines use `allowDiskUse=false`; explicit queries use the shorter configured socket timeout or 30 seconds as a client context deadline across the initial command and every `getMore`. This bounds MatrixOne's operation lifetime, not a MongoDB server CPU quota.
 
-The stage allowlist is `$match`, `$project`, `$set`, `$addFields`, `$unset`, `$group`, `$sort`, `$limit`, `$skip`, `$unwind`, and `$count`. Unknown stages/operators fail closed. Write stages (`$out`, `$merge`), cross-collection stages (`$lookup`, `$graphLookup`, `$unionWith`), metadata stages, and server-side JavaScript (`$where`, `$function`, `$accumulator`) are rejected before a MongoDB operation is sent. The external table mapping remains the authorization boundary; this is not an arbitrary command interface.
+The stage allowlist is `$match`, `$project`, `$set`, `$addFields`, `$unset`, `$group`, `$limit`, `$skip`, and `$count`. `$sort`, `$unwind`, `$push`, and `$addToSet` are intentionally excluded from the initial resource envelope. Unknown stages/operators fail closed. Write stages (`$out`, `$merge`), cross-collection stages (`$lookup`, `$graphLookup`, `$unionWith`), metadata stages, and server-side JavaScript (`$where`, `$function`, `$accumulator`) are rejected before a MongoDB operation is sent. The external table mapping remains the authorization boundary; this is not an arbitrary command interface.
 
 When explicitly selected, `__mo_query` is populated on every returned row as canonical relaxed Extended JSON (insignificant input whitespace is not preserved). Diagnostics expose only the operation kind and a digest prefix; errors, metrics labels, E2E reports, and EXPLAIN output do not include the raw query body.
 
