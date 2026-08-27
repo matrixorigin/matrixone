@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
@@ -560,6 +561,158 @@ func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
 	require.True(t, agg.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(2), agg.Stats.HashmapStats.ShuffleColIdx,
 		"a logical group column determined by the physical key remains a safe distribution key")
+}
+
+func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 1_000_000
+	stats.NdvMap["user_id"] = 1_000_000
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	child := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		Stats: &plan.Stats{
+			Outcnt:       1_000_000,
+			Selectivity:  1,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	groupBy := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Ndv:  100,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	}
+	countID := function.EncodeOverloadID(function.COUNT, 0)
+	sumID := function.EncodeOverloadID(function.SUM, 0)
+	newAggregate := func(distinctNDV float64) *plan.Node {
+		stats.NdvMap["user_id"] = distinctNDV
+		arg := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 1}},
+		}
+		return &plan.Node{
+			NodeType: plan.Node_AGG,
+			Children: []int32{0},
+			GroupBy:  []*plan.Expr{DeepCopyExpr(groupBy)},
+			// Keep a regular aggregate beside COUNT(DISTINCT), matching the mixed
+			// aggregate shape that cannot use optimizeDistinctAgg's single-aggregate
+			// rewrite.
+			AggList: []*plan.Expr{
+				{
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: countID},
+						Args: []*plan.Expr{DeepCopyExpr(arg)},
+					}},
+				},
+				{
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: int64(uint64(countID) | function.Distinct)},
+						Args: []*plan.Expr{arg},
+					}},
+				},
+			},
+			Stats: &plan.Stats{
+				Outcnt:      100,
+				Selectivity: 1,
+				HashmapStats: &plan.HashMapStats{
+					HashmapSize: 100,
+				},
+			},
+		}
+	}
+	builder := &QueryBuilder{
+		qry:     &plan.Query{Nodes: []*plan.Node{child}},
+		compCtx: ctx,
+		tag2Table: map[int32]*plan.TableDef{1: {
+			TblId: 1,
+			Cols: []*plan.ColDef{
+				{Name: "region_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Name: "user_id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			},
+		}},
+	}
+
+	large := newAggregate(1_000_000)
+	determineShuffleForGroupBy(large, builder)
+	require.True(t, large.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), large.Stats.HashmapStats.ShuffleColIdx)
+
+	small := newAggregate(threshHoldForShuffleGroup)
+	determineShuffleForGroupBy(small, builder)
+	require.False(t, small.Stats.HashmapStats.Shuffle)
+
+	lowGroupNDV := newAggregate(1_000_000)
+	lowGroupNDV.GroupBy[0].Ndv = shuffleDistinctGroupMinNDV - 1
+	determineShuffleForGroupBy(lowGroupNDV, builder)
+	require.False(t, lowGroupNDV.Stats.HashmapStats.Shuffle,
+		"too few groups would serialize the high-cardinality distinct state")
+
+	emptyGroupingSet := newAggregate(1_000_000)
+	emptyGroupingSet.GroupingFlag = []bool{false}
+	determineShuffleForGroupBy(emptyGroupingSet, builder)
+	require.False(t, emptyGroupingSet.Stats.HashmapStats.Shuffle,
+		"an empty grouping set has no raw child key safe for pre-group shuffle")
+
+	activeGroupingKey := newAggregate(1_000_000)
+	activeGroupingKey.GroupBy = append(activeGroupingKey.GroupBy, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Ndv:  1_000_000,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	})
+	activeGroupingKey.GroupingFlag = []bool{false, true}
+	determineShuffleForGroupBy(activeGroupingKey, builder)
+	require.True(t, activeGroupingKey.Stats.HashmapStats.Shuffle,
+		"a grouping-set branch may still shuffle on an active key")
+	require.Equal(t, int32(1), activeGroupingKey.Stats.HashmapStats.ShuffleColIdx,
+		"inactive high-NDV keys must not become the distribution key")
+
+	child.Stats.Outcnt = 100_000_000
+	lowStateRatio := newAggregate(1_000_000)
+	determineShuffleForGroupBy(lowStateRatio, builder)
+	require.False(t, lowStateRatio.Stats.HashmapStats.Shuffle,
+		"do not redistribute a large input for a comparatively small exact state")
+
+	stats.TableCnt = 100_000_000
+	child.Stats.Outcnt = 1_000_000
+	child.Stats.Selectivity = 0.01
+	selective := newAggregate(1_000_000)
+	selective.GroupBy[0].Ndv = 100_000
+	determineShuffleForGroupBy(selective, builder)
+	require.False(t, selective.Stats.HashmapStats.Shuffle,
+		"table-level NDV must not claim that all distinct values survive selection")
+	selectiveManyOwners := newAggregate(100_000_000)
+	selectiveManyOwners.GroupBy[0].Ndv = 100_000
+	determineShuffleForGroupBy(selectiveManyOwners, builder)
+	require.True(t, selectiveManyOwners.Stats.HashmapStats.Shuffle,
+		"selection may retain shuffle when enough estimated owners and exact state remain")
+
+	child.Stats.Selectivity = 1
+	singleStage := newAggregate(100_000_000)
+	singleStage.Stats.HashmapStats.HashmapSize = 3_000_000
+	singleStage.Stats.HashmapStats.Shuffle = true
+	arg := DeepCopyExpr(singleStage.AggList[1].GetF().Args[0])
+	singleStage.AggList = append(singleStage.AggList, &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(uint64(sumID) | function.Distinct)},
+			Args: []*plan.Expr{arg},
+		}},
+	})
+	determineShuffleForGroupBy(singleStage, builder)
+	require.False(t, singleStage.Stats.HashmapStats.Shuffle,
+		"an aggregate forced to one CN must clear even stale shuffle state")
+}
+
+func TestEstimateNDVAfterSelectionRejectsInvalidStats(t *testing.T) {
+	require.Equal(t, float64(-1), estimateNDVAfterSelection(100, nil))
+	require.Equal(t, float64(-1), estimateNDVAfterSelection(math.NaN(), &plan.Stats{Outcnt: 10}))
+	require.Equal(t, float64(-1), estimateNDVAfterSelection(100, &plan.Stats{Outcnt: math.Inf(1)}))
+	require.Equal(t, float64(10), estimateNDVAfterSelection(100, &plan.Stats{Outcnt: 10}))
+	require.InDelta(t, 100*math.Pow(0.01, 0.8),
+		estimateNDVAfterSelection(100, &plan.Stats{Outcnt: 100, Selectivity: 0.01}), 1e-9)
 }
 
 func TestDetermineShuffleForJoinFindsEligibleConditionAcrossPredicateOrder(t *testing.T) {

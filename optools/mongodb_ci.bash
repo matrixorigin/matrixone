@@ -40,7 +40,7 @@ collect() {
   sanitize "$TMP_DIR/mo-service.log" "$REPORT_DIR/mo-service.log"
   if command -v docker >/dev/null 2>&1; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
-      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE="${MONGODB_KEYFILE:-/dev/null}" \
+      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE_DIR="${MONGODB_KEYFILE_DIR:-/tmp}" \
       docker compose -p "${COMPOSE_PROJECT_NAME:-mo-mongodb-unused}" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" logs --no-color \
       >"$TMP_DIR/mongodb.log" 2>&1 || true
     sanitize "$TMP_DIR/mongodb.log" "$REPORT_DIR/mongodb.log"
@@ -68,7 +68,7 @@ cleanup() {
   collect
   if [[ -n "$TMP_DIR" ]]; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
-      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE="${MONGODB_KEYFILE:-/dev/null}" \
+      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE_DIR="${MONGODB_KEYFILE_DIR:-/tmp}" \
       docker compose -p "${COMPOSE_PROJECT_NAME:-mo-mongodb-unused}" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
     # TMP_DIR is created by the exact mktemp template below. Refuse a broad
     # deletion if that invariant is ever changed or corrupted.
@@ -413,7 +413,9 @@ run_e2e() {
   export MONGODB_ROOT_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_NEXT_PASSWORD="$(openssl rand -hex 24)"
-  export MONGODB_KEYFILE="$TMP_DIR/mongodb-keyfile"
+  export MONGODB_KEYFILE_DIR="$TMP_DIR/mongodb-key-source"
+  mkdir -p "$MONGODB_KEYFILE_DIR"
+  export MONGODB_KEYFILE="$MONGODB_KEYFILE_DIR/mongodb-keyfile"
   openssl rand -base64 756 >"$MONGODB_KEYFILE"
   chmod 600 "$MONGODB_KEYFILE"
 
