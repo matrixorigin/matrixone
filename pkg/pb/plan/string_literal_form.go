@@ -537,6 +537,11 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	return nil
 }
 
+// VisitExpressionsInOwner visits each expression root contained in an owner.
+func VisitExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkExpressionsInOwner(owner, visitor)
+}
+
 // validateStringLiteralFormsInOwner validates every expression nested in a
 // decoded plan without coupling this boundary check to every plan node shape.
 func validateStringLiteralFormsInOwner(owner any) error {

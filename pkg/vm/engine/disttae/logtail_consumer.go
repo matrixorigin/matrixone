@@ -1422,8 +1422,13 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 			}
 		}
 		ent, exist := c.subscribed.m[tblId]
-		if exist && ent.state == Subscribed {
-			return Subscribed, nil
+		if exist {
+			// The lock was released while waiting for the subscriber to become
+			// ready. Another waiter may already own the subscription attempt, or
+			// its response may already have advanced the state. Preserve that
+			// state so concurrent waiters cannot send duplicate requests or move
+			// SubRspReceived back to Subscribing.
+			return ent.state, nil
 		}
 		c.subscribed.m[tblId] = &subEntry{
 			dbID:  dbId,

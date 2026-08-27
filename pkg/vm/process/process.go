@@ -187,6 +187,25 @@ func (proc *Process) SetPrepareParamsWithMeta(
 	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, false)
 }
 
+// SetPrepareParamsWithReusableMeta reuses caller-provided metadata storage.
+func (proc *Process) SetPrepareParamsWithReusableMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	metadata []bool,
+) []bool {
+	generated := prepareParamMetadata(prepareParams, isBin, kinds)
+	if cap(metadata) < len(generated) {
+		metadata = make([]bool, len(generated))
+	} else {
+		metadata = metadata[:len(generated)]
+		clear(metadata)
+	}
+	copy(metadata, generated)
+	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	return metadata
+}
+
 // SetPrepareParamsWithTypedMeta borrows prepareParams and additionally keeps
 // the concrete SQL type needed by prepared JSON comparisons. Exact types use a
 // separate metadata axis; they must never be folded into PrepareParamKind,
