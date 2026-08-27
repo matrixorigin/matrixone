@@ -160,14 +160,6 @@ DROP TABLE t_stddev_scaled;
 
 # exact BIGINT origins must preserve unit differences above 2^53
 CREATE TABLE t_variance_integer_limits(s BIGINT, u BIGINT UNSIGNED);
-INSERT INTO t_variance_integer_limits VALUES
-    (9223372036854775804, 18446744073709551612),
-    (9223372036854775805, 18446744073709551613),
-    (9223372036854775806, 18446744073709551614),
-    (9223372036854775807, 18446744073709551615);
-SELECT VAR_POP(s) = 1.25 AS signed_var_ok,
-       VAR_POP(DISTINCT u) = 1.25 AS unsigned_distinct_var_ok,
-       STDDEV_POP(s) > 1.118 AND STDDEV_POP(s) < 1.119 AS signed_stddev_ok,
-       VAR_SAMP(u) > 1.6666 AND VAR_SAMP(u) < 1.6667 AS unsigned_sample_ok
-FROM t_variance_integer_limits;
+INSERT INTO t_variance_integer_limits VALUES (9223372036854775804, 18446744073709551612),(9223372036854775805, 18446744073709551613),(9223372036854775806, 18446744073709551614),(9223372036854775807, 18446744073709551615);
+SELECT VAR_POP(s) = 1.25 AS signed_var_ok, VAR_POP(DISTINCT u) = 1.25 AS unsigned_distinct_var_ok, STDDEV_POP(s) > 1.118 AND STDDEV_POP(s) < 1.119 AS signed_stddev_ok, VAR_SAMP(u) > 1.6666 AND VAR_SAMP(u) < 1.6667 AS unsigned_sample_ok FROM t_variance_integer_limits;
 DROP TABLE t_variance_integer_limits;
