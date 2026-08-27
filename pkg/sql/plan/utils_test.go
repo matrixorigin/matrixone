@@ -901,6 +901,11 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		{value: "1.", want: true},
 		{value: "1e+2", want: true},
 		{value: ".1e-2", want: true},
+		// This finite value is valid FLOAT64 syntax, but its exponent is
+		// outside the Decimal256 domain.  preparedDecimalType must therefore
+		// reject it; preparedExponentType below covers the approximate domain.
+		{value: "1.7976931348623157e308", want: false},
+		{value: "1e309", want: false},
 		{value: "1e", want: false},
 		{value: "1e+", want: false},
 		{value: "1.2.3", want: false},
@@ -908,6 +913,23 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		_, ok := preparedDecimalType(test.value)
 		require.Equal(t, test.want, ok, test.value)
 	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "1e+2", want: true},
+		{value: ".1e-2", want: true},
+		{value: "1.7976931348623157e308", want: true},
+		{value: "1e309", want: false},
+		{value: "1e", want: false},
+		{value: "e1", want: false},
+		{value: "1ee2", want: false},
+		{value: "1eE2", want: false},
+	} {
+		_, ok := preparedExponentType(test.value)
+		require.Equal(t, test.want, ok, test.value)
+	}
+	require.Equal(t, types.T_float64, preparedNumericComparisonTextType().Oid)
 }
 
 func TestPreparedRuntimeParamExprMaterializesRuntimeTypes(t *testing.T) {

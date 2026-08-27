@@ -344,12 +344,13 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
-	numericPrefixConsumer      bool
-	directResultParamPositions []int32
-	hasPaginationParams        bool
-	hasLagLeadParams           bool
-	paramKinds                 []vector.PrepareParamKind
-	paramMetadata              []bool
+	numericPrefixConsumer         bool
+	directResultParamPositions    []int32
+	directResultParamPositionsSet bool
+	hasPaginationParams           bool
+	hasLagLeadParams              bool
+	paramKinds                    []vector.PrepareParamKind
+	paramMetadata                 []bool
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -362,6 +363,14 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// runtimeSpecializationPlan records the plan for which the static
+	// execute-time specialization decision was made. Most prepared DML only
+	// needs parameter values and can reuse the prepare-time compile; keeping the
+	// decision with the plan avoids copying and walking the whole plan on every
+	// EXECUTE.
+	runtimeSpecializationPlan   *plan.Plan
+	runtimeSpecializationNeeded bool
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -810,6 +819,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ColDefData = nil
 	}
 	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
 }
 
