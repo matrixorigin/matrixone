@@ -2712,22 +2712,33 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	if err != nil {
 		return nil, err
 	}
-	// Predicate pushdown is SQL-only and opt-in ('pushdown' = 'true'), for the
-	// same reason it is opt-in for DATASTREAM: a pushed predicate is not
-	// provably superset-preserving across engines, so the source may drop a
-	// row MO would have kept under a different collation, time zone, or
-	// coercion, and nothing MO does afterwards can bring it back.
+	// Predicate pushdown, SQL only and opt-in ('pushdown' = 'true'): wrap each
+	// query text as a derived table carrying the conjuncts MO can render, and
+	// stop evaluating those locally -- the source has them now.
 	//
-	// Compile only OFFERS the conjuncts; it cannot render them.  The WHERE
-	// clause has to name columns, and the names MO knows are its own -- the
-	// result is mapped positionally, so `select a_id from src` legitimately
-	// feeds a column declared `id`.  Only the reader, holding a connection,
-	// can ask the source what its columns are called.  Consequently the
-	// conjuncts also STAY in FilterList: MO keeps evaluating them, so a scan
-	// that ends up not pushing (no connection capability, an unprobeable
-	// query, nothing renderable) is merely unoptimized, never wrong.
-	if fs.Pushdown && fs.Kind == foreignext.KindSQL {
-		fs.PushdownFilters = offerablePushdownFilters(residual, node.TableDef.Cols)
+	// Opting in is a statement about the source: that its result columns are
+	// the DECLARED ones, by name, because a WHERE clause has to name what it
+	// filters and MO writes the names it knows. The reader checks that claim
+	// against the columns the source actually answers with, and errors when it
+	// does not hold. Predicates MO cannot render stay local, since there is
+	// nothing to send.
+	if fs.Pushdown && fs.Kind == foreignext.KindSQL && len(residual) > 0 {
+		// Bare identifiers: the quoting character is dialect-specific, and
+		// sql_tvf speaks to PostgreSQL as well as MySQL.
+		filter, pushed := sqldatastream.DeparseFiltersBareIdents(
+			residual, pushdownCols(node.TableDef.Cols), c.proc.GetSessionInfo().TimeZone)
+		if filter != "" {
+			for i := range queryList {
+				queryList[i] = foreignext.WrapPushdownQuery(queryList[i], filter)
+			}
+			kept := make([]*plan.Expr, 0, len(residual))
+			for i, expr := range residual {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			residual = kept
+		}
 	}
 	node.FilterList = residual
 
@@ -2743,69 +2754,25 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	return []*Scope{scope}, nil
 }
 
-// offerablePushdownFilters picks the conjuncts the reader may try to render
-// against the source.  A conjunct qualifies when every column it references is
-// a DECLARED column of the table: declared columns are the ones the source
-// actually returns, and their position in TableDef.Cols is their position in
-// the source's result, which is the only correspondence the reader can rely on
-// when it substitutes the source's own names.
+// pushdownCols masks the synthetic external-scan columns out of a scan's
+// column list.  They exist only inside MO -- __mo_query selects which query
+// runs, the error-mode columns are synthesized by the reader -- so a conjunct
+// mentioning one must never be rendered into the source's WHERE clause.  The
+// deparser resolves column refs by position and already refuses a nil entry,
+// so blanking the slot is enough.
 //
-// That excludes the synthetic columns -- __mo_query selects which query runs,
-// the error-mode columns are synthesized by the reader, __mo_filepath is a file
-// name -- none of which exist at the source. They are appended after the
-// declared ones, so the test is a position bound.
-//
-// Whether a conjunct can be RENDERED is not decided here; the reader re-runs
-// the deparser once it knows the names, and simply pushes less if it cannot.
-func offerablePushdownFilters(exprs []*plan.Expr, cols []*plan.ColDef) []*plan.Expr {
-	declared := declaredColCount(cols)
-	if declared == 0 {
-		return nil
-	}
-	var out []*plan.Expr
-	for _, expr := range exprs {
-		if referencesOnlyDeclaredCols(expr, declared) {
-			out = append(out, expr)
-		}
-	}
-	return out
-}
-
-// declaredColCount counts the leading columns of a scan that the source
-// actually produces, i.e. those before the first synthetic one.  The synthetic
-// columns are appended at the end (__mo_query must be last of all: see
-// isFileLevelColumn), so a prefix count is exact.
-func declaredColCount(cols []*plan.ColDef) int {
+// The mask is by name, which is blunter than the (name, ColId) scoping used
+// elsewhere: a pre-existing schema may hold a REAL column called __mo_query,
+// and masking it merely costs that one conjunct its pushdown.
+func pushdownCols(cols []*plan.ColDef) []*plan.ColDef {
+	masked := make([]*plan.ColDef, len(cols))
 	for i, col := range cols {
 		if col == nil || catalog.IsReservedExternalColName(col.Name) {
-			return i
+			continue
 		}
+		masked[i] = col
 	}
-	return len(cols)
-}
-
-func referencesOnlyDeclaredCols(expr *plan.Expr, declared int) bool {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return e.Col != nil && e.Col.ColPos >= 0 && int(e.Col.ColPos) < declared
-	case *plan.Expr_F:
-		if e.F == nil {
-			return false
-		}
-		for _, arg := range e.F.Args {
-			if !referencesOnlyDeclaredCols(arg, declared) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_Lit:
-		return true
-	default:
-		// Anything MO cannot look inside (subquery, correlated ref, param)
-		// is not offered; the reader's deparser would refuse it anyway, and
-		// refusing here keeps the plan small.
-		return false
-	}
+	return masked
 }
 
 // compileKafkaScan compiles a scan of a Kafka external table. The read

@@ -85,21 +85,20 @@ select id from plain where __mo_query = 'select id as ident, name as nm, amount 
 ➤ id[4,32,0]  𝄀
 4
 select id from pushed where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
+invalid input: sql_tvf: query failed: Error 1054 (42S22): invalid input: column id does not exist
+select id from pushed where __mo_query = 'select id as ID, name as NAME, amount as AMOUNT, created as CREATED from src' and id > 3;
 ➤ id[4,32,0]  𝄀
 4
-select id, name from pushed
-where __mo_query = 'select id+100 as ident, upper(name) as nm, amount as amt, created as c from src'
-and id > 102 order by id;
-➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
-103  ¦  CAROL  𝄀
-104  ¦  DAVE
-select id from pushed where __mo_query = 'select id, name, amount, created from src union all select id, name, amount, created from src where 1=0' and id > 3;
-➤ id[4,32,0]  𝄀
-4
+select id from pushed where __mo_query = 'select name, id, amount, created from src' and id > 3;
+invalid input: predicate pushdown ('pushdown' = 'true') requires the query to return the table's declared columns, but column 1 is named "name" at the source and "id" in the table; alias it, or drop the option to keep the positional mapping
+select id from pushed where __mo_query = 'select id, name from src' and id > 3;
+invalid input: predicate pushdown ('pushdown' = 'true') requires the query to return the table's declared columns, but it returned 2 column(s) for 4 declared
+select id from pushed where __mo_query = 'select id as ident, name, amount, created from src' and abs(id - 3) < 1;
+invalid input: predicate pushdown ('pushdown' = 'true') requires the query to return the table's declared columns, but column 1 is named "ident" at the source and "id" in the table; alias it, or drop the option to keep the positional mapping
 create external table bad_esql (a int) engine = esql
 with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'pushdown' = 'true');
 invalid input: the 'pushdown' option is only supported by ENGINE = SQL, not esql
 create external table bad_value (a int) engine = sql
-with ('config' = '{"driver":"mysql","dsn":"d"}', 'recheck' = 'sometimes');
-invalid input: unknown sql option 'recheck' (supported: config, query, pushdown)
+with ('config' = '{"driver":"mysql","dsn":"d"}', 'pushdown' = 'sometimes');
+invalid input: sql option 'pushdown' must be true or false, got 'sometimes'
 drop database foreign_pushdown;

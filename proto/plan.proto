@@ -1231,12 +1231,6 @@ message ForeignScan {
   // MO then sends the query text verbatim, which is correct against any
   // remote.
   bool pushdown = 4;
-  // pushdown_filters are the scan conjuncts compile offered for pushdown:
-  // row-level, referencing only declared columns by position.  The READER
-  // renders them, because only it can ask the source what its columns are
-  // actually called.  MO evaluates them locally regardless, so an empty or
-  // unrenderable list only costs the optimization.
-  repeated Expr pushdown_filters = 5;
 }
 
 // KafkaScan describes a scan of a Kafka external table (CREATE EXTERNAL

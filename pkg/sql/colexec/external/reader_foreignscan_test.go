@@ -20,7 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -294,169 +293,131 @@ func TestForeignScanISO8601Timestamp(t *testing.T) {
 	op.Free(proc, false, nil)
 }
 
-// probeConn is a fakeScanConn that can also answer "what do you call these
-// columns", the way a MySQL source does.
-type probeConn struct {
+// namedConn is a fakeScanConn that also reports the column names of the
+// result, the way a SQL source does.
+type namedConn struct {
 	fakeScanConn
-	probeNames  []string
-	probeErr    error
-	probedQuery string
-	queries     []string
+	names   []string
+	queries []string
 }
 
-func (c *probeConn) Query(ctx context.Context, q string) (io.ReadCloser, error) {
+func (c *namedConn) QueryNamed(ctx context.Context, q string) (io.ReadCloser, []string, error) {
 	c.queries = append(c.queries, q)
-	return c.fakeScanConn.Query(ctx, q)
+	stream, err := c.fakeScanConn.Query(ctx, q)
+	return stream, c.names, err
 }
 
-func (c *probeConn) ProbeColumns(ctx context.Context, q string) ([]string, error) {
-	c.probedQuery = q
-	return c.probeNames, c.probeErr
-}
-
-// foreignPushdownParam builds a scan of a two-column SQL foreign table whose
-// declared names are id/name, with one offered conjunct `id > 3`.
-func foreignPushdownParam(t *testing.T, pushdown bool, filters []*plan.Expr) *ExternalParam {
+func foreignPushdownParam(t *testing.T, pushdown bool) *ExternalParam {
 	cfg := `{"driver":"nope","dsn":"unused"}`
 	param := foreignScanParam(t, "sql", cfg, foreignScanCols(), []string{"id", "name"})
 	param.Cols = foreignScanCols()
+	// what compile records for a two-column table: the DECLARED width, and
+	// each attr's declared position -- both survive column pruning
+	param.ColumnListLen = 2
+	param.Attrs = []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0, ColFieldIndex: 0},
+		{ColName: "name", ColIndex: 1, ColFieldIndex: 1},
+	}
 	param.ForeignScan.Pushdown = pushdown
-	param.ForeignScan.PushdownFilters = filters
-	param.Fileparam.Filepath = "select a_id, a_name from src"
+	// compile has already wrapped this text: pushdown is decided there
+	param.Fileparam.Filepath = "select * from (\nselect id, name from src\n) __mo_subq_1 where id > 3"
 	return param
 }
 
-func idGreaterThan(pos int32, v int64) *plan.Expr {
-	return &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_bool)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: ">"},
-			Args: []*plan.Expr{
-				{Typ: plan.Type{Id: int32(types.T_int64)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}},
-				{Typ: plan.Type{Id: int32(types.T_int64)},
-					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 3}}}},
-			},
-		}},
-	}
-}
-
-// TestForeignScanPushdownUsesSourceColumnNames is the point of the whole
-// mechanism: the filter MO sends must name the columns as the SOURCE names
-// them, not as MO declares them. A foreign scan maps the result positionally,
-// so `select a_id, a_name from src` legitimately feeds columns declared
-// (id, name) -- and `where id > 3` would be an unknown column at the source.
-func TestForeignScanPushdownUsesSourceColumnNames(t *testing.T) {
+func openForeignScan(t *testing.T, param *ExternalParam, conn foreigntvf.Conn) error {
 	proc := testutil.NewProcess(t)
 	ses := &fakeScanSession{}
 	proc.Session = ses
-	cfg := `{"driver":"nope","dsn":"unused"}`
-	conn := &probeConn{
-		fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: "\"4\",\"dave\"\n"},
-		probeNames:   []string{"a_id", "a_name"},
-	}
-	ses.PutForeignConn(context.TODO(), foreigntvf.MakeHandle(foreigntvf.KindSQL, cfg), conn)
-
-	param := foreignPushdownParam(t, true, []*plan.Expr{idGreaterThan(0, 3)})
-	_, err := NewForeignScanReader(param).Open(param, proc)
-	require.NoError(t, err)
-
-	// the probe asked about the wrapped-but-unfiltered query
-	require.Contains(t, conn.probedQuery, "select a_id, a_name from src")
-	require.Contains(t, conn.probedQuery, "limit 0")
-
-	// and the query that ran filters on the SOURCE name, not on `id`
-	require.Len(t, conn.queries, 1)
-	sent := conn.queries[0]
-	require.Contains(t, sent, "(`a_id` > 3)")
-	require.NotContains(t, sent, "`id`")
-}
-
-// TestForeignScanPushdownFallsBack pins the safety property: every way the
-// pushdown can fail to apply must end in the verbatim query, because the
-// conjuncts are still in the scan's filter list and MO will apply them.
-func TestForeignScanPushdownFallsBack(t *testing.T) {
-	verbatim := "select a_id, a_name from src"
-	run := func(param *ExternalParam, conn foreigntvf.Conn) []string {
-		proc := testutil.NewProcess(t)
-		ses := &fakeScanSession{}
-		proc.Session = ses
-		ses.PutForeignConn(context.TODO(),
-			foreigntvf.MakeHandle(foreigntvf.KindSQL, `{"driver":"nope","dsn":"unused"}`), conn)
-		_, err := NewForeignScanReader(param).Open(param, proc)
-		require.NoError(t, err)
-		switch c := conn.(type) {
-		case *probeConn:
-			return c.queries
-		default:
-			return []string{conn.(*fakeScanConn).lastQuery}
-		}
-	}
-	csv := "\"4\",\"dave\"\n"
-
-	// not opted in
-	require.Equal(t, []string{verbatim},
-		run(foreignPushdownParam(t, false, []*plan.Expr{idGreaterThan(0, 3)}),
-			&probeConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
-				probeNames: []string{"a_id", "a_name"}}))
-
-	// opted in, but nothing was offered
-	require.Equal(t, []string{verbatim},
-		run(foreignPushdownParam(t, true, nil),
-			&probeConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
-				probeNames: []string{"a_id", "a_name"}}))
-
-	// the connection cannot be probed at all (a PostgreSQL source, or any
-	// connection without the capability): no type assertion, no pushdown
-	param := foreignPushdownParam(t, true, []*plan.Expr{idGreaterThan(0, 3)})
-	require.Equal(t, []string{verbatim},
-		run(param, &fakeScanConn{kind: foreigntvf.KindSQL, csv: csv}))
-
-	// the probe fails -- the text is not a wrappable derived table
-	require.Equal(t, []string{verbatim},
-		run(foreignPushdownParam(t, true, []*plan.Expr{idGreaterThan(0, 3)}),
-			&probeConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
-				probeErr: moerr.NewInvalidInputNoCtx("not a derived table")}))
-
-	// the source returns a different number of columns than declared: the
-	// positional correspondence does not hold, so no name can be trusted
-	require.Equal(t, []string{verbatim},
-		run(foreignPushdownParam(t, true, []*plan.Expr{idGreaterThan(0, 3)}),
-			&probeConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
-				probeNames: []string{"a_id"}}))
-
-	// the offered conjunct is over a column the deparser cannot resolve
-	require.Equal(t, []string{verbatim},
-		run(foreignPushdownParam(t, true, []*plan.Expr{idGreaterThan(9, 3)}),
-			&probeConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
-				probeNames: []string{"a_id", "a_name"}}))
-}
-
-// TestForeignScanPushdownSkipsProbeWhenNothingRenders proves the round trip is
-// only paid when it can buy something: a conjunct the deparser cannot express
-// is discovered locally, before any I/O.
-func TestForeignScanPushdownSkipsProbeWhenNothingRenders(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ses := &fakeScanSession{}
-	proc.Session = ses
-	conn := &probeConn{
-		fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: "\"4\",\"dave\"\n"},
-		probeNames:   []string{"a_id", "a_name"},
-	}
 	ses.PutForeignConn(context.TODO(),
 		foreigntvf.MakeHandle(foreigntvf.KindSQL, `{"driver":"nope","dsn":"unused"}`), conn)
-
-	unrenderable := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_bool)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: "abs"},
-			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int64)},
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
-		}},
-	}
-	param := foreignPushdownParam(t, true, []*plan.Expr{unrenderable})
 	_, err := NewForeignScanReader(param).Open(param, proc)
-	require.NoError(t, err)
-	require.Empty(t, conn.probedQuery, "no round trip when nothing could be pushed anyway")
-	require.Equal(t, []string{"select a_id, a_name from src"}, conn.queries)
+	return err
+}
+
+// TestForeignScanPushdownChecksColumnsAgainstDDL covers the contract a table
+// accepts when it opts in: MO writes the DECLARED column names into the SQL it
+// sends, so the source must answer with those columns. Case is not part of it
+// -- dialects differ on identifier case and the CSV that follows is positional
+// anyway -- but identity is.
+func TestForeignScanPushdownChecksColumnsAgainstDDL(t *testing.T) {
+	csv := "\"4\",\"dave\"\n"
+
+	// exact match
+	require.NoError(t, openForeignScan(t, foreignPushdownParam(t, true),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"id", "name"}}))
+
+	// case-insensitive match
+	require.NoError(t, openForeignScan(t, foreignPushdownParam(t, true),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"ID", "Name"}}))
+
+	// a differently-named projection is an ERROR now, not a silent positional
+	// mapping: MO has already narrowed the source query using the name `id`
+	err := openForeignScan(t, foreignPushdownParam(t, true),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"a_id", "a_name"}})
+	require.ErrorContains(t, err, "column 1")
+	require.ErrorContains(t, err, "a_id")
+	require.ErrorContains(t, err, "pushdown")
+
+	// right names, wrong order is still wrong: the mapping is positional
+	err = openForeignScan(t, foreignPushdownParam(t, true),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"name", "id"}})
+	require.ErrorContains(t, err, "column 1")
+
+	// arity mismatch
+	err = openForeignScan(t, foreignPushdownParam(t, true),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"id"}})
+	require.ErrorContains(t, err, "1 column(s) for 2 declared")
+
+	// a connection that cannot report its columns cannot honour the contract,
+	// so it must not have been narrowed either
+	err = openForeignScan(t, foreignPushdownParam(t, true),
+		&fakeScanConn{kind: foreigntvf.KindSQL, csv: csv})
+	require.ErrorContains(t, err, "cannot report the columns")
+}
+
+// TestForeignScanPushdownChecksPrunedScans pins that the check survives column
+// pruning: a scan that reads only the second column still knows the table is
+// two columns wide, and still checks that column at its own position.
+func TestForeignScanPushdownChecksPrunedScans(t *testing.T) {
+	csv := "\"4\",\"dave\"\n"
+	pruned := func() *ExternalParam {
+		param := foreignPushdownParam(t, true)
+		param.Attrs = []plan.ExternAttr{{ColName: "name", ColIndex: 1, ColFieldIndex: 1}}
+		return param
+	}
+
+	require.NoError(t, openForeignScan(t, pruned(),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"id", "name"}}))
+
+	// the unread column may be misnamed without anyone noticing -- but the one
+	// this scan reads may not
+	require.NoError(t, openForeignScan(t, pruned(),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"whatever", "name"}}))
+	err := openForeignScan(t, pruned(),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"id", "a_name"}})
+	require.ErrorContains(t, err, "column 2")
+	require.ErrorContains(t, err, "a_name")
+
+	// and the declared width is still the full table, not the pruned scan
+	err = openForeignScan(t, pruned(),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: csv},
+			names: []string{"name"}})
+	require.ErrorContains(t, err, "1 column(s) for 2 declared")
+}
+
+// TestForeignScanWithoutPushdownIgnoresColumnNames pins the other half: a
+// table that did NOT opt in keeps the positional contract, and its source may
+// call the columns whatever it likes.
+func TestForeignScanWithoutPushdownIgnoresColumnNames(t *testing.T) {
+	require.NoError(t, openForeignScan(t, foreignPushdownParam(t, false),
+		&namedConn{fakeScanConn: fakeScanConn{kind: foreigntvf.KindSQL, csv: "\"4\",\"dave\"\n"},
+			names: []string{"totally", "different"}}))
 }

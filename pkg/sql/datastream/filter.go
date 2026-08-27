@@ -42,10 +42,24 @@ import (
 // The returned pushed slice is index-aligned with exprs and reports which
 // conjuncts made it into the returned filter text (joined with AND).
 func DeparseFilters(exprs []*plan.Expr, cols []*plan.ColDef, loc *time.Location) (filter string, pushed []bool) {
+	return deparseFilters(exprs, cols, loc, true)
+}
+
+// DeparseFiltersBareIdents renders the same conjuncts but writes column names
+// UNQUOTED.  The quoting character is dialect-specific (MySQL backticks,
+// standard double quotes) while a bare identifier is accepted by both, so a
+// caller that must produce text for more than one kind of source asks for this
+// form -- at the cost of a column named after a reserved word, or holding a
+// space, which only a quoted identifier can express.
+func DeparseFiltersBareIdents(exprs []*plan.Expr, cols []*plan.ColDef, loc *time.Location) (filter string, pushed []bool) {
+	return deparseFilters(exprs, cols, loc, false)
+}
+
+func deparseFilters(exprs []*plan.Expr, cols []*plan.ColDef, loc *time.Location, quoteIdents bool) (filter string, pushed []bool) {
 	pushed = make([]bool, len(exprs))
 	var parts []string
 	for i, expr := range exprs {
-		if text, ok := deparseExpr(expr, cols, loc); ok {
+		if text, ok := deparseExpr(expr, cols, loc, quoteIdents); ok {
 			parts = append(parts, text)
 			pushed[i] = true
 		}
@@ -53,23 +67,23 @@ func DeparseFilters(exprs []*plan.Expr, cols []*plan.ColDef, loc *time.Location)
 	return strings.Join(parts, " AND "), pushed
 }
 
-func deparseExpr(expr *plan.Expr, cols []*plan.ColDef, loc *time.Location) (string, bool) {
+func deparseExpr(expr *plan.Expr, cols []*plan.ColDef, loc *time.Location, quoteIdents bool) (string, bool) {
 	if expr == nil {
 		return "", false
 	}
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		return deparseColRef(impl.Col, cols)
+		return deparseColRef(impl.Col, cols, quoteIdents)
 	case *plan.Expr_Lit:
 		return deparseLiteral(expr, impl.Lit, loc)
 	case *plan.Expr_F:
-		return deparseFunc(expr.GetF(), cols, loc)
+		return deparseFunc(expr.GetF(), cols, loc, quoteIdents)
 	default:
 		return "", false
 	}
 }
 
-func deparseColRef(col *plan.ColRef, cols []*plan.ColDef) (string, bool) {
+func deparseColRef(col *plan.ColRef, cols []*plan.ColDef, quoteIdents bool) (string, bool) {
 	// ColPos indexes the scan's TableDef.Cols (the same convention the
 	// external scan's file-level filter uses).  The display Name is not
 	// trustworthy for identifier surgery: at the scan node it is
@@ -82,6 +96,15 @@ func deparseColRef(col *plan.ColRef, cols []*plan.ColDef) (string, bool) {
 	name := cols[pos].GetOriginCaseName()
 	if name == "" {
 		return "", false
+	}
+	if !quoteIdents {
+		// A bare identifier only survives if it is spelled like one; a caller
+		// asking for this form has to accept that a column MySQL would need
+		// backticks for is simply not pushed.
+		if !isBareIdentifier(name) {
+			return "", false
+		}
+		return name, true
 	}
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`", true
 }
@@ -151,7 +174,7 @@ func deparseLiteral(expr *plan.Expr, lit *plan.Literal, loc *time.Location) (str
 	}
 }
 
-func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (string, bool) {
+func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location, quoteIdents bool) (string, bool) {
 	if fn == nil || fn.Func == nil {
 		return "", false
 	}
@@ -167,7 +190,7 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		}
 		parts := make([]string, 0, len(fn.Args))
 		for _, arg := range fn.Args {
-			text, ok := deparseExpr(arg, cols, loc)
+			text, ok := deparseExpr(arg, cols, loc, quoteIdents)
 			if !ok {
 				return "", false
 			}
@@ -178,7 +201,7 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		if len(fn.Args) != 1 {
 			return "", false
 		}
-		text, ok := deparseExpr(fn.Args[0], cols, loc)
+		text, ok := deparseExpr(fn.Args[0], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
@@ -187,11 +210,11 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		if len(fn.Args) != 2 {
 			return "", false
 		}
-		left, ok := deparseExpr(fn.Args[0], cols, loc)
+		left, ok := deparseExpr(fn.Args[0], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
-		right, ok := deparseExpr(fn.Args[1], cols, loc)
+		right, ok := deparseExpr(fn.Args[1], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
@@ -204,7 +227,7 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		if len(fn.Args) != 2 {
 			return "", false
 		}
-		left, ok := deparseExpr(fn.Args[0], cols, loc)
+		left, ok := deparseExpr(fn.Args[0], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
@@ -214,7 +237,7 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		}
 		items := make([]string, 0, len(list.List.List))
 		for _, item := range list.List.List {
-			text, itemOK := deparseExpr(item, cols, loc)
+			text, itemOK := deparseExpr(item, cols, loc, quoteIdents)
 			if !itemOK {
 				return "", false
 			}
@@ -229,15 +252,15 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		if len(fn.Args) != 3 {
 			return "", false
 		}
-		target, ok := deparseExpr(fn.Args[0], cols, loc)
+		target, ok := deparseExpr(fn.Args[0], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
-		low, ok := deparseExpr(fn.Args[1], cols, loc)
+		low, ok := deparseExpr(fn.Args[1], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
-		high, ok := deparseExpr(fn.Args[2], cols, loc)
+		high, ok := deparseExpr(fn.Args[2], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
@@ -246,7 +269,7 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		if len(fn.Args) != 1 {
 			return "", false
 		}
-		text, ok := deparseExpr(fn.Args[0], cols, loc)
+		text, ok := deparseExpr(fn.Args[0], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
@@ -255,7 +278,7 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 		if len(fn.Args) != 1 {
 			return "", false
 		}
-		text, ok := deparseExpr(fn.Args[0], cols, loc)
+		text, ok := deparseExpr(fn.Args[0], cols, loc, quoteIdents)
 		if !ok {
 			return "", false
 		}
@@ -263,6 +286,29 @@ func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (st
 	default:
 		return "", false
 	}
+}
+
+// isBareIdentifier reports whether name can be written without quotes in both
+// MySQL and standard SQL: ASCII letter or underscore first, then letters,
+// digits or underscores.  Reserved words are deliberately NOT excluded -- the
+// source rejects those itself, which is the same answer one step later.
+func isBareIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func isPrintableText(value string) bool {

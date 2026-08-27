@@ -292,3 +292,47 @@ func TestDeparseGuardBranches(t *testing.T) {
 		[]*plan.ColDef{nil}, time.UTC)
 	require.False(t, pushed[0])
 }
+
+func TestDeparseFiltersBareIdents(t *testing.T) {
+	cols := []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "order by", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}
+	lit := func(v int64) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}}}
+	}
+	gt := func(pos int32, v int64) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: ">"},
+			Args: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}, lit(v)},
+		}}}
+	}
+
+	// the default form quotes, MySQL-style
+	quoted, _ := DeparseFilters([]*plan.Expr{gt(0, 3)}, cols, time.UTC)
+	require.Equal(t, "(`id` > 3)", quoted)
+
+	// the bare form does not, so the same text is accepted by dialects that
+	// spell the quoting character differently
+	bare, pushed := DeparseFiltersBareIdents([]*plan.Expr{gt(0, 3)}, cols, time.UTC)
+	require.Equal(t, "(id > 3)", bare)
+	require.Equal(t, []bool{true}, pushed)
+
+	// a name that only quoting could express is not rendered bare at all
+	bare, pushed = DeparseFiltersBareIdents([]*plan.Expr{gt(1, 3)}, cols, time.UTC)
+	require.Equal(t, "", bare)
+	require.Equal(t, []bool{false}, pushed)
+
+	// string literals keep their own quoting either way
+	eq := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "="},
+		Args: []*plan.Expr{
+			{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			{Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a`b"}}}},
+		},
+	}}}
+	bare, _ = DeparseFiltersBareIdents([]*plan.Expr{eq}, cols, time.UTC)
+	require.Equal(t, "(id = 'a`b')", bare)
+}

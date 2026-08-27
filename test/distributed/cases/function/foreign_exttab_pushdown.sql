@@ -1,12 +1,14 @@
 -- Predicate pushdown for ENGINE = SQL foreign external tables ('pushdown' =
 -- 'true'): the query text is wrapped as a derived table carrying the
 -- renderable conjuncts, so the source narrows the result instead of MO.
--- Because the result is mapped POSITIONALLY, MO asks the source what it calls
--- its columns and filters on those names, not on the declared ones.
--- Covers: identical answers with and without pushdown, a query whose
--- projection is named differently from the declared columns, conjuncts the
--- deparser cannot express, query texts with a trailing ';' or line comment,
--- IN-derived query lists, SHOW CREATE round-trip, and option validation.
+-- Opting in is a statement about the source: that its result columns are the
+-- DECLARED ones, by name, since MO writes those names into the SQL it sends.
+-- MO checks that against the columns the source answers with (case
+-- insensitively) and errors when it does not hold.
+-- Covers: identical answers with and without pushdown, the column check and
+-- its case-insensitivity, conjuncts the deparser cannot express, query texts
+-- with a trailing ';' or line comment, IN-derived query lists, SHOW CREATE
+-- round-trip, and option validation.
 drop database if exists foreign_pushdown;
 create database foreign_pushdown;
 use foreign_pushdown;
@@ -61,24 +63,31 @@ select id from pushed_default where id > 3;
 show create table pushed;
 show create table plain;
 
--- THE POSITIONAL CONTRACT: the source's column names need not be the declared
--- ones. MO probes the source for them and filters on ITS names, so a renaming
--- projection gives the same answer pushed or not.
+-- THE COLUMN CHECK. Without the option the mapping is positional and the
+-- source may name its columns anything; with it, the names must be the
+-- declared ones.
 select id from plain where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
 select id from pushed where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
--- ... including when the source has no column of that name anywhere
-select id, name from pushed
-where __mo_query = 'select id+100 as ident, upper(name) as nm, amount as amt, created as c from src'
-  and id > 102 order by id;
+-- case does not matter
+select id from pushed where __mo_query = 'select id as ID, name as NAME, amount as AMOUNT, created as CREATED from src' and id > 3;
+-- right names in the wrong order is still a mismatch: the mapping is positional
+select id from pushed where __mo_query = 'select name, id, amount, created from src' and id > 3;
+-- too few columns
+select id from pushed where __mo_query = 'select id, name from src' and id > 3;
+-- the check applies to every scan of an opted-in table, even one whose
+-- predicates were all unrenderable
+select id from pushed where __mo_query = 'select id as ident, name, amount, created from src' and abs(id - 3) < 1;
 
--- a text that cannot be a derived table still works: the probe fails and MO
--- runs it verbatim, filtering locally
-select id from pushed where __mo_query = 'select id, name, amount, created from src union all select id, name, amount, created from src where 1=0' and id > 3;
+-- (a source error stays an error -- there is no second, unfiltered attempt --
+-- as the renaming case above shows: the source rejects the narrowed query and
+-- MO reports that, rather than retrying it unfiltered. A missing-table case is
+-- deliberately not asserted here: its message carries a SQLSTATE that another
+-- in-flight change corrects, and this golden should not depend on it.)
 
 -- option validation
 create external table bad_esql (a int) engine = esql
  with ('config' = '{"addresses":["http://127.0.0.1:9200"]}', 'pushdown' = 'true');
 create external table bad_value (a int) engine = sql
- with ('config' = '{"driver":"mysql","dsn":"d"}', 'recheck' = 'sometimes');
+ with ('config' = '{"driver":"mysql","dsn":"d"}', 'pushdown' = 'sometimes');
 
 drop database foreign_pushdown;

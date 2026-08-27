@@ -74,13 +74,3 @@ func PushdownAlias(query string) string {
 func trimQueryTail(query string) string {
 	return strings.TrimRight(strings.TrimSpace(query), "; \t\r\n")
 }
-
-// WrapPushdownProbe renders the zero-row form of a query, used to ask a source
-// what it calls the columns of that query's result.  It is the same derived
-// table the pushed-down query will use, so a text that cannot be wrapped fails
-// here -- before MO has committed to a wrapped query -- and MO falls back to
-// the verbatim text.
-func WrapPushdownProbe(query string) string {
-	inner := trimQueryTail(query)
-	return fmt.Sprintf("%s\n%s\n) %s limit 0", pushdownPrefix, inner, PushdownAlias(inner))
-}

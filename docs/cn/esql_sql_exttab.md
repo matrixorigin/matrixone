@@ -188,87 +188,77 @@ create external table orders (id bigint, name varchar(64))
 engine = sql with ('config' = '...', 'pushdown' = 'true');
 ```
 
-#### The name problem, and how it is solved
+`compileForeignScan` renders the row-level conjuncts with
+`datastream.DeparseFiltersBareIdents` (column refs, literals, comparisons,
+`AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS [NOT] NULL`, `LIKE` — anything else has
+nothing to send and keeps its conjunct local) and wraps each query text as a
+derived table:
 
-The result is mapped **positionally** (§3): field *i* feeds declared column
-*i*, and the source's column *names* are never read.  That is what makes
+```
+select * from (
+select id, name from src
+) __mo_subq_1a2b3c4d where (id > 3)
+```
+
+Exactly the rendered conjuncts leave `node.FilterList`: the source has them
+now.  The synthetic columns (`__mo_query`, `__mo_filepath`, the error-mode
+columns) are masked out of the deparser, so a conjunct touching one is never
+sent — the source has no counterpart for it.
+
+Identifiers are written **bare**.  The quoting character is dialect-specific
+(MySQL backticks, standard double quotes) while a bare identifier is accepted
+by both, and `sql_tvf` speaks to PostgreSQL as well as MySQL.  The cost is that
+a column whose name needs quoting — a reserved word, a space — is simply not
+pushed.  The derived-table alias is MO's own, spelled from `[a-z0-9_]`, so it
+needs no quoting either.
+
+#### The contract: opting in means the source returns the declared columns
+
+A foreign scan normally maps the result **positionally** (§3) and never reads
+the source's column names, which is what makes this legal:
 
 ```
 select * from orders where __mo_query = 'select a_id, a_name from src';
 ```
 
-legal — a column declared `id` fed by a source column called `a_id`.  A `WHERE`
-clause, though, has to *name* the column it filters, and the name MO knows is
-`id`, which the source may not have at all.
+Pushdown cannot live with that freedom: a `WHERE` clause has to *name* what it
+filters, and the only names MO has are its own.  So opting in is a statement
+about the source — **that its result columns are the declared ones, by name**.
 
-So MO does not guess: **it asks the source.**  Before sending a filtered query
-it probes the wrapped-but-unfiltered text for its column names —
-
-```
-select * from (
-select a_id, a_name from src
-) __mo_subq_1a2b3c4d limit 0
-```
-
-— reads the result's column names (`a_id`, `a_name`), pairs them with the
-declared columns *by position*, the same correspondence the scan already
-relies on, and renders the predicate in the source's own vocabulary:
+MO checks the claim rather than trusting it.  `database/sql` reports a result's
+column names the moment the query returns, before any row is read, so the
+reader gets them for free and compares them against the DDL, in order,
+**case-insensitively** (dialects differ on identifier case, and the CSV that
+follows is positional anyway).  A mismatch is an **error**:
 
 ```
-select * from (
-select a_id, a_name from src
-) __mo_subq_1a2b3c4d where (`a_id` > 3)
+predicate pushdown ('pushdown' = 'true') requires the query to return the
+table's declared columns, but column 1 is named "a_id" at the source and "id"
+in the table; alias it, or drop the option to keep the positional mapping
 ```
 
-`LIMIT 0` makes the probe a metadata round trip, not a scan, and it doubles as
-the check that the text can be a derived table at all: a `SHOW`, a `CALL`, or a
-projection with duplicate column names fails there, before MO has committed to
-a wrapped query.  The probe is skipped entirely when nothing was renderable
-anyway, so a scan that cannot benefit never pays for it.
+It has to be an error, not a fallback: the source has already run a query MO
+narrowed, and MO cannot tell whether the rows it is about to read were filtered
+on the columns it meant.  For the same reason a source error is just an error —
+there is no second, unfiltered attempt.
 
-#### Layering
+The check runs for every scan of an opted-in table, including one whose
+predicates were all unrenderable, so the contract does not depend on which
+predicate a query happens to carry.
 
-* `query_builder.go` records the opt-in on `ForeignScan.pushdown`;
-* `compileForeignScan` **offers** conjuncts — `ForeignScan.pushdown_filters` —
-  keeping only those over declared columns.  A declared column's position in
-  `TableDef.Cols` is its position in the source's result; the synthetic columns
-  (`__mo_query`, `__mo_filepath`, the error-mode columns) are appended after
-  them and have no counterpart at the source, so a conjunct touching one is
-  never offered.  Compile cannot render anything: it has no connection;
-* the **reader** (`pushdownQueryText`) probes, renders with
-  `datastream.DeparseFilters` (column refs, literals, comparisons,
-  `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS [NOT] NULL`, `LIKE` — anything else
-  keeps its conjunct local) and wraps.
-
-#### Everything is best-effort, and that is the safety property
-
-The offered conjuncts **stay in the scan's filter list**, so MO evaluates them
-whatever happens at the source.  Each of these ends in the verbatim query and a
-correct answer, only unoptimized:
-
-* the connection has no `PushdownProber` — today that means any driver other
-  than MySQL, since MO renders MySQL-quoted identifiers and a PostgreSQL source
-  could not parse them;
-* the probe fails, i.e. the text cannot be a derived table;
-* the source returns a different number of columns than the table declares (the
-  positional correspondence does not hold, so no name can be trusted — and the
-  scan reports that mismatch itself, against the verbatim query, in the terms
-  the user already knows);
-* nothing renders.
-
-#### Why it is opt-in even so
+#### Why it is opt-in
 
 A pushed predicate is **not provably superset-preserving across engines**: the
 source may drop a row MO would have kept under a different collation, time
 zone, or coercion, and local evaluation cannot bring back a row that never
-arrived.  This is the same reasoning as DATASTREAM's `recheck` option.  The
-name differs because the guarantee does: DATASTREAM's `recheck` = `false` also
-*stops* MO filtering locally, whereas here MO always does, and the flag only
-permits narrowing the source query.
+arrived.  This is the same reasoning as DATASTREAM's `recheck` option.
 
-One more difference worth knowing: an `ORDER BY` inside a derived table is not
-guaranteed to survive — which only matters to a query relying on row order MO
-never guaranteed anyway.
+Two more things change under the wrapper, which is why a table has to ask for
+it: a text that is a valid statement but an invalid derived table (a `SHOW`, a
+`CALL`, a projection with duplicate column names) now fails, and an `ORDER BY`
+inside a derived table is not guaranteed to survive.  A trailing `;` and a
+trailing `-- comment` are handled — `WrapPushdownQuery` trims the first and
+puts the closing paren on its own line for the second.
 
 `SHOW CREATE TABLE` renders `"pushdown" = 'true'` only when the table opted in,
 so tables that never did keep rendering exactly the options their owner wrote.

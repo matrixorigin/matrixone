@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -118,17 +118,26 @@ func (r *ForeignScanReader) Open(param *ExternalParam, proc *process.Process) (f
 	}
 
 	queryText := param.Fileparam.Filepath
-	sentText, pushed := pushdownQueryText(proc, conn, fs, param, queryText)
-	stream, err := conn.Query(proc.Ctx, sentText)
-	if err != nil {
-		if pushed {
-			// The probe already ran this text's shape as a derived table, so a
-			// failure here is the source's own, not the wrapper's -- but say
-			// which text failed, or the user reads an error about a query they
-			// did not write.
-			return false, moerr.NewInvalidInputf(proc.Ctx,
-				"sql external table query failed with predicate pushdown on: %v (query sent: %s)", err, sentText)
+	// A table that opted into predicate pushdown has a name contract with its
+	// source (see checkPushedColumns), so its result columns are checked. That
+	// needs a connection that can report them; one that cannot is a source MO
+	// must not have narrowed in the first place.
+	var stream io.ReadCloser
+	if fs.Pushdown && kind == foreigntvf.KindSQL {
+		named, ok := conn.(foreigntvf.NamedQuerier)
+		if !ok {
+			return false, moerr.NewInvalidInput(proc.Ctx,
+				"this connection cannot report the columns a query returns, which predicate pushdown ('pushdown' = 'true') requires")
 		}
+		var names []string
+		if stream, names, err = named.QueryNamed(proc.Ctx, queryText); err != nil {
+			return false, err
+		}
+		if err = checkPushedColumns(proc.Ctx, names, param); err != nil {
+			stream.Close()
+			return false, err
+		}
+	} else if stream, err = conn.Query(proc.Ctx, queryText); err != nil {
 		return false, err
 	}
 	parser, err := newCSVParserFromReader(param.Extern, stream)
@@ -165,87 +174,50 @@ func (r *ForeignScanReader) Close() error {
 	return nil
 }
 
-// pushdownQueryText decides what MO actually sends to a SQL source for one
-// query text: either the user's text verbatim, or that text wrapped as a
-// derived table filtered by the conjuncts compile offered.  The bool reports
-// which.
+// checkPushedColumns enforces the claim a table makes when it opts into
+// predicate pushdown: that the source's result columns ARE the declared ones.
 //
-// The hard part is names.  A foreign scan maps the source's result onto the
-// declared columns BY POSITION, so `select a_id, a_name from src` legitimately
-// feeds columns declared (id, name) and the source may have no column called
-// `id` at all.  A WHERE clause, however, must name what it filters.  So MO
-// asks the source: it probes the wrapped-but-unfiltered query for its column
-// names, matches them to the declared columns positionally -- the very
-// correspondence the scan already relies on -- and renders the predicate in
-// the source's vocabulary.
+// A foreign scan normally maps the result by POSITION and never reads the
+// source's column names, so `select a_id, a_name from src` may legitimately
+// feed columns declared (id, name).  Pushdown cannot live with that freedom:
+// a WHERE clause has to name what it filters, and the only names MO has are
+// its own.  So MO writes the declared names into the SQL it sends, and checks
+// here that the source answered with those same columns.  Comparison is
+// case-insensitive: dialects differ on identifier case, and the CSV that
+// follows is positional anyway.
 //
-// Everything here is best-effort.  The conjuncts stay in the scan's own filter
-// list, so if the connection cannot be probed, the query cannot be a derived
-// table, the arity disagrees, or nothing renders, MO sends the verbatim text
-// and filters the rows itself: slower, never wrong.
-func pushdownQueryText(
-	proc *process.Process, conn foreigntvf.Conn,
-	fs *plan.ForeignScan, param *ExternalParam, queryText string,
-) (string, bool) {
-	if fs == nil || !fs.Pushdown || len(fs.PushdownFilters) == 0 {
-		return queryText, false
+// A mismatch has to be an error rather than a silent fallback: the source has
+// already run a query MO narrowed, and MO cannot tell whether the rows it is
+// about to read were filtered on the columns it meant.
+//
+// Both inputs survive column pruning, which is why they are used instead of
+// param.Cols: ColumnListLen is the count of DECLARED columns (the map it comes
+// from is built before the synthetic ones are appended, and before any
+// pruning), and each attr carries its own declared position in ColFieldIndex.
+// A pruned scan therefore checks the columns it actually reads, each at its
+// true position in the source's result.
+func checkPushedColumns(ctx context.Context, got []string, param *ExternalParam) error {
+	if len(got) != int(param.ColumnListLen) {
+		return moerr.NewInvalidInputf(ctx,
+			"predicate pushdown ('pushdown' = 'true') requires the query to return the table's declared columns, but it returned %d column(s) for %d declared",
+			len(got), param.ColumnListLen)
 	}
-	prober, ok := conn.(foreigntvf.PushdownProber)
-	if !ok {
-		return queryText, false
-	}
-	declared := foreignDeclaredCols(param)
-	if len(declared) == 0 {
-		return queryText, false
-	}
-
-	// Render once against MO's own names first. It costs no I/O and answers
-	// "is anything pushable at all?", so a scan whose predicates the deparser
-	// cannot express never pays for a round trip.
-	if text, _ := sqldatastream.DeparseFilters(
-		fs.PushdownFilters, declared, proc.GetSessionInfo().TimeZone); text == "" {
-		return queryText, false
-	}
-
-	names, err := prober.ProbeColumns(proc.Ctx, foreignext.WrapPushdownProbe(queryText))
-	if err != nil || len(names) != len(declared) {
-		// An arity mismatch is not this function's error to raise: the scan
-		// itself reports it, against the verbatim query, in the terms the user
-		// already knows ("the data of row 1 contained is not equal to input
-		// columns").
-		return queryText, false
-	}
-	remote := make([]*plan.ColDef, len(declared))
-	for i, name := range names {
-		if name == "" {
-			return queryText, false
+	for _, attr := range param.Attrs {
+		// the synthetic columns are MO's own; the source knows nothing of them
+		if catalog.IsReservedExternalColName(attr.ColName) {
+			continue
 		}
-		// Only the name is substituted: the type stays the declared one, which
-		// is what the deparser consults to render literals.
-		col := *declared[i]
-		col.Name = name
-		col.OriginName = name
-		remote[i] = &col
-	}
-
-	filter, _ := sqldatastream.DeparseFilters(fs.PushdownFilters, remote, proc.GetSessionInfo().TimeZone)
-	if filter == "" {
-		return queryText, false
-	}
-	return foreignext.WrapPushdownQuery(queryText, filter), true
-}
-
-// foreignDeclaredCols returns the scan's declared columns in DDL order -- the
-// columns the source produces, positionally. The synthetic columns
-// (__mo_query, the error-mode columns) are appended after them and are not
-// part of the source's result.
-func foreignDeclaredCols(param *ExternalParam) []*plan.ColDef {
-	out := make([]*plan.ColDef, 0, len(param.Cols))
-	for _, col := range param.Cols {
-		if col == nil || catalog.IsReservedExternalColName(col.Name) {
-			break
+		idx := int(attr.ColFieldIndex)
+		if idx < 0 || idx >= len(got) {
+			return moerr.NewInvalidInputf(ctx,
+				"predicate pushdown ('pushdown' = 'true') cannot place declared column %q at result position %d of %d",
+				attr.ColName, idx+1, len(got))
 		}
-		out = append(out, col)
+		if !strings.EqualFold(got[idx], attr.ColName) {
+			return moerr.NewInvalidInputf(ctx,
+				"predicate pushdown ('pushdown' = 'true') requires the query to return the table's declared columns, but column %d is named %q at the source and %q in the table; alias it, or drop the option to keep the positional mapping",
+				idx+1, got[idx], attr.ColName)
+		}
 	}
-	return out
+	return nil
 }
