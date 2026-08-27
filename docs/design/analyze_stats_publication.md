@@ -102,11 +102,11 @@ It intentionally does not provide:
 7. Engine statistics and refresh-scheduling metadata share the table cleanup
    boundary. Once an unsubscribed table reaches `RemoveTid`, neither
    `statsInfoMap` nor `updatingMu.updating` retains any key for that table ID,
-   and a late automatic-refresh publication/completion cannot recreate either
-   entry or write into a replacement generation. The scheduling-record pointer
-   captured at enqueue is the automatic generation's lifetime token. Logtail's
-   cache-existence check and token capture use the same cleanup lock order, so
-   removal cannot fall between those two producer steps.
+   and a late automatic or explicit refresh cannot recreate either entry or
+   write into a replacement generation. Every refresh, including the first
+   queued request, carries a non-nil scheduling-record pointer as its lifetime
+   token. Logtail's cache-existence check and token capture use the same cleanup
+   lock order, so removal cannot fall between those two producer steps.
 
 ## 4. Identity and visibility
 
@@ -232,8 +232,10 @@ Cancellation and deadline errors remain cancellation/deadline errors at the
 public refresh boundary. Other object/metadata failures may be wrapped with
 table-refresh context, but must remain a failed publication.
 
-Retry starts a fresh refresh and generation attempt. No generation is reserved
-before success, so a failed retry creates no gap that consumers must interpret.
+Retry starts a fresh refresh attempt. The engine reserves only an internal
+table-lifetime token before work starts; the frontend reuse generation is not
+advanced until engine publication succeeds, so a failed retry creates no
+consumer-visible generation gap.
 
 ## 7. Compatibility and operations
 
@@ -328,12 +330,12 @@ checks on affected plan-cache hits.
 | pre-canceled, in-flight canceled, and shutdown-rejected work terminates | executor/visible-object cancellation UT |
 | same-table refresh order; unrelated-table concurrency | frontend and engine admission race UT |
 | failed automatic refresh preserves last-good stats and completes an absent first generation | injected subscribe-failure state-transition UT |
-| table cleanup reclaims both statistics and refresh-scheduling entries; late automatic publication/completion cannot recreate them | `RemoveTid` ownership UT |
+| table cleanup reclaims both statistics and refresh-scheduling entries; first-queued, late automatic, and late explicit work cannot recreate them or target a replacement lifetime | `RemoveTid` ownership/generation UT |
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |
 | no-dependency and 1/4/16-dependency cache-hit cost | allocation/latency benchmarks |
-| SQL-visible existing-session plan changes after ANALYZE | real-service BVT and explain-plan assertion |
+| SQL-visible existing-session plan changes after ANALYZE | recorded real-service validation and explain-plan assertion |
 
 Every new concurrency test uses explicit phase barriers and an outer timeout
 only as a hang guard. The changed disttae and frontend packages require focused
@@ -362,9 +364,9 @@ Decision log:
 - Preserve the last successful automatic-refresh value on failure; use a nil
   sentinel only to complete an otherwise absent first generation.
 - Make `RemoveTid` the common lifetime owner for published engine statistics
-  and per-table refresh-scheduling metadata; automatic publication and
-  completion require the update record as a lifetime token, so an old worker
-  cannot recreate cleanup-owned state.
+  and per-table refresh-scheduling metadata; every automatic and explicit
+  refresh requires a non-nil update record as a lifetime token, so old work
+  cannot recreate cleanup-owned state or target a replacement lifetime.
 
 Open approval item: an independent reviewer must approve this exact design
 revision before the implementation is considered deliverable. There are no

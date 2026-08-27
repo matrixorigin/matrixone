@@ -128,7 +128,7 @@ func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
 			newerDone <- acquireErr
 			return
 		}
-		gs.markUpdateComplete(key, true, 100, 0.5)
+		gs.markAutomaticUpdateComplete(key, generation, true, 100, 0.5)
 		newRelease()
 		newerDone <- nil
 	}()

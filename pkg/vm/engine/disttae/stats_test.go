@@ -233,7 +233,8 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		}
 		assert.True(t, gs.shouldExecuteUpdate(k1))
 		assert.False(t, gs.shouldExecuteUpdate(k1))
-		gs.markUpdateComplete(k1, true, 1, 1.0)
+		gs.markAutomaticUpdateComplete(
+			k1, gs.currentOrCreateUpdateRecord(k1), true, 1, 1.0)
 		time.Sleep(MinUpdateInterval)
 		assert.True(t, gs.shouldExecuteUpdate(k1))
 	})
@@ -260,7 +261,8 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 				return
 			}
 			count.Add(1)
-			gs.markUpdateComplete(k1, true, 2, 1.0)
+			gs.markAutomaticUpdateComplete(
+				k1, gs.currentOrCreateUpdateRecord(k1), true, 2, 1.0)
 		}
 		for i := 0; i < 20; i++ {
 			wg.Add(1)
@@ -1267,7 +1269,8 @@ func TestSamplingForceAtLeastOneObject(t *testing.T) {
 // by calling shouldEnqueueUpdate once and then markUpdateComplete to set the baseObjectCount
 func initTableForTest(gs *GlobalStats, key statsinfo.StatsInfoKey, baseObjectCount int64) {
 	gs.shouldEnqueueUpdate(key, 0, false)
-	gs.markUpdateComplete(key, true, baseObjectCount, 1.0)
+	gs.markExplicitUpdateComplete(
+		key, gs.currentOrCreateUpdateRecord(key), baseObjectCount, 1.0)
 }
 
 // TestGlobalStats_ShouldEnqueue tests the shouldEnqueue logic for large table throttling
@@ -1732,10 +1735,14 @@ func TestRemoveTid(t *testing.T) {
 			gs.mu.statsInfoMap[k2] = nil // simulate failed update
 			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
 			gs.mu.Unlock()
-			gs.markUpdateComplete(k1, true, 1, 1)
-			gs.markUpdateComplete(k2, false, 0, 0)
-			gs.markUpdateComplete(k3, true, 2, 1)
-			generation := gs.currentUpdateRecord(k1)
+			generation := gs.currentOrCreateUpdateRecord(k1)
+			gs.currentOrCreateUpdateRecord(k2)
+			gs.currentOrCreateUpdateRecord(k3)
+			gs.markExplicitUpdateComplete(k1, generation, 1, 1)
+			gs.markAutomaticUpdateComplete(
+				k2, gs.currentOrCreateUpdateRecord(k2), false, 0, 0)
+			gs.markExplicitUpdateComplete(
+				k3, gs.currentOrCreateUpdateRecord(k3), 2, 1)
 
 			// Remove table 1001 entries
 			gs.RemoveTid(1001)
@@ -1788,6 +1795,70 @@ func TestRemoveTid(t *testing.T) {
 			assert.True(t, current.inProgress)
 			assert.Equal(t, 7, current.pendingChanges)
 		})
+	})
+
+	t.Run("first_queued_and_explicit_refreshes_cannot_cross_cleanup_generation", func(t *testing.T) {
+		gs := &GlobalStats{
+			updateC:      make(chan statsUpdateJob, 1),
+			queueWatcher: newQueueWatcher(),
+		}
+		gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
+		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+		gs.mu.cond = sync.NewCond(&gs.mu)
+
+		key := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
+		require.True(t, gs.enqueueStatsUpdate(statsinfo.StatsInfoKeyWithContext{
+			Ctx: context.Background(),
+			Key: key,
+		}, false))
+		job := <-gs.updateC
+		require.NotNil(t, job.expectedRecord,
+			"the first queued refresh must own a concrete lifetime token")
+
+		gs.RemoveTid(key.TableID)
+		gs.coordinateStatsUpdateJob(job)
+		gs.markAutomaticUpdateComplete(key, job.expectedRecord, true, 1, 1)
+		assert.False(t, gs.publishStatsForGeneration(
+			key, job.expectedRecord, plan2.NewStatsInfo()))
+
+		gs.mu.Lock()
+		_, cached := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		gs.updatingMu.Lock()
+		_, scheduled := gs.updatingMu.updating[key]
+		gs.updatingMu.Unlock()
+		assert.False(t, cached, "old work must not recreate the statistics cache")
+		assert.False(t, scheduled, "old work must not recreate scheduling metadata")
+
+		replacement := gs.currentOrCreateUpdateRecord(key)
+		assert.False(t, gs.publishStatsForGeneration(
+			key, job.expectedRecord, plan2.NewStatsInfo()),
+			"old explicit work must not publish into a replacement lifetime")
+		fresh := plan2.NewStatsInfo()
+		fresh.TableCnt = 42
+		require.True(t, gs.publishStatsForGeneration(key, replacement, fresh))
+		gs.mu.Lock()
+		assert.Same(t, fresh, gs.mu.statsInfoMap[key])
+		gs.mu.Unlock()
+	})
+
+	t.Run("explicit_completion_preserves_admitted_automatic_refresh", func(t *testing.T) {
+		gs := &GlobalStats{}
+		gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
+		key := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
+		generation := &updateRecord{inProgress: true, pendingChanges: 7}
+		gs.updatingMu.updating[key] = generation
+
+		gs.markExplicitUpdateComplete(key, generation, 42, 0.5)
+
+		gs.updatingMu.Lock()
+		got := *gs.updatingMu.updating[key]
+		gs.updatingMu.Unlock()
+		assert.True(t, got.inProgress,
+			"explicit completion must not reopen admission for another automatic refresh")
+		assert.Equal(t, int64(42), got.baseObjectCount)
+		assert.Zero(t, got.pendingChanges)
+		assert.Equal(t, 0.5, got.samplingRatio)
 	})
 
 	t.Run("remove_nonexistent_table", func(t *testing.T) {
