@@ -11,13 +11,19 @@ create table metadata_visibility_db.allowed_table (
     secret varchar(20) unique,
     payload int,
     constraint ck_allowed_payload check (payload >= 0)
+) partition by hash(id) partitions 2;
+create table metadata_visibility_db.hidden_parent (
+    id int primary key
 );
 create table metadata_visibility_db.hidden_table (
     id int primary key,
     secret varchar(20) unique,
     payload int,
-    constraint ck_hidden_payload check (payload >= 0)
+    constraint ck_hidden_payload check (payload >= 0),
+    constraint fk_hidden_parent foreign key (id) references metadata_visibility_db.hidden_parent(id)
 );
+create view metadata_visibility_db.hidden_view as
+select id, secret, payload from metadata_visibility_db.hidden_table;
 create role metadata_visibility_primary, metadata_visibility_reader;
 create user metadata_visibility_user identified by '123456' default role metadata_visibility_primary;
 grant connect on account * to metadata_visibility_primary;
@@ -35,6 +41,17 @@ where table_schema = 'metadata_visibility_db';
 select count(*) = 0 as constraints_hidden
 from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
+select
+    (select count(*) = 0 from information_schema.check_constraints
+     where constraint_schema = 'metadata_visibility_db') as check_constraints_hidden,
+    (select count(*) = 0 from information_schema.key_column_usage
+     where table_schema = 'metadata_visibility_db') as key_column_usage_hidden,
+    (select count(*) = 0 from information_schema.referential_constraints
+     where constraint_schema = 'metadata_visibility_db') as referential_constraints_hidden,
+    (select count(*) = 0 from information_schema.views
+     where table_schema = 'metadata_visibility_db') as views_hidden,
+    (select count(*) = 0 from information_schema.partitions
+     where table_schema = 'metadata_visibility_db') as partitions_hidden;
 select
     (select count(*) > 0 from information_schema.tables
      where table_schema = 'information_schema')
@@ -70,6 +87,22 @@ select
        and constraint_name = 'ck_allowed_payload') as allowed_check_visible,
     (select count(*) = 0 from information_schema.table_constraints
      where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_constraints_hidden;
+select
+    (select count(*) = 1 from information_schema.check_constraints
+     where constraint_schema = 'metadata_visibility_db' and constraint_name = 'ck_allowed_payload')
+        as allowed_check_metadata_visible,
+    (select count(*) > 0 from information_schema.partitions
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table')
+        as allowed_partition_metadata_visible,
+    (select count(*) = 0 from information_schema.key_column_usage
+     where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table')
+        as hidden_fk_columns_hidden,
+    (select count(*) = 0 from information_schema.referential_constraints
+     where constraint_schema = 'metadata_visibility_db' and table_name = 'hidden_table')
+        as hidden_fk_constraint_hidden,
+    (select count(*) = 0 from information_schema.views
+     where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view')
+        as hidden_view_hidden;
 -- @session
 
 alter role metadata_visibility_primary rename to metadata_visibility_primary_renamed;
@@ -134,7 +167,8 @@ grant show tables on database metadata_visibility_db to metadata_visibility_prim
 -- @session:id=2&user=sys:metadata_visibility_user:metadata_visibility_primary&password=123456
 select count(*) = 2 as database_tables_visible
 from information_schema.tables
-where table_schema = 'metadata_visibility_db';
+where table_schema = 'metadata_visibility_db'
+  and table_name in ('allowed_table', 'hidden_table');
 select count(*) = 6 as database_columns_visible
 from information_schema.columns
 where table_schema = 'metadata_visibility_db'
@@ -145,11 +179,23 @@ where table_schema = 'metadata_visibility_db';
 select count(*) > 0 as database_constraints_visible
 from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
+select
+    (select count(*) > 0 from information_schema.check_constraints
+     where constraint_schema = 'metadata_visibility_db') as database_checks_visible,
+    (select count(*) > 0 from information_schema.key_column_usage
+     where table_schema = 'metadata_visibility_db') as database_fk_columns_visible,
+    (select count(*) > 0 from information_schema.referential_constraints
+     where constraint_schema = 'metadata_visibility_db') as database_fk_constraints_visible,
+    (select count(*) = 1 from information_schema.views
+     where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as database_view_visible,
+    (select count(*) > 0 from information_schema.partitions
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as database_partitions_visible;
 -- @session
 
 select count(*) = 2 as admin_tables_visible
 from information_schema.tables
-where table_schema = 'metadata_visibility_db';
+where table_schema = 'metadata_visibility_db'
+  and table_name in ('allowed_table', 'hidden_table');
 select count(*) = 6 as admin_columns_visible
 from information_schema.columns
 where table_schema = 'metadata_visibility_db'
@@ -160,6 +206,17 @@ where table_schema = 'metadata_visibility_db';
 select count(*) > 0 as admin_constraints_visible
 from information_schema.table_constraints
 where table_schema = 'metadata_visibility_db';
+select
+    (select count(*) > 0 from information_schema.check_constraints
+     where constraint_schema = 'metadata_visibility_db') as admin_checks_visible,
+    (select count(*) > 0 from information_schema.key_column_usage
+     where table_schema = 'metadata_visibility_db') as admin_fk_columns_visible,
+    (select count(*) > 0 from information_schema.referential_constraints
+     where constraint_schema = 'metadata_visibility_db') as admin_fk_constraints_visible,
+    (select count(*) = 1 from information_schema.views
+     where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as admin_view_visible,
+    (select count(*) > 0 from information_schema.partitions
+     where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as admin_partitions_visible;
 
 drop database metadata_visibility_db;
 drop user metadata_visibility_user;

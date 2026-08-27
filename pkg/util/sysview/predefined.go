@@ -165,7 +165,7 @@ func informationSchemaMetadataVisibilityCTE() string {
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
-		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
+		"tbl.owner, tbl.creator, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
@@ -185,7 +185,7 @@ func informationSchemaMetadataVisibilityCTE() string {
 // They are all Tenant level system tables/system views
 var (
 	InformationSchemaKeyColumnUsageDDL = "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS " +
-		"SELECT " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, " +
 		"CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, " +
 		"CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, " +
@@ -198,7 +198,8 @@ var (
 		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, " +
 		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, " +
 		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
-		"FROM mo_catalog.mo_foreign_keys fk"
+		"FROM mo_catalog.mo_foreign_keys fk " +
+		"JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id"
 
 	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS "+informationSchemaMetadataVisibilityCTE()+"select "+
 		"'def' as TABLE_CATALOG,"+
@@ -342,7 +343,7 @@ var (
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
-		"SELECT " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
 		"`tbl`.`relname` AS `TABLE_NAME`," +
@@ -391,13 +392,13 @@ var (
 		"''  AS `PARTITION_COMMENT`," +
 		"'default' AS `NODEGROUP`," +
 		"NULL AS `TABLESPACE_NAME` " +
-		"FROM `mo_catalog`.`mo_tables` `tbl` " +
+		"FROM `__mo_visible_tables` `tbl` " +
 		"JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
 		"JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
 		"WHERE `tbl`.`account_id` = current_account_id()"
 
 	InformationSchemaViewsDDL = "CREATE VIEW information_schema.VIEWS AS " +
-		"SELECT 'def' AS `TABLE_CATALOG`," +
+		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
 		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
@@ -407,7 +408,7 @@ var (
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
-		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
+		"FROM __mo_visible_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
@@ -436,7 +437,7 @@ var (
 		"where `tbl`.`account_id` = current_account_id() and %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
-		"SELECT " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS CONSTRAINT_CATALOG, " +
 		"fk.db_name AS CONSTRAINT_SCHEMA, " +
 		"fk.constraint_name AS CONSTRAINT_NAME, " +
@@ -449,21 +450,24 @@ var (
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
 		"FROM (" +
-		"SELECT db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
+		"SELECT table_id, db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
 		"FROM mo_catalog.mo_foreign_keys " +
-		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
-		") fk"
+		"GROUP BY table_id, db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
+		") fk " +
+		"JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id"
 
 	// CHECK_CONSTRAINTS is backed by a table function because CHECK metadata is
 	// stored in the serialized SchemaExtra of each table.  The function decodes
 	// that metadata at query time and applies the current tenant's visibility.
 	InformationSchemaCheckConstraintsDDL = "CREATE VIEW information_schema.CHECK_CONSTRAINTS AS " +
-		"SELECT " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"cc.constraint_catalog AS CONSTRAINT_CATALOG, " +
 		"cc.constraint_schema AS CONSTRAINT_SCHEMA, " +
 		"cc.constraint_name AS CONSTRAINT_NAME, " +
 		"cc.check_clause AS CHECK_CLAUSE " +
-		"FROM mo_check_constraints() cc"
+		"FROM mo_check_constraints() cc " +
+		"JOIN __mo_visible_tables check_tbl " +
+		"ON cc.constraint_schema = check_tbl.reldatabase AND cc.table_name = check_tbl.relname"
 
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +

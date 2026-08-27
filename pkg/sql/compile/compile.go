@@ -1261,8 +1261,11 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	plan2.CalcQueryDOP(c.pn, ncpu, len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
-	// deal with sink scan first.
-	for i := len(qry.Steps) - 1; i >= 0; i-- {
+	firstStep := c.firstStepToCompile(qry)
+	// Deal with sink scans first. A final literal LIMIT 0 has no demand for
+	// producer steps; compiling recursive CTE producers would otherwise leave
+	// their pipelines waiting for consumers that the LIMIT fast path never builds.
+	for i := len(qry.Steps) - 1; i >= firstStep; i-- {
 		err := c.compileSinkScan(qry, qry.Steps[i])
 		if err != nil {
 			return nil, err
@@ -1275,7 +1278,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 			ReleaseScopes(steps)
 		}
 	}()
-	for i := len(qry.Steps) - 1; i >= 0; i-- {
+	for i := len(qry.Steps) - 1; i >= firstStep; i-- {
 		var scopes []*Scope
 		scopes, err = c.compilePlanScope(int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
@@ -2026,6 +2029,17 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", node))
 	}
+}
+
+func (c *Compile) firstStepToCompile(qry *plan.Query) int {
+	if qry == nil || len(qry.Steps) == 0 {
+		return 0
+	}
+	finalStep := qry.Steps[len(qry.Steps)-1]
+	if finalStep >= 0 && int(finalStep) < len(qry.Nodes) && c.canUseLiteralLimitZeroFastPath(qry.Nodes[finalStep]) {
+		return len(qry.Steps) - 1
+	}
+	return 0
 }
 
 func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {

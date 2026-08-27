@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 23)
+	require.Len(t, tenantUpgEntries, 28)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -137,6 +137,12 @@ func TestUpgradeEntries(t *testing.T) {
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL,
 			requiredProtocol: defines.MORPCVersion16},
+		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
+		{name: "REFERENTIAL_CONSTRAINTS", ddl: sysview.InformationSchemaReferentialConstraintsDDL},
+		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL,
+			requiredProtocol: defines.MORPCVersion16},
+		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
+		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
 	}
 	for i, view := range metadataViews {
 		entry := tenantUpgEntries[19+i]
@@ -159,6 +165,11 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
 		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+		{name: "KEY_COLUMN_USAGE", ddl: sysview.InformationSchemaKeyColumnUsageDDL},
+		{name: "REFERENTIAL_CONSTRAINTS", ddl: sysview.InformationSchemaReferentialConstraintsDDL},
+		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
+		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
+		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
 	}
 	checkErr := errors.New("check metadata view definition failed")
 
@@ -238,7 +249,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 23)
+	require.Len(t, tenantUpgEntries, 28)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -616,6 +627,10 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaTablesDDL, nil
 			case "STATISTICS":
 				return true, sysview.InformationSchemaStatisticsDDL, nil
+			case "VIEWS":
+				return true, sysview.InformationSchemaViewsDDL, nil
+			case "PARTITIONS":
+				return true, sysview.InformationSchemaPartitionsDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}

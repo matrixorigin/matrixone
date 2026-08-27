@@ -60,6 +60,11 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 		{name: "statistics", ddl: InformationSchemaStatisticsDDL},
 		{name: "table constraints", ddl: InformationSchemaTableConstraintsDDL},
 		{name: "legacy table constraints", ddl: InformationSchemaTableConstraintsLegacyDDL},
+		{name: "key column usage", ddl: InformationSchemaKeyColumnUsageDDL},
+		{name: "referential constraints", ddl: InformationSchemaReferentialConstraintsDDL},
+		{name: "check constraints", ddl: InformationSchemaCheckConstraintsDDL},
+		{name: "views", ddl: InformationSchemaViewsDDL},
+		{name: "partitions", ddl: InformationSchemaPartitionsDDL},
 	}
 
 	for _, test := range tests {
@@ -97,6 +102,12 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaStatisticsDDL, "join `__mo_visible_tables` `tbl`")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables tbl")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "join __mo_visible_tables check_tbl")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"JOIN __mo_visible_tables fk_tbl ON fk.table_id = fk_tbl.rel_id")
+	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
+	assert.Contains(t, InformationSchemaViewsDDL, "FROM __mo_visible_tables tbl")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {

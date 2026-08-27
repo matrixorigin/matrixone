@@ -51,6 +51,11 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("COLUMNS", sysview.InformationSchemaColumnsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
 	upgradeInformationSchemaMetadataVisibilityTableConstraints(),
+	upgradeInformationSchemaMetadataVisibilityView("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
+	upgradeInformationSchemaMetadataVisibilityView("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
+	upgradeInformationSchemaMetadataVisibilityCheckConstraints(),
+	upgradeInformationSchemaMetadataVisibilityView("VIEWS", sysview.InformationSchemaViewsDDL),
+	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
@@ -67,6 +72,13 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 func upgradeInformationSchemaMetadataVisibilityTableConstraints() versions.UpgradeEntry {
 	entry := upgradeInformationSchemaMetadataVisibilityView(
 		"TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL)
+	entry.RequiredProtocolVersion = defines.MORPCVersion16
+	return entry
+}
+
+func upgradeInformationSchemaMetadataVisibilityCheckConstraints() versions.UpgradeEntry {
+	entry := upgradeInformationSchemaMetadataVisibilityView(
+		"CHECK_CONSTRAINTS", sysview.InformationSchemaCheckConstraintsDDL)
 	entry.RequiredProtocolVersion = defines.MORPCVersion16
 	return entry
 }
