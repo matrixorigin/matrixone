@@ -257,10 +257,10 @@ func TestZoneMapInVectorFailsOpenForUnsortedPayload(t *testing.T) {
 	require.False(t, ok, "a corrupt payload must be reported, not silently used")
 }
 
-// Constant folding sorts non-nullable IN lists but InplaceSortAndCompact only
-// sets the sorted flag when it actually compacted, so an ordinary `id IN (1,2,3)`
-// arrives sorted in fact and unflagged. Refusing those would disable pruning for
-// a very common predicate.
+// A fixed-width payload that carries no sorted flag -- ordered by construction
+// rather than through InplaceSortAndCompact, which would have set it -- must
+// still be usable. The varlen order check does not cover numeric types, and
+// refusing what it cannot inspect would drop pruning for a whole type class.
 func TestZoneMapInVectorKeepsFixedWidthPruning(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

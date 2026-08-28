@@ -335,9 +335,11 @@ func ivfCentroidPrefixFilter(
 	// zone-map pruning binary-searches this list (ZM.PrefixIn, reached through
 	// colexec.EvaluateFilterByZoneMap), so an unsorted list makes the search
 	// probe the wrong element and skip blocks holding matching entries.
-	// Compaction is why Len below is taken from the vector, not from centroidIDs.
+	// InplaceSortAndCompact marks the vector sorted itself; setting the flag here
+	// as well would claim sortedness even for an element type its switch does not
+	// handle, which is the assumption this fix exists to remove. Compaction is why
+	// Len below is taken from the vector, not from centroidIDs.
 	prefixVec.InplaceSortAndCompact()
-	prefixVec.SetSorted(true)
 	data, err := prefixVec.MarshalBinary()
 	if err != nil {
 		return nil, err

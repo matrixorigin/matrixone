@@ -2113,19 +2113,22 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 
 // zoneMapInVectorIsSorted checks the physical byte order, which is what AnyIn and
 // PrefixIn search -- a NULL slot carries an empty payload and sorts first, the
-// same way those functions see it. The flag alone is not sufficient:
-// InplaceSortAndCompact only marks a vector when it actually compacted, so a
-// sorted payload can arrive unflagged. The scan is O(n) and allocation-free, so
-// checking is far cheaper than the per-block copy-and-sort it replaces.
+// same way those functions see it.
+//
+// The sorted flag is authoritative for producers that sort through
+// InplaceSortAndCompact, which sets it unconditionally and marshals it with the
+// payload; every planner producer goes that route. This scan only adds the case
+// of a payload ordered by construction whose producer never set the flag. It is
+// allocation-free and exits at the first inversion, so it costs nothing for a
+// genuinely unsorted list and buys pruning that would otherwise fail open.
 func zoneMapInVectorIsSorted(vec *vector.Vector) bool {
 	if !vec.GetType().IsVarlen() {
-		// Fixed-width payloads keep their previous treatment. Constant folding
-		// sorts every non-nullable IN list (rule/constant_fold.go, utils.go), and
-		// verifying each numeric type would need a full type switch for a defect
-		// that has not been observed. Refusing them here would instead disable
-		// pruning for ordinary predicates such as `id IN (1,2,3)`, whose list is
-		// sorted in fact but carries no sorted flag -- InplaceSortAndCompact only
-		// sets it when the list actually compacted.
+		// Only varlen order is checked here. Fixed-width lists reach this point
+		// already carrying the flag when a producer sorted them (constant folding
+		// sorts every non-nullable IN list), so the scan would add nothing for
+		// them, and verifying each numeric type needs a full type switch for a
+		// defect that has not been observed. Treat them as usable rather than
+		// refuse pruning on a type this check simply does not cover.
 		return true
 	}
 	col, area := vector.MustVarlenaRawData(vec)

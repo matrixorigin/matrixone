@@ -103,7 +103,6 @@ func ivfInInt64Expr(ctx context.Context, mp *mpool.MPool, left *plan.Expr, value
 	// this file's sibling had, and sorting at the source removes the dependency
 	// on a downstream normalize that this function cannot see.
 	vec.InplaceSortAndCompact()
-	vec.SetSorted(true)
 	data, err := vec.MarshalBinary()
 	if err != nil {
 		return nil, err
