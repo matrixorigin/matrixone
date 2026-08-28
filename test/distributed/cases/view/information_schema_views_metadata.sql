@@ -10,6 +10,10 @@ create view agg_v as select a, count(*) cnt from t group by a;
 /*!50001 CREATE DEFINER = `root`@`%` VIEW dump_v AS select a from t */;
 create view line_comment_v -- migration-generated view
 as select a from t;
+create view hash_comment_v # migration-generated view
+as select a from t;
+create view slash_comment_v // migration-generated view
+as select a from t;
 
 select table_name, view_definition, is_updatable
 from information_schema.views
