@@ -142,6 +142,9 @@ message CNService {
   // DDLVisibilityBarrierReady is published after QueryService is listening.
   // A CN is not publicly routable until its startup DDL frontier fence completes.
   bool DDLVisibilityBarrierReady = 16;
+  // ViewMetadataIngressReady is retained in raw control-plane inventory so
+  // protocol activation can verify withdrawal/publication without routing it.
+  bool ViewMetadataIngressReady = 17;
 }
 
 // TNService tn service metadata

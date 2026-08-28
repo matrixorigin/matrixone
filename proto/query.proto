@@ -164,11 +164,20 @@ message GetProtocolVersionRequest {
 message GetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+  // DDLVisibilityActivationPrepared means this CN has blocked and drained DDL
+  // producers before exposing the v35 sender capability.
+  bool DDLVisibilityActivationPrepared = 2;
+  // DDLVisibilityActivationFenced means this CN applied the converged peer
+  // frontier while every participant's DDL producers were blocked.
+  bool DDLVisibilityActivationFenced = 3;
 }
 
 message SetProtocolVersionRequest {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+  // DDLVisibilityActivationTargets is the complete CN set participating in a
+  // coordinated live activation. It is empty for ordinary version updates.
+  repeated string DDLVisibilityActivationTargets = 2;
 }
 
 message SetProtocolVersionResponse {

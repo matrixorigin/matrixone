@@ -155,15 +155,18 @@ func NewService(
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
-		cfg:         cfg,
-		logger:      logutil.GetGlobalLogger().Named("cn-service"),
-		metadataFS:  metadataFS,
-		etlFS:       etlFS,
-		fileService: fileService,
-		sessionMgr:  queryservice.NewSessionManager(),
-		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
-		gossipNode:  gossipNode,
+		cfg:           cfg,
+		logger:        logutil.GetGlobalLogger().Named("cn-service"),
+		metadataFS:    metadataFS,
+		etlFS:         etlFS,
+		fileService:   fileService,
+		sessionMgr:    queryservice.NewSessionManager(),
+		addressMgr:    address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
+		gossipNode:    gossipNode,
+		ddlCommitGate: frontend.NewDDLCommitGate(),
 	}
+	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(
+		frontend.DDLCommitGateRuntimeKey, srv.ddlCommitGate)
 	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
@@ -515,6 +518,9 @@ func (s *service) closeService() error {
 		// barrier after shutdown begins. Other QueryService methods remain live
 		// until authoritative withdrawal, preserving the stale-target retry path.
 		s.ddlVisibilityBarrierClosing.Store(true)
+		if s.ddlCommitGate != nil {
+			s.ddlCommitGate.Close()
+		}
 		// Stop periodic heartbeats before publishing the final false readiness.
 		// QueryService remains available until the authoritative inventory has
 		// observed the withdrawal, so healthy CNs cannot target a closed barrier.

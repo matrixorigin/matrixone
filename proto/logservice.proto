@@ -64,6 +64,8 @@ message CNStore {
   // DDLVisibilityBarrierReady means QueryService can accept the versioned DDL
   // visibility fence even when public SQL ingress is not admitted yet.
   bool DDLVisibilityBarrierReady = 21;
+  // ViewMetadataIngressReady is retained for raw control-plane inventory.
+  bool ViewMetadataIngressReady = 22;
 }
 
 message TNStore {

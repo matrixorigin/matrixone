@@ -45,6 +45,12 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 		return err
 	}
 	s.ddlVisibilityBarrierPrepared.Store(true)
+	if ddlVisibilityBarrierSupported(s.cfg.UUID) {
+		// A v35 startup has no admitted DDL producers and has already applied the
+		// startup frontier, so it satisfies both live-activation phases.
+		s.ddlVisibilityActivationPrepared.Store(true)
+		s.ddlVisibilityActivationFenced.Store(true)
+	}
 	return nil
 }
 
@@ -129,12 +135,13 @@ func (s *service) ddlVisibilityBarrierRetryInterval() time.Duration {
 	return retryInterval
 }
 
-// setProtocolVersion serializes the live protocol transition with startup and
-// shutdown. Before startup preparation, changing the runtime value is enough:
-// the normal startup path will observe it and fence before ingress. Once this
-// generation has been published, the first transition into v35 must withdraw,
-// catch up, and republish before the new capability becomes visible locally.
-func (s *service) setProtocolVersion(ctx context.Context, version int64) error {
+// setProtocolVersion serializes live activation with startup and shutdown.
+// Every target CN blocks and drains local DDL before publishing Prepared. Once
+// all targets are prepared, no v34 DDL producer exists; each CN applies the
+// converged frontier and publishes Fenced. A CN releases its DDL gate only after
+// every target is fenced, at which point all later DDL uses the v35 fan-out and
+// every still-fencing receiver remains barrier-reachable.
+func (s *service) setProtocolVersion(ctx context.Context, version int64, targets []string) error {
 	s.ddlVisibilityBarrierMu.Lock()
 	defer s.ddlVisibilityBarrierMu.Unlock()
 
@@ -150,53 +157,241 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64) error {
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid protocol version")
 	}
-	if current >= defines.MORPCVersion35 || version < defines.MORPCVersion35 ||
-		!s.ddlVisibilityBarrierPrepared.Load() {
+	pending := s.ddlVisibilityActivationPending.Load()
+	if version < defines.MORPCVersion35 {
+		if pending {
+			return moerr.NewInvalidStateNoCtx("cannot downgrade during DDL visibility activation")
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		s.ddlVisibilityActivationPrepared.Store(false)
+		s.ddlVisibilityActivationFenced.Store(false)
+		return nil
+	}
+	if !s.ddlVisibilityBarrierPrepared.Load() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		return nil
+	}
+	if current >= defines.MORPCVersion35 && !pending {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
 	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
 		return moerr.NewServiceUnavailableNoCtx("CN is closing")
 	}
-	if s.viewMetadataAdmissionGeneration == 0 || s.cfg == nil || s._hakeeperClient == nil ||
-		s.moCluster == nil || s.queryClient == nil || s._txnClient == nil || s.config == nil {
+	if s.viewMetadataAdmissionGeneration == 0 || s._hakeeperClient == nil ||
+		s.moCluster == nil || s.queryClient == nil || s._txnClient == nil || s.config == nil ||
+		s.ddlCommitGate == nil {
 		return moerr.NewInternalError(ctx, "DDL visibility activation dependencies are unavailable")
+	}
+	activationTargets, err := validateDDLVisibilityActivationTargets(s.cfg.UUID, targets)
+	if err != nil {
+		return err
 	}
 
 	barrierCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
 	defer cancel()
-	if err := s.withdrawDDLVisibilityBarrierLocked(barrierCtx); err != nil {
+	s.ddlVisibilityActivationPending.Store(true)
+	s.ddlVisibilityActivationPrepared.Store(false)
+	s.ddlVisibilityActivationFenced.Store(false)
+	if err := s.ddlCommitGate.Block(barrierCtx); err != nil {
+		return err
+	}
+	if err := s.setDDLVisibilityIngressLocked(barrierCtx, false); err != nil {
+		return err
+	}
+
+	// Version 35 is visible only after the local v34 producers are drained. It
+	// acts as the distributed Prepared signal queried by every other target.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+	s.ddlVisibilityActivationPrepared.Store(true)
+	if err := s.waitForDDLVisibilityActivationPhase(
+		barrierCtx, activationTargets, false); err != nil {
 		return err
 	}
 	if err := s.syncStartupDDLVisibilityFrontier(barrierCtx); err != nil {
 		return err
 	}
+	s.ddlVisibilityActivationFenced.Store(true)
+	if err := s.waitForDDLVisibilityActivationPhase(
+		barrierCtx, activationTargets, true); err != nil {
+		return err
+	}
 	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
 		return moerr.NewServiceUnavailableNoCtx("CN is closing")
 	}
-
-	// The local gates are opened before their heartbeat is sent, but ingress is
-	// not externally routable until HAKeeper publishes that heartbeat. The
-	// runtime version remains old until publication is authoritative.
-	s.ddlVisibilityBarrierReady.Store(true)
-	s.viewMetadataIngressReady.Store(true)
-	_, publishErr := s._hakeeperClient.SendCNHeartbeat(barrierCtx, s.newCNStoreHeartbeat())
-	if publishErr == nil {
-		publishErr = s.waitForDDLVisibilityBarrierPublication(
-			barrierCtx, s.ddlVisibilityBarrierRetryInterval())
-	}
-	if publishErr != nil {
-		// A successful heartbeat followed by an uncertain refresh may already
-		// have published true. Always issue a fresh bounded withdrawal before
-		// returning the activation failure.
+	if err := s.setDDLVisibilityIngressLocked(barrierCtx, true); err != nil {
 		cleanupCtx, cleanupCancel := s.newDDLVisibilityBarrierContext(context.Background())
-		cleanupErr := s.withdrawDDLVisibilityBarrierLocked(cleanupCtx)
+		cleanupErr := s.setDDLVisibilityIngressLocked(cleanupCtx, false)
 		cleanupCancel()
-		return errors.Join(moerr.AttachCause(barrierCtx, publishErr), cleanupErr)
+		return errors.Join(err, cleanupErr)
 	}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+	s.ddlVisibilityActivationPending.Store(false)
+	s.ddlCommitGate.Unblock()
 	return nil
+}
+
+func validateDDLVisibilityActivationTargets(serviceID string, targets []string) (map[string]struct{}, error) {
+	result := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if target == "" {
+			return nil, moerr.NewInternalErrorNoCtx("DDL visibility activation target is empty")
+		}
+		if _, exists := result[target]; exists {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"DDL visibility activation target %s is duplicated", target)
+		}
+		result[target] = struct{}{}
+	}
+	if _, ok := result[serviceID]; !ok {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"DDL visibility activation targets do not include local CN %s", serviceID)
+	}
+	return result, nil
+}
+
+func (s *service) setDDLVisibilityIngressLocked(ctx context.Context, ready bool) error {
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(ready)
+	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	return s.waitForDDLVisibilityIngress(
+		ctx, s.ddlVisibilityBarrierRetryInterval(), ready)
+}
+
+func (s *service) waitForDDLVisibilityIngress(
+	ctx context.Context,
+	retryInterval time.Duration,
+	ready bool,
+) error {
+	refresher, ok := s.moCluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"CN cluster service does not support authoritative DDL visibility refresh")
+	}
+	for {
+		if err := refresher.Refresh(ctx); err == nil {
+			matched := false
+			err = clusterservice.GetCNServiceRawWithContext(
+				ctx,
+				s.moCluster,
+				clusterservice.NewServiceIDSelector(s.cfg.UUID),
+				func(cn metadata.CNService) bool {
+					matched = cn.ViewMetadataAdmissionGeneration == s.viewMetadataAdmissionGeneration &&
+						cn.DDLVisibilityBarrierReady && cn.ViewMetadataIngressReady == ready
+					return false
+				})
+			if err != nil {
+				return err
+			}
+			if matched {
+				return nil
+			}
+		}
+		if err := waitDDLVisibilityRetry(ctx, retryInterval); err != nil {
+			return moerr.NewInternalErrorf(
+				context.Background(),
+				"CN %s DDL visibility ingress=%t was not published before deadline: %v",
+				s.cfg.UUID,
+				ready,
+				err)
+		}
+	}
+}
+
+func (s *service) waitForDDLVisibilityActivationPhase(
+	ctx context.Context,
+	targets map[string]struct{},
+	requireFenced bool,
+) error {
+	refresher, ok := s.moCluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"CN cluster service does not support authoritative DDL visibility refresh")
+	}
+	for {
+		allReady := true
+		addresses := make(map[string]string, len(targets))
+		if err := refresher.Refresh(ctx); err != nil {
+			allReady = false
+		} else if err := clusterservice.GetCNServiceRawWithContext(
+			ctx,
+			s.moCluster,
+			clusterservice.NewSelector(),
+			func(cn metadata.CNService) bool {
+				if !cn.DDLVisibilityBarrierReady {
+					return true
+				}
+				if _, expected := targets[cn.ServiceID]; !expected {
+					allReady = false
+					return true
+				}
+				addresses[cn.ServiceID] = cn.QueryAddress
+				return true
+			}); err != nil {
+			return err
+		}
+		if len(addresses) != len(targets) {
+			allReady = false
+		}
+		for serviceID := range targets {
+			if !allReady {
+				break
+			}
+			if serviceID == s.cfg.UUID {
+				if !s.ddlVisibilityActivationPrepared.Load() ||
+					(requireFenced && !s.ddlVisibilityActivationFenced.Load()) {
+					allReady = false
+				}
+				continue
+			}
+			address := addresses[serviceID]
+			if address == "" {
+				return moerr.NewInternalErrorNoCtxf(
+					"DDL visibility activation target %s has no query address", serviceID)
+			}
+			req := s.queryClient.NewRequest(query.CmdMethod_GetProtocolVersion)
+			resp, err := s.queryClient.SendMessage(ctx, address, req)
+			if err != nil {
+				allReady = false
+				break
+			}
+			if resp == nil || resp.GetProtocolVersion == nil {
+				if resp != nil {
+					s.queryClient.Release(resp)
+				}
+				return moerr.NewInternalErrorNoCtxf(
+					"missing protocol activation response from CN %s", serviceID)
+			}
+			phase := resp.GetProtocolVersion
+			allReady = phase.Version >= defines.MORPCVersion35 &&
+				phase.DDLVisibilityActivationPrepared &&
+				(!requireFenced || phase.DDLVisibilityActivationFenced)
+			s.queryClient.Release(resp)
+		}
+		if allReady {
+			return nil
+		}
+		if err := waitDDLVisibilityRetry(ctx, s.ddlVisibilityBarrierRetryInterval()); err != nil {
+			return moerr.NewInternalErrorf(
+				context.Background(),
+				"DDL visibility activation fenced=%t did not converge before deadline: %v",
+				requireFenced,
+				err)
+		}
+	}
+}
+
+func waitDDLVisibilityRetry(ctx context.Context, retryInterval time.Duration) error {
+	timer := time.NewTimer(retryInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *service) waitForDDLVisibilityBarrierWithdrawal(

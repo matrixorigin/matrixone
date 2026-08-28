@@ -16,6 +16,7 @@ package ctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -111,18 +113,85 @@ func handleSetProtocolVersion(proc *process.Process,
 	}
 
 	if service == cn && targets != nil {
-		versions := make([]string, 0, len(targets))
-		for _, target := range targets {
-			resp, err := transferToCN(qt, target, version)
-			if err != nil {
-				return Result{}, err
+		if version >= defines.MORPCVersion35 {
+			const maxDDLVisibilityActivationTargets = 1024
+			if len(targets) == 0 || len(targets) > maxDDLVisibilityActivationTargets {
+				return Result{}, moerr.NewInternalErrorNoCtxf(
+					"DDL visibility activation target count must be between 1 and %d",
+					maxDDLVisibilityActivationTargets)
 			}
-			if resp == nil {
-				return Result{}, moerr.NewInternalErrorNoCtx("no such cn service")
+			seen := make(map[string]struct{}, len(targets))
+			for _, target := range targets {
+				if target == "" {
+					return Result{}, moerr.NewInternalErrorNoCtx("DDL visibility activation target is empty")
+				}
+				if _, ok := seen[target]; ok {
+					return Result{}, moerr.NewInternalErrorNoCtxf(
+						"DDL visibility activation target %s is duplicated", target)
+				}
+				seen[target] = struct{}{}
 			}
-			versions = append(versions, fmt.Sprintf("%s:%d", target, resp.SetProtocolVersion.Version))
+		}
+		if version < defines.MORPCVersion35 {
+			versions := make([]string, 0, len(targets))
+			for _, target := range targets {
+				resp, sendErr := transferToCN(qt, target, version, nil)
+				if sendErr != nil {
+					return Result{}, sendErr
+				}
+				if resp == nil || resp.SetProtocolVersion == nil {
+					if resp != nil {
+						qt.Release(resp)
+					}
+					return Result{}, moerr.NewInternalErrorNoCtx("no such cn service")
+				}
+				versions = append(versions, fmt.Sprintf("%s:%d", target, resp.SetProtocolVersion.Version))
+				qt.Release(resp)
+			}
+			return Result{Method: SetProtocolVersionMethod, Data: strings.Join(versions, ", ")}, nil
 		}
 
+		// Live v35 activation is a distributed barrier. Dispatch every target
+		// concurrently so each CN can block local DDL producers before any CN
+		// waits for the complete Prepared set.
+		type targetResult struct {
+			index int
+			resp  *querypb.Response
+			err   error
+		}
+		results := make(chan targetResult, len(targets))
+		for i, target := range targets {
+			go func(index int, serviceID string) {
+				resp, sendErr := transferToCN(qt, serviceID, version, targets)
+				results <- targetResult{index: index, resp: resp, err: sendErr}
+			}(i, target)
+		}
+
+		versions := make([]string, len(targets))
+		var resultErr error
+		for range targets {
+			result := <-results
+			if result.err != nil {
+				if result.resp != nil {
+					qt.Release(result.resp)
+				}
+				resultErr = errors.Join(resultErr, result.err)
+				continue
+			}
+			if result.resp == nil || result.resp.SetProtocolVersion == nil {
+				if result.resp != nil {
+					qt.Release(result.resp)
+				}
+				resultErr = errors.Join(resultErr, moerr.NewInternalErrorNoCtx("no such cn service"))
+				continue
+			}
+			versions[result.index] = fmt.Sprintf(
+				"%s:%d", targets[result.index], result.resp.SetProtocolVersion.Version)
+			qt.Release(result.resp)
+		}
+		if resultErr != nil {
+			return Result{}, resultErr
+		}
 		return Result{
 			Method: SetProtocolVersionMethod,
 			Data:   strings.Join(versions, ", "),
@@ -187,13 +256,19 @@ func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 	}, nil
 }
 
-func transferToCN(qt qclient.QueryClient, target string, version int64) (resp *querypb.Response, err error) {
+func transferToCN(
+	qt qclient.QueryClient,
+	target string,
+	version int64,
+	activationTargets []string,
+) (resp *querypb.Response, err error) {
 	clusterservice.GetMOCluster(qt.ServiceID()).GetCNService(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
 			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)
 			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
-				Version: version,
+				Version:                        version,
+				DDLVisibilityActivationTargets: append([]string(nil), activationTargets...),
 			}
 			// Live protocol activation may withdraw CN ingress and wait for a
 			// bounded logtail frontier fence before acknowledging the transition.

@@ -656,6 +656,7 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		ViewMetadataAdmissionReady:      cn.ViewMetadataAdmissionReady,
 		ViewMetadataObservedEpoch:       cn.ViewMetadataObservedEpoch,
 		DDLVisibilityBarrierReady:       cn.DDLVisibilityBarrierReady,
+		ViewMetadataIngressReady:        cn.ViewMetadataIngressReady,
 	}
 }
 

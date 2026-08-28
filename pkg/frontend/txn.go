@@ -875,6 +875,13 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 		tempTxnKey := tempTableTxnKey(th.txnOp)
 		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
+		if haveDDL {
+			releaseDDLCommit, gateErr := enterDDLCommitGate(ctx2, execCtx.ses.GetService())
+			if gateErr != nil {
+				return gateErr
+			}
+			defer releaseDDLCommit()
+		}
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		commitResultUnknown := false
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {

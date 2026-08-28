@@ -143,6 +143,7 @@ func (s *service) initQueryCommandHandler() {
 	// Override queryservice's generic runtime-only setter so a live CN can
 	// execute the v35 DDL visibility activation fence before acknowledging the
 	// protocol transition.
+	s.addQueryCommandHandler(query.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion)
 	s.addQueryCommandHandler(query.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion)
 	s.addQueryCommandHandler(query.CmdMethod_KillConn, s.handleKillConn)
 	s.addQueryCommandHandler(query.CmdMethod_AlterAccount, s.handleAlterAccount)
@@ -209,6 +210,31 @@ func (s *service) closeQueryService() error {
 	})
 }
 
+func (s *service) handleGetProtocolVersion(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
+	if req == nil || req.GetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	value, ok := moruntime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return moerr.NewInternalError(ctx, "protocol version not found")
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid protocol version")
+	}
+	resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
+		Version:                         version,
+		DDLVisibilityActivationPrepared: s.ddlVisibilityActivationPrepared.Load(),
+		DDLVisibilityActivationFenced:   s.ddlVisibilityActivationFenced.Load(),
+	}
+	return nil
+}
+
 func (s *service) handleSetProtocolVersion(
 	ctx context.Context,
 	req *query.Request,
@@ -219,7 +245,8 @@ func (s *service) handleSetProtocolVersion(
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	version := req.SetProtocolVersion.Version
-	if err := s.setProtocolVersion(ctx, version); err != nil {
+	if err := s.setProtocolVersion(
+		ctx, version, req.SetProtocolVersion.DDLVisibilityActivationTargets); err != nil {
 		return err
 	}
 	resp.SetProtocolVersion = &query.SetProtocolVersionResponse{Version: version}

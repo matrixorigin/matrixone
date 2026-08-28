@@ -17,6 +17,9 @@ package ctl
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,14 +147,88 @@ type addressRecordingQueryClient struct {
 	testQClient
 	address  string
 	deadline time.Time
+	request  *query.Request
 }
 
 func (c *addressRecordingQueryClient) SendMessage(
-	ctx context.Context, address string, _ *query.Request,
+	ctx context.Context, address string, req *query.Request,
 ) (*query.Response, error) {
 	c.address = address
 	c.deadline, _ = ctx.Deadline()
+	c.request = req
 	return nil, moerr.NewInternalErrorNoCtx("send error")
+}
+
+type concurrentProtocolQueryClient struct {
+	testQClient
+	started  atomic.Int32
+	both     chan struct{}
+	mu       sync.Mutex
+	requests [][]string
+	releases atomic.Int32
+}
+
+func (c *concurrentProtocolQueryClient) SendMessage(
+	_ context.Context,
+	_ string,
+	req *query.Request,
+) (*query.Response, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests,
+		append([]string(nil), req.SetProtocolVersion.DDLVisibilityActivationTargets...))
+	c.mu.Unlock()
+	if c.started.Add(1) == 2 {
+		close(c.both)
+	}
+	<-c.both
+	return &query.Response{SetProtocolVersion: &query.SetProtocolVersionResponse{
+		Version: req.SetProtocolVersion.Version,
+	}}, nil
+}
+
+func (c *concurrentProtocolQueryClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+
+func (c *concurrentProtocolQueryClient) Release(*query.Response) { c.releases.Add(1) }
+
+func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *testing.T) {
+	targets := []string{"activation-cn-1", "activation-cn-2"}
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	mc := clusterservice.NewMOCluster(
+		"",
+		nil,
+		3*time.Second,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{
+				{ServiceID: targets[0], QueryAddress: "cn-1:6001", WorkState: metadata.WorkState_Working},
+				{ServiceID: targets[1], QueryAddress: "cn-2:6001", WorkState: metadata.WorkState_Working},
+			},
+			nil,
+		),
+	)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	qcli := &concurrentProtocolQueryClient{both: make(chan struct{})}
+	proc := &process.Process{Base: &process.BaseProcess{QueryClient: qcli}}
+
+	result, err := handleSetProtocolVersion(
+		proc, cn, strings.Join(targets, ",")+":35", nil)
+	require.NoError(t, err)
+	require.Equal(t, "activation-cn-1:35, activation-cn-2:35", result.Data)
+	require.Equal(t, int32(2), qcli.started.Load())
+	require.Equal(t, int32(2), qcli.releases.Load())
+	qcli.mu.Lock()
+	defer qcli.mu.Unlock()
+	require.Len(t, qcli.requests, 2)
+	for _, requestTargets := range qcli.requests {
+		require.Equal(t, targets, requestTargets)
+	}
+
+	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:35", nil)
+	require.ErrorContains(t, err, "duplicated")
 }
 
 func TestTransferToCNAllowsActivationFence(t *testing.T) {
@@ -176,9 +253,11 @@ func TestTransferToCNAllowsActivationFence(t *testing.T) {
 
 	qcli := &addressRecordingQueryClient{}
 	started := time.Now()
-	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion35)
+	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion35, []string{serviceID})
 	require.Error(t, err)
 	require.Equal(t, "activation-cn:6001", qcli.address)
+	require.Equal(t, []string{serviceID},
+		qcli.request.SetProtocolVersion.DDLVisibilityActivationTargets)
 	require.WithinDuration(t, started.Add(time.Minute), qcli.deadline, time.Second)
 }
 

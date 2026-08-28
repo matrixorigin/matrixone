@@ -170,6 +170,7 @@ func TestClusterAdmissionSnapshotFiltersEveryPublicInventory(t *testing.T) {
 					WorkState:                       metadata.WorkState_Working,
 					ViewMetadataAdmissionGeneration: 11,
 					DDLVisibilityBarrierReady:       true,
+					ViewMetadataIngressReady:        true,
 				},
 			}
 			hc.Unlock()
@@ -191,16 +192,19 @@ func TestClusterAdmissionSnapshotFiltersEveryPublicInventory(t *testing.T) {
 
 			var raw []string
 			pendingBarrierReady := false
+			pendingIngressReady := false
 			require.NoError(t, GetCNServiceRawWithContext(
 				context.Background(), c, NewSelector(), func(service metadata.CNService) bool {
 					raw = append(raw, service.ServiceID)
 					if service.ServiceID == "pending" {
 						pendingBarrierReady = service.DDLVisibilityBarrierReady
+						pendingIngressReady = service.ViewMetadataIngressReady
 					}
 					return true
 				}))
 			require.ElementsMatch(t, []string{"ready", "pending"}, raw)
 			require.True(t, pendingBarrierReady)
+			require.True(t, pendingIngressReady)
 
 			admission := c.GetViewMetadataAdmission()
 			require.True(t, admission.Enabled)

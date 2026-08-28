@@ -1750,6 +1750,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ViewMetadataObservedEpoch:       info.ViewMetadataObservedEpoch,
 			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 			DDLVisibilityBarrierReady:       info.DDLVisibilityBarrierReady,
+			ViewMetadataIngressReady:        info.ViewMetadataIngressReady,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}

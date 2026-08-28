@@ -982,6 +982,36 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
 
+	t.Run("activation gate drains and blocks concurrent DDL commit", func(t *testing.T) {
+		ses, op, _, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		gate := NewDDLCommitGate()
+		require.NoError(t, gate.Block(context.Background()))
+		var once sync.Once
+		commitWaiting := make(chan struct{})
+		gate.enterBlockedHook = func() { once.Do(func() { close(commitWaiting) }) }
+		rt := moruntime.ServiceRuntime(ses.GetService())
+		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
+		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
+		t.Cleanup(func() {
+			if hadPreviousGate {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, previousGate)
+			} else {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, nil)
+			}
+		})
+
+		commitDone := make(chan error, 1)
+		go func() { commitDone <- ses.GetTxnHandler().Commit(execCtx) }()
+		<-commitWaiting
+		require.Zero(t, op.commitCalls,
+			"DDL commit must not cross the activation linearization point")
+		gate.Unblock()
+		require.NoError(t, <-commitDone)
+		require.Equal(t, 1, op.commitCalls)
+	})
+
 	t.Run("retries when a CN becomes barrier-ready during fan-out", func(t *testing.T) {
 		ses, op, qc, execCtx := newState(t)
 		defer ses.Close()

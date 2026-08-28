@@ -802,7 +802,11 @@ type service struct {
 	ddlVisibilityBarrierReady       atomic.Bool
 	ddlVisibilityBarrierPrepared    atomic.Bool
 	ddlVisibilityBarrierClosing     atomic.Bool
+	ddlVisibilityActivationPending  atomic.Bool
+	ddlVisibilityActivationPrepared atomic.Bool
+	ddlVisibilityActivationFenced   atomic.Bool
 	ddlVisibilityBarrierMu          sync.Mutex
+	ddlCommitGate                   *frontend.DDLCommitGate
 	viewMetadataGenerationRevoked   atomic.Bool
 	viewMetadataRevocationOnce      sync.Once
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous

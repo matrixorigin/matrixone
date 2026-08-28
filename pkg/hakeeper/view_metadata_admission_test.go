@@ -632,6 +632,7 @@ func TestClusterDetailsKeepsSupportedPendingButHidesLegacyIngress(t *testing.T) 
 	require.False(t, byID["pending"].ViewMetadataAdmissionReady)
 	require.True(t, byID["pending"].DDLVisibilityBarrierReady)
 	require.Contains(t, byID, "ready")
+	require.True(t, byID["ready"].ViewMetadataIngressReady)
 	require.NotContains(t, byID, "legacy")
 }
 
