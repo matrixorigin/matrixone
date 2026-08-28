@@ -2077,4 +2077,10 @@ type ServerLevelVariables struct {
 	Aicm            atomic.Value
 	moServerStarted atomic.Bool
 	sessionAlloc    atomic.Value
+
+	optimizerStatsMu       sync.RWMutex
+	optimizerStatsClock    uint64
+	optimizerStatsReset    uint64
+	optimizerStatsVersions map[optimizerStatsTableKey]uint64
+	optimizerStatsPublish  [optimizerStatsPublisherStripes]chan struct{}
 }

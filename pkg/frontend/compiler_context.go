@@ -162,6 +162,23 @@ func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 	return tcc.execCtx.ses.GetStatsCache()
 }
 
+func (tcc *TxnCompilerContext) getStatsCacheVersion(
+	key optimizerStatsTableKey,
+) (*Session, *plan2.StatsCache, uint64) {
+	tcc.mu.Lock()
+	feSes := tcc.execCtx.ses
+	txnWrapper, _ := tcc.tcw.(*TxnComputationWrapper)
+	tcc.mu.Unlock()
+	if ses, ok := feSes.(*Session); ok {
+		cache, version := ses.getStatsCacheWithVersion(key)
+		if txnWrapper != nil {
+			txnWrapper.recordOptimizerStatsVersion(key, version)
+		}
+		return ses, cache, version
+	}
+	return nil, feSes.GetStatsCache(), 0
+}
+
 func InitTxnCompilerContext(db string) *TxnCompilerContext {
 	return &TxnCompilerContext{dbName: db}
 }
@@ -252,32 +269,61 @@ func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 
 // ResolveViewDependencyAccount returns the account whose catalog namespace was
 // used to resolve a View dependency. Keep the override order aligned with
-// getRelation: snapshot tenant, subscription publisher, then relations that
-// are always read from the system account.
+// getRelation: snapshot tenant, cluster-table name override, subscription
+// publisher, then relations that are always read from the system account.
 func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
 	obj *plan2.ObjectRef,
 	tableDef *plan2.TableDef,
 	snapshot *plan2.Snapshot,
 ) (uint32, error) {
+	return tcc.resolvePhysicalObjectAccount(obj, tableDef, snapshot), nil
+}
+
+// resolvePhysicalObjectAccount keeps statistics and view dependencies aligned
+// with the account context used by getRelation. The identity must be resolved
+// before consulting any cache so cached data and its generation share one key.
+func (tcc *TxnCompilerContext) resolvePhysicalObjectAccount(
+	obj *plan2.ObjectRef,
+	tableDef *plan2.TableDef,
+	snapshot *plan2.Snapshot,
+) uint32 {
 	accountID := tcc.execCtx.ses.GetAccountId()
 	if snapshot != nil && snapshot.Tenant != nil {
 		accountID = snapshot.Tenant.TenantID
 	}
-	if obj.PubInfo != nil {
-		accountID = uint32(obj.PubInfo.TenantId)
-	}
 
-	dbName, tableName := obj.SchemaName, obj.ObjName
-	if dbName == "" {
+	var dbName, tableName string
+	if obj != nil {
+		dbName, tableName = obj.SchemaName, obj.ObjName
+	}
+	if dbName == "" && tableDef != nil {
 		dbName = tableDef.DbName
 	}
-	if tableName == "" {
+	if tableName == "" && tableDef != nil {
 		tableName = tableDef.Name
 	}
-	if isClusterTable(dbName, tableName) || ShouldSwitchToSysAccount(dbName, tableName) {
+	if isClusterTable(dbName, tableName) {
 		accountID = sysAccountID
 	}
-	return accountID, nil
+	// getRelation applies publication ownership after the generic cluster-table
+	// name rule, so the publisher remains the physical owner in that overlap.
+	if obj != nil && obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	}
+	if ShouldSwitchToSysAccount(dbName, tableName) {
+		accountID = sysAccountID
+	}
+	return accountID
+}
+
+func (tcc *TxnCompilerContext) optimizerStatsKey(
+	obj *plan2.ObjectRef,
+	snapshot *plan2.Snapshot,
+) optimizerStatsTableKey {
+	return optimizerStatsTableKey{
+		accountID: tcc.resolvePhysicalObjectAccount(obj, nil, snapshot),
+		tableID:   uint64(obj.Obj),
+	}
 }
 
 func (tcc *TxnCompilerContext) GetAccountName() string {
@@ -1125,10 +1171,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	}()
 
 	tableID := uint64(obj.Obj)
+	statsKey := tcc.optimizerStatsKey(obj, snapshot)
+	ses, statsCache, statsVersion := tcc.getStatsCacheVersion(statsKey)
 
 	// Fast path: return cached result if visited within 3 seconds AND stats is valid
 	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
-	if w := tcc.GetStatsCache().Get(tableID); w.Exists() {
+	if w := statsCache.Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
 			if s != nil && s.AccurateObjectNumber > 0 {
@@ -1144,8 +1192,13 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		return nil, err
 	}
 
-	// Cache the result
-	tcc.GetStatsCache().Set(tableID, result)
+	// A refresh may have completed while the slow path was reading storage. Do
+	// not let work from the old generation repopulate the new session cache.
+	if ses == nil {
+		statsCache.Set(tableID, result)
+	} else {
+		ses.cacheStatsIfCurrent(statsKey, statsVersion, result)
+	}
 
 	return result, nil
 }
