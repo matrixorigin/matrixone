@@ -3723,16 +3723,31 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	return nil
 }
 
-// bindMixedInListComparison applies MySQL's REAL comparison semantics for a
-// string left operand and a numeric IN-list value. It is deliberately limited
-// to IN/NOT IN fallback comparisons: applying it to every comparison would
-// lose precision for numeric columns compared with string constants.
-func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+// bindMixedInListComparison preserves the scalar comparison domain for a
+// single IN candidate. Multi-candidate string lists keep their common REAL
+// fallback; applying exact normalization independently to each candidate would
+// change the multi-operand coercion contract.
+func bindMixedInListComparison(
+	ctx context.Context,
+	operator string,
+	left, right *Expr,
+	exactSingleComparison bool,
+) (*plan.Expr, error) {
+	operands := []*Expr{left, right}
+	if exactSingleComparison {
+		if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
+			return nil, err
+		}
+	}
+	left, right = operands[0], operands[1]
 	leftType := makeTypeByPlan2Expr(left)
 	rightType := makeTypeByPlan2Expr(right)
-	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
+	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
+	_, directStringRight := decimalStringLiteralValue(right)
+	if stringLeftNumericRight || (!exactSingleComparison && numericLeftStringRight && directStringRight) {
 		targetType := types.T_float64.ToType()
-		operands := []*Expr{left, right}
+		operands = []*Expr{left, right}
 		for i := range operands {
 			var err error
 			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
@@ -3767,6 +3782,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
@@ -4130,6 +4148,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
+			exactSingleComparison := len(rightList.List) == 1
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -4198,7 +4217,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				for _, expr := range orExprList {
 					left := DeepCopyExpr(args[0])
 					left.AuxId = args[0].AuxId
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr, exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4209,7 +4228,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				for _, expr := range orExprList {
 					left := DeepCopyExpr(args[0])
 					left.AuxId = args[0].AuxId
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr, exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -5268,6 +5287,141 @@ func integerMetadataWidth(oid types.T) int32 {
 	default:
 		return 0
 	}
+}
+
+func isDecimalComparisonOperator(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
+}
+
+// A numeric string literal paired with DECIMAL has an exact numeric domain.
+// Resolve that domain before the generic string/numeric cast matrix selects
+// FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
+// explicit character casts in the expression, but cast their result to the
+// literal's natural DECIMAL type so a narrower peer cannot truncate the value.
+func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	if !isDecimalComparisonOperator(name) || len(args) != 2 {
+		return nil
+	}
+
+	for stringPos, decimalPos := range []int{1, 0} {
+		if !types.T(args[decimalPos].Typ.Id).IsDecimal() {
+			continue
+		}
+		value, ok := decimalStringLiteralValue(args[stringPos])
+		if !ok {
+			continue
+		}
+		numericValue, ok := function.GetNumericStringPrefix(value)
+		if !ok {
+			continue
+		}
+		// A cast expression must still execute at runtime. Only wrap it when the
+		// complete cast value is itself a decimal spelling; otherwise a generic
+		// VARCHAR-to-DECIMAL cast could reject a valid MySQL numeric prefix.
+		if args[stringPos].GetLit() == nil && numericValue != value {
+			continue
+		}
+
+		decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, numericValue)
+		if err != nil {
+			return err
+		}
+		if !exact {
+			continue
+		}
+		target, ok := mergeExactDecimalComparisonType(args[decimalPos].Typ, decimalExpr.Typ)
+		if !ok {
+			floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
+			for pos := range args {
+				argTarget := floatType
+				argTarget.NotNullable = args[pos].Typ.NotNullable
+				args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		normalizedString := decimalExpr
+		if args[stringPos].GetLit() == nil {
+			normalizedString, err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
+			if err != nil {
+				return err
+			}
+		}
+		args[stringPos] = normalizedString
+		for _, pos := range []int{decimalPos, stringPos} {
+			if sameDecimalComparisonType(args[pos].Typ, target) {
+				continue
+			}
+			argTarget := target
+			argTarget.NotNullable = args[pos].Typ.NotNullable
+			args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func mergeExactDecimalComparisonType(left, right plan.Type) (plan.Type, bool) {
+	leftIntegral := max(int64(left.Width)-int64(left.Scale), 0)
+	rightIntegral := max(int64(right.Width)-int64(right.Scale), 0)
+	scale := max(int64(left.Scale), int64(right.Scale))
+	width := max(leftIntegral, rightIntegral) + scale
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if width <= 0 || width > maxWidth || scale > maxWidth {
+		return plan.Type{}, false
+	}
+
+	oid := types.T_decimal64
+	if width > int64(types.T_decimal64.ToType().Width) {
+		oid = types.T_decimal128
+	}
+	if width > int64(types.T_decimal128.ToType().Width) {
+		oid = types.T_decimal256
+	}
+	if types.T(left.Id) == types.T_decimal256 || types.T(right.Id) == types.T_decimal256 {
+		oid = types.T_decimal256
+	} else if oid == types.T_decimal64 &&
+		(types.T(left.Id) == types.T_decimal128 || types.T(right.Id) == types.T_decimal128) {
+		oid = types.T_decimal128
+	}
+	return plan.Type{Id: int32(oid), Width: int32(width), Scale: int32(scale)}, true
+}
+
+func sameDecimalComparisonType(left, right plan.Type) bool {
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
+}
+
+// decimalStringLiteralValue recognizes character-string literals and cast
+// chains rooted in one. Runtime strings, NULLs, and raw hex/bit literals retain
+// the generic REAL comparison path.
+func decimalStringLiteralValue(expr *Expr) (string, bool) {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return "", false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		value, ok := literal.Value.(*plan.Literal_Sval)
+		if !ok || literal.Isnull || literal.IsBin {
+			return "", false
+		}
+		return value.Sval, true
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return "", false
+	}
+	return decimalStringLiteralValue(fn.Args[0])
 }
 
 // A direct prepared parameter in a binary comparison derives its type from
