@@ -94,6 +94,17 @@ func TestConjunctiveTermsRouting(t *testing.T) {
 	}
 }
 
+func TestConjunctiveTermsRejectsBareNgramCJKPhrases(t *testing.T) {
+	for _, pattern := range []string{"+共和国", "+中华人民共", "+中华人民共和国"} {
+		q, err := buildBooleanQuery(pattern, ParserNgram)
+		require.NoError(t, err)
+		require.Len(t, q.must, 1)
+		require.Equal(t, clausePhrase, q.must[0].kind, "pattern=%q", pattern)
+		_, ok := conjunctiveTerms(q)
+		require.False(t, ok, "bare ngram CJK phrase must stay on the phrase/Boolean evaluator: %q", pattern)
+	}
+}
+
 func TestConjunctiveRandomizedParity(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260806))
 	terms := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}
