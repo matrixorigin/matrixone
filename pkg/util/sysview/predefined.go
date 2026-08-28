@@ -24,9 +24,11 @@ import (
 const (
 	informationSchemaViewIdentifierPattern = "(?:`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|[^[:space:].(),]+)"
 	// GetRootSql preserves line comments, so separators in the persisted DDL must
-	// accept them wherever valid SQL permits whitespace between view tokens.
-	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|--[^\\r\\n]*(?:\\r?\\n|$))*"
-	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|--[^\\r\\n]*(?:\\r?\\n|$))+"
+	// accept every lexer-supported form wherever valid SQL permits whitespace
+	// between view tokens.
+	informationSchemaViewLineCommentPattern       = "(?:(?:--|#|//)[^\\r\\n]*(?:\\r?\\n|$))"
+	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + ")*"
+	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + ")+"
 	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
 	// DEFINER, and SQL SECURITY clauses as well as mysqldump's version comments.
 	informationSchemaViewDefinitionPrefixPattern = "(?is)^[[:space:]]*(?:/[*]![0-9]+[[:space:]]*)?" +
