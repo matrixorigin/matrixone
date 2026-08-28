@@ -421,39 +421,6 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
 }
 
-func TestDistinctCombineRemoteProtocolValidation(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := runtime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	for _, tc := range []struct {
-		name string
-		id   int64
-	}{
-		{name: "sum", id: aggexec.AggIdOfInternalSumCombine},
-		{name: "count", id: aggexec.AggIdOfInternalCountCombine},
-		{name: "avg", id: aggexec.AggIdOfInternalAvgCombine},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			combine := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
-				tc.id,
-				false,
-				[]*plan.Expr{makeTestVarExpr("partial")},
-				nil,
-			)}
-
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
-			require.ErrorContains(
-				t,
-				validateRemoteAggregateProtocol(proc, combine),
-				"require MORPC protocol version 34",
-			)
-
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
-			require.NoError(t, validateRemoteAggregateProtocol(proc, combine))
-		})
-	}
-}
-
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())

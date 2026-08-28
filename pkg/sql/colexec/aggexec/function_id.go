@@ -61,9 +61,3 @@ const (
 	AggIdOfPercentileCont      int64 = 567 << 32
 	AggIdOfPercentileDisc      int64 = 568 << 32
 )
-
-const (
-	AggIdOfInternalSumCombine   int64 = 577 << 32
-	AggIdOfInternalCountCombine int64 = 578 << 32
-	AggIdOfInternalAvgCombine   int64 = 579 << 32
-)

@@ -206,54 +206,6 @@ func TestSharedAggExpressionsPrepareConcurrently(t *testing.T) {
 	}
 }
 
-func TestDistinctAvgCombineGroupMergeRoundTrip(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 2}, nil, proc.Mp())
-	input.Vecs[1] = testutil.MakeInt64Vector([]int64{10, 20, 9}, nil, proc.Mp())
-	input.Vecs[2] = testutil.MakeInt64Vector([]int64{2, 3, 3}, nil, proc.Mp())
-	input.SetRowCount(3)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	defer child.Free(proc, false, nil)
-
-	aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
-		aggexec.AggIdOfInternalAvgCombine,
-		false,
-		[]*plan.Expr{
-			colExpr(1, types.T_int64),
-			colExpr(2, types.T_int64),
-			{
-				Typ:  plan.Type{Id: int32(types.T_float64)},
-				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
-			},
-		},
-		nil,
-	)}
-	partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
-	partial.NeedEval = false
-	partial.AppendChild(child)
-	defer partial.Free(proc, false, nil)
-	require.NoError(t, partial.Prepare(proc))
-	partialBatches := collectBatches(t, partial, proc)
-	require.Len(t, partialBatches, 1)
-	wire := cloneBatch(t, proc, partialBatches[0])
-
-	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{wire})
-	defer mergeChild.Free(proc, false, nil)
-	merge := newMergeGroupOp(aggs)
-	merge.AppendChild(mergeChild)
-	defer merge.Free(proc, false, nil)
-	require.NoError(t, merge.Prepare(proc))
-	results := collectBatches(t, merge, proc)
-	require.Len(t, results, 1)
-	require.Equal(t, 2, results[0].RowCount())
-	require.Equal(t, []int32{1, 2}, vector.MustFixedColNoTypeCheck[int32](results[0].Vecs[0]))
-	averages := vector.MustFixedColNoTypeCheck[float64](results[0].Vecs[1])
-	require.Equal(t, []float64{6, 3}, averages)
-}
-
 type cancelOnDoneCheckContext struct {
 	context.Context
 	remaining int

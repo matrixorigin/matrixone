@@ -94,27 +94,6 @@ func TestAllocationAccountSupportedAggregateFamilies(t *testing.T) {
 		{name: "sum-distinct-decimal", id: AggIdOfSum, distinct: true, params: []types.Type{types.T_decimal64.ToType()}},
 		{name: "avg", id: AggIdOfAvg, params: []types.Type{types.T_int64.ToType()}},
 		{name: "avg-distinct", id: AggIdOfAvg, distinct: true, params: []types.Type{types.T_float64.ToType()}},
-		{name: "internal-sum-combine", id: AggIdOfInternalSumCombine, params: []types.Type{types.T_int64.ToType()}},
-		{name: "internal-sum-combine-uint", id: AggIdOfInternalSumCombine, params: []types.Type{types.T_uint64.ToType()}},
-		{name: "internal-sum-combine-float", id: AggIdOfInternalSumCombine, params: []types.Type{types.T_float64.ToType()}},
-		{name: "internal-sum-combine-decimal128", id: AggIdOfInternalSumCombine, params: []types.Type{types.T_decimal128.ToType()}},
-		{name: "internal-sum-combine-decimal256", id: AggIdOfInternalSumCombine, params: []types.Type{types.T_decimal256.ToType()}},
-		{name: "internal-count-combine", id: AggIdOfInternalCountCombine, params: []types.Type{types.T_int64.ToType()}},
-		{name: "internal-avg-combine", id: AggIdOfInternalAvgCombine, params: []types.Type{
-			types.T_int64.ToType(), types.T_int64.ToType(), types.T_float64.ToType(),
-		}},
-		{name: "internal-avg-combine-uint", id: AggIdOfInternalAvgCombine, params: []types.Type{
-			types.T_uint64.ToType(), types.T_int64.ToType(), types.T_float64.ToType(),
-		}},
-		{name: "internal-avg-combine-float", id: AggIdOfInternalAvgCombine, params: []types.Type{
-			types.T_float64.ToType(), types.T_int64.ToType(), types.T_float64.ToType(),
-		}},
-		{name: "internal-avg-combine-decimal128", id: AggIdOfInternalAvgCombine, params: []types.Type{
-			types.T_decimal128.ToType(), types.T_int64.ToType(), types.T_decimal128.ToType(),
-		}},
-		{name: "internal-avg-combine-decimal256", id: AggIdOfInternalAvgCombine, params: []types.Type{
-			types.T_decimal256.ToType(), types.T_int64.ToType(), types.T_decimal256.ToType(),
-		}},
 		{name: "count-column", id: AggIdOfCountColumn, params: []types.Type{types.T_int64.ToType()}},
 		{name: "count-column-distinct", id: AggIdOfCountColumn, distinct: true, params: []types.Type{types.T_int64.ToType()}},
 		{name: "count-star", id: AggIdOfCountStar},

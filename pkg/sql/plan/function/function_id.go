@@ -842,16 +842,9 @@ const (
 	// Kafka external table (issue #27518).
 	LAST_KAFKA_MESSAGE_ID = 576
 
-	// Planner-only aggregates used by exact DISTINCT-key decomposition. They
-	// deliberately have no entries in functionIdRegister, so SQL cannot bind
-	// them directly.
-	INTERNAL_SUM_COMBINE   = 577
-	INTERNAL_COUNT_COMBINE = 578
-	INTERNAL_AVG_COMBINE   = 579
-
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 580
+	FUNCTION_END_NUMBER = 577
 )
 
 // functionIdRegister is what function we have registered already.

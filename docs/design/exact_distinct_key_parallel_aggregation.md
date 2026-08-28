@@ -1,204 +1,133 @@
 # Exact DISTINCT-Key Parallel Aggregation
 
-Status: proposed MVP design; independent approval is tracked in implementation
-PR #27762 (2026-08-27)
+Status: proposed single-aggregate MVP; independent approval is tracked in
+implementation PR #27762 (2026-08-28)
 
 Owner issue: [#27720](https://github.com/matrixorigin/matrixone/issues/27720)
 
-Related bounded-memory work: [#27698](https://github.com/matrixorigin/matrixone/issues/27698)
+Related bounded-memory work:
+[#27698](https://github.com/matrixorigin/matrixone/issues/27698)
 
-Implementation PR: [#27762](https://github.com/matrixorigin/matrixone/pull/27762),
-followed by the bounded DISTINCT-state spill work tracked in #27698.
+Implementation PR:
+[#27762](https://github.com/matrixorigin/matrixone/pull/27762)
 
 ## Problem and invariant
 
-Exact `COUNT(DISTINCT d)` currently obtains distributed parallelism by assigning
-complete final groups to owners. That topology is efficient when the final
-`GROUP BY` key has enough balanced values, but a global aggregate or a query
-with only a few final groups cannot expose enough owners even when `d` has very
-high NDV.
+The established single-aggregate rewrite converts unary `COUNT(DISTINCT d)`
+into two ordinary grouping stages:
 
-The required invariant is:
+```text
+input -> Group by (g..., d) -> COUNT(d) by g...
+```
+
+It removes saved-argument DISTINCT state, but a global aggregate or a query
+with only a few final groups can still expose too few physical owners. The
+required invariant is:
 
 ```text
 For every active final group g and DISTINCT value d, all equal (g, d) rows are
-deduplicated by one owner before the final aggregate is computed.
+deduplicated by one owner before the final COUNT is computed.
 ```
 
-Routing by `d` is a safe coarsening for the single-argument MVP: equal `(g, d)`
-pairs necessarily have equal `d`, while hash collisions only co-locate unequal
-pairs. The receiving Group remains the authoritative equality check.
+For the unary MVP, routing by `d` is a safe coarsening: equal `(g, d)` pairs
+necessarily have equal `d`. Hash collisions only co-locate unequal pairs; the
+receiving Group remains the authoritative equality check.
 
-Goals:
+## Selected MVP
 
-- expose DISTINCT-key parallelism for global and few-group high-NDV queries;
-- preserve exact SQL results, output types, NULL behavior, and planner binding
-  tags;
-- retain the complete-group-owner path for sufficiently many final groups;
-- fail closed during mixed-version operation;
-- reuse existing shuffle, Group, MergeGroup, spill, and allocation ownership.
+When the existing logical rewrite is applied to a single
+`COUNT(DISTINCT d)`, mark its synthesized `(g..., d)` Group to hash-shuffle raw
+rows by `d`. The ordinary Group then deduplicates exact pairs, and the existing
+outer `COUNT(d)` produces final results.
 
-Non-goals for this MVP:
-
-- composite or expression DISTINCT keys;
-- multiple incompatible DISTINCT argument sets;
-- runtime skew sampling or high-cardinality hot-group detection;
-- local pre-deduplication before exchange;
-- carrying a precomputed canonical hash between operators;
-- a second DISTINCT spill implementation. #27698 owns fallback-state spill.
-
-This PR is one deliberately narrow phase of #27720; it does not close that
-issue. Approving this MVP accepts direct unary `d` ownership as a safe
-coarsening for the target global/few-group shape while leaving canonical
-multi-column keys, local adaptive pre-deduplication, transported hash reuse,
-runtime skew adaptation, and topology observability to separately reviewed
-follow-up work.
-
-## Alternatives and decision
-
-### Keep only final-group ownership
-
-This is the path introduced by #27693. It avoids exact-state merging and remains
-the preferred topology when an active final group key has at least the existing
-64-owner threshold. It cannot parallelize a global or few-group aggregate.
-
-### Shuffle aggregate partial-state blobs
-
-Group's intermediate aggregate states are encoded in `Batch.ExtraBuf` for a
-whole batch. The shuffle operator can split row vectors, but cannot split that
-opaque state blob by selected rows. Making partial state row-addressable would
-introduce a new batch and wire contract substantially larger than this change.
-
-### DISTINCT-key decomposition (selected)
-
-For the eligible shape, rewrite:
-
-```text
-input rows
-  -> hash shuffle by d
-  -> complete Group by (g..., d)
-  -> local partial Group by g...
-  -> MergeGroup by g...
-```
-
-The `(g, d)` stage emits at most one row per exact pair. The final stage converts
-`COUNT(DISTINCT d)` to ordinary `COUNT(d)` and combines decomposable ordinary
-aggregates. Existing Group spill can partition the synthesized pair table; the
-fallback exact-DISTINCT state remains the responsibility of #27698.
-
-The MVP recomputes hashes in Shuffle and Group. Adding transported hash metadata
-would widen the pipeline contract and is deferred until profiling demonstrates
-that its saved CPU outweighs the compatibility and maintenance cost.
-
-## Planner contract
-
-The mixed-aggregate rewrite is eligible only when all of these are true:
+Select this physical ownership only when:
 
 - every grouping flag is active;
-- all DISTINCT aggregates are unary `COUNT(DISTINCT d)` over the same `d`;
-- `d` is a direct column with an existing safe hash-shuffle type: signed or
-  unsigned 16/32/64-bit integer, CHAR, VARCHAR, or TEXT;
-- every ordinary aggregate is SUM, COUNT, COUNT(*), MIN, MAX, or AVG and has no
-  ordered aggregate configuration;
-- selected DISTINCT NDV is large enough to satisfy the existing exact-state
-  shuffle cost test;
+- the aggregate list contains exactly one unary `COUNT(DISTINCT d)`;
+- `d` is a direct column with a supported hash-shuffle type: signed or unsigned
+  16/32/64-bit integer, CHAR, VARCHAR, or TEXT;
+- selected DISTINCT NDV passes the existing exact-state shuffle cost test; and
 - the highest usable final-group-key NDV is below the existing 64-owner
-  threshold;
-- statistics are finite and the cluster compatibility gate is enabled.
+  threshold, or the aggregate is global.
 
-Missing or unreliable statistics, grouping sets, tuples, multiple DISTINCT
-sets, unsupported key types, and old protocol versions retain the current plan.
-The established single-aggregate COUNT/SUM DISTINCT logical rewrite remains;
-large supported COUNT DISTINCT additionally receives forced `d` ownership.
+Missing or unreliable statistics, grouping sets, expressions, tuples,
+multi-argument DISTINCT, unsupported key types, small DISTINCT state, and 64+
+final owners retain their current physical topology. The established logical
+rewrite for single `COUNT(DISTINCT)` and `SUM(DISTINCT)` remains unconditional;
+only eligible COUNT receives forced `d` ownership.
 
-The synthesized pair aggregate is marked only inside `QueryBuilder`. Shuffle
-planning consumes that marker and writes the ordinary `HashMapStats` decision;
-no planner protobuf field is added.
+## Deliberate boundary
 
-## Aggregate and binding contract
+This PR is one narrow phase of #27720 and does not close that issue. It does
+not decompose mixed aggregate lists. In particular, these remain unchanged:
 
-The original outer aggregate keeps its binding tags, aggregate slot count,
-slot order, and result types. Parent projections, HAVING, ORDER BY, aliases, and
-subqueries therefore require no rebinding pass.
+```sql
+SELECT COUNT(DISTINCT d), SUM(x) FROM t;
+SELECT COUNT(DISTINCT d), AVG(x), MIN(payload) FROM t;
+```
 
-| Original aggregate | `(g, d)` helper | Final aggregate |
-| --- | --- | --- |
-| `COUNT(DISTINCT d)` | `d` group key | `COUNT(d)` |
-| `SUM(x)` | `SUM(x)` | internal sum-combine |
-| `COUNT(x)` / `COUNT(*)` | matching count | internal count-combine |
-| `MIN(x)` / `MAX(x)` | matching aggregate | matching aggregate |
-| `AVG(x)` | `SUM(x)`, `COUNT(x)` | internal weighted avg-combine |
+Materializing ordinary SUM or AVG per `(g, d)` can change checked-overflow
+behavior because partial regrouping changes the addition order. Materializing
+MIN/MAX or many ordinary states per pair can also grow work and retained/spilled
+state by `NDV(d) * partial-state-width`. Supporting mixed global/few-group
+queries therefore requires a separately approved accumulator semantic and cost
+model; it is not hidden inside this MVP.
 
-Sum-combine returns the first argument type instead of applying SUM's widening
-rules a second time. Count-combine returns zero for empty input. Avg-combine
-uses `(partial sum, partial count, typed NULL result witness)` and the existing
-AVG decimal finalization rules, including result scale.
+Canonical multi-column distribution, multiple DISTINCT argument sets, local
+adaptive pre-deduplication, transported hash reuse, runtime skew adaptation,
+and topology observability also remain follow-up work. #27693 remains the
+preferred complete-group-owner path for eligible balanced mixed aggregates.
 
-The three functions are planner-only aggregate IDs and are absent from the SQL
-name registry. Their state is fixed-width and owned by the existing `aggExec`:
+## Ownership, memory, and lifecycle
 
-- Group growth owns resident vectors;
-- successful Flush transfers result-vector ownership to the caller;
-- failed Flush leaves resident state owned by `aggExec.Free`;
-- partial and spill serialization reuse the existing fixed-vector codecs;
-- no goroutine, file, queue, lock, or new cleanup state is introduced.
+The eligible path instantiates no saved-argument DISTINCT `argSkl` and no
+per-key ordinary aggregate states. The inner ordinary Group owns one exact
+`(g..., d)` key per surviving pair and uses its existing `SpillMem` contract,
+which can partition those independent pair groups by their complete group hash.
+The outer COUNT state is fixed-width.
 
-For an eligible Path B plan, the exact key owner is the ordinary inner Group on
-`(g..., d)`, not a saved-argument DISTINCT `argSkl`. Its existing `SpillMem`
-contract can partition those independent pair groups by their complete group
-hash, so one hot final group does not have to reload all of its DISTINCT values
-as one inseparable state. The outer Group retains only fixed-width ordinary
-combine state. This reuses existing Group spill ownership; it does not add a
-second DISTINCT spill format.
+No new aggregate executor, function ID, wire field, protocol generation,
+goroutine, file format, queue, lock, or cleanup state is introduced. Existing
+Group, shuffle, vector, allocation-account, spill, Reset, and Free ownership
+remain authoritative.
 
-Fallback plans are unchanged. Unsupported key shapes, multiple DISTINCT sets,
-and other DISTINCT aggregates can still retain one saved-argument state whose
-memory grows with NDV; #27698 owns bounded-memory completion for those paths.
-This MVP therefore makes no universal bounded-memory claim for #27720 or
-#27698.
+Fallback plans are unchanged. Unsupported DISTINCT shapes can still retain one
+saved-argument state whose memory grows with NDV; #27698 owns bounded-memory
+completion for those paths. This MVP makes no universal bounded-memory claim
+for #27720 or #27698.
 
-For `d IS NULL`, the pair stage retains `(g, NULL)` so ordinary aggregates still
-observe those rows; final `COUNT(d)` excludes the NULL pair. Empty global input
-returns zero for counts and NULL for SUM/AVG/MIN/MAX.
+For `d IS NULL`, the pair stage retains `(g, NULL)` and final `COUNT(d)` excludes
+it. Empty global input returns zero, matching the existing logical rewrite.
 
-## Compatibility and rollout
+## Planner and compatibility contract
 
-The aggregate IDs travel in existing remote pipeline fields, but older CNs do
-not recognize them. MORPC version 34 is therefore the capability boundary:
-
-- the planner does not select the mixed rewrite below version 34;
-- remote pipeline encoding validates every internal combine aggregate and fails
-  closed below version 34;
-- version 33 remains assigned to stable complete-key string-shuffle hashing;
-- rolling upgrade keeps the old topology until the deployment-wide minimum
-  version reaches 34; rollback lowers the gate before older CNs participate.
-
-There is no user setting or catalog/on-disk migration.
+The synthesized pair aggregate is marked only inside `QueryBuilder`.
+`determineShuffleForGroupBy` consumes that marker and writes the ordinary
+`HashMapStats` shuffle decision. No protobuf or remote-pipeline capability is
+added, so rolling upgrades use the existing hash-shuffle compatibility rules,
+including the current string-owner mapping selected for each execution.
 
 ## Validation and acceptance
 
 Deterministic unit coverage must prove:
 
-- path selection for global/few groups and retention of Path A at 64+ owners;
-- fallback for small NDV, missing/old protocol capability, grouping sets,
-  unsupported keys, and distinct-set mismatch;
-- unchanged outer bindings and exact helper/result types;
-- SUM/COUNT/AVG NULL, empty, overflow, integer, float, Decimal128, and
-  Decimal256 behavior;
-- aggregate-state serialization plus a real Group-to-MergeGroup round trip;
-- version 33 rejection and version 34 remote acceptance;
-- allocation-account cleanup with zero residual debt.
+- global and few-group high-NDV COUNT choose DISTINCT-key ownership;
+- the 64-owner boundary retains the existing topology;
+- small/missing NDV, grouping sets, expressions, unsupported keys, and
+  `SUM(DISTINCT)` do not force the new ownership;
+- mixed SUM/AVG/wide MIN shapes are not rewritten or mutated;
+- the outward aggregate binding and exact COUNT result contract remain
+  unchanged; and
+- NULL, duplicates, empty input, hash collisions, DOP=1, multi-DOP, spill, and
+  one-/multi-CN execution match an independent exact oracle.
 
-No BVT is added for the optimizer selector because deterministic SQL fixtures do
-not provide the required post-selection NDV statistics; a small SQL result test
-would exercise the fallback and duplicate executor coverage without proving the
-new topology. Performance validation belongs in the ClickBench/performance
-harness: compare global/few/hot high-NDV cases with the current topology and
-retain the balanced 64+ group control, reporting CPU, allocations, peak
-accounted memory, shuffle rows/bytes, and wall time.
+The performance matrix must compare global and few-group high-NDV COUNT at
+DOP=1 and multi-DOP, while retaining a balanced 64+ group control. Report CPU,
+allocations, peak accounted memory, shuffle rows/bytes and skew, spill activity,
+and wall time. A single-process microbenchmark cannot substitute for proving
+real multi-owner execution.
 
-Acceptance for this MVP is exact result equivalence and real multi-owner plan
-construction for eligible one/few-group inputs without regressing selection of
-the balanced complete-group-owner path. Runtime skew adaptation, local
-pre-deduplication, composite keys, and bounded fallback-state spill remain
-explicit follow-up work rather than implicit claims of this PR.
+Acceptance is exact result equivalence plus demonstrated multi-owner execution
+and benefit for the eligible global/few-group shapes without regressing the
+balanced control. Broader adaptive and mixed-aggregate support remains
+explicit follow-up work.

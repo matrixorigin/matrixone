@@ -18,9 +18,7 @@ import (
 	"context"
 	"testing"
 
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
@@ -54,23 +52,11 @@ func distinctAggTestExpr(
 }
 
 func newDistinctAggTestBuilder(
-	t *testing.T,
 	groupNDV float64,
 	distinctNDV float64,
 	aggs []*planpb.Expr,
 ) (*QueryBuilder, *planpb.Node) {
-	t.Helper()
 	ctx := &MockCompilerContext{ctx: context.Background()}
-	proc := ctx.GetProcess()
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		}
-	})
-
 	child := &planpb.Node{
 		NodeId:      0,
 		NodeType:    planpb.Node_TABLE_SCAN,
@@ -81,12 +67,11 @@ func newDistinctAggTestBuilder(
 			HashmapStats: &planpb.HashMapStats{},
 		},
 	}
-	groupBy := distinctAggTestCol(types.T_int32, 1, 0, groupNDV)
 	agg := &planpb.Node{
 		NodeId:      1,
 		NodeType:    planpb.Node_AGG,
 		Children:    []int32{0},
-		GroupBy:     []*planpb.Expr{groupBy},
+		GroupBy:     []*planpb.Expr{distinctAggTestCol(types.T_int32, 1, 0, groupNDV)},
 		AggList:     aggs,
 		BindingTags: []int32{10, 11},
 		Stats: &planpb.Stats{
@@ -98,7 +83,7 @@ func newDistinctAggTestBuilder(
 		},
 	}
 	for _, expr := range agg.AggList {
-		if fn := expr.GetF(); fn != nil &&
+		if fn := expr.GetF(); fn != nil && fn.Func != nil &&
 			uint64(fn.Func.Obj)&function.Distinct != 0 && len(fn.Args) == 1 {
 			fn.Args[0].Ndv = distinctNDV
 		}
@@ -114,49 +99,23 @@ func newDistinctAggTestBuilder(
 	return builder, agg
 }
 
-func TestOptimizeMixedDistinctAggBuildsDistinctKeyPath(t *testing.T) {
-	distinctKey := distinctAggTestCol(types.T_int64, 1, 1, 1_000_000)
-	value := distinctAggTestCol(types.T_int32, 1, 2, 100)
+func TestOptimizeSingleCountDistinctBuildsDistinctKeyPath(t *testing.T) {
+	key := distinctAggTestCol(types.T_int64, 1, 1, 1_000_000)
 	countDistinct := distinctAggTestExpr(
 		function.COUNT, true,
-		planpb.Type{Id: int32(types.T_int64), NotNullable: true}, distinctKey)
-	sum := distinctAggTestExpr(
-		function.SUM, false, planpb.Type{Id: int32(types.T_int64)}, value)
-	count := distinctAggTestExpr(
-		function.COUNT, false,
-		planpb.Type{Id: int32(types.T_int64), NotNullable: true}, value)
-	min := distinctAggTestExpr(
-		function.MIN, false, planpb.Type{Id: int32(types.T_int32)}, value)
-	avg := distinctAggTestExpr(
-		function.AVG, false, planpb.Type{Id: int32(types.T_float64)}, value)
-	builder, outer := newDistinctAggTestBuilder(
-		t, 10, 1_000_000, []*planpb.Expr{countDistinct, sum, count, min, avg})
+		planpb.Type{Id: int32(types.T_int64), NotNullable: true}, key)
+	builder, outer := newDistinctAggTestBuilder(10, 1_000_000, []*planpb.Expr{countDistinct})
 	originalTags := append([]int32(nil), outer.BindingTags...)
 
 	builder.optimizeDistinctAgg(1)
+
 	require.Len(t, builder.qry.Nodes, 3)
 	inner := builder.qry.Nodes[2]
 	require.Equal(t, []int32{2}, outer.Children)
-	require.Equal(t, originalTags, outer.BindingTags,
-		"the outward aggregate binding contract must remain stable")
+	require.Equal(t, originalTags, outer.BindingTags)
 	require.Len(t, inner.GroupBy, 2)
-	require.Len(t, inner.AggList, 5,
-		"SUM, COUNT, MIN, and AVG's SUM+COUNT helpers are materialized once")
-
-	outerIDs := make([]int32, len(outer.AggList))
-	for i, expr := range outer.AggList {
-		outerIDs[i], _ = function.DecodeOverloadID(expr.GetF().Func.Obj)
-	}
-	require.Equal(t, []int32{
-		function.COUNT,
-		function.INTERNAL_SUM_COMBINE,
-		function.INTERNAL_COUNT_COMBINE,
-		function.MIN,
-		function.INTERNAL_AVG_COMBINE,
-	}, outerIDs)
-	require.Len(t, outer.AggList[4].GetF().Args, 3)
-	require.True(t, outer.AggList[4].GetF().Args[2].GetLit().Isnull)
-	require.Equal(t, int32(types.T_float64), outer.AggList[4].GetF().Args[2].Typ.Id)
+	require.Empty(t, inner.AggList)
+	require.Zero(t, uint64(outer.AggList[0].GetF().Func.Obj)&function.Distinct)
 
 	shuffleCol, marked := builder.distinctKeyShuffleCols[inner]
 	require.True(t, marked)
@@ -167,94 +126,111 @@ func TestOptimizeMixedDistinctAggBuildsDistinctKeyPath(t *testing.T) {
 	require.Equal(t, planpb.ShuffleType_Hash, inner.Stats.HashmapStats.ShuffleType)
 }
 
-func TestOptimizeMixedDistinctAggPathSelectionAndFallbacks(t *testing.T) {
-	makeAggs := func(secondDistinctKey bool) []*planpb.Expr {
-		distinctKey := distinctAggTestCol(types.T_int64, 1, 1, 1_000_000)
-		secondKey := distinctKey
-		if secondDistinctKey {
-			secondKey = distinctAggTestCol(types.T_int64, 1, 3, 1_000_000)
-		}
-		return []*planpb.Expr{
-			distinctAggTestExpr(function.COUNT, true,
-				planpb.Type{Id: int32(types.T_int64)}, distinctKey),
-			distinctAggTestExpr(function.COUNT, true,
-				planpb.Type{Id: int32(types.T_int64)}, secondKey),
-			distinctAggTestExpr(function.SUM, false,
-				planpb.Type{Id: int32(types.T_int64)},
-				distinctAggTestCol(types.T_int32, 1, 2, 100)),
-		}
-	}
-
+func TestOptimizeSingleCountDistinctPathSelectionAndFallbacks(t *testing.T) {
 	for _, tc := range []struct {
-		name              string
-		groupNDV          float64
-		distinctNDV       float64
-		secondDistinctKey bool
-		global            bool
-		inactiveGrouping  bool
-		protocol          int64
-		wantRewrite       bool
+		name        string
+		keyType     types.T
+		groupNDV    float64
+		distinctNDV float64
+		global      bool
+		directKey   bool
+		groupingSet bool
+		wantRewrite bool
+		wantShuffle bool
 	}{
-		{name: "few final owners", groupNDV: 10, distinctNDV: 1_000_000,
-			protocol: defines.MORPCLatestVersion, wantRewrite: true},
-		{name: "global aggregate", groupNDV: 1, distinctNDV: 1_000_000,
-			global: true, protocol: defines.MORPCLatestVersion, wantRewrite: true},
-		{name: "path A boundary", groupNDV: shuffleDistinctGroupMinNDV,
-			distinctNDV: 1_000_000, protocol: defines.MORPCLatestVersion},
-		{name: "small distinct state", groupNDV: 10,
-			distinctNDV: threshHoldForShuffleGroup, protocol: defines.MORPCLatestVersion},
-		{name: "different distinct set", groupNDV: 10, distinctNDV: 1_000_000,
-			secondDistinctKey: true, protocol: defines.MORPCLatestVersion},
-		{name: "inactive grouping set", groupNDV: 10, distinctNDV: 1_000_000,
-			inactiveGrouping: true, protocol: defines.MORPCLatestVersion},
-		{name: "rolling upgrade", groupNDV: 10, distinctNDV: 1_000_000,
-			protocol: defines.MORPCVersion33},
+		{name: "few final owners", keyType: types.T_int64, groupNDV: 10,
+			distinctNDV: 1_000_000, directKey: true, wantRewrite: true, wantShuffle: true},
+		{name: "global aggregate", keyType: types.T_varchar, groupNDV: 1,
+			distinctNDV: 1_000_000, global: true, directKey: true,
+			wantRewrite: true, wantShuffle: true},
+		{name: "path A boundary", keyType: types.T_int64,
+			groupNDV: shuffleDistinctGroupMinNDV, distinctNDV: 1_000_000,
+			directKey: true, wantRewrite: true},
+		{name: "small distinct state", keyType: types.T_int64, groupNDV: 10,
+			distinctNDV: 10, directKey: true, wantRewrite: true},
+		{name: "missing distinct statistics", keyType: types.T_int64, groupNDV: 10,
+			distinctNDV: -1, directKey: true, wantRewrite: true},
+		{name: "unsupported shuffle key", keyType: types.T_float64, groupNDV: 10,
+			distinctNDV: 1_000_000, directKey: true, wantRewrite: true},
+		{name: "expression key", keyType: types.T_int64, groupNDV: 10,
+			distinctNDV: 1_000_000, wantRewrite: true},
+		{name: "inactive grouping set", keyType: types.T_int64, groupNDV: 10,
+			distinctNDV: 1_000_000, directKey: true, groupingSet: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			key := distinctAggTestCol(tc.keyType, 1, 1, tc.distinctNDV)
+			if !tc.directKey {
+				key.Expr = &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_I64Val{I64Val: 7},
+				}}
+			}
+			agg := distinctAggTestExpr(function.COUNT, true,
+				planpb.Type{Id: int32(types.T_int64)}, key)
 			builder, outer := newDistinctAggTestBuilder(
-				t, tc.groupNDV, tc.distinctNDV, makeAggs(tc.secondDistinctKey))
+				tc.groupNDV, tc.distinctNDV, []*planpb.Expr{agg})
 			if tc.global {
 				outer.GroupBy = nil
 				outer.Stats.HashmapStats.HashmapSize = 1
 			}
-			if tc.inactiveGrouping {
+			if tc.groupingSet {
 				outer.GroupingFlag = []bool{false}
 			}
-			proc := builder.compCtx.GetProcess()
-			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-				moruntime.MOProtocolVersion, tc.protocol)
+
 			builder.optimizeDistinctAgg(1)
-			require.Equal(t, tc.wantRewrite, len(builder.qry.Nodes) == 3)
+
+			rewritten := len(builder.qry.Nodes) == 3
+			require.Equal(t, tc.wantRewrite, rewritten)
+			marked := false
+			if rewritten {
+				_, marked = builder.distinctKeyShuffleCols[builder.qry.Nodes[2]]
+			}
+			require.Equal(t, tc.wantShuffle, marked)
 		})
 	}
 }
 
-func TestOptimizeSingleCountDistinctForcesOnlyLargeDistinctShuffle(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		keyType     types.T
-		distinctNDV float64
-		wantShuffle bool
-	}{
-		{name: "large", keyType: types.T_int64,
-			distinctNDV: 1_000_000, wantShuffle: true},
-		{name: "small", keyType: types.T_int64, distinctNDV: 10},
-		{name: "unsupported shuffle key", keyType: types.T_float64,
-			distinctNDV: 1_000_000},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			key := distinctAggTestCol(tc.keyType, 1, 1, tc.distinctNDV)
-			agg := distinctAggTestExpr(function.COUNT, true,
-				planpb.Type{Id: int32(types.T_int64)}, key)
-			builder, outer := newDistinctAggTestBuilder(t, 10, tc.distinctNDV,
-				[]*planpb.Expr{agg})
-			outer.GroupBy = nil
-			outer.Stats.HashmapStats.HashmapSize = 1
-			builder.optimizeDistinctAgg(1)
-			require.Len(t, builder.qry.Nodes, 3,
-				"the established logical rewrite remains unconditional")
-			_, marked := builder.distinctKeyShuffleCols[builder.qry.Nodes[2]]
-			require.Equal(t, tc.wantShuffle, marked)
-		})
+func TestOptimizeDistinctKeyPathLeavesMixedAggregatesUnchanged(t *testing.T) {
+	key := distinctAggTestCol(types.T_int64, 1, 1, 1_000_000)
+	value := distinctAggTestCol(types.T_decimal128, 1, 2, 100)
+	widePayload := distinctAggTestCol(types.T_varchar, 1, 3, 100)
+	widePayload.Typ.Width = 1 << 20
+	aggs := []*planpb.Expr{
+		distinctAggTestExpr(function.COUNT, true,
+			planpb.Type{Id: int32(types.T_int64)}, key),
+		distinctAggTestExpr(function.SUM, false,
+			planpb.Type{Id: int32(types.T_decimal128), Width: 38}, value),
+		distinctAggTestExpr(function.AVG, false,
+			planpb.Type{Id: int32(types.T_decimal128), Width: 38}, value),
+		distinctAggTestExpr(function.MIN, false, widePayload.Typ, widePayload),
 	}
+	builder, outer := newDistinctAggTestBuilder(1, 1_000_000, aggs)
+	outer.GroupBy = nil
+	originalChild := outer.Children[0]
+	originalIDs := make([]int64, len(outer.AggList))
+	for i := range outer.AggList {
+		originalIDs[i] = outer.AggList[i].GetF().Func.Obj
+	}
+
+	builder.optimizeDistinctAgg(1)
+
+	require.Len(t, builder.qry.Nodes, 2,
+		"ordinary aggregate state must not be replicated per DISTINCT key")
+	require.Equal(t, originalChild, outer.Children[0])
+	require.Empty(t, builder.distinctKeyShuffleCols)
+	for i := range outer.AggList {
+		require.Equal(t, originalIDs[i], outer.AggList[i].GetF().Func.Obj)
+	}
+}
+
+func TestOptimizeSingleSumDistinctKeepsExistingLogicalRewriteOnly(t *testing.T) {
+	key := distinctAggTestCol(types.T_decimal128, 1, 1, 1_000_000)
+	sumDistinct := distinctAggTestExpr(function.SUM, true,
+		planpb.Type{Id: int32(types.T_decimal128), Width: 38}, key)
+	builder, _ := newDistinctAggTestBuilder(1, 1_000_000, []*planpb.Expr{sumDistinct})
+
+	builder.optimizeDistinctAgg(1)
+
+	require.Len(t, builder.qry.Nodes, 3)
+	require.Empty(t, builder.distinctKeyShuffleCols,
+		"Path B is limited to COUNT(DISTINCT)")
 }
