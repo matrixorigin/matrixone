@@ -15,11 +15,62 @@
 package plan
 
 import (
+	"encoding/json"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &params); err != nil {
+		return nil, err
+	}
+	return params, nil
+}
+
+func vectorIndexStringParam(params map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := params[key]
+	if !ok {
+		return "", false
+	}
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return "", false
+	}
+	return *value, true
+}
+
+// vectorIndexInt64Param accepts the canonical quoted representation and the
+// legacy JSON-number representation used by older IVF metadata.
+func vectorIndexInt64Param(params map[string]json.RawMessage, key string) (int64, bool) {
+	raw, ok := params[key]
+	if !ok {
+		return 0, false
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		value, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return value, true
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil || number == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(number.String(), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
 
 type vectorSortContext struct {
 	projNode      *plan.Node

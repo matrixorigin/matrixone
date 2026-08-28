@@ -293,6 +293,10 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 			}
 		}
 		return true
+	case TIMESTAMP:
+		if len(args) == 2 {
+			return false
+		}
 	case COALESCE:
 		for _, arg := range args {
 			if arg.Typ.NotNullable {

@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 20)
+	require.Len(t, tenantUpgEntries, 21)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -126,13 +126,92 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, collationApplicability.UpgSql)
 	require.Contains(t, strings.ToLower(collationApplicability.PreSql),
 		"drop view if exists information_schema.collation_character_set_applicability")
-	statistics := tenantUpgEntries[19]
+	unsignedColumns := tenantUpgEntries[19]
+	require.Equal(t, versions.MODIFY_METADATA, unsignedColumns.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, unsignedColumns.Schema)
+	require.Equal(t, catalog.MO_COLUMNS, unsignedColumns.TableName)
+	require.Equal(t, int64(defines.MORPCVersion34), unsignedColumns.RequiredProtocolVersion)
+	require.True(t, unsignedColumns.AllowMoColumnsUpdate)
+	statistics := tenantUpgEntries[20]
 	require.Equal(t, versions.MODIFY_VIEW, statistics.UpgType)
 	require.Equal(t, sysview.InformationDBConst, statistics.Schema)
 	require.Equal(t, "STATISTICS", statistics.TableName)
 	require.Equal(t, sysview.InformationSchemaStatisticsDDL, statistics.UpgSql)
 	require.Contains(t, strings.ToLower(statistics.PreSql),
 		"drop view if exists information_schema.statistics")
+}
+
+func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {
+	entry := backfillMoColumnsAttIsUnsigned()
+	require.Contains(t, entry.UpgSql, "account_id = current_account_id()")
+	require.Contains(t, entry.UpgSql, "att_is_unsigned IS NULL OR att_is_unsigned = 0")
+	for _, typ := range []string{
+		"TINYINT UNSIGNED",
+		"SMALLINT UNSIGNED",
+		"INT UNSIGNED",
+		"BIGINT UNSIGNED",
+	} {
+		require.Contains(t, entry.UpgSql, "'"+typ+"'")
+	}
+	require.NotContains(t, entry.UpgSql, "DECIMAL")
+	require.NotContains(t, entry.UpgSql, "BIT")
+}
+
+func TestMoColumnsUnsignedBackfillWaitsForAllCNsAndIsIdempotent(t *testing.T) {
+	entry := backfillMoColumnsAttIsUnsigned()
+	checkSQL := "SELECT 1 FROM mo_catalog.mo_columns WHERE " + moColumnsUnsignedMismatchPredicate + " LIMIT 1"
+
+	t.Run("older CN blocks the update", func(t *testing.T) {
+		updated := false
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			switch sql {
+			case checkSQL:
+				result := executor.NewMemResult(nil, nil)
+				result.NewBatchWithRowCount(1)
+				return result.GetResult(), nil
+			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:34,cn-b:33"}`), nil
+			case entry.UpgSql:
+				updated = true
+			}
+			return executor.Result{}, nil
+		})
+
+		require.Error(t, entry.Upgrade(txn, 42))
+		require.False(t, updated)
+	})
+
+	t.Run("all CNs ready then second run is check only", func(t *testing.T) {
+		hasMismatch := true
+		var executed []string
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			switch sql {
+			case checkSQL:
+				if hasMismatch {
+					result := executor.NewMemResult(nil, nil)
+					result.NewBatchWithRowCount(1)
+					return result.GetResult(), nil
+				}
+			case "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newProtocolVersionResultValue(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:34,cn-b:34"}`), nil
+			case entry.UpgSql:
+				hasMismatch = false
+			}
+			return executor.Result{}, nil
+		})
+
+		require.NoError(t, entry.Upgrade(txn, 42))
+		require.Equal(t, []string{
+			checkSQL,
+			"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+			entry.UpgSql,
+		}, executed)
+
+		executed = nil
+		require.NoError(t, entry.Upgrade(txn, 42))
+		require.Equal(t, []string{checkSQL}, executed)
+	})
 }
 
 func TestInformationSchemaCollationsUpgradeCheckIsExact(t *testing.T) {
@@ -168,7 +247,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 20)
+	require.Len(t, tenantUpgEntries, 21)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -396,6 +475,7 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+removedIndexVisibilityUpgradeOffset, meta.VersionOffset)
+	require.Equal(t, int64(defines.MORPCVersion34), meta.RequiredProtocolVersion)
 }
 
 func TestTenantViewDefinitionChecks(t *testing.T) {
@@ -1017,6 +1097,16 @@ func newShowCreateTableResult(t *testing.T, tableName, createSQL string) executo
 			t.Fatalf("append SHOW CREATE TABLE column %d: %v", column, err)
 		}
 	}
+	return result.GetResult()
+}
+
+func newProtocolVersionResultValue(t *testing.T, value string) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{value}))
 	return result.GetResult()
 }
 
