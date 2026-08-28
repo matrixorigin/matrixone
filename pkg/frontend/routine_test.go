@@ -17,7 +17,9 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -1602,6 +1604,120 @@ func changeUserPacket(username string, authResponse []byte, database string) []b
 	payload = append(payload, []byte(AuthNativePassword)...)
 	payload = append(payload, 0)
 	return payload
+}
+
+func writeWirePacket(t *testing.T, conn net.Conn, sequence byte, payload []byte) {
+	t.Helper()
+	header := []byte{byte(len(payload)), byte(len(payload) >> 8), byte(len(payload) >> 16), sequence}
+	for _, data := range [][]byte{header, payload} {
+		for len(data) > 0 {
+			n, err := conn.Write(data)
+			require.NoError(t, err)
+			data = data[n:]
+		}
+	}
+}
+
+func readWirePacket(t *testing.T, conn net.Conn) (byte, []byte) {
+	t.Helper()
+	header := make([]byte, HeaderLengthOfTheProtocol)
+	_, err := io.ReadFull(conn, header)
+	require.NoError(t, err)
+	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	payload := make([]byte, length)
+	_, err = io.ReadFull(conn, payload)
+	require.NoError(t, err)
+	return header[3], payload
+}
+
+func wireHandshakeResponse(username string) []byte {
+	capability := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
+	payload := make([]byte, 4+4+1+23)
+	binary.LittleEndian.PutUint32(payload, capability)
+	binary.LittleEndian.PutUint32(payload[4:], 1<<24)
+	payload[8] = byte(Utf8mb4CollationID)
+	payload = append(payload, username...)
+	payload = append(payload, 0, 0) // username terminator and empty auth response
+	payload = append(payload, AuthNativePassword...)
+	return append(payload, 0)
+}
+
+func wireChangeUserRequest(username, plugin string) []byte {
+	payload := append([]byte{byte(COM_CHANGE_USER)}, username...)
+	payload = append(payload, 0, 0) // username terminator and empty secure auth response
+	payload = append(payload, 0)    // empty database
+	payload = append(payload, byte(Utf8mb4CollationID), 0)
+	payload = append(payload, plugin...)
+	return append(payload, 0)
+}
+
+func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
+	previousParameters := getPu("")
+	previousRoutineManager := getRtMgr("")
+	previousSessionAlloc := getSessionAlloc("")
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	parameters.SkipCheckUser = true
+	parameters.KillRountinesInterval = 0
+	setPu("", config.NewParameterUnit(parameters, nil, nil, nil))
+	setSessionAlloc("", NewLeakCheckAllocator())
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	setRtMgr("", rm)
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		rm.cancelCtx()
+		setRtMgr("", previousRoutineManager)
+		setSessionAlloc("", previousSessionAlloc)
+		setPu("", previousParameters)
+	})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		startInnerServer(serverConn)
+	}()
+
+	_, handshake := readWirePacket(t, clientConn)
+	versionEnd := 1
+	for versionEnd < len(handshake) && handshake[versionEnd] != 0 {
+		versionEnd++
+	}
+	require.Greater(t, len(handshake), versionEnd+4)
+	connectionID := binary.LittleEndian.Uint32(handshake[versionEnd+1:])
+	writeWirePacket(t, clientConn, 1, wireHandshakeResponse("dump"))
+	_, response := readWirePacket(t, clientConn)
+	require.NotEmpty(t, response)
+	require.Equal(t, byte(defines.OKHeader), response[0])
+
+	// Connector/J 8.0.15 falls back to COM_CHANGE_USER and has to answer the
+	// server's mysql_native_password authentication-switch packet. Exercise the
+	// real packet loop twice to prove a physical connection can be borrowed again.
+	for borrow := 0; borrow < 2; borrow++ {
+		writeWirePacket(t, clientConn, 0, wireChangeUserRequest("dump", "caching_sha2_password"))
+		_, switchRequest := readWirePacket(t, clientConn)
+		require.NotEmpty(t, switchRequest)
+		require.Equal(t, byte(defines.EOFHeader), switchRequest[0])
+		require.Contains(t, string(switchRequest), AuthNativePassword)
+		writeWirePacket(t, clientConn, 2, nil)
+		_, response = readWirePacket(t, clientConn)
+		require.NotEmpty(t, response)
+		require.Equal(t, byte(defines.OKHeader), response[0])
+
+		routine := rm.getRoutineByConnID(connectionID)
+		require.NotNil(t, routine)
+		require.Equal(t, connectionID, routine.getConnectionID())
+		require.Equal(t, "dump", routine.getSession().GetTenantInfo().GetUser())
+	}
+
+	require.NoError(t, clientConn.Close())
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("MySQL wire server did not stop after the client closed")
+	}
 }
 
 func TestRoutineChangeUserAuthenticatesBeforeReplacingSession(t *testing.T) {

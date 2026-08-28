@@ -3280,7 +3280,7 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 // errSessionResetConnectionMustClose marks an error after the old session
 // generation has changed state. The MySQL connection must not be reused: an
 // ERR response alone cannot restore physical temporary-table state.
-var errSessionResetConnectionMustClose = errors.New("session reset must close connection")
+var errSessionResetConnectionMustClose = moerr.NewInternalErrorNoCtx("session reset must close connection")
 
 // closeForReset retires a session generation while preserving the physical
 // protocol connection. All reusable server-side state must be gone before
