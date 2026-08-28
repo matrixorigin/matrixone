@@ -15,8 +15,20 @@ create table child(
 );
 insert into parent values (1);
 
-insert into child select 10, id + 1 from parent;
+insert into parent select result from generate_series(2, 9999) g;
+
+insert into child select result, result from generate_series(1, 10000) g;
 select count(*) from child;
-select 1 as reusable_connection;
+insert into child select result, result from generate_series(1, 10000) g;
+select count(*) from child;
+insert into child select result, result from generate_series(1, 10000) g;
+select count(*) from child;
+insert into child select result, result from generate_series(1, 10000) g;
+select count(*) from child;
+insert into child select result, result from generate_series(1, 10000) g;
+select count(*) from child;
+insert into child values (1, 1);
+select count(*) from child;
+select count(*) from parent;
 
 drop database issue_27524_fk_insert_select;
