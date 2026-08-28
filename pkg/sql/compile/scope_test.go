@@ -2123,34 +2123,52 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
+		require.NoError(t, suppressRemoteRunCancelError(ctx, nil, moerr.NewQueryInterrupted(ctx)))
 	})
 
 	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
+		require.NoError(t, suppressRemoteRunCancelError(ctx, nil, fmt.Errorf("open remote stream: %w", context.Canceled)))
 	})
 
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
+		err := suppressRemoteRunCancelError(ctx, nil, moerr.NewRPCTimeout(ctx))
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
 	})
 
 	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
 		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
+		err := suppressRemoteRunCancelError(ctx, nil, moerr.NewQueryInterrupted(ctx))
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
 	})
 
 	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
 		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, context.Canceled)
+		err := suppressRemoteRunCancelError(ctx, nil, context.Canceled)
 		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("keep query cancellation after pipeline cancel", func(t *testing.T) {
+		queryCtx, cancelQuery := context.WithCancel(context.Background())
+		pipelineCtx, cancelPipeline := context.WithCancel(queryCtx)
+		cancelQuery()
+		cancelPipeline()
+		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("keep substantive pipeline cancellation cause", func(t *testing.T) {
+		queryCtx := context.Background()
+		pipelineCtx, cancelPipeline := context.WithCancelCause(queryCtx)
+		substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+		cancelPipeline(substantiveErr)
+		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, context.Canceled)
+		require.ErrorIs(t, err, substantiveErr)
 	})
 }
 

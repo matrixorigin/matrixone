@@ -522,6 +522,141 @@ func TestRemoteRun(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
+	oldRuntime := runtime.ServiceRuntime("")
+	testRuntime := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", testRuntime)
+	t.Cleanup(func() {
+		runtime.SetupServiceBasedRuntime("", oldRuntime)
+	})
+	catalog.SetupDefines("")
+
+	substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+	tests := []struct {
+		name        string
+		cancelQuery bool
+		cancelCause error
+		wantErr     error
+		wantEvent   process.PipelineEventType
+		poison      bool
+	}{
+		{
+			name:      "internal early stop is successful and reuses backend",
+			wantEvent: process.EventEnd,
+		},
+		{
+			name:        "query cancellation is terminal and poisons backend",
+			cancelQuery: true,
+			wantErr:     context.Canceled,
+			wantEvent:   process.EventError,
+			poison:      true,
+		},
+		{
+			name:        "substantive error is terminal and poisons backend",
+			cancelCause: substantiveErr,
+			wantErr:     substantiveErr,
+			wantEvent:   process.EventError,
+			poison:      true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			_, cancelQuery := process.GetQueryCtxFromProc(proc)
+			t.Cleanup(cancelQuery)
+			proc.BuildPipelineContext(queryCtx)
+			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+
+			responses := make(chan morpc.Message, 2)
+			stream := mock_morpc.NewMockStream(ctrl)
+			stream.EXPECT().Receive().Return(responses, nil)
+			stream.EXPECT().ID().Return(uint64(27757)).AnyTimes()
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, request morpc.Message) error {
+					message := request.(*pipeline.Message)
+					switch message.GetCmd() {
+					case pipeline.Method_PipelineMessage:
+						if tt.cancelQuery {
+							cancelQuery()
+						} else {
+							proc.Cancel(tt.cancelCause)
+						}
+					case pipeline.Method_StopSending:
+						responses <- &pipeline.Message{
+							Id:                   27757,
+							Cmd:                  pipeline.Method_PipelineMessage,
+							Sid:                  pipeline.Status_MessageEnd,
+							AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+						}
+					case pipeline.Method_PipelineStreamFinish:
+						responses <- &pipeline.Message{
+							Id:                   27757,
+							Cmd:                  pipeline.Method_PipelineStreamFinishAck,
+							Sid:                  pipeline.Status_MessageEnd,
+							AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+						}
+					}
+					return nil
+				}).AnyTimes()
+			stream.EXPECT().Close(tt.poison).Return(nil)
+			testRuntime.SetGlobalVariables(runtime.PipelineClient, &testPipelineClient{
+				genStream: func(context.Context, string) (morpc.Stream, error) {
+					return stream, nil
+				},
+			})
+
+			c := NewCompile(
+				"local-cn:6002",
+				"test",
+				"select id from ivf_entries order by distance limit 10",
+				"",
+				"",
+				newStubEngine(),
+				proc,
+				nil,
+				false,
+				nil,
+				time.Now(),
+			)
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+			reg := process.NewPipelineEdge(1, 0)
+			root := connector.NewArgument().WithReg(reg)
+			t.Cleanup(root.Release)
+			s := &Scope{
+				Magic:         Remote,
+				Proc:          proc,
+				RootOp:        root,
+				ScopeAnalyzer: &ScopeAnalyzer{},
+				NodeInfo:      engine.Node{Addr: "remote-cn:6002", Mcpu: 1},
+			}
+
+			runErr := s.RemoteRun(c)
+			if tt.wantErr == nil {
+				require.NoError(t, runErr)
+			} else {
+				require.ErrorIs(t, runErr, tt.wantErr)
+			}
+			select {
+			case signal := <-reg.Ch2:
+				_, terminalErr := signal.Action()
+				require.Equal(t, tt.wantEvent, signal.EventType)
+				if tt.wantErr == nil {
+					require.NoError(t, terminalErr)
+				} else {
+					require.ErrorIs(t, terminalErr, tt.wantErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remote cleanup did not terminate its receiver")
+			}
+		})
+	}
+}
+
 func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	oldRuntime := runtime.ServiceRuntime("")
 	testRuntime := runtime.DefaultRuntime()

@@ -629,21 +629,21 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := err
-	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
-	if err != nil && s.Proc.Cancel != nil {
-		cancelErr := runErr
-		if cancelErr == nil {
-			cancelErr = err
-		}
-		s.Proc.Cancel(cancelErr)
+	runErr = suppressRemoteRunCancelError(
+		s.Proc.Ctx,
+		scopeRunQueryContext(s.Proc),
+		runErr,
+	)
+	if runErr != nil && s.Proc.Cancel != nil {
+		s.Proc.Cancel(runErr)
 	}
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
-	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
+	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
-		if err == nil {
+		if runErr == nil {
 			sender.prepareForLocalCleanup()
 		}
 		sender.close()
@@ -1308,15 +1308,44 @@ func logRemoteNotifyCleanupSendFailure(
 		err)
 }
 
-func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+func scopeRunQueryContext(proc *process.Process) context.Context {
+	if proc == nil || proc.Base == nil {
+		return nil
+	}
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
+	if queryCtx != nil {
+		return queryCtx
+	}
+	return proc.GetTopContext()
+}
+
+func suppressRemoteRunCancelError(
+	procCtx context.Context,
+	queryCtx context.Context,
+	err error,
+) error {
 	if err == nil {
 		return nil
 	}
-	if procCtx != nil && procCtx.Err() != nil &&
-		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
-		return nil
+	if procCtx == nil || procCtx.Err() == nil ||
+		(!moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) &&
+			!errors.Is(err, context.Canceled)) {
+		return err
 	}
-	return err
+	// A canceled query owns the terminal result. Only cancellation of this
+	// pipeline alone can be treated as successful downstream early-stop.
+	if queryCtx != nil && queryCtx.Err() != nil {
+		if cause := context.Cause(queryCtx); cause != nil {
+			return cause
+		}
+		return queryCtx.Err()
+	}
+	if cause := context.Cause(procCtx); cause != nil &&
+		!moerr.IsMoErrCode(cause, moerr.ErrQueryInterrupted) &&
+		!errors.Is(cause, context.Canceled) {
+		return cause
+	}
+	return nil
 }
 
 func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
