@@ -132,6 +132,17 @@ func (rt *Routine) isCancelled() bool {
 	return rt.cancelled.Load()
 }
 
+// shouldCloseConnection reports whether the connection lifecycle itself has
+// been cancelled. Request-scoped deadlines must not close an otherwise healthy
+// connection after a long-running request completes successfully.
+func (rt *Routine) shouldCloseConnection() bool {
+	if rt.isCancelled() {
+		return true
+	}
+	routineCtx := rt.getCancelRoutineCtx()
+	return routineCtx != nil && context.Cause(routineCtx) != nil
+}
+
 func (rt *Routine) setInProcessRequest(b bool) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -263,10 +274,8 @@ func (rt *Routine) getCleanupContext() context.Context {
 }
 
 func (rt *Routine) handleRequest(req *Request) error {
-	var routineCtx context.Context
 	var err error
 	var resp *Response
-	var quit bool
 
 	ses := rt.getSession()
 
@@ -280,15 +289,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}()
 
 	reqBegin := time.Now()
-	// WithHungThreshold used to add this deadline as a side effect of starting
-	// a Span. Preserve the request cleanup guard independently of the retired
-	// Span recording and profiling runtime.
-	routineCtx, cancelHungRequest := context.WithTimeoutCause(
-		rt.getCancelRoutineCtx(),
-		30*time.Minute,
-		moerr.CauseNewMOHungSpan,
-	)
-	defer cancelHungRequest()
+	routineCtx := rt.getCancelRoutineCtx()
 
 	parameters := rt.getParameters()
 	//all offspring related to the request inherit the txnCtx
@@ -376,22 +377,17 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	cancelRequestFunc()
 
-	//check the connection has been already canceled or not.
-	select {
-	case <-routineCtx.Done():
-		quit = true
-	default:
-	}
-
-	quit = quit || rt.isCancelled()
-
-	if quit {
+	// A completed request may have run longer than an observability threshold,
+	// but only connection-lifecycle cancellation should retire the connection.
+	if rt.shouldCloseConnection() {
 		rt.decreaseCount(func() {
 			metric.ConnectionCounter(ses.GetTenantInfo().GetTenant(), ses.GetTenantInfo().GetTenantID()).Dec()
 		})
 
 		//ensure cleaning the transaction
-		ses.Error(tenantCtx, "rollback the txn.")
+		ses.Error(tenantCtx, "rollback the txn.",
+			zap.Error(context.Cause(rt.getCancelRoutineCtx())),
+			zap.Bool("routine cancelled", rt.isCancelled()))
 		tempExecCtx := ExecCtx{
 			reqCtx: rt.getCleanupContext(),
 			ses:    ses,

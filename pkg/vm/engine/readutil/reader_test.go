@@ -82,6 +82,142 @@ func (s *singlePersistedBlockSource) Close() {
 }
 func (*singlePersistedBlockSource) String() string { return "singlePersistedBlockSource" }
 
+type readerOwnershipDataSource struct {
+	closeCount int32
+}
+
+func (*readerOwnershipDataSource) Next(
+	context.Context,
+	[]string,
+	[]types.Type,
+	[]uint16,
+	int32,
+	any,
+	*mpool.MPool,
+	*batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	return nil, engine.End, nil
+}
+
+func (*readerOwnershipDataSource) ApplyTombstones(
+	context.Context,
+	*objectio.Blockid,
+	[]int64,
+	engine.TombstoneApplyPolicy,
+) ([]int64, error) {
+	return nil, nil
+}
+
+func (*readerOwnershipDataSource) GetTombstones(
+	context.Context,
+	*objectio.Blockid,
+) (objectio.Bitmap, error) {
+	return objectio.Bitmap{}, nil
+}
+
+func (*readerOwnershipDataSource) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*readerOwnershipDataSource) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*readerOwnershipDataSource) SetFilterZM(objectio.ZoneMap)    {}
+func (s *readerOwnershipDataSource) Close() {
+	atomic.AddInt32(&s.closeCount, 1)
+}
+func (*readerOwnershipDataSource) String() string { return "readerOwnershipDataSource" }
+
+type readerOwnershipFilter struct {
+	freeCount int32
+}
+
+func (*readerOwnershipFilter) Test([]byte) bool { return true }
+func (*readerOwnershipFilter) TestVector(
+	*vector.Vector,
+	func(bool, bool, int),
+) []uint8 {
+	return nil
+}
+func (*readerOwnershipFilter) Valid() bool { return true }
+func (*readerOwnershipFilter) Exact() bool { return true }
+func (f *readerOwnershipFilter) Free() {
+	atomic.AddInt32(&f.freeCount, 1)
+}
+
+func TestNewReaderConsumesSourceAndFilterOnConstructionError(t *testing.T) {
+	setupMP := mpool.MustNew(t.Name() + "-setup")
+	column := func() *plan.Expr { return MakeColExprForTest(0, types.T_int64, "id") }
+	expr := MakeFunctionExprForTest("and", []*plan.Expr{
+		MakeInExprForTest(column(), []int64{1, 2, 3}, types.T_int64, setupMP),
+		MakeInExprForTest(column(), []int64{2, 3, 4}, types.T_int64, setupMP),
+	})
+	require.Zero(t, setupMP.CurrNB())
+
+	tableDef := &plan.TableDef{
+		Name:          "t",
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{{
+			Name:    "id",
+			Seqnum:  0,
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	source := new(readerOwnershipDataSource)
+	filter := new(readerOwnershipFilter)
+
+	reader, err := NewReader(
+		context.Background(),
+		nil,
+		nil,
+		nil,
+		tableDef,
+		timestamp.Timestamp{},
+		expr,
+		source,
+		0,
+		engine.FilterHint{BF: filter},
+	)
+	require.Error(t, err)
+	require.Nil(t, reader)
+	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+	require.Equal(t, int32(1), atomic.LoadInt32(&filter.freeCount))
+}
+
+func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "t",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Cols: []*plan.ColDef{{
+			Name:    "id",
+			Seqnum:  0,
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	source := new(readerOwnershipDataSource)
+	filter := new(readerOwnershipFilter)
+
+	reader, err := NewReader(
+		context.Background(),
+		nil,
+		nil,
+		nil,
+		tableDef,
+		timestamp.Timestamp{},
+		nil,
+		source,
+		0,
+		engine.FilterHint{BF: filter},
+	)
+	require.NoError(t, err)
+	require.Zero(t, atomic.LoadInt32(&source.closeCount))
+	require.Zero(t, atomic.LoadInt32(&filter.freeCount))
+	require.NoError(t, reader.Close())
+	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+	require.Equal(t, int32(1), atomic.LoadInt32(&filter.freeCount))
+}
+
 func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()

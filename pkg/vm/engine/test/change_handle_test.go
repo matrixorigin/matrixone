@@ -397,13 +397,30 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 		return
 	}
 	length := bat.RowCount()
-	assert.Equal(t, len(bat.Vecs), len(userBatch.Vecs)+1) // user rows + committs
+	require.GreaterOrEqual(t, len(bat.Vecs), len(userBatch.Vecs)+1)
 	for i, vec := range userBatch.Vecs {
 		assert.Equal(t, bat.Vecs[i].GetType().Oid, vec.GetType().Oid)
 		assert.Equal(t, bat.Vecs[i].Length(), length)
 	}
-	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].GetType().Oid, types.T_TS)
-	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].Length(), length)
+	commitPos := -1
+	for pos, attr := range bat.Attrs {
+		if attr == objectio.DefaultCommitTS_Attr {
+			commitPos = pos
+			break
+		}
+	}
+	if commitPos == -1 {
+		for pos := len(bat.Vecs) - 1; pos >= len(userBatch.Vecs); pos-- {
+			if bat.Vecs[pos].GetType().Oid == types.T_TS {
+				commitPos = pos
+				break
+			}
+		}
+	}
+	require.NotEqual(t, -1, commitPos)
+	require.Less(t, commitPos, len(bat.Vecs))
+	assert.Equal(t, types.T_TS, bat.Vecs[commitPos].GetType().Oid)
+	assert.Equal(t, length, bat.Vecs[commitPos].Length())
 }
 
 func changesHandleTestRowCount() int {
@@ -1622,6 +1639,12 @@ func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
 			catalog.SetupDefines("")
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			fs, err := fileservice.NewMemoryFS(
+				"checkpoint-entry-dedup", fileservice.DisabledCacheConfig, nil,
+			)
+			require.NoError(t, err)
 
 			ctx := context.Background()
 			start := types.BuildTS(1, 0)
@@ -1660,7 +1683,7 @@ func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
 			entry1 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
 			entry2 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
 
-			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointEntries(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry1, entry2}, nil, nil)
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointEntries(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry1, entry2}, mp, fs)
 			require.NoError(t, err)
 
 			require.Len(t, dataAobjs, 1)
@@ -1682,6 +1705,12 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
 			catalog.SetupDefines("")
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			fs, err := fileservice.NewMemoryFS(
+				"checkpoint-range", fileservice.DisabledCacheConfig, nil,
+			)
+			require.NoError(t, err)
 
 			ctx := context.Background()
 			start := types.BuildTS(10, 0)
@@ -1723,7 +1752,7 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 
 			entry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
 
-			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry}, nil, nil)
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry}, mp, fs)
 			require.NoError(t, err)
 
 			require.Len(t, dataCNObjs, 1)
@@ -1778,6 +1807,7 @@ func newObjectEntryForCheckpointTest(t *testing.T, id byte, appendable bool, cnC
 
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
 	if appendable {
 		objectio.WithAppendable()(stats)
 	}

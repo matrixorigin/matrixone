@@ -21,6 +21,7 @@ package docfilter
 import "C"
 
 import (
+	"runtime"
 	"sync/atomic"
 	"unsafe"
 
@@ -30,22 +31,22 @@ import (
 )
 
 // TagCbitmap marks a payload serialized by the dense cbitmap filter, alongside
-// TagBloom / TagBitset / TagCRoaring in the shared reader-side transport.
+// TagBloom / TagCRoaring / TagSorted64 in the shared reader-side transport.
 const TagCbitmap byte = 3
 
 // MaxCbitmapBits caps the dense bitset size. A dense bitmap is indexed by the
 // doc_id value, so its size is O(max value), not O(count) — only viable when
-// the max id is bounded. Above this the caller falls back to CRoaring.
+// the max id is bounded. Above this the caller falls back to Sorted64.
 //
-// 2^23 bits = 1 MB, sized to stay within a typical per-core L2 cache so the
-// random per-row membership probe hits L2 rather than L3/DRAM, and to bound
-// per-query memory under concurrency (N concurrent queries * up to 1 MB).
-// Covers dense integer PKs up to ~8.4M; sparser/larger id ranges fall back to
-// the compact CRoaring bitset.
-const MaxCbitmapBits = uint64(1) << 23
+// 2^29 bits = 64 MiB is a hard per-filter ceiling, not the ordinary selection
+// threshold. BuildCbitmapBytes additionally caps the dense representation by
+// the sparse representation's 8-bytes-per-key cost. Dense data such as 10M
+// sequential IDs therefore uses about 1.25 MiB, while a handful of far-apart
+// IDs never allocates a large bitmap merely because it fits the hard ceiling.
+const MaxCbitmapBits = uint64(1) << 29
 
 // CbitmapFeasible reports whether a max doc_id value is small enough that a
-// dense cbitmap is worthwhile (vs the compact CRoaring filter). This is the
+// dense cbitmap is worthwhile (vs the sorted exact filter). This is the
 // value-indexed (offset-off) bound; with CbitmapUseOffset the actual build
 // gates on the value SPAN (max-min), which is never larger.
 func CbitmapFeasible(maxVal uint64) bool {
@@ -58,19 +59,35 @@ func CbitmapFeasible(maxVal uint64) bool {
 
 // BuildIntegerFilter builds the best exact filter for an integer doc_id
 // vector and returns the tag byte to prepend + the serialized payload: a dense
-// cbitmap when the id range is bounded (fastest), else a compact CRoaring
-// bitset (sparse-safe). The reader picks the structure from the tag.
+// cbitmap when the id range is bounded (fastest), else an exact sorted uint64
+// set whose memory is linear and Go-owned. TagCRoaring remains readable for
+// rolling-upgrade compatibility but is no longer produced for new filters.
 func BuildIntegerFilter(v *vector.Vector) (byte, []byte, error) {
+	if integerValueCountUpperBound(v) == 0 {
+		data, err := BuildSorted64Bytes(v)
+		return TagSorted64, data, err
+	}
 	if data, ok, err := BuildCbitmapBytes(v); err != nil {
 		return 0, nil, err
 	} else if ok {
 		return TagCbitmap, data, nil
 	}
-	data, err := BuildCRoaringBytes(v)
+	data, err := BuildSorted64Bytes(v)
 	if err != nil {
 		return 0, nil, err
 	}
-	return TagCRoaring, data, nil
+	return TagSorted64, data, nil
+}
+
+func buildTaggedIntegerFilter(v *vector.Vector) ([]byte, error) {
+	if integerValueCountUpperBound(v) != 0 {
+		if data, ok, err := buildTaggedCbitmapBytes(v); err != nil {
+			return nil, err
+		} else if ok {
+			return data, nil
+		}
+	}
+	return buildSorted64TaggedBytes(v)
 }
 
 // CbitmapFilter wraps a C dense bitset (cgo/cbitmap) and implements
@@ -79,27 +96,44 @@ func BuildIntegerFilter(v *vector.Vector) (byte, []byte, error) {
 // the same C bitset can be shared across parallel readers and freed once. It is
 // the fastest exact filter for dense, bounded integer doc_ids.
 type CbitmapFilter struct {
-	ptr    unsafe.Pointer
-	refcnt int32
+	ptr           unsafe.Pointer
+	refcnt        int32
+	memoryRelease func()
 }
 
 // cbitmapSerialize serializes a C bitset handle to bytes (no tag prefix).
 func cbitmapSerialize(f unsafe.Pointer) ([]byte, error) {
-	var clen C.size_t
-	buf := C.mo_cbitmap_serialize(f, &clen)
-	if buf == nil {
+	return cbitmapSerializeMode(f, false)
+}
+
+func cbitmapSerializeMode(f unsafe.Pointer, tagged bool) ([]byte, error) {
+	clen := C.mo_cbitmap_serialized_size(f)
+	if clen == 0 || uint64(clen) > uint64(^uint(0)>>1) {
 		return nil, moerr.NewInternalErrorNoCtx("cbitmap: serialize failed")
 	}
-	defer C.mo_cbitmap_free_buf(buf)
-	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
+	offset := 0
+	if tagged {
+		offset = 1
+	}
+	data := make([]byte, int(clen)+offset)
+	if !bool(C.mo_cbitmap_serialize_into(
+		f, (*C.uint8_t)(unsafe.Pointer(&data[offset])), clen)) {
+		return nil, moerr.NewInternalErrorNoCtx("cbitmap: serialize failed")
+	}
+	if tagged {
+		data[0] = TagCbitmap
+	}
+	runtime.KeepAlive(data)
+	return data, nil
 }
 
 // CbitmapUseOffset, when true, bases the dense bitset at min(values) so its size
 // is the value SPAN (max-min) rather than the max value. This lets high-but-
 // narrow id sets — recent rows of a large table, BETWEEN ranges, or
 // signed/negative PKs (which zero-extend to huge uint64) — stay within
-// MaxCbitmapBits instead of falling back to CRoaring. On by default: it strictly
-// shrinks the bitset (size = span, never larger than the value-indexed layout)
+// MaxCbitmapBits instead of falling back to the sparse exact form. On by
+// default: it strictly shrinks the bitset (size = span, never larger than the
+// value-indexed layout)
 // at no probe cost (BenchmarkTestVectorOffset: identical probe time), so a
 // bounded-span set uses the fast dense path even when its absolute ids are
 // large. The base is carried in the serialized payload, so the reader is
@@ -109,15 +143,100 @@ var CbitmapUseOffset = true
 
 // BuildCbitmapBytes builds a dense bitset from an integer doc_id vector (read
 // directly in C) and returns its serialization (no tag). ok=false means the id
-// range is too large for a dense bitmap (caller should use CRoaring instead).
+// range is too large for a dense bitmap (caller should use Sorted64 instead).
 func BuildCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
-	return buildCbitmapBytesCap(v, MaxCbitmapBits, CbitmapUseOffset)
+	return buildCbitmapBytesCapMode(v, cbitmapBitCap(v), CbitmapUseOffset, false)
+}
+
+func buildTaggedCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
+	return buildCbitmapBytesCapMode(v, cbitmapBitCap(v), CbitmapUseOffset, true)
+}
+
+// integerValueCountUpperBound is exact except for duplicates, which only make
+// the bound conservative. Constant vectors have one physical value regardless
+// of their logical row count.
+//
+// The count is derived by scanning only [0, v.Length()) so stale null bits that
+// SetLength preserves beyond the logical length cannot shrink the estimate and
+// cause BuildSorted64Bytes (or any other downstream allocation sized from this
+// bound) to under-allocate and panic.
+func integerValueCountUpperBound(v *vector.Vector) uint64 {
+	if v == nil || v.Length() == 0 || v.IsConstNull() {
+		return 0
+	}
+	if v.IsConst() {
+		return 1
+	}
+	length := uint64(v.Length())
+	nullCount := v.GetNulls().GetBitmap().CountRange(0, length)
+	return uint64(v.Length() - nullCount)
+}
+
+func cbitmapBitCap(v *vector.Vector) uint64 {
+	return cbitmapBitCapForCount(integerValueCountUpperBound(v))
+}
+
+func cbitmapBitCapForCount(count uint64) uint64 {
+	// Sorted64 needs one uint64 header plus one uint64 per value; cbitmap needs
+	// two header words plus its bitmap words. Select dense only when its
+	// serialized representation is no larger than Sorted64.
+	if count <= 1 {
+		return 0
+	}
+	if count-1 >= MaxCbitmapBits/64 {
+		return MaxCbitmapBits
+	}
+	return min(MaxCbitmapBits, (count-1)*64)
+}
+
+type integerRange struct {
+	min   uint64
+	max   uint64
+	count uint64
+}
+
+func integerValueRange(v *vector.Vector) (integerRange, bool) {
+	if v == nil || !SupportsBitset(*v.GetType()) {
+		return integerRange{}, false
+	}
+	physicalRows := v.Length()
+	if v.IsConst() {
+		if v.IsConstNull() || physicalRows == 0 {
+			physicalRows = 0
+		} else {
+			physicalRows = 1
+		}
+	}
+	var result integerRange
+	for i := 0; i < physicalRows; i++ {
+		if v.IsNull(uint64(i)) {
+			continue
+		}
+		value := rawIntToUint64(v.GetRawBytesAt(i))
+		if result.count == 0 {
+			result.min, result.max = value, value
+		} else {
+			result.min = min(result.min, value)
+			result.max = max(result.max, value)
+		}
+		result.count++
+	}
+	return result, true
 }
 
 // buildCbitmapBytesCap is BuildCbitmapBytes with an explicit bit cap and offset
 // flag. Production callers use BuildCbitmapBytes (MaxCbitmapBits +
 // CbitmapUseOffset); benchmarks pass these explicitly to measure each variant.
 func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64, useOffset bool) (data []byte, ok bool, err error) {
+	return buildCbitmapBytesCapMode(v, maxBits, useOffset, false)
+}
+
+func buildCbitmapBytesCapMode(
+	v *vector.Vector,
+	maxBits uint64,
+	useOffset bool,
+	tagged bool,
+) (data []byte, ok bool, err error) {
 	cdata, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
 	off := C.int(0)
 	if useOffset {
@@ -128,7 +247,7 @@ func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64, useOffset bool) (dat
 		C.uint64_t(maxBits), off, &f)
 	switch status {
 	case C.MO_CBITMAP_RANGE_TOO_LARGE:
-		// The ONLY status that means "fall back to CRoaring": ok=false, no error.
+		// The ONLY status that means "use the sparse exact form": ok=false, no error.
 		return nil, false, nil
 	case C.MO_CBITMAP_OOM:
 		return nil, false, moerr.NewInternalErrorNoCtx("cbitmap: build out of memory")
@@ -138,7 +257,7 @@ func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64, useOffset bool) (dat
 		return nil, false, moerr.NewInternalErrorNoCtx("cbitmap: invalid build input")
 	}
 	defer C.mo_cbitmap_free(f)
-	b, err := cbitmapSerialize(f)
+	b, err := cbitmapSerializeMode(f, tagged)
 	if err != nil {
 		return nil, false, err
 	}
@@ -206,6 +325,10 @@ func (f *CbitmapFilter) Free() {
 		if atomic.AddInt32(&f.refcnt, -1) == 0 {
 			C.mo_cbitmap_free(f.ptr)
 			f.ptr = nil
+			if f.memoryRelease != nil {
+				f.memoryRelease()
+				f.memoryRelease = nil
+			}
 		}
 	}
 }

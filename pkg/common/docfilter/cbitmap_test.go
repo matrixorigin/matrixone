@@ -25,7 +25,7 @@ import (
 
 func TestCbitmapFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
-	present := []int64{1, 2, 100, 4096, 7}
+	present := []int64{1, 2, 3, 4, 5}
 	v := buildIntVec(t, mp, types.T_int64.ToType(), present, nil)
 	defer v.Free(mp)
 
@@ -41,13 +41,13 @@ func TestCbitmapFilter(t *testing.T) {
 	for i := range present {
 		require.True(t, f.Test(v.GetRawBytesAt(i)), "value %d present", present[i])
 	}
-	absent := buildIntVec(t, mp, types.T_int64.ToType(), []int64{3, 4, 999, 1 << 20}, nil)
+	absent := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 6, 999, 1 << 20}, nil)
 	defer absent.Free(mp)
 	for i := 0; i < absent.Length(); i++ {
 		require.False(t, f.Test(absent.GetRawBytesAt(i)))
 	}
 
-	probe := buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 3, 100, 0}, map[int]bool{3: true})
+	probe := buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 6, 5, 0}, map[int]bool{3: true})
 	defer probe.Free(mp)
 	require.Equal(t, []uint8{1, 0, 1, 0}, f.TestVector(probe, nil))
 
@@ -57,13 +57,13 @@ func TestCbitmapFilter(t *testing.T) {
 	require.True(t, f.Valid())
 	require.True(t, f.Test(v.GetRawBytesAt(0)))
 
-	// over-budget id SPAN -> ok=false (caller falls back to CRoaring). With the
+	// over-budget id SPAN -> ok=false (caller selects Sorted64). With the
 	// base offset on (default), feasibility is span-based, so a lone huge value
 	// (span 0) is feasible — it's a set whose SPAN exceeds the cap that falls
 	// back. {0, MaxCbitmapBits+10} spans past the cap either way (base 0).
 	big := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, int64(MaxCbitmapBits) + 10}, nil)
 	defer big.Free(mp)
-	_, ok, err = BuildCbitmapBytes(big)
+	_, ok, err = buildCbitmapBytesCap(big, MaxCbitmapBits, CbitmapUseOffset)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -86,13 +86,13 @@ func TestCbitmapNegativeInt32(t *testing.T) {
 
 	// Without offset: max ~4.29B >> MaxCbitmapBits -> infeasible -> CRoaring.
 	CbitmapUseOffset = false
-	_, ok, err := BuildCbitmapBytes(v)
+	_, ok, err := buildCbitmapBytesCap(v, MaxCbitmapBits, CbitmapUseOffset)
 	require.NoError(t, err)
 	require.False(t, ok, "negative int32 max (~4.3B) exceeds the cap without offset")
 
 	// With offset: span ~999 -> feasible, membership exact.
 	CbitmapUseOffset = true
-	payload, ok, err := BuildCbitmapBytes(v)
+	payload, ok, err := buildCbitmapBytesCap(v, MaxCbitmapBits, CbitmapUseOffset)
 	require.NoError(t, err)
 	require.True(t, ok, "offset makes the narrow negative span feasible")
 
@@ -115,11 +115,26 @@ func TestCbitmapNegativeInt32(t *testing.T) {
 
 func TestCbitmapConstVector(t *testing.T) {
 	runConstVectorFilterTest(t, func(t *testing.T, v *vector.Vector) constProbeFilter {
-		data, ok, err := BuildCbitmapBytes(v)
+		data, ok, err := buildCbitmapBytesCap(v, MaxCbitmapBits, CbitmapUseOffset)
 		require.NoError(t, err)
 		require.True(t, ok, "small ints should fit a dense cbitmap")
 		f, err := NewCbitmapFilter(data)
 		require.NoError(t, err)
 		return f
 	})
+}
+
+func TestBuildIntegerFilterStaleNullBits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil)
+	defer v.Free(mp)
+	v.SetNull(18)
+	require.Equal(t, uint64(10), integerValueCountUpperBound(v))
+
+	payload, err := BuildSorted64Bytes(v)
+	require.NoError(t, err)
+	f, err := NewSorted64Filter(payload)
+	require.NoError(t, err)
+	defer f.Free()
+	require.Equal(t, []uint8{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, f.TestVector(v, nil))
 }

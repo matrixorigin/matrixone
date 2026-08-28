@@ -1319,6 +1319,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// pre-filter path and use the legacy single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
+	if usePreFilter && len(remainingFilters) > 0 &&
+		types.T(ivfCtx.pkType.Id).IsInteger() &&
+		!localProtocolEnablesSortedMembershipFilter(
+			builder.compCtx.GetProcess().GetService()) {
+		// The exact pre-filter payload can use TagSorted64. During a rolling
+		// upgrade an older remote reader cannot decode that tag, so retain the
+		// original relational plan until the deployment-wide protocol gate rises.
+		return nodeID, nil
+	}
 	canIndexOnly := canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {

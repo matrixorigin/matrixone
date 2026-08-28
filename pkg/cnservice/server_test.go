@@ -366,6 +366,41 @@ func TestHandleAssemblePipelineDeletesCacheAndRejectsMixedNegotiation(t *testing
 		final := &pipeline.Message{Id: 43, Cmd: pipeline.Method_PipelineMessage, RequestedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
 		require.Error(t, handleAssemblePipeline(ctx, final, session))
 	})
+
+	for _, tt := range []struct {
+		name     string
+		fragment *pipeline.Message
+		final    *pipeline.Message
+	}{
+		{
+			name: "mixed batch count credit is protocol error",
+			fragment: &pipeline.Message{Id: 44, Cmd: pipeline.Method_PipelineMessage,
+				RequestedTeardownMode:     pipeline.StreamTeardownMode_FinishAck,
+				RequestedBatchCreditCount: 7, RequestedBatchCreditBytes: 1024},
+			final: &pipeline.Message{Id: 44, Cmd: pipeline.Method_PipelineMessage,
+				RequestedTeardownMode:     pipeline.StreamTeardownMode_FinishAck,
+				RequestedBatchCreditCount: 8, RequestedBatchCreditBytes: 1024},
+		},
+		{
+			name: "mixed batch byte credit is protocol error",
+			fragment: &pipeline.Message{Id: 45, Cmd: pipeline.Method_PipelineMessage,
+				RequestedTeardownMode:     pipeline.StreamTeardownMode_FinishAck,
+				RequestedBatchCreditCount: 8, RequestedBatchCreditBytes: 1024},
+			final: &pipeline.Message{Id: 45, Cmd: pipeline.Method_PipelineMessage,
+				RequestedTeardownMode:     pipeline.StreamTeardownMode_FinishAck,
+				RequestedBatchCreditCount: 8, RequestedBatchCreditBytes: 2048},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			session := mock_morpc.NewMockClientSession(ctrl)
+			ctx := context.Background()
+			cache := &testMessageCache{cache: []morpc.Message{tt.fragment}}
+			session.EXPECT().CreateCache(ctx, tt.final.GetID()).Return(cache, nil)
+			session.EXPECT().DeleteCache(tt.final.GetID())
+			require.Error(t, handleAssemblePipeline(ctx, tt.final, session))
+		})
+	}
 }
 
 func (c *testMessageCache) Add(val morpc.Message) error {

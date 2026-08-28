@@ -95,6 +95,112 @@ func TestNewMemPKFilter_WithBF_FulltextTable(t *testing.T) {
 	require.Equal(t, int16(0), filter.BFSeqNum)
 }
 
+func TestNewMemPKFilter_FulltextBFWithoutBasePKFilter(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "__mo_index_secondary_fulltext",
+		TableType: catalog.FullTextIndex_TblType,
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{catalog.FakePrimaryKeyColName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.FullTextIndex_TabCol_Id, Seqnum: 7, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "word", Seqnum: 8, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, Seqnum: 9, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	packerPool := fileservice.NewPool(8, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.01)
+	defer bf.Free()
+
+	filter, err := NewMemPKFilter(
+		tableDef,
+		types.MaxTs().ToTimestamp(),
+		packerPool,
+		BasePKFilter{},
+		engine.FilterHint{BF: bf},
+	)
+	require.NoError(t, err)
+	require.False(t, filter.Valid(), "membership filtering is independent of PK predicate pruning")
+	require.True(t, filter.HasBF)
+	require.Equal(t, int16(7), filter.BFSeqNum)
+}
+
+func TestNewMemPKFilterPreservesMembershipOnPKFailOpen(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"pk"},
+		},
+		Cols: []*plan.ColDef{
+			{Name: "pk", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.IndexTablePrimaryColName, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	packerPool := fileservice.NewPool(
+		8,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.01)
+	defer bf.Free()
+	hint := engine.FilterHint{Must: true, BF: bf}
+
+	valid := BasePKFilter{
+		Valid: true,
+		Op:    function.EQUAL,
+		Oid:   types.T_int64,
+		LB:    types.EncodeFixed(int64(1)),
+	}
+	invalid := BasePKFilter{
+		Valid: true,
+		Op:    function.EQUAL,
+		Oid:   types.T_int64,
+		LB:    []byte{1},
+	}
+
+	for _, test := range []struct {
+		name      string
+		base      BasePKFilter
+		wantValid bool
+		wantSpecs int
+	}{
+		{name: "invalid atomic predicate", base: invalid},
+		{
+			name: "invalid first disjunct",
+			base: BasePKFilter{Valid: true, Disjuncts: []BasePKFilter{invalid, valid}},
+		},
+		{
+			name: "invalid disjunct after partial construction",
+			base: BasePKFilter{Valid: true, Disjuncts: []BasePKFilter{valid, invalid}},
+		},
+		{
+			name:      "valid disjuncts keep both filters",
+			base:      BasePKFilter{Valid: true, Disjuncts: []BasePKFilter{valid, valid}},
+			wantValid: true,
+			wantSpecs: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filter, err := NewMemPKFilter(
+				tableDef,
+				types.MaxTs().ToTimestamp(),
+				packerPool,
+				test.base,
+				hint,
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.wantValid, filter.Valid())
+			require.Len(t, filter.Specs(), test.wantSpecs)
+			require.Len(t, filter.disjuncts, test.wantSpecs)
+			require.True(t, filter.HasBF)
+			require.Equal(t, int16(1), filter.BFSeqNum)
+			require.True(t, filter.Must())
+			require.Same(t, bf, filter.FilterHint.BF)
+		})
+	}
+}
+
 func TestNewMemPKFilter(t *testing.T) {
 
 	lb, ub := 10, 20
