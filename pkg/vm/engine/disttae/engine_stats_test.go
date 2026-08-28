@@ -101,7 +101,11 @@ func TestCoordinateStatsUpdateCancellationReleasesUpdateGeneration(t *testing.T)
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	gs.coordinateStatsUpdate(pb.StatsInfoKeyWithContext{Ctx: canceled, Key: key})
+	generation := gs.currentOrCreateUpdateRecord(key)
+	gs.coordinateStatsUpdateJob(statsUpdateJob{
+		wrapKey:        pb.StatsInfoKeyWithContext{Ctx: canceled, Key: key},
+		expectedRecord: generation,
+	})
 
 	gs.updatingMu.Lock()
 	record := gs.updatingMu.updating[key]
@@ -180,7 +184,11 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 		lastGood := newStats()
 		gs.mu.statsInfoMap[key] = lastGood
 
-		gs.coordinateStatsUpdate(pb.StatsInfoKeyWithContext{Ctx: context.Background(), Key: key})
+		generation := gs.currentOrCreateUpdateRecord(key)
+		gs.coordinateStatsUpdateJob(statsUpdateJob{
+			wrapKey:        pb.StatsInfoKeyWithContext{Ctx: context.Background(), Key: key},
+			expectedRecord: generation,
+		})
 
 		gs.mu.Lock()
 		got, exists := gs.mu.statsInfoMap[key]
@@ -193,7 +201,11 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 	t.Run("complete first failed generation", func(t *testing.T) {
 		gs := newGlobalStats()
 
-		gs.coordinateStatsUpdate(pb.StatsInfoKeyWithContext{Ctx: context.Background(), Key: key})
+		generation := gs.currentOrCreateUpdateRecord(key)
+		gs.coordinateStatsUpdateJob(statsUpdateJob{
+			wrapKey:        pb.StatsInfoKeyWithContext{Ctx: context.Background(), Key: key},
+			expectedRecord: generation,
+		})
 
 		gs.mu.Lock()
 		got, exists := gs.mu.statsInfoMap[key]

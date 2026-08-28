@@ -84,6 +84,17 @@ It intentionally does not provide:
    orphaned request, or a caller waiting for abandoned queued work.
 4. Unrelated tables normally remain parallel. A bounded hash-stripe collision
    may serialize refresh control work but cannot affect query execution.
+5. A synchronous first-read waiter may sleep only while the exact refresh
+   generation it enqueued is still owned by the current table subscription and
+   has at least one queued or running producer. Cache completion, context
+   cancellation, worker-lifecycle shutdown, producer exhaustion, and generation
+   removal are durable predicates checked while holding `GlobalStats.mu`;
+   `cond.Wait` atomically releases that same mutex. A notification is never
+   treated as the predicate.
+6. A producer may create or capture a refresh generation only while a live
+   subscription owns its eventual cleanup. Failed queue admission may leave an
+   idle record for that live subscription, but it cannot create process-lifetime
+   metadata for an unsubscribed table and no waiter may depend on a rejected job.
 
 ### 3.3 Boundedness
 
@@ -114,6 +125,10 @@ It intentionally does not provide:
 9. A first statistics read whose subscription fails returns without enqueueing
    automatic work. Retrying through the worker queue would create cache and
    scheduling state before any subscription lifetime can own its cleanup.
+10. Prefetch and synchronous first-read producers capture their scheduling
+    token while holding the subscription lifecycle read lock. A first-read also
+    requires the exact `subEntry` observed after subscription, so cleanup and a
+    replacement subscription cannot silently retarget old work.
 
 ## 4. Identity and visibility
 
@@ -173,7 +188,50 @@ The frontend point intentionally follows the engine point. Before generation
 advancement, an old plan may still run against the old generation. After it,
 new cache admission and later cache hits must reject that old generation.
 
-### 5.2 Automatic refresh interaction
+### 5.2 Synchronous first-read wait protocol
+
+`GlobalStats.Get(sync=true)` uses a level-triggered predicate rather than an
+edge-triggered wakeup contract:
+
+```text
+subscribe and capture exact subEntry
+  -> under subscription RLock, capture/create exact updateRecord
+  -> register and enqueue a job carrying that updateRecord
+  -> lock GlobalStats.mu
+  -> if cache key exists (value or nil sentinel), return it
+  -> if caller context is done, return nil
+  -> under GlobalStats.mu -> updatingMu, if updateRecord is no longer current
+     or has no queued/running producer, return nil
+  -> cond.Wait (atomically publish waiter and release GlobalStats.mu)
+  -> re-evaluate all predicates
+```
+
+`RemoveTid` takes `GlobalStats.mu -> updatingMu`, removes both the cache entry
+and generation, then broadcasts before releasing `GlobalStats.mu`. Therefore
+cleanup either happens before the waiter checks the generation, in which case
+the durable generation predicate terminates it, or after `cond.Wait` has
+atomically registered the waiter, in which case the broadcast wakes it. There
+is no broadcast-before-wait gap. A stale worker may reject its generation
+silently; progress never depends on that stale worker issuing another wakeup.
+Each enqueue attempt increments the generation's queued-producer count before
+it can become visible to a waiter; a forced sender blocked on a full queue is
+therefore also a live producer with caller and lifecycle cancellation. Worker
+admission atomically transfers that count to `inProgress` or consumes a
+coalesced/rejected job. Queue rollback and
+every path that removes the final running producer broadcast after persisting
+the zero-producer predicate. Thus a waiter cannot depend on a job that was
+accepted by the channel but later abandoned by debounce, coalescing, or a
+different caller's cancellation.
+
+Context cancellation uses the same rule: its callback acquires
+`GlobalStats.mu` before broadcasting, so cancellation cannot fall between the
+predicate check and waiter registration. A forced queue submission that is
+rejected or canceled is never followed by a wait.
+The `GlobalStats` lifecycle context is an independent terminal predicate for
+both a forced queue submission and an already parked waiter. Stopping update
+workers therefore cannot strand a request whose caller context remains live.
+
+### 5.3 Automatic refresh interaction
 
 Automatic logtail refresh and explicit ANALYZE share the engine stripe. An
 automatic refresh commits its statistics entry and object-count/sampling
@@ -195,7 +253,7 @@ Hash collisions deliberately trade rare refresh serialization for fixed memory.
 They do not merge table identity: engine maps, generations, session tags, and
 plan dependencies remain keyed by the full physical key.
 
-### 5.3 Plan and session-cache admission
+### 5.4 Plan and session-cache admission
 
 Planning records the first generation observed for each physical table. A
 generation change during repeated reads makes the completed plan ineligible for
@@ -217,6 +275,12 @@ The terminal behavior is:
 | frontend admission canceled | unchanged | unchanged | unchanged | cancellation |
 | explicit subscribe/catalog resolution fails | unchanged | no generation retained before a cleanup owner exists | unchanged | error |
 | initial statistics-read subscription fails | unchanged | no automatic work or generation admitted | unchanged | no statistics |
+| prefetch outside a live subscription | unchanged | no generation admitted | unchanged | rejected |
+| forced first-read queue admission canceled/rejected | unchanged | live-subscription record may remain for reuse and eventual cleanup; no waiter admitted | unchanged | no statistics |
+| shared automatic producer canceled before publication | unchanged | queued/running producer count reaches zero and wakes all coalesced waiters | unchanged | no statistics |
+| statistics worker lifecycle stops with queued work | unchanged | waiter terminates on lifecycle predicate; process-owned record dies with `GlobalStats` | unchanged | no statistics |
+| subscription cleanup before first-read waiter parks | removed | exact generation removed; durable predicate terminates waiter | unchanged | no statistics |
+| subscription cleanup after first-read waiter parks | removed | exact generation removed; cleanup broadcast terminates waiter | unchanged | no statistics |
 | automatic subscribe/catalog resolution fails | last-good entry retained; nil completion sentinel only when absent | failed generation closed | unchanged | not an ANALYZE result |
 | task submission canceled/rejected | unchanged | failed generation closed | unchanged | error |
 | object task fails or is canceled | unchanged; local partial object discarded | failed generation closed | unchanged | error |
@@ -278,10 +342,13 @@ cross-CN extension.
 The common TP path with no recorded statistics dependency performs no new
 generation-map read. A dependent cache hit takes one process-local read lock and
 O(number of referenced physical tables) comparisons, with no allocations. The
-local Apple M4 evidence at implementation revision `28acbd4cc7` measured
-1.77-1.83 ns for zero dependencies, 35.21-35.47 ns for one, 46.23-47.95 ns for
-four, and 115.6-128.7 ns for sixteen, all with zero allocations. These values
-are directional microbenchmark evidence, not a production latency SLO.
+local Apple M4 evidence at implementation revision `cb2327fd90` measured
+1.773-1.785 ns for zero dependencies, 34.95-36.45 ns for one, 47.20-48.10 ns
+for four, and 121.5-123.1 ns for sixteen, all with zero allocations. The waiter
+repair does not touch that path; its producer accounting adds one integer under
+the existing scheduling mutex only when a statistics refresh is enqueued.
+These values are directional microbenchmark evidence, not a production latency
+SLO.
 
 ANALYZE adds a synchronous disttae object-metadata scan after its derived query.
 This increases ANALYZE latency and S3 reads but moves the cost off the normal TP
@@ -344,6 +411,14 @@ checks on affected plan-cache hits.
 | table cleanup reclaims both statistics and refresh-scheduling entries; first-queued, late automatic, and late explicit work cannot recreate them or target a replacement lifetime | `RemoveTid` ownership/generation UT |
 | failed explicit subscription creates no ownerless scheduling generation | injected subscribe-failure UT |
 | failed initial-read subscription queues no ownerless automatic generation | injected subscribe-failure UT |
+| synchronous first read returns the exact value published by its accepted producer | producer-publication UT |
+| prefetch outside a live subscription creates no ownerless generation | focused ownership UT |
+| cleanup before synchronous waiter registration cannot lose a wake | queue/admission phase-barrier UT |
+| cleanup after synchronous waiter registration terminates the wait | condition-registration phase-barrier UT |
+| caller cancellation after synchronous waiter registration terminates the wait | condition-registration phase-barrier UT |
+| coalesced waiter terminates when another caller's producer is canceled at refresh admission | producer-transfer phase-barrier UT |
+| synchronous waiter terminates when the statistics worker lifecycle stops | worker-lifecycle phase-barrier UT |
+| replacement subscription rejects work captured from the old `subEntry` | subscription-generation UT |
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |
@@ -380,6 +455,9 @@ Decision log:
   and per-table refresh-scheduling metadata; every automatic and explicit
   refresh requires a non-nil update record as a lifetime token, so old work
   cannot recreate cleanup-owned state or target a replacement lifetime.
+- Treat condition-variable broadcasts only as hints. The cache/context/exact
+  generation predicates are checked under the condition mutex, and every
+  producer generation is captured under a live subscription cleanup owner.
 
 Open approval item: an independent reviewer must approve this exact design
 revision before the implementation is considered deliverable. There are no

@@ -66,10 +66,10 @@ import (
 // spawnUpdateWorkers (16-27个 goroutine)
 //     │
 //     │ 判断执行条件（第二层）： 便于统一 debounce force/normal update request
-//     │ - shouldExecuteUpdate(): 检查 inProgress 和 MinUpdateInterval (15s)
+//     │ - startAutomaticUpdate(): 检查 generation、inProgress 和 MinUpdateInterval (15s)
 //     │
 //     ▼
-// coordinateStatsUpdate()
+// coordinateStatsUpdateJob()
 //     │
 //     ├─→ 订阅表获取 PartitionState
 //     ├─→ 从 CatalogCache 获取 TableDef
@@ -202,6 +202,11 @@ func WithApproxObjectNumUpdater(f func() int64) GlobalStatsOption {
 
 // updateRecord records the update status of a key.
 type updateRecord struct {
+	// queued is the number of registered enqueue attempts that have not reached
+	// worker admission or rolled back. It includes a forced sender blocked on a
+	// full queue. Together with inProgress it is the durable predicate that
+	// proves a synchronous waiter still has a producer.
+	queued int
 	// inProgress indicates if the stats of a table is being updated.
 	inProgress bool
 	// lastUpdate is the time of the stats last updated.
@@ -220,6 +225,9 @@ type updateRecord struct {
 type statsUpdateJob struct {
 	wrapKey        pb.StatsInfoKeyWithContext
 	expectedRecord *updateRecord
+	// registered means enqueueStatsUpdateForRecord accounted this job in
+	// expectedRecord. Direct test helpers leave it false.
+	registered bool
 }
 
 type GlobalStats struct {
@@ -279,6 +287,14 @@ type GlobalStats struct {
 
 	// beforeSubscribeTable is for test only.
 	beforeSubscribeTable func(pb.StatsInfoKey)
+
+	// beforeStatsWait is for deterministic wait-protocol tests only. It runs
+	// with gs.mu held immediately before cond.Wait atomically releases it.
+	beforeStatsWait func(pb.StatsInfoKey, *updateRecord)
+
+	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
+	// tests only. It runs after worker admission and before refresh admission.
+	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
 }
 
 func NewGlobalStats(
@@ -295,6 +311,9 @@ func NewGlobalStats(
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.cond = sync.NewCond(&s.mu)
+	// One lifecycle callback wakes every current waiter when update workers
+	// stop. Register it once per GlobalStats rather than once per cache miss.
+	context.AfterFunc(ctx, s.notifyStatsWaiters)
 	s.initStatsRefreshAdmission()
 	for _, opt := range opts {
 		opt(s)
@@ -390,14 +409,20 @@ func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 		Ctx: ctx,
 		Key: key,
 	}
-	return gs.enqueueStatsUpdate(wrapkey, false)
+	generation, ok := gs.currentOrCreateSubscribedUpdateRecord(key)
+	if !ok {
+		return false
+	}
+	return gs.enqueueStatsUpdateForRecord(wrapkey, false, generation)
 }
 
 // currentOrCreateUpdateRecord returns the table-lifetime token that every
 // queued or explicit refresh must carry. In particular, the first refresh must
 // not use nil as an "expected absence" token: RemoveTid can make absence true
 // again, allowing old queued work to cross the cleanup boundary and recreate
-// table-owned state.
+// table-owned state. Production callers must already hold or have proved a
+// cleanup owner; use currentOrCreateSubscribedUpdateRecord for request-driven
+// work and shouldEnqueueExistingStatsUpdateGeneration for logtail work.
 func (gs *GlobalStats) currentOrCreateUpdateRecord(key pb.StatsInfoKey) *updateRecord {
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
@@ -423,6 +448,27 @@ func (gs *GlobalStats) currentOrCreateSubscribedUpdateRecord(
 
 	ent, ok := gs.engine.pClient.subscribed.m[key.TableID]
 	if !ok || ent == nil || ent.dbID != key.DatabaseID || ent.state != Subscribed {
+		return nil, false
+	}
+	return gs.currentOrCreateUpdateRecord(key), true
+}
+
+// currentOrCreateExactSubscribedUpdateRecord is the first-read variant. It
+// validates the exact subscription generation before mutating scheduling
+// state, so an old read cannot create even idle metadata for a replacement
+// lifetime.
+func (gs *GlobalStats) currentOrCreateExactSubscribedUpdateRecord(
+	key pb.StatsInfoKey,
+	expectedEnt *subEntry,
+) (*updateRecord, bool) {
+	if expectedEnt == nil {
+		return nil, false
+	}
+	gs.engine.pClient.subscribed.rw.RLock()
+	defer gs.engine.pClient.subscribed.rw.RUnlock()
+
+	ent, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || ent != expectedEnt || ent.dbID != key.DatabaseID || ent.state != Subscribed {
 		return nil, false
 	}
 	return gs.currentOrCreateUpdateRecord(key), true
@@ -512,6 +558,12 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	}
 
 	subscribedEnt := gs.subscribedEntry(key)
+	if subscribedEnt == nil {
+		// Cleanup crossed the successful subscribe return before this read could
+		// capture the exact lifetime. Do not let nil mean "accept any later
+		// subscription" when the synchronous producer is created below.
+		return nil
+	}
 	var remoteInfo *pb.StatsInfo
 	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
@@ -545,57 +597,71 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 
-	if sync {
-		stopWake := context.AfterFunc(ctx, func() {
-			gs.mu.Lock()
-			gs.mu.cond.Broadcast()
-			gs.mu.Unlock()
-		})
-		defer stopWake()
+	// Another producer may have published while subscription or remote lookup
+	// was in progress. Preserve this recheck for both synchronous and non-blocking
+	// callers. For a synchronous caller, an existing nil sentinel still admits a
+	// background retry, as before.
+	gs.mu.Lock()
+	info = gs.mu.statsInfoMap[key]
+	gs.mu.Unlock()
+	if info != nil {
+		return info
 	}
+	if !sync {
+		return nil
+	}
+
+	// Capture the producer generation only while the exact subscription
+	// observed above still owns cleanup. A replacement subscription must not
+	// silently retarget this read to a new table lifetime.
+	generation, generationOwned :=
+		gs.currentOrCreateExactSubscribedUpdateRecord(key, subscribedEnt)
+	if !generationOwned {
+		return nil
+	}
+
+	// A forced enqueue is the ownership transfer to a producer. If admission
+	// is canceled, no waiter may depend on work that was never accepted.
+	if !gs.enqueueStatsUpdateForRecord(wrapkey, true, generation) {
+		return nil
+	}
+	return gs.waitForStatsUpdate(ctx, key, generation)
+}
+
+// waitForStatsUpdate waits on durable state, not on a Broadcast edge. The
+// cache predicate and exact queued/running producer predicate are both checked
+// while gs.mu is held; RemoveTid uses the same gs.mu -> updatingMu order.
+// Cleanup or producer exhaustion therefore either changes the predicate before
+// this check, or broadcasts after cond.Wait has atomically registered the
+// waiter and released gs.mu.
+func (gs *GlobalStats) waitForStatsUpdate(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+) *pb.StatsInfo {
+	stopWake := context.AfterFunc(ctx, gs.notifyStatsWaiters)
+	defer stopWake()
 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-
-	// Recheck local cache after lock reacquired, another goroutine may have updated it.
-	info, ok = gs.mu.statsInfoMap[key]
-	if ok && info != nil {
-		return info
-	}
-
-	ok = false
-	if sync {
-		for !ok {
-			if ctx.Err() != nil {
-				return nil
-			}
-
-			func() {
-				// A forced update can block while the channel is full. A worker
-				// draining it may need gs.mu, so unlock before enqueueing.
-				gs.mu.Unlock()
-				defer gs.mu.Lock()
-				// If the trigger condition is not satisfied, the stats will not be updated
-				// for long time. So we trigger the update here to get the stats info as soon
-				// as possible.
-				gs.enqueueStatsUpdate(wrapkey, true)
-			}()
-
-			info, ok = gs.mu.statsInfoMap[key]
-			if ok {
-				break
-			}
-			if ctx.Err() != nil {
-				return nil
-			}
-
-			// Wait until stats info of the key is updated.
-			gs.mu.cond.Wait()
-
-			info, ok = gs.mu.statsInfoMap[key]
+	for {
+		if info, complete := gs.mu.statsInfoMap[key]; complete {
+			return info
 		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if gs.ctx != nil && gs.ctx.Err() != nil {
+			return nil
+		}
+		if !gs.statsUpdateProducerActive(key, generation) {
+			return nil
+		}
+		if gs.beforeStatsWait != nil {
+			gs.beforeStatsWait(key, generation)
+		}
+		gs.mu.cond.Wait()
 	}
-	return info
 }
 
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
@@ -638,20 +704,23 @@ func (gs *GlobalStats) spawnUpdateWorkers(ctx context.Context, num int) {
 	}
 }
 
-func (gs *GlobalStats) enqueueStatsUpdate(key pb.StatsInfoKeyWithContext, force bool) bool {
-	return gs.enqueueStatsUpdateForRecord(
-		key, force, gs.currentOrCreateUpdateRecord(key.Key))
-}
-
 func (gs *GlobalStats) enqueueStatsUpdateForRecord(
 	key pb.StatsInfoKeyWithContext,
 	force bool,
 	expectedRecord *updateRecord,
 ) bool {
+	if expectedRecord == nil {
+		return false
+	}
 	defer func() {
 		v2.StatsTriggerQueueSizeGauge.Set(float64(len(gs.updateC)))
 	}()
-	job := statsUpdateJob{wrapKey: key, expectedRecord: expectedRecord}
+	gs.registerStatsUpdateJob(expectedRecord)
+	job := statsUpdateJob{
+		wrapKey:        key,
+		expectedRecord: expectedRecord,
+		registered:     true,
+	}
 	if force {
 		select {
 		case gs.updateC <- job:
@@ -659,6 +728,14 @@ func (gs *GlobalStats) enqueueStatsUpdateForRecord(
 			v2.StatsTriggerForcedCounter.Add(1)
 			return true
 		case <-key.Ctx.Done():
+			if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+				gs.notifyStatsWaiters()
+			}
+			return false
+		case <-gs.lifecycleDone():
+			if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+				gs.notifyStatsWaiters()
+			}
 			return false
 		}
 	}
@@ -669,8 +746,48 @@ func (gs *GlobalStats) enqueueStatsUpdateForRecord(
 		v2.StatsTriggerUnforcedCounter.Add(1)
 		return true
 	default:
+		if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+			gs.notifyStatsWaiters()
+		}
 		return false
 	}
+}
+
+func (gs *GlobalStats) registerStatsUpdateJob(generation *updateRecord) {
+	gs.updatingMu.Lock()
+	generation.queued++
+	gs.updatingMu.Unlock()
+}
+
+// unregisterStatsUpdateJob rolls back a job that never reached worker
+// admission. It returns true only when the current generation has no remaining
+// queued or running producer and waiters must re-evaluate their predicate.
+func (gs *GlobalStats) unregisterStatsUpdateJob(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+) bool {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	if generation.queued > 0 {
+		generation.queued--
+	}
+	current, ok := gs.updatingMu.updating[key]
+	return ok && current == generation && generation.queued == 0 && !generation.inProgress
+}
+
+func (gs *GlobalStats) notifyStatsWaiters() {
+	gs.mu.Lock()
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	gs.mu.Unlock()
+}
+
+func (gs *GlobalStats) lifecycleDone() <-chan struct{} {
+	if gs.ctx == nil {
+		return nil
+	}
+	return gs.ctx.Done()
 }
 
 func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLogtail) {
@@ -788,16 +905,6 @@ func (gs *GlobalStats) shouldEnqueueUpdateGenerationLocked(
 	return rec, false
 }
 
-// shouldUpdate implements a debounce mechanism to prevent excessive stats updates.
-
-// shouldExecuteUpdate implements a debounce mechanism to prevent excessive stats updates.
-// Only checks inProgress and MinUpdateInterval.
-// Change rate is NOT checked here (already checked in shouldEnqueueUpdate).
-func (gs *GlobalStats) shouldExecuteUpdate(key pb.StatsInfoKey) bool {
-	_, ok := gs.startAutomaticUpdate(key, gs.currentOrCreateUpdateRecord(key))
-	return ok
-}
-
 func (gs *GlobalStats) startAutomaticUpdate(
 	key pb.StatsInfoKey,
 	expectedRecord *updateRecord,
@@ -807,6 +914,35 @@ func (gs *GlobalStats) startAutomaticUpdate(
 	}
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
+	return gs.startAutomaticUpdateLocked(key, expectedRecord)
+}
+
+func (gs *GlobalStats) startAutomaticUpdateJob(
+	job statsUpdateJob,
+) (*updateRecord, bool, bool) {
+	if job.expectedRecord == nil {
+		return nil, false, false
+	}
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	if job.registered && job.expectedRecord.queued > 0 {
+		job.expectedRecord.queued--
+	}
+	generation, started :=
+		gs.startAutomaticUpdateLocked(job.wrapKey.Key, job.expectedRecord)
+	if started {
+		return generation, true, false
+	}
+	current, ok := gs.updatingMu.updating[job.wrapKey.Key]
+	noProducer := ok && current == job.expectedRecord &&
+		job.expectedRecord.queued == 0 && !job.expectedRecord.inProgress
+	return nil, false, noProducer
+}
+
+func (gs *GlobalStats) startAutomaticUpdateLocked(
+	key pb.StatsInfoKey,
+	expectedRecord *updateRecord,
+) (*updateRecord, bool) {
 	rec, ok := gs.updatingMu.updating[key]
 	if !ok || rec != expectedRecord {
 		return nil, false
@@ -826,6 +962,13 @@ func (gs *GlobalStats) statsUpdateGenerationActive(key pb.StatsInfoKey, generati
 	defer gs.updatingMu.Unlock()
 	rec, ok := gs.updatingMu.updating[key]
 	return ok && rec == generation
+}
+
+func (gs *GlobalStats) statsUpdateProducerActive(key pb.StatsInfoKey, generation *updateRecord) bool {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	rec, ok := gs.updatingMu.updating[key]
+	return ok && rec == generation && (rec.queued > 0 || rec.inProgress)
 }
 
 // markExplicitUpdateComplete advances the refresh baseline without stealing
@@ -1082,20 +1225,19 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 	gs.mu.cond.Broadcast()
 }
 
-func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext) {
-	gs.coordinateStatsUpdateJob(statsUpdateJob{
-		wrapKey:        wrapKey,
-		expectedRecord: gs.currentOrCreateUpdateRecord(wrapKey.Key),
-	})
-}
-
 func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
 	wrapKey := job.wrapKey
 	statser := statistic.StatsInfoFromContext(wrapKey.Ctx)
 	crs := new(perfcounter.CounterSet)
-	generation, ok := gs.startAutomaticUpdate(wrapKey.Key, job.expectedRecord)
+	generation, ok, noProducer := gs.startAutomaticUpdateJob(job)
 	if !ok {
+		if noProducer {
+			gs.notifyStatsWaiters()
+		}
 		return
+	}
+	if gs.afterAutomaticUpdateStarted != nil {
+		gs.afterAutomaticUpdateStarted(wrapKey.Key, generation)
 	}
 
 	// updated is used to mark that the stats info is updated.
@@ -1104,9 +1246,10 @@ func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
 	var samplingRatio float64
 	release, err := gs.acquireStatsRefresh(wrapKey.Ctx, wrapKey.Key)
 	if err != nil {
-		// shouldExecuteUpdate opened this generation before admission. Close it
+		// Worker admission opened this generation before refresh admission. Close it
 		// even when cancellation prevents this worker from acquiring the stripe.
 		gs.markAutomaticUpdateComplete(wrapKey.Key, generation, false, 0, 0)
+		gs.notifyStatsWaiters()
 		return
 	}
 	if !gs.statsUpdateGenerationActive(wrapKey.Key, generation) {
