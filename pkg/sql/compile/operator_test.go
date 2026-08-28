@@ -800,6 +800,7 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	op := shuffle.NewArgument()
 	op.BucketNum = 4
 	op.DrainAllBuckets = true
+	op.StringHashKey = true
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*shuffle.Shuffle)
@@ -813,6 +814,8 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.Equal(t, int32(1), dup2.CurrentShuffleIdx)
 	require.True(t, dup1.DrainAllBuckets)
 	require.True(t, dup2.DrainAllBuckets)
+	require.True(t, dup1.StringHashKey)
+	require.True(t, dup2.StringHashKey)
 }
 
 func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {

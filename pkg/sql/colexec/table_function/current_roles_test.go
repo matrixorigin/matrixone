@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,36 +33,141 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCurrentRoleClosure(t *testing.T) {
-	edges := []roleGrantEdge{
-		{grantedID: 20, granteeID: 10},
-		{grantedID: 30, granteeID: 20},
-		{grantedID: 40, granteeID: 30},
-		{grantedID: 10, granteeID: 40}, // cycle
-		{grantedID: 50, granteeID: 20},
-		{grantedID: 99, granteeID: 98}, // disconnected
-		{grantedID: 30, granteeID: 20}, // duplicate
+func roleGraphExpander(graph map[int64][]int64, expanded *[]int64) currentRoleFrontierExpander {
+	return func(_ *process.Process, frontier []int64, visit func(int64)) error {
+		for _, roleID := range frontier {
+			if expanded != nil {
+				*expanded = append(*expanded, roleID)
+			}
+			for _, grantedID := range graph[roleID] {
+				visit(grantedID)
+			}
+		}
+		return nil
 	}
-
-	require.Equal(t, []int64{10, 20, 30, 40, 50}, currentRoleClosure(10, edges))
-	require.Equal(t, []int64{98, 99}, currentRoleClosure(98, edges))
-	require.Equal(t, []int64{77}, currentRoleClosure(77, edges))
 }
 
-func TestDecodeCurrentRoleGrantEdges(t *testing.T) {
+func TestCurrentRoleClosure(t *testing.T) {
+	graph := map[int64][]int64{
+		10: {20},
+		20: {30, 50, 30}, // duplicate
+		30: {40},
+		40: {10}, // cycle
+		98: {99}, // disconnected
+	}
+
+	roles, err := currentRoleClosure(nil, 10, roleGraphExpander(graph, nil))
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 20, 30, 40, 50}, roles)
+
+	roles, err = currentRoleClosure(nil, 98, roleGraphExpander(graph, nil))
+	require.NoError(t, err)
+	require.Equal(t, []int64{98, 99}, roles)
+
+	roles, err = currentRoleClosure(nil, 77, roleGraphExpander(graph, nil))
+	require.NoError(t, err)
+	require.Equal(t, []int64{77}, roles)
+}
+
+func TestCurrentRoleClosureDoesNotVisitLargeDisconnectedGraph(t *testing.T) {
+	graph := make(map[int64]int64, 100_002)
+	graph[10] = 20
+	graph[20] = 30
+	for i := int64(0); i < 100_000; i++ {
+		graph[1_000_000+i] = 2_000_000 + i
+	}
+
+	lookups := 0
+	expand := func(_ *process.Process, frontier []int64, visit func(int64)) error {
+		for _, roleID := range frontier {
+			lookups++
+			if grantedID, ok := graph[roleID]; ok {
+				visit(grantedID)
+			}
+		}
+		return nil
+	}
+	roles, err := currentRoleClosure(nil, 10, expand)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 20, 30}, roles)
+	require.Equal(t, 3, lookups)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_, closureErr := currentRoleClosure(nil, 10, expand)
+		if closureErr != nil {
+			panic(closureErr)
+		}
+	})
+	require.Less(t, allocs, float64(100))
+}
+
+func BenchmarkCurrentRoleClosureLargeDisconnectedGraph(b *testing.B) {
+	graph := make(map[int64]int64, 100_002)
+	graph[10] = 20
+	graph[20] = 30
+	for i := int64(0); i < 100_000; i++ {
+		graph[1_000_000+i] = 2_000_000 + i
+	}
+	expand := func(_ *process.Process, frontier []int64, visit func(int64)) error {
+		for _, roleID := range frontier {
+			if grantedID, ok := graph[roleID]; ok {
+				visit(grantedID)
+			}
+		}
+		return nil
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := currentRoleClosure(nil, 10, expand); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestBuildCurrentRoleGrantQuery(t *testing.T) {
+	require.Equal(t,
+		"SELECT cast(granted_id AS bigint) FROM mo_catalog.mo_role_grant WHERE grantee_id IN (10,20,30)",
+		buildCurrentRoleGrantQuery([]int64{10, 20, 30}),
+	)
+}
+
+func TestVisitCurrentRoleGrants(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.NewWithSize(2)
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	for _, edge := range []roleGrantEdge{{20, 10}, {30, 20}} {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], edge.grantedID, false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[1], edge.granteeID, false, mp))
+	for _, roleID := range []int64{20, 30} {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], roleID, false, mp))
 	}
 	bat.SetRowCount(2)
 	result := executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 	defer result.Close()
 
-	require.Equal(t, []roleGrantEdge{{20, 10}, {30, 20}}, decodeCurrentRoleGrantEdges(result))
+	var roles []int64
+	visitCurrentRoleGrants(result, func(roleID int64) { roles = append(roles, roleID) })
+	require.Equal(t, []int64{20, 30}, roles)
+}
+
+func TestExpandCurrentRoleFrontierChunksQueries(t *testing.T) {
+	frontier := make([]int64, currentRoleGrantFrontierBatchSize+2)
+	for i := range frontier {
+		frontier[i] = int64(i + 1)
+	}
+	var queries []string
+	run := func(_ *process.Process, sql string) (executor.Result, error) {
+		queries = append(queries, sql)
+		return executor.Result{}, nil
+	}
+
+	require.NoError(t, expandCurrentRoleFrontierWithRunner(nil, frontier, func(int64) {}, run))
+	require.Len(t, queries, 2)
+	require.True(t, strings.HasSuffix(queries[0], ",255,256)"))
+	require.Equal(t, currentRoleGrantQueryPrefix+"257,258)", queries[1])
+	for _, query := range queries {
+		require.Contains(t, query, "WHERE grantee_id IN (")
+		require.NotContains(t, query, "grantee_id AS bigint")
+	}
 }
 
 func TestCurrentRolesState(t *testing.T) {
@@ -79,9 +185,11 @@ func TestCurrentRolesState(t *testing.T) {
 		}
 		require.NoError(t, tf.Prepare(proc))
 		state := tf.ctr.state.(*currentRolesState)
-		state.loadEdges = func(*process.Process) ([]roleGrantEdge, error) {
-			return []roleGrantEdge{{20, 10}, {30, 20}, {10, 30}}, nil
-		}
+		state.expandFrontier = roleGraphExpander(map[int64][]int64{
+			10: {20},
+			20: {30},
+			30: {10},
+		}, nil)
 
 		require.NoError(t, state.start(tf, proc, 0, nil))
 		require.Equal(t, []int64{10, 20, 30}, vector.MustFixedColWithTypeCheck[int64](state.batch.Vecs[0]))
@@ -95,7 +203,7 @@ func TestCurrentRolesState(t *testing.T) {
 		require.Zero(t, state.batch.RowCount())
 
 		expected := errors.New("role grant read failed")
-		state.loadEdges = func(*process.Process) ([]roleGrantEdge, error) { return nil, expected }
+		state.expandFrontier = func(*process.Process, []int64, func(int64)) error { return expected }
 		require.ErrorIs(t, state.start(tf, proc, 0, nil), expected)
 		tf.Free(proc, false, nil)
 	})

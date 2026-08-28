@@ -10719,7 +10719,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: TIMESTAMP,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    timestampPairTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -10770,6 +10770,14 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTimestamp
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_any, types.T_any},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampWithTime
 				},
 			},
 		},

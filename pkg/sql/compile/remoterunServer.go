@@ -740,15 +740,16 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId                 uuid.UUID
-	statementRuntimeIgnore bool
-	planSnapshotTS         timestamp.Timestamp
-	hasPlanSnapshotTS      bool
-	planGenerationReused   bool
-	prepareParams          pipeline.PrepareParamInfo
-	affectedRows           int64
-	remoteFragmentCounts   map[string]uint32
-	remoteExecutionID      uuid.UUID
+	StmtId                     uuid.UUID
+	statementRuntimeIgnore     bool
+	planSnapshotTS             timestamp.Timestamp
+	hasPlanSnapshotTS          bool
+	planGenerationReused       bool
+	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	prepareParams              pipeline.PrepareParamInfo
+	affectedRows               int64
+	remoteFragmentCounts       map[string]uint32
+	remoteExecutionID          uuid.UUID
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -923,6 +924,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
 		proc.SetPlanGenerationReused(pHelper.planGenerationReused)
 	}
+	proc.SetStringShuffleHashAlgorithm(pHelper.stringShuffleHashAlgorithm)
 	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
 		proc.GetService(),
 		int(pHelper.prepareParams.Length),
@@ -1213,16 +1215,23 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
+		procInfo.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return processHelper{}, err
+	}
 
 	result := processHelper{
-		id:                     procInfo.Id,
-		lim:                    process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:               procInfo.UnixTime,
-		accountId:              procInfo.AccountId,
-		txnClient:              cli,
-		affectedRows:           procInfo.AffectedRows,
-		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
-		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
+		id:                         procInfo.Id,
+		lim:                        process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:                   procInfo.UnixTime,
+		accountId:                  procInfo.AccountId,
+		txnClient:                  cli,
+		affectedRows:               procInfo.AffectedRows,
+		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
+		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {
 		result.planSnapshotTS = *procInfo.PlanSnapshotTs

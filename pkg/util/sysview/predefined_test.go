@@ -180,7 +180,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		assertInformationSchemaInitSQLParses(t, sql)
 	}
 
-	for _, protocol := range []int64{defines.MORPCVersion16, defines.MORPCVersion32} {
+	for _, protocol := range []int64{defines.MORPCVersion16, defines.MORPCVersion32, defines.MORPCVersion34} {
 		t.Run(fmt.Sprintf("compatibility-v%d", protocol), func(t *testing.T) {
 			compatibility := InitInformationSchemaSysTablesForProtocol(protocol)
 			assert.Len(t, compatibility, len(InitInformationSchemaSysTables))
@@ -196,7 +196,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion33)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion35)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 }
 

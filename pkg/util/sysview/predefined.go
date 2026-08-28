@@ -167,7 +167,7 @@ func informationSchemaMetadataVisibilityCTE() string {
 // rolling deployment's common protocol is below the mo_current_roles()
 // capability. It keeps tenant bootstrap executable on every CN and remains
 // cycle-safe by limiting the compatibility closure to the active role and its
-// directly inherited roles. The v33 same-version upgrade replaces these
+// directly inherited roles. The v35 same-version upgrade replaces these
 // definitions with the complete canonical closure after all CNs support it.
 func informationSchemaMetadataVisibilityCompatibilityCTE() string {
 	return informationSchemaMetadataVisibilityCTEWithActiveRoles(

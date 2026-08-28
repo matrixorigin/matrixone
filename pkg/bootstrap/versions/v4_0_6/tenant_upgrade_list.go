@@ -47,6 +47,9 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
+	backfillMoColumnsAttIsUnsigned(),
+	upgradeInformationSchemaStatistics(),
+	addMoRoleGrantGranteeIndex(),
 	upgradeInformationSchemaMetadataVisibilityView("TABLES", sysview.InformationSchemaTablesDDL),
 	upgradeInformationSchemaMetadataVisibilityView("COLUMNS", sysview.InformationSchemaColumnsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
@@ -67,7 +70,7 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 		UpgSql:                  viewDDL,
 		CheckFunc:               checkViewDefinition(viewName, viewDDL),
 		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		RequiredProtocolVersion: defines.MORPCVersion33,
+		RequiredProtocolVersion: defines.MORPCVersion35,
 	}
 }
 
@@ -81,14 +84,35 @@ func upgradeInformationSchemaMetadataVisibilityCheckConstraints() versions.Upgra
 		"CHECK_CONSTRAINTS", sysview.InformationSchemaCheckConstraintsDDL)
 }
 
+const moColumnsUnsignedMismatchPredicate = "account_id = current_account_id() " +
+	"AND (att_is_unsigned IS NULL OR att_is_unsigned = 0) " +
+	"AND mo_show_visible_bin(atttyp, 2) IN ('TINYINT UNSIGNED', 'SMALLINT UNSIGNED', 'INT UNSIGNED', 'BIGINT UNSIGNED')"
+
+func backfillMoColumnsAttIsUnsigned() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  catalog.MO_CATALOG,
+		TableName:               catalog.MO_COLUMNS,
+		UpgType:                 versions.MODIFY_METADATA,
+		UpgSql:                  "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE " + moColumnsUnsignedMismatchPredicate,
+		RequiredProtocolVersion: defines.MORPCVersion34,
+		AllowMoColumnsUpdate:    true,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			mismatch, err := versions.CheckTableDataExist(txn, accountID,
+				"SELECT 1 FROM mo_catalog.mo_columns WHERE "+moColumnsUnsignedMismatchPredicate+" LIMIT 1")
+			return !mismatch, err
+		},
+	}
+}
+
 // Keep this as a separate upgrade entry so tenants that already completed
 // v4.0.6 refresh COLUMNS and expose MySQL-compatible base DATA_TYPE names.
 func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "COLUMNS",
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    sysview.InformationSchemaColumnsDDL,
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "COLUMNS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaColumnsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion35,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
@@ -276,6 +300,21 @@ func addUserDefinedFunctionSignatureIndex() versions.UpgradeEntry {
 	}
 }
 
+func addMoRoleGrantGranteeIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  catalog.MO_CATALOG,
+		TableName:               "mo_role_grant",
+		UpgType:                 versions.ADD_INDEX,
+		UpgSql:                  "create index idx_mo_role_grant_grantee_id on mo_catalog.mo_role_grant(grantee_id)",
+		RequiredProtocolVersion: defines.MORPCVersion35,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(
+				txn, accountID, catalog.MO_CATALOG, "mo_role_grant", "idx_mo_role_grant_grantee_id",
+			)
+		},
+	}
+}
+
 func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    sysview.InformationDBConst,
@@ -319,24 +358,26 @@ func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {
 
 func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "KEY_COLUMN_USAGE",
-		UpgType:   versions.CREATE_VIEW,
-		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
-		CheckFunc: checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
-		PreSql:    fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
-		PostSql:   sysview.InformationSchemaKeyColumnUsageDDL,
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "KEY_COLUMN_USAGE",
+		UpgType:                 versions.CREATE_VIEW,
+		UpgSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		RequiredProtocolVersion: defines.MORPCVersion35,
+		CheckFunc:               checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
+		PreSql:                  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		PostSql:                 sysview.InformationSchemaKeyColumnUsageDDL,
 	}
 }
 
 func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "REFERENTIAL_CONSTRAINTS",
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    sysview.InformationSchemaReferentialConstraintsDDL,
-		CheckFunc: checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
-		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "REFERENTIAL_CONSTRAINTS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaReferentialConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion35,
+		CheckFunc:               checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
+		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
 	}
 }
 
@@ -346,7 +387,7 @@ func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
 		TableName:               "CHECK_CONSTRAINTS",
 		UpgType:                 versions.CREATE_VIEW,
 		UpgSql:                  sysview.InformationSchemaCheckConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion16,
+		RequiredProtocolVersion: defines.MORPCVersion35,
 		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
 			sysview.InformationSchemaCheckConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
@@ -360,11 +401,25 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 		TableName:               "TABLE_CONSTRAINTS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaTableConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion16,
+		RequiredProtocolVersion: defines.MORPCVersion35,
 		CheckFunc: checkViewDefinition("TABLE_CONSTRAINTS",
 			sysview.InformationSchemaTableConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
 			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
+	}
+}
+
+// Refresh STATISTICS for tenants that completed an earlier v4.0.6 offset.
+func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "STATISTICS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaStatisticsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion35,
+		CheckFunc:               checkViewDefinition("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "STATISTICS"),
 	}
 }
 
