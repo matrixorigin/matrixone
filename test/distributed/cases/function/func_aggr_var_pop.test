@@ -91,6 +91,9 @@ insert into decimal02 values(-298432432433242412313123321231321313);
 insert into decimal02 values(-34243214324324342321313321321342342343.123143);
 insert into decimal02 values(-0.12813218391321939921391929391293912);
 select * from decimal02;
+-- The converted DECIMAL result overflows.  Its float64 payload is an
+-- implementation detail and may vary with a numerically stable algorithm.
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 select var_pop(col1) from decimal02;
 drop table decimal02;
 
@@ -247,6 +250,7 @@ insert into test01 values(-298432432433242412313123321231321313);
 insert into test01 values(-34243214324324342321313321321342342343.123143);
 insert into test01 values(-0.12813218391321939921391929391293912);
 select * from test01;
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 select variance(a) from test01;
 drop table test01;
 

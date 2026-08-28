@@ -53,6 +53,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		}
 	}
 	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
+	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.groupingAware = false
@@ -419,7 +420,7 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
 				vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
 				return moerr.NewInvalidStateNoCtx(
-					"aggregate string source metadata requires MORPCVersion35")
+					"aggregate string source metadata requires MORPCVersion36")
 			}
 			if err := validateDecodedAggregateGroupCount(
 				ctr.spillAggList[i], bat.RowCount()); err != nil {

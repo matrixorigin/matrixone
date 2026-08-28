@@ -348,12 +348,12 @@ func TestStringSourcePrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 		}
 	}()
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion34)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
 	metadata, err := StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
 	require.NoError(t, err)
 	require.Nil(t, metadata, "old peers must receive a source-free compatible payload")
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
 	metadata, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 4}, metadata)

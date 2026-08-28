@@ -245,6 +245,7 @@ type container struct {
 	prepareParamKind       aggexec.PrepareParamKindStates
 	prepareParamKindWireV1 bool
 	legacyTextMinMax       bool
+	legacyVarianceState    bool
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
