@@ -705,6 +705,9 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	// cancelTxnCreateWithRequest is reserved for short-lived background
+	// transactions whose request context owns a blocked TxnClient.New call.
+	cancelTxnCreateWithRequest bool
 }
 
 // BackgroundExec executes the sql in background session without network output.

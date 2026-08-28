@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -1775,6 +1776,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 	}
 	return be
 }
@@ -2155,6 +2157,64 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
+// advanceAuthenticationSnapshot installs a session minimum timestamp that is
+// strictly beyond the clock uncertainty window captured for this login. The
+// authentication background transaction inherits this timestamp and waits for
+// the local logtail before reading security catalog state.
+func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return moerr.NewInternalError(ctx, "missing service runtime for authentication snapshot")
+	}
+	txnClock := rt.Clock()
+	if txnClock == nil {
+		return moerr.NewInternalError(ctx, "missing transaction clock for authentication snapshot")
+	}
+	if txnClock.MaxOffset() < 0 {
+		return moerr.NewInternalError(ctx, "negative transaction clock offset for authentication snapshot")
+	}
+
+	_, upperBound := txnClock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return moerr.NewInternalError(ctx, "authentication snapshot timestamp overflow")
+	}
+
+	// HLC ordering compares the logical component when physical times are equal.
+	// Moving to the next physical tick dominates every logical timestamp at the
+	// uncertainty upper bound, including a remote commit at that exact tick.
+	ses.updateLastCommitTS(timestamp.Timestamp{
+		PhysicalTime: upperBound.PhysicalTime + 1,
+	})
+	return nil
+}
+
+// prepareAuthenticationSnapshot installs the authentication fence and waits
+// for the local logtail before creating the user transaction. Waiting outside
+// TxnClient.New keeps the uncertainty interval from consuming a user-transaction
+// admission slot. The transaction still inherits the same session minimum, so
+// the default sacrificing-freshness path confirms it immediately and preserves
+// the snapshot contract. Freshness-preserving mode retains its existing wait for
+// the later of the current clock and this minimum.
+func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
+	if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
+	}
+	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+	if err != nil {
+		return err
+	}
+	if applied.Less(minimum) {
+		return moerr.NewInternalError(ctx, "authentication snapshot did not reach the required timestamp")
+	}
+	return nil
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2201,8 +2261,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
+	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+		return nil, err
+	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
+		fromRealUser:               true,
+		cancelTxnCreateWithRequest: true,
+	})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
