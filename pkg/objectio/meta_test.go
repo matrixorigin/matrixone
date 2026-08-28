@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,6 +66,26 @@ func TestBuildMetaData(t *testing.T) {
 	}
 }
 
+type dedupLoadWaiterContext struct {
+	context.Context
+	admitted chan struct{}
+	once     sync.Once
+}
+
+// dedupLoad calls Done only after it finds an existing load call. Observing
+// that call gives these tests a phase barrier without relying on scheduling.
+func (c *dedupLoadWaiterContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.admitted) })
+	return c.Context.Done()
+}
+
+func newDedupLoadWaiterContext() *dedupLoadWaiterContext {
+	return &dedupLoadWaiterContext{
+		Context:  context.Background(),
+		admitted: make(chan struct{}),
+	}
+}
+
 func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	oldMetaCache := metaCache
 	metaCache = newMetaCache(fscache.ConstCapacity(1024))
@@ -90,15 +111,16 @@ func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	}()
 
 	<-started
+	waiterCtx := newDedupLoadWaiterContext()
 	waiterDone := make(chan error, 1)
 	go func() {
-		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		_, err := dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			return nil, errors.New("unexpected waiter load")
 		})
 		waiterDone <- err
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	<-waiterCtx.admitted
 	close(release)
 	assert.Equal(t, "boom", <-panicDone)
 	err := <-waiterDone
@@ -142,8 +164,9 @@ func TestDedupLoadWaiterGetsSuccessfulOwnerValue(t *testing.T) {
 	}()
 	<-started
 
+	waiterCtx := newDedupLoadWaiterContext()
 	go func() {
-		v, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		v, err := dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			return nil, errors.New("unexpected waiter load")
 		})
 		waiterDone <- struct {
@@ -152,7 +175,7 @@ func TestDedupLoadWaiterGetsSuccessfulOwnerValue(t *testing.T) {
 		}{v, err}
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	<-waiterCtx.admitted
 	close(release)
 	result := <-waiterDone
 	assert.NoError(t, result.err)
@@ -217,17 +240,18 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	}()
 	<-started
 
+	waiterCtx := newDedupLoadWaiterContext()
 	var waiterLoadCount atomic.Int32
 	waiterDone := make(chan error, 1)
 	go func() {
-		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		_, err := dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			waiterLoadCount.Add(1)
 			return nil, errors.New("unexpected waiter load")
 		})
 		waiterDone <- err
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	<-waiterCtx.admitted
 	cancel()
 	assert.ErrorIs(t, <-ownerDone, context.Canceled)
 	assert.ErrorIs(t, <-waiterDone, context.Canceled)
