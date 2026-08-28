@@ -68,6 +68,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		assertIDs := func(t *testing.T, rows *sql.Rows, queryErr error, want ...int) {
 			t.Helper()
 			require.NoError(t, queryErr)
+			defer rows.Close()
 			var got []int
 			for rows.Next() {
 				var id int
@@ -77,6 +78,61 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, rows.Err())
 			require.Equal(t, want, got)
 		}
+
+		mustExec(t, ctx, conn, `create table prepared_exact_integer_cmp (
+			id int primary key,
+			u bigint unsigned,
+			b bit(64)
+		)`)
+		mustExec(t, ctx, conn, `insert into prepared_exact_integer_cmp values
+			(1, 9007199254740992, 9007199254740992),
+			(2, 9007199254740993, 9007199254740993),
+			(3, 9007199254740994, 9007199254740994)`)
+
+		t.Run("issue 27492 COM_STMT exact integer comparison", func(t *testing.T) {
+			for _, column := range []string{"u", "b"} {
+				t.Run(column, func(t *testing.T) {
+					stmt, prepareErr := conn.PrepareContext(ctx, fmt.Sprintf(
+						"select id from prepared_exact_integer_cmp where %s = ? order by id", column))
+					require.NoError(t, prepareErr)
+					defer stmt.Close()
+
+					rows, queryErr := stmt.QueryContext(ctx, "9007199254740993")
+					assertIDs(t, rows, queryErr, 2)
+					rows, queryErr = stmt.QueryContext(ctx, uint64(9007199254740993))
+					assertIDs(t, rows, queryErr, 2)
+					rows, queryErr = stmt.QueryContext(ctx, nil)
+					assertIDs(t, rows, queryErr)
+					rows, queryErr = stmt.QueryContext(ctx, "9007199254740993")
+					assertIDs(t, rows, queryErr, 2)
+				})
+			}
+		})
+
+		t.Run("issue 27492 SQL PREPARE exact integer comparison", func(t *testing.T) {
+			for _, column := range []string{"u", "b"} {
+				statementName := "issue27492_sql_" + column
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"prepare %s from 'select id from prepared_exact_integer_cmp where %s = ? order by id'",
+					statementName, column))
+				defer func() {
+					_, _ = conn.ExecContext(context.Background(), "deallocate prepare "+statementName)
+				}()
+
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
+				rows, queryErr := conn.QueryContext(ctx,
+					"execute "+statementName+" using @issue27492_value")
+				assertIDs(t, rows, queryErr, 2)
+				mustExec(t, ctx, conn, "set @issue27492_value = null")
+				rows, queryErr = conn.QueryContext(ctx,
+					"execute "+statementName+" using @issue27492_value")
+				assertIDs(t, rows, queryErr)
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
+				rows, queryErr = conn.QueryContext(ctx,
+					"execute "+statementName+" using @issue27492_value")
+				assertIDs(t, rows, queryErr, 2)
+			}
+		})
 
 		t.Run("COM_STMT exact comparison and list", func(t *testing.T) {
 			equality, prepareErr := conn.PrepareContext(ctx,

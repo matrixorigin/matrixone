@@ -1562,6 +1562,98 @@ func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
 	}
 }
 
+func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
+	ctx := context.Background()
+	uint64Type := makePlan2Type(&types.Type{Oid: types.T_uint64})
+	bit64Type := makePlan2Type(&types.Type{Oid: types.T_bit, Width: 64})
+	int64Type := makePlan2Type(&types.Type{Oid: types.T_int64})
+
+	for _, test := range []struct {
+		name   string
+		value  string
+		target planpb.Type
+		want   uint64
+	}{
+		{name: "uint64 above double precision", value: "9007199254740993", target: uint64Type, want: 9007199254740993},
+		{name: "bit64 numeric prefix", value: "9007199254740993tail", target: bit64Type, want: 9007199254740993},
+		{name: "integral exponent", value: "9007199254740993e0", target: uint64Type, want: 9007199254740993},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, ok, err := preparedComparisonExactIntegerExpr(ctx, test.value, test.target)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, test.want, expr.GetLit().GetU64Val())
+			require.Equal(t, test.target.Id, expr.Typ.Id)
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		value  string
+		target planpb.Type
+	}{
+		{name: "fraction stays approximate", value: "9007199254740993.5", target: uint64Type},
+		{name: "uint64 overflow", value: "18446744073709551616", target: uint64Type},
+		{name: "negative unsigned", value: "-1", target: uint64Type},
+		{name: "int64 overflow", value: "9223372036854775808", target: int64Type},
+		{name: "nonnumeric", value: "tail", target: bit64Type},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, ok, err := preparedComparisonExactIntegerExpr(ctx, test.value, test.target)
+			require.NoError(t, err)
+			require.False(t, ok)
+			require.Nil(t, expr)
+		})
+	}
+}
+
+func TestFillValuesOfParamsKeepsBitDomainForExactTextComparison(t *testing.T) {
+	ctx := context.Background()
+	bitType := makePlan2Type(&types.Type{Oid: types.T_bit, Width: 64})
+	column := &planpb.Expr{
+		Typ: bitType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{column, param})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{comparison},
+		}},
+	}}}
+	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		query, []types.Type{types.T_text.ToType()}))
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{
+			Value:            "9007199254740993",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	bound := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_bit), bound.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), bound.GetF().Args[1].Typ.Id)
+	require.Equal(t, uint64(9007199254740993), bound.GetF().Args[1].GetLit().GetU64Val())
+	require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, filled))
+	bound = filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_bit), bound.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), bound.GetF().Args[1].Typ.Id)
+}
+
 func TestPreparedRuntimeTextComparisonUnknownTypeIsNotNumeric(t *testing.T) {
 	rule := &preparedRuntimeTextComparisonScanRule{}
 	expr := &planpb.Expr{

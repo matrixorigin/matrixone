@@ -1169,6 +1169,48 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 	require.Same(t, original, runtimePlan, "ineligible SQL EXECUTE must not deep-copy the cached plan")
 }
 
+func TestSpecializePreparedExecutionPlanAppliesBitTextComparison(t *testing.T) {
+	ctx := context.Background()
+	bitType := plan.Type{Id: int32(types.T_bit), Width: 64}
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+		{
+			Typ: bitType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	})
+	require.NoError(t, err)
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+
+	runtimePlan, specialized, applied, err := specializePreparedExecutionPlan(ctx, original, []any{
+		plan2.ParamValue{
+			Value:            "9007199254740993",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	}, true, false)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.True(t, applied)
+	comparison := runtimePlan.GetQuery().Nodes[0].FilterList[0]
+	require.Equal(t, int32(types.T_bit), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), comparison.GetF().Args[1].Typ.Id)
+}
+
 func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *testing.T) {
 	ctx := context.Background()
 	makePlan := func(peerType types.T) *plan.Plan {

@@ -1696,7 +1696,7 @@ func preparedPlanHasStaticExactNumericPeer(preparePlan *plan2.Plan) bool {
 				isStaticValue := candidate.GetCol() != nil ||
 					(candidate.GetLit() != nil && candidate.GetLit().GetSrc() == nil)
 				argHasStaticExact = argHasStaticExact || (isStaticValue &&
-					(candidateType.IsInteger() || candidateType.IsDecimal()))
+					(candidateType.IsInteger() || candidateType.IsDecimal() || candidateType == types.T_bit))
 				return nil
 			})
 			hasParam = hasParam || argHasParam
@@ -1726,8 +1726,30 @@ func specializePreparedExecutionPlan(
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	needsNumericPrefix := plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
 	needsRuntimeSpecialization := plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
+	runtimeTypes := make([]types.Type, len(paramVals))
+	for i, value := range paramVals {
+		param, ok := value.(plan2.ParamValue)
+		if !ok {
+			continue
+		}
+		if param.IsBinaryProtocol {
+			if param.HasRuntimeType {
+				runtimeTypes[i] = param.RuntimeType
+			} else if param.Value != nil {
+				runtimeTypes[i] = types.T_text.ToType()
+			}
+		} else if param.HasSourceType {
+			switch param.SourceType.Oid {
+			case types.T_char, types.T_varchar, types.T_text:
+				runtimeTypes[i] = types.T_text.ToType()
+			}
+		}
+	}
+	needsTextComparison := plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		executionPlan, runtimeTypes)
 	if !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
-		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization {
+		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization &&
+		!needsTextComparison {
 		return executionPlan, false, false, nil
 	}
 

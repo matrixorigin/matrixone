@@ -641,5 +641,26 @@ set @issue25408_runtime_value = -2;
 execute issue25408_runtime_reexecute using @issue25408_runtime_value;
 deallocate prepare issue25408_runtime_reexecute;
 
+-- @case
+-- @desc:Prepared exact integer comparisons do not pass BIGINT/BIT text through DOUBLE
+-- @label:bvt
+drop table if exists issue27492_exact_cmp;
+create table issue27492_exact_cmp(id int primary key, u bigint unsigned, b bit(64));
+insert into issue27492_exact_cmp values (1, 9007199254740992, 9007199254740992), (2, 9007199254740993, 9007199254740993), (3, 9007199254740994, 9007199254740994);
+prepare issue27492_bigint from 'select id from issue27492_exact_cmp where u = ? order by id';
+prepare issue27492_bit from 'select id from issue27492_exact_cmp where b = ? order by id';
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+set @issue27492_value = null;
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+set @issue27492_value = '9007199254740993';
+execute issue27492_bigint using @issue27492_value;
+execute issue27492_bit using @issue27492_value;
+deallocate prepare issue27492_bigint;
+deallocate prepare issue27492_bit;
+drop table issue27492_exact_cmp;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

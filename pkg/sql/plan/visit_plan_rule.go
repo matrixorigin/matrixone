@@ -1014,6 +1014,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			implicitComparisonCastPos < len(rule.params) &&
 			rule.numericComparisonTextParamPositions[implicitComparisonCastPos] &&
 			rule.params[implicitComparisonCastPos] != nil {
+			if literal := rule.params[implicitComparisonCastPos].GetLit(); literal != nil {
+				exact, ok, exactErr := preparedComparisonExactIntegerExpr(
+					rule.ctx, literal.GetSval(), originalTyp)
+				if exactErr != nil {
+					return nil, exactErr
+				}
+				if ok {
+					if literal.Src != nil {
+						attachPreparedRuntimeParamSource(exact, literal.Src)
+					}
+					rule.specialized = true
+					return exact, nil
+				}
+			}
 			if literal := rule.params[implicitComparisonCastPos].GetLit(); literal != nil &&
 				preparedComparisonTextNeedsDoubleFallback(literal.GetSval(), originalTyp) {
 				// Keep the comparison in DOUBLE space when narrowing the converted
@@ -1176,6 +1190,70 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+// preparedComparisonExactIntegerExpr keeps an exact integral text prefix in
+// the comparison peer's integer domain. Routing it through DOUBLE first loses
+// adjacent BIGINT/BIT values above 2^53. Fractional and out-of-range values are
+// intentionally rejected here so the caller retains MySQL's approximate
+// numeric-comparison fallback for those cases.
+func preparedComparisonExactIntegerExpr(
+	ctx context.Context,
+	value string,
+	target plan.Type,
+) (*plan.Expr, bool, error) {
+	prefix, ok := planfunction.GetNumericStringPrefix(value)
+	if !ok {
+		return nil, false, nil
+	}
+	exact, ok := new(big.Rat).SetString(prefix)
+	if !ok || !exact.IsInt() {
+		return nil, false, nil
+	}
+	integer := exact.Num()
+	targetType := makeTypeByPlan2Type(target)
+	bits := 0
+	signed := false
+	switch targetType.Oid {
+	case types.T_int8:
+		bits, signed = 8, true
+	case types.T_int16:
+		bits, signed = 16, true
+	case types.T_int32:
+		bits, signed = 32, true
+	case types.T_int64:
+		bits, signed = 64, true
+	case types.T_uint8:
+		bits = 8
+	case types.T_uint16:
+		bits = 16
+	case types.T_uint32:
+		bits = 32
+	case types.T_uint64:
+		bits = 64
+	case types.T_bit:
+		bits = int(targetType.Width)
+		if bits <= 0 || bits > 64 {
+			bits = 64
+		}
+	default:
+		return nil, false, nil
+	}
+	if signed {
+		if !integer.IsInt64() {
+			return nil, false, nil
+		}
+		parsed := integer.Int64()
+		if bits < 64 && (parsed < -(int64(1)<<(bits-1)) || parsed > (int64(1)<<(bits-1))-1) {
+			return nil, false, nil
+		}
+	} else {
+		if !integer.IsUint64() || bits < 64 && integer.BitLen() > bits {
+			return nil, false, nil
+		}
+	}
+	expr, err := preparedRuntimeParamExpr(ctx, integer.String(), false, targetType)
+	return expr, err == nil, err
 }
 
 func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) bool {

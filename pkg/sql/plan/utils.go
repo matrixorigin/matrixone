@@ -3644,16 +3644,17 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 	}
 	if isImplicitPreparedParamCast(expr) {
 		position, ok := implicitPreparedParamPosition(expr)
-		return ok && rule.paramTypeIsNumeric(position)
+		return preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id)) ||
+			(ok && rule.paramTypeIsNumeric(position))
 	}
 	if expr.GetCol() != nil {
 		// A numeric column is a numeric comparison domain too. Keep the column
 		// expression itself unchanged; the text marker is rebound to the
 		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
 		// preserved without relying on the stale prepare-time integer cast.
-		return (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric()
+		return preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id))
 	}
-	if (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric() {
+	if preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id)) {
 		return true
 	}
 	if list := expr.GetList(); list != nil {
@@ -3719,7 +3720,12 @@ func (rule *preparedRuntimeTextComparisonScanRule) collectTextParams(expr *plan.
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsNumeric(position int) bool {
-	return position >= 0 && position < len(rule.runtimeParamTypes) && rule.runtimeParamTypes[position].IsNumeric()
+	return position >= 0 && position < len(rule.runtimeParamTypes) &&
+		preparedComparisonTypeIsNumeric(rule.runtimeParamTypes[position].Oid)
+}
+
+func preparedComparisonTypeIsNumeric(typ types.T) bool {
+	return typ == types.T_bit || (types.Type{Oid: typ}).IsNumeric()
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
@@ -5453,7 +5459,13 @@ func replaceParamVals(
 	runtimeParamTypes := make([]types.Type, len(paramVals))
 	for i, val := range paramVals {
 		param, ok := val.(ParamValue)
-		if !ok || !param.IsBinaryProtocol {
+		if !ok {
+			continue
+		}
+		if !param.IsBinaryProtocol {
+			if param.HasSourceType && isStringBackedType(param.SourceType) {
+				runtimeParamTypes[i] = types.T_text.ToType()
+			}
 			continue
 		}
 		if param.PrepareParamKind == vector.PrepareParamBoolean {
