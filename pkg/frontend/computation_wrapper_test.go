@@ -2566,6 +2566,28 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.NotNil(t, retStmt)
 }
 
+func TestInitExecuteStmtParamRebuildsDynamicSubscriptionMetadataPlan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 111)
+	defer prepareStmt.Close()
+
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	prepareStmt.dynamicSubscriptionMetadata = true
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp, "an execute-time rebound plan cannot reuse the prepare-time topology")
+	require.NotNil(t, retPlan)
+	require.NotSame(t, originalPlan, retPlan)
+	require.NotNil(t, retStmt)
+	require.Same(t, sentinel, prepareStmt.compile,
+		"the ordinary cached topology remains owned by the prepared statement")
+}
+
 func TestInitExecuteStmtParamBypassesCachedTopologyForPreparedSiriusExecution(t *testing.T) {
 	for _, protocol := range []struct {
 		name     string

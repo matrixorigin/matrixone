@@ -5157,13 +5157,10 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
-	restoreSubscriptionMetadataScope, err := builder.enterSubscriptionMetadataScope(stmt)
-	if err != nil {
+	ctx.queryBlockOwner = ctx
+	if err = builder.configureSubscriptionMetadataScopes(stmt, ctx); err != nil {
 		return 0, err
 	}
-	defer restoreSubscriptionMetadataScope()
-
-	ctx.queryBlockOwner = ctx
 	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
 		ctx.cteState.recursiveRefQueryBlock = ctx
 	}
@@ -10947,6 +10944,7 @@ func (builder *QueryBuilder) bindView(
 	snapshot *Snapshot,
 	obj *ObjectRef,
 	schema, table string,
+	metadataSubscription *SubscriptionMeta,
 ) (nodeID int32, err error) {
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
@@ -10995,7 +10993,6 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.AsSource = alterstmt.AsSource
 	}
 
-	metadataSubscription := builder.subscriptionMetadataScope
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
 	if isSubscriptionStatistics {
 		rewriteSubscriptionStatisticsAccount(viewStmt.AsSource, uint32(metadataSubscription.AccountId))
@@ -11836,7 +11833,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 			}
 
-			nodeID, err = builder.bindView(ctx, tableDef, snapshot, obj, schema, table)
+			metadataSubscription := ctx.activeSubscriptionMetadata
+			if metadataSubscription == nil &&
+				strings.EqualFold(schema, INFORMATION_SCHEMA) &&
+				strings.EqualFold(table, informationSchemaStatistics) {
+				metadataSubscription = subscriptionMetadataScopeForQualifier(
+					ctx, informationSchemaStatistics,
+				)
+			}
+			nodeID, err = builder.bindView(
+				ctx, tableDef, snapshot, obj, schema, table, metadataSubscription,
+			)
 			if err != nil {
 				return 0, err
 			}
@@ -11891,6 +11898,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		return builder.buildTable(tbl.Expr, ctx, tableInput)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
+		previousSubscriptionMetadata := ctx.activeSubscriptionMetadata
+		ctx.activeSubscriptionMetadata = nil
+		if subscriptionStatisticsTable(tableExprWithoutParens(tbl.Expr)) != nil {
+			qualifier := string(tbl.As.Alias)
+			if qualifier == "" {
+				qualifier = informationSchemaStatistics
+			}
+			ctx.activeSubscriptionMetadata = subscriptionMetadataScopeForQualifier(ctx, qualifier)
+		}
+		defer func() {
+			ctx.activeSubscriptionMetadata = previousSubscriptionMetadata
+		}()
+
 		derivedSelect := numericProjectionTableSelect(tbl.Expr)
 		if derivedSelect != nil && tbl.As.Alias == "" {
 			return 0, moerr.NewDerivedMustHaveAlias(builder.GetContext())

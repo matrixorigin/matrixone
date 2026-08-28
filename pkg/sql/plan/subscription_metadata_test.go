@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -23,26 +24,39 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 type subscriptionMetadataTestContext struct {
 	*MockCompilerContext
-	subscription *SubscriptionMeta
-	querying     *SubscriptionMeta
+	subscription  *SubscriptionMeta
+	subscriptions map[string]*SubscriptionMeta
+	querying      *SubscriptionMeta
+	defaultDB     string
+}
+
+func (c *subscriptionMetadataTestContext) subscriptionFor(databaseName string) *SubscriptionMeta {
+	if strings.EqualFold(databaseName, c.subscription.SubName) {
+		return c.subscription
+	}
+	for name, subscription := range c.subscriptions {
+		if strings.EqualFold(databaseName, name) {
+			return subscription
+		}
+	}
+	return nil
 }
 
 func (c *subscriptionMetadataTestContext) GetSubscriptionMeta(
 	databaseName string,
 	_ *Snapshot,
 ) (*SubscriptionMeta, error) {
-	if strings.EqualFold(databaseName, c.subscription.SubName) {
-		return c.subscription, nil
-	}
-	return nil, nil
+	return c.subscriptionFor(databaseName), nil
 }
 
 func (c *subscriptionMetadataTestContext) SetQueryingSubscription(subscription *SubscriptionMeta) {
@@ -53,11 +67,18 @@ func (c *subscriptionMetadataTestContext) GetQueryingSubscription() *Subscriptio
 	return c.querying
 }
 
+func (c *subscriptionMetadataTestContext) DefaultDatabase() string {
+	if c.defaultDB != "" {
+		return c.defaultDB
+	}
+	return c.MockCompilerContext.DefaultDatabase()
+}
+
 func (c *subscriptionMetadataTestContext) DatabaseExists(
 	databaseName string,
 	snapshot *Snapshot,
 ) bool {
-	return strings.EqualFold(databaseName, c.subscription.SubName) ||
+	return c.subscriptionFor(databaseName) != nil ||
 		c.MockCompilerContext.DatabaseExists(databaseName, snapshot)
 }
 
@@ -71,10 +92,11 @@ func (c *subscriptionMetadataTestContext) Resolve(
 		obj, tableDef := subscriptionStatisticsTestView()
 		return obj, tableDef, nil
 	}
-	if !strings.EqualFold(databaseName, c.subscription.SubName) {
+	subscription := c.subscriptionFor(databaseName)
+	if subscription == nil {
 		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot)
 	}
-	obj, tableDef, err := c.MockCompilerContext.Resolve(c.subscription.DbName, tableName, snapshot)
+	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot)
 	if err != nil || tableDef == nil {
 		return obj, tableDef, err
 	}
@@ -83,11 +105,11 @@ func (c *subscriptionMetadataTestContext) Resolve(
 		objectID = obj.Obj
 	}
 	obj = &ObjectRef{
-		SchemaName:       c.subscription.DbName,
+		SchemaName:       subscription.DbName,
 		ObjName:          tableName,
 		Obj:              objectID,
-		SubscriptionName: c.subscription.SubName,
-		PubInfo:          &plan.PubInfo{TenantId: c.subscription.AccountId},
+		SubscriptionName: subscription.SubName,
+		PubInfo:          &plan.PubInfo{TenantId: subscription.AccountId},
 	}
 	return obj, tableDef, nil
 }
@@ -144,6 +166,14 @@ func newSubscriptionMetadataTestOptimizer() (Optimizer, *subscriptionMetadataTes
 			DbName:    "tpch",
 			SubName:   "sub_db",
 			Tables:    "nation",
+		},
+		subscriptions: map[string]*SubscriptionMeta{
+			"sub_b": {
+				AccountId: 0,
+				DbName:    "tpch",
+				SubName:   "sub_b",
+				Tables:    "nation",
+			},
 		},
 	}
 	return subscriptionMetadataTestOptimizer{ctx: ctx}, ctx
@@ -262,4 +292,132 @@ func TestSubscriptionMetadataScopeControls(t *testing.T) {
 	require.Contains(t, filter, "reldatabase = tpch")
 	require.Contains(t, filter, "relname in (nation)")
 	require.NotContains(t, filter, "region")
+}
+
+func TestSubscriptionMetadataScopesArePerStatisticsOccurrence(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+
+	nestedPlan, err := runOneStmt(optimizer, t,
+		"select s.index_name from information_schema.statistics s "+
+			"where s.table_schema = 'sub_db' and exists ("+
+			"select 1 from information_schema.statistics t where t.table_schema = 'sub_b')")
+	require.NoError(t, err)
+	requireStatisticsPublisherScopes(t, nestedPlan.GetQuery(), map[string]int32{
+		"sub_db": 0,
+		"sub_b":  0,
+	})
+	require.Nil(t, ctx.GetQueryingSubscription())
+
+	siblingPlan, err := runOneStmt(optimizer, t,
+		"select a.index_name from information_schema.statistics a "+
+			"join information_schema.statistics b on a.table_name = b.table_name "+
+			"where a.table_schema = 'sub_db' and b.table_schema = 'sub_b'")
+	require.NoError(t, err)
+	requireStatisticsPublisherScopes(t, siblingPlan.GetQuery(), map[string]int32{
+		"sub_db": 0,
+		"sub_b":  0,
+	})
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestSubscriptionMetadataPredicateRouting(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+
+	booleanPlan, err := runOneStmt(optimizer, t,
+		"select s.index_name from information_schema.statistics s "+
+			"where s.table_schema = 'sub_db' and "+
+			"(s.index_name = 'PRIMARY' or s.non_unique = 1)")
+	require.NoError(t, err)
+	requireStatisticsPublisherScopes(t, booleanPlan.GetQuery(), map[string]int32{"sub_db": 0})
+
+	ctx.defaultDB = "sub_db"
+	accountWidePlan, err := runOneStmt(optimizer, t,
+		"select index_name from information_schema.statistics where table_name = 'nation'")
+	require.NoError(t, err)
+	for _, node := range accountWidePlan.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_TABLE_SCAN &&
+			node.GetObjRef().GetSchemaName() == catalog.MO_CATALOG {
+			require.Nil(t, node.GetObjRef().GetPubInfo(),
+				"an account-wide query must not infer a publisher from the current database")
+		}
+	}
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
+func TestPreparedStatementDetectsDynamicSubscriptionMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{
+			name: "root statistics parameter",
+			sql:  "select index_name from information_schema.statistics where table_schema = ? and table_name = ?",
+			want: true,
+		},
+		{
+			name: "nested statistics parameter",
+			sql: "select 1 where exists (select 1 from information_schema.statistics s " +
+				"where s.table_schema = ?)",
+			want: true,
+		},
+		{
+			name: "literal statistics scope",
+			sql:  "select index_name from information_schema.statistics where table_schema = 'sub_db'",
+		},
+		{
+			name: "unrelated parameter",
+			sql:  "select index_name from information_schema.statistics where table_name = ?",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statements, err := mysql.Parse(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer statements[0].Free()
+			require.Equal(t, test.want,
+				PreparedStatementHasDynamicSubscriptionMetadata(statements[0]))
+		})
+	}
+}
+
+func TestPreparedSubscriptionMetadataUsesExecuteParameters(t *testing.T) {
+	_, ctx := newSubscriptionMetadataTestOptimizer()
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("sub_db"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("nation"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	}()
+
+	statements, err := mysql.Parse(context.Background(),
+		"select index_name from information_schema.statistics "+
+			"where table_schema = ? and table_name = ?", 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer statements[0].Free()
+	queryPlan, err := BuildPlan(ctx, statements[0], true)
+	require.NoError(t, err)
+	requireStatisticsPublisherScopes(t, queryPlan.GetQuery(), map[string]int32{"sub_db": 0})
+}
+
+func requireStatisticsPublisherScopes(
+	t *testing.T,
+	query *Query,
+	want map[string]int32,
+) {
+	t.Helper()
+	got := make(map[string]int32)
+	for _, node := range query.GetNodes() {
+		if node.GetNodeType() != plan.Node_TABLE_SCAN ||
+			node.GetObjRef().GetObjName() != catalog.MO_INDEXES ||
+			node.GetObjRef().GetPubInfo() == nil {
+			continue
+		}
+		got[node.GetObjRef().GetSubscriptionName()] = node.GetObjRef().GetPubInfo().GetTenantId()
+	}
+	require.Equal(t, want, got)
 }

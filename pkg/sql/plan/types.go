@@ -340,12 +340,6 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	// subscriptionMetadataScope identifies an outer INFORMATION_SCHEMA.STATISTICS
-	// query that targets a subscription. The publisher identity is installed on
-	// CompilerContext only while that built-in view is expanded, so unrelated
-	// tables in the same SELECT continue to use the subscriber identity.
-	subscriptionMetadataScope *SubscriptionMeta
-
 	ctxByNode             []*BindContext
 	windowValidationScans []*plan.Node
 	nameByColRef          map[[2]int32]string
@@ -599,6 +593,12 @@ type orderResolutionMetadata struct {
 
 type BindContext struct {
 	binder Binder
+
+	// subscriptionMetadataScopes belongs to one query-block owner and is keyed
+	// by that block's STATISTICS alias. activeSubscriptionMetadata is installed
+	// only while the matching table expression expands its built-in view.
+	subscriptionMetadataScopes map[string]*SubscriptionMeta
+	activeSubscriptionMetadata *SubscriptionMeta
 
 	// outputColumnProvenance records planner-local source or pure-NULL identity
 	// by output position. An explicit None prevents later transparent-boundary
