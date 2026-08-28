@@ -948,31 +948,36 @@ func TestEffectiveStatementForTxn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.Background()
 	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("execute_db")
+	ses.AddTempTable("execute_db", "t", "__mo_temp_t")
 	require.NoError(t, ses.SetPrepareStmt(ctx, "drop_stmt", &PrepareStmt{
-		Name: "drop_stmt",
+		Name:            "drop_stmt",
+		defaultDatabase: "prepare_db",
 		PrepareStmt: &tree.DropTable{Names: tree.TableNames{
 			tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil),
 		}},
 	}))
 
-	effective, err := effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "drop_stmt"})
+	effective, defaultDatabase, err := effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "drop_stmt"})
 	require.NoError(t, err)
 	require.IsType(t, &tree.DropTable{}, effective)
-	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, effective))
+	require.Equal(t, "prepare_db", defaultDatabase)
+	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, effective, defaultDatabase))
 
 	selectStmt := &tree.Select{}
-	effective, err = effectiveStatementForTxn(ctx, ses, selectStmt)
+	effective, defaultDatabase, err = effectiveStatementForTxn(ctx, ses, selectStmt)
 	require.NoError(t, err)
 	require.Same(t, selectStmt, effective)
+	require.Empty(t, defaultDatabase)
 
-	_, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "missing"})
+	_, _, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "missing"})
 	require.Error(t, err)
 
 	require.NoError(t, ses.SetPrepareStmt(ctx, "cycle", &PrepareStmt{
 		Name:        "cycle",
 		PrepareStmt: &tree.Execute{Name: "cycle"},
 	}))
-	_, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "cycle"})
+	_, _, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "cycle"})
 	require.ErrorContains(t, err, "cyclic prepared EXECUTE reference")
 }
 
@@ -1049,6 +1054,41 @@ func TestLifecycleAdmissionFailurePreservesPreviousStatement(t *testing.T) {
 			require.Same(t, op, handler.GetTxn())
 		})
 	}
+}
+
+func TestPreparedDropAdmissionUsesPrepareDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("execute_db")
+	ses.AddTempTable("execute_db", "t", "__mo_temp_t")
+	target := tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil)
+	require.NoError(t, ses.SetPrepareStmt(ctx, "p", &PrepareStmt{
+		Name: "p", defaultDatabase: "prepare_db",
+		PrepareStmt: &tree.DropTable{Names: tree.TableNames{target}},
+	}))
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	handler := ses.GetTxnHandler()
+	handler.mu.Lock()
+	handler.txnOp = op
+	handler.txnCtx = ctx
+	handler.optionBits = OPTION_BEGIN
+	handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+	handler.mu.Unlock()
+	execCtx := &ExecCtx{
+		reqCtx: ctx, stmt: &tree.Execute{Name: "p"}, ses: ses, proc: ses.GetProc(),
+		input: &UserInput{sql: "execute p"},
+	}
+
+	err := executeStmtWithWorkspace(ses, nil, execCtx)
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Equal(t, "prepare_db", execCtx.effectiveTxnDefaultDatabase)
+	require.Same(t, op, handler.GetTxn())
 }
 
 func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {

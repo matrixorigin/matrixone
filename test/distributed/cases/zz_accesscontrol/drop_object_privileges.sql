@@ -6,10 +6,12 @@ grant create database on account * to drop_object_privileges_role;
 create database drop_object_privileges_db;
 create table drop_object_privileges_db.t1(id int);
 create view drop_object_privileges_db.v1 as select 1 as id;
+create sequence drop_object_privileges_db.s1;
 
 grant select on table drop_object_privileges_db.t1 to drop_object_privileges_role;
 grant select on table drop_object_privileges_db.* to drop_object_privileges_role;
 grant select on view drop_object_privileges_db.v1 to drop_object_privileges_role;
+grant select on table drop_object_privileges_db.s1 to drop_object_privileges_role;
 grant create table on database drop_object_privileges_db to drop_object_privileges_role;
 
 set @drop_priv_db_id = (select dat_id from mo_catalog.mo_database
@@ -18,11 +20,20 @@ set @drop_priv_t1_id = (select rel_logical_id from mo_catalog.mo_tables
                          where reldatabase = 'drop_object_privileges_db' and relname = 't1');
 set @drop_priv_v1_id = (select rel_logical_id from mo_catalog.mo_tables
                          where reldatabase = 'drop_object_privileges_db' and relname = 'v1');
+set @drop_priv_s1_id = (select rel_logical_id from mo_catalog.mo_tables
+                         where reldatabase = 'drop_object_privileges_db' and relname = 's1');
 
 select count(*) as object_grants_before_drop
 from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'
-  and obj_id in (@drop_priv_db_id, @drop_priv_t1_id, @drop_priv_v1_id);
+  and obj_id in (@drop_priv_db_id, @drop_priv_t1_id, @drop_priv_v1_id, @drop_priv_s1_id);
+
+-- Sequences accept table-scoped grants and must clean their logical identity.
+drop sequence drop_object_privileges_db.s1;
+select count(*) as dropped_sequence_grants
+from mo_catalog.mo_role_privs
+where role_name = 'drop_object_privileges_role'
+  and obj_id = @drop_priv_s1_id;
 
 -- Dropping one table removes only grants tied to that table object.
 drop table drop_object_privileges_db.t1;

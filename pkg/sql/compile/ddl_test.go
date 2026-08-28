@@ -1387,6 +1387,45 @@ func TestDeleteRolePrivilegesForDroppedObjects(t *testing.T) {
 	})
 }
 
+func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	var sqls []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			return executor.Result{}, nil
+		}),
+	)
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["s"] = &stubRelation{
+		name: "s", tableID: 101, tableDef: &plan2.TableDef{LogicalId: 77},
+	}
+	eng.dbs["db"] = db
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_DropSequence{DropSequence: &plan2.DropSequence{
+			Database: "db", Table: "s",
+		}},
+	}}}}
+	c := NewCompile("test", "db", "drop sequence s", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = s.Plan
+
+	require.NoError(t, s.DropSequence(c))
+	require.Equal(t, []string{"delete from mo_catalog.mo_role_privs where obj_id = 77;"}, sqls)
+	require.Equal(t, []uint64{101}, proc.GetSessionInfo().SeqDeleteKeys)
+	_, exists := db.rels["s"]
+	require.False(t, exists)
+}
+
 func TestAlterViewPreservesLogicalID(t *testing.T) {
 	eng := newStubEngine()
 	db := newStubDatabase("db")

@@ -613,16 +613,20 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	return err
 }
 
-func requiresPessimisticObjectLifecycleTxn(ses FeSession, stmt tree.Statement) bool {
+func requiresPessimisticObjectLifecycleTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
 	switch st := stmt.(type) {
-	case *tree.DropDatabase, *tree.DropView, *tree.AlterView,
+	case *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 		return true
 	case *tree.DropTable:
 		// Ordinary DROP TABLE can resolve to a session temporary alias only after
 		// parsing. Classify every target before admission so temp-only statements
 		// do not inherit the persistent catalog protocol.
-		return len(capturePersistentDropTableTargets(ses, st)) > 0
+		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
 	case *tree.CreateView:
 		return st.Replace
 	default:

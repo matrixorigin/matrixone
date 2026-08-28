@@ -4894,26 +4894,31 @@ func effectiveStatementForTxn(
 	ctx context.Context,
 	ses FeSession,
 	stmt tree.Statement,
-) (tree.Statement, error) {
+) (tree.Statement, string, error) {
 	seen := make(map[string]struct{})
+	defaultDatabase := ""
 	for {
 		execute, ok := stmt.(*tree.Execute)
 		if !ok {
-			return stmt, nil
+			return stmt, defaultDatabase, nil
 		}
 		name := strings.ToLower(string(execute.Name))
 		if _, ok = seen[name]; ok {
-			return nil, moerr.NewInternalError(ctx, "cyclic prepared EXECUTE reference")
+			return nil, "", moerr.NewInternalError(ctx, "cyclic prepared EXECUTE reference")
 		}
 		seen[name] = struct{}{}
 		prepared, err := ses.GetPrepareStmt(ctx, name)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if prepared == nil || prepared.PrepareStmt == nil {
-			return nil, moerr.NewInternalError(ctx, "prepared statement has no executable statement")
+			return nil, "", moerr.NewInternalError(ctx, "prepared statement has no executable statement")
 		}
 		stmt = prepared.PrepareStmt
+		// Unqualified names in the saved AST were bound against this database.
+		// Admission must resolve them exactly like the prepared plan, regardless
+		// of the session database when EXECUTE runs.
+		defaultDatabase = prepared.defaultDatabase
 	}
 }
 
@@ -4957,11 +4962,16 @@ func executeStmtWithWorkspace(ses FeSession,
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
 	execCtx.txnOpt.Close()
-	effectiveStmt, err := effectiveStatementForTxn(execCtx.reqCtx, ses, execCtx.stmt)
+	effectiveStmt, effectiveDefaultDatabase, err := effectiveStatementForTxn(
+		execCtx.reqCtx, ses, execCtx.stmt,
+	)
 	if err != nil {
 		return err
 	}
-	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(ses, effectiveStmt)
+	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
+	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {

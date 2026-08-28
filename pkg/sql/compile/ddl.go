@@ -3589,6 +3589,9 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
+	if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -3609,10 +3612,17 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
+	// Sequence grants resolve through mo_tables and therefore use the same
+	// logical object identity as table/view grants.
+	droppedObjectID := plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
+
 	// Delete the stored session value.
 	c.proc.GetSessionInfo().SeqDeleteKeys = append(c.proc.GetSessionInfo().SeqDeleteKeys, rel.GetTableID(c.proc.Ctx))
 
-	return dbSource.Delete(c.proc.Ctx, tblName)
+	if err = dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		return err
+	}
+	return c.deleteRolePrivilegesForDroppedRelation(droppedObjectID)
 }
 
 func (c *Compile) deleteRolePrivilegesForDroppedDatabase(accountID uint32, databaseID uint64) error {

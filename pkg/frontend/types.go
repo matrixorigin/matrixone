@@ -1041,6 +1041,10 @@ type ExecCtx struct {
 	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
+	// effectiveTxnDefaultDatabase is the binding database of the effective
+	// prepared statement. Direct statements leave it empty and resolve against
+	// the current session database.
+	effectiveTxnDefaultDatabase string
 	// persistentDropTableTargets captures the per-target classification before
 	// DROP TABLE executes. Temporary aliases are removed during execution, so
 	// post-execution persistent side effects must consume this snapshot instead
@@ -1111,6 +1115,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
+	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
