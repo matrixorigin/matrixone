@@ -487,9 +487,10 @@ function should_run_ut_stage(){
 
     case "${UT_SHARD}:${stage}" in
         all:* | \
-        light-plan:light | light-plan:plan | \
-        cluster:serial | cluster:embedded | \
-        heavy:heavy)
+        light:light | \
+        issues:serial | \
+        embedded:embedded | \
+        heavy-plan:heavy | heavy-plan:plan)
             return 0
             ;;
         *)
@@ -513,9 +514,9 @@ function run_tests(){
     horiz_rule
 
     case "${UT_SHARD}" in
-        all | light-plan | cluster | heavy) ;;
+        all | light | issues | embedded | heavy-plan) ;;
         *)
-            logger "ERR" "UT_SHARD must be all, light-plan, cluster, or heavy; got '${UT_SHARD}'"
+            logger "ERR" "UT_SHARD must be all, light, issues, embedded, or heavy-plan; got '${UT_SHARD}'"
             UT_TEST_STATUS=1
             return 0
             ;;
