@@ -773,12 +773,20 @@ func (store *txnStore) SoftDeleteObjectByCN(isTombstone bool, id *common.ID) (er
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
-	if store.cmdMgr.GetCSN() != 0 {
-		for _, db := range store.dbs {
-			if err = db.ApplyRollback(); err != nil {
-				break
-			}
+	// Freeze installs append payload and AppendNodes before queue PrePrepare
+	// dedup. A dedup failure therefore has global MVCC entries to roll back even
+	// though CollectCmd has not assigned a CSN yet. Catalog entries retain the
+	// upstream CSN lifecycle: some are already detached by PrepareRollback and
+	// cannot be applied again.
+	for _, db := range store.dbs {
+		var dbErr error
+		if store.cmdMgr.GetCSN() == 0 {
+			dbErr = db.ApplyRollbackPendingAppends()
+		} else {
+			dbErr = db.ApplyRollback()
+			dbErr = combineTxnLifecycleErrors(dbErr, db.ApplyRollbackPendingAppends())
 		}
+		err = combineTxnLifecycleErrors(err, dbErr)
 	}
 	store.CleanUp()
 	return
