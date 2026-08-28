@@ -790,8 +790,13 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 // fixed-length, so no encoded value byte-prefixes another. Tracked as #27817;
 // fixing it here would let that caller-side check go away.
 //
-// Callers that cannot guarantee the order must establish it or check it before
-// calling (see colexec.zoneMapInVector); a wrong answer here silently drops rows.
+// Order is the producer's responsibility, not something every consumer verifies.
+// colexec.zoneMapInVector does check and keeps the block when it cannot establish
+// the order, but readutil's filter compiler (compileFilterExprs, reached from
+// exec_util.go) does not: it takes seek and stop bounds positionally from the same
+// payload, col[0] and col[len-1], so an unordered one makes every block look
+// excluded there regardless of what this function would answer. A wrong answer
+// here silently drops rows.
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
