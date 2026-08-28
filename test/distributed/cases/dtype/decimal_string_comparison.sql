@@ -77,4 +77,26 @@ WHERE d < '12345678.0000000000000000000000000000001' ORDER BY id;
 SELECT id FROM wide_values FORCE INDEX (idx_d)
 WHERE d < '12345678.0000000000000000000000000000001' ORDER BY id;
 
+-- Redundant coefficient zeroes must be removed before the DECIMAL256 bound is checked.
+CREATE TABLE normalized_values (id INT PRIMARY KEY, d DECIMAL(20,0));
+INSERT INTO normalized_values VALUES
+  (1, 90071992547409920001),
+  (2, 90071992547409920002);
+SELECT id FROM normalized_values
+WHERE d = '90071992547409920001000000000000000000000000000000000000000000000000000000000e-57'
+ORDER BY id;
+
+-- Prefixes and extension tokens stay in the runtime DOUBLE coercion path.
+CREATE TABLE token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
+INSERT INTO token_values VALUES (1, 16), (2, 100);
+SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
+SELECT id FROM token_values WHERE d = '1e2suffix' ORDER BY id;
+SHOW WARNINGS;
+SELECT id FROM token_values WHERE d = '0x10foo' ORDER BY id;
+
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
+SELECT id FROM token_values WHERE d = '1e2suffix' ORDER BY id;
+SET SESSION sql_mode = '';
+
 DROP DATABASE decimal_string_comparison;

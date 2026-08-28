@@ -5298,7 +5298,7 @@ func isDecimalComparisonOperator(name string) bool {
 	}
 }
 
-// A numeric string literal paired with DECIMAL has an exact numeric domain.
+// A complete decimal string literal paired with DECIMAL has an exact numeric domain.
 // Resolve that domain before the generic string/numeric cast matrix selects
 // FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
 // explicit character casts in the expression, but cast their result to the
@@ -5316,18 +5316,15 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 		if !ok {
 			continue
 		}
-		numericValue, ok := function.GetNumericStringPrefix(value)
-		if !ok {
+		// Only a complete decimal lexeme with mode-independent outer whitespace
+		// can enter the exact path. Prefixes, extension tokens, and Unicode-only
+		// whitespace must retain their original spelling for runtime SQL
+		// compatibility-mode parsing, invalid-token errors, and warning 1292.
+		trimmedValue := strings.Trim(value, " \t\n\v\f\r")
+		if strings.TrimSpace(value) != trimmedValue {
 			continue
 		}
-		// A cast expression must still execute at runtime. Only wrap it when the
-		// complete cast value is itself a decimal spelling; otherwise a generic
-		// VARCHAR-to-DECIMAL cast could reject a valid MySQL numeric prefix.
-		if args[stringPos].GetLit() == nil && numericValue != value {
-			continue
-		}
-
-		decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, numericValue)
+		decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, trimmedValue)
 		if err != nil {
 			return err
 		}

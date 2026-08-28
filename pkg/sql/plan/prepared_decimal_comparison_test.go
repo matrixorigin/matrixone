@@ -259,27 +259,21 @@ func containsDecimalComparisonStringCast(expr *planpb.Expr) bool {
 	return false
 }
 
-func TestDecimalStringLiteralUsesNumericPrefix(t *testing.T) {
+func TestDecimalStringPrefixKeepsOriginalCoercion(t *testing.T) {
 	ctx := context.Background()
-	for _, tc := range []struct {
-		value     string
-		canonical string
-	}{
-		{value: "1e2suffix", canonical: "1e2"},
-		{value: "0x10", canonical: "0"},
-	} {
-		t.Run(tc.value, func(t *testing.T) {
+	for _, value := range []string{"1e2suffix", "0x10", "0x10foo", "\u00a01\u00a0"} {
+		t.Run(value, func(t *testing.T) {
 			expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
 				makePreparedDecimalComparisonColumn(types.New(types.T_decimal128, 20, 4)),
-				makePlan2StringConstExprWithType(tc.value),
+				makePlan2StringConstExprWithType(value),
 			})
 			require.NoError(t, err)
 			for _, arg := range expr.GetF().Args {
-				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type: %+v", arg.Typ)
+				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
 			}
-			value, ok := decimalComparisonStringLiteral(expr)
+			actual, ok := decimalComparisonStringLiteral(expr)
 			require.True(t, ok)
-			require.Equal(t, tc.canonical, value)
+			require.Equal(t, value, actual)
 		})
 	}
 }
