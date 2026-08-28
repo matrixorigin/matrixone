@@ -83,10 +83,13 @@ fields, preventing it from becoming a general metadata mutation surface. SQL is
 formed from validated numeric IDs and fixed scope predicates.
 
 The work is cold-path catalog maintenance: residency-policy cleanup uses separate
-cluster and account catalog-leading index probes rather than an `OR` scan, and it
-adds no per-query background work, cache, or retained state. Existing frontend
-errors and the E2E report provide operational diagnosis; rollback preserves the
-original metadata for inspection.
+cluster and account probes rather than an `OR` scan. Cluster registrations
+normalize `account_id` to zero, so both probes use the existing residency-policy
+primary-key prefix `(scope_type, account_id, catalog_id)` without requiring an
+unversioned secondary index for already-installed tenants. It adds no per-query
+background work, cache, or retained state. Existing frontend errors and the E2E
+report provide operational diagnosis; rollback preserves the original metadata
+for inspection.
 
 ## Alternatives
 

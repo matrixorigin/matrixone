@@ -133,7 +133,7 @@ func TestExecuteIcebergUnregisterAccessCallCommitsAtomicCleanup(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(0, "tiera") + " for update"
-	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and catalog_id = 7"
+	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and account_id = 0 and catalog_id = 7"
 	accountCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'account' and account_id = 0 and catalog_id = 7"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(0), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
 	bh.sql2result[clusterCountSQL] = icebergCallResult([]interface{}{uint64(0)})
@@ -204,7 +204,7 @@ func TestExecuteIcebergUnregisterAccessCallDoesNotReturnCommittedResultWhenCommi
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(0, "tiera") + " for update"
-	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and catalog_id = 7"
+	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and account_id = 0 and catalog_id = 7"
 	accountCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'account' and account_id = 0 and catalog_id = 7"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(0), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
 	bh.sql2result[clusterCountSQL] = icebergCallResult([]interface{}{uint64(0)})
@@ -236,7 +236,7 @@ func TestExecuteIcebergUnregisterAccessCallKeepsPrincipalForRemainingScope(t *te
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(9, "tiera") + " for update"
-	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and catalog_id = 7"
+	clusterCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'cluster' and account_id = 0 and catalog_id = 7"
 	accountCountSQL := "select count(*) from mo_catalog.mo_iceberg_residency_policy where scope_type = 'account' and account_id = 9 and catalog_id = 7"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(9), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
 	bh.sql2result[clusterCountSQL] = icebergCallResult([]interface{}{uint64(0)})

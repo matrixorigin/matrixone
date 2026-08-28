@@ -409,11 +409,12 @@ func icebergUnregisterResidencyWhere(scopeType string, accountID uint32) string 
 }
 
 func icebergAccessResidencyPolicyCount(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (uint64, error) {
-	// Keep the OR out of this query: catalog_scope_account gives both relevant
-	// scopes catalog-leading index probes while the catalog row is locked.
+	// Keep the OR out of this query. Cluster registrations normalize account_id
+	// to zero, so each count uses the full primary-key prefix while the catalog
+	// row is locked.
 	var total uint64
 	for _, where := range []string{
-		fmt.Sprintf("scope_type = 'cluster' and catalog_id = %d", catalogID),
+		fmt.Sprintf("scope_type = 'cluster' and account_id = 0 and catalog_id = %d", catalogID),
 		fmt.Sprintf("scope_type = 'account' and account_id = %d and catalog_id = %d", accountID, catalogID),
 	} {
 		results, err := ExeSqlInBgSes(ctx, bh, fmt.Sprintf(

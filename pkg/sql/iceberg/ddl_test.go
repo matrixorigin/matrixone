@@ -24,10 +24,12 @@ func TestResidencyPolicyDDLKeysCatalogURI(t *testing.T) {
 	for _, want := range []string{
 		"allowed_catalog_uri varchar(2048) not null",
 		"primary key(scope_type, account_id, catalog_id, allowed_catalog_uri, allowed_endpoint, allowed_region, allowed_bucket)",
-		"key catalog_scope_account(catalog_id, scope_type, account_id)",
 	} {
 		if !strings.Contains(normalized, want) {
 			t.Fatalf("residency policy DDL must include %q in storage identity:\n%s", want, normalized)
 		}
+	}
+	if strings.Contains(normalized, "key catalog_scope_account") {
+		t.Fatalf("residency policy DDL must not add an unversioned secondary index:\n%s", normalized)
 	}
 }
