@@ -103,7 +103,7 @@ func TestNumericContextModWithoutParametersInPrepareMode(t *testing.T) {
 	require.Empty(t, collectPlanParamTypes(queryPlan))
 }
 
-func TestNumericContextDoesNotCrossFunctionBoundary(t *testing.T) {
+func TestNumericContextUsesFunctionSpecificPreparedDomain(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), "select ? + abs(?)", 1)
 	require.NoError(t, err)
@@ -114,7 +114,10 @@ func TestNumericContextDoesNotCrossFunctionBoundary(t *testing.T) {
 	paramTypes := collectPlanParamTypes(queryPlan)
 	require.Len(t, paramTypes, 2)
 	require.Equal(t, types.T_float64, paramTypes[0])
-	require.Equal(t, types.T_int64, paramTypes[1])
+	// ABS has its own prepared numeric domain.  The outer arithmetic context
+	// does not leak into the function, but the function-specific domain is
+	// DOUBLE so fractional values remain valid at execute time.
+	require.Equal(t, types.T_float64, paramTypes[1])
 }
 
 func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
