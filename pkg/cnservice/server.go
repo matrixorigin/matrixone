@@ -483,11 +483,9 @@ func (s *service) Start() (err error) {
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
-	s.viewMetadataIngressReady.Store(true)
-	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
+	if err = s.publishDDLVisibilityIngressAfterStart(); err != nil {
 		return err
 	}
-	s.notifyHeartbeat()
 
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err

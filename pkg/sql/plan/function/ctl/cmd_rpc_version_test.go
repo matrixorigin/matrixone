@@ -203,8 +203,10 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(
 			[]metadata.CNService{
-				{ServiceID: targets[0], QueryAddress: "cn-1:6001", WorkState: metadata.WorkState_Working},
-				{ServiceID: targets[1], QueryAddress: "cn-2:6001", WorkState: metadata.WorkState_Working},
+				{ServiceID: targets[0], QueryAddress: "cn-1:6001", WorkState: metadata.WorkState_Working,
+					ViewMetadataAdmissionGeneration: 1},
+				{ServiceID: targets[1], QueryAddress: "cn-2:6001", WorkState: metadata.WorkState_Working,
+					ViewMetadataAdmissionGeneration: 2},
 			},
 			nil,
 		),
@@ -215,9 +217,9 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 	proc := &process.Process{Base: &process.BaseProcess{QueryClient: qcli}}
 
 	result, err := handleSetProtocolVersion(
-		proc, cn, strings.Join(targets, ",")+":35", nil)
+		proc, cn, strings.Join(targets, ",")+":36", nil)
 	require.NoError(t, err)
-	require.Equal(t, "activation-cn-1:35, activation-cn-2:35", result.Data)
+	require.Equal(t, "activation-cn-1:36, activation-cn-2:36", result.Data)
 	require.Equal(t, int32(2), qcli.started.Load())
 	require.Equal(t, int32(2), qcli.releases.Load())
 	qcli.mu.Lock()
@@ -227,7 +229,7 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 		require.Equal(t, targets, requestTargets)
 	}
 
-	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:35", nil)
+	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:36", nil)
 	require.ErrorContains(t, err, "duplicated")
 }
 
@@ -243,7 +245,7 @@ func TestTransferToCNAllowsActivationFence(t *testing.T) {
 		clusterservice.WithServices(
 			[]metadata.CNService{{
 				ServiceID: serviceID, QueryAddress: "activation-cn:6001",
-				WorkState: metadata.WorkState_Working,
+				WorkState: metadata.WorkState_Draining, ViewMetadataAdmissionGeneration: 1,
 			}},
 			nil,
 		),
@@ -253,11 +255,14 @@ func TestTransferToCNAllowsActivationFence(t *testing.T) {
 
 	qcli := &addressRecordingQueryClient{}
 	started := time.Now()
-	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion35, []string{serviceID})
+	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion36, []string{serviceID})
 	require.Error(t, err)
 	require.Equal(t, "activation-cn:6001", qcli.address)
 	require.Equal(t, []string{serviceID},
 		qcli.request.SetProtocolVersion.DDLVisibilityActivationTargets)
+	require.Equal(t, uint64(1), qcli.request.SetProtocolVersion.DDLVisibilityTargetGeneration)
+	require.Equal(t, "activation-cn:6001",
+		qcli.request.SetProtocolVersion.DDLVisibilityTargetQueryAddress)
 	require.WithinDuration(t, started.Add(time.Minute), qcli.deadline, time.Second)
 }
 

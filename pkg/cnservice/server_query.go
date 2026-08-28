@@ -141,7 +141,7 @@ func (s *service) initQueryService() error {
 
 func (s *service) initQueryCommandHandler() {
 	// Override queryservice's generic runtime-only setter so a live CN can
-	// execute the v35 DDL visibility activation fence before acknowledging the
+	// execute the v36 DDL visibility activation fence before acknowledging the
 	// protocol transition.
 	s.addQueryCommandHandler(query.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion)
 	s.addQueryCommandHandler(query.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion)
@@ -245,6 +245,16 @@ func (s *service) handleSetProtocolVersion(
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	version := req.SetProtocolVersion.Version
+	if version >= defines.MORPCVersion36 &&
+		len(req.SetProtocolVersion.DDLVisibilityActivationTargets) > 0 {
+		expectedGeneration := req.SetProtocolVersion.DDLVisibilityTargetGeneration
+		expectedAddress := req.SetProtocolVersion.DDLVisibilityTargetQueryAddress
+		localAddress := s.queryServiceServiceAddr()
+		if expectedGeneration == 0 || expectedGeneration != s.viewMetadataAdmissionGeneration ||
+			expectedAddress == "" || (localAddress != "" && expectedAddress != localAddress) {
+			return moerr.NewInvalidStateNoCtx("stale DDL visibility activation target identity")
+		}
+	}
 	if err := s.setProtocolVersion(
 		ctx, version, req.SetProtocolVersion.DDLVisibilityActivationTargets); err != nil {
 		return err

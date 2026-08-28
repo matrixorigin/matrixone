@@ -31,11 +31,11 @@ import (
 func ddlVisibilityBarrierSupported(serviceID string) bool {
 	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion35
+	return ok && valid && version >= defines.MORPCVersion36
 }
 
 // prepareDDLVisibilityBarrier publishes this CN only after QueryService is
-// listening. With protocol v35 active, it then catches up to the largest
+// listening. With protocol v36 active, it then catches up to the largest
 // frontier held by the already-published barrier participants before public
 // SQL ingress can be admitted.
 func (s *service) prepareDDLVisibilityBarrier() error {
@@ -46,7 +46,7 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 	}
 	s.ddlVisibilityBarrierPrepared.Store(true)
 	if ddlVisibilityBarrierSupported(s.cfg.UUID) {
-		// A v35 startup has no admitted DDL producers and has already applied the
+		// A v36 startup has no admitted DDL producers and has already applied the
 		// startup frontier, so it satisfies both live-activation phases.
 		s.ddlVisibilityActivationPrepared.Store(true)
 		s.ddlVisibilityActivationFenced.Store(true)
@@ -56,7 +56,8 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 
 func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	supported := ddlVisibilityBarrierSupported(s.cfg.UUID)
-	if supported && (s.moCluster == nil || s.queryClient == nil || s._txnClient == nil) {
+	if supported && (s.moCluster == nil || s.queryClient == nil || s._txnClient == nil ||
+		s._hakeeperClient == nil || s.config == nil) {
 		// Focused service tests may construct only the dependencies relevant to
 		// their lifecycle assertion. Production NewService initializes a non-zero
 		// admission generation together with all three barrier dependencies.
@@ -66,8 +67,8 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	}
 
 	s.ddlVisibilityBarrierReady.Store(true)
-	s.notifyHeartbeat()
 	if !supported || s.moCluster == nil || s.queryClient == nil || s._txnClient == nil {
+		s.notifyHeartbeat()
 		return nil
 	}
 
@@ -77,6 +78,14 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	// Startup owns this mutex, so relying on the periodic heartbeat (which uses
+	// the same mutex to order readiness snapshots) would deadlock publication.
+	// Publish the startup barrier directly before waiting for its authoritative
+	// observation; periodic heartbeats remain serialized behind startup.
+	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
 
 	retryInterval := s.cfg.HAKeeper.HeatbeatInterval.Duration
 	if retryInterval < minClusterReadinessRetryInterval {
@@ -92,6 +101,23 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 // QueryService is stopped. closeService invokes it only after the periodic
 // heartbeat task has terminated, so no previously captured ready heartbeat can
 // overwrite this final withdrawal.
+func (s *service) publishDDLVisibilityIngressAfterStart() error {
+	// Serialize listener-ready publication with startup/activation/shutdown.
+	// Activation may have sampled ingress=false before listeners became live;
+	// acquiring the owner lock makes the later publication win that ordering.
+	s.ddlVisibilityBarrierMu.Lock()
+	defer s.ddlVisibilityBarrierMu.Unlock()
+	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	s.viewMetadataIngressReady.Store(true)
+	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	s.notifyHeartbeat()
+	return nil
+}
+
 func (s *service) withdrawDDLVisibilityBarrier() error {
 	s.ddlVisibilityBarrierMu.Lock()
 	defer s.ddlVisibilityBarrierMu.Unlock()
@@ -139,7 +165,7 @@ func (s *service) ddlVisibilityBarrierRetryInterval() time.Duration {
 // Every target CN blocks and drains local DDL before publishing Prepared. Once
 // all targets are prepared, no v34 DDL producer exists; each CN applies the
 // converged frontier and publishes Fenced. A CN releases its DDL gate only after
-// every target is fenced, at which point all later DDL uses the v35 fan-out and
+// every target is fenced, at which point all later DDL uses the v36 fan-out and
 // every still-fencing receiver remains barrier-reachable.
 func (s *service) setProtocolVersion(ctx context.Context, version int64, targets []string) error {
 	s.ddlVisibilityBarrierMu.Lock()
@@ -158,7 +184,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return moerr.NewInternalError(ctx, "invalid protocol version")
 	}
 	pending := s.ddlVisibilityActivationPending.Load()
-	if version < defines.MORPCVersion35 {
+	if version < defines.MORPCVersion36 {
 		if pending {
 			return moerr.NewInvalidStateNoCtx("cannot downgrade during DDL visibility activation")
 		}
@@ -171,7 +197,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
-	if current >= defines.MORPCVersion35 && !pending {
+	if current >= defines.MORPCVersion36 && !pending {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
@@ -206,7 +232,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return err
 	}
 
-	// Version 35 is visible only after the local v34 producers are drained. It
+	// Version 36 is visible only after the local v34 producers are drained. It
 	// acts as the distributed Prepared signal queried by every other target.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 	s.ddlVisibilityActivationPrepared.Store(true)
@@ -372,7 +398,7 @@ func (s *service) waitForDDLVisibilityActivationPhase(
 					"missing protocol activation response from CN %s", serviceID)
 			}
 			phase := resp.GetProtocolVersion
-			allReady = phase.Version >= defines.MORPCVersion35 &&
+			allReady = phase.Version >= defines.MORPCVersion36 &&
 				phase.DDLVisibilityActivationPrepared &&
 				(!requireFenced || phase.DDLVisibilityActivationFenced)
 			s.queryClient.Release(resp)

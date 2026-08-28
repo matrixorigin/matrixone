@@ -70,8 +70,9 @@ const (
 	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
 	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
 	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
-	MORPCVersion35     int64 = 35 // cancellable cross-CN DDL visibility fence
-	MORPCLatestVersion       = MORPCVersion35
+	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
+	MORPCVersion36     int64 = 36 // cancellable cross-CN DDL visibility fence
+	MORPCLatestVersion       = MORPCVersion36
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

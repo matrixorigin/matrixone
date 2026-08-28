@@ -113,7 +113,7 @@ func handleSetProtocolVersion(proc *process.Process,
 	}
 
 	if service == cn && targets != nil {
-		if version >= defines.MORPCVersion35 {
+		if version >= defines.MORPCVersion36 {
 			const maxDDLVisibilityActivationTargets = 1024
 			if len(targets) == 0 || len(targets) > maxDDLVisibilityActivationTargets {
 				return Result{}, moerr.NewInternalErrorNoCtxf(
@@ -132,7 +132,7 @@ func handleSetProtocolVersion(proc *process.Process,
 				seen[target] = struct{}{}
 			}
 		}
-		if version < defines.MORPCVersion35 {
+		if version < defines.MORPCVersion36 {
 			versions := make([]string, 0, len(targets))
 			for _, target := range targets {
 				resp, sendErr := transferToCN(qt, target, version, nil)
@@ -151,7 +151,7 @@ func handleSetProtocolVersion(proc *process.Process,
 			return Result{Method: SetProtocolVersionMethod, Data: strings.Join(versions, ", ")}, nil
 		}
 
-		// Live v35 activation is a distributed barrier. Dispatch every target
+		// Live v36 activation is a distributed barrier. Dispatch every target
 		// concurrently so each CN can block local DDL producers before any CN
 		// waits for the complete Prepared set.
 		type targetResult struct {
@@ -262,27 +262,53 @@ func transferToCN(
 	version int64,
 	activationTargets []string,
 ) (resp *querypb.Response, err error) {
-	clusterservice.GetMOCluster(qt.ServiceID()).GetCNService(
-		clusterservice.NewServiceIDSelector(target),
-		func(cn metadata.CNService) bool {
-			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)
-			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
-				Version:                        version,
-				DDLVisibilityActivationTargets: append([]string(nil), activationTargets...),
-			}
-			// Live protocol activation may withdraw CN ingress and wait for a
-			// bounded logtail frontier fence before acknowledging the transition.
-			// Keep the caller deadline above the CN's default 30-second discovery
-			// bound instead of truncating the safety fence at the historical 1s.
-			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseTransferToCN)
-			defer cancel()
-
-			resp, err = qt.SendMessage(ctx, cn.QueryAddress, req)
-			err = moerr.AttachCause(ctx, err)
-			return true
+	cluster := clusterservice.GetMOCluster(qt.ServiceID())
+	var selected metadata.CNService
+	if version >= defines.MORPCVersion36 {
+		refresher, refreshOK := cluster.(clusterservice.AuthoritativeRefresher)
+		if !refreshOK {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"CN cluster service does not support authoritative activation recovery")
+		}
+		ctx, cancel := context.WithTimeoutCause(
+			context.Background(), time.Minute, moerr.CauseTransferToCN)
+		defer cancel()
+		if err := refresher.Refresh(ctx); err != nil {
+			return nil, moerr.AttachCause(ctx, err)
+		}
+		if err := clusterservice.GetCNServiceRawWithContext(
+			ctx, cluster, clusterservice.NewServiceIDSelector(target), func(cn metadata.CNService) bool {
+				selected = cn
+				return false
+			}); err != nil {
+			return nil, moerr.AttachCause(ctx, err)
+		}
+		if selected.ServiceID != target || selected.ViewMetadataAdmissionGeneration == 0 ||
+			selected.QueryAddress == "" {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"no authoritative CN activation target %s with valid generation and query address", target)
+		}
+	} else {
+		cluster.GetCNService(clusterservice.NewServiceIDSelector(target), func(cn metadata.CNService) bool {
+			selected = cn
+			return false
 		})
-	if err != nil {
-		return nil, err
 	}
-	return resp, nil
+	if selected.QueryAddress == "" {
+		return nil, nil
+	}
+
+	req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+	req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
+		Version:                         version,
+		DDLVisibilityActivationTargets:  append([]string(nil), activationTargets...),
+		DDLVisibilityTargetGeneration:   selected.ViewMetadataAdmissionGeneration,
+		DDLVisibilityTargetQueryAddress: selected.QueryAddress,
+	}
+	// Live protocol activation may withdraw CN ingress and wait for a bounded
+	// logtail frontier fence before acknowledging the transition.
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseTransferToCN)
+	defer cancel()
+	resp, err = qt.SendMessage(ctx, selected.QueryAddress, req)
+	return resp, moerr.AttachCause(ctx, err)
 }
