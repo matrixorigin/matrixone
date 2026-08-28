@@ -1,6 +1,6 @@
 # ANALYZE Statistics Publication and Plan-Cache Freshness
 
-- Status: implementation record; ordinary bug-fix design gate exempt
+- Status: mandatory design review pending (stateful cache/concurrency lifecycle)
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#27758](https://github.com/matrixorigin/matrixone/pull/27758)
 - Last updated: 2026-08-28
