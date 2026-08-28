@@ -606,6 +606,38 @@ func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) 
 		"the direct VAR_STRING result must retain TEXT metadata")
 }
 
+func TestInitExecuteStmtParamDirectNumericPreservesTextSibling(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 214, "select ? as direct_number, ? as direct_text")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []int32{0, 1}, prepareStmt.directResultParamPositions)
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("text"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	originalRoot := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
+	require.Len(t, originalRoot.ProjectList, 2)
+	originalTextType := originalRoot.ProjectList[1].Typ
+
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	runtimeRoot := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_int64), runtimeRoot.ProjectList[0].Typ.Id)
+	require.Equal(t, originalTextType, runtimeRoot.ProjectList[1].Typ,
+		"a nonnumeric direct sibling must keep its prepare-time charset and type")
+}
+
 func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
 	defer func() {
