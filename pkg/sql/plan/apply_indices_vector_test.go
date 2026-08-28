@@ -28,6 +28,61 @@ func TestIsDescendingVectorSort(t *testing.T) {
 	require.False(t, isDescendingVectorSort(plan.OrderBySpec_INTERNAL))
 }
 
+func TestDecodeVectorIndexAlgoParams(t *testing.T) {
+	params, err := decodeVectorIndexAlgoParams(`{
+		"op_type":"vector_l2_ops",
+		"lists":"100",
+		"session_vars":{"cfg":{"probe_limit":5}}
+	}`)
+	require.NoError(t, err)
+
+	opType, ok := vectorIndexStringParam(params, "op_type")
+	require.True(t, ok)
+	require.Equal(t, "vector_l2_ops", opType)
+
+	lists, ok := vectorIndexInt64Param(params, "lists")
+	require.True(t, ok)
+	require.Equal(t, int64(100), lists)
+
+	_, ok = vectorIndexStringParam(params, "missing")
+	require.False(t, ok)
+	for _, value := range []string{`123`, `true`, `null`, `{}`, `[]`} {
+		params, err = decodeVectorIndexAlgoParams(`{"op_type":` + value + `}`)
+		require.NoError(t, err)
+		_, ok = vectorIndexStringParam(params, "op_type")
+		require.False(t, ok)
+	}
+	_, err = decodeVectorIndexAlgoParams("not-json")
+	require.Error(t, err)
+}
+
+func TestVectorIndexInt64ParamRepresentations(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  int64
+		ok    bool
+	}{
+		{name: "quoted integer", value: `"100"`, want: 100, ok: true},
+		{name: "JSON integer", value: `100`, want: 100, ok: true},
+		{name: "float", value: `100.5`, ok: false},
+		{name: "quoted float", value: `"100.5"`, ok: false},
+		{name: "boolean", value: `true`, ok: false},
+		{name: "null", value: `null`, ok: false},
+		{name: "object", value: `{}`, ok: false},
+		{name: "overflow", value: `9223372036854775808`, ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := decodeVectorIndexAlgoParams(`{"lists":` + test.value + `}`)
+			require.NoError(t, err)
+			got, ok := vectorIndexInt64Param(params, "lists")
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestPickVectorLimit(t *testing.T) {
 	// Sort.Limit takes precedence over scan and project.
 	limA := i64Lit(10)
