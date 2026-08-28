@@ -1890,7 +1890,10 @@ func getSqlForCheckUserGrant(roleId, userId int64) string {
 }
 
 func getSqlForCheckUserGrantForAuthorization(roleId, userId int64) string {
-	return strings.TrimSuffix(getSqlForCheckUserGrant(roleId, userId), ";") + " for update;"
+	// Authorization only needs a latest-committed membership read from the
+	// private RC transaction. A locking read serializes every cold authorization
+	// for the same user/role without improving the committed-REVOKE boundary.
+	return getSqlForCheckUserGrant(roleId, userId)
 }
 
 func getSqlForCheckUserHasRole(ctx context.Context, userName string, roleId int64) (string, error) {
@@ -2644,12 +2647,14 @@ type privilegeCache struct {
 	// catalog state. Keep the validation in the same cache generation as the
 	// privilege entries so clear_privilege_cache rechecks both before either
 	// can authorize another statement.
-	activeRoleGrant atomic.Pointer[activeRoleGrantCacheEntry]
+	activeRoleGrant           atomic.Pointer[activeRoleGrantCacheEntry]
+	activeRoleGrantGeneration atomic.Uint64
 }
 
 type activeRoleGrantCacheEntry struct {
-	key   uint64
-	valid bool
+	key        uint64
+	valid      bool
+	generation uint64
 }
 
 func activeRoleGrantKey(userID, roleID uint32) uint64 {
@@ -2660,8 +2665,9 @@ func (pc *privilegeCache) getActiveRoleGrant(userID, roleID uint32) (valid bool,
 	if pc == nil {
 		return false, false
 	}
+	generation := pc.activeRoleGrantGeneration.Load()
 	entry := pc.activeRoleGrant.Load()
-	if entry == nil || entry.key != activeRoleGrantKey(userID, roleID) {
+	if entry == nil || entry.generation != generation || entry.key != activeRoleGrantKey(userID, roleID) {
 		return false, false
 	}
 	return entry.valid, true
@@ -2671,10 +2677,34 @@ func (pc *privilegeCache) setActiveRoleGrant(userID, roleID uint32, valid bool) 
 	if pc == nil {
 		return
 	}
+	pc.setActiveRoleGrantForGeneration(
+		userID, roleID, valid, pc.activeRoleGrantGeneration.Load())
+}
+
+func (pc *privilegeCache) getActiveRoleGrantGeneration() uint64 {
+	if pc == nil {
+		return 0
+	}
+	return pc.activeRoleGrantGeneration.Load()
+}
+
+// setActiveRoleGrantForGeneration publishes a catalog decision only if the
+// privilege-cache generation that initiated the read is still current. Even
+// if invalidate races with Store, getActiveRoleGrant rejects the old generation.
+func (pc *privilegeCache) setActiveRoleGrantForGeneration(
+	userID, roleID uint32,
+	valid bool,
+	generation uint64,
+) bool {
+	if pc == nil || pc.activeRoleGrantGeneration.Load() != generation {
+		return false
+	}
 	pc.activeRoleGrant.Store(&activeRoleGrantCacheEntry{
-		key:   activeRoleGrantKey(userID, roleID),
-		valid: valid,
+		key:        activeRoleGrantKey(userID, roleID),
+		valid:      valid,
+		generation: generation,
 	})
+	return pc.activeRoleGrantGeneration.Load() == generation
 }
 
 // has checks the cache has privilege on a table
@@ -2794,6 +2824,9 @@ func (pc *privilegeCache) invalidate() {
 	if pc == nil {
 		return
 	}
+	// Advance first so a validation that started in the old generation can
+	// never become visible even if its atomic Store races with the clear below.
+	pc.activeRoleGrantGeneration.Add(1)
 	// total := pc.total.Swap(0)
 	// hit := pc.hit.Swap(0)
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
@@ -8025,6 +8058,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	roleGrantNeedsCheck := activeRoleGrantNeedsCheck(tenant)
 	var roleGrantValid bool
 	roleGrantCached := !roleGrantNeedsCheck
+	var roleGrantCacheGeneration uint64
 	cache := ses.GetPrivilegeCache()
 	if roleGrantNeedsCheck && enableCache && cache != nil {
 		roleGrantValid, roleGrantCached = cache.getActiveRoleGrant(
@@ -8086,22 +8120,46 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	roleSetOfKthIteration.Insert((int64)(tenant.GetDefaultRoleID()))
 
 	err = bh.Exec(ctx, "begin;")
+	txnFinished := false
+	publishRoleGrant := false
 	defer func() {
+		if txnFinished {
+			return
+		}
 		err = finishTxn(ctx, bh, err)
+		if err == nil && publishRoleGrant && enableCache && cache != nil {
+			cache.setActiveRoleGrantForGeneration(
+				tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid,
+				roleGrantCacheGeneration)
+		}
 	}()
 	if err != nil {
 		return false, stats, err
 	}
 
 	if !roleGrantCached {
+		if enableCache && cache != nil {
+			roleGrantCacheGeneration = cache.getActiveRoleGrantGeneration()
+		}
 		roleGrantValid, err = activeRoleGrantIsValid(ctx, bh, tenant)
 		if err != nil {
 			return false, stats, err
 		}
-		if enableCache && cache != nil {
-			cache.setActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid)
-		}
+		publishRoleGrant = true
 		if !roleGrantValid {
+			// A negative membership result is a successful catalog transaction,
+			// even though it denies the statement. Commit that read before caching
+			// it, then return the authorization error to the caller.
+			err = finishTxn(ctx, bh, nil)
+			txnFinished = true
+			if err != nil {
+				return false, stats, err
+			}
+			if enableCache && cache != nil {
+				cache.setActiveRoleGrantForGeneration(
+					tenant.GetUserID(), tenant.GetDefaultRoleID(), false,
+					roleGrantCacheGeneration)
+			}
 			return false, stats, activeRoleGrantAuthorizationError(ctx)
 		}
 
@@ -8250,12 +8308,14 @@ func activeRoleGrantNeedsCheck(tenant *TenantInfo) bool {
 	if tenant == nil {
 		return false
 	}
-	switch tenant.GetDefaultRoleID() {
-	case moAdminRoleID, publicRoleID, accountAdminRoleID:
+	roleID := tenant.GetDefaultRoleID()
+	if roleID == publicRoleID {
 		return false
-	default:
-		return true
 	}
+	if tenant.IsSysTenant() {
+		return roleID != moAdminRoleID
+	}
+	return roleID != accountAdminRoleID
 }
 
 func activeRoleGrantIsValid(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) (bool, error) {
@@ -8297,11 +8357,13 @@ func validateActiveRoleGrantForAuthorization(
 		return false, stats, err
 	}
 	cache := ses.GetPrivilegeCache()
+	var cacheGeneration uint64
 	if enableCache && cache != nil {
 		if valid, cached := cache.getActiveRoleGrant(
 			tenant.GetUserID(), tenant.GetDefaultRoleID()); cached {
 			return valid, stats, nil
 		}
+		cacheGeneration = cache.getActiveRoleGrantGeneration()
 	}
 
 	// WITH GRANT OPTION authorization can bypass the general privilege walk,
@@ -8313,19 +8375,18 @@ func validateActiveRoleGrantForAuthorization(
 	}()
 
 	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 	if err != nil {
 		return false, stats, err
 	}
 
 	ret, err = activeRoleGrantIsValid(ctx, bh, tenant)
+	err = finishTxn(ctx, bh, err)
 	if err != nil {
 		return false, stats, err
 	}
 	if enableCache && cache != nil {
-		cache.setActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID(), ret)
+		cache.setActiveRoleGrantForGeneration(
+			tenant.GetUserID(), tenant.GetDefaultRoleID(), ret, cacheGeneration)
 	}
 	return ret, stats, nil
 }

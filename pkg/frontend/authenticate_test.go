@@ -914,6 +914,9 @@ func Test_determineCreateAccount(t *testing.T) {
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
+			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeCreateAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
 			}),
@@ -948,6 +951,9 @@ func Test_determineCreateAccount(t *testing.T) {
 		sql2result := map[string]ExecResult{
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
+			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
 			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeAlterAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
@@ -1086,6 +1092,9 @@ func Test_determineCreateAccount(t *testing.T) {
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
 			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
+			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeDropAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
 			}),
@@ -1122,6 +1131,9 @@ func Test_determineCreateAccount(t *testing.T) {
 		sql2result := map[string]ExecResult{
 			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
 				{2, false},
+			}),
+			getSqlForCheckUserGrantForAuthorization(2, 2): newMrsForCheckUserGrant([][]interface{}{
+				{2, 2, false},
 			}),
 			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeUpgradeAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
 				{PrivilegeTypeAccountAll, false},
@@ -12088,10 +12100,7 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 		return nil
 	}).AnyTimes()
 	bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-		result, ok := sql2result[currentSql]
-		if !ok {
-			result = sql2result[backgroundExecTestFixtureSQL(currentSql)]
-		}
+		result := sql2result[currentSql]
 		return []interface{}{result}
 	}).AnyTimes()
 	bh.EXPECT().GetExecStatsArray().DoAndReturn(func() statistic.StatsArray {
@@ -12108,6 +12117,7 @@ type backgroundExecTest struct {
 	sql2result                     map[string]ExecResult
 	sql2err                        map[string]error
 	executedSQLs                   []string
+	beforeExec                     func(string)
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
 	executionAccountIDs            []uint32
@@ -12200,6 +12210,9 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 }
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
+	if bt.beforeExec != nil {
+		bt.beforeExec(s)
+	}
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
@@ -12211,15 +12224,7 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	if err, ok := bt.sql2err[s]; ok {
 		return err
 	}
-	return bt.sql2err[backgroundExecTestFixtureSQL(s)]
-}
-
-func backgroundExecTestFixtureSQL(sql string) string {
-	if strings.HasPrefix(sql, "select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant ") &&
-		strings.HasSuffix(sql, " for update;") {
-		return strings.TrimSuffix(sql, " for update;") + ";"
-	}
-	return sql
+	return nil
 }
 
 func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sqlMode string) error {
@@ -12235,9 +12240,6 @@ func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from ui
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 	result, ok := bt.sql2result[bt.currentSql]
-	if !ok {
-		result, ok = bt.sql2result[backgroundExecTestFixtureSQL(bt.currentSql)]
-	}
 	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
 		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}
@@ -13244,6 +13246,29 @@ func TestActiveRoleGrantCacheLifecycle(t *testing.T) {
 	require.False(t, valid)
 }
 
+func TestActiveRoleGrantCacheRejectsStaleGeneration(t *testing.T) {
+	var nilCache *privilegeCache
+	require.Zero(t, nilCache.getActiveRoleGrantGeneration())
+
+	cache := &privilegeCache{}
+	generation := cache.getActiveRoleGrantGeneration()
+	cache.invalidate()
+
+	require.False(t, cache.setActiveRoleGrantForGeneration(2, 3, true, generation))
+	_, cached := cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	// Model the narrow race where an old validation stores after invalidate's
+	// clear. The generation embedded in the entry still makes it unusable.
+	cache.activeRoleGrant.Store(&activeRoleGrantCacheEntry{
+		key:        activeRoleGrantKey(2, 3),
+		valid:      true,
+		generation: generation,
+	})
+	_, cached = cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+}
+
 func TestActiveRoleGrantCachePublishesKeyAndValueAtomically(t *testing.T) {
 	cache := &privilegeCache{}
 	const iterations = 10_000
@@ -13275,8 +13300,12 @@ func TestActiveRoleGrantCachePublishesKeyAndValueAtomically(t *testing.T) {
 }
 
 func TestActiveRoleGrantValidationCompatibility(t *testing.T) {
-	for _, roleID := range []uint32{moAdminRoleID, publicRoleID, accountAdminRoleID} {
-		tenant := &TenantInfo{DefaultRoleID: roleID}
+	for _, tenant := range []*TenantInfo{
+		{Tenant: sysAccountName, TenantID: sysAccountID, DefaultRoleID: moAdminRoleID},
+		{Tenant: sysAccountName, TenantID: sysAccountID, DefaultRoleID: publicRoleID},
+		{Tenant: "acc1", TenantID: 1, DefaultRoleID: accountAdminRoleID},
+		{Tenant: "acc1", TenantID: 1, DefaultRoleID: publicRoleID},
+	} {
 		require.False(t, activeRoleGrantNeedsCheck(tenant))
 		valid, err := activeRoleGrantIsValid(context.Background(), nil, tenant)
 		require.NoError(t, err)
@@ -13284,7 +13313,129 @@ func TestActiveRoleGrantValidationCompatibility(t *testing.T) {
 	}
 
 	require.False(t, activeRoleGrantNeedsCheck(nil))
-	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{DefaultRoleID: 3}))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{
+		Tenant: sysAccountName, TenantID: sysAccountID, DefaultRoleID: accountAdminRoleID,
+	}))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{
+		Tenant: "acc1", TenantID: 1, DefaultRoleID: moAdminRoleID,
+	}))
+	require.True(t, activeRoleGrantNeedsCheck(&TenantInfo{
+		Tenant: "acc1", TenantID: 1, DefaultRoleID: 3,
+	}))
+}
+
+func TestActiveRoleGrantAuthorizationUsesNonLockingRead(t *testing.T) {
+	sql := getSqlForCheckUserGrantForAuthorization(3, 2)
+	require.Equal(t, getSqlForCheckUserGrant(3, 2), sql)
+	require.NotContains(t, strings.ToLower(sql), "for update")
+}
+
+func TestSysTenantCustomRoleIDTwoIsRevalidated(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	cache := &privilegeCache{}
+	ses := &Session{cache: cache}
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		TenantID:      sysAccountID,
+		User:          "alice",
+		UserID:        2,
+		DefaultRole:   "custom_role",
+		DefaultRoleID: accountAdminRoleID,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(accountAdminRoleID, 2)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
+	backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundExecStub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.NoError(t, err)
+	require.False(t, valid)
+	require.Contains(t, bh.executedSQLs, roleGrantSQL)
+	cachedValid, cached := cache.getActiveRoleGrant(2, accountAdminRoleID)
+	require.True(t, cached)
+	require.False(t, cachedValid)
+}
+
+func TestActiveRoleGrantAuthorizationDoesNotSerializeSameUser(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return false, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	executors := make([]BackgroundExec, 2)
+	for i := range executors {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(
+			[][]interface{}{{int64(3), int64(2), false}})
+		bh.beforeExec = func(sql string) {
+			if sql == roleGrantSQL {
+				arrived <- struct{}{}
+				<-release
+			}
+		}
+		executors[i] = bh
+	}
+
+	var executorMu sync.Mutex
+	nextExecutor := 0
+	backgroundExecStub := gostub.Stub(&NewBackgroundExec, func(
+		_ context.Context,
+		_ FeSession,
+		_ ...*BackgroundExecOption,
+	) BackgroundExec {
+		executorMu.Lock()
+		defer executorMu.Unlock()
+		executor := executors[nextExecutor]
+		nextExecutor++
+		return executor
+	})
+	defer backgroundExecStub.Reset()
+
+	results := make(chan error, 2)
+	start := time.Now()
+	for range 2 {
+		ses := &Session{cache: &privilegeCache{}}
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "alice",
+			TenantID:      1,
+			UserID:        2,
+			DefaultRole:   "reader",
+			DefaultRoleID: 3,
+		})
+		go func() {
+			_, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+			results <- err
+		}()
+	}
+
+	deadline := time.After(time.Second)
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-deadline:
+			close(release)
+			for range 2 {
+				<-results
+			}
+			t.Fatal("same-user authorization reads did not reach the catalog concurrently")
+		}
+	}
+	close(release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+	require.Less(t, time.Since(start), 2*time.Second)
 }
 
 func TestValidateActiveRoleGrantForAuthorizationDoesNotCacheCatalogErrors(t *testing.T) {
@@ -13331,6 +13482,193 @@ func TestValidateActiveRoleGrantForAuthorizationDoesNotCacheCatalogErrors(t *tes
 	valid, _, err = validateActiveRoleGrantForAuthorization(context.Background(), ses)
 	require.NoError(t, err)
 	require.True(t, valid)
+}
+
+func TestValidateActiveRoleGrantForAuthorizationPublishesOnlyAfterCommit(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	for _, tc := range []struct {
+		name  string
+		rows  [][]interface{}
+		valid bool
+	}{
+		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}, valid: true},
+		{name: "revoked", valid: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &privilegeCache{}
+			ses := &Session{cache: cache}
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "acc1",
+				User:          "alice",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRole:   "reader",
+				DefaultRoleID: 3,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(tc.rows)
+			commitErr := errors.New("commit failed")
+			bh.sql2err["commit;"] = commitErr
+			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer backgroundExecStub.Reset()
+
+			valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+			require.False(t, valid)
+			require.ErrorIs(t, err, commitErr)
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			_, cached := cache.getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+		})
+	}
+}
+
+func TestDetermineUserHasPrivilegeSetPublishesRoleGrantOnlyAfterCommit(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+	cacheHitStub := gostub.Stub(&checkPrivilegeInCache, func(context.Context, *Session, *privilege, bool) (bool, error) {
+		return true, nil
+	})
+	defer cacheHitStub.Reset()
+
+	for _, tc := range []struct {
+		name string
+		rows [][]interface{}
+	}{
+		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}},
+		{name: "revoked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &privilegeCache{}
+			ses := &Session{cache: cache}
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "acc1",
+				User:          "alice",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRole:   "reader",
+				DefaultRoleID: 3,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(tc.rows)
+			commitErr := errors.New("commit failed")
+			bh.sql2err["commit;"] = commitErr
+			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer backgroundExecStub.Reset()
+
+			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
+			_, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
+			require.ErrorIs(t, err, commitErr)
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			_, cached := cache.getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+		})
+	}
+}
+
+func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+	cacheHitStub := gostub.Stub(&checkPrivilegeInCache, func(context.Context, *Session, *privilege, bool) (bool, error) {
+		return true, nil
+	})
+	defer cacheHitStub.Reset()
+
+	for _, tc := range []struct {
+		name      string
+		rows      [][]interface{}
+		wantValid bool
+		wantError bool
+	}{
+		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}, wantValid: true},
+		{name: "revoked", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &privilegeCache{}
+			ses := &Session{cache: cache}
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "acc1",
+				User:          "alice",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRole:   "reader",
+				DefaultRoleID: 3,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(tc.rows)
+			bh.beforeExec = func(sql string) {
+				if sql == "commit;" {
+					_, cached := cache.getActiveRoleGrant(2, 3)
+					require.False(t, cached)
+				}
+			}
+			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer backgroundExecStub.Reset()
+
+			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
+			valid, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantValid, valid)
+			cachedValid, cached := cache.getActiveRoleGrant(2, 3)
+			require.True(t, cached)
+			require.Equal(t, tc.wantValid, cachedValid)
+		})
+	}
+}
+
+func TestValidateActiveRoleGrantForAuthorizationDoesNotPublishAcrossInvalidation(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	cache := &privilegeCache{}
+	ses := &Session{cache: cache}
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "acc1",
+		User:          "alice",
+		TenantID:      1,
+		UserID:        2,
+		DefaultRole:   "reader",
+		DefaultRoleID: 3,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(
+		[][]interface{}{{int64(3), int64(2), false}})
+	bh.beforeExec = func(sql string) {
+		if sql == "commit;" {
+			_, cached := cache.getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+			cache.invalidate()
+		}
+	}
+	backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundExecStub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(context.Background(), ses)
+	require.NoError(t, err)
+	require.True(t, valid)
+	_, cached := cache.getActiveRoleGrant(2, 3)
+	require.False(t, cached)
 }
 
 func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
