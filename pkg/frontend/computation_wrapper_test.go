@@ -1240,6 +1240,23 @@ func TestSpecializePreparedExecutionPlanDoesNotRecomputeStaticCapability(t *test
 		"the execution helper must consume the generation-cached decision instead of rescanning the plan")
 }
 
+func TestBuildPlanForCompileRetryDerivesStaticCapabilityForNewGeneration(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 216, "select coalesce(?, ?) from dual")
+	defer prepareStmt.Close()
+	ses.SetSql("execute " + prepareStmt.Name)
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
+	require.True(t, plan2.PreparedPlanNeedsRuntimeSpecialization(originalPlan))
+
+	retryPlan, err := buildPlanForCompileRetry(
+		execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), prepareStmt.PrepareStmt, false,
+		newPreparedExecutionRetry(preparedArithmeticDMLParamValues(), true))
+	require.NoError(t, err)
+	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
+	columns := plan2.GetResultColumnsFromPlan(retryPlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_int64), columns[0].Typ.Id)
+}
+
 func BenchmarkSpecializePreparedTPCCArithmeticUpdate(b *testing.B) {
 	preparedPlan := buildPreparedRuntimePlanForFrontendTest(b,
 		"update nation set n_regionkey = n_regionkey + ? where n_nationkey = ?")
