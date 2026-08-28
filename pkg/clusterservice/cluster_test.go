@@ -148,6 +148,61 @@ func TestClusterForceRefresh(t *testing.T) {
 		})
 }
 
+func TestClusterAdmissionSnapshotFiltersEveryPublicInventory(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.Lock()
+			hc.value.ViewMetadataAdmission = &logpb.ViewMetadataAdmission{
+				Enabled: true,
+				Epoch:   4,
+			}
+			hc.value.CNStores = []logpb.CNStore{
+				{
+					UUID:                            "ready",
+					WorkState:                       metadata.WorkState_Working,
+					ViewMetadataAdmissionGeneration: 10,
+					ViewMetadataObservedEpoch:       4,
+					ViewMetadataAdmissionReady:      true,
+				},
+				{
+					UUID:                            "pending",
+					WorkState:                       metadata.WorkState_Working,
+					ViewMetadataAdmissionGeneration: 11,
+				},
+			}
+			hc.Unlock()
+			require.NoError(t, c.Refresh(context.Background()))
+
+			var regular []string
+			c.GetCNService(NewSelector(), func(service metadata.CNService) bool {
+				regular = append(regular, service.ServiceID)
+				return true
+			})
+			require.Equal(t, []string{"ready"}, regular)
+
+			var withoutWorkState []string
+			c.GetCNServiceWithoutWorkingState(NewSelector(), func(service metadata.CNService) bool {
+				withoutWorkState = append(withoutWorkState, service.ServiceID)
+				return true
+			})
+			require.Equal(t, []string{"ready"}, withoutWorkState)
+
+			var raw []string
+			require.NoError(t, GetCNServiceRawWithContext(
+				context.Background(), c, NewSelector(), func(service metadata.CNService) bool {
+					raw = append(raw, service.ServiceID)
+					return true
+				}))
+			require.ElementsMatch(t, []string{"ready", "pending"}, raw)
+
+			admission := c.GetViewMetadataAdmission()
+			require.True(t, admission.Enabled)
+			require.Equal(t, uint64(4), admission.Epoch)
+		},
+	)
+}
+
 func TestClusterRefreshReportsFailureAndPreservesSnapshot(t *testing.T) {
 	runClusterTest(
 		time.Hour,

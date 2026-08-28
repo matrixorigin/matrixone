@@ -819,8 +819,22 @@ func (tbl *txnTable) GetObject(id *types.Objectid, isTombstone bool) (obj handle
 }
 
 func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error) {
-	txnEntry, err := tbl.entry.DropObjectEntry(
-		id, tbl.store.txn, isTombstone)
+	return tbl.softDeleteObject(id, isTombstone, false)
+}
+
+func (tbl *txnTable) SoftDeleteObjectByCN(id *types.Objectid, isTombstone bool) (err error) {
+	return tbl.softDeleteObject(id, isTombstone, true)
+}
+
+func (tbl *txnTable) softDeleteObject(id *types.Objectid, isTombstone, byCN bool) (err error) {
+	var txnEntry *catalog.ObjectEntry
+	if byCN {
+		txnEntry, err = tbl.entry.DropObjectEntryByCN(
+			id, tbl.store.txn, isTombstone)
+	} else {
+		txnEntry, err = tbl.entry.DropObjectEntry(
+			id, tbl.store.txn, isTombstone)
+	}
 	if err != nil {
 		return
 	}

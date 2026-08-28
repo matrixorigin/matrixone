@@ -20,7 +20,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"math"
-	"net"
 	"os"
 	"sync"
 	"time"
@@ -40,6 +39,8 @@ import (
 
 type RoutineManager struct {
 	mu                     sync.RWMutex
+	disconnectProbeMu      sync.Mutex
+	disconnectProbeScratch []activeClientRequest
 	ctx                    context.Context
 	clients                map[*Conn]*Routine
 	workerWG               sync.WaitGroup
@@ -71,6 +72,11 @@ type KillRecord struct {
 type activeClientRequest struct {
 	conn    *Conn
 	routine *Routine
+}
+
+var clientDisconnectProbeErrorEvent = logutil.Event{
+	Name:    "frontend.client-disconnect-probe.error",
+	Message: "failed to probe active client connection",
 }
 
 func NewKillRecord(killtime time.Time, version uint64) KillRecord {
@@ -195,11 +201,14 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 	return nil
 }
 
-func (rm *RoutineManager) longRunningRequests(now time.Time, minimum time.Duration) []activeClientRequest {
+func (rm *RoutineManager) appendLongRunningRequests(
+	requests []activeClientRequest,
+	now time.Time,
+	minimum time.Duration,
+) []activeClientRequest {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	nowValue := clientRequestClockValue(now)
-	var requests []activeClientRequest
 	for conn, routine := range rm.clients {
 		if conn != nil && routine != nil && routine.requestRunningLongerThan(nowValue, minimum) {
 			requests = append(requests, activeClientRequest{conn: conn, routine: routine})
@@ -211,15 +220,27 @@ func (rm *RoutineManager) longRunningRequests(now time.Time, minimum time.Durati
 func (rm *RoutineManager) cancelDisconnectedRequests(
 	now time.Time,
 	minimum time.Duration,
-	probe func(net.Conn) (bool, error),
+	probe func(*Conn) (bool, error),
 ) {
 	if probe == nil {
 		return
 	}
-	for _, request := range rm.longRunningRequests(now, minimum) {
-		closed, err := probe(request.conn.RawConn())
+	rm.disconnectProbeMu.Lock()
+	defer rm.disconnectProbeMu.Unlock()
+	requests := rm.appendLongRunningRequests(rm.disconnectProbeScratch[:0], now, minimum)
+	defer func() {
+		clear(requests)
+		rm.disconnectProbeScratch = requests[:0]
+	}()
+	for _, request := range requests {
+		closed, err := probe(request.conn)
 		if err != nil {
-			logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
+			clientDisconnectProbeErrorEvent.DebugLazy(func() []zap.Field {
+				return []zap.Field{
+					zap.String("connection", request.conn.RemoteAddress()),
+					zap.Error(err),
+				}
+			})
 			continue
 		}
 		if !closed {
@@ -517,7 +538,11 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
-	return rm.ResetSessionWithContext(rm.ctx, req, resp)
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
 func (rm *RoutineManager) ResetSessionWithContext(

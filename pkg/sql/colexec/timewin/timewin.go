@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -217,10 +218,11 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	}
 
 	ctr.boundedGapFill = true
-	ctr.gapFillStart = start - start%timeWin.Interval
+	ctr.gapFillStart = ctr.windowStart(start, timeWin.Interval, proc)
 	ctr.gapFillEnd = finish
 	if ctr.gapFillStart < finish {
-		ctr.gapFillRows = int64((finish-ctr.gapFillStart-1)/timeWin.Sliding) + 1
+		ctr.gapFillRows = ctr.windowBoundaryWindowCount(
+			ctr.gapFillStart, finish, timeWin.Sliding, proc)
 	}
 	if ctr.gapFillRows > maxGapFillRowsPerPartition {
 		return moerr.NewInvalidInputNoCtx("GAPFILL generated row limit exceeded for a partition")
@@ -294,7 +296,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if result.Batch == nil {
 				if ctr.hasGapFillBounds(timeWin) && ctr.i == 0 && len(timeWin.PartitionBy) == 0 {
-					if err = ctr.startSyntheticGapFill(timeWin); err != nil {
+					if err = ctr.startSyntheticGapFill(timeWin, proc); err != nil {
 						return result, err
 					}
 					ctr.status = boundedEmpty
@@ -324,21 +326,21 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case firstWindow:
 
-			if err = ctr.firstWindow(timeWin); err != nil {
+			if err = ctr.firstWindow(timeWin, proc); err != nil {
 				return result, err
 			}
 			ctr.status = fill
 
 		case nextWindow:
 
-			if err = ctr.nextWindow(timeWin); err != nil {
+			if err = ctr.nextWindow(timeWin, proc); err != nil {
 				return result, err
 			}
 			ctr.status = fill
 
 		case resumeAfterFlush:
 
-			if err = ctr.resumeWindowAfterFlush(timeWin); err != nil {
+			if err = ctr.resumeWindowAfterFlush(timeWin, proc); err != nil {
 				return result, err
 			}
 			ctr.status = fill
@@ -361,7 +363,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.end {
 				if ctr.hasGapFillBounds(timeWin) {
 					if ctr.boundedStreamReadyForTail(timeWin) {
-						complete, err := ctr.closeBoundedGapFillTail(timeWin)
+						complete, err := ctr.closeBoundedGapFillTail(timeWin, proc)
 						if err != nil {
 							return result, err
 						}
@@ -422,12 +424,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case fill:
 
-			if err = ctr.fillRows(timeWin); err != nil {
+			if err = ctr.fillRows(timeWin, proc); err != nil {
 				return result, err
 			}
 
 		case boundedEmpty:
-			complete, err := ctr.closeBoundedGapFillTail(timeWin)
+			complete, err := ctr.closeBoundedGapFillTail(timeWin, proc)
 			if err != nil {
 				return result, err
 			}
@@ -473,9 +475,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.freeAgg()
 				ctr.aggs = replacements
 				ctr.left = ctr.nextLeft
-				ctr.right = ctr.left + timeWin.Interval
-				ctr.nextLeft = ctr.left + timeWin.Sliding
-				ctr.nextRight = ctr.nextLeft + timeWin.Interval
+				ctr.right = ctr.advanceWindowBoundary(ctr.left, timeWin.Interval, proc)
+				ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, timeWin.Sliding, proc)
+				ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, timeWin.Interval, proc)
 				ctr.group = 0
 				ctr.withoutFill = true
 				if err = ctr.accountGapFillWindows(timeWin, 1); err != nil {
@@ -638,7 +640,88 @@ func (ctr *container) zeroWindowValue() types.Datetime {
 	return types.ZeroDatetime
 }
 
-func (ctr *container) nextWindow(t *TimeWin) error {
+func (ctr *container) windowStart(value, interval types.Datetime, proc *process.Process) types.Datetime {
+	if ctr.tsOid == types.T_timestamp {
+		return types.Datetime(function.NormalizeTimestampWindowStart(
+			types.Timestamp(value), int64(interval), proc.GetSessionInfo().TimeZone))
+	}
+	return value - value%interval
+}
+
+func (ctr *container) advanceWindowBoundary(value, delta types.Datetime, proc *process.Process) types.Datetime {
+	if ctr.tsOid == types.T_timestamp {
+		return types.Datetime(function.AdvanceTimestampWindowBoundary(
+			types.Timestamp(value), int64(delta), proc.GetSessionInfo().TimeZone))
+	}
+	return value + delta
+}
+
+func (ctr *container) advanceWindowBoundaryBy(value types.Datetime, count int64, delta types.Datetime, proc *process.Process) types.Datetime {
+	if count == 0 {
+		return value
+	}
+	if ctr.tsOid != types.T_timestamp {
+		return value + types.Datetime(count)*delta
+	}
+	return types.Datetime(function.AdvanceTimestampWindowBoundaryBy(
+		types.Timestamp(value), count, int64(delta), proc.GetSessionInfo().TimeZone))
+}
+
+// windowBoundarySteps returns the number of sliding boundaries strictly before
+// end when advancing from start.  TIMESTAMP boundaries are a civil-time grid,
+// so subtracting their wall-clock values is insufficient at DST gaps/folds:
+// a fold contains two distinct instants with the same civil value, while a gap
+// removes a civil value.  The function package counts the actual boundary
+// sequence and uses a constant-time jump on fixed-offset spans.
+func (ctr *container) windowBoundarySteps(start, end types.Datetime, delta types.Datetime, proc *process.Process) int64 {
+	if end <= start || delta <= 0 {
+		return 0
+	}
+	if ctr.tsOid == types.T_timestamp {
+		return function.TimestampWindowBoundarySteps(
+			types.Timestamp(start), types.Timestamp(end), int64(delta), proc.GetSessionInfo().TimeZone)
+	}
+	return int64((end - start) / delta)
+}
+
+// windowBoundaryWindowCount returns the number of window starts in the
+// half-open interval [start, end).  Bounded GAPFILL uses this ceiling count;
+// unlike windowBoundarySteps, it includes a partially covered final window.
+func (ctr *container) windowBoundaryWindowCount(start, end, delta types.Datetime, proc *process.Process) int64 {
+	if end <= start || delta <= 0 {
+		return 0
+	}
+	steps := ctr.windowBoundarySteps(start, end, delta, proc)
+	if ctr.tsOid != types.T_timestamp {
+		if (end-start)%delta != 0 {
+			steps++
+		}
+		return steps
+	}
+	rawSpan := int64(end) - int64(start)
+	civilStart := int64(types.Timestamp(start).ToDatetime(proc.GetSessionInfo().TimeZone))
+	civilEnd := int64(types.Timestamp(end).ToDatetime(proc.GetSessionInfo().TimeZone))
+	// A divisible raw span already represents the actual number of boundary
+	// instants, including both sides of a DST fold and the skipped instants of
+	// a gap.  A divisible civil span is the corresponding exact count for
+	// day-sized transitions whose raw span is 23/25 hours.
+	if rawSpan >= 0 && rawSpan%int64(delta) == 0 {
+		return steps
+	}
+	if civilEnd >= civilStart && (civilEnd-civilStart)%int64(delta) == 0 {
+		return steps
+	}
+	boundary := ctr.advanceWindowBoundaryBy(start, steps, delta, proc)
+	if boundary < end {
+		steps++
+	}
+	if steps == 0 {
+		steps = 1
+	}
+	return steps
+}
+
+func (ctr *container) nextWindow(t *TimeWin, proc *process.Process) error {
 	emit := !ctr.withoutFill || t.GapFill
 	if emit {
 		ctr.wStart = append(ctr.wStart, ctr.left)
@@ -648,8 +731,8 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 	ctr.left = ctr.nextLeft
 	ctr.right = ctr.nextRight
 
-	ctr.nextLeft = ctr.left + t.Sliding
-	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+	ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 
 	ctr.curVecIdx = ctr.preVecIdx
 	ctr.curRowIdx = ctr.preRowIdx
@@ -675,12 +758,12 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 // the flush, and makeAggExecutors grew the replacement generation's first
 // group. Re-entering nextWindow here would append the old bounds a second time
 // and grow a second group for the same transition.
-func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
+func (ctr *container) resumeWindowAfterFlush(t *TimeWin, proc *process.Process) error {
 	ctr.left = ctr.nextLeft
 	ctr.right = ctr.nextRight
 
-	ctr.nextLeft = ctr.left + t.Sliding
-	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+	ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 
 	ctr.curVecIdx = ctr.preVecIdx
 	ctr.curRowIdx = ctr.preRowIdx
@@ -694,7 +777,7 @@ func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
 	return nil
 }
 
-func (ctr *container) firstWindow(t *TimeWin) error {
+func (ctr *container) firstWindow(t *TimeWin, proc *process.Process) error {
 	if ctr.partIdx < 0 {
 		ctr.partitionCount++
 		if t.GapFill && ctr.partitionCount > maxGapFillPartitions {
@@ -721,16 +804,16 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 		ctr.zeroWindow = true
 	} else if ctr.hasGapFillBounds(t) {
 		ctr.left = ctr.gapFillStart
-		ctr.right = ctr.left + t.Interval
-		ctr.nextLeft = ctr.left + t.Sliding
-		ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
+		ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+		ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 		ctr.zeroWindow = false
 	} else {
-		ctr.left = val - val%t.Interval
-		ctr.right = ctr.left + t.Interval
+		ctr.left = ctr.windowStart(val, t.Interval, proc)
+		ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
 
-		ctr.nextLeft = ctr.left + t.Sliding
-		ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+		ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 		ctr.zeroWindow = false
 	}
 
@@ -753,7 +836,7 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 	return nil
 }
 
-func (ctr *container) fillRows(t *TimeWin) error {
+func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 	cnt := ctr.tsVec[ctr.curVecIdx].Length()
 	zeroValue := ctr.zeroWindowValue()
 
@@ -841,7 +924,7 @@ func (ctr *container) fillRows(t *TimeWin) error {
 	case partBreak:
 		if ctr.hasGapFillBounds(t) {
 			if ctr.boundedPartitionReadyForTail(t) {
-				complete, err := ctr.closeBoundedGapFillTail(t)
+				complete, err := ctr.closeBoundedGapFillTail(t, proc)
 				if err != nil {
 					return err
 				}
@@ -868,11 +951,12 @@ func (ctr *container) fillRows(t *TimeWin) error {
 		val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
 		if ctr.withoutFill && !t.GapFill && t.Sliding > 0 {
 			if val >= ctr.right {
-				skip := (val-ctr.right)/t.Sliding + 1
-				ctr.left += skip * t.Sliding
-				ctr.right += skip * t.Sliding
-				ctr.nextLeft = ctr.left + t.Sliding
-				ctr.nextRight = ctr.nextLeft + t.Interval
+				steps := ctr.windowBoundarySteps(ctr.right, val, t.Sliding, proc)
+				skip := steps + 1
+				ctr.left = ctr.advanceWindowBoundaryBy(ctr.left, skip, t.Sliding, proc)
+				ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
+				ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+				ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 				ctr.curVecIdx = ctr.preVecIdx
 				ctr.curRowIdx = ctr.preRowIdx
 				ctr.status = fill
@@ -880,8 +964,8 @@ func (ctr *container) fillRows(t *TimeWin) error {
 			}
 		}
 		if ctr.hasGapFillBounds(t) && t.Sliding == t.Interval {
-			target := val - val%t.Interval
-			flushed, err := ctr.advanceBoundedTumblingGap(t, target)
+			target := ctr.windowStart(val, t.Interval, proc)
+			flushed, err := ctr.advanceBoundedTumblingGap(t, target, proc)
 			if err != nil {
 				return err
 			}
@@ -919,7 +1003,7 @@ func (ctr *container) boundedPartitionReadyForTail(t *TimeWin) bool {
 			ctr.partLastVal < ctr.nextLeft)
 }
 
-func (ctr *container) startSyntheticGapFill(t *TimeWin) error {
+func (ctr *container) startSyntheticGapFill(t *TimeWin, proc *process.Process) error {
 	if ctr.gapFillRows <= 0 {
 		return moerr.NewInternalErrorNoCtx("cannot start an empty GAPFILL domain")
 	}
@@ -932,9 +1016,9 @@ func (ctr *container) startSyntheticGapFill(t *TimeWin) error {
 	}
 
 	ctr.left = ctr.gapFillStart
-	ctr.right = ctr.left + t.Interval
-	ctr.nextLeft = ctr.left + t.Sliding
-	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
+	ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+	ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 	ctr.group = 0
 	ctr.withoutFill = true
 	ctr.syntheticBounds = true
@@ -950,11 +1034,11 @@ func (ctr *container) startSyntheticGapFill(t *TimeWin) error {
 // window whose start is inside [start, finish). It grows aggregate groups once
 // per output batch instead of once per empty bucket, which is the dominant
 // cost for long quiet ranges. The bool reports whether finish was reached.
-func (ctr *container) closeBoundedGapFillTail(t *TimeWin) (bool, error) {
+func (ctr *container) closeBoundedGapFillTail(t *TimeWin, proc *process.Process) (bool, error) {
 	if ctr.left >= ctr.gapFillEnd {
 		return true, nil
 	}
-	remaining := int64((ctr.gapFillEnd-ctr.left-1)/t.Sliding) + 1
+	remaining := ctr.windowBoundaryWindowCount(ctr.left, ctr.gapFillEnd, t.Sliding, proc)
 	count := remaining
 	capacity := int64(maxTimeWindowRows - len(ctr.wStart))
 	if capacity < 1 {
@@ -964,24 +1048,30 @@ func (ctr *container) closeBoundedGapFillTail(t *TimeWin) (bool, error) {
 		count = capacity
 	}
 
-	ctr.appendGapFillBounds(t, count)
+	ctr.appendGapFillBounds(t, count, proc)
 	additional := count - 1 // the current aggregate group already exists
 	if err := ctr.growGapFillGroups(t, additional); err != nil {
 		return false, err
 	}
 	ctr.group += int(additional)
-	ctr.left += types.Datetime(additional) * t.Sliding
-	ctr.right = ctr.left + t.Interval
-	ctr.nextLeft = ctr.left + t.Sliding
-	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.left = ctr.advanceWindowBoundaryBy(ctr.left, additional, t.Sliding, proc)
+	ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
+	ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+	ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 	return count == remaining, nil
 }
 
 // advanceBoundedTumblingGap skips directly to the bucket containing target.
 // When the output batch fills, it closes the current prefix and lets the normal
 // post-flush transition create the next group.
-func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetime) (bool, error) {
-	steps := int64((target - ctr.left) / t.Sliding)
+func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetime, proc *process.Process) (bool, error) {
+	steps := ctr.windowBoundarySteps(ctr.left, target, t.Sliding, proc)
+	if steps == 0 && target > ctr.left {
+		// The first civil boundary after a fold may have the same wall-clock
+		// value as the current one.  Treat it as one real window so the cursor
+		// and aggregate generation cannot stall on the same row.
+		steps = 1
+	}
 	if steps <= 0 {
 		return false, nil
 	}
@@ -991,31 +1081,31 @@ func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetim
 	}
 
 	if steps >= capacity {
-		ctr.appendGapFillBounds(t, capacity)
+		ctr.appendGapFillBounds(t, capacity, proc)
 		additional := capacity - 1
 		if err := ctr.growGapFillGroups(t, additional); err != nil {
 			return false, err
 		}
 		ctr.group += int(additional)
-		ctr.left += types.Datetime(additional) * t.Sliding
-		ctr.right = ctr.left + t.Interval
-		ctr.nextLeft = ctr.left + t.Sliding
-		ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.left = ctr.advanceWindowBoundaryBy(ctr.left, additional, t.Sliding, proc)
+		ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
+		ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+		ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 		return true, nil
 	}
 
 	// Close every bucket before target and create one aggregate group for the
 	// target bucket. The input row remains at the same cursor and is consumed by
 	// the next fill iteration.
-	ctr.appendGapFillBounds(t, steps)
+	ctr.appendGapFillBounds(t, steps, proc)
 	if err := ctr.growGapFillGroups(t, steps); err != nil {
 		return false, err
 	}
 	ctr.group += int(steps)
 	ctr.left = target
-	ctr.right = ctr.left + t.Interval
-	ctr.nextLeft = ctr.left + t.Sliding
-	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
+	ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
+	ctr.nextRight = ctr.advanceWindowBoundary(ctr.nextLeft, t.Interval, proc)
 	ctr.withoutFill = true
 	return false, nil
 }
@@ -1035,17 +1125,17 @@ func (ctr *container) growGapFillGroups(t *TimeWin, count int64) error {
 	return nil
 }
 
-func (ctr *container) appendGapFillBounds(t *TimeWin, count int64) {
+func (ctr *container) appendGapFillBounds(t *TimeWin, count int64, proc *process.Process) {
 	if count <= 0 {
 		return
 	}
 	ctr.wStart = slices.Grow(ctr.wStart, int(count))
 	ctr.wEnd = slices.Grow(ctr.wEnd, int(count))
-	start := ctr.left
+	left := ctr.left
 	for i := int64(0); i < count; i++ {
-		left := start + types.Datetime(i)*t.Sliding
 		ctr.wStart = append(ctr.wStart, left)
-		ctr.wEnd = append(ctr.wEnd, left+t.Interval)
+		ctr.wEnd = append(ctr.wEnd, ctr.advanceWindowBoundary(left, t.Interval, proc))
+		left = ctr.advanceWindowBoundary(left, t.Sliding, proc)
 	}
 }
 
@@ -1146,7 +1236,7 @@ func appendTimestampIntervalBoundaryVector(
 			continue
 		}
 		if end && value != types.ZeroTimestamp {
-			boundary, ok := addTimestampIntervalBoundary(value, interval)
+			boundary, ok := addTimestampIntervalBoundary(value, interval, proc.GetSessionInfo().TimeZone)
 			if !ok {
 				err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
 				if err != nil {
@@ -1171,7 +1261,7 @@ func appendTimestampIntervalBoundaryVector(
 	return vec, nil
 }
 
-func addTimestampIntervalBoundary(value types.Timestamp, interval types.Datetime) (types.Timestamp, bool) {
+func addTimestampIntervalBoundary(value types.Timestamp, interval types.Datetime, loc *time.Location) (types.Timestamp, bool) {
 	raw := int64(value)
 	delta := int64(interval)
 	if delta > 0 && raw > int64(types.TimestampMaxValue)-delta {
@@ -1180,7 +1270,7 @@ func addTimestampIntervalBoundary(value types.Timestamp, interval types.Datetime
 	if delta < 0 && raw < int64(types.TimestampMinValue)-delta {
 		return 0, false
 	}
-	boundary := types.Timestamp(raw + delta)
+	boundary := function.AdvanceTimestampWindowBoundary(value, delta, loc)
 	return boundary, timestampIntervalBoundaryInDomain(boundary)
 }
 

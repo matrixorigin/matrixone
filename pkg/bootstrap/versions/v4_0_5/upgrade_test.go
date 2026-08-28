@@ -19,9 +19,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
@@ -61,13 +64,14 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 
 func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 	views := []struct {
-		name string
-		ddl  string
+		name            string
+		ddl             string
+		legacyBaseTable bool
 	}{
 		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
 		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
 		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
-		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL, legacyBaseTable: true},
 	}
 
 	for i, view := range views {
@@ -75,8 +79,12 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 		if entry.Schema != sysview.InformationDBConst || entry.TableName != view.name || entry.UpgType != versions.MODIFY_VIEW {
 			t.Fatalf("unexpected information_schema.%s upgrade: %+v", view.name, entry)
 		}
-		if entry.UpgSql != view.ddl {
-			t.Fatalf("%s upgrade does not use the current view definition: %s", view.name, entry.UpgSql)
+		definitionSQL := entry.UpgSql
+		if view.legacyBaseTable {
+			definitionSQL = entry.PostSql
+		}
+		if definitionSQL != view.ddl {
+			t.Fatalf("%s upgrade does not use the current view definition: %s", view.name, definitionSQL)
 		}
 		for _, want := range []string{
 			"relkind = 'temporary_table'",
@@ -84,15 +92,80 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 			"mo_is_legacy_temporary_table",
 			"[0-9a-f]{32}",
 		} {
-			if !strings.Contains(entry.UpgSql, want) {
-				t.Fatalf("%s upgrade is missing legacy temporary-table compatibility %q: %s", view.name, want, entry.UpgSql)
+			if !strings.Contains(definitionSQL, want) {
+				t.Fatalf("%s upgrade is missing legacy temporary-table compatibility %q: %s", view.name, want, definitionSQL)
 			}
 		}
-		wantPreSQL := "drop view if exists information_schema." + strings.ToLower(view.name)
-		if !strings.Contains(strings.ToLower(entry.PreSql), wantPreSQL) {
-			t.Fatalf("%s upgrade is missing its drop-view precondition: %s", view.name, entry.PreSql)
+		if view.legacyBaseTable {
+			requireSQLContains(t, entry.PreSql, "drop table if exists information_schema."+strings.ToLower(view.name))
+			requireSQLContains(t, entry.UpgSql, "drop view if exists information_schema."+strings.ToLower(view.name))
+			continue
+		}
+		requireSQLContains(t, entry.PreSql, "drop view if exists information_schema."+strings.ToLower(view.name))
+		if entry.PostSql != "" {
+			t.Fatalf("%s regular view upgrade should not use post-sql: %s", view.name, entry.PostSql)
 		}
 	}
+}
+
+func requireSQLContains(t *testing.T, sql, want string) {
+	t.Helper()
+	if !strings.Contains(strings.ToLower(sql), want) {
+		t.Fatalf("SQL %q does not contain %q", sql, want)
+	}
+}
+
+func TestInformationSchemaLegacyTableUpgradeIsOrderedAndIdempotent(t *testing.T) {
+	entry := upgradeInformationSchemaViewFromLegacyTable("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL)
+	upgraded := false
+	stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+		if accountID != 42 || schema != sysview.InformationDBConst || viewName != "TABLE_CONSTRAINTS" {
+			t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
+		}
+		if upgraded {
+			return true, sysview.InformationSchemaTableConstraintsDDL, nil
+		}
+		return false, "", nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.PostSql {
+			upgraded = true
+		}
+		return executor.Result{}, nil
+	}, txnOperator)
+
+	if err := entry.Upgrade(txnExecutor, 42); err != nil {
+		t.Fatalf("first upgrade: %v", err)
+	}
+	if want := []string{entry.PreSql, entry.UpgSql, entry.PostSql}; !equalStrings(executed, want) {
+		t.Fatalf("unexpected execution order: got %q, want %q", executed, want)
+	}
+
+	executed = nil
+	if err := entry.Upgrade(txnExecutor, 42); err != nil {
+		t.Fatalf("second upgrade: %v", err)
+	}
+	if len(executed) != 0 {
+		t.Fatalf("matching view should skip DDL, executed %q", executed)
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestInformationSchemaTenantUpgradeCheckFunc(t *testing.T) {

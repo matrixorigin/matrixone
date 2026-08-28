@@ -22,12 +22,38 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRestorePreparedRuntimeParamRefsKeepsTypedCast(t *testing.T) {
+	literal := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 90}},
+			Src: &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			},
+		}},
+	}
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0}, Nodes: []*planpb.Node{{NodeType: planpb.Node_VALUE_SCAN, ProjectList: []*planpb.Expr{literal}}},
+	}}}
+	require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), prepared))
+	project := prepared.GetQuery().Nodes[0].ProjectList[0]
+	require.Nil(t, project.GetLit())
+	param := project.GetP()
+	if param == nil && project.GetF() != nil && len(project.GetF().GetArgs()) > 0 {
+		param = project.GetF().GetArgs()[0].GetP()
+	}
+	require.NotNil(t, param)
+	require.Equal(t, int32(0), param.GetPos())
+}
 
 var errWindowParameterVisit = errors.New("window parameter visit failed")
 
@@ -77,6 +103,29 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 		window.GetW().Frame.Start.Val.GetP().Pos,
 		window.GetW().Frame.End.Val.GetP().Pos,
 	})
+}
+
+func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeId:   0,
+			NodeType: planpb.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &planpb.VectorIndexScan{
+				QueryVector:     param(4),
+				CandidateLimit:  param(3),
+				FirstRoundLimit: param(0),
+				PreFilters:      []*planpb.Expr{param(2)},
+				DistanceRange:   &planpb.DistRange{LowerBound: param(1)},
+			},
+		}},
+	}}}
+	rule := NewGetParamRule()
+	require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+	require.Equal(t, map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0}, rule.params)
 }
 
 func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
@@ -1120,6 +1169,873 @@ func TestResetParamRefRulePreservesAggregateConfig(t *testing.T) {
 
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), expr.GetF().AggConfig[0])
+}
+
+func TestResetParamRefRuleRebindsTypedAncestors(t *testing.T) {
+	ctx := context.Background()
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	inner, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
+		param,
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	outer, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{inner})
+	require.NoError(t, err)
+
+	rule := NewResetParamRefRule(ctx, []*planpb.Expr{
+		makePlan2Float64ConstExprWithType(-1.5),
+	})
+	rewritten, err := rule.ApplyExpr(outer)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, types.T(rewritten.Typ.Id))
+	require.Equal(t, types.T_float64, types.T(rewritten.GetF().Args[0].Typ.Id))
+}
+
+func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
+	ctx := context.Background()
+	param := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+	}
+
+	selectParam, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{selectParam},
+		}},
+	}}}
+
+	decimal := types.New(types.T_decimal64, 2, 1)
+	filled, err := FillValuesOfParamsInPlan(ctx, query, []any{ParamValue{
+		Value:          "-1.5",
+		RuntimeType:    decimal,
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	result := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), result.Typ.Id)
+	boundArg := result.GetF().Args[0]
+	require.Equal(t, int64(-15), boundArg.GetLit().GetDecimal64Val().A)
+	require.Nil(t, boundArg.GetF())
+	require.Equal(t, int32(types.T_decimal64), boundArg.Typ.Id)
+
+	stringFilled, err := FillValuesOfParamsInPlan(ctx, query, []any{ParamValue{
+		Value:          "-1.5",
+		RuntimeType:    types.T_text.ToType(),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), stringResult.Typ.Id)
+	require.Nil(t, stringResult.GetF().Args[0].GetF())
+	require.Equal(t, int64(-15), stringResult.GetF().Args[0].GetLit().GetDecimal64Val().A)
+
+	sleepParam, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	sleepQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{sleepParam},
+		}},
+	}}}
+	sleepFilled, err := FillValuesOfParamsInPlan(ctx, sleepQuery, []any{ParamValue{
+		Value:          "0.05",
+		RuntimeType:    types.T_float64.ToType(),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	sleepResult := sleepFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_uint8), sleepResult.Typ.Id)
+	require.Equal(t, int32(types.T_float64), sleepResult.GetF().Args[0].Typ.Id)
+	require.Nil(t, sleepResult.GetF().Args[0].GetF())
+
+	sleepFloat, err := FillValuesOfParamsInPlan(ctx, sleepQuery, []any{ParamValue{
+		Value:          "0.05",
+		RuntimeType:    types.T_float32.ToType(),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	sleepFloatArg := sleepFloat.GetQuery().Nodes[0].ProjectList[0].GetF().Args[0]
+	require.Equal(t, int32(types.T_float64), sleepFloatArg.Typ.Id)
+	require.Equal(t, "cast", sleepFloatArg.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_float32), sleepFloatArg.GetF().Args[0].Typ.Id)
+
+	sleepDecimal, err := FillValuesOfParamsInPlan(ctx, sleepQuery, []any{ParamValue{
+		Value:          "0.05",
+		RuntimeType:    types.New(types.T_decimal64, 3, 2),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	sleepDecimalArg := sleepDecimal.GetQuery().Nodes[0].ProjectList[0].GetF().Args[0]
+	require.Equal(t, int32(types.T_float64), sleepDecimalArg.Typ.Id)
+	require.Equal(t, "cast", sleepDecimalArg.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_decimal64), sleepDecimalArg.GetF().Args[0].Typ.Id)
+
+	direct := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{param()},
+		}},
+	}}}
+	filled, err = FillValuesOfParamsInPlan(ctx, direct, []any{ParamValue{
+		Value:          "-12345678901234567890.123456789",
+		RuntimeType:    types.New(types.T_decimal128, 29, 9),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Id)
+	require.Equal(t, int32(29), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Width)
+	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
+}
+
+func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {
+	ctx := context.Background()
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param(0)})
+	require.NoError(t, err)
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(1),
+		param(1),
+	})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{absExpr, eqExpr},
+		}},
+	}}}
+
+	filled, err := FillValuesOfParamsInPlan(ctx, query, []any{
+		ParamValue{Value: "-1.5", RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "1"},
+	})
+	require.NoError(t, err)
+	bound := filled.GetQuery().Nodes[0].ProjectList[1].GetF().Args[1]
+	require.Equal(t, int64(1), bound.GetLit().GetI64Val())
+}
+
+func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T) {
+	ctx := context.Background()
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{param(0), param(1)})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{comparison},
+		}},
+	}}}
+	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		query, []types.Type{types.T_int8.ToType(), types.T_text.ToType()}))
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{
+			Value:            "1e+100",
+			RuntimeType:      types.T_float64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+		ParamValue{
+			Value:            "1e100",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	boundComparison := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_bool), boundComparison.Typ.Id)
+	require.Len(t, boundComparison.GetF().Args, 2)
+	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, float64(1e100), boundComparison.GetF().Args[0].GetLit().GetDval())
+	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[1].Typ.Id)
+	require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName())
+
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{
+			Value:            "9223372036854775806",
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+		ParamValue{
+			Value:            "9223372036854775807",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
+	for _, arg := range boundComparison.GetF().Args {
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+	}
+
+	for _, textValue := range []string{"foo", "1abc", "1e309", "\u00a01"} {
+		filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{
+				Value:            "0",
+				RuntimeType:      types.T_int64.ToType(),
+				HasRuntimeType:   true,
+				IsBinaryProtocol: true,
+			},
+			ParamValue{
+				Value:            textValue,
+				RuntimeType:      types.T_text.ToType(),
+				HasRuntimeType:   true,
+				IsBinaryProtocol: true,
+			},
+		})
+		require.NoError(t, err, textValue)
+		require.True(t, specialized, textValue)
+		boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
+		for _, arg := range boundComparison.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id, textValue)
+		}
+		require.NotNil(t, boundComparison.GetF().Args[1].GetF(), textValue)
+		require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName(), textValue)
+	}
+
+	implicitComparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(0),
+		param(0),
+	})
+	require.NoError(t, err)
+	implicitQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{implicitComparison},
+		}},
+	}}}
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(implicitQuery))
+	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		implicitQuery, []types.Type{types.T_text.ToType()}))
+	require.True(t, preparedNumericComparisonTextParamPositions(
+		implicitQuery, []types.Type{types.T_text.ToType()})[0])
+	require.False(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		implicitQuery, []types.Type{types.T_int64.ToType()}))
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, implicitQuery, []any{
+		ParamValue{
+			Value:            "foo",
+			RuntimeType:      types.T_text.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	boundComparison = filled.GetQuery().Nodes[0].ProjectList[0]
+	// A nonnumeric text value must remain in the common DOUBLE domain so the
+	// comparison follows MySQL's numeric-prefix/zero and warning semantics.
+	// The enclosing comparison is rebound with both operands in that domain.
+	require.Equal(t, int32(types.T_float64), boundComparison.GetF().Args[1].Typ.Id)
+	require.Equal(t, "cast", boundComparison.GetF().Args[1].GetF().Func.GetObjName())
+}
+
+func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
+	int32Source := types.T_int32.ToType()
+	int64Source := types.T_int64.ToType()
+	float64Source := types.T_float64.ToType()
+	decimalSource := types.T_decimal128.ToType()
+	int32Type := makePlan2Type(&int32Source)
+	int64Type := makePlan2Type(&int64Source)
+	float64Type := makePlan2Type(&float64Source)
+	decimalType := makePlan2Type(&decimalSource)
+	for _, test := range []struct {
+		name   string
+		value  string
+		target planpb.Type
+		want   bool
+	}{
+		{name: "numeric prefix fits integer", value: "1abc", target: int32Type, want: false},
+		{name: "fractional integer comparison", value: "0.9", target: int32Type, want: true},
+		{name: "integer range overflow", value: "2147483648", target: int32Type, want: true},
+		{name: "double range overflow", value: "1e309", target: int32Type, want: true},
+		{name: "int64 double precision loss", value: "9007199254740993", target: int64Type, want: true},
+		{name: "int64 exactly representable", value: "9007199254740992", target: int64Type, want: false},
+		{name: "fraction rounds to integral double", value: "9007199254740992.5", target: int64Type, want: true},
+		{name: "int64 exponent precision loss", value: "9007199254740993e0", target: int64Type, want: true},
+		{name: "floating target", value: "0.9", target: float64Type, want: false},
+		{name: "decimal target uses common double domain", value: "9007199254740993", target: decimalType, want: true},
+		{name: "missing prefix coerces zero", value: "foo", target: int32Type, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, preparedComparisonTextNeedsDoubleFallback(test.value, test.target))
+		})
+	}
+}
+
+func TestPreparedRuntimeTextComparisonUnknownTypeIsNotNumeric(t *testing.T) {
+	rule := &preparedRuntimeTextComparisonScanRule{}
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: 999},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}
+	require.NotPanics(t, func() {
+		require.False(t, rule.exprHasNumericDomain(expr))
+	})
+}
+
+func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {
+	ctx := context.Background()
+	param := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+	}
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{absExpr},
+		}},
+	}}}
+
+	_, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "-1.5", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "COM_STMT text numeric values must rebind ABS")
+
+	sleepExpr, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	sleepQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{sleepExpr},
+		}},
+	}}}
+	sleepFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, sleepQuery, []any{
+		ParamValue{Value: "0.05", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "COM_STMT text fractional values must rebind SLEEP")
+	require.NotNil(t, sleepFilled.GetQuery().Nodes[0].ProjectList[0].GetF())
+
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "-1.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	direct := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{param()},
+		}},
+	}}}
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: "text", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.False(t, specialized, "same-domain text execution should reuse the cached plan")
+
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: "5", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "direct numeric result metadata must be specialized")
+}
+
+func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	decimalColumn := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&decimalType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+	}
+	makeQuery := func(t *testing.T, name string, args []*planpb.Expr) *planpb.Plan {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			StmtType: planpb.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_VALUE_SCAN,
+				ProjectList: []*planpb.Expr{expr},
+			}},
+		}}}
+	}
+	findNumericPrefixCast := func(expr *planpb.Expr) *planpb.Expr {
+		var visit func(*planpb.Expr) *planpb.Expr
+		visit = func(current *planpb.Expr) *planpb.Expr {
+			if current == nil {
+				return nil
+			}
+			if fn := current.GetF(); fn != nil {
+				if fn.Func.GetObjName() == "cast" && current.Typ.Charset == 255 {
+					return current
+				}
+				for _, arg := range fn.Args {
+					if found := visit(arg); found != nil {
+						return found
+					}
+				}
+			}
+			if list := current.GetList(); list != nil {
+				for _, item := range list.List {
+					if found := visit(item); found != nil {
+						return found
+					}
+				}
+			}
+			return nil
+		}
+		return visit(expr)
+	}
+	collectNumericOperandTypes := func(expr *planpb.Expr) []types.T {
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		result := make([]types.T, 0, len(fn.Args))
+		for _, arg := range fn.Args {
+			if list := arg.GetList(); list != nil {
+				for _, item := range list.List {
+					result = append(result, types.T(item.Typ.Id))
+				}
+				continue
+			}
+			result = append(result, types.T(arg.Typ.Id))
+		}
+		return result
+	}
+
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		t.Run(name, func(t *testing.T) {
+			query := makeQuery(t, name, []*planpb.Expr{param(0), decimalColumn()})
+			cached, err := query.Marshal()
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+				ParamValue{
+					Value:               "9007199254740992.0001tail",
+					IsBinaryProtocol:    true,
+					EnableNumericPrefix: true,
+				},
+			})
+			require.NoError(t, err)
+			require.True(t, specialized, filled.String())
+			after, err := query.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, cached, after, "execute-time specialization must not mutate the cached plan")
+
+			result := filled.GetQuery().Nodes[0].ProjectList[0]
+			require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
+			prefixCast := findNumericPrefixCast(result)
+			require.NotNil(t, prefixCast, result.String())
+			require.Equal(t, "9007199254740992.0001tail", prefixCast.GetF().Args[0].GetLit().GetSval())
+		})
+	}
+
+	t.Run("nested common value keeps exact outer comparison", func(t *testing.T) {
+		common, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
+		require.NoError(t, err)
+		query := makeQuery(t, "=", []*planpb.Expr{common, decimalColumn()})
+		values := []any{ParamValue{
+			Value: "9007199254740992.0001tail", IsBinaryProtocol: true, EnableNumericPrefix: true,
+		}}
+		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
+
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, values)
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "=", predicate.GetF().GetFunc().GetObjName(), predicate.String())
+		require.Equal(t, []types.T{types.T_decimal128, types.T_decimal128},
+			collectNumericOperandTypes(predicate), predicate.String())
+		require.NotNil(t, findNumericPrefixCast(predicate), predicate.String())
+	})
+
+	t.Run("SQL eligibility includes integer peer with decimal variable kind", func(t *testing.T) {
+		intType := types.T_int32.ToType()
+		intColumn := &planpb.Expr{
+			Typ:  makePlan2Type(&intType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}},
+		}
+		query := makeQuery(t, "=", []*planpb.Expr{intColumn, param(0)})
+		values := []any{ParamValue{
+			Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+		}}
+		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
+
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, values)
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		operandTypes := collectNumericOperandTypes(predicate)
+		require.Len(t, operandTypes, 2, predicate.String())
+		for _, operandType := range operandTypes {
+			require.True(t, operandType.IsDecimal(), predicate.String())
+		}
+	})
+
+	t.Run("SQL eligibility excludes float peer with decimal variable kind", func(t *testing.T) {
+		floatType := types.T_float32.ToType()
+		floatColumn := &planpb.Expr{
+			Typ:  makePlan2Type(&floatType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}},
+		}
+		query := makeQuery(t, "=", []*planpb.Expr{floatColumn, param(0)})
+		require.False(t, PreparedPlanNeedsNumericPrefixSpecialization(query, []any{ParamValue{
+			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+		}}), query.String())
+	})
+
+	t.Run("dependency unwrap preserves physical casts", func(t *testing.T) {
+		numericSource := makePlan2Int64ConstExprWithType(2026)
+		yearType := types.T_year.ToType()
+		yearCast, err := makePlan2CastExpr(ctx, numericSource, makePlan2Type(&yearType))
+		require.NoError(t, err)
+		unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(yearCast)
+		require.False(t, changed, yearCast.String())
+		require.Same(t, yearCast, unwrapped)
+
+		floatType := types.T_float64.ToType()
+		floatCast, err := makePlan2CastExpr(ctx, decimalColumn(), makePlan2Type(&floatType))
+		require.NoError(t, err)
+		unwrapped, changed = unwrapNumericPrefixDependentImplicitCast(floatCast)
+		require.True(t, changed, floatCast.String())
+		require.Equal(t, types.T_decimal128, types.T(unwrapped.Typ.Id))
+	})
+
+	for _, test := range []struct {
+		name   string
+		fnName string
+		args   func() []*planpb.Expr
+		values []any
+	}{
+		{
+			name: "comparison", fnName: "=",
+			args: func() []*planpb.Expr { return []*planpb.Expr{decimalColumn(), param(0)} },
+			values: []any{ParamValue{
+				Value: "9007199254740992.0001tail", IsBinaryProtocol: true, EnableNumericPrefix: true,
+			}},
+		},
+		{
+			name: "between", fnName: "between",
+			args: func() []*planpb.Expr { return []*planpb.Expr{decimalColumn(), param(0), param(1)} },
+			values: []any{
+				ParamValue{Value: "9007199254740992.0000low", IsBinaryProtocol: true, EnableNumericPrefix: true},
+				ParamValue{Value: "9007199254740992.0002high", IsBinaryProtocol: true, EnableNumericPrefix: true},
+			},
+		},
+		{
+			name: "in list", fnName: "in",
+			args: func() []*planpb.Expr {
+				return []*planpb.Expr{decimalColumn(), {
+					Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{param(0), param(1)}}},
+				}}
+			},
+			values: []any{
+				ParamValue{Value: "9007199254740992.0001first", IsBinaryProtocol: true, EnableNumericPrefix: true},
+				ParamValue{Value: "9007199254740992.0002second", IsBinaryProtocol: true, EnableNumericPrefix: true},
+			},
+		},
+		{
+			name: "not in list", fnName: "not_in",
+			args: func() []*planpb.Expr {
+				return []*planpb.Expr{decimalColumn(), {
+					Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{param(0), param(1)}}},
+				}}
+			},
+			values: []any{
+				ParamValue{Value: "9007199254740992.0001first", IsBinaryProtocol: true, EnableNumericPrefix: true},
+				ParamValue{Value: "9007199254740992.0002second", IsBinaryProtocol: true, EnableNumericPrefix: true},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := makeQuery(t, test.fnName, test.args())
+			cached, err := query.Marshal()
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, test.values)
+			require.NoError(t, err)
+			require.True(t, specialized, filled.String())
+			after, err := query.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, cached, after)
+			predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+			require.Equal(t, int32(types.T_bool), predicate.Typ.Id, predicate.String())
+			require.NotNil(t, findNumericPrefixCast(predicate), predicate.String())
+		})
+	}
+
+	t.Run("parameter on in left keeps typed list", func(t *testing.T) {
+		first, err := makePlan2DecimalExprWithType(ctx, "1.25")
+		require.NoError(t, err)
+		second, err := makePlan2DecimalExprWithType(ctx, "2.50")
+		require.NoError(t, err)
+		list := &planpb.Expr{
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{first, second}}},
+		}
+		query := makeQuery(t, "in", []*planpb.Expr{param(0), list})
+		preparedPredicate := query.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "in", preparedPredicate.GetF().GetFunc().GetObjName(), preparedPredicate.String())
+		require.True(t, isImplicitPreparedParamCast(preparedPredicate.GetF().Args[0]), preparedPredicate.String())
+
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{Value: "1.50tail", IsBinaryProtocol: true, EnableNumericPrefix: true},
+		})
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "in", predicate.GetF().GetFunc().GetObjName(), predicate.String())
+		require.NotNil(t, findNumericPrefixCast(predicate), predicate.String())
+		require.Len(t, collectNumericOperandTypes(predicate), 3)
+	})
+
+	t.Run("parameter on between left keeps decimal bounds", func(t *testing.T) {
+		lower := decimalColumn()
+		upper := decimalColumn()
+		upper.GetCol().ColPos = 1
+		query := makeQuery(t, "between", []*planpb.Expr{param(0), lower, upper})
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{
+				Value: "9007199254740992.0001tail", IsBinaryProtocol: true, EnableNumericPrefix: true,
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "between", predicate.GetF().GetFunc().GetObjName(), predicate.String())
+		require.Equal(t, []types.T{types.T_decimal128, types.T_decimal128, types.T_decimal128},
+			collectNumericOperandTypes(predicate), predicate.String())
+		require.NotNil(t, findNumericPrefixCast(predicate), predicate.String())
+	})
+
+	t.Run("all strings stay text", func(t *testing.T) {
+		query := makeQuery(t, "greatest", []*planpb.Expr{param(0), param(1)})
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{Value: "10", IsBinaryProtocol: true, EnableNumericPrefix: true},
+			ParamValue{Value: "2", IsBinaryProtocol: true, EnableNumericPrefix: true},
+		})
+		require.NoError(t, err)
+		result := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.True(t, types.T(result.Typ.Id).IsMySQLString(), result.String())
+		require.Nil(t, findNumericPrefixCast(result))
+	})
+
+	t.Run("string peer keeps common value function in text domain", func(t *testing.T) {
+		stringType := types.T_varchar.ToType()
+		stringPeer := &planpb.Expr{
+			Typ:  makePlan2Type(&stringType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},
+		}
+		query := makeQuery(t, "greatest", []*planpb.Expr{param(0), decimalColumn(), stringPeer})
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{Value: "12.5tail", IsBinaryProtocol: true, EnableNumericPrefix: true},
+		})
+		require.NoError(t, err)
+		result := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.True(t, types.T(result.Typ.Id).IsMySQLString(), result.String())
+		require.Nil(t, findNumericPrefixCast(result), result.String())
+	})
+
+	t.Run("explicit string cast remains a string boundary", func(t *testing.T) {
+		varcharType := types.T_varchar.ToType()
+		explicitString, err := appendExplicitCastBeforeExpr(ctx, param(0), makePlan2Type(&varcharType))
+		require.NoError(t, err)
+		query := makeQuery(t, "greatest", []*planpb.Expr{explicitString, decimalColumn()})
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{Value: "12.5tail", IsBinaryProtocol: true, EnableNumericPrefix: true},
+		})
+		require.NoError(t, err)
+		result := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.True(t, types.T(result.Typ.Id).IsMySQLString(), result.String())
+		require.Nil(t, findNumericPrefixCast(result), result.String())
+	})
+
+	t.Run("decimal parameter kind establishes numeric context", func(t *testing.T) {
+		query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), param(1)})
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{
+				Value: "12.5", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+			},
+			ParamValue{
+				Value: int64(2), PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		result := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
+		require.Nil(t, findNumericPrefixCast(result),
+			"native decimal and integer parameters should be materialized without a text-prefix cast")
+	})
+
+	t.Run("in list uses one float domain", func(t *testing.T) {
+		list := &planpb.Expr{
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{param(0), param(1)}}},
+		}
+		query := makeQuery(t, "in", []*planpb.Expr{decimalColumn(), list})
+		preparedPredicate := query.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "in", preparedPredicate.GetF().GetFunc().GetObjName(), preparedPredicate.String())
+		require.Len(t, preparedPredicate.GetF().Args[1].GetList().List, 2)
+
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{Value: "9007199254740992.0001tail", EnableNumericPrefix: true},
+			ParamValue{
+				Value: "9007199254740992.0002", PrepareParamKind: vector.PrepareParamFloat,
+				EnableNumericPrefix: true,
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "in", predicate.GetF().GetFunc().GetObjName(), predicate.String())
+		require.Equal(t, []types.T{types.T_float64, types.T_float64, types.T_float64},
+			collectNumericOperandTypes(predicate))
+	})
+
+	t.Run("runtime source categories", func(t *testing.T) {
+		for _, test := range []struct {
+			name    string
+			value   any
+			kind    vector.PrepareParamKind
+			wantOID types.T
+		}{
+			{name: "boolean", value: true, kind: vector.PrepareParamBoolean, wantOID: types.T_decimal128},
+			{name: "integer", value: int64(42), kind: vector.PrepareParamInteger, wantOID: types.T_decimal128},
+			{name: "decimal", value: "42.25", kind: vector.PrepareParamDecimal, wantOID: types.T_decimal128},
+			{name: "float", value: "42.25", kind: vector.PrepareParamFloat, wantOID: types.T_float64},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
+				filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+					ParamValue{
+						Value: test.value, PrepareParamKind: test.kind, EnableNumericPrefix: true,
+					},
+				})
+				require.NoError(t, err)
+				require.True(t, specialized)
+				result := filled.GetQuery().Nodes[0].ProjectList[0]
+				require.Equal(t, int32(test.wantOID), result.Typ.Id, result.String())
+			})
+		}
+	})
+
+	t.Run("protocol gate", func(t *testing.T) {
+		query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+			ParamValue{Value: "12.5tail", IsBinaryProtocol: true},
+		})
+		require.NoError(t, err)
+		require.Nil(t, findNumericPrefixCast(filled.GetQuery().Nodes[0].ProjectList[0]))
+	})
+}
+
+func TestPreparedNumericCommonType(t *testing.T) {
+	expr := func(typ types.Type) *planpb.Expr {
+		return &planpb.Expr{Typ: makePlan2Type(&typ)}
+	}
+	for _, test := range []struct {
+		name      string
+		operands  []types.Type
+		wantOID   types.T
+		wantWidth int32
+		wantScale int32
+		wantOK    bool
+	}{
+		{
+			name: "uint64 keeps full integral capacity",
+			operands: []types.Type{
+				types.New(types.T_decimal128, 20, 4), types.T_uint64.ToType(),
+			},
+			wantOID: types.T_decimal128, wantWidth: 24, wantScale: 4, wantOK: true,
+		},
+		{
+			name: "decimal256 combines independent integral and scale maxima",
+			operands: []types.Type{
+				types.New(types.T_decimal256, 38, 0), types.New(types.T_decimal256, 38, 38),
+			},
+			wantOID: types.T_decimal256, wantWidth: 76, wantScale: 38, wantOK: true,
+		},
+		{
+			name: "decimal256 physical overflow uses float",
+			operands: []types.Type{
+				types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 76),
+			},
+			wantOID: types.T_float64, wantWidth: types.T_float64.ToType().Width, wantOK: true,
+		},
+		{
+			name: "real operand is approximate boundary",
+			operands: []types.Type{
+				types.New(types.T_decimal64, 8, 2), types.T_float32.ToType(),
+			},
+			wantOID: types.T_float64, wantWidth: types.T_float64.ToType().Width, wantOK: true,
+		},
+		{
+			name: "string blocks numeric common domain",
+			operands: []types.Type{
+				types.New(types.T_decimal64, 8, 2), types.T_varchar.ToType(),
+			},
+			wantOK: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			operands := make([]*planpb.Expr, len(test.operands))
+			for i := range test.operands {
+				operands[i] = expr(test.operands[i])
+			}
+			got, ok := preparedNumericCommonType(operands)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
+			require.Equal(t, test.wantOID, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
 }
 
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {

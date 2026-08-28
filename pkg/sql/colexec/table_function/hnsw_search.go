@@ -28,6 +28,7 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -113,9 +114,26 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 	var err error
 	st := &hnswSearchState{}
 
-	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
-	if err != nil {
-		return nil, err
+	// k is carried either on IndexReaderParam.Limit (prepared/param path: raw k,
+	// over-fetched here at EXECUTE) or on arg.Limit (literal path: already
+	// over-fetched at plan time, or the no-filter limit). Take the max so both
+	// paths resolve the intended candidate budget.
+	if arg.IndexReaderParam != nil {
+		st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if arg.Limit != nil {
+		var tfLimit uint64
+		tfLimit, err = evalLimitExpression(proc, arg.Limit, 1)
+		if err != nil {
+			return nil, err
+		}
+		st.limit = max(st.limit, tfLimit)
+	}
+	if st.limit == 0 {
+		st.limit = 1
 	}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
@@ -244,8 +262,17 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
+	// When a residual filter will drop candidates after this search (post-filter
+	// JOIN), over-fetch so k rows still survive. For a prepared LIMIT ? this is
+	// the only place k is known; a literal LIMIT was already over-fetched at plan
+	// time and leaves the flag off. See pkg/vectorindex/overfetch (#26869).
+	searchLimit := u.limit
+	if u.tblcfg.PostFilterOverFetch {
+		searchLimit = overfetch.PostFilterLimit(searchLimit)
+	}
+
 	rt := vectorindex.RuntimeConfig{
-		Limit:        uint(u.limit),
+		Limit:        uint(searchLimit),
 		OrigFuncName: u.tblcfg.OrigFuncName,
 	}
 	var keys any

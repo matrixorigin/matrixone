@@ -71,6 +71,12 @@ func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower in
 		}
 		return nil, p.lexer.scanner.LastError
 	}
+	if err := validateSelectIntoStatements(&p.lexer); err != nil {
+		for _, s := range p.lexer.stmts {
+			s.Free()
+		}
+		return nil, err
+	}
 	if len(p.lexer.stmts) == 0 {
 		/**
 		For CORNER CASE like:
@@ -100,6 +106,12 @@ func (p *MySQLParser) ParseFirstWithSQLMode(ctx context.Context, sql string, low
 			s.Free()
 		}
 		return nil, 0, p.lexer.scanner.LastError
+	}
+	if err := validateSelectIntoStatements(&p.lexer); err != nil {
+		for _, s := range p.lexer.stmts {
+			s.Free()
+		}
+		return nil, 0, err
 	}
 	if len(p.lexer.stmts) == 0 {
 		return &tree.EmptyStmt{}, len(sql), nil
@@ -134,6 +146,12 @@ func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode stri
 		}
 		return nil, lexer.scanner.LastError
 	}
+	if err := validateSelectIntoStatements(lexer); err != nil {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
+		return nil, err
+	}
 	if len(lexer.stmts) == 0 {
 		/**
 		For CORNER CASE like:
@@ -161,6 +179,12 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 			s.Free()
 		}
 		return nil, lexer.scanner.LastError
+	}
+	if err := validateSelectIntoStatements(lexer); err != nil {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
+		return nil, err
 	}
 	if len(lexer.stmts) != 1 {
 		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
@@ -286,11 +310,63 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
+	// ASOF stays contextual. The grammar resolves whether the phrase starts a
+	// native join or whether ASOF still occupies the current table's alias slot.
+	// This preserves legacy `t asof JOIN u`, while an already completed alias or
+	// table-factor suffix makes the same phrase a native ASOF JOIN.
+	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
+		typ = ASOF
+	}
 
 	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+func (l *Lexer) asofJoinPhraseAhead() bool {
+	lookahead := Scanner{}
+	lookahead.setSql(l.scanner.buf[l.scanner.Pos:])
+	lookahead.setSQLMode(l.sqlMode)
+
+	next, _ := lookahead.Scan()
+	if next == JOIN {
+		return true
+	}
+	if next != LEFT {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	if next == JOIN {
+		return true
+	}
+	if next != OUTER {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	return next == JOIN
+}
+
+// hasAsofLeftFactorAlias follows the right edge of a table-reference chain,
+// which is the table factor immediately preceding an ASOF modifier.
+func hasAsofLeftFactorAlias(expr tree.TableExpr) bool {
+	for expr != nil {
+		switch e := expr.(type) {
+		case *tree.AliasedTableExpr:
+			return e.As.Alias != ""
+		case *tree.JoinTableExpr:
+			if e.Right != nil {
+				expr = e.Right
+			} else {
+				expr = e.Left
+			}
+		case *tree.ApplyTableExpr:
+			expr = e.Right
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (l *Lexer) recordSyntaxToken(token int) {
@@ -385,6 +461,12 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64
 		}
 		return nil, lexer.scanner.LastError
 	}
+	if err := validateSelectIntoStatements(lexer); err != nil {
+		for _, stmt := range lexer.stmts {
+			stmt.Free()
+		}
+		return nil, err
+	}
 	defer func() {
 		for _, stmt := range lexer.stmts {
 			stmt.Free()
@@ -421,6 +503,20 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64
 		return []string{""}, nil
 	}
 	return fragments, nil
+}
+
+// validateSelectIntoStatements is the final parser boundary for SELECT INTO
+// ownership.  Individual grammar productions validate their local shape, but
+// only after the complete statement is assembled can we see ON DUPLICATE,
+// RETURNING, EXPLAIN, and statement roots such as SET/DO/CALL/SHOW.
+func validateSelectIntoStatements(lexer *Lexer) error {
+	for _, stmt := range lexer.stmts {
+		if errMsg := tree.ValidateSelectIntoStatementRoot(stmt); errMsg != "" {
+			lexer.Error(errMsg)
+			return lexer.scanner.LastError
+		}
+	}
+	return nil
 }
 
 // executableCommentEndsByFinalSemicolon maps the final semicolon inside each

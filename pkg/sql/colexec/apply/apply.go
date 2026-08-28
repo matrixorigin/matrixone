@@ -52,11 +52,23 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 		apply.ctr.sels = make([]int32, 0)
 	}
 
-	if apply.TableFunction == nil {
-		return moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
+	if apply.Source == nil {
+		if apply.TableFunction != nil {
+			apply.Source = apply.TableFunction
+		} else if apply.VectorIndexScan != nil {
+			source := NewVectorSource(apply.VectorIndexScan, apply.VectorAttrs, apply.Typs).(*vectorSource)
+			source.txnOffset = apply.TxnOffset
+			apply.Source = source
+		}
+	}
+	if source, ok := apply.Source.(*vectorSource); ok {
+		source.txnOffset = apply.TxnOffset
+	}
+	if apply.Source == nil {
+		return moerr.NewInvalidState(proc.Ctx, "apply operator missing parameterized source")
 	}
 
-	err = apply.TableFunction.ApplyPrepare(proc)
+	err = apply.Source.ApplyPrepare(proc)
 	if err != nil {
 		return
 	}
@@ -64,8 +76,8 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 }
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
-	if apply.TableFunction == nil {
-		return vm.CancelResult, moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
+	if apply.Source == nil {
+		return vm.CancelResult, moerr.NewInvalidState(proc.Ctx, "apply operator missing parameterized source")
 	}
 
 	analyzer := apply.OpAnalyzer
@@ -84,7 +96,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inbat == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
-				err := apply.TableFunction.ApplyEnd(proc)
+				err := apply.Source.ApplyEnd(proc)
 				if err != nil {
 					return result, err
 				}
@@ -93,7 +105,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inbat.Last() {
 				// last batch
 				result.Batch = ctr.inbat
-				err := apply.TableFunction.ApplyEnd(proc)
+				err := apply.Source.ApplyEnd(proc)
 				if err != nil {
 					return result, err
 				}
@@ -105,7 +117,9 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.batIdx = 0
 			ctr.tfFinish = true
-			apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
+			if err = apply.Source.ApplyArgsEval(ctr.inbat, proc); err != nil {
+				return result, err
+			}
 		}
 		if ctr.rbat == nil {
 			ctr.rbat = batch.NewWithSize(len(apply.Result))
@@ -137,7 +151,7 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 	var err error
 	for i := ctr.batIdx; i < count; i++ {
 		if ctr.tfFinish {
-			err = ap.TableFunction.ApplyStart(i, proc, analyzer)
+			err = ap.Source.ApplyStart(i, proc, analyzer)
 			ctr.tfNull = true
 			if err != nil {
 				return err
@@ -145,7 +159,7 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 			ctr.tfFinish = false
 		}
 		for {
-			tfResult, err = ap.TableFunction.ApplyCall(proc)
+			tfResult, err = ap.Source.ApplyCall(proc)
 			if err != nil {
 				return err
 			}

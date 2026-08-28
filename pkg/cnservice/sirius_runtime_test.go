@@ -100,6 +100,8 @@ func TestSiriusInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
 func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 	var disabled SiriusConfig
 	require.NoError(t, disabled.validate())
+	benchmarkDisabled := SiriusConfig{BenchmarkNoGC: true}
+	require.ErrorContains(t, benchmarkDisabled.validate(), "requires Sirius enabled")
 
 	enabled := SiriusConfig{Enabled: true}
 	err := enabled.validate()
@@ -128,6 +130,78 @@ func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 	enabled.CleanupTimeout.Duration = time.Duration(1 << 62)
 	enabled.LeaseTTL.Duration = substrait.MaxLeaseTTL
 	require.ErrorContains(t, enabled.validate(), "invalid Sirius transport limits")
+}
+
+func TestSiriusBenchmarkNoGCRequiresLauncherVerification(t *testing.T) {
+	require.NoError(t, VerifySiriusBenchmarkNoGC(nil, false))
+
+	cfg := &Config{Sirius: SiriusConfig{BenchmarkNoGC: true}}
+	require.ErrorContains(t, VerifySiriusBenchmarkNoGC(cfg, false), "disable-gc=true")
+	require.False(t, cfg.Sirius.benchmarkGCDisabled)
+	require.NoError(t, VerifySiriusBenchmarkNoGC(cfg, true))
+	require.True(t, cfg.Sirius.benchmarkGCDisabled)
+	require.ErrorContains(t, VerifySiriusBenchmarkNoGC(cfg, false), "disable-gc=true")
+	require.False(t, cfg.Sirius.benchmarkGCDisabled)
+	cfg.Sirius.BenchmarkNoGC = false
+	require.NoError(t, VerifySiriusBenchmarkNoGC(cfg, true))
+	require.False(t, cfg.Sirius.benchmarkGCDisabled)
+
+	unverified := &service{cfg: &Config{Sirius: SiriusConfig{Enabled: true, BenchmarkNoGC: true}}}
+	require.ErrorContains(t, unverified.startSiriusRuntime(context.Background()), "verified TN GC disablement")
+
+	s := &service{cfg: &Config{UUID: "sirius-benchmark-dependencies", Sirius: SiriusConfig{
+		Enabled: true, BenchmarkNoGC: true, benchmarkGCDisabled: true,
+	}}}
+	require.ErrorContains(t, s.startSiriusRuntime(context.Background()), "load Flight client certificate")
+	require.NotNil(t, s.options.siriusLeases)
+	require.True(t, s.options.siriusLeases.Ready())
+	require.True(t, s.options.siriusLeases.Protected())
+	require.True(t, s.options.siriusLeases.BenchmarkReady())
+	require.False(t, s.options.siriusLeases.DurableReady())
+	require.NotNil(t, s.options.siriusAuditor)
+}
+
+func TestSiriusBenchmarkProtectorLifecycle(t *testing.T) {
+	protector := new(siriusBenchmarkProtector)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, _, err := protector.Begin(canceled)
+	require.ErrorIs(t, err, context.Canceled)
+	var nilProtector *siriusBenchmarkProtector
+	_, _, _, err = nilProtector.Begin(context.Background())
+	require.ErrorContains(t, err, "protector is nil")
+
+	register, rollback, closeProtection, err := protector.Begin(context.Background())
+	require.NoError(t, err)
+	ref := []byte("benchmark-read")
+	require.ErrorContains(t, register(context.Background(), nil, nil, time.Now().Add(time.Minute)), "empty reference")
+	require.ErrorContains(t, register(context.Background(), ref, nil, time.Time{}), "empty expiry")
+	require.NoError(t, register(context.Background(), ref, []string{"object"}, time.Now().Add(time.Minute)))
+	require.ErrorContains(t, register(context.Background(), ref, nil, time.Now().Add(time.Minute)), "duplicate")
+	require.ErrorContains(t, rollback(context.Background(), nil), "empty reference")
+	require.NoError(t, rollback(context.Background(), ref))
+	require.NoError(t, rollback(context.Background(), ref))
+	closeProtection()
+	closeProtection()
+	require.ErrorContains(t, rollback(context.Background(), ref), "session is closed")
+	require.NoError(t, protector.Unregister(context.Background(), ref))
+	require.ErrorContains(t, protector.Unregister(context.Background(), nil), "empty reference")
+	require.ErrorIs(t, protector.Unregister(canceled, ref), context.Canceled)
+	require.ErrorContains(t, nilProtector.Unregister(context.Background(), ref), "protector is nil")
+}
+
+func TestSiriusBenchmarkAuditRecorder(t *testing.T) {
+	recorder := new(siriusBenchmarkAuditRecorder)
+	require.NoError(t, recorder.RecordResolve(nil, substrait.ResolveAuditEvent{}))
+	require.EqualValues(t, 1, recorder.resolves.Load())
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, recorder.RecordResolve(canceled, substrait.ResolveAuditEvent{}), context.Canceled)
+	require.EqualValues(t, 1, recorder.resolves.Load())
+
+	var nilRecorder *siriusBenchmarkAuditRecorder
+	require.ErrorContains(t, nilRecorder.RecordResolve(context.Background(), substrait.ResolveAuditEvent{}), "recorder is nil")
 }
 
 func TestSiriusTLSLoadersAndStartupCleanup(t *testing.T) {
@@ -188,6 +262,25 @@ func TestSiriusTLSLoadersAndStartupCleanup(t *testing.T) {
 	require.NoError(t, s.closeSiriusRuntime())
 	require.Nil(t, s.siriusRuntime)
 	_, ok = moruntime.ServiceRuntime(serviceID).GetGlobalVariables(compile.SiriusRuntimeKey)
+	require.False(t, ok)
+
+	benchmarkConfig := config
+	benchmarkConfig.BenchmarkNoGC = true
+	benchmarkConfig.benchmarkGCDisabled = true
+	benchmarkServiceID := "sirius-benchmark-startup-success-test"
+	moruntime.SetupServiceBasedRuntime(benchmarkServiceID, moruntime.NewRuntime(metadata.ServiceType_CN, benchmarkServiceID, nil))
+	s = &service{cfg: &Config{UUID: benchmarkServiceID, Sirius: benchmarkConfig}}
+	require.NoError(t, s.startSiriusRuntime(context.Background()))
+	require.NotNil(t, s.siriusRuntime)
+	require.True(t, s.siriusRuntime.BenchmarkNoGC)
+	require.True(t, s.siriusRuntime.Leases.BenchmarkReady())
+	require.False(t, s.siriusRuntime.Leases.DurableReady())
+	value, ok = moruntime.ServiceRuntime(benchmarkServiceID).GetGlobalVariables(compile.SiriusRuntimeKey)
+	require.True(t, ok)
+	require.Same(t, s.siriusRuntime, value)
+	require.NoError(t, s.closeSiriusRuntime())
+	require.Nil(t, s.siriusRuntime)
+	_, ok = moruntime.ServiceRuntime(benchmarkServiceID).GetGlobalVariables(compile.SiriusRuntimeKey)
 	require.False(t, ok)
 }
 

@@ -761,6 +761,17 @@ func (store *txnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err er
 	return db.SoftDeleteObject(id, isTombstone)
 }
 
+func (store *txnStore) SoftDeleteObjectByCN(isTombstone bool, id *common.ID) (err error) {
+	if err = store.WantWrite("SoftDeleteObjectByCN"); err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
+		return
+	}
+	return db.SoftDeleteObjectByCN(id, isTombstone)
+}
+
 func (store *txnStore) ApplyRollback() (err error) {
 	if store.cmdMgr.GetCSN() != 0 {
 		for _, db := range store.dbs {

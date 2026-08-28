@@ -9,12 +9,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +96,9 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		"create external table mongodb_ci.events(mongo_id char(24) mongodb_path '_id', device_id varchar(20), site_id varchar(10), ts datetime(3) mongodb_convert 'try_null', measurement double mongodb_convert 'try_null', source_batch varchar(50)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.temporal_edges(ts datetime(0) mongodb_convert 'try_null') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_edges','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.decoded_budget(payload_1 text mongodb_path 'payload', payload_2 text mongodb_path 'payload', payload_3 text mongodb_path 'payload', payload_4 text mongodb_path 'payload', payload_5 text mongodb_path 'payload', payload_6 text mongodb_path 'payload', payload_7 text mongodb_path 'payload', payload_8 text mongodb_path 'payload') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='decoded_budget','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.json_scalar(value json, payload json, arr json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.binary_padding(id varchar(2) mongodb_path '_id', value binary(4)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='binary_padding','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.temporal_order(id varchar(2) mongodb_path '_id', d datetime(6), t timestamp(6)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_order','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -101,6 +106,10 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		}
 	}
 	r.Cases = append(r.Cases, "secret-backed-ddl")
+	if err := verifyShowMongoDBConnections(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "show-connections-admin-metadata-redaction")
 	if err := verifyShowCreate(ctx, db); err != nil {
 		return err
 	}
@@ -111,10 +120,36 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		}
 		r.Cases = append(r.Cases, "non-admin-marker-injection-boundary")
 	}
+	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", "text"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select json_unquote(json_extract(payload, '$.a')) from mongodb_ci.json_scalar", "2"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select json_contains(arr, '2', '$') from mongodb_ci.json_scalar", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "json-relaxed-extended-conversion")
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.binary_padding where octet_length(value) = 4", "4"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.binary_padding where binary value = _binary'a'", "0"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "fixed-binary-padding")
 
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return err
 	}
+	if err := expectStatementRejected(ctx, db,
+		"truncate table mongodb_ci.events",
+		"cannot insert/update/delete from external table"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
+		return fmt.Errorf("scan after rejected truncate: %w", err)
+	}
+	r.Cases = append(r.Cases, "truncate-read-only-source-preserved")
 	if err := expectRows(ctx, db,
 		"select mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL') from mongodb_ci.events order by mongo_id",
 		manifest.Rows); err != nil {
@@ -127,6 +162,32 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return err
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
+	if err := verifyPreparedMongoDBScan(ctx, db); err != nil {
+		return err
+	}
+	if err := verifyTextPreparedMongoDBScan(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "prepared-scan-binary-and-text-reuse-recovery-metadata")
+
+	if err := verifyPrimaryKeyInsertSelect(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "insert-select-primary-key-targets")
+	if _, err := db.ExecContext(ctx, "set time_zone = '+00:00'"); err != nil {
+		return fmt.Errorf("set UTC time zone for temporal ordering: %w", err)
+	}
+	if err := expectRows(ctx, db,
+		"select id,date_format(d,'%Y-%m-%d %H:%i:%s.%f'),date_format(t,'%Y-%m-%d %H:%i:%s.%f') from mongodb_ci.temporal_order order by id",
+		[][]string{
+			{"a", "2026-03-08 01:59:59.123000", "2026-03-08 01:59:59.123000"},
+			{"b", "2026-03-08 03:00:00.456000", "2026-03-08 03:00:00.456000"},
+			{"c", "2026-11-01 01:59:59.789000", "2026-11-01 01:59:59.789000"},
+			{"d", "2026-11-01 02:00:00.012000", "2026-11-01 02:00:00.012000"},
+		}); err != nil {
+		return fmt.Errorf("DATE_FORMAT with ORDER BY: %w", err)
+	}
+	r.Cases = append(r.Cases, "date-format-order-by")
 
 	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
 	// The source predicate must therefore remain residual-only: an exact MongoDB
@@ -269,6 +330,54 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	return nil
 }
 
+func verifyPrimaryKeyInsertSelect(ctx context.Context, db *sql.DB) error {
+	const sourceID = "64b000000000000000000001"
+	insertSingle := "insert into mongodb_ci.events_insert_target select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='" + sourceID + "'"
+	for _, target := range []struct {
+		name, create, insert, count string
+	}{
+		{
+			name:   "single primary key",
+			create: "create table mongodb_ci.events_insert_target(mongo_id char(24) primary key, device_id varchar(20), site_id varchar(10), ts datetime(3), measurement double, source_batch varchar(50))",
+			insert: insertSingle,
+			count:  "select count(*) from mongodb_ci.events_insert_target",
+		},
+		{
+			name:   "composite primary key",
+			create: "create table mongodb_ci.events_composite_insert_target(site_id varchar(10) not null, mongo_id char(24) not null, device_id varchar(20), ts datetime(3), measurement double, source_batch varchar(50), primary key(site_id,mongo_id))",
+			insert: "insert into mongodb_ci.events_composite_insert_target select site_id,mongo_id,device_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='" + sourceID + "'",
+			count:  "select count(*) from mongodb_ci.events_composite_insert_target",
+		},
+	} {
+		if _, err := db.ExecContext(ctx, target.create); err != nil {
+			return fmt.Errorf("create %s target: %w", target.name, err)
+		}
+		insertCtx, cancelInsert := context.WithTimeout(ctx, 15*time.Second)
+		_, err := db.ExecContext(insertCtx, target.insert)
+		cancelInsert()
+		if err != nil {
+			return fmt.Errorf("insert-select into %s target: %w", target.name, err)
+		}
+		if err := expectScalar(ctx, db, target.count, "1"); err != nil {
+			return fmt.Errorf("verify %s target: %w", target.name, err)
+		}
+	}
+
+	duplicateCtx, cancelDuplicate := context.WithTimeout(ctx, 15*time.Second)
+	_, err := db.ExecContext(duplicateCtx, insertSingle)
+	cancelDuplicate()
+	if err == nil {
+		return errors.New("duplicate insert-select into primary-key target unexpectedly succeeded")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("duplicate insert-select into primary-key target timed out: %w", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		return fmt.Errorf("duplicate insert-select into primary-key target returned unexpected error: %w", err)
+	}
+	return expectScalar(ctx, db, "select count(*) from mongodb_ci.events_insert_target", "1")
+}
+
 func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string) error {
 	const (
 		roleName = "mongodb_ci_creator"
@@ -308,6 +417,9 @@ func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn strin
 	defer userDB.Close()
 	if err := userDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect non-admin MatrixOne session: %w", err)
+	}
+	if err := expectStatementRejected(ctx, userDB, "show mongodb connections", "do not have privilege"); err != nil {
+		return fmt.Errorf("non-admin SHOW MONGODB CONNECTIONS boundary: %w", err)
 	}
 
 	if _, err := userDB.ExecContext(ctx,
@@ -360,8 +472,12 @@ func expectRows(ctx context.Context, db *sql.DB, query string, expected [][]stri
 	}
 	defer rows.Close()
 	actual := make([][]string, 0, len(expected))
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
 	for rows.Next() {
-		row := make([]string, 6)
+		row := make([]string, len(columns))
 		dest := make([]any, len(row))
 		for i := range row {
 			dest[i] = &row[i]
@@ -398,6 +514,56 @@ func verifyShowCreate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func verifyShowMongoDBConnections(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, "show mongodb connections")
+	if err != nil {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS: %w", err)
+	}
+	defer rows.Close()
+	expectedColumns := []string{
+		"name", "discovery_mode", "auth_mechanism", "tls_mode",
+		"read_preference", "read_concern", "version", "disabled",
+	}
+	columns, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS columns: %w", err)
+	}
+	if !reflect.DeepEqual(columns, expectedColumns) {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS exposed unexpected columns: %v", columns)
+	}
+
+	found := false
+	for rows.Next() {
+		var actual [8]string
+		dest := make([]any, len(actual))
+		for i := range actual {
+			dest[i] = &actual[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return fmt.Errorf("SHOW MONGODB CONNECTIONS scan: %w", err)
+		}
+		if actual[0] != "mongodb_ci" {
+			continue
+		}
+		found = true
+		expected := [8]string{"mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", actual[6], "0"}
+		if actual != expected {
+			return fmt.Errorf("SHOW MONGODB CONNECTIONS metadata mismatch: expected %v, got %v", expected, actual)
+		}
+		version, err := strconv.ParseUint(actual[6], 10, 64)
+		if err != nil || version == 0 {
+			return fmt.Errorf("SHOW MONGODB CONNECTIONS returned invalid version %q", actual[6])
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS rows: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS omitted mongodb_ci")
+	}
+	return nil
+}
+
 func expectScalar(ctx context.Context, db *sql.DB, query, expected string) error {
 	var actual string
 	if err := db.QueryRowContext(ctx, query).Scan(&actual); err != nil {
@@ -409,6 +575,101 @@ func expectScalar(ctx context.Context, db *sql.DB, query, expected string) error
 	return nil
 }
 
+func verifyPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
+	const query = "select count(*) from mongodb_ci.events where measurement > ?"
+	stmt, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("prepare MongoDB scan: %w", err)
+	}
+	defer stmt.Close()
+
+	check := func(bound int64, expected string, checkMetadata bool) error {
+		rows, err := stmt.QueryContext(ctx, bound)
+		if err != nil {
+			return fmt.Errorf("execute prepared MongoDB scan with %d: %w", bound, err)
+		}
+		defer rows.Close()
+		if checkMetadata {
+			columns, err := rows.Columns()
+			if err != nil {
+				return fmt.Errorf("prepared MongoDB result metadata: %w", err)
+			}
+			if len(columns) != 1 || strings.ToLower(columns[0]) != "count(*)" {
+				return fmt.Errorf("prepared MongoDB result metadata mismatch: %v", columns)
+			}
+		}
+		if !rows.Next() {
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("read prepared MongoDB result: %w", err)
+			}
+			return fmt.Errorf("prepared MongoDB scan returned no rows")
+		}
+		var actual string
+		if err := rows.Scan(&actual); err != nil {
+			return fmt.Errorf("scan prepared MongoDB result: %w", err)
+		}
+		if actual != expected {
+			return fmt.Errorf("prepared MongoDB scan with %d: expected %q, got %q", bound, expected, actual)
+		}
+		if rows.Next() {
+			return fmt.Errorf("prepared MongoDB aggregate returned more than one row")
+		}
+		return rows.Err()
+	}
+
+	if err := check(13, "3", true); err != nil {
+		return err
+	}
+	if err := check(19, "2", false); err != nil {
+		return err
+	}
+	if err := stmt.QueryRowContext(ctx).Scan(new(string)); err == nil {
+		return fmt.Errorf("prepared MongoDB scan accepted a missing parameter")
+	}
+	if err := check(29, "1", false); err != nil {
+		return fmt.Errorf("prepared MongoDB scan did not recover after an execute error: %w", err)
+	}
+	return nil
+}
+
+func verifyTextPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx,
+		"prepare mongo_pruned_no_params from 'select count(measurement) from mongodb_ci.events'"); err != nil {
+		return fmt.Errorf("prepare parameterless MongoDB scan: %w", err)
+	}
+	for range 2 {
+		if err := expectScalar(ctx, db, "execute mongo_pruned_no_params", "4"); err != nil {
+			return fmt.Errorf("execute parameterless MongoDB scan: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_no_params"); err != nil {
+		return fmt.Errorf("deallocate parameterless MongoDB scan: %w", err)
+	}
+
+	if _, err := db.ExecContext(ctx,
+		"prepare mongo_pruned_text from 'select count(measurement) from mongodb_ci.events where measurement > ?'"); err != nil {
+		return fmt.Errorf("prepare text-protocol MongoDB scan: %w", err)
+	}
+	for _, check := range []struct {
+		value    string
+		expected string
+	}{
+		{value: "13", expected: "3"},
+		{value: "19", expected: "2"},
+	} {
+		if _, err := db.ExecContext(ctx, "set @mongo_measurement = "+check.value); err != nil {
+			return fmt.Errorf("bind text-protocol MongoDB scan: %w", err)
+		}
+		if err := expectScalar(ctx, db, "execute mongo_pruned_text using @mongo_measurement", check.expected); err != nil {
+			return fmt.Errorf("execute text-protocol MongoDB scan: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_text"); err != nil {
+		return fmt.Errorf("deallocate text-protocol MongoDB scan: %w", err)
+	}
+	return nil
+}
+
 func expectQueryFailure(ctx context.Context, db *sql.DB, query, contains string) error {
 	var value string
 	err := db.QueryRowContext(ctx, query).Scan(&value)
@@ -416,6 +677,23 @@ func expectQueryFailure(ctx context.Context, db *sql.DB, query, contains string)
 		return fmt.Errorf("query %s unexpectedly succeeded", redact(query))
 	}
 	if contains != "" && !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(contains)) {
+		return fmt.Errorf("query %s failed without %q: %w", redact(query), contains, err)
+	}
+	return nil
+}
+
+func expectStatementRejected(ctx context.Context, db *sql.DB, query, contains string) error {
+	rows, err := db.QueryContext(ctx, query)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("query %s failed while reading rows: %w", redact(query), err)
+		}
+		return fmt.Errorf("query %s unexpectedly succeeded", redact(query))
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(contains)) {
 		return fmt.Errorf("query %s failed without %q: %w", redact(query), contains, err)
 	}
 	return nil

@@ -5,9 +5,6 @@ use sv_db1;
 create table t1(a int);
 begin;
 insert into t1 values (1);
-select sleep(10);
-sleep(10)
-0
 select count(*) > 0 from mo_locks() l;
 count(*) > 0
 1

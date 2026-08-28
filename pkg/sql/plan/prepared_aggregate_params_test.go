@@ -20,7 +20,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -308,6 +310,192 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedAggregateRuntimeTypeReachesResultProjection(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select sum(?) from nation")
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		prepare.Plan,
+		[]any{ParamValue{
+			Value:            "7",
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	columns := GetResultColumnsFromPlan(filled)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_decimal128), columns[0].Typ.Id)
+	for _, node := range filled.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col != nil && col.RelPos == -2 {
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+			}
+		}
+	}
+}
+
+func TestPreparedWindowAggregateRuntimeTypeReachesResultProjection(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select sum(?) over () from nation")
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		prepare.Plan,
+		[]any{ParamValue{
+			Value:            "7",
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	columns := GetResultColumnsFromPlan(filled)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_decimal128), columns[0].Typ.Id)
+	windowSeen := false
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_WINDOW {
+			continue
+		}
+		windowSeen = true
+		require.Len(t, node.WinSpecList, 1)
+		require.Equal(t, int32(types.T_decimal128), node.WinSpecList[0].Typ.Id)
+		for _, expr := range node.ProjectList {
+			if col := expr.GetCol(); col != nil && col.RelPos == -1 {
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+			}
+		}
+	}
+	require.True(t, windowSeen)
+}
+
+func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
+	for _, name := range []string{"max_by", "max_by_non_null"} {
+		t.Run(name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
+			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(),
+				prepare.Plan,
+				[]any{ParamValue{
+					Value:            "7",
+					RuntimeType:      types.T_int64.ToType(),
+					HasRuntimeType:   true,
+					IsBinaryProtocol: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			columns := GetResultColumnsFromPlan(filled)
+			require.Len(t, columns, 1)
+			require.Equal(t, int32(types.T_int64), columns[0].Typ.Id)
+		})
+	}
+}
+
+func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
+	for _, name := range []string{
+		"min", "max", "any_value", "max_by", "max_by_non_null",
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, preparedRuntimeSpecializationFunction(name))
+		})
+	}
+}
+
+func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
+	predicateOnly := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = ''x'' where ? = ?")
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(predicateOnly.Plan))
+
+	withWriteParameter := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = ? where ? = ?")
+	// The predicate still needs execute-time comparison specialization. The
+	// write projection is materialized with its original assignment cast so a
+	// fresh DML compile cannot change the positional write layout.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
+
+	writeExpressionPredicate := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = (? = ?) where n_nationkey = 1")
+	// A domain-sensitive expression may be nested below the assignment cast;
+	// scanning must descend into the write root while preserving its outer
+	// positional contract.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(writeExpressionPredicate.Plan))
+
+	nestedWriteExpression := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = (select d.v from (select ? = ? as v) d) where n_nationkey = 1")
+	// A derived-table projection is not a positional DML write root. Its
+	// marker comparison must therefore remain visible to the specialization
+	// scan instead of being preserved as if it were an assignment cast.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(nestedWriteExpression.Plan))
+
+	columnBoundPredicate := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
+	// The generic overload scan can still reuse the cached indexed plan; the
+	// separate text-comparison scan must select the engine DOUBLE conversion.
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
+	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		columnBoundPredicate.Plan,
+		[]types.Type{types.T_text.ToType(), types.T_text.ToType(), types.T_text.ToType()},
+	))
+	for _, predicate := range []string{
+		"n_nationkey = abs(?)",
+		"n_nationkey = (? + 0)",
+		"n_nationkey in (abs(?), 2)",
+		"? between n_nationkey and n_regionkey",
+	} {
+		columnExpressionPredicate := buildPreparedAggregatePlan(t,
+			"update nation set n_comment = n_comment where "+predicate)
+		require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+			columnExpressionPredicate.Plan, []types.Type{types.T_text.ToType()}), predicate)
+	}
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		context.Background(),
+		withWriteParameter.Plan,
+		[]any{
+			ParamValue{Value: "updated", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1.00", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	writeCastSeen := false
+	predicateParamSeen := false
+	for _, node := range filled.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			function := expr.GetF()
+			if function == nil || function.Func == nil || function.Func.GetObjName() != "cast_assign" || len(function.Args) == 0 {
+				continue
+			}
+			if literal := function.Args[0].GetLit(); literal != nil && literal.GetSval() == "updated" {
+				writeCastSeen = true
+			}
+		}
+		for _, expr := range node.FilterList {
+			if expr.GetF() == nil || expr.GetF().Func == nil || expr.GetF().Func.GetObjName() != "=" {
+				continue
+			}
+			for _, arg := range expr.GetF().Args {
+				if arg.GetP() != nil {
+					predicateParamSeen = true
+				}
+			}
+		}
+	}
+	require.True(t, writeCastSeen)
+	require.False(t, predicateParamSeen)
+}
+
 func TestPreparedNtileParameter(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t,
 		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")
@@ -335,14 +523,39 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 			))
 			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			require.Equal(t, []int32{0}, PreparedLagLeadParamPositions(prepare.Plan))
 
 			originalTypes := preparedEffectiveParamTypes(t, prepare)
 			require.Equal(t, int32(types.T_int64), originalTypes[0].Id)
 
-			filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(1)})
-			require.NoError(t, err)
-			require.NotSame(t, prepare.Plan, filled)
-			require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+			for _, valid := range []any{
+				int64(0),
+				int64(1),
+				false,
+				true,
+				ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamBoolean},
+				ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean},
+				ParamValue{Value: "9223372036854775807", PrepareParamKind: vector.PrepareParamInteger},
+			} {
+				filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{valid})
+				require.NoError(t, err)
+				require.NotSame(t, prepare.Plan, filled)
+				require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+			}
+
+			for _, invalid := range []any{
+				int64(-1),
+				nil,
+				float64(-1.5),
+				ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger},
+				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamFloat},
+				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamDecimal},
+				ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamBoolean},
+			} {
+				_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{invalid})
+				require.Error(t, err)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+			}
 		})
 	}
 }

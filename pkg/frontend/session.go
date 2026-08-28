@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -38,12 +39,14 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -75,6 +78,15 @@ func currentProtocolVersion(proc *process.Process) int64 {
 		return defines.MORPCVersion4
 	}
 	return version
+}
+
+// reusablePlanGenerationSupported reports whether every live service in the
+// rollout understands the logical-plan generation snapshot carried by remote
+// pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest
+// live service, so cross-transaction plan reuse must remain disabled until the
+// version 32 wire contract is active cluster-wide.
+func reusablePlanGenerationSupported(proc *process.Process) bool {
+	return currentProtocolVersion(proc) >= defines.MORPCVersion32
 }
 
 func init() {
@@ -152,6 +164,10 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// migrationSystemVarReplayable records whether the latest assignment for a
+	// session system variable is known to be captured by the proxy's raw SET
+	// replay stream. A prepared assignment is not visible to that stream.
+	migrationSystemVarReplayable map[string]bool
 	// tempTables records the relationship between the temporary table created by the session and the actual table.
 	// Key: dbName.alias, Value: realName
 	tempTables map[string]string
@@ -177,6 +193,12 @@ type Session struct {
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
 
+	// preparedCursorBytes accounts for rows retained by all active server-side
+	// cursors in this session. Cursor results live on the prepared statement,
+	// so a session-level budget is required in addition to a per-cursor bound.
+	preparedCursorBytes atomic.Uint64
+	preparedCursorLimit atomic.Uint64
+
 	priv *privilege
 
 	ddlOwnerRoleID uint32
@@ -186,6 +208,29 @@ type Session struct {
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
 	ruleCacheMu sync.RWMutex      // protects ruleCache
+
+	// foreignConns caches connections to foreign data sources (Elasticsearch,
+	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
+	// consumed by esql_tvf / sql_tvf. It is session-scoped: every connection is
+	// closed when the session ends (see closeForeignConns in Close). See
+	// session_foreignconn.go for the process.ForeignConnCache implementation.
+	foreignConnMu sync.Mutex
+	foreignConns  map[string]process.ForeignConn // handle -> connection
+	// foreignConnsClosed is the terminal tombstone set by closeForeignConns:
+	// a connector racing with session close (KILL CONNECTION during a slow
+	// connect handshake) must have its late connection rejected and closed,
+	// not silently re-admitted into a cache nobody will ever clean up again.
+	foreignConnsClosed bool
+
+	// lastKafkaMessageID is the offset of the last message a completed Kafka
+	// external-table scan returned in this session; read back by
+	// LAST_KAFKA_MESSAGE_ID(). See session_kafka.go.
+	lastKafkaMessageMu  sync.Mutex
+	lastKafkaMessageID  int64
+	lastKafkaMessageSet bool
+	// kafkaProgressQueue holds drained Kafka scans' deferred progress
+	// finalizers until the statement terminal (see session_kafka.go).
+	kafkaProgressQueue []func(publish bool)
 
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
@@ -199,6 +244,10 @@ type Session struct {
 	// consumed by the ROW_COUNT() builtin. MySQL semantics: -1 after a
 	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
 	lastAffectedRows int64
+
+	// lastFoundRows records the result count exposed by FOUND_ROWS() for the
+	// previous result-set statement.
+	lastFoundRows uint64
 
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
@@ -437,7 +486,13 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
-	return ses.setUserDefinedVarWithKind(name, value, sql, isBin, prepareParamKindFromValue(value))
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), prepareParamKindFromValue(value))
+}
+
+func (ses *Session) setUserDefinedVarWithType(name string, value interface{}, sql string, isBin bool, typ plan.Type) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)))
 }
 
 func (ses *Session) setUserDefinedVarWithKind(
@@ -447,15 +502,109 @@ func (ses *Session) setUserDefinedVarWithKind(
 	isBin bool,
 	kind vector.PrepareParamKind,
 ) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
+}
+
+func (ses *Session) setUserDefinedVarWithKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind, replayable)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, typ, kind, false)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
+	if typ.Id == 0 {
+		typ = inferUserDefinedVarType(value)
+	}
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+	key := strings.ToLower(name)
+	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+		replayable = false
+	}
+	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
 		IsBin:            isBin,
+		Type:             typ,
 		PrepareParamKind: kind,
+		Replayable:       replayable,
 	}
+	ses.mu.Unlock()
+	// User-variable references are typed at bind time. A later assignment can
+	// change that type, so cached plans containing @vars must be rebound.
+	ses.cleanCache()
 	return nil
+}
+
+func (ses *Session) markMigrationSystemVarReplayable(name string, replayable bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) getMigrationSystemVarReplayability(name string) (bool, bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	replayable, tracked := ses.migrationSystemVarReplayable[name]
+	return replayable, tracked
+}
+
+func (ses *Session) restoreMigrationSystemVarReplayability(
+	name string, replayable, tracked bool,
+) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if !tracked {
+		delete(ses.migrationSystemVarReplayable, name)
+		return
+	}
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) hasUnreplayableMigrationSystemVars() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, replayable := range ses.migrationSystemVarReplayable {
+		if !replayable {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserDefinedVar gets value of the user defined variable
@@ -932,35 +1081,84 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
-	codes  []uint16
-	msgs   []string
-	maxCnt int
+	codes         []uint16
+	msgs          []string
+	levels        []string
+	maxCnt        int
+	totalWarnings uint64
 }
 
 func (e *errInfo) push(code uint16, msg string) {
-	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+	e.pushWithLevel(code, msg, "Error")
+}
+
+func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
+	if !strings.EqualFold(level, "Error") {
+		e.totalWarnings++
+	}
+	e.pushStored(code, msg, level)
+}
+
+func (e *errInfo) pushStored(code uint16, msg, level string) {
+	if e.maxCnt > 0 && len(e.codes) >= e.maxCnt {
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
+		e.levels = e.levels[1:]
 	}
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
+	e.levels = append(e.levels, level)
+}
+
+func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string) {
+	e.totalWarnings += total
+	for i := 0; i < len(codes) && i < len(msgs); i++ {
+		e.pushStored(codes[i], msgs[i], "Warning")
+	}
 }
 
 func (e *errInfo) reset() {
 	e.codes = e.codes[:0]
 	e.msgs = e.msgs[:0]
+	e.levels = e.levels[:0]
+	e.totalWarnings = 0
 }
 
 func (e *errInfo) snapshot() errInfo {
 	return errInfo{
-		codes:  append([]uint16(nil), e.codes...),
-		msgs:   append([]string(nil), e.msgs...),
-		maxCnt: e.maxCnt,
+		codes:         append([]uint16(nil), e.codes...),
+		msgs:          append([]string(nil), e.msgs...),
+		levels:        append([]string(nil), e.levels...),
+		maxCnt:        e.maxCnt,
+		totalWarnings: e.totalWarnings,
 	}
 }
 
 func (e errInfo) length() int {
 	return len(e.codes)
+}
+
+func (e errInfo) warningCount() uint16 {
+	if e.totalWarnings > 0 {
+		if e.totalWarnings >= uint64(^uint16(0)) {
+			return ^uint16(0)
+		}
+		return uint16(e.totalWarnings)
+	}
+	count := 0
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if !strings.EqualFold(level, "Error") {
+			count++
+			if count >= int(^uint16(0)) {
+				return ^uint16(0)
+			}
+		}
+	}
+	return uint16(count)
 }
 
 func NewSession(
@@ -1003,6 +1201,7 @@ func NewSession(
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
@@ -1147,6 +1346,12 @@ func (ses *Session) Close() {
 		}
 	}
 
+	// Close any esql_tvf / sql_tvf foreign-data connections opened by this
+	// session so their sockets and driver pools do not outlive it.
+	ses.closeForeignConns()
+	// a session closing mid-statement must not advance the kafka chain
+	ses.FinalizeKafkaProgress(false)
+
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
@@ -1169,6 +1374,8 @@ func (ses *Session) Close() {
 		stmt.Close()
 	}
 	ses.prepareStmts = nil
+	ses.preparedCursorBytes.Store(0)
+	ses.preparedCursorLimit.Store(0)
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
@@ -1232,6 +1439,17 @@ func (ses *Session) IsBackgroundSession() bool {
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	ses.cachePlanWithSnapshots(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
 		return
 	}
@@ -1245,7 +1463,7 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cache(sql, stmts, plans, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshots(sql, stmts, plans, planSnapshotTS, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -1285,6 +1503,40 @@ func (ses *Session) removeCachedPlan(sql string) {
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.remove(sql)
+	}
+}
+
+func (ses *Session) updateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+) bool {
+	if len(sql) == 0 {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
+	return ses.planCache.updatePlanGeneration(
+		sql, index, expectedPlan, newPlan, planSnapshotTS)
+}
+
+func (ses *Session) invalidateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidatePlanGeneration(sql, index, expectedPlan)
 	}
 }
 
@@ -1398,6 +1650,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 	}
 	return be
 }
@@ -1466,6 +1719,12 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
+			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
+				return err
+			}
+			return stagePreparedCursorQueryResult(execCtx, crs, bat)
+		}
 		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }
@@ -1483,6 +1742,31 @@ func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
 	defer ses.mu.Unlock()
 	if ses.errInfo != nil {
 		ses.errInfo.push(code, msg)
+	}
+}
+
+func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.pushWithLevel(code, msg, "Warning")
+	}
+}
+
+// AppendWarningDiagnostic exposes the diagnostic sink to expression
+// evaluation without coupling the process.Session interface to frontend
+// warning storage.
+func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
+	ses.appendWarningDiagnostic(code, msg)
+}
+
+// AppendWarningBatch merges the total warning count from a remote fragment
+// while retaining only the bounded records needed by SHOW WARNINGS.
+func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningBatch(total, codes, messages)
 	}
 }
 
@@ -1536,6 +1820,18 @@ func (ses *Session) GetLastAffectedRows() int64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.lastAffectedRows
+}
+
+func (ses *Session) SetLastFoundRows(num uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastFoundRows = num
+}
+
+func (ses *Session) GetLastFoundRows() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastFoundRows
 }
 
 func (ses *Session) SetCmd(cmd CommandType) {
@@ -1735,6 +2031,64 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
+// advanceAuthenticationSnapshot installs a session minimum timestamp that is
+// strictly beyond the clock uncertainty window captured for this login. The
+// authentication background transaction inherits this timestamp and waits for
+// the local logtail before reading security catalog state.
+func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return moerr.NewInternalError(ctx, "missing service runtime for authentication snapshot")
+	}
+	txnClock := rt.Clock()
+	if txnClock == nil {
+		return moerr.NewInternalError(ctx, "missing transaction clock for authentication snapshot")
+	}
+	if txnClock.MaxOffset() < 0 {
+		return moerr.NewInternalError(ctx, "negative transaction clock offset for authentication snapshot")
+	}
+
+	_, upperBound := txnClock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return moerr.NewInternalError(ctx, "authentication snapshot timestamp overflow")
+	}
+
+	// HLC ordering compares the logical component when physical times are equal.
+	// Moving to the next physical tick dominates every logical timestamp at the
+	// uncertainty upper bound, including a remote commit at that exact tick.
+	ses.updateLastCommitTS(timestamp.Timestamp{
+		PhysicalTime: upperBound.PhysicalTime + 1,
+	})
+	return nil
+}
+
+// prepareAuthenticationSnapshot installs the authentication fence and waits
+// for the local logtail before creating the user transaction. Waiting outside
+// TxnClient.New keeps the uncertainty interval from consuming a user-transaction
+// admission slot. The transaction still inherits the same session minimum, so
+// the default sacrificing-freshness path confirms it immediately and preserves
+// the snapshot contract. Freshness-preserving mode retains its existing wait for
+// the later of the current clock and this minimum.
+func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
+	if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
+	}
+	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+	if err != nil {
+		return err
+	}
+	if applied.Less(minimum) {
+		return moerr.NewInternalError(ctx, "authentication snapshot did not reach the required timestamp")
+	}
+	return nil
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -1781,8 +2135,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
+	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+		return nil, err
+	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
+		fromRealUser:               true,
+		cancelTxnCreateWithRequest: true,
+	})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
@@ -1879,21 +2239,21 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//the default_role in the mo_user table.
-	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
+	// The catalog value may be NULL or stale after a prior REVOKE. Do not use
+	// it as an active role until the implicit-login path validates the grant.
+	defaultRoleID, defaultRoleIDValid, err := readStoredDefaultRoleID(tenantCtx, userRsset[0])
 	if err != nil {
 		return nil, err
 	}
 
 	tenant.SetUserID(uint32(userID))
-	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	ses.timestampMap[TSCheckUserEnd] = time.Now()
 	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
 		1.get the default_role of the user in mo_user
+		2.validate that the role is still granted, otherwise use the public grant
 
 		login case 2: tenant:user:role
 		1.check the role has been granted to the user
@@ -1943,21 +2303,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
-		//the get name of default_role from mo_role
-		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
+		ses.Debugf(tenantCtx, "validate implicit default role of user %s.", tenant)
+		defaultRoleID, defaultRole, err = resolveImplicitDefaultRole(
+			tenantCtx, bh, userID, defaultRoleID, defaultRoleIDValid)
 		if err != nil {
 			return nil, err
 		}
-		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
-		}
-
-		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 		tenant.SetDefaultRole(defaultRole)
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
@@ -2121,6 +2473,72 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	return GetPassWord(pwd)
 }
 
+func readStoredDefaultRoleID(ctx context.Context, userResult ExecResult) (int64, bool, error) {
+	isNull, err := userResult.ColumnIsNull(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if isNull {
+		return 0, false, nil
+	}
+
+	roleID, err := userResult.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if roleID < 0 || roleID > int64(^uint32(0)) {
+		return 0, false, nil
+	}
+	return roleID, true, nil
+}
+
+// resolveImplicitDefaultRole returns a role that is currently granted to the
+// user. A stale, NULL, invalid, or missing catalog default falls back to the
+// user's public grant; it is never activated directly from mo_user metadata.
+func resolveImplicitDefaultRole(
+	ctx context.Context,
+	bh BackgroundExec,
+	userID int64,
+	storedRoleID int64,
+	storedRoleIDValid bool,
+) (int64, string, error) {
+	roleID := storedRoleID
+	if !storedRoleIDValid {
+		roleID = publicRoleID
+	}
+
+	for {
+		sql := getSqlForRoleNameOfUserRole(userID, roleID)
+		rsset, err := executeSQLInBackgroundSession(ctx, bh, sql)
+		if err != nil {
+			return 0, "", err
+		}
+		if execResultArrayHasData(rsset) {
+			roleNameIsNull, err := rsset[0].ColumnIsNull(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleName, err := rsset[0].GetString(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleNameValid := !roleNameIsNull && roleName != ""
+			if roleID == publicRoleID {
+				roleNameValid = roleNameValid && isPublicRole(roleName)
+			}
+			if roleNameValid {
+				return roleID, roleName, nil
+			}
+		}
+
+		if roleID == publicRoleID {
+			return 0, "", moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID)
+		}
+		roleID = publicRoleID
+	}
+}
+
 func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
 	// Get mo final version, which is based on the current code version
 	finalVersion := ses.rm.baseService.GetFinalVersion()
@@ -2280,11 +2698,12 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
+	warnings := ses.diagnosticsSnapshot().warningCount()
 	if !isLastStmt {
-		resp = NewResponse(category, affectedRows, 0, 0,
+		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
+		resp = NewResponse(category, affectedRows, 0, warnings, serverStatus, cmd, d)
 	}
 	return resp
 }
@@ -2571,8 +2990,14 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		return err
 	}
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
-	// Restore the source session value after all replay work has finished.
+	// Restore the source session values after all replay work has finished.
 	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
+	defer func() {
+		ses.SetLastFoundRows(req.FoundRows)
+		if proc := ses.GetProc(); proc != nil {
+			proc.SetFoundRows(req.FoundRows)
+		}
+	}()
 	// Migration work is bounded by both its caller/lifecycle context and the
 	// configured session timeout.
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ctx, parameters.SessionTimeout.Duration, moerr.CauseMigrate)
@@ -2614,6 +3039,109 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			"so continue to mirgrate session, conn ID: %d, err: %v",
 			req.DB, req.ConnID, err)
 	}
+	if len(req.UserDefinedVars) > 0 && !req.UserDefinedVarsExported {
+		return moerr.NewInternalError(ctx, "user variables were provided without a typed migration snapshot")
+	}
+	var userVars map[string]*UserDefinedVar
+	if req.UserDefinedVarsExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 22")
+		}
+		var err error
+		userVars, err = decodeUserDefinedVars(
+			migrationCtx, req.UserDefinedVars, req.UserDefinedVarsReplayable)
+		if err != nil {
+			return err
+		}
+	}
+	var systemVars []migratedSystemVariable
+	if req.SystemVariablesExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed system-variable migration requires protocol version 22")
+		}
+		var err error
+		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
+		if err != nil {
+			return err
+		}
+	}
+	if req.UserDefinedVarsExported {
+		ses.installUserDefinedVars(userVars)
+	}
+	if req.SystemVariablesExported {
+		migrationExecCtx := &ExecCtx{
+			reqCtx:      migrationCtx,
+			inMigration: true,
+			ses:         ses,
+		}
+		defer migrationExecCtx.Close()
+		for _, variable := range systemVars {
+			if variable.nextTransaction {
+				isolation, err := txnIsolationFromSystemValue(migrationCtx, variable.value)
+				if err != nil {
+					return err
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, req.SystemVariablesReplayable)
+				continue
+			}
+			var oldAutocommit interface{}
+			if variable.name == "autocommit" {
+				oldAutocommit, err = ses.GetSessionSysVar(variable.name)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)
+			if variable.name == "autocommit" {
+				oldValue, err := valueIsBoolTrue(oldAutocommit)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				newValue, err := valueIsBoolTrue(variable.value)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.SetAutocommit(migrationExecCtx, oldValue, newValue); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if variable.runtimeValuePresent {
+				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
+			} else {
+				ses.applySessionSysVarSideEffects(variable.name, variable.value)
+			}
+			// The typed snapshot carries only the final value. Invalidate for
+			// both cache-control variables so a source toggle (0->1 or 1->0)
+			// cannot leave stale target entries after migration.
+			if variable.name == "clear_privilege_cache" || variable.name == "enable_privilege_cache" {
+				ses.InvalidatePrivilegeCache()
+			}
+		}
+	} else {
+		for _, stmt := range req.SetVarStmts {
+			tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
+			err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
+			tempExecCtx.Close()
+			if err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+		}
+	}
 
 	var maxStmtID uint32
 	for _, p := range req.PrepareStmts {
@@ -2636,6 +3164,30 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		return cause
 	}
 	return nil
+}
+
+func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
+	switch strings.ToLower(name) {
+	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
+	case "disable_agg_statement":
+		boolVal := InitSystemVariableBoolType("_")
+		ses.disableAgg = boolVal.IsTrue(value)
+	case "clear_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	case "enable_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if !boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	}
 }
 
 func (ses *Session) GetLogger() SessionLogger {

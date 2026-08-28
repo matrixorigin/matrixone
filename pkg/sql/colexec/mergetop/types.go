@@ -43,6 +43,7 @@ var _ interface {
 
 type container struct {
 	n     int // result vector number
+	state vm.CtrState
 	sels  []int64
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structure used to do sort work
@@ -297,6 +298,7 @@ func mergeTopTerminalCapacityError(ctx context.Context, err error) error {
 
 func (ctr *container) reset(proc *process.Process) {
 	ctr.n = 0
+	ctr.state = vm.Build
 	if ctr.allocationAccount != nil && cap(ctr.sels) != 0 {
 		mpool.FreeSlice(proc.Mp(), ctr.sels)
 	}
@@ -329,6 +331,7 @@ func (ctr *container) reset(proc *process.Process) {
 }
 
 func (ctr *container) free(proc *process.Process) {
+	ctr.state = vm.Build
 	if ctr.allocationAccount != nil && cap(ctr.sels) != 0 {
 		mpool.FreeSlice(proc.Mp(), ctr.sels)
 	}

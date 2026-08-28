@@ -250,15 +250,17 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:                     "test-proc-id",
-			accountId:              catalog.System_Account,
-			unixTime:               time.Now().Unix(),
-			affectedRows:           42,
-			statementRuntimeIgnore: true,
-			planSnapshotTS:         timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
-			hasPlanSnapshotTS:      true,
-			txnClient:              txnClient,
-			txnOperator:            txnOperator,
+			id:                         "test-proc-id",
+			accountId:                  catalog.System_Account,
+			unixTime:                   time.Now().Unix(),
+			affectedRows:               42,
+			statementRuntimeIgnore:     true,
+			planSnapshotTS:             timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+			hasPlanSnapshotTS:          true,
+			planGenerationReused:       true,
+			stringShuffleHashAlgorithm: process.StringShuffleHashComplete,
+			txnClient:                  txnClient,
+			txnOperator:                txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
 				Length:         2,
 				Data:           append([]byte(nil), params.GetData()...),
@@ -298,6 +300,9 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
+	require.True(t, compile.proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashComplete,
+		compile.proc.StringShuffleHashAlgorithm())
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -375,12 +380,14 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	procInfo := &pipeline.ProcessInfo{
-		Id:                     "test-proc-id",
-		AccountId:              catalog.System_Account,
-		UnixTime:               time.Now().Unix(),
-		AffectedRows:           42,
-		StatementRuntimeIgnore: true,
-		PlanSnapshotTs:         &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+		Id:                         "test-proc-id",
+		AccountId:                  catalog.System_Account,
+		UnixTime:                   time.Now().Unix(),
+		AffectedRows:               42,
+		StatementRuntimeIgnore:     true,
+		PlanSnapshotTs:             &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+		PlanGenerationReused:       true,
+		StringShuffleHashAlgorithm: uint32(process.StringShuffleHashComplete),
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -411,9 +418,19 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.True(t, helper.statementRuntimeIgnore)
 	require.True(t, helper.hasPlanSnapshotTS)
 	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
+	require.True(t, helper.planGenerationReused)
+	require.Equal(t, process.StringShuffleHashComplete, helper.stringShuffleHashAlgorithm)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
+}
+
+func TestGenerateProcessHelperRejectsUnknownStringShuffleHashAlgorithm(t *testing.T) {
+	data, err := (&pipeline.ProcessInfo{StringShuffleHashAlgorithm: 99}).Marshal()
+	require.NoError(t, err)
+
+	_, err = generateProcessHelper(context.Background(), data, nil)
+	require.ErrorContains(t, err, "string shuffle hash algorithm 99 is not supported")
 }
 
 func TestNewMessageReceiverReturnsSnapshotRestoreError(t *testing.T) {
@@ -724,7 +741,9 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
+	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringBinary, types.RuntimeStringText,
+	}, mp))
 	require.NoError(t, bat.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	}, mp))
@@ -750,7 +769,9 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion22)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion23")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion23)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()
@@ -758,6 +779,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(1))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 }
 

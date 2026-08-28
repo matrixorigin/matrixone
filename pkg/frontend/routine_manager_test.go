@@ -342,9 +342,9 @@ func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
 	}}
 
 	probes := 0
-	rm.cancelDisconnectedRequests(now, grace, func(conn net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, grace, func(conn *Conn) (bool, error) {
 		probes++
-		return conn == longServer, nil
+		return conn.RawConn() == longServer, nil
 	})
 
 	require.Equal(t, 1, probes, "only requests beyond the grace period should be probed")
@@ -359,11 +359,42 @@ func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
 	default:
 	}
 
-	rm.cancelDisconnectedRequests(now, grace, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, grace, func(*Conn) (bool, error) {
 		probes++
 		return true, nil
 	})
 	require.Equal(t, 1, probes, "a routine already closing should not be probed again")
+}
+
+func TestClientDisconnectProbePolicyCoversNewRequests(t *testing.T) {
+	now := time.Now()
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.requestStartedAt.Store(clientRequestClockValue(now))
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	t.Cleanup(cancelRequest)
+	routine.setCancelRequestFunc(cancelRequest)
+
+	conn := &Conn{conn: serverConn, remoteAddr: "new-request"}
+	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
+	probes := 0
+	rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, func(*Conn) (bool, error) {
+		probes++
+		return true, nil
+	})
+
+	require.Equal(t, 1, probes, "a new active request must be probed without an age grace period")
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("a disconnected new request was not canceled")
+	}
 }
 
 func TestRoutineManagerProbeErrorDoesNotCancelRequest(t *testing.T) {
@@ -383,7 +414,7 @@ func TestRoutineManagerProbeErrorDoesNotCancelRequest(t *testing.T) {
 
 	conn := &Conn{conn: serverConn}
 	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
-	rm.cancelDisconnectedRequests(now, 30*time.Second, func(net.Conn) (bool, error) {
+	rm.cancelDisconnectedRequests(now, 30*time.Second, func(*Conn) (bool, error) {
 		return false, errors.New("probe failed")
 	})
 
@@ -436,7 +467,8 @@ func BenchmarkRoutineManagerLongRunningRequests(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = rm.longRunningRequests(now, 30*time.Second)
+				requests := rm.appendLongRunningRequests(nil, now, 30*time.Second)
+				clear(requests)
 			}
 		})
 	}
@@ -945,7 +977,7 @@ func receiveLegacyMigrationActionResult(t *testing.T, result <-chan error) error
 	}
 }
 
-func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T) {
+func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.T) {
 	const connID = uint32(1009)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
@@ -958,6 +990,7 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()
+	rm.setBaseService(&testMOServerBaseService{id: ""})
 
 	oldSession.respr = NewMysqlResp(protocol)
 	oldSession.setRoutineManager(rm)
@@ -1007,11 +1040,28 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("request did not write its terminal response")
 	}
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
 
 	oldProc := oldSession.GetProc()
 	oldTxnHandler := oldSession.GetTxnHandler()
-	err = routine.resetSession("", &query.ResetSessionResponse{})
-	require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+	resetCtx, cancelReset := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReset()
+	resetResult := make(chan error, 1)
+	go func() {
+		resetResult <- rm.ResetSessionWithContext(
+			resetCtx,
+			&query.ResetSessionRequest{ConnID: connID},
+			&query.ResetSessionResponse{},
+		)
+	}()
+	select {
+	case err := <-resetResult:
+		t.Fatalf("reset returned before the request finished: %v", err)
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter the request-only admission wait")
+	}
 	require.Same(t, oldSession, routine.getSession())
 	require.Same(t, oldProc, oldSession.GetProc())
 	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
@@ -1030,7 +1080,12 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 		t.Fatal("request handler did not finish after response release")
 	}
 
-	require.NoError(t, routine.resetSession("", &query.ResetSessionResponse{}))
+	select {
+	case err := <-resetResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("reset did not finish after request release")
+	}
 	newSession := routine.getSession()
 	require.NotSame(t, oldSession, newSession)
 	require.Nil(t, oldSession.GetProc())
@@ -1038,6 +1093,19 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 	registered = rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1)
 	require.Same(t, newSession, registered[0])
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
+	secondResetCtx, cancelSecondReset := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecondReset()
+	require.NoError(t, rm.ResetSessionWithContext(
+		secondResetCtx,
+		&query.ResetSessionRequest{ConnID: connID},
+		&query.ResetSessionResponse{},
+	))
+	secondSession := routine.getSession()
+	require.NotSame(t, newSession, secondSession)
+	registered = rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, secondSession, registered[0])
 	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
 }
 

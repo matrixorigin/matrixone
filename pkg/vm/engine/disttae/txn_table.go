@@ -1655,6 +1655,13 @@ func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	return nil
 }
 
+func validateReplaceDefVersion(current uint32, replaceDef *api.AlterTableReplaceDef) error {
+	if replaceDef != nil && replaceDef.GetCheckVersion() && replaceDef.GetExpectedVersion() != current {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
@@ -1664,6 +1671,11 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	for _, req := range reqs {
 		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
 			autoIncrResetCount++
+		}
+		if req.GetKind() == api.AlterKind_ReplaceDef {
+			if err := validateReplaceDefVersion(tbl.version, req.GetReplaceDef()); err != nil {
+				return err
+			}
 		}
 	}
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
@@ -1822,12 +1834,20 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
+	var preservedOwnership *tableCatalogOwnership
+	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
+		preservedOwnership = &tableCatalogOwnership{
+			creator:     replaceDefReq.GetReplaceDef().GetPreservedCreator(),
+			owner:       replaceDefReq.GetReplaceDef().GetPreservedOwner(),
+			createdTime: types.Timestamp(replaceDefReq.GetReplaceDef().GetPreservedCreatedTime()),
+		}
+	}
 	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for
 	// the recreation to replace. Pass that intent explicitly: inferring it from
 	// the hidden-table name would leave the old row and insert a duplicate.
 	if err := tbl.db.createWithID(
 		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
-		tbl.defs, !createdInTxn, tbl.extraInfo,
+		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership,
 	); err != nil {
 		return err
 	}
@@ -1924,6 +1944,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
+	tableName := tbl.writeTableName(ctx)
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
 		ctx,
 		INSERT,
@@ -1932,7 +1953,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.db.databaseName,
-		tbl.tableName,
+		tableName,
 		ibat,
 		tbl.getTxn().tnStores[0],
 		tbl.extraInfo.AutoIncrEpoch,
@@ -1976,8 +1997,8 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, "", err
 	}
 
-	s3Writer := colexec.NewCNS3DataWriter(
-		proc.Mp(), fs, tbl.tableDef, -1, false,
+	s3Writer := colexec.NewCNS3DataWriterForService(
+		proc.GetService(), proc.Mp(), fs, tbl.tableDef, -1, false,
 	)
 
 	defer func() { s3Writer.Close() }()
@@ -2108,13 +2129,13 @@ func (tbl *txnTable) Delete(
 		if skipTransfer {
 			tbl.getTxn().Lock()
 			err := tbl.getTxn().writeFileLockedSkipTransferWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
+				tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 			tbl.getTxn().Unlock()
 			return err
 		}
 
 		if err := tbl.getTxn().writeFileWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+			tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 			return err
 		}
 
@@ -2174,11 +2195,18 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 		return err
 	}
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+		tbl.db.databaseName, tbl.writeTableName(ctx), ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
 	return nil
+}
+
+func (tbl *txnTable) writeTableName(ctx context.Context) string {
+	if tbl.tableId == catalog.MO_COLUMNS_ID && ctx.Value(defines.MoColumnsUpdateKey{}) != nil {
+		return catalog.MO_COLUMNS_UPDATE
+	}
+	return tbl.tableName
 }
 
 func (tbl *txnTable) AddTableDef(ctx context.Context, def engine.TableDef) error {

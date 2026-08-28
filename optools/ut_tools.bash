@@ -78,10 +78,15 @@ function list_embedded_cluster_test_packages() {
     if [[ -n "${TAGS:-}" ]]; then
         tags_args=(-tags "${TAGS}")
     fi
-    embed_package=$(go list ${GO_MODULE_MODE:-} "${tags_args[@]}" ./pkg/embed) || return $?
+    # Package discovery does not consume build metadata.  Disable VCS
+    # stamping so this also works from source archives and temporary module
+    # fixtures that do not have a .git directory (Go 1.24+ otherwise makes
+    # `go list -test` fail while trying to obtain VCS status).
+    local -a build_args=(-buildvcs=false)
+    embed_package=$(go list ${GO_MODULE_MODE:-} "${build_args[@]}" "${tags_args[@]}" ./pkg/embed) || return $?
 
     template='{{ if eq .ImportPath "'"${embed_package}"'" }}{{ .ImportPath }}{{ "\n" }}{{ end }}{{ $owner := .ForTest }}{{ range .Deps }}{{ if eq . "'"${embed_package}"'" }}{{ $owner }}{{ "\n" }}{{ end }}{{ end }}'
-    discovered_packages=$(go list ${GO_MODULE_MODE:-} -race -test \
+    discovered_packages=$(go list ${GO_MODULE_MODE:-} "${build_args[@]}" -race -test \
         "${tags_args[@]}" -f "${template}" "$@") || return $?
 
     printf '%s\n' "${discovered_packages}" | sed '/^$/d' | LC_ALL=C sort -u

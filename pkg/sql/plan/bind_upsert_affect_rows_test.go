@@ -39,6 +39,13 @@ func mainUpdateCtxCountDelete(t *testing.T, p *Plan) bool {
 	return found.UpdateCtxList[0].CountDeleteAffectRows
 }
 
+func TestDeepCopyUpdateCtxPreservesChangedRowsCol(t *testing.T) {
+	original := []*planpb.UpdateCtx{{ChangedRowsCol: &planpb.ColRef{RelPos: 3, ColPos: 7}}}
+	copied := DeepCopyUpdateCtxList(original)
+	require.Equal(t, original[0].ChangedRowsCol, copied[0].ChangedRowsCol)
+	require.NotSame(t, original[0].ChangedRowsCol, copied[0].ChangedRowsCol)
+}
+
 // hasNoopFilter reports whether the plan contains a FILTER node whose predicate
 // is the ODKU no-op guard: isnull(old rowid) OR NOT( col <=> col [AND ...] ).
 // The isnull(rowid) branch keeps non-conflicting rows (all-NULL old image)

@@ -143,9 +143,10 @@ type testCNServer struct {
 	started  bool
 	quit     chan interface{}
 
-	globalVars map[string]string
-	tlsCfg     tlsConfig
-	tlsConfig  *tls.Config
+	globalVarsMu sync.RWMutex
+	globalVars   map[string]string
+	tlsCfg       tlsConfig
+	tlsConfig    *tls.Config
 
 	beforeHandle func()
 	handle       func(*testHandler)
@@ -220,6 +221,23 @@ func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsC
 	return func() error {
 		return b.Stop()
 	}
+}
+
+func (s *testCNServer) setGlobalVar(name, value string) {
+	s.globalVarsMu.Lock()
+	defer s.globalVarsMu.Unlock()
+	s.globalVars[name] = value
+}
+
+func (s *testCNServer) globalVarsSnapshot() map[string]string {
+	s.globalVarsMu.RLock()
+	defer s.globalVarsMu.RUnlock()
+
+	vars := make(map[string]string, len(s.globalVars))
+	for name, value := range s.globalVars {
+		vars[name] = value
+	}
+	return vars
 }
 
 func (s *testCNServer) waitCNServerReady() bool {
@@ -382,7 +400,7 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 }
 
 func (h *testHandler) handleKillConn() {
-	h.server.globalVars["killed"] = "yes"
+	h.server.setGlobalVar("killed", "yes")
 	h.mysqlProto.SetSequenceID(1)
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
@@ -466,7 +484,7 @@ func (h *testHandler) handleShowGlobalVar() {
 		}
 	}
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
-	for k, v := range h.server.globalVars {
+	for k, v := range h.server.globalVarsSnapshot() {
 		row := make([]interface{}, 2)
 		row[0] = k
 		row[1] = v
@@ -542,6 +560,36 @@ func (s *testCNServer) Stop() error {
 	return nil
 }
 
+func TestCNServerGlobalVarsConcurrentAccess(t *testing.T) {
+	server := &testCNServer{globalVars: make(map[string]string)}
+	const workers = 8
+	const iterations = 16
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				server.setGlobalVar("killed", "yes")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				_ = server.globalVarsSnapshot()
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, map[string]string{"killed": "yes"}, server.globalVarsSnapshot())
+}
+
 func TestServerConn_Create(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
@@ -598,6 +646,35 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	err = sc.Close()
 	require.NoError(t, err)
+}
+
+func TestServerConn_HandleHandshakeClearsReadDeadline(t *testing.T) {
+	defer leaktest.AfterTest(t)
+
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn := testMakeCNServer("cn-deadline", addr, 0, "", labelInfo{})
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
+	defer func() { require.NoError(t, stopFn()) }()
+
+	sc, err := newServerConn(cn, nil, tp.re, 0)
+	require.NoError(t, err)
+	impl := sc.(*serverConn)
+	defer impl.Close()
+
+	// Replace the transport in both serverConn and its frontend protocol so
+	// the test can observe the deadline left by the handshake reads.
+	tracked := &readDeadlineTrackingConn{Conn: impl.conn}
+	impl.conn = tracked
+	impl.mysqlProto.UseConn(tracked)
+
+	_, err = impl.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, 3*time.Second)
+	require.NoError(t, err)
+	require.True(t, tracked.readDeadline().IsZero(),
+		"the frontend handshake deadline must not survive into the tunnel")
 }
 
 func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {

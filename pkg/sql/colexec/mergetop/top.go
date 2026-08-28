@@ -119,29 +119,41 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (
 
 	result = vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {
-		result.Batch = nil
+		mergeTop.ctr.state = vm.End
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	if end, err := mergeTop.ctr.build(mergeTop, proc, analyzer); err != nil {
+	if mergeTop.ctr.state == vm.Build {
+		if end, err := mergeTop.ctr.build(mergeTop, proc, analyzer); err != nil {
+			return result, err
+		} else if end {
+			mergeTop.ctr.state = vm.End
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		mergeTop.ctr.state = vm.Eval
+	}
+
+	if mergeTop.ctr.state == vm.Eval {
+		if mergeTop.ctr.bat == nil || mergeTop.ctr.bat.IsEmpty() {
+			mergeTop.ctr.state = vm.End
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		err = mergeTop.ctr.eval(mergeTop.ctr.limit, proc, analyzer, &result)
+		if err == nil {
+			mergeTop.ctr.state = vm.End
+			result.Status = vm.ExecStop
+		}
 		return result, err
-	} else if end {
-		result.Status = vm.ExecStop
-		return result, nil
 	}
 
-	if mergeTop.ctr.bat == nil || mergeTop.ctr.bat.IsEmpty() {
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, nil
+	if mergeTop.ctr.state == vm.End {
+		return vm.CancelResult, nil
 	}
-	err = mergeTop.ctr.eval(mergeTop.ctr.limit, proc, analyzer, &result)
-	if err == nil {
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-	return result, err
+
+	panic("bug")
 }
 
 func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer process.Analyzer) (bool, error) {

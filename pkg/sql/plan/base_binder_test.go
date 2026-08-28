@@ -32,6 +32,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMissingColumnWithStaleAliasUsesBadFieldError(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.aliasMap["missing_col"] = &aliasItem{idx: 0}
+	binder := &baseBinder{sysCtx: context.Background(), ctx: ctx}
+
+	_, err := binder.baseBindColRef(tree.NewUnresolvedColName("missing_col"), 0, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrBadFieldError, moErr.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode())
+	require.Equal(t, "42S22", moErr.SqlState())
+	require.EqualError(t, moErr, "invalid input: column missing_col does not exist")
+}
+
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	scopes := []map[string]interface{}{{
 		"p1": "10.00",
@@ -589,6 +604,8 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	require.Equal(t, "12", rawExpr.GetLit().GetSval())
 	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
 	require.False(t, rawExpr.GetLit().GetIsBin())
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		rawExpr.GetLit().GetLiteralForm())
 
 	testCases := []struct {
 		name  string
@@ -630,6 +647,13 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
 	require.NoError(t, err)
 	require.True(t, plainHexExpr.GetLit().GetIsBin())
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plainHexExpr.GetLit().GetLiteralForm())
+	bit := tree.NewNumVal("0b1", "0b1", false, tree.P_bit)
+	bitExpr, err := binder.bindNumVal(bit, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BIT,
+		bitExpr.GetLit().GetLiteralForm())
 
 	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
 	require.NoError(t, err)
@@ -650,6 +674,8 @@ func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
 	require.Equal(t, "1", rawExpr.GetLit().GetSval())
 	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
 	require.False(t, rawExpr.GetLit().GetIsBin())
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		rawExpr.GetLit().GetLiteralForm())
 
 	castExpr, err := binder.bindNumVal(binStr, plan.Type{Id: int32(types.T_uint64)})
 	require.NoError(t, err)
@@ -1520,4 +1546,17 @@ func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
 		require.Len(t, list.List, 2)
 		require.Equal(t, "day", list.List[1].GetLit().GetSval())
 	})
+}
+
+func TestNormalizeDecimalParamInArgsUsesFloatForMixedApproximateList(t *testing.T) {
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0}},
+			{Typ: plan.Type{Id: int32(types.T_float64)}},
+		}}}},
+	}
+	require.NoError(t, normalizeDecimalParamInArgs(context.Background(), "in", args))
+	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+	require.Equal(t, "cast", args[0].GetF().GetFunc().GetObjName())
 }

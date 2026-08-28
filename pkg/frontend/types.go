@@ -312,6 +312,11 @@ type PrepareStmt struct {
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
+	// materialized cursor is kept on the prepared statement because a later
+	// COM_STMT_FETCH only carries the statement id.
+	cursorRequested bool
+	cursor          *preparedStmtCursor
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
@@ -329,11 +334,81 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// needsRebuild is set when execution-time retry discovers that the cached
+	// prepared plan generation is stale before frontend metadata catches up.
+	needsRebuild bool
+	// compileNeedsRebuild remembers that this statement had an eligible cached
+	// topology before it was invalidated, even after that topology is released.
+	compileNeedsRebuild bool
+	// Static prepared-plan capabilities are computed once per plan generation so
+	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
+	// result positions identify parameters whose binary runtime type is also the
+	// visible result-column type.
+	numericPrefixConsumer         bool
+	directResultParamPositions    []int32
+	directResultParamPositionsSet bool
+	hasPaginationParams           bool
+	hasLagLeadParams              bool
+	paramKinds                    []vector.PrepareParamKind
+	paramMetadata                 []bool
+	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
+	// stable parameter semantic category. The cached runtime plan retains
+	// ParamRefs, so equivalent values reuse the compile without embedding the
+	// preceding execution's literal.
+	runtimeSpecializationKey string
+	runtimePlan              *plan.Plan
+	runtimeCompile           *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// runtimeSpecializationPlan records the plan for which the static
+	// execute-time specialization decision was made. Most prepared DML only
+	// needs parameter values and can reuse the prepare-time compile; keeping the
+	// decision with the plan avoids copying and walking the whole plan on every
+	// EXECUTE.
+	runtimeSpecializationPlan   *plan.Plan
+	runtimeSpecializationNeeded bool
+}
+
+// preparedStmtCursor is the server-side result retained between
+// COM_STMT_EXECUTE and COM_STMT_FETCH. MySQL sessions serialize commands, so
+// the cursor does not need an additional lock.
+type preparedStmtCursor struct {
+	result   *MysqlResultSet
+	offset   uint64
+	bytes    uint64
+	maxBytes uint64
+	// maxBytesSet distinguishes an explicit zero query_result_maxsize from
+	// an in-memory test/legacy cursor that has not been initialized yet.
+	maxBytesSet bool
+	maxRows     uint64
+	owner       *Session
+}
+
+func (cursor *preparedStmtCursor) close() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	cursor.result = nil
+	cursor.offset = 0
+	cursor.bytes = 0
+	cursor.owner = nil
+}
+
+func (prepareStmt *PrepareStmt) closeCursor() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.cursor != nil {
+		prepareStmt.cursor.close()
+		prepareStmt.cursor = nil
+	}
 }
 
 /*
@@ -630,6 +705,9 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	// cancelTxnCreateWithRequest is reserved for short-lived background
+	// transactions whose request context owns a blocked TxnClient.New call.
+	cancelTxnCreateWithRequest bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -674,9 +752,58 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	tableInfos map[string][]ColumnInfo
 //}
 
+func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
+	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
+		return
+	}
+	// Compile/operator release resets execution-owned process state. Keep the
+	// current COM_STMT parameter generation detached while replacing an older
+	// runtime category, then restore it for the candidate that is about to run.
+	// Without this guard, a successful category replacement can publish the new
+	// compile but execute it with an empty prepare-parameter vector.
+	if prepareStmt.proc != nil {
+		prepareParams := prepareStmt.proc.DetachPrepareParams()
+		defer prepareStmt.proc.RestorePrepareParams(prepareParams)
+	}
+	runtimeCompile.FreeOperator()
+	runtimeCompile.SetIsPrepare(false)
+	runtimeCompile.Release()
+}
+
+func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
+	key string,
+	runtimePlan *plan.Plan,
+	runtimeCompile *compile.Compile,
+) {
+	oldRuntimeCompile := prepareStmt.runtimeCompile
+	runtimeCompile.SetIsPrepare(true)
+	prepareStmt.runtimeSpecializationKey = key
+	prepareStmt.runtimePlan = runtimePlan
+	prepareStmt.runtimeCompile = runtimeCompile
+	if oldRuntimeCompile != runtimeCompile {
+		prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+	}
+}
+
+func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
+	oldRuntimeCompile := prepareStmt.runtimeCompile
+	prepareStmt.runtimeSpecializationKey = ""
+	prepareStmt.runtimePlan = nil
+	prepareStmt.runtimeCompile = nil
+	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+}
+
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.closeCursor()
+	// Release the runtime compile while the current parameter vector is still
+	// valid; releaseRuntimeCompile temporarily detaches and restores it.
+	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.params != nil {
+		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
+			prepareStmt.proc.SetPrepareParams(nil)
+		}
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
+		prepareStmt.params = nil
 	}
 
 	if prepareStmt.compile != nil {
@@ -694,7 +821,26 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
+}
+
+// invalidateCachedCompile detaches and returns the old cached topology. The
+// caller owns its one Release unless it is also the currently running Compile,
+// whose normal execution cleanup owns that Release.
+func (prepareStmt *PrepareStmt) invalidateCachedCompile() *compile.Compile {
+	prepareStmt.needsRebuild = true
+	prepareStmt.compileNeedsRebuild = true
+	if prepareStmt.compile == nil {
+		return nil
+	}
+	invalidatedCompile := prepareStmt.compile
+	invalidatedCompile.FreeOperator()
+	invalidatedCompile.SetIsPrepare(false)
+	// Clear first so PrepareStmt.Close cannot release the detached owner.
+	prepareStmt.compile = nil
+	return invalidatedCompile
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {
@@ -709,6 +855,10 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) hasPendingLongData() bool {
+	return prepareStmt != nil && len(prepareStmt.getFromSendLongData) > 0
+}
+
 func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if prepareStmt == nil {
 		return
@@ -720,6 +870,7 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
 	}
+	prepareStmt.cursorRequested = false
 }
 
 type Allocator interface {
@@ -913,6 +1064,9 @@ type ExecCtx struct {
 	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
+	// singleStatementQuery is true only for a raw COM_QUERY containing one
+	// statement, which is the only input the proxy records for raw replay.
+	singleStatementQuery bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -933,7 +1087,9 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	cursorResultSaver StagedBinaryWriter
 	returning         *returningState
+	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -958,6 +1114,10 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.cursorResultSaver != nil && execCtx.reqCtx != nil && execCtx.ses != nil {
+		_ = execCtx.cursorResultSaver.Abort(execCtx)
+	}
+	execCtx.cursorResultSaver = nil
 	if execCtx.returning != nil {
 		_ = execCtx.returning.Close(execCtx)
 		execCtx.returning = nil
@@ -968,6 +1128,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.persistentDropTableTargets = nil
+	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -982,6 +1143,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
 
@@ -1575,7 +1737,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// later in rewriteSQL, which runs on every statement and would make the
 	// session unable to even clear the bad value.
 	if name == "remap_rewrites" {
-		if err = validateRemapRewrites(ctx, val); err != nil {
+		if err = validateRemapRewrites(ctx, val, parserLowerCaseTableNames(ses)); err != nil {
 			return err
 		}
 	}
@@ -1601,6 +1763,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
 		}
 	}
 
@@ -1617,6 +1780,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
 		ses.RemoveAllPrepareStmts()
+	}
+	if err == nil {
+		ses.markMigrationSystemVarReplayable(canonicalName, false)
 	}
 	return
 }

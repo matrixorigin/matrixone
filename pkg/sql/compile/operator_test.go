@@ -800,6 +800,7 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	op := shuffle.NewArgument()
 	op.BucketNum = 4
 	op.DrainAllBuckets = true
+	op.StringHashKey = true
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*shuffle.Shuffle)
@@ -813,6 +814,8 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.Equal(t, int32(1), dup2.CurrentShuffleIdx)
 	require.True(t, dup1.DrainAllBuckets)
 	require.True(t, dup2.DrainAllBuckets)
+	require.True(t, dup1.StringHashKey)
+	require.True(t, dup2.StringHashKey)
 }
 
 func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
@@ -830,6 +833,7 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 
 func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := hashjoin.NewArgument()
+	op.EmitCompressedRowCount = true
 	staleMailbox := hashjoin.NewBitmapMailbox(2)
 	staleMailbox.SealAndDrain(mpool.MustNewZero())
 	op.Mailbox = staleMailbox
@@ -841,6 +845,8 @@ func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	require.Same(t, staleMailbox, op.Mailbox, "duplicating must not mutate the reusable template")
 	require.NotSame(t, staleMailbox, dup1.Mailbox, "a stale template mailbox must not enter a new execution")
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	require.True(t, dup1.EmitCompressedRowCount)
+	require.True(t, dup2.EmitCompressedRowCount)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*hashjoin.HashJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
@@ -1182,7 +1188,7 @@ func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 
 func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
 	op := table_function.NewArgument()
-	op.FuncName = "ivf_search"
+	op.FuncName = "unnest"
 	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: 8, UseMembershipFilter: true},
 	}

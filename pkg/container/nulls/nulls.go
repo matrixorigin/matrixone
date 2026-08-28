@@ -70,16 +70,35 @@ func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 // Or performs union operation on Nulls nsp,m and store the result in r
 func Or(nsp, m, r *Nulls) {
 	if nsp.EmptyByFlag() && m.EmptyByFlag() {
-		r.Reset()
+		if r.np.HasExternalStorage() {
+			// External capacity belongs to the result owner and is not a row
+			// count. Clear values while retaining the owner's current bound.
+			r.Clear()
+		} else {
+			r.Reset()
+		}
+		return
 	}
 
-	if !nsp.EmptyByFlag() {
-		r.np.Or(&nsp.np)
+	if nsp != nil {
+		orBitmapInto(r, &nsp.np)
 	}
+	if m != nil {
+		orBitmapInto(r, &m.np)
+	}
+}
 
-	if !m.EmptyByFlag() {
-		r.np.Or(&m.np)
+func orBitmapInto(dst *Nulls, src *bitmap.Bitmap) {
+	if src == nil || src.EmptyByFlag() || src == &dst.np {
+		return
 	}
+	if dst.np.HasExternalStorage() {
+		// External storage capacity can exceed the destination's current row
+		// domain. The owner-established logical length is the only valid bound.
+		dst.np.OrBounded(src, dst.np.Len())
+		return
+	}
+	dst.np.Or(src)
 }
 
 func (nsp *Nulls) Build(size int, rows ...uint64) {
@@ -189,8 +208,8 @@ func Del(nsp *Nulls, sels ...uint64) {
 
 // Set performs union operation on Nulls nsp,m and store the result in nsp
 func Set(nsp, other *Nulls) {
-	if !other.np.EmptyByFlag() {
-		nsp.np.Or(&other.np)
+	if other != nil {
+		orBitmapInto(nsp, &other.np)
 	}
 }
 
@@ -295,6 +314,13 @@ func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
 }
 
 func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
+	FilterByMaskWithOffset(nsp, sels, negate, 0)
+}
+
+// FilterByMaskWithOffset applies sels after translating every selected row by
+// offset. The selection bitmap is relative to a window of the owning vector,
+// while the null bitmap remains in the full vector's row domain.
+func FilterByMaskWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if nsp.np.EmptyByFlag() {
 		return
 	}
@@ -304,25 +330,22 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 		oldLen := nsp.np.Len()
 		var bm bitmap.Bitmap
 		bm.InitWithSize(oldLen)
-		sel := itr.Next()
-		for oldIdx, newIdx, selIdx := int64(0), 0, 0; oldIdx < oldLen; oldIdx++ {
-			if uint64(oldIdx) != sel {
+		var sel uint64
+		hasSel := itr.HasNext()
+		if hasSel {
+			sel = itr.Next() + offset
+		}
+		for oldIdx, newIdx := int64(0), 0; oldIdx < oldLen; oldIdx++ {
+			if !hasSel || uint64(oldIdx) != sel {
 				if nsp.np.Contains(uint64(oldIdx)) {
 					bm.Add(uint64(newIdx))
 				}
 				newIdx++
 			} else {
-				selIdx++
-				if !itr.HasNext() {
-					for idx := oldIdx + 1; idx < oldLen; idx++ {
-						if nsp.np.Contains(uint64(idx)) {
-							bm.Add(uint64(newIdx))
-						}
-						newIdx++
-					}
-					break
+				hasSel = itr.HasNext()
+				if hasSel {
+					sel = itr.Next() + offset
 				}
-				sel = itr.Next()
 			}
 		}
 		nsp.np.InitWith(&bm)
@@ -332,8 +355,9 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 		upperLimit := nsp.np.Len()
 		idx := 0
 		for itr.HasNext() {
-			sel := itr.Next()
+			sel := itr.Next() + offset
 			if sel >= uint64(upperLimit) {
+				idx++
 				continue
 			}
 			if nsp.np.Contains(sel) {
@@ -348,14 +372,20 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 // FilterByMaskInPlace rewrites a null bitmap using the selection bitmap's
 // naturally ordered iterator and therefore requires no row-scaled scratch.
 func FilterByMaskInPlace(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
+	FilterByMaskInPlaceWithOffset(nsp, sels, negate, 0)
+}
+
+// FilterByMaskInPlaceWithOffset is FilterByMaskInPlace for a selection whose
+// row indexes are relative to a window beginning at offset.
+func FilterByMaskInPlaceWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if nsp.np.EmptyByFlag() {
 		return
 	}
 	if !nsp.np.HasExternalStorage() {
-		FilterByMask(nsp, sels, negate)
+		FilterByMaskWithOffset(nsp, sels, negate, offset)
 		return
 	}
-	nsp.np.RemapMaskOrdered(sels, negate)
+	nsp.np.RemapMaskOrderedWithOffset(sels, negate, offset)
 }
 
 // XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.
@@ -448,15 +478,13 @@ func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
 }
 
 func (nsp *Nulls) OrBitmap(m *bitmap.Bitmap) {
-	if m != nil && !m.IsEmpty() {
-		nsp.np.Or(m)
-	}
+	orBitmapInto(nsp, m)
 }
 
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
-	if m != nil && !m.np.EmptyByFlag() {
-		nsp.np.Or(&m.np)
+	if m != nil {
+		orBitmapInto(nsp, &m.np)
 	}
 }
 
@@ -503,10 +531,9 @@ func (nsp *Nulls) Foreach(fn func(uint64) bool) {
 }
 
 func (nsp *Nulls) Merge(other *Nulls) {
-	if other.Count() == 0 {
-		return
+	if other != nil {
+		orBitmapInto(nsp, &other.np)
 	}
-	nsp.np.Or(&other.np)
 }
 
 func (nsp *Nulls) String() string {

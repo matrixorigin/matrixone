@@ -856,7 +856,7 @@ func TestBlockDataReadBackupCombinesAbortAndTombstoneMasks(t *testing.T) {
 		aborts   []bool
 	}{
 		{
-			name:     "v10-abort-column",
+			name:     "v11-abort-column",
 			seqnums:  []uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
 			commitTS: []types.TS{types.BuildTS(1, 0), types.BuildTS(1, 0), types.BuildTS(1, 0), types.BuildTS(1, 0)},
 			aborts:   []bool{false, true, false, false},

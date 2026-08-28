@@ -634,7 +634,12 @@ func insertAutoValues[T constraints.Integer](
 				return outOfRangeError(v)
 			}
 			vs[i] = T(v)
-			lastInsertValue = v
+			if lastInsertValue == 0 {
+				// LAST_INSERT_ID() reports the first automatically generated
+				// value of a multi-row INSERT, not the last value filled in the
+				// batch. Auto-increment values are never zero here.
+				lastInsertValue = v
+			}
 			return nil
 		},
 		txnOp)

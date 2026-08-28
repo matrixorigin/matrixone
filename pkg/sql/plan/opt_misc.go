@@ -53,6 +53,10 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.PartitionCols, 2, colRefCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}] += 2
+		}
+		increaseRefCntForColRefList(updateCtx.AffectedRowsCols, 2, colRefCnt)
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -77,7 +81,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
-		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
+		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER ||
+			node.JoinType == plan.Node_ASOF_LEFT
 
 		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
 		node.Children[0] = newChildID
@@ -338,6 +343,12 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
 		replaceColumnsForColRefList(updateCtx.PartitionCols, projMap)
+		if updateCtx.ChangedRowsCol != nil {
+			cols := []plan.ColRef{*updateCtx.ChangedRowsCol}
+			replaceColumnsForColRefList(cols, projMap)
+			*updateCtx.ChangedRowsCol = cols[0]
+		}
+		replaceColumnsForColRefList(updateCtx.AffectedRowsCols, projMap)
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -620,6 +631,10 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 		increaseTagCntForColRefList(updateCtx.InsertCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.PartitionCols, 2, tagCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			tagCnt[updateCtx.ChangedRowsCol.RelPos] += 2
+		}
+		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, 2, tagCnt)
 	}
 
 	for i, childID := range node.Children {
@@ -665,6 +680,10 @@ END:
 		increaseTagCntForColRefList(updateCtx.InsertCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.PartitionCols, -2, tagCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			tagCnt[updateCtx.ChangedRowsCol.RelPos] -= 2
+		}
+		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, -2, tagCnt)
 	}
 
 	return nodeID
@@ -708,7 +727,7 @@ func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
 func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.BindingTags[0] == tag {
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == tag {
 			return node.TableDef
 		}
 	} else if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
@@ -726,7 +745,7 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.TableDef.Pkey == nil {
+		if node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 			return nil
 		}
 		tag := uint64(node.BindingTags[0]) << 32
@@ -1179,14 +1198,28 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	}
 }
 
-func handleOptimizerHints(str string, builder *QueryBuilder) {
+// splitOptimizerHint parses one comma-separated `key=value` entry of the optimizer_hints
+// variable. Nothing is trimmed, so in `a=1, applyIndices=1` the second entry has the key
+// " applyIndices" and matches no hint -- that hint is simply not applied.
+//
+// Anything else deciding whether a hint is in effect must call THIS, not re-split the string:
+// a copy that trims believes a hint is on while the optimizer ignores it, and the two then
+// disagree about what the plan actually did.
+func splitOptimizerHint(str string) (key string, value int, ok bool) {
 	strs := strings.Split(str, "=")
 	if len(strs) != 2 {
-		return
+		return "", 0, false
 	}
-	key := strs[0]
-	value, err := strconv.Atoi(strs[1])
+	v, err := strconv.Atoi(strs[1])
 	if err != nil {
+		return "", 0, false
+	}
+	return strs[0], v, true
+}
+
+func handleOptimizerHints(str string, builder *QueryBuilder) {
+	key, value, ok := splitOptimizerHint(str)
+	if !ok {
 		return
 	}
 	if builder.optimizerHints == nil {

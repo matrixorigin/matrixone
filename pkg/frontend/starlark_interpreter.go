@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +37,10 @@ type starlarkInterpreter struct {
 	predeclared starlark.StringDict
 
 	llm llm.LLMClient
+
+	// lastErr is the codes of the most recent failing mo.* call; see
+	// lastFailure.
+	lastErr lastFailure
 }
 
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
@@ -200,8 +205,64 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 	return nil
 }
 
-// Build the mo module for starlark interpreter.  Expose a set of runtime functions in the mo module.
-// All functions should return a list of [result, ok], where ok is None if the function call is successful.
+// lastFailure records the codes of the most recent mo.* builtin failure, so a
+// procedure can branch on an error CLASS instead of matching message text:
+//
+//	rs, err = mo.sql("insert into t values (1)")
+//	if err != None and mo.errno() == 1062:
+//	    ...                      # duplicate key, whatever the message says
+//
+// The failure itself is still handed back in the `ok` slot as a plain string,
+// exactly as it always was.  Carrying the codes ON that value was tried and
+// abandoned: a Go value cannot be a drop-in for starlark.String, because the
+// interpreter type-asserts the concrete type for equality, hashing, ordering
+// and dict membership -- and claiming Type() == "string" makes sorted() panic.
+// Keeping the string untouched keeps every existing procedure working.
+type lastFailure struct {
+	code     uint16
+	sqlstate string
+	set      bool
+}
+
+// beginCall resets the recorded failure.  Every builtin that can fail calls it
+// first, so mo.errno() answers for the CALL THAT JUST HAPPENED and never for a
+// stale one.  mo.errno and mo.sqlstate deliberately do not call it: reporting
+// a value must not consume it.
+func (si *starlarkInterpreter) beginCall() {
+	si.lastErr = lastFailure{}
+}
+
+// failed records a builtin failure and renders it for the `ok` slot.  The
+// rendering is a plain starlark.String, which is what mo.* always returned.
+func (si *starlarkInterpreter) failed(err error) starlark.Value {
+	si.lastErr = lastFailure{set: true}
+	var me *moerr.Error
+	if errors.As(err, &me) {
+		si.lastErr.code = me.MySQLCode()
+		si.lastErr.sqlstate = me.SqlState()
+	}
+	return starlark.String(err.Error())
+}
+
+// moErrno reports the MySQL error number of the most recent mo.* failure: 0
+// when the last call succeeded, and 0 when it failed with something that is
+// not a moerr (argument unpacking, say) -- there is no error number to borrow.
+func (si *starlarkInterpreter) moErrno(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs("errno", args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	return starlark.MakeInt(int(si.lastErr.code)), nil
+}
+
+// moSqlstate reports the SQLSTATE of the most recent mo.* failure, "" when
+// there is none.
+func (si *starlarkInterpreter) moSqlstate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs("sqlstate", args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	return starlark.String(si.lastErr.sqlstate), nil
+}
+
 func (si *starlarkInterpreter) buildModule() starlark.Value {
 	return &starlarkstruct.Module{
 		Name: "mo",
@@ -210,20 +271,23 @@ func (si *starlarkInterpreter) buildModule() starlark.Value {
 			"jq":          starlark.NewBuiltin("mo.jq", si.moJq),
 			"quote":       starlark.NewBuiltin("mo.quote", si.moQuote),
 			"getvar":      starlark.NewBuiltin("mo.getvar", si.moGetVar),
-			"setvar":      starlark.NewBuiltin("mo.getvar", si.moSetVar),
+			"setvar":      starlark.NewBuiltin("mo.setvar", si.moSetVar),
 			"llm_connect": starlark.NewBuiltin("mo.llm_connect", si.moLlmConnect),
 			"llm_chat":    starlark.NewBuiltin("mo.llm_chat", si.moLlmChat),
+			"errno":       starlark.NewBuiltin("mo.errno", si.moErrno),
+			"sqlstate":    starlark.NewBuiltin("mo.sqlstate", si.moSqlstate),
 		},
 	}
 }
 
 func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var sql string
 	// ret is the list of [result, ok]
 	var ret = []starlark.Value{starlark.None, starlark.None}
 
 	if err := starlark.UnpackPositionalArgs("sql", args, kwargs, 1, &sql); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -231,20 +295,20 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 	err := si.interp.bh.Exec(si.interp.ctx, sql)
 	si.interp.recordAffectedRows()
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	erArray, err := getResultSet(si.interp.ctx, si.interp.bh)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	if len(erArray) == 0 {
 		return starlark.NewList(ret), nil
 	} else if len(erArray) > 1 {
-		ret[1] = starlark.String("sql must return a single result set")
+		ret[1] = si.failed(moerr.NewInvalidInput(si.interp.ctx, "sql must return a single result set"))
 		return starlark.NewList(ret), nil
 	}
 
@@ -255,7 +319,7 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 		for j := range rowsi {
 			v, err := er.GetString(si.interp.ctx, uint64(i), uint64(j))
 			if err != nil {
-				ret[1] = starlark.String(err.Error())
+				ret[1] = si.failed(err)
 				return starlark.NewList(ret), nil
 			}
 			rowsi[j] = starlark.String(v)
@@ -268,17 +332,18 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 }
 
 func (si *starlarkInterpreter) moJq(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var jq string
 	var data string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("jq", args, kwargs, 2, &jq, &data); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	res, err := ujson.RunJQOnString(jq, data)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -289,10 +354,11 @@ func (si *starlarkInterpreter) moJq(thread *starlark.Thread, b *starlark.Builtin
 
 // mo.quote(s) SQL quote a string.  Each single quote in the string is doubled.
 func (si *starlarkInterpreter) moQuote(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var s string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("quote", args, kwargs, 1, &s); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -301,22 +367,23 @@ func (si *starlarkInterpreter) moQuote(thread *starlark.Thread, b *starlark.Buil
 }
 
 func (si *starlarkInterpreter) moGetVar(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var name string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("getvar", args, kwargs, 1, &name); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	value, err := si.interp.ses.GetUserDefinedVar(name)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	starlarkValue, err := convertToStarlarkValue(si.interp.ctx, value.Value)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
@@ -325,23 +392,24 @@ func (si *starlarkInterpreter) moGetVar(thread *starlark.Thread, b *starlark.Bui
 }
 
 func (si *starlarkInterpreter) moSetVar(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var name string
 	var value starlark.Value
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("setvar", args, kwargs, 2, &name, &value); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	sqlValue, err := convertFromStarlarkValue(si.interp.ctx, value)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	err = si.interp.ses.SetUserDefinedVar(name, sqlValue, "")
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 	return starlark.NewList(ret), nil
@@ -367,42 +435,44 @@ func (si *starlarkInterpreter) llmConnect(server, addr, model, options string) (
 }
 
 func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var err error
 	var server, addr, model, options string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_connect", args, kwargs, 3, &server, &addr, &model, &options); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	si.llm, err = si.llmConnect(server, addr, model, options)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 	return starlark.NewList(ret), nil
 }
 
 func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	si.beginCall()
 	var err error
 	var prompt string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_chat", args, kwargs, 1, &prompt); err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 
 	if si.llm == nil {
 		si.llm, err = si.llmConnect("", "", "", "")
 		if err != nil {
-			ret[1] = starlark.String(err.Error())
+			ret[1] = si.failed(err)
 			return starlark.NewList(ret), nil
 		}
 	}
 
 	reply, err := si.llm.Chat(si.interp.ctx, prompt)
 	if err != nil {
-		ret[1] = starlark.String(err.Error())
+		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
 

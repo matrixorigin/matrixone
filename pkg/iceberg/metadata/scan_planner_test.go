@@ -101,6 +101,7 @@ func TestLocalScanPlannerUsesCacheOnSecondPlanning(t *testing.T) {
 		Namespace:      api.Namespace{"sales"},
 		Table:          "orders",
 		Ref:            "main",
+		Snapshot:       api.SnapshotSelector{SnapshotID: 22, HasSnapshotID: true},
 	})
 	if err != nil {
 		t.Fatalf("first plan: %v", err)
@@ -111,6 +112,7 @@ func TestLocalScanPlannerUsesCacheOnSecondPlanning(t *testing.T) {
 		Namespace:      api.Namespace{"sales"},
 		Table:          "orders",
 		Ref:            "main",
+		Snapshot:       api.SnapshotSelector{SnapshotID: 22, HasSnapshotID: true},
 	})
 	if err != nil {
 		t.Fatalf("second plan: %v", err)

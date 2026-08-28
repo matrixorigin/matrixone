@@ -38,7 +38,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
-	if node.TableDef.Pkey == nil {
+	if node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 		return
 	}
 
@@ -561,7 +561,7 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	// IsSerialized only controls diagnostic rendering. It must not make
 	// otherwise identical list/vector block-filter sets compare different,
 	// including plans produced by older peers that do not carry provenance.
-	lit = literalWithoutDiagnosticProvenance(lit)
+	lit = literalForExecutableIdentity(typ, lit)
 	typ = literalSemanticKeyType(typ)
 	litBytes, err := lit.Marshal()
 	if err != nil {
@@ -1274,6 +1274,12 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 		if err != nil {
 			continue
 		}
+		// Values that still need coercion can make the binder expand the IN back
+		// into an OR-of-equalities. That is not a merge and must not be reported
+		// as progress to normalizeColumnDomain's fixpoint loop.
+		if mergedFn := merged.GetF(); mergedFn != nil && mergedFn.Func.ObjName == "or" {
+			continue
+		}
 		for _, pos := range group.positions {
 			skip[pos] = struct{}{}
 		}
@@ -1613,7 +1619,7 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	lit = literalWithoutDiagnosticProvenance(lit)
+	lit = literalForExecutableIdentity(typ, lit)
 	typ = literalSemanticKeyType(typ)
 	// Serialize the literal with proto binary Marshal rather than String(),
 	// which goes through the reflection-driven TextMarshaler and can dominate

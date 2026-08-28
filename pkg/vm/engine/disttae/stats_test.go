@@ -1901,6 +1901,99 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 	})
 }
 
+func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		partition := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, commit := partition.MutateState()
+		objectID := objectio.NewObjectid()
+		objectStats := objectio.NewObjectStatsWithObjectID(
+			&objectID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(objectStats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *objectStats,
+			CreateTime:  types.BuildTS(1, 0),
+		}, false))
+		commit()
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+		e.pClient.subscribed.rw.Lock()
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = &subEntry{
+			dbID:  dbID,
+			state: Subscribed,
+		}
+		e.pClient.subscribed.rw.Unlock()
+
+		// This isolated GlobalStats has no update worker. Receiving its forced
+		// request below proves Get reached the synchronous update path, after
+		// which no data-path goroutine can broadcast the condition variable.
+		gs := &GlobalStats{
+			ctx:          ctx,
+			engine:       e,
+			updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+			queueWatcher: newQueueWatcher(),
+		}
+		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+		gs.mu.cond = sync.NewCond(&gs.mu)
+
+		getCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		result := make(chan *statsinfo.StatsInfo, 1)
+		go func() {
+			result <- gs.Get(getCtx, key, true)
+		}()
+
+		select {
+		case <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not enqueue the synchronous update")
+		}
+		cancel()
+
+		select {
+		case info := <-result:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after context cancellation")
+		}
+		gs.queueWatcher.del(tblID)
+	})
+}
+
+func TestEnqueueStatsUpdateForceReturnsWhenContextCanceled(t *testing.T) {
+	gs := &GlobalStats{
+		updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+		queueWatcher: newQueueWatcher(),
+	}
+	queued := statsinfo.StatsInfoKeyWithContext{
+		Ctx: context.Background(),
+		Key: statsinfo.StatsInfoKey{TableID: 1},
+	}
+	gs.updateC <- queued
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	accepted := gs.enqueueStatsUpdate(statsinfo.StatsInfoKeyWithContext{
+		Ctx: ctx,
+		Key: statsinfo.StatsInfoKey{TableID: 2},
+	}, true)
+	require.False(t, accepted)
+	require.Equal(t, queued, <-gs.updateC)
+}
+
 func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
 	runTest(t, func(ctx context.Context, e *Engine) {
 		gs := e.globalStats

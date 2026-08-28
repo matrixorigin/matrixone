@@ -16,17 +16,32 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type closeTrackingFileService struct {
+	fileservice.FileService
+	closeCount int
+}
+
+func (f *closeTrackingFileService) Close(ctx context.Context) {
+	f.closeCount++
+	f.FileService.Close(ctx)
+}
 
 func TestParseTNConfig(t *testing.T) {
 	data := `
@@ -104,6 +119,155 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
+}
+
+func TestCreateFileServiceWithCreatorClosesUnpublishedServices(t *testing.T) {
+	cfg := &Config{
+		FileServices: []fileservice.Config{
+			{Name: defines.LocalFileServiceName, Backend: "MEM"},
+			{Name: defines.SharedFileServiceName, Backend: "MEM"},
+		},
+	}
+	cfg.Observability.DisableMetric = true
+	cfg.Observability.DisableTrace = true
+	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	tracked := &closeTrackingFileService{FileService: local}
+	permanent := errors.New("permanent")
+	nodeUUID := "proxy-partial-cleanup"
+
+	_, err = cfg.createFileServiceWithCreator(
+		context.Background(),
+		metadata.ServiceType_PROXY,
+		nodeUUID,
+		func(_ context.Context, fsCfg fileservice.Config, _ []*perfcounter.CounterSet) (fileservice.FileService, error) {
+			if fsCfg.Name == defines.LocalFileServiceName {
+				return tracked, nil
+			}
+			return nil, permanent
+		},
+	)
+	require.ErrorIs(t, err, permanent)
+	require.Equal(t, 1, tracked.closeCount)
+	_, published := perfcounter.Named.Load(perfcounter.NameForFileService(
+		metadata.ServiceType_PROXY.String(), nodeUUID, defines.LocalFileServiceName,
+	))
+	require.False(t, published)
+}
+
+func TestCreateFileServiceWithCreatorClosesPartialServicesOnRetryCancellation(t *testing.T) {
+	cfg := &Config{
+		FileServices: []fileservice.Config{
+			{Name: defines.LocalFileServiceName, Backend: "MEM"},
+			{Name: defines.SharedFileServiceName, Backend: "MEM"},
+		},
+	}
+	cfg.Observability.DisableMetric = true
+	cfg.Observability.DisableTrace = true
+	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	tracked := &closeTrackingFileService{FileService: local}
+	ctx, cancel := context.WithCancel(context.Background())
+	sharedAttempts := 0
+
+	_, err = cfg.createFileServiceWithCreator(
+		ctx,
+		metadata.ServiceType_PROXY,
+		"proxy-cancel-cleanup",
+		func(
+			ctx context.Context,
+			fsCfg fileservice.Config,
+			counterSets []*perfcounter.CounterSet,
+		) (fileservice.FileService, error) {
+			return createProxyFileServiceWithRetry(
+				ctx,
+				fsCfg,
+				counterSets,
+				func(
+					context.Context,
+					fileservice.Config,
+					[]*perfcounter.CounterSet,
+				) (fileservice.FileService, error) {
+					if fsCfg.Name == defines.LocalFileServiceName {
+						return tracked, nil
+					}
+					sharedAttempts++
+					return nil, &net.DNSError{Err: "no such host", Name: "minio"}
+				},
+				func(ctx context.Context, _ time.Duration) error {
+					cancel()
+					return ctx.Err()
+				},
+			)
+		},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, sharedAttempts)
+	require.Equal(t, 1, tracked.closeCount)
+	_, published := perfcounter.Named.Load(perfcounter.NameForFileService(
+		metadata.ServiceType_PROXY.String(), "proxy-cancel-cleanup", defines.LocalFileServiceName,
+	))
+	require.False(t, published)
+}
+
+func TestCreateFileServiceWithCreatorRetainsSuccessfulServicesAcrossRetry(t *testing.T) {
+	configs := []fileservice.Config{
+		{Name: defines.LocalFileServiceName, Backend: "MEM"},
+		{Name: defines.SharedFileServiceName, Backend: "MEM"},
+		{Name: defines.ETLFileServiceName, Backend: "MEM"},
+		{Name: defines.TmpFileServiceName, Backend: "MEM"},
+	}
+	cfg := &Config{FileServices: configs}
+	cfg.Observability.DisableMetric = true
+	cfg.Observability.DisableTrace = true
+	nodeUUID := "proxy-retain-success"
+	t.Cleanup(func() {
+		for _, fsCfg := range configs {
+			perfcounter.Named.Delete(perfcounter.NameForFileService(
+				metadata.ServiceType_PROXY.String(), nodeUUID, fsCfg.Name,
+			))
+		}
+		perfcounter.Named.Delete(perfcounter.NameForNode(metadata.ServiceType_PROXY.String(), nodeUUID))
+	})
+
+	attempts := make(map[string]int)
+	rawCreator := func(
+		ctx context.Context,
+		fsCfg fileservice.Config,
+		counterSets []*perfcounter.CounterSet,
+	) (fileservice.FileService, error) {
+		attempts[fsCfg.Name]++
+		if fsCfg.Name == defines.SharedFileServiceName && attempts[fsCfg.Name] < 3 {
+			return nil, &net.DNSError{Err: "no such host", Name: "minio"}
+		}
+		return fileservice.NewFileService(ctx, fsCfg, counterSets)
+	}
+	retryingCreator := func(
+		ctx context.Context,
+		fsCfg fileservice.Config,
+		counterSets []*perfcounter.CounterSet,
+	) (fileservice.FileService, error) {
+		return createProxyFileServiceWithRetry(
+			ctx,
+			fsCfg,
+			counterSets,
+			rawCreator,
+			func(context.Context, time.Duration) error { return nil },
+		)
+	}
+
+	fs, err := cfg.createFileServiceWithCreator(
+		context.Background(),
+		metadata.ServiceType_PROXY,
+		nodeUUID,
+		retryingCreator,
+	)
+	require.NoError(t, err)
+	defer fs.Close(context.Background())
+	require.Equal(t, 1, attempts[defines.LocalFileServiceName])
+	require.Equal(t, 3, attempts[defines.SharedFileServiceName])
+	require.Equal(t, 1, attempts[defines.ETLFileServiceName])
+	require.Equal(t, 1, attempts[defines.TmpFileServiceName])
 }
 
 func TestResolveGossipSeedAddresses(t *testing.T) {
@@ -220,6 +384,66 @@ func TestMongoDBEnablementConfigDefaults(t *testing.T) {
 			require.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
 		})
 	}
+}
+
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	validators := []struct {
+		name string
+		call func(*Config) error
+	}{
+		{name: "validate loaded config", call: (*Config).validate},
+		{name: "apply programmatic defaults", call: (*Config).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "max-clock-offset must be positive")
+
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "authentication freshness clock budget 2.000000001s")
+
+			// Authentication uses the connection deadline directly. A short
+			// ordinary transaction-creation timeout must not make an otherwise
+			// valid CN fail startup.
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(cfg))
+
+			// Catalog authentication is unreachable when user checks are skipped,
+			// so its connection-timeout budget must not reject startup.
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+			cfg.CN.Frontend.SkipCheckUser = true
+			require.NoError(t, validator.call(cfg))
+
+			// Skipping authentication does not bypass the general clock contract.
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "max-clock-offset must be positive")
+		})
+	}
+}
+
+func TestNewLocalClockRetainsOffsetWhenMonitoringDisabled(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+
+	s := stopper.NewStopper("clock-offset-contract")
+	t.Cleanup(func() { s.Stop() })
+	require.Equal(t, defaultMaxClockOffset, newLocalClock(cfg, s).MaxOffset())
 }
 
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {

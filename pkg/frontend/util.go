@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -54,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -199,7 +201,8 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, isBin...)
+	return value, err
 }
 
 func getExprValueWithPrepareMeta(
@@ -207,9 +210,10 @@ func getExprValueWithPrepareMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	preparedExpression bool,
+	materializedResult **plan.Expr,
 	prepareParamKind *vector.PrepareParamKind,
 	isBin ...*bool,
-) (interface{}, error) {
+) (interface{}, plan.Type, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -225,7 +229,7 @@ func getExprValueWithPrepareMeta(
 		if prepareParamKind != nil {
 			*prepareParamKind = vector.PrepareParamNone
 		}
-		return v.ColName(), nil
+		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
 
 	var err error
@@ -263,20 +267,37 @@ func getExprValueWithPrepareMeta(
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
-	defer tempExecCtx.Close()
+	defer func() {
+		// The synthetic SELECT is executed through doComQuery, which points the
+		// session compiler context at tempExecCtx.  Restore the caller's context
+		// before the next statement in a multi-statement packet is planned;
+		// tempExecCtx.Close clears its request context and would otherwise leave
+		// a nil context/process behind.
+		tempExecCtx.Close()
+		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+			tcc.SetExecCtx(execCtx)
+		}
+	}()
+	var preparedParamVals []any
+	var preparedBinaryExecute bool
+	if preparedExpression && execCtx.cw != nil {
+		preparedParamVals = execCtx.cw.ParamVals()
+		preparedBinaryExecute = execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	}
 	err = executeStmtInSameSession(
-		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect,
+		preparedExpression, preparedParamVals, preparedBinaryExecute)
 	if err != nil {
-		return nil, err
+		return nil, plan.Type{}, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -288,7 +309,7 @@ func getExprValueWithPrepareMeta(
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
+			return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -296,7 +317,7 @@ func getExprValueWithPrepareMeta(
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -307,7 +328,7 @@ func getExprValueWithPrepareMeta(
 		planExpr, err = bindSetVariableResultExpr(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
-			return nil, err
+			return nil, plan.Type{}, err
 		}
 	}
 
@@ -319,14 +340,290 @@ func getExprValueWithPrepareMeta(
 		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
 			if err != nil {
-				return nil, err
+				return nil, plan.Type{}, err
 			}
 		}
 		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
 		}
 	}
-	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	resultType := plan2.MakePlan2Type(resultVec.GetType())
+	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	if materializedResult != nil {
+		literal := planrule.GetConstantValue(resultVec, false, 0)
+		if literal == nil && resultVec.GetType().Oid == types.T_enum {
+			literal = planrule.GetConstantValue(resultVec, true, 0)
+		}
+		if literal != nil {
+			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
+		} else {
+			source := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value))
+			target := &plan.Expr{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			*materializedResult, err = plan2.BindFuncExprImplByPlanExpr(
+				execCtx.reqCtx, "cast", []*plan.Expr{source, target})
+			if err != nil {
+				return nil, plan.Type{}, err
+			}
+		}
+	}
+	return value, resultType, nil
+}
+
+func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
+	if expr == nil {
+		return
+	}
+	switch current := expr.(type) {
+	case *tree.Subquery:
+		*subqueries = append(*subqueries, current)
+	case *tree.ComparisonExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.AndExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.OrExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.XorExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.BinaryExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.UnaryExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.NotExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.ParenExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNullExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotNullExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsUnknownExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotUnknownExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsTrueExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotTrueExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsFalseExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotFalseExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.CastExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.BitCastExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IntervalExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.SerialExtractExpr:
+		collectScalarSubqueries(current.SerialExpr, subqueries)
+		collectScalarSubqueries(current.IndexExpr, subqueries)
+	case *tree.FuncExpr:
+		for _, arg := range current.Exprs {
+			collectScalarSubqueries(arg, subqueries)
+		}
+		for _, order := range current.OrderBy {
+			if order != nil {
+				collectScalarSubqueries(order.Expr, subqueries)
+			}
+		}
+		if current.WindowSpec != nil {
+			for _, partition := range current.WindowSpec.PartitionBy {
+				collectScalarSubqueries(partition, subqueries)
+			}
+			for _, order := range current.WindowSpec.OrderBy {
+				if order != nil {
+					collectScalarSubqueries(order.Expr, subqueries)
+				}
+			}
+			if frame := current.WindowSpec.Frame; frame != nil {
+				if frame.Start != nil {
+					collectScalarSubqueries(frame.Start.Expr, subqueries)
+				}
+				if frame.End != nil {
+					collectScalarSubqueries(frame.End.Expr, subqueries)
+				}
+			}
+		}
+	case *tree.Tuple:
+		for _, item := range current.Exprs {
+			collectScalarSubqueries(item, subqueries)
+		}
+	case *tree.RangeCond:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.From, subqueries)
+		collectScalarSubqueries(current.To, subqueries)
+	case *tree.CaseExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+		for _, when := range current.Whens {
+			collectScalarSubqueries(when.Cond, subqueries)
+			collectScalarSubqueries(when.Val, subqueries)
+		}
+		collectScalarSubqueries(current.Else, subqueries)
+	case *tree.ExprList:
+		for _, item := range current.Exprs {
+			collectScalarSubqueries(item, subqueries)
+		}
+	}
+}
+
+func replacePreparedPlanSubqueries(expr *plan.Expr, replacements []*plan.Expr, position *int) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if expr.GetSub() != nil {
+		if *position >= len(replacements) {
+			return nil, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
+		}
+		replacement := replacements[*position]
+		*position = *position + 1
+		if replacement.GetLit().GetIsnull() {
+			replacement.Typ = expr.Typ
+		}
+		return replacement, nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		for i, arg := range fn.Args {
+			var err error
+			fn.Args[i], err = replacePreparedPlanSubqueries(arg, replacements, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for i, item := range list.List {
+			var err error
+			list.List[i], err = replacePreparedPlanSubqueries(item, replacements, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
+		var err error
+		lit.Src, err = replacePreparedPlanSubqueries(lit.Src, replacements, position)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		var err error
+		window.WindowFunc, err = replacePreparedPlanSubqueries(window.WindowFunc, replacements, position)
+		if err != nil {
+			return nil, err
+		}
+		for i, partition := range window.PartitionBy {
+			window.PartitionBy[i], err = replacePreparedPlanSubqueries(partition, replacements, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				order.Expr, err = replacePreparedPlanSubqueries(order.Expr, replacements, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if frame := window.Frame; frame != nil {
+			if frame.Start != nil {
+				frame.Start.Val, err = replacePreparedPlanSubqueries(frame.Start.Val, replacements, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if frame.End != nil {
+				frame.End.Val, err = replacePreparedPlanSubqueries(frame.End.Val, replacements, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return expr, nil
+}
+
+func getPreparedPlanExprValueWithSubqueries(
+	astExpr tree.Expr,
+	specializedExpr *plan.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin *bool,
+) (interface{}, plan.Type, error) {
+	var subqueries []*tree.Subquery
+	collectScalarSubqueries(astExpr, &subqueries)
+	replacements := make([]*plan.Expr, len(subqueries))
+	for i, subquery := range subqueries {
+		var subqueryKind vector.PrepareParamKind
+		var subqueryIsBin bool
+		_, _, err := getExprValueWithPrepareMeta(
+			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, &subqueryIsBin)
+		if err != nil {
+			return nil, plan.Type{}, err
+		}
+	}
+	runtimeExpr := plan2.DeepCopyExpr(specializedExpr)
+	position := 0
+	var err error
+	runtimeExpr, err = replacePreparedPlanSubqueries(runtimeExpr, replacements, &position)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	if position != len(replacements) {
+		return nil, plan.Type{}, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
+	}
+	return getPreparedPlanExprValueWithMeta(runtimeExpr, ses, execCtx, prepareParamKind, isBin)
+}
+
+func preparedPlanExprContainsSubquery(expr *plan.Expr) bool {
+	contains := false
+	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+		contains = contains || candidate.GetSub() != nil
+		return nil
+	})
+	return contains
+}
+
+func getPreparedPlanExprValueWithMeta(
+	expr *plan.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin *bool,
+) (interface{}, plan.Type, error) {
+	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	defer executor.Free()
+	input := batch.NewWithSize(0)
+	input.SetRowCount(1)
+	defer input.Clean(execCtx.proc.Mp())
+	result, err := executor.Eval(execCtx.proc, []*batch.Batch{input}, nil)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	if isBin != nil {
+		*isBin = result.GetIsBin()
+	}
+	if prepareParamKind != nil {
+		*prepareParamKind = result.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
+		}
+	}
+	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
+	return value, plan2.MakePlan2Type(result.GetType()), err
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
@@ -1743,7 +2040,21 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
-		col.SetLength(uint32(types.MaxVarcharLen))
+		col.SetLength(4)
+	} else if typ.Oid == types.T_date {
+		col.SetLength(10)
+	} else if typ.Oid == types.T_time {
+		col.SetLength(mysqlTemporalDisplayLength(10, typ.Scale))
+	} else if typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp {
+		col.SetLength(mysqlTemporalDisplayLength(19, typ.Scale))
+	} else if typ.Oid == types.T_text {
+		// TEXT-family widths are already declared in bytes. A width of zero is
+		// the ordinary TEXT declaration (65535 bytes), not an empty result.
+		length := uint32(types.MaxStringSize)
+		if typ.Width > 0 {
+			length = uint32(typ.Width)
+		}
+		col.SetLength(length)
 	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
 		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
 		// string widths are declared in characters, so the byte multiplier must
@@ -1770,6 +2081,13 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		return
 	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlTemporalDisplayLength(base int, scale int32) uint32 {
+	if scale > 0 {
+		return uint32(base + 1 + int(scale))
+	}
+	return uint32(base)
 }
 
 func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
@@ -1810,6 +2128,47 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
 	moerr.ErrBackendCannotConnect:     false,
+}
+
+// sessionRollsBackTxnOnError reports whether the session has opted into
+// treating this error as fatal to the whole transaction rather than to the
+// statement alone.
+//
+// The static errCodeRollbackWholeTxn set above is infrastructure -- deadlock,
+// lock timeout, a backend that went away -- failures after which the
+// transaction genuinely cannot continue, and it is only twelve of the ~240
+// error codes MO defines. Every other error, from a syntax error to a
+// constraint violation, rolls back the statement alone and leaves the
+// transaction open, which is MySQL's behaviour and MO's default. An
+// application that treats any failed statement as fatal to its unit of work
+// can ask for the stricter behaviour per session.
+//
+// Only real errors qualify. moerr also carries Ok signals, Info codes and
+// Warning codes; a warning such as a truncated value travels as the same type
+// but must never discard a transaction, so IsRealError gates this.
+//
+// A background session never opts in: backSession.GetSessionSysVar answers nil
+// for anything outside its small allowlist, so internal work -- catalog
+// maintenance, restores, the statement of another user's session -- keeps
+// MySQL semantics even when the variable is set globally.
+func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
+	if ses == nil || inputErr == nil {
+		return false
+	}
+	// Only moerr distinguishes an error from a warning, and only a warning is
+	// exempt. Anything that is NOT a moerr has no warning form to be -- it is
+	// a failure -- so it must roll back like any other error, or the setting
+	// would silently mean "any error MO happens to have wrapped".
+	var me *moerr.Error
+	if errors.As(inputErr, &me) && !me.IsRealError() {
+		return false
+	}
+	val, err := ses.GetSessionSysVar("mo_rollback_txn_on_error")
+	if err != nil {
+		return false
+	}
+	v, _ := val.(int8)
+	return v > 0
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
@@ -1894,12 +2253,17 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isCursorExecute marks a COM_STMT_EXECUTE using MySQL's
+	// CURSOR_TYPE_READ_ONLY flag. Its rows are retained for COM_STMT_FETCH.
+	isCursorExecute bool
 	// isSetExpression marks an AST-only SELECT synthesized to evaluate a SET
 	// assignment. Such statements have no stable SQL cache key.
 	isSetExpression bool
 	// isPreparedExpression marks a nested SET-derived expression that is being
 	// evaluated as part of prepared-statement execution.
-	isPreparedExpression bool
+	isPreparedExpression  bool
+	preparedParamVals     []any
+	preparedBinaryExecute bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()

@@ -90,7 +90,7 @@ update t2 set a = b, b = a +1 where a > 1;
 select * from t2;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  2  𝄀
-4  ¦  3
+4  ¦  5
 select count(*) from t2;
 ➤ count(*)[-5,64,0]  𝄀
 2
@@ -139,8 +139,8 @@ update t7 set a = b,  b = a + 1 where a > 1;
 select * from t7;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 1  ¦  2  ¦  11  𝄀
-4  ¦  4  ¦  11  𝄀
-6  ¦  6  ¦  11
+4  ¦  5  ¦  11  𝄀
+6  ¦  7  ¦  11
 drop table if exists t8;
 create table t8 (a int);
 insert into t8 values(1), (2), (3),  (4),  (5);

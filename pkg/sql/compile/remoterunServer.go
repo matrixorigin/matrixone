@@ -386,6 +386,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					runCompile.MessageBoard = message.NewMessageBoard()
 					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
 				}
+				if runCompile.proc.GetSession() == receiver.warningSession {
+					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
+				}
+				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
 				runCompile.clear()
 				return nil
 			}))
@@ -736,14 +740,16 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId                 uuid.UUID
-	statementRuntimeIgnore bool
-	planSnapshotTS         timestamp.Timestamp
-	hasPlanSnapshotTS      bool
-	prepareParams          pipeline.PrepareParamInfo
-	affectedRows           int64
-	remoteFragmentCounts   map[string]uint32
-	remoteExecutionID      uuid.UUID
+	StmtId                     uuid.UUID
+	statementRuntimeIgnore     bool
+	planSnapshotTS             timestamp.Timestamp
+	hasPlanSnapshotTS          bool
+	planGenerationReused       bool
+	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	prepareParams              pipeline.PrepareParamInfo
+	affectedRows               int64
+	remoteFragmentCounts       map[string]uint32
+	remoteExecutionID          uuid.UUID
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -781,6 +787,10 @@ type messageReceiverOnServer struct {
 	resourceMissingMemoryDomains      uint64
 	resourcePendingAllocationGroups   []remoteAllocationGroupPending
 	resourceCompletedAllocationGroups []string
+	warningSession                    *remoteWarningCollector
+	warningCount                      uint64
+	warningDiagnostics                []remoteWarningDiagnostic
+	statementLastInsertID             uint64
 }
 
 func newMessageReceiverOnServer(
@@ -908,9 +918,13 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	receiver.warningSession = &remoteWarningCollector{}
+	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
+		proc.SetPlanGenerationReused(pHelper.planGenerationReused)
 	}
+	proc.SetStringShuffleHashAlgorithm(pHelper.stringShuffleHashAlgorithm)
 	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
 		proc.GetService(),
 		int(pHelper.prepareParams.Length),
@@ -1074,6 +1088,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return moerr.NewInvalidStateNoCtx(
 			"binary-string provenance requires MORPCVersion18 for remote results")
 	}
+	if b.HasExplicitTextStringMetadata() && version < defines.MORPCVersion23 {
+		return moerr.NewInvalidStateNoCtx(
+			"explicit-text provenance requires MORPCVersion23 for remote results")
+	}
 	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
 		return moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote results")
@@ -1166,6 +1184,8 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		StatementLastInsertID:     receiver.statementLastInsertID,
+		WarningCount:              receiver.warningCount,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,
 		Allocation:                receiver.resourceAllocation,
@@ -1177,6 +1197,10 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
 	}
+	envelope.WarningDiagnostics = append(
+		envelope.WarningDiagnostics,
+		receiver.warningDiagnostics...,
+	)
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
@@ -1191,20 +1215,28 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
+		procInfo.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return processHelper{}, err
+	}
 
 	result := processHelper{
-		id:                     procInfo.Id,
-		lim:                    process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:               procInfo.UnixTime,
-		accountId:              procInfo.AccountId,
-		txnClient:              cli,
-		affectedRows:           procInfo.AffectedRows,
-		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
-		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
+		id:                         procInfo.Id,
+		lim:                        process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:                   procInfo.UnixTime,
+		accountId:                  procInfo.AccountId,
+		txnClient:                  cli,
+		affectedRows:               procInfo.AffectedRows,
+		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
+		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {
 		result.planSnapshotTS = *procInfo.PlanSnapshotTs
 		result.hasPlanSnapshotTS = true
+		result.planGenerationReused = procInfo.PlanGenerationReused
 	}
 	if len(procInfo.RemoteExecutionId) > 0 {
 		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)

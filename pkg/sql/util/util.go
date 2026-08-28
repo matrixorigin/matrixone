@@ -161,6 +161,26 @@ func BuildSysMetricFilter(curAccountId uint64) tree.Expr {
 	return makeAccountIdEqualAst(curAccountId)
 }
 
+// BuildViewMetadataDependenciesFilter exposes only the current account's
+// dependency rows plus the system activation sentinel. The sentinel is cluster
+// wide state used by tenant information_schema views to fail closed while a
+// rolling-upgrade revalidation pass is required or running.
+func BuildViewMetadataDependenciesFilter(curAccountId uint64) tree.Expr {
+	currentAccount := makeAccountIdEqualAst(curAccountId)
+	globalSentinel := tree.NewAndExpr(
+		makeAccountIdEqualAst(uint64(catalog.System_Account)),
+		tree.NewAndExpr(
+			tree.NewComparisonExpr(tree.EQUAL,
+				tree.NewUnresolvedColName("target_relation_id"),
+				tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)),
+			tree.NewComparisonExpr(tree.EQUAL,
+				tree.NewUnresolvedColName("dependency_ordinal"),
+				tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)),
+		),
+	)
+	return tree.NewOrExpr(currentAccount, tree.NewParentExpr(globalSentinel))
+}
+
 // Build the filter condition AST expression for mo_tables, as follows:
 // account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
 func BuildMoTablesFilter(curAccountId uint64) tree.Expr {

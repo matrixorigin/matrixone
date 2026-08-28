@@ -111,16 +111,70 @@ func float64OfCheck(v1, v2, sum float64) error {
 	return nil
 }
 
+func windowRowIsNull(vec *vector.Vector, row int) bool {
+	if vec.IsConst() {
+		row = 0
+	}
+	return vec.IsNull(uint64(row))
+}
+
 type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats] struct {
 	aggExec
-	isSum   bool
-	ofCheck func(T, T, T) error
+	isSum              bool
+	ofCheck            func(T, T, T) error
+	windowNonNullCount int64
 }
 
 func (*sumAvgExec[T, A]) sourcePreservingMerge() {}
 
 func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
+	if !exec.isSum || exec.IsDistinct() {
+		return false
+	}
+	// Floating subtraction can change results for infinities and accumulate
+	// rounding drift. Keep those inputs on the ordinary frame evaluator.
+	switch exec.aggInfo.argTypes[0].Oid {
+	case types.T_float32, types.T_float64:
+		return false
+	default:
+		return true
+	}
+}
+
+func (exec *sumAvgExec[T, A]) addWindowRow(row int, vectors []*vector.Vector) error {
+	if err := exec.Fill(0, row, vectors); err != nil {
+		return err
+	}
+	if !windowRowIsNull(vectors[0], row) {
+		exec.windowNonNullCount++
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) removeWindowRow(row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if exec.windowNonNullCount <= 0 {
+		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	value := T(vector.MustFixedColNoTypeCheck[A](vec)[row])
+	sums := chunkArr[T](exec.state[0].vecs[0])
+	sums[0] -= value
+	exec.windowNonNullCount--
+	if exec.windowNonNullCount == 0 {
+		sums[0] = 0
+		exec.state[0].vecs[0].SetNull(0)
+	}
+	return nil
 }
 
 func (exec *sumAvgExec[T, A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -688,16 +742,65 @@ func decimalStateAddUnchecked[S sumAvgDecimalState](left, right S) S {
 	panic("unreachable")
 }
 
+func decimalStateMinus[S sumAvgDecimalState](value S) S {
+	switch v := any(value).(type) {
+	case types.Decimal128:
+		return any(v.Minus()).(S)
+	case types.Decimal256:
+		return any(v.Minus()).(S)
+	}
+	panic("unreachable")
+}
+
 type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 	aggExec
-	isSum        bool
-	localAddSafe bool // true when state type is wider than arg type (overflow impossible in local buffer)
+	isSum              bool
+	localAddSafe       bool // true when state type is wider than arg type (overflow impossible in local buffer)
+	windowNonNullCount int64
 }
 
 func (*sumAvgDecExec[A, S]) sourcePreservingMerge() {}
 
 func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) windowSlidingSupported() bool {
+	return exec.isSum && !exec.IsDistinct() && exec.localAddSafe
+}
+
+func (exec *sumAvgDecExec[A, S]) addWindowRow(row int, vectors []*vector.Vector) error {
+	if err := exec.Fill(0, row, vectors); err != nil {
+		return err
+	}
+	if !windowRowIsNull(vectors[0], row) {
+		exec.windowNonNullCount++
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if exec.windowNonNullCount <= 0 {
+		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	value := decimalStateFromArg[A, S](
+		vector.MustFixedColNoTypeCheck[A](vec)[row], exec.aggInfo.argTypes[0].Scale)
+	sums := chunkArr[S](exec.state[0].vecs[0])
+	sums[0] = decimalStateAddUnchecked(sums[0], decimalStateMinus(value))
+	exec.windowNonNullCount--
+	if exec.windowNonNullCount == 0 {
+		var zero S
+		sums[0] = zero
+		exec.state[0].vecs[0].SetNull(0)
+	}
+	return nil
 }
 
 func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {

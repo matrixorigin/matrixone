@@ -138,6 +138,76 @@ services:
         aliases:
           - "logservice"
 
+  # ---------------------------------------------------------------------
+  # jstfu: the datastream external table gRPC server (xtool/jstfu), needed
+  # by test/distributed/cases/datastream.  The BVT cases address it as
+  # 'server'='127.0.0.1','port'='4444' from whichever CN compiles the scan,
+  # so one instance runs inside each CN's network namespace.  The jar is
+  # built once by jstfu-build (Java 8 bytecode via the pom's release
+  # profile) into a shared volume.  docker compose up -d does not return
+  # until jstfu-build completes, so BVT cannot start before the jar exists.
+  # ---------------------------------------------------------------------
+  jstfu-build:
+    container_name: jstfu-build
+    image: maven:3.9-eclipse-temurin-17
+    profiles:
+      - launch
+      - launch-multi-cn
+    volumes:
+      - ../../:/matrixone
+      - jstfu_out:/jstfu-out
+      - jstfu_m2:/root/.m2
+    working_dir: /matrixone/xtool/jstfu
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; mvn -q -B -DskipTests package && cp target/jstfu.jar /jstfu-out/jstfu.jar && echo 'jstfu.jar built'"]
+    networks:
+      monet:
+
+  jstfu-cn0:
+    container_name: jstfu-cn0
+    image: eclipse-temurin:8-jre
+    profiles:
+      - launch
+      - launch-multi-cn
+    network_mode: "service:cn-0"
+    restart: on-failure
+    depends_on:
+      jstfu-build:
+        condition: service_completed_successfully
+      cn-0:
+        condition: service_started
+    volumes:
+      # /jstfu-test (not /test): compose CI rewrites ':/test' mounts to the
+      # host workspace path so LOAD DATA host paths resolve in-container;
+      # jstfu's config paths must stay stable, so use a name the rewrite
+      # cannot match.
+      - ../../test:/jstfu-test
+      - ../../etc/launch-tae-compose/config:/config
+      - jstfu_out:/jstfu-out
+    entrypoint: ["java","-jar","/jstfu-out/jstfu.jar","/config/jstfu-compose.json"]
+
+  jstfu-cn1:
+    container_name: jstfu-cn1
+    image: eclipse-temurin:8-jre
+    profiles:
+      - launch
+      - launch-multi-cn
+    network_mode: "service:cn-1"
+    restart: on-failure
+    depends_on:
+      jstfu-build:
+        condition: service_completed_successfully
+      cn-1:
+        condition: service_started
+    volumes:
+      # /jstfu-test (not /test): compose CI rewrites ':/test' mounts to the
+      # host workspace path so LOAD DATA host paths resolve in-container;
+      # jstfu's config paths must stay stable, so use a name the rewrite
+      # cannot match.
+      - ../../test:/jstfu-test
+      - ../../etc/launch-tae-compose/config:/config
+      - jstfu_out:/jstfu-out
+    entrypoint: ["java","-jar","/jstfu-out/jstfu.jar","/config/jstfu-compose.json"]
+
   minio:
     image: minio/minio:RELEASE.2023-11-01T18-37-25Z
     ports:
@@ -185,6 +255,8 @@ services:
 
 volumes:
   minio_storage: {}
+  jstfu_out: {}
+  jstfu_m2: {}
 
 # If there has subnet conflict, please change the subnet CIDR
 networks:

@@ -109,6 +109,23 @@ func TestAnyValueIntermediateRoundTripPreservesBinaryString(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAnyValuePreservesExplicitTextFromNullSlot(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("text"), false, mp))
+	require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_varbinary.ToType())
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+	results[0].Free(mp)
+	exec.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func newLimitedAnyValueExec(t *testing.T) (*anyExec, *mpool.MPool, []byte) {
 	t.Helper()
 

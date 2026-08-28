@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -33,6 +34,7 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 		tableAlias string
 	}{
 		{name: "tables", ddl: InformationSchemaTablesDDL, tableAlias: "tbl"},
+		{name: "key column usage", ddl: InformationSchemaKeyColumnUsageDDL, tableAlias: "tbl"},
 		{name: "columns", ddl: InformationSchemaColumnsDDL, tableAlias: "mt"},
 		{name: "statistics", ddl: InformationSchemaStatisticsDDL, tableAlias: "tbl"},
 		{name: "table constraints", ddl: InformationSchemaTableConstraintsDDL, tableAlias: "tbl"},
@@ -52,11 +54,23 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
+	assert.Contains(t, InformationSchemaStatisticsDDL, "group by `tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`type`, `idx`.`name`")
+	assert.Contains(t, InformationSchemaStatisticsDDL, "not startswith(`tbl`.`relname`, '"+catalog.IndexTableNamePrefix+"')")
+	statements, err := mysql.Parse(context.Background(), InformationSchemaStatisticsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaTableConstraintsDDL_ContainsCheckConstraints(t *testing.T) {
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "UNION ALL")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "FROM mo_check_constraints() cc")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "FROM mo_catalog.mo_foreign_keys fk")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "idx.type in ('PRIMARY', 'UNIQUE')")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "then 'PRIMARY KEY'")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "group by tbl.reldatabase, idx.name, tbl.relname, idx.type")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, "cc.table_name AS TABLE_NAME")
 	assert.Contains(t, InformationSchemaTableConstraintsDDL, catalog.NonTemporaryTableSQLPredicate("tbl"))
 	statements, err := mysql.Parse(context.Background(), InformationSchemaTableConstraintsDDL, 1)
@@ -67,8 +81,9 @@ func TestInformationSchemaTableConstraintsDDL_ContainsCheckConstraints(t *testin
 }
 
 func TestInformationSchemaTableConstraintsLegacyDDL_DoesNotUseCheckConstraints(t *testing.T) {
-	assert.NotContains(t, InformationSchemaTableConstraintsLegacyDDL, "UNION ALL")
 	assert.NotContains(t, InformationSchemaTableConstraintsLegacyDDL, "mo_check_constraints()")
+	assert.Contains(t, InformationSchemaTableConstraintsLegacyDDL, "FROM mo_catalog.mo_foreign_keys fk")
+	assert.Contains(t, InformationSchemaTableConstraintsLegacyDDL, "idx.type in ('PRIMARY', 'UNIQUE')")
 	assert.Contains(t, InformationSchemaTableConstraintsLegacyDDL, catalog.NonTemporaryTableSQLPredicate("tbl"))
 	statements, err := mysql.Parse(context.Background(), InformationSchemaTableConstraintsLegacyDDL, 1)
 	assert.NoError(t, err)
@@ -82,6 +97,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
 	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
 	assert.Contains(t, legacy, InformationSchemaTableConstraintsLegacyDDL)
+	assert.Contains(t, legacy, InformationSchemaCollationCharacterSetApplicabilityDDL)
 	for _, sql := range legacy {
 		assert.NotContains(t, sql, "mo_check_constraints()")
 	}
@@ -105,6 +121,14 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 
 func TestInformationSchemaColumnsDDL_HidesInternalColumns(t *testing.T) {
 	assert.Contains(t, InformationSchemaColumnsDDL, "mc.att_is_hidden = 0")
+	assert.Contains(t, InformationSchemaColumnsDDL, "not startswith(mc.att_relname, '"+catalog.IndexTableNamePrefix+"')")
+	assert.Contains(t, InformationSchemaColumnsDDL, "mk.key_priority = 3 then 'PRI'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "when mk.key_priority = 2 then 'UNI'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "when mk.key_priority = 1 then 'MUL'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "ki.ordinal_position = 1")
+	assert.Contains(t, InformationSchemaColumnsDDL, "ki.type = 'PRIMARY'")
+	assert.Contains(t, InformationSchemaColumnsDDL, "kp.part_count = 1")
+	assert.NotContains(t, InformationSchemaColumnsDDL, "mo_show_col_unique")
 
 	statements, err := mysql.Parse(context.Background(), InformationSchemaColumnsDDL, 1)
 	assert.NoError(t, err)
@@ -115,6 +139,12 @@ func TestInformationSchemaColumnsDDL_HidesInternalColumns(t *testing.T) {
 
 func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testing.T) {
 	assert.True(t, strings.HasPrefix(InformationSchemaKeyColumnUsageDDL, "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS"))
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "FROM mo_catalog.mo_indexes idx")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "idx.type IN ('PRIMARY', 'UNIQUE')")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS CONSTRAINT_SCHEMA")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "CAST(NULL AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "NOT startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')")
+	assert.Contains(t, InformationSchemaKeyColumnUsageDDL, "UNION ALL")
 	for _, column := range []string{
 		"CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME",
 		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA",
@@ -123,6 +153,12 @@ func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testin
 		"CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION",
 	} {
 		assert.Contains(t, InformationSchemaKeyColumnUsageDDL, column)
+	}
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaKeyColumnUsageDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
 	}
 }
 
@@ -173,8 +209,8 @@ func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",
-		"('utf8','utf8_bin','UTF-8 Unicode',4)",
-		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)",
+		"('utf8','utf8_general_ci','UTF-8 Unicode',4)",
+		"('utf8mb4','utf8mb4_general_ci','UTF-8 Unicode',4)",
 	} {
 		assert.Contains(t, InformationSchemaCharacterSetsData, expected)
 	}
@@ -191,4 +227,75 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, ddlIndex, 0)
 	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.T) {
+	assert.Empty(t, DefaultCollationForCharset("unknown_charset"))
+	for _, charset := range []string{"binary", "utf8", "utf8mb4"} {
+		defaultCollation := DefaultCollationForCharset(charset)
+		assert.NotEmpty(t, defaultCollation, "missing canonical default for %s", charset)
+		assert.Contains(t, InformationSchemaCharacterSetsData,
+			fmt.Sprintf("('%s','%s'", charset, defaultCollation))
+	}
+	assert.Contains(t, InformationSchemaSchemataDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS DEFAULT_COLLATION_NAME")
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION")
+	assert.Contains(t, InformationSchemaViewsDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS `COLLATION_CONNECTION`")
+}
+
+func TestSupportedCollationDefinitionsHaveOneDefaultPerCharset(t *testing.T) {
+	defaults := make(map[string]int)
+	for _, definition := range SupportedCollationDefinitions {
+		if definition.IsDefault == "YES" {
+			defaults[definition.Charset]++
+		}
+	}
+	for _, charset := range []string{"binary", "utf8", "utf8mb4"} {
+		assert.Equal(t, 1, defaults[charset], "expected exactly one default collation for %s", charset)
+	}
+}
+
+func TestInformationSchemaCollationsData(t *testing.T) {
+	for _, collation := range SupportedCollationDefinitions {
+		assert.Contains(t, InformationSchemaCollationsData,
+			fmt.Sprintf("('%s', '%s', %d, '%s', '%s', %d, '%s')",
+				collation.Name,
+				collation.Charset,
+				collation.ID,
+				collation.IsDefault,
+				collation.IsCompiled,
+				collation.SortLen,
+				collation.PadAttribute,
+			))
+	}
+
+	ddlIndex := -1
+	dataIndex := -1
+	for i, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaCollationsDDL:
+			ddlIndex = i
+		case InformationSchemaCollationsData:
+			dataIndex = i
+		}
+	}
+	assert.GreaterOrEqual(t, ddlIndex, 0)
+	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaCollationCharacterSetApplicabilityDDL(t *testing.T) {
+	assert.Contains(t, InformationSchemaCollationCharacterSetApplicabilityDDL,
+		"CREATE VIEW information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS")
+	assert.Contains(t, InformationSchemaCollationCharacterSetApplicabilityDDL,
+		"SELECT COLLATION_NAME, CHARACTER_SET_NAME")
+	assert.Contains(t, InformationSchemaCollationCharacterSetApplicabilityDDL,
+		"FROM information_schema.COLLATIONS")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaCollationCharacterSetApplicabilityDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }

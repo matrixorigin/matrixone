@@ -1,5 +1,170 @@
 drop database if exists rdb_src;
 drop database if exists rdb_dst;
+set global lower_case_table_names = 0;
+drop database if exists SrcMix27190;
+drop database if exists DstMix27190;
+create database SrcMix27190;
+create database DstMix27190;
+create table DstMix27190.t(id int primary key, v int);
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb": {"SrcMix27190": "DstMix27190"}}';
+insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (1, 10);
+insert into SrcMix27190.t set SrcMix27190.t.id = 2, SrcMix27190.t.v = 20;
+insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) select 3, 30;
+replace into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (4, 40);
+insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (1, 15)
+on duplicate key update v = values(SrcMix27190.t.v);
+prepare mixed_case_remap_insert from
+'insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (?, ?)';
+set @mixed_id = 5;
+set @mixed_v = 50;
+execute mixed_case_remap_insert using @mixed_id, @mixed_v;
+deallocate prepare mixed_case_remap_insert;
+use SrcMix27190;
+insert into t(SrcMix27190.t.id, SrcMix27190.t.v) values (6, 60);
+select * from DstMix27190.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  15  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  40  𝄀
+5  ¦  50  𝄀
+6  ¦  60
+/*+ {"rewrites":{"DstMix27190.t":"select * from DstMix27190.t where id=2"}} */
+select * from DstMix27190.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20
+use mysql;
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+drop database SrcMix27190;
+drop database DstMix27190;
+set global lower_case_table_names = 2;
+drop database if exists SrcMix2_27190;
+drop database if exists DstMix2_27190;
+create database SrcMix2_27190;
+create database DstMix2_27190;
+create table DstMix2_27190.T(id int primary key, v int);
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb": {"SrcMix2_27190": "DstMix2_27190"}}';
+insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (1, 10);
+insert into SrcMix2_27190.T set SrcMix2_27190.T.id = 2, SrcMix2_27190.T.v = 20;
+insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) select 3, 30;
+replace into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (4, 40);
+insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (1, 15)
+on duplicate key update v = values(SrcMix2_27190.T.v);
+prepare mixed_case_mode_two_insert from
+'insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (?, ?)';
+set @mixed_two_id = 5;
+set @mixed_two_v = 50;
+execute mixed_case_mode_two_insert using @mixed_two_id, @mixed_two_v;
+deallocate prepare mixed_case_mode_two_insert;
+select * from DstMix2_27190.T order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  15  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  40  𝄀
+5  ¦  50
+/*+ {"rewrites":{"DstMix2_27190.T":"select * from DstMix2_27190.T where id=2"}} */
+select * from DstMix2_27190.T order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20
+set remap_rewrites = '{"rewrites":{"DstMix2_27190.T":"select * from DstMix2_27190.T where id=3"}}';
+select * from dstmix2_27190.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+3  ¦  30
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+set global lower_case_table_names = 0;
+drop database SrcMix2_27190;
+drop database DstMix2_27190;
+set global lower_case_table_names = 1;
+drop database if exists srcform27190;
+drop database if exists dstform27190;
+drop database if exists srcuse27190;
+drop database if exists dstuse27190;
+drop database if exists dsta27190;
+drop database if exists dstb27190;
+drop database if exists srcrewriteinline27190;
+drop database if exists dstrewritemixed27190;
+create database SrcForm27190;
+create database DstForm27190;
+create table DstForm27190.t(id int primary key, v int);
+create database SrcUse27190;
+create database DstUse27190;
+create table SrcUse27190.t(id int primary key, v int);
+create table DstUse27190.t(id int primary key, v int);
+create database SrcRewriteInline27190;
+create database DstRewriteMixed27190;
+create table DstRewriteMixed27190.t(id int primary key);
+insert into DstRewriteMixed27190.t values (1), (2), (3);
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb":{"SrcForm27190":"DstForm27190","SrcUse27190":"DstUse27190"}}';
+insert into SrcForm27190.t(SrcForm27190.t.id, SrcForm27190.t.v) values (1, 10);
+use SrcUse27190;
+insert into t values (2, 20);
+prepare mode_one_unqualified_insert from 'insert into t values (?, ?)';
+set @mode_one_id = 3;
+set @mode_one_v = 30;
+execute mode_one_unqualified_insert using @mode_one_id, @mode_one_v;
+deallocate prepare mode_one_unqualified_insert;
+create table remapped_ddl(id int primary key);
+insert into remapped_ddl values (4);
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select * from remapped_ddl;
+➤ id[4,32,0]  𝄀
+4
+use mysql;
+set remap_rewrites = '';
+select count(*) from srcuse27190.t;
+➤ count(*)[-5,64,0]  𝄀
+0
+select * from dstuse27190.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select * from dstform27190.t;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select * from dstuse27190.remapped_ddl;
+➤ id[4,32,0]  𝄀
+4
+create database DstA27190;
+create database DstB27190;
+create table DstA27190.t(id int primary key);
+create table DstB27190.t(id int primary key);
+set remap_rewrites = '{"remapdb":{"SourceCase27190":"DstA27190"}}';
+/*+ {"remapdb":{"sourcecase27190":"DstB27190"}} */ insert into SourceCase27190.t values (5);
+set remap_rewrites = '';
+select count(*) from dsta27190.t;
+➤ count(*)[-5,64,0]  𝄀
+0
+select * from dstb27190.t;
+➤ id[4,32,0]  𝄀
+5
+/*+ {
+"remapdb":{"SrcRewriteInline27190":"DstRewriteMixed27190"},
+"rewrites":{"DstRewriteMixed27190.t":"select * from DstRewriteMixed27190.t where id=2"}
+} */ select * from SrcRewriteInline27190.t order by id;
+➤ id[4,32,0]  𝄀
+2
+set remap_rewrites = '{"remapdb":{"SourceCase27190":"dst_a","sourcecase27190":"dst_b"}}';
+invalid input: remapdb source databases (.*) are equivalent under lower_case_table_names=1
+set remap_rewrites = '{"remapdb":{"ChainSrc27190":"MID27190","mid27190":"dst_chain27190"}}';
+invalid input: remapdb: database (.*) must not be both a source and a destination \(chaining is not allowed\)
+set enable_remap_hint = 0;
+drop database srcform27190;
+drop database dstform27190;
+drop database srcuse27190;
+drop database dstuse27190;
+drop database dsta27190;
+drop database dstb27190;
+drop database srcrewriteinline27190;
+drop database dstrewritemixed27190;
 create database rdb_dst;
 create table rdb_dst.t(id int, v int);
 insert into rdb_dst.t values (1,10),(2,20),(3,30);
@@ -56,12 +221,30 @@ create database rdb_dml;
 create table rdb_dml.t(id int, v int);
 insert into rdb_dml.t values (1,10),(2,20),(3,30);
 create table rdb_dml.u(id int, v int);
+create table rdb_dml.q(id int primary key, v int);
 set remap_rewrites = '{"remapdb": {"rdb_src_dml": "rdb_dml"}}';
 insert into rdb_src_dml.u select * from rdb_src_dml.t where id <= 2;
+insert into rdb_src_dml.u(rdb_src_dml.u.id, rdb_src_dml.u.v) values (4,40);
+insert into rdb_src_dml.u set rdb_src_dml.u.id = 5, rdb_src_dml.u.v = 50;
+prepare remap_qualified_insert from
+'insert into rdb_src_dml.u(rdb_src_dml.u.id, rdb_src_dml.u.v) values (?, ?)';
+set @remap_id = 6;
+set @remap_v = 60;
+execute remap_qualified_insert using @remap_id, @remap_v;
+deallocate prepare remap_qualified_insert;
 select * from rdb_dml.u order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
-2  ¦  20
+2  ¦  20  𝄀
+4  ¦  40  𝄀
+5  ¦  50  𝄀
+6  ¦  60
+insert into rdb_src_dml.q(rdb_src_dml.q.id, rdb_src_dml.q.v) values (1,10);
+insert into rdb_src_dml.q(rdb_src_dml.q.id, rdb_src_dml.q.v) values (1,20)
+on duplicate key update v = values(rdb_src_dml.q.v);
+select * from rdb_dml.q;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  20
 update rdb_src_dml.t set v = 999 where id = 3;
 select * from rdb_dml.t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
@@ -81,7 +264,7 @@ insert into rdb_src.t values (100,1000),(200,2000);
 set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
 use rdb_src;
 select database() as curdb;
-➤ curdb[12,-1,0]  𝄀
+➤ curdb[12,65535,0]  𝄀
 rdb_src
 select * from t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀

@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -107,6 +108,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetPrepareParamsWithMetadata(vec, []bool{true, false}, []bool{false, true})
 	proc.SetAffectedRows(42)
 	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
+	proc.SetPlanGenerationReused(true)
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashComplete)
 	return proc, txnOp
 }
 
@@ -210,11 +213,22 @@ func TestProcessCodecHelpers(t *testing.T) {
 		})
 		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
 
-		// Resolver returns explicit empty string -> sentinel (explicitly non-strict).
+		// A frontend resolver returning an explicit empty string means the
+		// session is intentionally non-strict.
+		proc.Base.IsFrontend = true
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "", nil
 		})
 		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+
+		// A background resolver may return its empty compiled default, but the
+		// captured strict snapshot must survive the first serialization.
+		proc.Base.IsFrontend = false
+		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc),
+			"an already-captured explicit empty mode must remain non-strict")
+		proc.Base.SessionInfo.SqlMode = "STRICT_ALL_TABLES"
 
 		// Resolver error / non-string -> fall back to captured SessionInfo.SqlMode.
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
@@ -233,6 +247,30 @@ func TestProcessCodecHelpers(t *testing.T) {
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
 		require.Equal(t, "", resolveSqlMode(emptyProc))
 	})
+}
+
+func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "", nil
+	})
+
+	first, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", first.SessionInfo.SqlMode)
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	require.NoError(t, err)
+	defer decoded.Free()
+
+	// The decoded remote process has no resolver. A second forward must retain
+	// the snapshot produced by the first forward rather than defaulting to
+	// non-strict mode.
+	second, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
@@ -384,6 +422,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, info.PlanSnapshotTs)
+	require.True(t, info.PlanGenerationReused)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
@@ -549,17 +588,33 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	decodedPlanSnapshot, ok := decodedProc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, decodedPlanSnapshot)
+	require.True(t, decodedProc.PlanGenerationReused())
+	require.Equal(t, StringShuffleHashComplete, decodedProc.StringShuffleHashAlgorithm())
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())
 	require.Nil(t, decodedParams.GetArea())
 
-	info.PlanSnapshotTs = nil // simulate a sender from before the field existed
+	info.PlanSnapshotTs = nil // simulate a sender from before the fields existed
+	info.PlanGenerationReused = false
+	info.StringShuffleHashAlgorithm = 0
 	legacyProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	_, ok = legacyProc.GetPlanSnapshotTS()
 	require.False(t, ok)
+	require.False(t, legacyProc.PlanGenerationReused())
+	require.Equal(t, StringShuffleHashLegacy, legacyProc.StringShuffleHashAlgorithm())
 	require.NotPanics(t, legacyProc.Free)
+
+	for _, invalid := range []uint32{2, 99, 257} {
+		info.StringShuffleHashAlgorithm = invalid
+		_, err = svc.Decode(context.Background(), info)
+		require.ErrorContains(t, err,
+			fmt.Sprintf("string shuffle hash algorithm %d is not supported", invalid))
+	}
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashAlgorithm(99))
+	_, err = proc.BuildProcessInfo("select invalid hash algorithm")
+	require.ErrorContains(t, err, "string shuffle hash algorithm 99 is not supported")
 
 	rtSvc := "codec-test-svc"
 	runtime := rt.DefaultRuntime()
@@ -573,11 +628,13 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	firstSnapshot := timestamp.Timestamp{PhysicalTime: 10}
 	secondSnapshot := timestamp.Timestamp{PhysicalTime: 20}
 	proc.SetPlanSnapshotTS(firstSnapshot)
+	proc.SetPlanGenerationReused(true)
 
 	child := proc.NewNoContextChildProc(0)
 	got, ok := child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, firstSnapshot, got)
+	require.True(t, child.PlanGenerationReused())
 	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
 	got, ok = channelChild.GetPlanSnapshotTS()
 	require.True(t, ok)
@@ -587,15 +644,37 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	// pipeline generation because setting a generation installs a new immutable
 	// binding rather than mutating the prior one.
 	proc.SetPlanSnapshotTS(secondSnapshot)
+	require.False(t, proc.PlanGenerationReused())
 	got, ok = child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, firstSnapshot, got)
+	require.True(t, child.PlanGenerationReused())
 
 	proc.ClearPlanSnapshotTS()
 	legacyChild := proc.NewNoContextChildProc(0)
 	_, ok = legacyChild.GetPlanSnapshotTS()
 	require.False(t, ok)
+	require.False(t, legacyChild.PlanGenerationReused())
 	proc.Free()
+}
+
+func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashComplete)
+
+	child := proc.NewNoContextChildProc(0)
+	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	require.Equal(t, StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashComplete, channelChild.StringShuffleHashAlgorithm())
+
+	// Selecting the next execution after rollback cannot mutate processes that
+	// already belong to the running execution.
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashLegacy)
+	require.Equal(t, StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashComplete, channelChild.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashLegacy,
+		proc.NewNoContextChildProc(0).StringShuffleHashAlgorithm())
 }
 
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {

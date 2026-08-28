@@ -45,6 +45,7 @@ type Column struct {
 	ConstraintType  string
 	IsClusterBy     int8
 	IsHidden        int8
+	IsUnsigned      int8
 	IsAutoIncrement int8
 	HasUpdate       int8
 	UpdateExpr      []byte
@@ -73,6 +74,7 @@ type Table struct {
 	Version       uint32
 	ExtraInfo     []byte
 	LogicalId     uint64 // rel_logical_id, if 0, will use TableId
+	CreatedTime   types.Timestamp
 }
 
 // genColumnsFromDefs generates column struct from TableDef.
@@ -136,6 +138,9 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 			Comment:      attrDef.Attr.Comment,
 			Seqnum:       uint16(num - 1),
 			EnumValues:   attrDef.Attr.EnumVlaues,
+		}
+		if attrDef.Attr.Type.IsUInt() {
+			col.IsUnsigned = 1
 		}
 		attrDef.Attr.ID = uint64(num)
 		attrDef.Attr.Seqnum = uint16(num - 1)
@@ -418,7 +423,11 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 		}
 		idx = MO_TABLES_CREATED_TIME_IDX
 		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // created_time
-		if err = vector.AppendFixed(bat.Vecs[idx], types.CurrentTimestamp(), false, m); err != nil {
+		createdTime := tbl.CreatedTime
+		if createdTime == 0 {
+			createdTime = types.CurrentTimestamp()
+		}
+		if err = vector.AppendFixed(bat.Vecs[idx], createdTime, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_CREATOR_IDX
@@ -574,7 +583,7 @@ func GenCreateColumnTuples(cols []Column, m *mpool.MPool, packer *types.Packer) 
 			return nil, err
 		}
 		idx = MO_COLUMNS_ATT_IS_UNSIGNED_IDX
-		if err = vector.AppendFixed(bat.Vecs[idx], int8(0), false, m); err != nil {
+		if err = vector.AppendFixed(bat.Vecs[idx], col.IsUnsigned, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX

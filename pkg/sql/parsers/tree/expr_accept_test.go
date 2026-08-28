@@ -135,4 +135,22 @@ func TestExprAcceptVisitsSpecialOperands(t *testing.T) {
 		require.True(t, ok)
 		require.Same(t, pattern, visited.(*FullTextMatchExpr).Pattern)
 	})
+
+	t.Run("sample columns", func(t *testing.T) {
+		expr, err := NewSampleRowsFuncExpression(
+			1,
+			false,
+			Exprs{NewUnresolvedColName("old_col")},
+			"row",
+		)
+		require.NoError(t, err)
+		visited, ok := expr.Accept(visitor)
+		require.True(t, ok)
+		sample, ok := visited.(*SampleExpr)
+		require.True(t, ok)
+		columns, isStar := sample.GetColumns()
+		require.False(t, isStar)
+		require.Len(t, columns, 1)
+		require.Equal(t, "new_col", columns[0].(*UnresolvedName).ColName())
+	})
 }

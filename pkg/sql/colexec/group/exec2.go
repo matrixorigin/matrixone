@@ -83,6 +83,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
+	group.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -394,6 +395,22 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	if group.ctr.mtyp == H0 {
 		if err = group.evaluateBuildInput(proc, bat); err != nil {
 			return false, err
+		}
+		// COUNT(*) is row-count only.  Projection-pruned joins can represent a
+		// very large number of matches with one zero-column batch, so consuming
+		// it a UnitLimit-sized slice at a time would recreate the materialization
+		// cost that the join avoided.
+		if len(group.ctr.aggList) == 1 &&
+			group.ctr.aggList[0].AggID() == aggexec.AggIdOfCountStar &&
+			len(group.ctr.aggArgEvaluate) == 1 &&
+			len(group.ctr.aggArgEvaluate[0].Vec) > 0 {
+			if err = group.ctr.aggList[0].BulkFill(
+				0, group.ctr.aggArgEvaluate[0].Vec,
+			); err != nil {
+				return false, err
+			}
+			group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
+			return false, nil
 		}
 		// note that in prepare we already called GroupGrow(1) for each agg.
 		var oneGroup [hashmap.UnitLimit]uint64
@@ -989,6 +1006,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"aggregate binary-string metadata requires MORPCVersion18")
+		}
+		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
+			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, writer); err != nil {
 			return vm.CancelResult, false, err

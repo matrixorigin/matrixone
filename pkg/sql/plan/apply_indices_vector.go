@@ -15,11 +15,62 @@
 package plan
 
 import (
+	"encoding/json"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &params); err != nil {
+		return nil, err
+	}
+	return params, nil
+}
+
+func vectorIndexStringParam(params map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := params[key]
+	if !ok {
+		return "", false
+	}
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return "", false
+	}
+	return *value, true
+}
+
+// vectorIndexInt64Param accepts the canonical quoted representation and the
+// legacy JSON-number representation used by older IVF metadata.
+func vectorIndexInt64Param(params map[string]json.RawMessage, key string) (int64, bool) {
+	raw, ok := params[key]
+	if !ok {
+		return 0, false
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		value, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return value, true
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil || number == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(number.String(), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
 
 type vectorSortContext struct {
 	projNode      *plan.Node
@@ -1260,4 +1311,61 @@ func vecTextToBytes(t types.T, s string) ([]byte, bool) {
 		return nil, false
 	}
 	return b, true
+}
+
+// exprCallsFunc reports whether expr calls fnName anywhere inside it, including nested in
+// another call's arguments or inside an expression list.
+//
+// Used to spot a predicate that WRAPS an index placeholder rather than being one --
+// `MATCH(...) > 0`, `ROUND(l2_distance(...), 2) < 5` -- which the "is this expression exactly
+// the placeholder?" tests used elsewhere step straight past.
+func exprCallsFunc(expr *plan.Expr, fnName string) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == fnName {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if exprCallsFunc(arg, fnName) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, sub := range e.List.List {
+			if exprCallsFunc(sub, fnName) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// replaceScoreFnInExprBy walks expr and offers every function call to rewrite. A non-nil
+// return replaces that call; nil leaves it in place and the walk descends into its arguments.
+// Returns the rewritten expression.
+//
+// Letting the callback see the whole *plan.Function -- not just its name -- is what lets a
+// caller with several candidate index scans decide WHICH one a given call belongs to, and
+// leave alone the ones no scan answers.
+func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if repl := rewrite(e.F); repl != nil {
+			return repl
+		}
+		for i, arg := range e.F.Args {
+			e.F.Args[i] = replaceScoreFnInExprBy(arg, rewrite)
+		}
+	case *plan.Expr_List:
+		for i, sub := range e.List.List {
+			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
+		}
+	}
+	return expr
 }

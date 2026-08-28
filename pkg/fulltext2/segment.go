@@ -157,6 +157,37 @@ func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
 	return blen
 }
 
+// fillBlockDocs decodes only block b's doc IDs. Phrase intersection never reads term
+// frequency, so using fillBlockDocs there avoids a redundant tf copy for every block the
+// doc cursor visits. WAND keeps using fillBlock because it scores with tf.
+func (p *termPostings) fillBlockDocs(b int, outDocs []int64) int {
+	blen := p.blockLen(b)
+	if p.docIDs != nil {
+		lo := b * BlockSize
+		copy(outDocs[:blen], p.docIDs[lo:lo+blen])
+		return blen
+	}
+	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
+	var prev int64
+	if b > 0 {
+		prev = p.blockLastDoc[b-1]
+	}
+	off := 0
+	for i := 0; i < blen; i++ {
+		if off >= len(data) {
+			return i
+		}
+		g, n := binary.Uvarint(data[off:])
+		if n <= 0 {
+			return i
+		}
+		off += n
+		prev += int64(g)
+		outDocs[i] = prev
+	}
+	return blen
+}
+
 // fillBlockPositions decodes block b's per-doc token positions into out[:blen],
 // returning the block length. loaded-side varint-decodes only block b's slice of posRaw
 // (via blockPosOff) — the per-block analogue of fillBlock, so the phrase cursor holds ONE
@@ -364,6 +395,11 @@ type Segment struct {
 	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
+	// ownedBytes is the unique serialized archive retained by a loaded segment.
+	// The tail pool counts this once because pkRaw, FST, ranking, blocks, and
+	// positions are views into the same archive.
+	ownedBytes int64
+	lease      *segmentLease // non-nil for a view into the immutable base pool
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -652,6 +688,20 @@ func cbAppendNull(k *vectorindex.ColumnBuffer, fixedW int, fixed bool) {
 // reading. The loaded posting blocks (blockData) are views into mmapData, so
 // munmap reclaims them — there is no off-heap buffer to deallocate.
 func (s *Segment) Free() {
+	if s.lease != nil {
+		lease := s.lease
+		s.lease = nil
+		// The view does not own the mmap. Clear its aliases as well so a
+		// defensive second Free cannot munmap the shared mapping directly.
+		s.mmapData, s.mmapPath = nil, ""
+		s.ranking, s.blocks, s.positions = nil, nil, nil
+		lease.release()
+		return
+	}
+	s.freeOwned()
+}
+
+func (s *Segment) freeOwned() {
 	if s.mmapData != nil {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
@@ -661,6 +711,7 @@ func (s *Segment) Free() {
 		s.mmapPath = ""
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
+	s.ownedBytes = 0
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

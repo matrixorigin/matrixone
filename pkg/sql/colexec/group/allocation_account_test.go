@@ -109,6 +109,53 @@ func runAccountedCountGroup(
 	return got, records
 }
 
+func TestAccountedMedianAcceptsProspectiveGroupsFromGroupPreflight(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(
+		[]int32{1, 1, 2, 2}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt64Vector(
+		[]int64{1, 3, 5, 7}, nil, proc.Mp())
+	input.SetRowCount(4)
+
+	median := aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfMedian,
+		false,
+		[]*plan.Expr{colExpr(1, types.T_int64)},
+		nil,
+	)
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{median},
+	)
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+
+	got := make(map[int32]float64, 2)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+		medians := vector.MustFixedColNoTypeCheck[float64](result.Batch.Vecs[1])
+		for row, key := range keys {
+			got[key] = medians[row]
+		}
+	}
+	require.Equal(t, map[int32]float64{1: 2, 2: 6}, got)
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	input.Clean(proc.Mp())
+}
+
 type groupTestAllocation struct {
 	generation *process.ExecutionResourceGeneration
 	registry   *mpool.AllocationAccountRegistry
