@@ -1473,7 +1473,10 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	replacement := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	require.True(t, cw.completeRuntimeCacheCandidate(replacement, nil))
+	require.True(t, cw.stageRuntimeCacheCandidate(replacement))
+	require.Same(t, sentinel, prepareStmt.runtimeCompile,
+		"the old category remains live until replacement execution terminates")
+	require.True(t, cw.completeRuntimeCacheExecution(replacement, nil, false))
 	// Evicting the previous semantic-category compile must not clear the
 	// parameter vector borrowed by the execution that installs its replacement.
 	require.Same(t, thirdParams, cw.proc.GetPrepareParams())
@@ -1650,7 +1653,7 @@ func TestPreparedDirectResultSemanticKeyPreservesDecimalMetadataDomain(t *testin
 		"direct DECIMAL scale is visible metadata and must participate in the cache category")
 }
 
-func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
+func TestRuntimeSpecializationReplacementCommitsOnlyAfterExecutionSuccess(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
 	defer prepareStmt.Close()
 
@@ -1664,7 +1667,7 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "failed"
 	cw.runtimeCachePlan = failedPlan
-	require.False(t, cw.completeRuntimeCacheCandidate(nil, assert.AnError))
+	cw.discardRuntimeCacheCandidate()
 	require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
 	require.Same(t, oldPlan, prepareStmt.runtimePlan)
 	require.Same(t, oldCompile, prepareStmt.runtimeCompile)
@@ -1678,12 +1681,30 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "new"
 	cw.runtimeCachePlan = newPlan
-	require.True(t, cw.completeRuntimeCacheCandidate(newCompile, nil))
+	require.True(t, cw.stageRuntimeCacheCandidate(newCompile))
+	require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
+	require.Same(t, oldPlan, prepareStmt.runtimePlan)
+	require.Same(t, oldCompile, prepareStmt.runtimeCompile)
+	require.True(t, cw.completeRuntimeCacheExecution(newCompile, nil, false))
 	require.Equal(t, "new", prepareStmt.runtimeSpecializationKey)
 	require.Same(t, newPlan, prepareStmt.runtimePlan)
 	require.Same(t, newCompile, prepareStmt.runtimeCompile)
 	require.Nil(t, cw.runtimeCacheTarget)
 	require.Nil(t, cw.runtimeCachePlan)
+	require.Nil(t, cw.runtimeCacheCompile)
+
+	failedCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	cw.runtimeCacheTarget = prepareStmt
+	cw.runtimeCacheKey = "failed-run"
+	cw.runtimeCachePlan = failedPlan
+	require.True(t, cw.stageRuntimeCacheCandidate(failedCompile))
+	require.False(t, cw.completeRuntimeCacheExecution(failedCompile, assert.AnError, false))
+	require.Equal(t, "new", prepareStmt.runtimeSpecializationKey)
+	require.Same(t, newPlan, prepareStmt.runtimePlan)
+	require.Same(t, newCompile, prepareStmt.runtimeCompile)
+	failedCompile.Release()
 
 	prepareStmt.clearRuntimeSpecializationCache()
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)

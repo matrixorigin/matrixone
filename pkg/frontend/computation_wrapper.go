@@ -92,13 +92,15 @@ type TxnComputationWrapper struct {
 	// plan. Compile retry must replay the same mode instead of inferring a
 	// different plan shape from the rebuilt template.
 	runtimeSpecializationMode preparedRuntimeSpecializationMode
-	// runtimeCacheTarget/runtimeCacheKey/runtimeCachePlan stage a candidate
-	// specialization outside the live PrepareStmt cache. The candidate is
-	// installed only after its Compile succeeds, so a failed replacement leaves
-	// the preceding category and Compile intact.
-	runtimeCacheTarget *PrepareStmt
-	runtimeCacheKey    string
-	runtimeCachePlan   *plan.Plan
+	// runtimeCacheTarget/runtimeCacheKey/runtimeCachePlan/runtimeCacheCompile
+	// stage a candidate specialization outside the live PrepareStmt cache. The
+	// candidate is published only after Compile.Run succeeds, so compiling and
+	// executing it cannot be disrupted by releasing the preceding category's
+	// Compile, which shares the prepared statement Process.
+	runtimeCacheTarget  *PrepareStmt
+	runtimeCacheKey     string
+	runtimeCachePlan    *plan.Plan
+	runtimeCacheCompile *compile.Compile
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -556,13 +558,13 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				preparedRetry,
 			)
 			if err != nil {
-				cwft.completeRuntimeCacheCandidate(nil, err)
+				cwft.discardRuntimeCacheCandidate()
 				return nil, err
 			}
 			cwft.compile.SetOriginSQL(originSQL)
 			if cwft.runtimeCacheTarget != nil {
 				runtimeCompile, ok := cwft.compile.(*compile.Compile)
-				if !ok || !cwft.completeRuntimeCacheCandidate(runtimeCompile, nil) {
+				if !ok || !cwft.stageRuntimeCacheCandidate(runtimeCompile) {
 					cwft.discardRuntimeCacheCandidate()
 				}
 			}
@@ -730,7 +732,9 @@ func (cwft *TxnComputationWrapper) completeCompileExecution(
 	runErr error,
 ) {
 	cwft.syncCompileExecution(runningCompile)
-	if !runningCompile.PlanGenerationRebuilt() {
+	planGenerationRebuilt := runningCompile.PlanGenerationRebuilt()
+	cwft.completeRuntimeCacheExecution(runningCompile, runErr, planGenerationRebuilt)
+	if !planGenerationRebuilt {
 		return
 	}
 
@@ -1581,21 +1585,58 @@ func initExecuteStmtParamWithResolverInSession(
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
-func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
+func (cwft *TxnComputationWrapper) clearRuntimeCacheCandidate() {
 	cwft.runtimeCacheTarget = nil
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
+	cwft.runtimeCacheCompile = nil
 }
 
-func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(
-	runtimeCompile *compile.Compile,
-	compileErr error,
-) bool {
-	if compileErr != nil {
-		cwft.discardRuntimeCacheCandidate()
+func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
+	if cwft.runtimeCacheCompile != nil {
+		// The execution owner will release an unsuccessful candidate. Restore its
+		// ordinary lifecycle so that Release returns it to the Compile pool.
+		cwft.runtimeCacheCompile.SetIsPrepare(false)
+	}
+	cwft.clearRuntimeCacheCandidate()
+}
+
+func (cwft *TxnComputationWrapper) stageRuntimeCacheCandidate(runtimeCompile *compile.Compile) bool {
+	if cwft.runtimeCacheTarget == nil || cwft.runtimeCacheKey == "" ||
+		cwft.runtimeCachePlan == nil || runtimeCompile == nil {
 		return false
 	}
-	return cwft.installRuntimeCacheCandidate(runtimeCompile)
+	// Preserve the candidate across the execution owner's Release if Run
+	// succeeds. A failed execution resets this flag before Release.
+	runtimeCompile.SetIsPrepare(true)
+	cwft.runtimeCacheCompile = runtimeCompile
+	return true
+}
+
+func (cwft *TxnComputationWrapper) completeRuntimeCacheExecution(
+	runningCompile Compile,
+	runErr error,
+	planGenerationRebuilt bool,
+) bool {
+	runtimeCompile, ok := runningCompile.(*compile.Compile)
+	if !ok || runtimeCompile != cwft.runtimeCacheCompile {
+		return false
+	}
+
+	target := cwft.runtimeCacheTarget
+	key := cwft.runtimeCacheKey
+	runtimePlan := cwft.runtimeCachePlan
+	cwft.clearRuntimeCacheCandidate()
+	if runErr != nil || planGenerationRebuilt {
+		runtimeCompile.SetIsPrepare(false)
+		return false
+	}
+
+	// Publish and retire the old category only after the replacement has
+	// finished running. Both Compiles share target.proc; releasing the old one
+	// before Run resets process query state needed by the replacement pipeline.
+	target.installRuntimeSpecializationCache(key, runtimePlan, runtimeCompile)
+	return true
 }
 
 func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *compile.Compile) bool {
@@ -1605,7 +1646,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 	}
 	cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
 		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile)
-	cwft.discardRuntimeCacheCandidate()
+	cwft.clearRuntimeCacheCandidate()
 	return true
 }
 
