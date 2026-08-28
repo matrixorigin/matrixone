@@ -2105,31 +2105,37 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 		// AnyIn scans linearly for these, so order does not matter.
 		return vec, true
 	}
-	if vec.GetSorted() || zoneMapInVectorIsSorted(vec) {
+	if zoneMapInVectorOrderIsKnown(vec) {
 		return vec, true
 	}
 	return nil, false
 }
 
-// zoneMapInVectorIsSorted checks the physical byte order, which is what AnyIn and
-// PrefixIn search -- a NULL slot carries an empty payload and sorts first, the
-// same way those functions see it.
+// zoneMapInVectorOrderIsKnown reports whether the payload's ascending order can be
+// relied on. It is not "is this sorted" -- an unflagged fixed-width payload may
+// well be ordered, but nothing here can establish that, and the caller must treat
+// unknown exactly as it treats unsorted.
 //
-// The sorted flag is authoritative for producers that sort through
-// InplaceSortAndCompact, which sets it unconditionally and marshals it with the
-// payload; every planner producer goes that route. This scan only adds the case
-// of a payload ordered by construction whose producer never set the flag. It is
-// allocation-free and exits at the first inversion, so it costs nothing for a
-// genuinely unsorted list and buys pruning that would otherwise fail open.
-func zoneMapInVectorIsSorted(vec *vector.Vector) bool {
-	if !vec.GetType().IsVarlen() {
-		// Only varlen order is checked here. Fixed-width lists reach this point
-		// already carrying the flag when a producer sorted them (constant folding
-		// sorts every non-nullable IN list), so the scan would add nothing for
-		// them, and verifying each numeric type needs a full type switch for a
-		// defect that has not been observed. Treat them as usable rather than
-		// refuse pruning on a type this check simply does not cover.
+// The sorted flag is authoritative when set: InplaceSortAndCompact sets it
+// unconditionally and it is marshalled with the payload, so every planner-folded
+// IN list carries it. It is not a universal invariant, though --
+// readutil.ConstructInExpr serialises a caller-supplied vector verbatim (transfer
+// and snapshot filtering both do), so an unordered payload arrives with no flag.
+//
+// For varlen the order is verified directly, in the byte order AnyIn and PrefixIn
+// search, with a NULL slot's empty payload sorting first exactly as they see it.
+// Fixed-width types would need a per-type comparator, so absent the flag their
+// order is unknown and the caller fails open.
+//
+// Failing open only costs pruning. Trusting an unverified order costs rows:
+// needles [30,10] against a block zonemap [5,15] make AnyIn's binary search probe
+// 30, answer false, and drop a block holding the matching needle 10.
+func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
+	if vec.GetSorted() {
 		return true
+	}
+	if !vec.GetType().IsVarlen() {
+		return false
 	}
 	col, area := vector.MustVarlenaRawData(vec)
 	for i := 1; i < len(col); i++ {

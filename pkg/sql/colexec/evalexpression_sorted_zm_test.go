@@ -257,24 +257,49 @@ func TestZoneMapInVectorFailsOpenForUnsortedPayload(t *testing.T) {
 	require.False(t, ok, "a corrupt payload must be reported, not silently used")
 }
 
-// A fixed-width payload that carries no sorted flag -- ordered by construction
-// rather than through InplaceSortAndCompact, which would have set it -- must
-// still be usable. The varlen order check does not cover numeric types, and
-// refusing what it cannot inspect would drop pruning for a whole type class.
-func TestZoneMapInVectorKeepsFixedWidthPruning(t *testing.T) {
+// ZM.AnyIn binary-searches fixed-width values, so an unflagged payload whose
+// order cannot be verified here must not prune. Needles [30,10] against a block
+// zonemap [5,15] make the search probe 30, answer false, and drop a block holding
+// the matching needle 10.
+//
+// Reachable beyond constant folding: readutil.ConstructInExpr serialises a
+// caller-supplied vector verbatim (transfer and snapshot filtering), so the
+// serialised sorted flag is not a universal invariant.
+func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
+	proc := testutil.NewProcess(t)
 
 	vec := vector.NewVec(types.T_int64.ToType())
 	defer vec.Free(mp)
-	for _, v := range []int64{1, 2, 3} {
-		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
+	for _, n := range []int64{30, 10} {
+		require.NoError(t, vector.AppendFixed(vec, n, false, mp))
 	}
-	require.False(t, vec.GetSorted(), "no compaction happened, so no sorted flag")
+	require.False(t, vec.GetSorted(), "ConstructInExpr marshals without sorting or flagging")
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
 
-	got, ok := zoneMapInVector(data, false)
-	require.True(t, ok, "a fixed-width IN list must keep its pruning")
-	require.Equal(t, 3, got.Length())
+	lo, hi := int64(5), int64(15)
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	zm := index.NewZM(types.T_int64, 0)
+	index.UpdateZM(zm, types.EncodeInt64(&lo))
+	index.UpdateZM(zm, types.EncodeInt64(&hi))
+	meta.MustGetColumn(0).SetZoneMap(zm)
+
+	require.True(t, evalZoneMap(t, proc, zmInExpr("in", data, 2), meta),
+		"block [5,15] must be kept: needle 10 is inside it")
+
+	// A flagged, genuinely ordered payload still prunes normally.
+	sorted := vector.NewVec(types.T_int64.ToType())
+	defer sorted.Free(mp)
+	for _, n := range []int64{10, 30} {
+		require.NoError(t, vector.AppendFixed(sorted, n, false, mp))
+	}
+	sorted.SetSorted(true)
+	sdata, err := sorted.MarshalBinary()
+	require.NoError(t, err)
+	got, ok := zoneMapInVector(sdata, false)
+	require.True(t, ok, "a flagged ordered payload keeps its pruning")
+	require.Equal(t, 2, got.Length())
 }
