@@ -438,7 +438,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				// Prepared plans are cached across privilege-cache refreshes. Recheck
 				// the resolved statement and plan at execution time so a revoke cannot
 				// leave an existing PREPARE/EXECUTE handle authorized.
-				authStats, err := authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, owner, stmt, plan)
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(
+					execCtx.reqCtx, owner, stmt, plan, execCtx.effectiveTxnDefaultDatabase,
+				)
 				if err != nil {
 					return nil, err
 				}
@@ -475,7 +477,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				// check as text EXECUTE. Do not rely on authorization captured while
 				// the statement was prepared.
 				authStats, err := authenticateUserCanExecutePrepareOrExecute(
-					execCtx.reqCtx, owner, stmt, cwft.plan)
+					execCtx.reqCtx, owner, stmt, cwft.plan, execCtx.effectiveTxnDefaultDatabase,
+				)
 				if err != nil {
 					return nil, err
 				}
@@ -1095,6 +1098,9 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	cwft.preparedStmt = prepareStmt
+	// Carry the binding database through execute-time authorization, lifecycle
+	// admission, and ownership cleanup. All three must address the same object.
+	execCtx.effectiveTxnDefaultDatabase = prepareStmt.defaultDatabase
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	executionPlan := preparePlan.Plan

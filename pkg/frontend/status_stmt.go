@@ -195,14 +195,17 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			)
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets); err != nil {
+			if err = doRevokePrivilegeImplicitly(
+				execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets,
+				execCtx.effectiveTxnDefaultDatabase,
+			); err != nil {
 				return
 			}
 
 		case *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil); err != nil {
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil, ""); err != nil {
 				return
 			}
 

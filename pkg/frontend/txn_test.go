@@ -2209,6 +2209,7 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.DropView{},
 		&tree.DropSequence{},
 		&tree.AlterView{},
+		&tree.AlterSequence{},
 		&tree.CreateView{Replace: true},
 		&tree.DataBranchDeleteTable{},
 		&tree.DataBranchDeleteDatabase{},
@@ -2230,6 +2231,67 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
 		Names: tree.TableNames{alias, persistent},
 	}, ""))
+}
+
+func TestCreateRollsBackPublishedGenerationOnStorageInitFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	storageErr := moerr.NewInternalErrorNoCtx("storage initialization failed")
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(storageErr)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.GetTxnHandler().storage = eng
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	originalTxnClient := getPu("").TxnClient
+	defer func() { getPu("").TxnClient = originalTxnClient }()
+	getPu("").TxnClient = txnClient
+
+	err := ses.GetTxnHandler().Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		stmt:   &tree.Select{},
+		txnOpt: FeTxnOption{autoCommit: true},
+	})
+	require.ErrorIs(t, err, storageErr)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+	require.Equal(t, 1, op.rollbackCalls)
+}
+
+func TestCreateRollsBackPublishedGenerationOnValidityFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.GetTxnHandler().storage = eng
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{2}, Status: txn.TxnStatus_Aborted}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	originalTxnClient := getPu("").TxnClient
+	defer func() { getPu("").TxnClient = originalTxnClient }()
+	getPu("").TxnClient = txnClient
+
+	err := ses.GetTxnHandler().Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		stmt:   &tree.Select{},
+		txnOpt: FeTxnOption{autoCommit: true},
+	})
+	require.Error(t, err)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+	require.Equal(t, 1, op.rollbackCalls)
 }
 
 func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {

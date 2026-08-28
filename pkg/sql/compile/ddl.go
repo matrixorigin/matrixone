@@ -4164,6 +4164,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 	var values []interface{}
 	var curval string
+	var oldLogicalID uint64
 	qry := s.Plan.GetDdl().GetAlterSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -4189,6 +4190,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
+		// ALTER SEQUENCE replaces the physical relation but preserves the logical
+		// privilege identity, like ALTER VIEW/TABLE replacement.
+		oldLogicalID = plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
 		// sequence table exists
 		// get pre sequence table row values
 		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
@@ -4205,7 +4209,8 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
 		if err = c.runSqlWithOptions(
-			fmt.Sprintf("DROP SEQUENCE %s", tblName), executor.StatementOption{}.WithDisableLog(),
+			fmt.Sprintf("DROP SEQUENCE %s", tblName),
+			executor.StatementOption{}.WithDisableLog().WithIgnoreForeignKey(),
 		); err != nil {
 			return err
 		}
@@ -4221,7 +4226,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	if err := dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 

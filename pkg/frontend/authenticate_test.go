@@ -69,7 +69,7 @@ func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
 		context.Background(), nil, &tree.CreateTable{Temporary: true},
 	))
 	require.NoError(t, doRevokePrivilegeImplicitly(
-		context.Background(), nil, &tree.DropTable{}, nil,
+		context.Background(), nil, &tree.DropTable{}, nil, "",
 	))
 }
 
@@ -8972,6 +8972,24 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			require.Equal(t, testCase.expectedSQLs, bh.executedSQLs)
 		})
 	}
+
+	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		_, _, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "d",
+				TabName: catalog.IndexTableNamePrefix + "legacy",
+			},
+		)
+		require.ErrorContains(t, err, "cannot grant privileges on internal relation")
+		require.Empty(t, bh.executedSQLs)
+	})
 
 	t.Run("lock failure prevents privilege mutation", func(t *testing.T) {
 		bh := &backgroundExecTest{}

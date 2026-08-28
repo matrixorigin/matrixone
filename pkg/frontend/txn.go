@@ -555,8 +555,7 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 
 // starts a new txn.
 // if there is a txn existed, commit it before creating a new one.
-func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
-	var err error
+func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) (err error) {
 	defer th.inActiveTxnUnsafe()
 	if th.shareTxn {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxn: the share txn is not allowed to create new txn")
@@ -588,7 +587,19 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeBegin)
 		}
 	}()
+	createdGeneration := false
+	defer func() {
+		if err == nil || !createdGeneration {
+			return
+		}
+		// Create owns cleanup only for the generation it published during this
+		// call. Admission failures return before createUnsafe and therefore keep
+		// any pre-existing transaction untouched.
+		err = errors.Join(err, th.rollbackUnsafe(execCtx, nil))
+	}()
+
 	err = th.createTxnOpUnsafe(execCtx)
+	createdGeneration = th.txnOp != nil
 	if err != nil {
 		return err
 	}
@@ -622,7 +633,7 @@ func requiresPessimisticObjectLifecycleTxn(
 ) bool {
 	switch st := stmt.(type) {
 	case *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
-		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 		return true
 	case *tree.DropTable:
 		// Ordinary DROP TABLE can resolve to a session temporary alias only after

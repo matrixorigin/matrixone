@@ -5596,6 +5596,14 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
+	if ot == tree.OBJECT_TYPE_TABLE &&
+		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) &&
+		isIndexTable(pl.TabName) {
+		// Hidden index relations are implementation details whose lifecycle is
+		// owned by their base table/index definition. They cannot be independent
+		// authorization objects.
+		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
+	}
 	return checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
 }
 
@@ -12062,6 +12070,7 @@ func doRevokePrivilegeImplicitly(
 	ses *Session,
 	stmt tree.Statement,
 	persistentDropTableTargets tree.TableNames,
+	defaultDatabase string,
 ) error {
 	var err error
 	if _, ok := stmt.(*tree.DropTable); ok && len(persistentDropTableTargets) == 0 {
@@ -12103,7 +12112,10 @@ func doRevokePrivilegeImplicitly(
 		for _, name := range persistentDropTableTargets {
 			dbName := string(name.SchemaName)
 			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
+				dbName = defaultDatabase
+				if dbName == "" {
+					dbName = ses.GetDatabaseName()
+				}
 			}
 			curRole, err := getTableOwnerRoleName(tenantCtx, bh, dbName, string(name.ObjectName))
 			if err != nil {

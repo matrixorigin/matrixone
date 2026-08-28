@@ -4506,9 +4506,24 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+func authenticateUserCanExecutePrepareOrExecute(
+	reqCtx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	p *plan.Plan,
+	defaultDatabase string,
+) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
+
+	// Unqualified names in a prepared AST retain their PREPARE-time binding.
+	// Authorization must resolve that same object rather than the database that
+	// happens to be active when EXECUTE runs.
+	if defaultDatabase != "" && defaultDatabase != ses.GetDatabaseName() {
+		currentDatabase := ses.GetDatabaseName()
+		ses.SetDatabaseName(defaultDatabase)
+		defer ses.SetDatabaseName(currentDatabase)
+	}
 
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
@@ -4966,6 +4981,11 @@ func executeStmtWithWorkspace(ses FeSession,
 	)
 	if err != nil {
 		return err
+	}
+	if effectiveDefaultDatabase == "" {
+		// Binary execution and wrappers may already expose the prepared inner AST;
+		// initExecuteStmtParam recorded its binding database before authorization.
+		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
 	}
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
