@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -119,6 +120,41 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 
 const viewMetadataRevalidationSeedComplete = uint32(^uint32(0))
 
+func decodeViewMetadataAccountIDs(column *vector.Vector, rows int) ([]uint32, error) {
+	if column == nil {
+		return nil, moerr.NewInternalErrorNoCtx("view metadata account_id vector is nil")
+	}
+	if rows < 0 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"view metadata account_id vector has invalid row count %d", rows)
+	}
+	if column.GetType().Oid != types.T_int32 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"view metadata account_id vector has type %s, expected %s",
+			column.GetType().String(), types.T_int32.String())
+	}
+	if !column.IsConst() && rows > column.Length() {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"view metadata account_id vector has %d rows, length %d",
+			rows, column.Length())
+	}
+
+	accounts := make([]uint32, rows)
+	for i := range accounts {
+		if column.IsNull(uint64(i)) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"view metadata account_id vector contains NULL at row %d", i)
+		}
+		accountID := vector.GetFixedAtWithTypeCheck[int32](column, i)
+		if accountID < 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"view metadata account_id is negative: %d", accountID)
+		}
+		accounts[i] = uint32(accountID)
+	}
+	return accounts, nil
+}
+
 func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, active bool, err error) {
 	cursorResult, err := txn.Exec(fmt.Sprintf(
 		"select source_account_id,source_relation_kind,dependency_generation from %s.%s "+
@@ -153,11 +189,35 @@ func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, 
 		return false, true, err
 	}
 	accounts := make([]uint32, 0, viewMetadataRecoveryPageSize)
+	var pageErr error
 	page.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		accounts = append(accounts, vector.MustFixedColNoTypeCheck[uint32](columns[0])[:rows]...)
+		if rows == 0 {
+			return true
+		}
+		if rows < 0 || len(accounts) > viewMetadataRecoveryPageSize ||
+			rows > viewMetadataRecoveryPageSize-len(accounts) {
+			pageErr = moerr.NewInternalErrorNoCtxf(
+				"view metadata account page has too many rows: batch=%d, read=%d, maximum=%d",
+				rows, len(accounts), viewMetadataRecoveryPageSize)
+			return false
+		}
+		if len(columns) != 1 {
+			pageErr = moerr.NewInternalErrorNoCtxf(
+				"view metadata account page returned %d columns, expected 1", len(columns))
+			return false
+		}
+		var pageAccounts []uint32
+		pageAccounts, pageErr = decodeViewMetadataAccountIDs(columns[0], rows)
+		if pageErr != nil {
+			return false
+		}
+		accounts = append(accounts, pageAccounts...)
 		return true
 	})
 	page.Close()
+	if pageErr != nil {
+		return false, true, pageErr
+	}
 	for _, accountID := range accounts {
 		result, execErr := txn.Exec(fmt.Sprintf(
 			"replace into %s.%s (%s) values (%d,0,0,0,'%s','%s',0,0,0,0,0,"+
