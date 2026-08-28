@@ -198,8 +198,20 @@ func (obj *aobject) GetDuplicatedRows(
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
+		// Build the prepare-range selection from the immutable COW snapshot
+		// before GetDuplicatedRows takes the object lock for ART and conflict
+		// checks. PrePrepare assigns/publishes predecessor PrepareTS values in
+		// the same serialized worker before this read; later active appends are
+		// still handled by the newest-owner conflict check under the lock.
+		selection, snapshot := obj.appendMVCC.GetRowSelectionAfterWithSnapshot(from, to)
 		fn := func() (index.RowSelection, error) {
-			return obj.appendMVCC.GetRowSelectionAfterLocked(from, to), nil
+			// PrepareCommit also takes the object lock. If it published a new
+			// snapshot between the lock-free traversal above and this callback,
+			// rebuild from the now-stable snapshot while holding the lock.
+			if !obj.appendMVCC.IsPrepareSnapshotCurrent(snapshot) {
+				return obj.appendMVCC.GetRowSelectionAfter(from, to), nil
+			}
+			return selection, nil
 		}
 		return node.GetDuplicatedRows(
 			ctx,

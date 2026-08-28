@@ -198,6 +198,8 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.Equal(t, txnif.UncommitTS, n1.GetPrepare())
 	assert.Equal(t, txnif.UncommitTS, n2.GetPrepare())
 	assert.Equal(t, txnif.UncommitTS, n3.GetPrepare())
+	_, unpreparedSnapshot := h.GetRowSelectionAfterWithSnapshot(types.TS{}, types.MaxTs())
+	require.NotNil(t, unpreparedSnapshot)
 
 	txn2.PrepareTS = types.BuildTS(2, 0)
 	assert.NoError(t, n2.PrepareCommit())
@@ -205,6 +207,9 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.NoError(t, n1.PrepareCommit())
 	txn3.PrepareTS = types.BuildTS(4, 0)
 	assert.NoError(t, n3.PrepareCommit())
+	assert.False(t, h.IsPrepareSnapshotCurrent(unpreparedSnapshot))
+	_, preparedSnapshot := h.GetRowSelectionAfterWithSnapshot(types.TS{}, types.MaxTs())
+	assert.True(t, h.IsPrepareSnapshotCurrent(preparedSnapshot))
 	assert.Same(t, n2, h.appends.MVCC[0])
 	assert.Same(t, n1, h.appends.MVCC[1])
 	assert.Same(t, n3, h.appends.MVCC[2])
@@ -217,12 +222,12 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 
 	// Prepare order differs from physical row order. The selected ranges must
 	// still be assembled in physical order, with strict/inclusive TS bounds.
-	selection := h.GetRowSelectionAfterLocked(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	selection := h.GetRowSelectionAfter(types.BuildTS(1, 0), types.BuildTS(3, 0))
 	assert.Equal(t, uint32(0), selection.MinRow)
 	assert.Equal(t, uint32(20), selection.MaxRow)
 	assert.Nil(t, selection.Holes)
 
-	selection = h.GetRowSelectionAfterLocked(types.BuildTS(2, 0), types.BuildTS(4, 0))
+	selection = h.GetRowSelectionAfter(types.BuildTS(2, 0), types.BuildTS(4, 0))
 	assert.Equal(t, uint32(0), selection.MinRow)
 	assert.Equal(t, uint32(30), selection.MaxRow)
 	require.NotNil(t, selection.Holes)
@@ -231,6 +236,62 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.True(t, selection.Holes.Contains(19))
 	assert.False(t, selection.Holes.Contains(9))
 	assert.False(t, selection.Holes.Contains(20))
+}
+
+func TestAppendMVCCPrepareTreeConcurrentReaders(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	h := NewAppendMVCCHandle(obj)
+
+	const nodeCount = 64
+	nodes := make([]*AppendNode, nodeCount)
+	for i := range nodes {
+		txn := mockTxn()
+		nodes[i], _ = h.AddAppendNodeLocked(txn, uint32(i), uint32(i+1))
+		// Reverse PrepareTS order to exercise COW replacement and physical-row
+		// reordering concurrently with lock-free readers.
+		txn.PrepareTS = types.BuildTS(int64(nodeCount-i), 0)
+	}
+
+	readerStarted := make(chan struct{})
+	done := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 8 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			select {
+			case readerStarted <- struct{}{}:
+			case <-done:
+				return
+			}
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				selection := h.GetRowSelectionAfter(types.TS{}, types.MaxTs())
+				require.Equal(t, uint32(0), selection.MinRow)
+				require.Equal(t, uint32(nodeCount), selection.MaxRow)
+				require.True(t, selection.Holes == nil || selection.Holes.IsEmpty())
+			}
+		}()
+	}
+	for range 8 {
+		<-readerStarted
+	}
+	for _, node := range nodes {
+		require.NoError(t, node.PrepareCommit())
+	}
+	close(done)
+	readers.Wait()
 }
 
 func TestAppendMVCCRollbackKeepsPhysicalHole(t *testing.T) {
