@@ -126,6 +126,47 @@ func BenchmarkCurrentRoleClosureLargeDisconnectedGraph(b *testing.B) {
 	}
 }
 
+func BenchmarkCurrentRoleClosureInternalSQLBoundary(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	run := func(_ *process.Process, sql string) (executor.Result, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		var grantedID int64
+		switch {
+		case strings.HasSuffix(sql, "(10)"):
+			grantedID = 20
+		case strings.HasSuffix(sql, "(20)"):
+			grantedID = 30
+		case strings.HasSuffix(sql, "(30)"):
+		default:
+			return executor.Result{}, errors.New("unexpected role-grant query")
+		}
+		if grantedID != 0 {
+			if err := vector.AppendFixed(bat.Vecs[0], grantedID, false, mp); err != nil {
+				return executor.Result{}, err
+			}
+			bat.SetRowCount(1)
+		}
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+	}
+	expand := func(proc *process.Process, frontier []int64, visit func(int64)) error {
+		return expandCurrentRoleFrontierWithRunner(proc, frontier, visit, run)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		roles, err := currentRoleClosure(nil, 10, expand)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(roles) != 3 {
+			b.Fatalf("expected three roles, got %d", len(roles))
+		}
+	}
+}
+
 func TestBuildCurrentRoleGrantQuery(t *testing.T) {
 	require.Equal(t,
 		"SELECT cast(granted_id AS bigint) FROM mo_catalog.mo_role_grant WHERE grantee_id IN (10,20,30)",

@@ -53,19 +53,34 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 }
 
 func (builder *QueryBuilder) canReuseCTE(cteRef *CTERef, rootID int32) bool {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 ||
-		cteRef.hasNestedRef || cteRef.hasNestedUse {
+	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 || cteRef.hasNestedRef {
 		return false
 	}
 
 	first := cteRef.occurrences[0]
+	allOccurrencesContainStatementStableFunction := true
 	for _, occurrence := range cteRef.occurrences {
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
 			return false
 		}
+		allOccurrencesContainStatementStableFunction =
+			allOccurrencesContainStatementStableFunction &&
+				builder.cteSubtreeContainsStatementStableFunction(occurrence.rootID, make(map[int32]bool))
 	}
 
+	if cteRef.hasNestedUse && !allOccurrencesContainStatementStableFunction {
+		return false
+	}
+	if allOccurrencesContainStatementStableFunction {
+		// Unlike a generic CTE, mo_current_roles already computes its complete
+		// closure into one fixed-width batch before producing any row. LIMIT and
+		// SEMI/ANTI consumers therefore cannot save internal SQL work by keeping
+		// it inline. Require every occurrence to be in the rewritten root graph,
+		// then share one statement-local producer even when a consumer can stop
+		// early.
+		return builder.cteOccurrencesReachable(rootID, cteRef.occurrences)
+	}
 	if !builder.cteConsumersFullyDrain(rootID, cteRef.occurrences) {
 		return false
 	}
@@ -154,6 +169,33 @@ func samePlanType(left, right planpb.Type) bool {
 		left.Enumvalues == right.Enumvalues && left.Charset == right.Charset
 }
 
+func statementStableFunctionScan(node *planpb.Node) bool {
+	return node != nil && node.NodeType == planpb.Node_FUNCTION_SCAN &&
+		node.TableDef != nil && node.TableDef.TblFunc != nil &&
+		node.TableDef.TblFunc.Name == "mo_current_roles" &&
+		len(node.TblFuncExprList) == 0 && len(node.Children) == 0
+}
+
+func (builder *QueryBuilder) cteSubtreeContainsStatementStableFunction(
+	nodeID int32,
+	seen map[int32]bool,
+) bool {
+	if seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := builder.qry.Nodes[nodeID]
+	if statementStableFunctionScan(node) {
+		return true
+	}
+	for _, childID := range node.Children {
+		if builder.cteSubtreeContainsStatementStableFunction(childID, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[int32]bool) bool {
 	if seen[nodeID] {
 		return true
@@ -161,7 +203,11 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	seen[nodeID] = true
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
-	case planpb.Node_FUNCTION_SCAN, planpb.Node_EXTERNAL_SCAN,
+	case planpb.Node_FUNCTION_SCAN:
+		if !statementStableFunctionScan(node) {
+			return false
+		}
+	case planpb.Node_EXTERNAL_SCAN,
 		planpb.Node_EXTERNAL_FUNCTION, planpb.Node_LOCK_OP, planpb.Node_INSERT,
 		planpb.Node_DELETE, planpb.Node_MULTI_UPDATE, planpb.Node_POSTDML,
 		planpb.Node_RECURSIVE_CTE, planpb.Node_RECURSIVE_SCAN, planpb.Node_SINK,
@@ -234,6 +280,17 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	}
 	for _, childID := range node.Children {
 		if !builder.cteSubtreeIsDeterministic(childID, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) cteOccurrencesReachable(rootID int32, occurrences []cteOccurrence) bool {
+	reachable := make(map[int32]bool)
+	builder.collectCTEParents(rootID, make(map[int32][]int32), reachable)
+	for _, occurrence := range occurrences {
+		if !reachable[occurrence.rootID] {
 			return false
 		}
 	}
