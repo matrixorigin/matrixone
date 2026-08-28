@@ -125,79 +125,156 @@ func TestEvaluateFilterByZoneMapRejectsCorruptPayload(t *testing.T) {
 	}
 }
 
-// ZM.PrefixIn binary-searches the payload, so an unsorted list makes zone-map
-// pruning skip a block that holds matching rows. This is the live pruning path:
-// BlockFilters reach it through EvaluateFilterByZoneMap.
-func TestEvaluateFilterByZoneMapPrefixInIgnoresPayloadOrder(t *testing.T) {
+// A NULL slot carries an empty payload, which PrefixCompare treats as a prefix
+// of everything, so a leading NULL matches rather than prunes. What actually
+// breaks the search is physical order, so the rule is about order and each
+// consumer's search strategy -- not about NULL by itself.
+func TestEvaluateFilterByZoneMapNullAndOrderRules(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	proc := testutil.NewProcess(t)
-
-	colTyp := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
-	// The block covers keys in ["a","b"], and "a" is in every payload below, so
-	// the block must be selected regardless of the order the payload arrives in.
 	meta := zmVarcharBlockMeta(t, "a", "b")
 
+	payload := func(t *testing.T, items ...string) []byte {
+		t.Helper()
+		vec := vector.NewVec(types.T_varchar.ToType())
+		defer vec.Free(mp)
+		for _, it := range items {
+			if it == "NULL" {
+				require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+			} else {
+				require.NoError(t, vector.AppendBytes(vec, []byte(it), false, mp))
+			}
+		}
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		return data
+	}
+
+	// "a" is in every payload, so the block covering ["a","b"] must survive all
+	// of them however the needles are ordered or interleaved with NULLs.
 	for _, test := range []struct {
-		name   string
-		values []string
+		name  string
+		fn    string
+		items []string
 	}{
-		{"sorted", []string{"a", "c"}},
-		{"unsorted", []string{"c", "a"}},
+		{"prefix_in sorted", "prefix_in", []string{"a", "c"}},
+		{"prefix_in unsorted", "prefix_in", []string{"c", "a"}},
+		{"prefix_in null first", "prefix_in", []string{"NULL", "c", "a"}},
+		{"prefix_in null interleaved", "prefix_in", []string{"c", "NULL", "a"}},
+		{"in sorted", "in", []string{"a", "c"}},
+		{"in unsorted", "in", []string{"c", "a"}},
+		{"in null interleaved", "in", []string{"c", "NULL", "a"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			expr := &plan.Expr{
-				Typ:   plan.Type{Id: int32(types.T_bool)},
-				AuxId: 0,
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "prefix_in"},
-					Args: []*plan.Expr{
-						{Typ: colTyp, AuxId: 1, Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{Name: "k", ColPos: 0}}},
-						{Typ: colTyp, AuxId: 2, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-							Len:  int32(len(test.values)),
-							Data: zmVarcharPayload(t, mp, test.values...),
-						}}},
-					},
-				}},
-			}
-
-			zms := make([]objectio.ZoneMap, 3)
-			vecs := make([]*vector.Vector, 3)
-			defer func() {
-				for i := range vecs {
-					if vecs[i] != nil {
-						vecs[i].Free(proc.Mp())
-					}
-				}
-			}()
-
-			selected := EvaluateFilterByZoneMap(
-				context.Background(), proc, expr, meta, map[int]int{0: 0}, zms, vecs)
-			require.True(t, selected,
-				"block covering [a,b] must be selected: 'a' is in the payload")
+			expr := zmInExpr(test.fn, payload(t, test.items...), len(test.items))
+			require.True(t, evalZoneMap(t, proc, expr, meta),
+				"block covering [a,b] must be kept: 'a' is in the payload")
 		})
 	}
 }
 
-func TestZoneMapInVectorSortsWithoutTouchingThePayload(t *testing.T) {
+// A nullable IN list keeps its pruning: AnyIn scans those linearly, so order
+// never mattered for it and failing open would lose valid pruning.
+func TestZoneMapInVectorKeepsNullableInPruning(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	data := zmVarcharPayload(t, mp, "c", "a", "b")
-	original := bytes.Clone(data)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendBytes(vec, []byte("c"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, mp))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
 
-	vec, ok := zoneMapInVector(data)
+	_, ok := zoneMapInVector(data, false)
+	require.True(t, ok, "nullable IN uses a linear scan and must still prune")
+
+	_, ok = zoneMapInVector(data, true)
+	require.False(t, ok, "prefix_in binary-searches and must refuse this order")
+}
+
+// The evaluator runs once per object and again per block, and frees its vector
+// cache each call, so a payload that already holds the invariant must decode
+// without copying. Proven by aliasing: mutating the source bytes is visible
+// through the decoded vector.
+func TestZoneMapInVectorDecodesSortedPayloadZeroCopy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	src := vector.NewVec(types.T_varchar.ToType())
+	defer src.Free(mp)
+	for _, v := range []string{"aaa", "bbb", "ccc"} {
+		require.NoError(t, vector.AppendBytes(src, []byte(v), false, mp))
+	}
+	src.SetSorted(true)
+	data, err := src.MarshalBinary()
+	require.NoError(t, err)
+
+	vec, ok := zoneMapInVector(data, true)
 	require.True(t, ok)
-	require.Equal(t, original, data, "payload was mutated in place")
+	require.Equal(t, 3, vec.Length())
 
 	col, area := vector.MustVarlenaRawData(vec)
-	require.Equal(t, 3, len(col))
-	for i := 1; i < len(col); i++ {
-		require.Negative(t, bytes.Compare(
-			col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)))
-	}
+	before := string(col[0].GetByteSlice(area))
+	require.Equal(t, "aaa", before)
 
-	_, ok = zoneMapInVector([]byte("not a marshalled vector"))
+	// Flip a byte of the first value inside the source buffer. A zero-copy decode
+	// observes it; a defensive clone would not.
+	idx := bytes.Index(data, []byte("aaa"))
+	require.GreaterOrEqual(t, idx, 0)
+	data[idx] = 'z'
+
+	col, area = vector.MustVarlenaRawData(vec)
+	require.Equal(t, "zaa", string(col[0].GetByteSlice(area)),
+		"sorted payload was copied instead of decoded in place")
+}
+
+// An unsorted payload cannot be searched soundly, and normalizing it here would
+// cost a copy and a sort for every block. It must fail open instead.
+func TestZoneMapInVectorFailsOpenForUnsortedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	_, ok := zoneMapInVector(zmVarcharPayload(t, mp, "c", "a"), true)
+	require.False(t, ok, "unsorted payload must not be used for pruning")
+
+	// Sorted but unflagged still prunes: the O(n) check confirms the order.
+	unflagged := vector.NewVec(types.T_varchar.ToType())
+	defer unflagged.Free(mp)
+	for _, v := range []string{"a", "b", "c"} {
+		require.NoError(t, vector.AppendBytes(unflagged, []byte(v), false, mp))
+	}
+	require.False(t, unflagged.GetSorted())
+	data, err := unflagged.MarshalBinary()
+	require.NoError(t, err)
+	vec, ok := zoneMapInVector(data, true)
+	require.True(t, ok, "a de-facto sorted payload should keep its pruning")
+	require.Equal(t, 3, vec.Length())
+
+	_, ok = zoneMapInVector([]byte("not a marshalled vector"), true)
 	require.False(t, ok, "a corrupt payload must be reported, not silently used")
+}
+
+// Constant folding sorts non-nullable IN lists but InplaceSortAndCompact only
+// sets the sorted flag when it actually compacted, so an ordinary `id IN (1,2,3)`
+// arrives sorted in fact and unflagged. Refusing those would disable pruning for
+// a very common predicate.
+func TestZoneMapInVectorKeepsFixedWidthPruning(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+	for _, v := range []int64{1, 2, 3} {
+		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
+	}
+	require.False(t, vec.GetSorted(), "no compaction happened, so no sorted flag")
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+
+	got, ok := zoneMapInVector(data, false)
+	require.True(t, ok, "a fixed-width IN list must keep its pruning")
+	require.Equal(t, 3, got.Length())
 }

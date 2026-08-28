@@ -96,13 +96,21 @@ func ivfInInt64Expr(ctx context.Context, mp *mpool.MPool, left *plan.Expr, value
 	if err := vector.AppendFixedList(vec, values, nil, mp); err != nil {
 		return nil, err
 	}
+	// Publish a canonical membership set. centroidIDs arrives ranked by distance
+	// to the query, and consumers of an IN payload binary-search it (ZM.AnyIn).
+	// Today this filter reaches the reader's PK path, which normalizes for us, so
+	// this is not a live defect -- but it is the same shape as the prefix_in bug
+	// this file's sibling had, and sorting at the source removes the dependency
+	// on a downstream normalize that this function cannot see.
+	vec.InplaceSortAndCompact()
+	vec.SetSorted(true)
 	data, err := vec.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
 	right := &plan.Expr{
 		Typ:  left.Typ,
-		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: int32(len(values)), Data: data}},
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: int32(vec.Length()), Data: data}},
 	}
 	return ivfFuncExpr(ctx, function.InFunctionName, left, right)
 }

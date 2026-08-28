@@ -330,11 +330,12 @@ func ivfCentroidPrefixFilter(
 			return nil, err
 		}
 	}
-	// prefix_in values must be sorted before they leave this function. Block
-	// pruning takes its seek point and its early-stop bound from the first and
-	// last element positionally (readutil/expr_filter.go), so an unsorted list
-	// makes the reader seek past whole centroids and stop the scan early.
-	// centroidIDs arrives ranked by distance to the query, never by value.
+	// prefix_in values must be sorted before they leave this function.
+	// centroidIDs arrives ranked by distance to the query, never by value, and
+	// zone-map pruning binary-searches this list (ZM.PrefixIn, reached through
+	// colexec.EvaluateFilterByZoneMap), so an unsorted list makes the search
+	// probe the wrong element and skip blocks holding matching entries.
+	// Compaction is why Len below is taken from the vector, not from centroidIDs.
 	prefixVec.InplaceSortAndCompact()
 	prefixVec.SetSorted(true)
 	data, err := prefixVec.MarshalBinary()

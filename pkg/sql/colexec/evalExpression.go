@@ -2077,30 +2077,64 @@ func EvaluateFilterByZoneMap(
 }
 
 // zoneMapInVector decodes an IN / prefix_in payload for zone-map pruning and
-// guarantees the sorted order its consumers assume. ZM.AnyIn and ZM.PrefixIn
-// binary-search the value list, so an unsorted payload makes them probe the
-// wrong element and skip objects or blocks that do hold matching rows.
+// reports whether it may be used to prune.
 //
-// Producers are not required to sort. The pk_filter path normalizes for exactly
-// this reason (normalizePKInVector), and this path must establish the same
-// invariant rather than trust its input.
+// What each consumer needs differs:
+//   - ZM.PrefixIn always binary-searches the physical varlena slots and never
+//     consults the null bitmap, so it needs the physical order to be ascending.
+//   - ZM.AnyIn binary-searches too, except when the payload carries NULLs, where
+//     it falls back to anyInNullableVec -- a linear scan that ignores order.
 //
-// Payloads carrying NULLs are returned untouched: AnyIn routes them to
-// anyInNullableVec, a linear scan that does not depend on order.
-func zoneMapInVector(data []byte) (*vector.Vector, bool) {
-	// InplaceSortAndCompact writes through to the payload's backing bytes, which
-	// belong to the plan expression and may be reused across blocks or shipped to
-	// another CN. Decoding over a private copy keeps pruning from ever mutating
-	// them, and costs one copy per query because the decoded vector is cached.
+// An out-of-order payload makes the search probe the wrong element and silently
+// drop blocks that hold matching rows, so it must not prune at all: keeping a
+// block is always safe.
+//
+// Normalizing here is not an option. EvaluateFilterByZoneMap frees its vector
+// cache on every call, and disttae calls it once per object and again for each
+// block, so sorting a private copy would clone and sort the payload per block.
+// Decoding is therefore zero-copy and the payload is only ever inspected.
+func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 	vec := vector.NewVec(types.T_any.ToType())
-	if err := vec.UnmarshalBinary(bytes.Clone(data)); err != nil {
+	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, false
 	}
-	if vec.GetSorted() || vec.IsConst() || vec.GetNulls().Any() {
+	if vec.IsConst() {
 		return vec, true
 	}
-	vec.InplaceSortAndCompact()
-	return vec, true
+	if !prefixSearch && vec.GetNulls().Any() {
+		// AnyIn scans linearly for these, so order does not matter.
+		return vec, true
+	}
+	if vec.GetSorted() || zoneMapInVectorIsSorted(vec) {
+		return vec, true
+	}
+	return nil, false
+}
+
+// zoneMapInVectorIsSorted checks the physical byte order, which is what AnyIn and
+// PrefixIn search -- a NULL slot carries an empty payload and sorts first, the
+// same way those functions see it. The flag alone is not sufficient:
+// InplaceSortAndCompact only marks a vector when it actually compacted, so a
+// sorted payload can arrive unflagged. The scan is O(n) and allocation-free, so
+// checking is far cheaper than the per-block copy-and-sort it replaces.
+func zoneMapInVectorIsSorted(vec *vector.Vector) bool {
+	if !vec.GetType().IsVarlen() {
+		// Fixed-width payloads keep their previous treatment. Constant folding
+		// sorts every non-nullable IN list (rule/constant_fold.go, utils.go), and
+		// verifying each numeric type would need a full type switch for a defect
+		// that has not been observed. Refusing them here would instead disable
+		// pruning for ordinary predicates such as `id IN (1,2,3)`, whose list is
+		// sorted in fact but carries no sorted flag -- InplaceSortAndCompact only
+		// sets it when the list actually compacted.
+		return true
+	}
+	col, area := vector.MustVarlenaRawData(vec)
+	for i := 1; i < len(col); i++ {
+		if bytes.Compare(col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func GetExprZoneMap(
@@ -2161,7 +2195,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec, decoded := zoneMapInVector(data.Vec.Data)
+						vec, decoded := zoneMapInVector(data.Vec.Data, false)
 						if !decoded {
 							zms[expr.AuxId].Reset()
 							vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
@@ -2238,7 +2272,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec, decoded := zoneMapInVector(data.Vec.Data)
+						vec, decoded := zoneMapInVector(data.Vec.Data, true)
 						if !decoded {
 							zms[expr.AuxId].Reset()
 							vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())

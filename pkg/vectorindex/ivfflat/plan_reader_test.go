@@ -1719,3 +1719,30 @@ func TestIvfCentroidPrefixFilterRejectsEmptyCentroidSet(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, filter)
 }
+
+// The IN centroid filter is the sibling of ivfCentroidPrefixFilter and takes the
+// same distance-ranked input, so it must publish the same canonical membership
+// set: sorted, compacted, and with Len describing the payload.
+func TestIvfInInt64ExprPublishesSortedMembershipSet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	left := ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})
+	expr, err := ivfInInt64Expr(context.Background(), mp, left, []int64{900, 7, 900, 42, 7})
+	require.NoError(t, err)
+
+	literal := expr.GetF().Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// {900,7,900,42,7} holds three distinct centroids.
+	require.Equal(t, 3, published.Length())
+	require.Equal(t, int32(3), literal.Len)
+	require.True(t, published.GetSorted())
+
+	col := vector.MustFixedColWithTypeCheck[int64](published)
+	require.Equal(t, []int64{7, 42, 900}, col)
+}

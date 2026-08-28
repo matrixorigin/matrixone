@@ -15,7 +15,6 @@
 package readutil
 
 import (
-	"bytes"
 	"context"
 	"sort"
 	"time"
@@ -292,34 +291,6 @@ func prefixInRangeByValue(
 		return zoneMapMatch{}
 	}
 	return zoneMapMatch{matches: zm.PrefixInRange(lower, upper, hint), comparable: true}
-}
-
-// unmarshalSortedFilterVector decodes an IN / prefix_in payload for pruning and
-// guarantees the sorted order that its consumers assume. ZM.AnyIn and
-// ZM.PrefixIn binary-search the value list, and the object/block bounds below
-// read the first and last element as the value range, so an unsorted payload
-// silently prunes candidates that should have been read.
-//
-// The pk_filter path establishes this invariant with normalizePKInVector; this
-// path decodes the plan expression directly, so it must establish it itself.
-// Vectors carrying NULLs are returned untouched: the consumers that need sorted
-// order are disabled for them (prefixInVector bails out, and AnyIn falls back to
-// anyInNullableVec, a linear scan), and normalizing them would change behaviour
-// on a path that has no defect.
-func unmarshalSortedFilterVector(data []byte) (*vector.Vector, bool) {
-	// InplaceSortAndCompact writes through to the payload's backing bytes, which
-	// belong to the plan expression and may be reused across blocks or shipped to
-	// another CN. Decoding over a private copy keeps pruning from ever mutating
-	// them, and costs one copy per query because the decoded vector is cached.
-	vec := vector.NewVec(types.T_any.ToType())
-	if err := vec.UnmarshalBinary(bytes.Clone(data)); err != nil {
-		return nil, false
-	}
-	if vec.GetSorted() || vec.IsConst() || vec.GetNulls().Any() {
-		return vec, true
-	}
-	vec.InplaceSortAndCompact()
-	return vec, true
 }
 
 func prefixInVector(
@@ -1529,8 +1500,8 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			vec, decoded := unmarshalSortedFilterVector(val)
-			if !decoded {
+			vec := vector.NewVec(types.T_any.ToType())
+			if err := vec.UnmarshalBinary(val); err != nil {
 				canCompile = false
 				return
 			}
@@ -1637,8 +1608,8 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			vec, decoded := unmarshalSortedFilterVector(val)
-			if !decoded {
+			vec := vector.NewVec(types.T_any.ToType())
+			if err := vec.UnmarshalBinary(val); err != nil {
 				canCompile = false
 				return
 			}
