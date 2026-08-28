@@ -3312,7 +3312,11 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 	if err != nil {
 		ses.Error(rollbackCtx, "failed to rollback txn",
 			zap.Error(err))
-		return err
+		// rollbackUnsafe invalidates the transaction handle even when the
+		// storage rollback fails or its context expires. The old generation is
+		// therefore no longer an untouched, reusable session: fail closed just
+		// as we do after a partially completed temporary-table cleanup.
+		return errors.Join(err, errSessionResetConnectionMustClose)
 	}
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {

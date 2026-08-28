@@ -1452,20 +1452,15 @@ func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
 
 	err = routine.resetSession("", &query.ResetSessionResponse{})
 	require.ErrorIs(t, err, assert.AnError)
+	require.ErrorIs(t, err, errSessionResetConnectionMustClose)
 	require.Same(t, oldSession, routine.getSession())
 	require.Equal(t, "db1", protocol.GetStr(DBNAME))
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1)
 	require.Same(t, oldSession, registered[0])
 
-	// The failed reset did not publish or dispose the old generation. A second
-	// reset on the same physical connection can therefore complete cleanly.
-	require.NoError(t, routine.resetSession("", &query.ResetSessionResponse{}))
-	require.NotSame(t, oldSession, routine.getSession())
-	require.Equal(t, "", protocol.GetStr(DBNAME))
-	registered = rm.sessionManager.GetAllSessions()
-	require.Len(t, registered, 1)
-	require.Same(t, routine.getSession(), registered[0])
+	// rollbackUnsafe has invalidated the transaction generation, so the handler
+	// must retire this connection instead of attempting another reset on it.
 }
 
 func TestRoutineHandleSessionCommandRejectsResetPayload(t *testing.T) {
@@ -1584,6 +1579,63 @@ func TestRoutineHandleSessionCommandClosesPartialTempTableReset(t *testing.T) {
 	require.Same(t, oldSession, routine.getSession(), "the replacement generation must remain unpublished")
 }
 
+func TestRoutineHandleSessionCommandClosesRollbackFailedReset(t *testing.T) {
+	for name, rollback := range map[string]func(context.Context) error{
+		"storage error": func(context.Context) error { return assert.AnError },
+		"deadline": func(ctx context.Context) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			oldSession := newTestSession(t, ctrl)
+			rm, err := NewRoutineManager(context.Background(), "")
+			require.NoError(t, err)
+			rm.sessionManager = queryservice.NewSessionManager()
+
+			mysqlProtocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+			protocol := &disconnectRecordingProtocol{MysqlRrWr: mysqlProtocol}
+			parameters := &config.FrontendParameters{}
+			parameters.SetDefaultValues()
+			if name == "deadline" {
+				parameters.SessionTimeout.Duration = time.Millisecond
+			}
+			routine := NewRoutine(context.Background(), protocol, parameters)
+			oldSession.setRoutineManager(rm)
+			oldSession.setRoutine(routine)
+			routine.setSession(oldSession)
+			rm.sessionManager.AddSession(oldSession)
+			conn := mysqlProtocol.GetTcpConnection()
+			rm.setRoutine(conn, mysqlProtocol.ConnectionID(), routine)
+			t.Cleanup(func() {
+				rm.deleteRoutine(conn)
+				rm.sessionManager.RemoveSession(oldSession)
+				oldSession.Close()
+				routine.cancelRoutineFunc()
+				rm.cancelCtx()
+			})
+
+			oldSession.GetTxnHandler().Close()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+			txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			workspace.EXPECT().GetHaveDDL().Return(false)
+			txnOp.EXPECT().GetWorkspace().Return(workspace)
+			txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(rollback)
+			oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+			oldSession.txnHandler.shareTxn = false
+
+			require.NoError(t, rm.Handler(conn, []byte{byte(COM_RESET_CONNECTION)}))
+			require.Equal(t, 1, protocol.disconnects, "a reset that invalidated its transaction generation must close the physical connection")
+			require.Same(t, oldSession, routine.getSession(), "a failed reset must not publish a replacement generation")
+		})
+	}
+}
+
 func mysqlNativePasswordResponse(password, salt []byte) []byte {
 	hash1 := HashSha1(password)
 	hash2 := HashSha1(hash1)
@@ -1628,6 +1680,15 @@ func readWirePacket(t *testing.T, conn net.Conn) (byte, []byte) {
 	_, err = io.ReadFull(conn, payload)
 	require.NoError(t, err)
 	return header[3], payload
+}
+
+func wireOKPacketStatus(t *testing.T, payload []byte) uint16 {
+	t.Helper()
+	require.GreaterOrEqual(t, len(payload), 5)
+	require.Equal(t, byte(defines.OKHeader), payload[0])
+	// The focused exchange carries zero affected rows and zero last-insert ID,
+	// both encoded as one byte. The following two bytes are the server status.
+	return binary.LittleEndian.Uint16(payload[3:5])
 }
 
 func wireHandshakeResponse(username string) []byte {
@@ -1703,6 +1764,8 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 		_, response = readWirePacket(t, clientConn)
 		require.NotEmpty(t, response)
 		require.Equal(t, byte(defines.OKHeader), response[0])
+		require.NotZero(t, wireOKPacketStatus(t, response)&SERVER_STATUS_AUTOCOMMIT,
+			"COM_CHANGE_USER must publish a clean autocommit status to the pooled client")
 
 		routine := rm.getRoutineByConnID(connectionID)
 		require.NotNil(t, routine)
