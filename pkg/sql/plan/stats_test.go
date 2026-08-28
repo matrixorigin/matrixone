@@ -345,6 +345,19 @@ func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
 	return builder
 }
 
+func TestStatsCacheReportsWholeCacheReset(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	for tableID := uint64(0); tableID <= statsCacheMaxSize; tableID++ {
+		require.False(t, statsCache.SetAndReportReset(tableID, stats))
+	}
+	require.True(t, statsCache.SetAndReportReset(statsCacheMaxSize+1, stats))
+	removed := statsCache.Get(0)
+	retained := statsCache.Get(statsCacheMaxSize + 1)
+	require.False(t, removed.Exists())
+	require.True(t, retained.Exists())
+}
+
 type statsCacheCompilerContext struct {
 	*MockCompilerContext
 	statsCache *StatsCache

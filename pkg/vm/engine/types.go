@@ -1327,6 +1327,14 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// StatsRefresher is an optional engine capability for statements that define
+// a synchronous statistics-publication boundary, such as ANALYZE TABLE.
+// Implementations must not return until Stats() can observe the returned
+// statistics on the local engine instance.
+type StatsRefresher interface {
+	RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error)
+}
+
 type VectorPool interface {
 	PutBatch(bat *batch.Batch)
 	GetVector(typ types.Type) *vector.Vector
