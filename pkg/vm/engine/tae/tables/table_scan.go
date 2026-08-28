@@ -44,28 +44,28 @@ func preservePhysicalRows(ctx context.Context) bool {
 	return preserve
 }
 
-func compactAbortRows(bat *containers.Batch, abortRows *nulls.Bitmap) {
-	if bat == nil || abortRows.IsEmpty() {
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) {
+	if bat == nil || invisibleRows.IsEmpty() {
 		return
 	}
 
-	aborts := abortRows.ToArray()
-	remainingDeletes := nulls.NewWithSize(bat.Length() - len(aborts))
-	abortIdx := 0
+	invisible := invisibleRows.ToArray()
+	remainingDeletes := nulls.NewWithSize(bat.Length() - len(invisible))
+	invisibleIdx := 0
 	for _, row := range bat.Deletes.ToArray() {
-		for abortIdx < len(aborts) && aborts[abortIdx] < row {
-			abortIdx++
+		for invisibleIdx < len(invisible) && invisible[invisibleIdx] < row {
+			invisibleIdx++
 		}
-		if abortIdx < len(aborts) && aborts[abortIdx] == row {
+		if invisibleIdx < len(invisible) && invisible[invisibleIdx] == row {
 			continue
 		}
-		remainingDeletes.Add(row - uint64(abortIdx))
+		remainingDeletes.Add(row - uint64(invisibleIdx))
 	}
 
-	// Compact only append-abort holes. Tombstone and workspace deletes remain
-	// represented in the returned batch, with offsets shifted to account for
-	// the physically removed abort rows.
-	bat.Deletes = abortRows
+	// Compact rows hidden by append MVCC (rollback holes and commits newer than
+	// the reader snapshot). Tombstone and workspace deletes remain represented
+	// in the returned batch, with offsets shifted over the removed rows.
+	bat.Deletes = invisibleRows
 	bat.Compact()
 	if !remainingDeletes.IsEmpty() {
 		bat.Deletes = remainingDeletes
@@ -89,28 +89,27 @@ func HybridScanByBlock(
 	_, offset := blkID.Offsets()
 	deleteStartOffset := 0
 	var deletesBeforeScan *nulls.Bitmap
-	filterAbortRows := dataObject.IsAppendable() &&
-		!dataObject.ObjectPersisted() &&
-		!preservePhysicalRows(ctx)
+	filterInvisibleAppendRows := dataObject.IsAppendable() && !preservePhysicalRows(ctx)
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
-		if filterAbortRows {
+		if filterInvisibleAppendRows {
 			deletesBeforeScan = (*bat).Deletes.Clone()
 		}
 	}
-	err = dataObject.GetObjectData().Scan(ctx, bat, txn, readSchema, offset, colIdxs, mp)
+	err = dataObject.GetObjectData().Scan(
+		ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
 		return err
 	}
 	if *bat == nil {
 		return nil
 	}
-	var abortRows *nulls.Bitmap
-	if filterAbortRows {
-		abortRows = (*bat).Deletes.Clone()
+	var invisibleAppendRows *nulls.Bitmap
+	if filterInvisibleAppendRows {
+		invisibleAppendRows = (*bat).Deletes.Clone()
 		if deletesBeforeScan != nil {
 			deletesBeforeScan.Foreach(func(row uint64) bool {
-				abortRows.Del(row)
+				invisibleAppendRows.Del(row)
 				return true
 			})
 		}
@@ -132,7 +131,7 @@ func HybridScanByBlock(
 		(*bat).Close()
 		return err
 	}
-	compactAbortRows(*bat, abortRows)
+	compactInvisibleAppendRows(*bat, invisibleAppendRows)
 	return nil
 }
 

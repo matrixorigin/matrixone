@@ -461,6 +461,13 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
+func (db *txnDB) ApplyRollbackPendingAppends() (err error) {
+	for _, table := range db.tables {
+		err = combineTxnLifecycleErrors(err, table.ApplyRollbackPendingAppends())
+	}
+	return
+}
+
 func (db *txnDB) WaitWal() (err error) {
 	for _, table := range db.tables {
 		table.WaitSynced()
