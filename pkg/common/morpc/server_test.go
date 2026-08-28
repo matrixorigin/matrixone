@@ -196,6 +196,37 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 	require.Equal(t, 1, futureReleased)
 }
 
+func TestClientSessionCleanSendDoesNotAccessReleasedFuture(t *testing.T) {
+	var released atomic.Int32
+	var messagesReleased atomic.Int32
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { messagesReleased.Add(1) },
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	f := newFuture(func(f *Future) {
+		released.Add(1)
+		// Simulate the next pool generation changing the future kind.
+		f.oneWay = true
+	})
+	f.init(RPCMessage{
+		Ctx:     ctx,
+		Message: newTestMessage(1),
+	})
+	f.ref()
+	f.Close()
+	cs.c <- f
+
+	cs.cleanSend()
+	require.Equal(t, int32(1), released.Load())
+	require.Equal(t, int32(1), messagesReleased.Load())
+}
+
 func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 	run := func(t *testing.T, conn *testIOSession) {
 		var futureReleased atomic.Int32
@@ -290,6 +321,62 @@ func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
 		}
 	}
 	require.Equal(t, int32(2), released.Load())
+}
+
+func TestStartWriteLoopDoesNotAccessReleasedUnwrittenFuture(t *testing.T) {
+	var unwrittenReleased atomic.Int32
+	var messagesReleased atomic.Int32
+	releasedC := make(chan struct{}, 1)
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 2
+
+	cs := newClientSession(
+		s.metrics,
+		newTestIOSession(goetty.ErrIllegalState, nil),
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { messagesReleased.Add(1) },
+	)
+	newClosedFuture := func(id uint64, releaseFunc func(*Future)) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		t.Cleanup(cancel)
+		f := newFuture(releaseFunc)
+		f.init(RPCMessage{
+			Ctx:     ctx,
+			Message: newTestMessage(id),
+		})
+		f.ref()
+		f.Close()
+		return f
+	}
+	cs.c <- newClosedFuture(1, nil)
+	cs.c <- newClosedFuture(2, func(f *Future) {
+		unwrittenReleased.Add(1)
+		select {
+		case releasedC <- struct{}{}:
+		default:
+		}
+		// Simulate the next pool generation changing the future kind.
+		f.oneWay = true
+	})
+
+	require.NoError(t, s.startWriteLoop(cs))
+	select {
+	case <-releasedC:
+	case <-time.After(time.Second):
+		t.Fatal("unwritten future was not released")
+	}
+	s.stopper.Stop()
+
+	require.Equal(t, int32(1), unwrittenReleased.Load())
+	require.Equal(t, int32(2), messagesReleased.Load())
 }
 
 func TestStreamServer(t *testing.T) {

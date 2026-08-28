@@ -378,9 +378,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				}
 				failUnwritten := func(values []*Future, err error) {
 					for _, f := range values {
+						oneWay := f.oneWay
 						cs.releaseMessage(f.send)
 						f.messageSent(err)
-						if f.oneWay {
+						if oneWay {
 							f.Close()
 						}
 					}
@@ -639,9 +640,10 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
+			oneWay := f.oneWay
 			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
-			if f.oneWay {
+			if oneWay {
 				f.Close()
 			}
 		default:
