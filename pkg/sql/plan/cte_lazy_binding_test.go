@@ -716,7 +716,9 @@ func TestCTEReuseSharesOnlyStatementStableCurrentRolesFunction(t *testing.T) {
 
 	builder := &QueryBuilder{qry: &Query{Nodes: []*Node{currentRoles()}}}
 	require.True(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
-	require.True(t, builder.cteSubtreeContainsStatementStableFunction(0, make(map[int32]bool)))
+	require.True(t, builder.cteSubtreeIsCurrentRoleClosure(0, make(map[int32]bool)))
+	require.True(t, currentRoleClosureOutput([]planpb.Type{{Id: int32(types.T_int64)}}))
+	require.False(t, currentRoleClosureOutput([]planpb.Type{{Id: int32(types.T_varchar)}}))
 
 	builder.qry.Nodes[0].TableDef.TblFunc.Name = "generate_series"
 	require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
@@ -729,6 +731,48 @@ func TestCTEReuseSharesOnlyStatementStableCurrentRolesFunction(t *testing.T) {
 	builder.qry.Nodes[0] = currentRoles()
 	builder.qry.Nodes[0].Children = []int32{1}
 	require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
+
+	builder.qry.Nodes = []*Node{
+		currentRoles(),
+		{
+			NodeType:    planpb.Node_PROJECT,
+			Children:    []int32{0},
+			ProjectList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}}},
+		},
+	}
+	require.True(t, builder.cteSubtreeIsCurrentRoleClosure(1, make(map[int32]bool)))
+	builder.qry.Nodes[1].ProjectList[0].Typ.Id = int32(types.T_varchar)
+	require.False(t, builder.cteSubtreeIsCurrentRoleClosure(1, make(map[int32]bool)))
+}
+
+func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
+	purePlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		WITH c AS (SELECT role_id FROM mo_current_roles() role_closure)
+		SELECT a.role_id FROM c a JOIN c b ON a.role_id = b.role_id LIMIT 1`)
+	require.NoError(t, err)
+	require.Equal(t, 1, countReachableNodeType(purePlan.GetQuery(), planpb.Node_SINK))
+	require.Equal(t, 1, countReachableTableFunction(purePlan.GetQuery(), "mo_current_roles"))
+
+	amplifiedPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		WITH c AS (
+			SELECT l.l_comment, r.role_id
+			FROM lineitem l CROSS JOIN mo_current_roles() r
+		)
+		SELECT a.role_id FROM c a JOIN c b ON a.role_id = b.role_id LIMIT 1`)
+	require.NoError(t, err)
+	require.Zero(t, countReachableNodeType(amplifiedPlan.GetQuery(), planpb.Node_SINK),
+		"an early-terminating amplifying subtree must retain the guarded inline plan")
+	require.Equal(t, 2, countReachableTableFunction(amplifiedPlan.GetQuery(), "mo_current_roles"))
+
+	variableWidthPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		WITH c AS (
+			SELECT l.l_comment, r.role_id
+			FROM lineitem l CROSS JOIN mo_current_roles() r
+		)
+		SELECT count(*) FROM c a JOIN c b ON a.role_id = b.role_id`)
+	require.NoError(t, err)
+	require.Zero(t, countReachableNodeType(variableWidthPlan.GetQuery(), planpb.Node_SINK),
+		"a full-drain variable-width subtree must retain the materialization memory guard")
 }
 
 func TestInformationSchemaMetadataPlansShareCurrentRolesOnce(t *testing.T) {
