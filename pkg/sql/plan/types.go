@@ -340,6 +340,12 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
+	// subscriptionMetadataScope identifies an outer INFORMATION_SCHEMA.STATISTICS
+	// query that targets a subscription. The publisher identity is installed on
+	// CompilerContext only while that built-in view is expanded, so unrelated
+	// tables in the same SELECT continue to use the subscriber identity.
+	subscriptionMetadataScope *SubscriptionMeta
+
 	ctxByNode             []*BindContext
 	windowValidationScans []*plan.Node
 	nameByColRef          map[[2]int32]string

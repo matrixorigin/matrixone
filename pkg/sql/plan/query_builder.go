@@ -5157,6 +5157,12 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	restoreSubscriptionMetadataScope, err := builder.enterSubscriptionMetadataScope(stmt)
+	if err != nil {
+		return 0, err
+	}
+	defer restoreSubscriptionMetadataScope()
+
 	ctx.queryBlockOwner = ctx
 	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
 		ctx.cteState.recursiveRefQueryBlock = ctx
@@ -10989,6 +10995,12 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.AsSource = alterstmt.AsSource
 	}
 
+	metadataSubscription := builder.subscriptionMetadataScope
+	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
+	if isSubscriptionStatistics {
+		rewriteSubscriptionStatisticsAccount(viewStmt.AsSource, uint32(metadataSubscription.AccountId))
+	}
+
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
@@ -11045,6 +11057,11 @@ func (builder *QueryBuilder) bindView(
 		capture.enterNestedView()
 		defer capture.leaveNestedView()
 	}
+	if isSubscriptionStatistics {
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(metadataSubscription)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -11053,6 +11070,9 @@ func (builder *QueryBuilder) bindView(
 		nodeID, viewCtx, viewCtx.outputColumnProvenanceForBoundary())
 	if err != nil {
 		return
+	}
+	if isSubscriptionStatistics {
+		rewriteSubscriptionStatisticsOutput(builder, nodeID, viewCtx, metadataSubscription.SubName)
 	}
 	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
@@ -11934,6 +11954,22 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
+				if dbName == catalog.MO_CATALOG && midNode.ObjRef != nil {
+					objRef := *midNode.ObjRef
+					midNode.ObjRef = &objRef
+					midNode.ObjRef.PubInfo = &plan.PubInfo{TenantId: sub.AccountId}
+					midNode.ObjRef.SubscriptionName = sub.SubName
+				}
+			}
+			if currentAccountID == catalog.System_Account && dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				if subFilter := subscriptionMoTablesFilter(builder.compCtx.GetQueryingSubscription()); subFilter != nil {
+					ctx.binder = NewWhereBinder(builder, ctx)
+					publicationFilterExprs, err := splitAndBindCondition(subFilter, NoAlias, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = publicationFilterExprs
+				}
 			}
 			if currentAccountID != catalog.System_Account {
 				// add account filter for system table scan
@@ -11963,6 +11999,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
 					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
+					if subFilter := subscriptionMoTablesFilter(builder.compCtx.GetQueryingSubscription()); subFilter != nil {
+						motablesFilter = tree.NewAndExpr(motablesFilter, subFilter)
+					}
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
