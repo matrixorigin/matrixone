@@ -3,21 +3,21 @@ create database kafka_exttab;
 use kafka_exttab;
 create external table kt (a int, b varchar(100)) engine = kafka with ('brokers' = '127.0.0.1:19092', 'topic' = 'events');
 show create table kt;
-➤ Table[12,2,0]  ¦  Create Table[12,303,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 kt  ¦  CREATE EXTERNAL TABLE `kt` (
   `a` int DEFAULT NULL,
-  `b` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL
+  `b` varchar(100) DEFAULT NULL
 ) ENGINE = KAFKA WITH ("brokers" = '127.0.0.1:19092', "topic" = 'events', "partition" = '0', "autocommit" = 'false', "group" = 'mo_kafka_kafka_exttab_kt', "format" = 'csv', "separator" = ',')
 create external table kt2 (a int, b varchar(100)) engine = kafka with ('brokers' = 'h1:9092,h2:9092', 'topic' = 't2', 'partition' = '3', 'autocommit' = 'true', 'group' = 'g2', 'format' = 'jsonl');
 show create table kt2;
-➤ Table[12,3,0]  ¦  Create Table[12,260,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 kt2  ¦  CREATE EXTERNAL TABLE `kt2` (
   `a` int DEFAULT NULL,
-  `b` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL
+  `b` varchar(100) DEFAULT NULL
 ) ENGINE = KAFKA WITH ("brokers" = 'h1:9092,h2:9092', "topic" = 't2', "partition" = '3', "autocommit" = 'true', "group" = 'g2', "format" = 'jsonl')
 create external table kt3 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't3', 'separator' = '|');
 show create table kt3;
-➤ Table[12,3,0]  ¦  Create Table[12,232,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 kt3  ¦  CREATE EXTERNAL TABLE `kt3` (
   `a` int DEFAULT NULL
 ) ENGINE = KAFKA WITH ("brokers" = 'h:9092', "topic" = 't3', "partition" = '0', "autocommit" = 'false', "group" = 'mo_kafka_kafka_exttab_kt3', "format" = 'csv', "separator" = '|')

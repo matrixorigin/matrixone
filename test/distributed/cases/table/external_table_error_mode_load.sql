@@ -1,8 +1,10 @@
--- Splitting a messy source into a data table and a rejects table in ONE
--- statement, by combining the external error-mode columns with multi-table
--- INSERT. This is the shape a real load takes: the good records land in the
--- destination, every bad record lands in a rejects table with its line number,
--- message and source text, and the statement never fails.
+-- Splitting a messy source into a data table and a rejects table by routing on
+-- the external error-mode columns. This is the shape a real load takes: the
+-- good records land in the destination, every bad record lands in a rejects
+-- table with its line number, message and source text, and neither statement
+-- fails. (On main this is written as one multi-table INSERT FIRST; 4.2-dev has
+-- no multi-table INSERT, so the same routing is expressed as one INSERT per
+-- destination over the same scan.)
 drop database if exists exterrload;
 create database exterrload;
 use exterrload;
@@ -22,13 +24,12 @@ fields terminated by ',' enclosed by '"' lines terminated by '\n';
 -- what the scan makes of each line
 select __mo_file_line, id, name, amount, ts, __mo_error_message from src_csv;
 
--- one statement, two destinations
-insert first
-  when errmsg is null then into dest (id, name, amount, ts) values (id, name, amount, ts)
-  else into rejects (line, msg, txt) values (ln, errmsg, errtxt)
-select id, name, amount, ts,
-       __mo_file_line as ln, __mo_error_message as errmsg, __mo_error_text as errtxt
-from src_csv;
+-- two destinations, routed on __mo_error_message
+insert into dest (id, name, amount, ts)
+select id, name, amount, ts from src_csv where __mo_error_message is null;
+insert into rejects (line, msg, txt)
+select __mo_file_line, __mo_error_message, __mo_error_text
+from src_csv where __mo_error_message is not null;
 
 select * from dest order by id;
 select line, msg, txt from rejects order by line;
@@ -52,31 +53,32 @@ infile{'filepath'='$resources/external_table_file/errmix.jsonl', 'format'='jsonl
 
 select __mo_file_line, id, name, amount, ts, __mo_error_message from src_json;
 
-insert first
-  when errmsg is null then into dest (id, name, amount, ts) values (id, name, amount, ts)
-  else into rejects (line, msg, txt) values (ln, errmsg, errtxt)
-select id, name, amount, ts,
-       __mo_file_line as ln, __mo_error_message as errmsg, __mo_error_text as errtxt
-from src_json;
+insert into dest (id, name, amount, ts)
+select id, name, amount, ts from src_json where __mo_error_message is null;
+insert into rejects (line, msg, txt)
+select __mo_file_line, __mo_error_message, __mo_error_text
+from src_json where __mo_error_message is not null;
 
 select * from dest order by id;
 select line, msg, txt from rejects order by line;
 select (select count(*) from dest) + (select count(*) from rejects) as total;
 
--- ---------------------------------------------------------------- INSERT ALL
--- INSERT ALL is not first-match: a row goes to EVERY branch whose condition it
--- satisfies. The always-true audit branch therefore receives every record,
--- good and bad, while the first two branches split them.
+-- ------------------------------------------------------------- AUDIT OF ALL
+-- An audit table that receives EVERY record, good and bad, alongside the split
+-- into dest/rejects: the error columns stay readable for a row that also feeds
+-- another destination. (On main this is one INSERT ALL with an always-true
+-- audit branch.)
 drop table if exists audit;
 create table audit (line bigint, failed int);
 truncate table dest;
 truncate table rejects;
-insert all
-  when errmsg is null then into dest (id, name, amount, ts) values (id, name, amount, ts)
-  when errmsg is not null then into rejects (line, msg, txt) values (ln, errmsg, errtxt)
-  when 1 = 1 then into audit (line, failed) values (ln, case when errmsg is null then 0 else 1 end)
-select id, name, amount, ts,
-       __mo_file_line as ln, __mo_error_message as errmsg, __mo_error_text as errtxt
+insert into dest (id, name, amount, ts)
+select id, name, amount, ts from src_csv where __mo_error_message is null;
+insert into rejects (line, msg, txt)
+select __mo_file_line, __mo_error_message, __mo_error_text
+from src_csv where __mo_error_message is not null;
+insert into audit (line, failed)
+select __mo_file_line, case when __mo_error_message is null then 0 else 1 end
 from src_csv;
 
 select count(*) as dest_rows from dest;

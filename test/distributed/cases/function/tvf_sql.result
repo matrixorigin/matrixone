@@ -5,7 +5,7 @@ create table t(id int, name varchar(50), score int);
 insert into t values (1,'alice',90),(2,'bob',NULL),(3,'carol',75),(4,'d,e',60),(5,'q"x',NULL);
 set @h = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}');
 select * from sql_tvf('select id,name,score from t order by id', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x;
-➤ id[-5,64,0]  ¦  name[12,536870911,0]  ¦  score[-5,64,0]  𝄀
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  score[-5,64,0]  𝄀
 1  ¦  alice  ¦  90  𝄀
 2  ¦  bob  ¦  null  𝄀
 3  ¦  carol  ¦  75  𝄀
@@ -26,7 +26,7 @@ select a.id, b.name from
 sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) a
 join sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) b
 on a.id = b.id where a.id in (1,4) order by a.id;
-➤ id[-5,64,0]  ¦  name[12,536870911,0]  𝄀
+➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
 1  ¦  alice  𝄀
 4  ¦  d,e
 select * from sql_tvf('select id,name from t order by id', NULL, @h) x;
@@ -56,12 +56,12 @@ insert into typed values
 (true, 42, 1.5, 2.25, '2026-01-15 10:20:30', 'line1\nline2 unicode 中文'),
 (false, NULL, NULL, -0.5, NULL, NULL);
 select * from sql_tvf('select b,i32,f32,f64,ts,txt from typed order by i32', '{"cols":[{"name":"b","type":"bool"},{"name":"i32","type":"int32"},{"name":"f32","type":"float32"},{"name":"f64","type":"float64"},{"name":"ts","type":"timestamp"},{"name":"txt","type":"string"}]}', @h) x;
-➤ b[-7,1,0]  ¦  i32[4,32,0]  ¦  f32[7,23,31]  ¦  f64[8,53,31]  ¦  ts[93,19,0]  ¦  txt[12,536870911,0]  𝄀
+➤ b[-7,1,0]  ¦  i32[4,32,0]  ¦  f32[7,24,0]  ¦  f64[8,54,0]  ¦  ts[93,64,0]  ¦  txt[12,-1,0]  𝄀
 0  ¦  null  ¦  null  ¦  -0.5  ¦  null  ¦  null  𝄀
 1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30  ¦  line1
 line2 unicode 中文
 select * from sql_tvf('select b,i32,f32,f64,ts from typed where i32 is not null', 'bifFt', @h) x;
-➤ col0[-7,1,0]  ¦  col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[8,53,31]  ¦  col4[93,19,0]  𝄀
+➤ col0[-7,1,0]  ¦  col1[4,32,0]  ¦  col2[7,24,0]  ¦  col3[8,54,0]  ¦  col4[93,64,0]  𝄀
 1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30
 select * from sql_tvf('select 1,2', '{"cols":[{"name":"a","type":"int64"},{"name":"a","type":"int64"}]}', @h) x;
 invalid input: duplicate column name "a" in options

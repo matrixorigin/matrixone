@@ -12,11 +12,11 @@ engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6
 create external table pushed (id int, name varchar(50), amount decimal(12,2), created datetime)
 engine = sql with ('config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_pushdown"}', 'pushdown' = 'true');
 select id, name from plain where __mo_query = 'select id, name, amount, created from src order by id' and id > 2;
-➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
 3  ¦  carol  𝄀
 4  ¦  dave
 select id, name from pushed where __mo_query = 'select id, name, amount, created from src order by id' and id > 2;
-➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
 3  ¦  carol  𝄀
 4  ¦  dave
 select id from pushed where __mo_query = 'select id, name, amount, created from src' and amount is null;
@@ -55,7 +55,7 @@ select id, name from pushed
 where __mo_query in ('select id, name, amount, created from src where id < 3',
 'select id, name, amount, created from src where id > 3')
 and id <> 1 order by id;
-➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
 2  ¦  bob  𝄀
 4  ¦  dave
 create external table pushed_default (id int, name varchar(50), amount decimal(12,2), created datetime)
@@ -66,18 +66,18 @@ select id from pushed_default where id > 3;
 ➤ id[4,32,0]  𝄀
 4
 show create table pushed;
-➤ Table[12,6,0]  ¦  Create Table[12,259,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 pushed  ¦  CREATE EXTERNAL TABLE `pushed` (
   `id` int DEFAULT NULL,
-  `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `name` varchar(50) DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `created` datetime DEFAULT NULL
 ) ENGINE = SQL WITH ("config" = '<redacted>', "pushdown" = 'true')
 show create table plain;
-➤ Table[12,5,0]  ¦  Create Table[12,237,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 plain  ¦  CREATE EXTERNAL TABLE `plain` (
   `id` int DEFAULT NULL,
-  `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `name` varchar(50) DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `created` datetime DEFAULT NULL
 ) ENGINE = SQL WITH ("config" = '<redacted>')
@@ -85,7 +85,7 @@ select id from plain where __mo_query = 'select id as ident, name as nm, amount 
 ➤ id[4,32,0]  𝄀
 4
 select id from pushed where __mo_query = 'select id as ident, name as nm, amount as amt, created as c from src' and id > 3;
-invalid input: sql_tvf: query failed: Error 1054 (42S22): invalid input: column id does not exist
+invalid input: sql_tvf: query failed: Error 20301 (HY000): invalid input: column id does not exist
 select id from pushed where __mo_query = 'select id as ID, name as NAME, amount as AMOUNT, created as CREATED from src' and id > 3;
 ➤ id[4,32,0]  𝄀
 4
