@@ -706,6 +706,81 @@ func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
 	require.Equal(t, []uint64{99}, p.GetDdl().GetTruncateTable().GetForeignTbl())
 }
 
+func TestBuildTruncateMongoDBExternalTableRejectsReadOnlyDML(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["mongo_events"] = &ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "mongo_events",
+	}
+	ctx.tables["mongo_events"] = &TableDef{
+		Name:        "mongo_events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source",
+			Database:   "telemetry",
+			Collection: "events",
+			SchemaMode: sqlmongodb.SchemaExplicit,
+			Conversion: sqlmongodb.ConversionStrict,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "id", Path: "_id", TypeID: int32(types.T_varchar), Width: 64},
+			},
+		}),
+		Cols: []*ColDef{
+			{Name: "id", Typ: Type{Id: int32(types.T_varchar), Width: 64}},
+		},
+	}
+
+	for _, prepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table mongo_events", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, prepare)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			require.Equal(t, "invalid input: cannot insert/update/delete from external table", err.Error())
+		})
+	}
+}
+
+func TestBuildTruncateNonMongoExternalTableKeepsExistingBehavior(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table external_events", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["external_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "external_events"}
+	ctx.tables["external_events"] = &TableDef{
+		Name:      "external_events",
+		TableType: catalog.SystemExternalRel,
+	}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDdl().GetTruncateTable())
+}
+
+func TestBuildTruncateMalformedMongoDBExternalTableReturnsCatalogError(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table mongo_events", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.objects["mongo_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "mongo_events"}
+	ctx.tables["mongo_events"] = &TableDef{
+		Name:        "mongo_events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+	}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.Nil(t, p)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Equal(t, "invalid input: MongoDB external table is missing its catalog envelope", err.Error())
+}
+
 func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		t.Context(),
@@ -5226,6 +5301,33 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
 			require.NoError(t, err)
 			stmt.Free()
+		})
+	}
+}
+
+func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		expression string
+		wantFSP    int32
+	}{
+		{name: "string literals fsp zero", expression: "timestamp('2024-01-15', '12:30:00')", wantFSP: 0},
+		{name: "string literals fsp one", expression: "timestamp('2024-01-15 10:00:00.1', '02:30:00')", wantFSP: 1},
+		{name: "second datetime literal fsp one", expression: "timestamp('2024-01-15', '2024-01-15 12:30:00.1')", wantFSP: 1},
+		{name: "string literals fsp six", expression: "timestamp('2024-01-15', '12:30:00.123456')", wantFSP: 6},
+		{name: "typed values fsp six", expression: "timestamp(cast('2024-01-15' as date), cast('12:30:00.123456' as time(6)))", wantFSP: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := buildSingleStmt(mock, t,
+				"create table timestamp_pair_ctas as select "+test.expression+" as pair_value")
+			require.NoError(t, err)
+
+			column := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.Equal(t, int32(types.T_datetime), column.Typ.Id)
+			require.Equal(t, test.wantFSP, column.Typ.Width)
+			require.Equal(t, test.wantFSP, column.Typ.Scale)
+			require.True(t, column.GetDefault().GetNullAbility())
 		})
 	}
 }

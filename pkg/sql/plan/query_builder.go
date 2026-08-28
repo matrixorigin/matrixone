@@ -4517,6 +4517,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
+const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
@@ -11462,6 +11463,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Kind:         foreignCfg.Kind,
 					Config:       foreignCfg.ConfigJSON,
 					DefaultQuery: foreignCfg.DefaultQuery,
+					// Both the option and the plan field are the positive
+					// form, so the zero value -- any path that forgets to set
+					// it -- is the safe "send the query verbatim".
+					Pushdown: foreignCfg.Pushdown,
 				}
 			} else if externType == plan.ExternType_KAFKA_TB {
 				// Read-control defaults; compileKafkaScan overwrites them from
