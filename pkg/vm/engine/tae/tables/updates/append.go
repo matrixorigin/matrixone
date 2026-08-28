@@ -128,9 +128,10 @@ func (node *AppendNode) SetMaxRow(row uint32) {
 func (node *AppendNode) PrepareCommit() error {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
+	oldPrepare := node.Prepare
 	_, err := node.TxnMVCCNode.PrepareCommit()
 	if err == nil {
-		node.mvcc.reorderPrepareLocked(node)
+		node.mvcc.reorderPrepareLocked(node, oldPrepare)
 	}
 	return err
 }
@@ -244,10 +245,11 @@ func (node *AppendNode) ReadFromVersion(
 func (node *AppendNode) PrepareRollback() (err error) {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
+	oldPrepare := node.Prepare
 	err = node.TxnMVCCNode.PrepareRollback()
 	if err == nil && node.GetTxn() != nil {
 		node.Prepare = node.GetTxn().GetPrepareTS()
-		node.mvcc.reorderPrepareLocked(node)
+		node.mvcc.reorderPrepareLocked(node, oldPrepare)
 	}
 	return
 }
