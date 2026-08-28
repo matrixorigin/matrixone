@@ -2131,7 +2131,7 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 // needles [30,10] against a block zonemap [5,15] make AnyIn's binary search probe
 // 30, answer false, and drop a block holding the matching needle 10.
 func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
-	if vec.GetSorted() {
+	if vec.GetSorted() || vec.Length() < 2 {
 		return true
 	}
 	if !vec.GetType().IsVarlen() {

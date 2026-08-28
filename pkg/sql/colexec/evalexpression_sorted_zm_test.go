@@ -303,3 +303,23 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T)
 	require.True(t, ok, "a flagged ordered payload keeps its pruning")
 	require.Equal(t, 2, got.Length())
 }
+
+// A constant vector represents one repeated value, so its order is not in
+// question and it is passed through without inspection.
+func TestZoneMapInVectorAcceptsConstPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 5, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+	require.True(t, vec.IsConst())
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+
+	for _, prefixSearch := range []bool{false, true} {
+		got, ok := zoneMapInVector(data, prefixSearch)
+		require.True(t, ok, "const payload is usable (prefixSearch=%v)", prefixSearch)
+		require.True(t, got.IsConst())
+	}
+}

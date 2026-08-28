@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -46,20 +47,64 @@ func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	}
 }
 
+// ConstructInExpr builds `colName IN (<colVec>)`.
+//
+// The payload is published ordered and flagged, because zone-map pruning
+// binary-searches it (ZM.AnyIn) and drops blocks that hold matching rows when the
+// order is wrong -- and because colexec refuses to prune on a payload whose order
+// it cannot establish, so an unflagged one silently loses block filtering.
+//
+// The caller's vector is never modified. Callers pass vectors they use
+// positionally elsewhere: disttae's transfer pairs searchPKColumn with
+// searchEntryPos and searchBatPos by index, so sorting it in place would
+// mis-associate rows. Normalising a private copy costs one clone per scan, not
+// per block.
+//
+// Errors are returned rather than swallowed. Publishing a filter built from a
+// payload that failed to encode would prune against garbage, and silently
+// skipping normalisation would cost pruning with no signal that anything went
+// wrong.
 func ConstructInExpr(
 	ctx context.Context,
 	colName string,
 	colVec *vector.Vector,
-) *plan.Expr {
-	data, _ := colVec.MarshalBinary()
+) (*plan.Expr, error) {
+	data, err := colVec.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	length := colVec.Length()
+	if !colVec.GetSorted() && length > 1 {
+		if data, length, err = normalizeInPayload(data); err != nil {
+			return nil, err
+		}
+	}
 	colExpr := NewColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
 	return plan2.MakeInExpr(
 		ctx,
 		colExpr,
-		int32(colVec.Length()),
+		int32(length),
 		data,
 		false,
-	)
+	), nil
+}
+
+// normalizeInPayload re-encodes an IN payload in ascending order with the sorted
+// flag set, so zone-map pruning can binary-search it.
+//
+// It decodes into its own vector rather than sorting the caller's: callers pass
+// vectors they use positionally elsewhere, and reordering one in place would
+// mis-associate rows against its parallel arrays.
+func normalizeInPayload(data []byte) ([]byte, int, error) {
+	owned := vector.NewVec(types.T_any.ToType())
+	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+		return nil, 0, err
+	}
+	owned.InplaceSortAndCompact() // also sets the sorted flag
+	// Returned directly rather than branched on: there is nothing to unwind here,
+	// and the caller discards the length whenever the error is non-nil.
+	sorted, err := owned.MarshalBinary()
+	return sorted, owned.Length(), err
 }
 
 func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
