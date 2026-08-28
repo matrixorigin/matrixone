@@ -2023,6 +2023,26 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 	return
 }
 
+func (tbl *txnTable) ApplyRollbackPendingAppends() (err error) {
+	for idx, entry := range tbl.txnEntries.entries {
+		if tbl.txnEntries.IsDeleted(idx) {
+			continue
+		}
+		appendNode, ok := entry.(txnif.AppendNode)
+		if !ok {
+			continue
+		}
+		// Full ApplyRollback may already have handled this node. More
+		// importantly, an earlier entry failure must not prevent a later append
+		// from releasing its global MVCC state.
+		if appendNode.GetTxn() == nil {
+			continue
+		}
+		err = combineTxnLifecycleErrors(err, appendNode.ApplyRollback())
+	}
+	return
+}
+
 func (tbl *txnTable) CleanUp() {
 	tbl.dataTable.CleanUp()
 	if tbl.tombstoneTable != nil {

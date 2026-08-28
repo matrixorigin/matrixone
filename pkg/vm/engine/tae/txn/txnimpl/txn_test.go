@@ -796,6 +796,8 @@ func TestConcurrentDedupSamePK(t *testing.T) {
 		rows, err := obj.GetObjectData().Rows()
 		require.NoError(t, err)
 		t.Logf("data object: id=%s physical-rows=%d", obj.ID().String(), rows)
+		compactable, reason := obj.GetObjectData().PrepareCompactInfo()
+		require.Truef(t, compactable, "object %s is not compactable: %s", obj.ID().String(), reason)
 	}
 	t.Logf("data object count: %d", tableEntry.ObjectCnt(false))
 	require.Equal(t, 1, successes)
