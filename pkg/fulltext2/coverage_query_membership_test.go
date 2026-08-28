@@ -30,10 +30,12 @@ import (
 // recordingMembershipFilter makes the loaded zero-copy probe observable without
 // relying on a probabilistic Bloom-filter hit as a byte-equivalence oracle.
 type recordingMembershipFilter struct {
-	probes [][]byte
+	probes     [][]byte
+	probeViews [][]byte
 }
 
 func (f *recordingMembershipFilter) Test(data []byte) bool {
+	f.probeViews = append(f.probeViews, data)
 	probe := make([]byte, len(data))
 	copy(probe, data)
 	f.probes = append(f.probes, probe)
@@ -229,10 +231,12 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 			feed(t, b, tc.val, "x")
 			seg, err := b.Finish()
 			require.NoError(t, err)
+			require.NotNil(t, seg.pks)
 			blob, err := seg.Serialize()
 			require.NoError(t, err)
 			loaded, err := Deserialize("loaded-membership", bytes.NewReader(blob))
 			require.NoError(t, err)
+			require.Nil(t, loaded.pks)
 			t.Cleanup(func() { _ = loaded.dict.Close() })
 
 			vec := vector.NewVec(tc.typ.ToType())
@@ -258,9 +262,28 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 			captured := &docFilterMembership{seg: loaded, f: capture}
 			require.True(t, captured.Contains(0))
 			require.Len(t, capture.probes, 1)
+			require.Len(t, capture.probeViews, 1)
 			expected := sourcePkBytes(vec, tc.typ.ToType())
 			require.Len(t, capture.probes[0], len(expected))
 			require.True(t, bytes.Equal(expected, capture.probes[0]))
+
+			// Byte equality alone would still pass if loaded keys fell back to
+			// decode-plus-reencode. Prove the non-UUID probe is the exact borrowed
+			// docmap view. UUID is the intentional control: its stored 36-byte
+			// canonical text must be converted to an independent raw 16-byte probe.
+			stored, err := loaded.pkContent(0)
+			require.NoError(t, err)
+			view := capture.probeViews[0]
+			if tc.typ == types.T_uuid {
+				require.Len(t, stored, 36)
+				require.Len(t, view, 16)
+				require.False(t, &stored[0] == &view[0])
+			} else {
+				require.Len(t, view, len(stored))
+				if len(stored) > 0 {
+					require.True(t, &stored[0] == &view[0])
+				}
+			}
 		})
 	}
 }
