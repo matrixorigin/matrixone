@@ -2105,7 +2105,7 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 		// AnyIn scans linearly for these, so order does not matter.
 		return vec, true
 	}
-	if zoneMapInVectorOrderIsKnown(vec) {
+	if zoneMapInVectorOrderIsKnown(vec, prefixSearch) {
 		return vec, true
 	}
 	return nil, false
@@ -2125,24 +2125,43 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 //
 // For varlen the order is verified directly, in the byte order AnyIn and PrefixIn
 // search, with a NULL slot's empty payload sorting first exactly as they see it.
-// Fixed-width types would need a per-type comparator, so absent the flag their
-// order is unknown and the caller fails open.
+// A prefix search needs one condition more than order -- see the walk below --
+// which is why the flag does not short-circuit it. Fixed-width types would need a
+// per-type comparator, so absent the flag their order is unknown and the caller
+// fails open.
 //
 // Failing open only costs pruning. Trusting an unverified order costs rows:
 // needles [30,10] against a block zonemap [5,15] make AnyIn's binary search probe
 // 30, answer false, and drop a block holding the matching needle 10.
-func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
-	if vec.GetSorted() || vec.Length() < 2 {
+func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
+	if vec.Length() < 2 {
 		return true
 	}
 	if !vec.GetType().IsVarlen() {
-		return false
+		// Fixed-width order can only come from the flag. PrefixIn never reaches
+		// these -- it reads varlena slots directly.
+		return vec.GetSorted()
 	}
+
+	// The flag alone is not enough for a prefix search, so this walks even when it
+	// is set: PrefixIn's search predicate is non-monotonic whenever one needle is a
+	// proper byte-prefix of another, and InplaceSortAndCompact will happily flag
+	// such a payload. Ascending ["a","ab"] against a zone map ["az","c"] makes the
+	// predicate read [true,false]; sort.Search runs off the end and prunes a block
+	// that "a" matches. Checking adjacent pairs suffices: if one needle is a proper
+	// prefix of a later one, every needle between them carries that prefix too.
+	checkOrder := !vec.GetSorted()
 	col, area := vector.MustVarlenaRawData(vec)
+	prev := col[0].GetByteSlice(area)
 	for i := 1; i < len(col); i++ {
-		if bytes.Compare(col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)) > 0 {
+		cur := col[i].GetByteSlice(area)
+		if checkOrder && bytes.Compare(prev, cur) > 0 {
 			return false
 		}
+		if prefixSearch && len(prev) < len(cur) && bytes.HasPrefix(cur, prev) {
+			return false
+		}
+		prev = cur
 	}
 	return true
 }

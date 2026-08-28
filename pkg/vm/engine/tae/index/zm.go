@@ -781,12 +781,13 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 // makes the search probe the wrong element and prune blocks that do match.
 //
 // Sortedness is necessary but not sufficient: the search also assumes no value is
-// a byte-prefix of another. Ascending ["a","ab"] against a zone map ["az","c"]
-// answers false, though ["a"] alone answers true -- adding a needle removes a
-// match. No current producer can hit this, because packer and serial encodings are
-// self-delimiting and IVF centroid prefixes are fixed-length, so no encoded value
-// byte-prefixes another. A producer publishing raw variable-length strings would
-// need that case fixed here first.
+// a proper byte-prefix of another. Ascending ["a","ab"] against a zone map
+// ["az","c"] answers false, though ["a"] alone answers true -- the predicate reads
+// [true,false] and sort.Search runs off the end. The sorted flag does not imply
+// this, so callers must check it separately (colexec.zoneMapInVector does, and
+// keeps the block when it fails). Today's producers cannot trip it anyway: packer
+// and serial encodings are self-delimiting and IVF centroid prefixes are
+// fixed-length, so no encoded value byte-prefixes another.
 //
 // Callers that cannot guarantee the order must establish it or check it before
 // calling (see colexec.zoneMapInVector); a wrong answer here silently drops rows.

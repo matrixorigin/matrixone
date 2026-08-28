@@ -323,3 +323,63 @@ func TestZoneMapInVectorAcceptsConstPayload(t *testing.T) {
 		require.True(t, got.IsConst())
 	}
 }
+
+// PrefixIn's sort.Search predicate is non-monotonic when one needle is a proper
+// byte-prefix of another, and sorting does not fix it: ascending ["a","ab"] against
+// a zone map ["az","c"] reads [true,false], so the search runs off the end and
+// answers false even though "az" starts with "a". The flag cannot be trusted here
+// either -- InplaceSortAndCompact sets it on exactly this payload -- so the block
+// must be kept whether or not the payload arrives flagged.
+func TestEvaluateFilterByZoneMapKeepsBlockForPrefixNeedleOfAnother(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	proc := testutil.NewProcess(t)
+
+	zm := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(zm, []byte("az"))
+	index.UpdateZM(zm, []byte("c"))
+
+	for _, flagged := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unflagged", true: "flagged"}[flagged], func(t *testing.T) {
+			vec := vector.NewVec(types.T_varchar.ToType())
+			defer vec.Free(mp)
+			for _, s := range []string{"a", "ab"} {
+				require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
+			}
+			if flagged {
+				vec.InplaceSortAndCompact()
+				require.True(t, vec.GetSorted(), "the payload really is flagged sorted")
+			}
+			data, err := vec.MarshalBinary()
+			require.NoError(t, err)
+
+			dataMeta := objectio.BuildMetaData(1, 1)
+			meta := dataMeta.GetBlockMeta(0)
+			meta.MustGetColumn(0).SetZoneMap(zm)
+
+			require.True(t, evalZoneMap(t, proc, zmInExpr("prefix_in", data, vec.Length()), meta),
+				`block ["az","c"] must be kept: "az" has prefix "a"`)
+		})
+	}
+}
+
+// The guard above must not disable prefix pruning generally: needles that are not
+// prefixes of one another keep their binary search, and a block outside their range
+// is still pruned.
+func TestEvaluateFilterByZoneMapStillPrunesDisjointPrefixes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	proc := testutil.NewProcess(t)
+
+	zm := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(zm, []byte("m"))
+	index.UpdateZM(zm, []byte("n"))
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	meta.MustGetColumn(0).SetZoneMap(zm)
+
+	require.False(t, evalZoneMap(t, proc, zmInExpr("prefix_in", zmVarcharPayload(t, mp, "a", "b"), 2), meta),
+		`block ["m","n"] must be pruned: neither "a" nor "b" can prefix it`)
+	require.True(t, evalZoneMap(t, proc, zmInExpr("prefix_in", zmVarcharPayload(t, mp, "a", "m"), 2), meta),
+		`block ["m","n"] must be kept: "m" matches`)
+}
