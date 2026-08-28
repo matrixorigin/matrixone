@@ -6608,12 +6608,16 @@ type warningDiagnosticAppender interface {
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
-	trimmed := strings.TrimSpace(value)
+	// Numeric prefix scanning follows MySQL's ASCII whitespace rules. Using
+	// strings.TrimSpace here would disagree with the conversion itself for
+	// inputs such as a leading non-breaking space: the value converts to zero,
+	// but the warning check would reinterpret it as a complete number.
+	trimmed := trimASCIISpace(value)
 	if trimmed == "" || isExtensionFloatCandidate(trimmed) {
 		return
 	}
 	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
-	if ok && strings.TrimSpace(prefix) == trimmed {
+	if ok && prefix == trimmed {
 		return
 	}
 	if proc == nil {
@@ -6735,6 +6739,20 @@ func skipASCIISpace(s string, i int) int {
 		}
 	}
 	return i
+}
+
+func trimASCIISpace(s string) string {
+	start := skipASCIISpace(s, 0)
+	end := len(s)
+	for end > start {
+		switch s[end-1] {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			end--
+		default:
+			return s[start:end]
+		}
+	}
+	return s[start:end]
 }
 
 func isASCIIDigit(b byte) bool {

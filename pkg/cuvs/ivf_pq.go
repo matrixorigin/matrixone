@@ -143,6 +143,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 }
 
 // NewGpuIvfPqEmpty creates a new GpuIvfPq instance with pre-allocated buffer but no data yet.
+
 func NewGpuIvfPqEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
@@ -456,6 +457,7 @@ func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfPq for loading")
 	}
 
+	// Constructed for LOADING: deserialising ingests no raw rows.
 	C.gpu_ivf_pq_start(cIvfPq, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -561,14 +563,21 @@ func (gi *GpuIvfPq[B, Q]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuIvfPq[B, Q]) Pack(filename string) error {
+// spillDir hosts the intermediate save_dir tree; pass the LocalSpillDir the
+// caller is already using for the final .tar so this scratch does NOT land in
+// $TMPDIR (/tmp) where a wiki_all-scale build would ENOSPC.
+// Pack writes the index components and archives them, returning the size of every
+// component split by where it becomes resident (see PackSizes). The build-side
+// aggregate admission needs Device rather than the tar total, which also counts
+// host-only components.
+func (gi *GpuIvfPq[B, Q]) Pack(filename, spillDir string) (PackSizes, error) {
 	if gi.cIvfPq == nil {
-		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+		return PackSizes{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "ivf-pq-pack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "ivf-pq-pack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
+		return PackSizes{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -580,22 +589,32 @@ func (gi *GpuIvfPq[B, Q]) Pack(filename string) error {
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
+		return PackSizes{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
-	return Pack(tmpDir, filename)
+	// Measure BEFORE archiving: Pack removes nothing, but taking the figure from
+	// the component directory keeps it independent of tar framing overhead.
+	sizes, err := MeasureComponents(tmpDir)
+	if err != nil {
+		return PackSizes{}, err
+	}
+	if err := Pack(tmpDir, filename); err != nil {
+		return PackSizes{}, err
+	}
+	return sizes, nil
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuIvfPq[B, Q]) Unpack(filename string, mode DistributionMode) error {
+// spillDir hosts the intermediate extraction of the .tar; empty falls back to $TMPDIR.
+func (gi *GpuIvfPq[B, Q]) Unpack(filename, spillDir string, mode DistributionMode) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "ivf-pq-unpack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "ivf-pq-unpack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
@@ -1231,4 +1250,44 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 	}
 
 	return uint64(jobID), nil
+}
+
+// IvfPqRowsFitting answers how many rows an IVF-PQ index of this shape fits on
+// these devices, and how many k-means training rows fit.
+//
+// No index is involved: the cost model is a value type in C++ (index_cost.hpp),
+// so capacity can be estimated before anything exists to estimate it for. The
+// per-row costs, the budget, de-duplicating aliased device ids and taking the
+// smallest card all happen there; Go supplies the shape and consumes row counts.
+//
+// ASK ONCE, before any sub-index has been built. A later call sees the memory
+// earlier sub-indexes took and would shrink each successive capacity instead of
+// all of them sharing one.
+func IvfPqRowsFitting(dim, m, bitsPerCode, elemSize uint64, devices []int, mode DistributionMode) (
+	rows int64, trainsetRows int64, perRow uint64, minDevice int, minFree uint64, err error) {
+	if len(devices) == 0 {
+		return 0, 0, 0, 0, 0, nil
+	}
+	cDevs := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevs[i] = C.int(d)
+	}
+	var errmsg *C.char
+	var cRows, cTrain C.int64_t
+	var cPerRow, cFree C.uint64_t
+	var cMinDev C.int
+	rc := C.gpu_ivf_pq_rows_fitting(
+		C.uint64_t(dim), C.uint64_t(m), C.uint64_t(bitsPerCode), C.uint64_t(elemSize),
+		&cDevs[0], C.int(len(cDevs)), C.int(mode),
+		&cRows, &cTrain, &cPerRow, &cMinDev, &cFree, unsafe.Pointer(&errmsg))
+	runtime.KeepAlive(cDevs)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, 0, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, 0, 0, 0, 0, moerr.NewInternalErrorNoCtx("IvfPqRowsFitting failed")
+	}
+	return int64(cRows), int64(cTrain), uint64(cPerRow), int(cMinDev), uint64(cFree), nil
 }

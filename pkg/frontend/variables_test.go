@@ -337,3 +337,39 @@ func Test_valueIsBoolTrue(t *testing.T) {
 		})
 	}
 }
+
+// TestRollbackTxnOnErrorVarDefinition pins the definition of the switch that
+// changes when a transaction survives a failed statement. Its default is the
+// MySQL behaviour (statement-only rollback), and it has to be settable per
+// session and globally, at runtime, for an application to opt in.
+func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
+	convey.Convey("mo_rollback_txn_on_error defaults to MySQL behaviour", t, func() {
+		sv, ok := gSysVarsDefs["mo_rollback_txn_on_error"]
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Default, convey.ShouldEqual, int8(0))
+		convey.So(sv.Scope, convey.ShouldEqual, ScopeBoth)
+		convey.So(sv.Dynamic, convey.ShouldBeTrue)
+
+		// the default must convert, or a fresh session cannot start
+		got, err := sv.Type.Convert(sv.Default)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(got, convey.ShouldEqual, int8(0))
+
+		// the spellings an application actually writes
+		for _, on := range []any{1, int64(1), "on", "ON", "true"} {
+			got, err = sv.Type.Convert(on)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(got, convey.ShouldEqual, int8(1))
+		}
+		for _, off := range []any{0, int64(0), "off", "false"} {
+			got, err = sv.Type.Convert(off)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(got, convey.ShouldEqual, int8(0))
+		}
+
+		// and a value that is not a boolean is rejected rather than coerced
+		// to "on", which would silently discard transactions
+		_, err = sv.Type.Convert("sometimes")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}

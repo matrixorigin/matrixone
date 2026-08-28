@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -1371,11 +1372,32 @@ func doSetVar(
 			captureSystemReplayability(assign.Name)
 		}
 	}
-	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+	var preparedItems []*plan.SetVariablesItem
+	if preparedExpression {
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.plan != nil {
+			if setVariables := cw.plan.GetDcl().GetSetVariables(); setVariables != nil {
+				preparedItems = setVariables.Items
+			}
+		}
+	}
+	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, valueType, evalErr := getExprValueWithPrepareMeta(
-			assign.Value, ses, execCtx, preparedExpression, nil, &prepareParamKind, &isBin)
+		var value interface{}
+		var valueType plan.Type
+		var evalErr error
+		if index < len(preparedItems) && preparedItems[index].Value != nil {
+			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
+				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
+					assign.Value, preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+			} else {
+				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
+					preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+			}
+		} else {
+			value, valueType, evalErr = getExprValueWithPrepareMeta(
+				assign.Value, ses, execCtx, preparedExpression, nil, &prepareParamKind, &isBin)
+		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -1652,8 +1674,8 @@ func doSetVar(
 			}
 		}()
 
-		for _, assign := range sv.Assignments {
-			item, evalErr := evaluateAssignment(assign)
+		for index, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(index, assign)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -1666,8 +1688,8 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
-		item, evalErr := evaluateAssignment(assign)
+	for index, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(index, assign)
 		if evalErr != nil {
 			return evalErr
 		}
@@ -2717,7 +2739,7 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, &prepareTs, false, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2746,11 +2768,14 @@ func createPrepareStmtInSession(
 		ddlVersion:         owner.getDDLVersion(),
 		cloneSQL:           cloneSQL,
 		protocolVersion:    protocolVersion,
-		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
-			prepareControl.Plan),
-		jsonComparisonParamPositionsSet: true,
-		getFromSendLongData:             make(map[int]struct{}),
-		schedulingSQLMode:               schedulingSQLMode,
+		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
+			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan),
+		directResultParamPositionsSet: true,
+		hasPaginationParams:           plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:              len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
+		getFromSendLongData:           make(map[int]struct{}),
+		schedulingSQLMode:             schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
@@ -3929,6 +3954,13 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
+	if !reusablePlanGenerationSupported(ses.proc) {
+		// Evict eagerly while the rollout gate is closed. Besides releasing the
+		// owned AST, this prevents an entry from surviving an observed protocol
+		// rollback and becoming eligible again after a later upgrade.
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
 	cached := ses.getCachedPlan(input.getHash())
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
@@ -4002,6 +4034,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// to the parser pool while the cache still owns or already freed it.
 			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
+			tcw.cachedPlanSQL = execCtx.input.getHash()
+			tcw.cachedPlanIndex = i
+			tcw.cachedPlanGeneration = cached.plans[i]
+			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
+			tcw.planGenerationReused = true
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -4794,15 +4831,13 @@ func executeStmtWithResponse(ses *Session,
 	// RespPostMeta below, so a commit error can never follow an advertised
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
-	// Deferred Kafka scan progress is OWNED BY THE TRANSACTION terminal
-	// (TxnHandler.Commit/Rollback): a successful statement inside BEGIN /
-	// autocommit=0 must not publish until the enclosing transaction commits,
-	// or BEGIN; INSERT..SELECT FROM kafka_t; ROLLBACK would advance the
-	// exactly-once chain past rows that were rolled back. A FAILED statement
-	// discards here as a belt (its rollback path also discards).
-	if err != nil {
-		ses.FinalizeKafkaProgress(false)
-	}
+	// The WHOLE-statement terminal for deferred Kafka scan progress: every
+	// pipeline (including downstream consumers on split scopes) has finished
+	// by the time executeStmtWithMaxExecutionTime returns. Kafka progress is
+	// deliberately statement/session state, not transaction state. Consumers
+	// that need atomic data+offset commits store LAST_KAFKA_MESSAGE_ID() in a
+	// separate MatrixOne table in the same explicit transaction.
+	ses.FinalizeKafkaProgress(err == nil)
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
@@ -5224,9 +5259,8 @@ func executeStmt(ses *Session,
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
 
-			// Sync the latest plan after Run (it may have changed due to retry)
 			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				txnCw.plan = c.GetPlan()
+				txnCw.completeCompileExecution(c, err)
 			}
 
 			// Serialize the execution plan as json
@@ -5294,6 +5328,35 @@ func countUpdateChangedRows(ses *Session) bool {
 	}
 	resper, ok := ses.GetResponser().(*MysqlResp)
 	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
+}
+
+// rollbackWholeTxnOnPreExecutionError applies mo_rollback_txn_on_error to a
+// failure that never reached the executor.
+//
+// A parse error or a privilege rejection returns from doComQuery long before
+// finishTxnFunc, which is where the setting is otherwise honoured. Without this
+// the setting would quietly mean "any error the executor produced", exempting
+// the ones that never got that far: with it on,
+// `BEGIN; INSERT ...; selec 1; COMMIT;` would still COMMIT the row.
+//
+// It is called from the defer every COM_QUERY error path converges on. A
+// statement that already rolled back has left no active transaction, so the
+// guard below makes this a no-op for the errors finishTxnFunc handled, rather
+// than rolling back twice.
+func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
+	if !sessionRollsBackTxnOnError(ses, retErr) {
+		return
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
+		return
+	}
+	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
+		// The statement's own error is what the client asked about; a failure
+		// to roll back is logged, not substituted for it.
+		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
+			zap.Error(rbErr), zap.Error(retErr))
+	}
 }
 
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
@@ -5390,9 +5453,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// is reseeded from the session on the next query, so the session value drives
 	// the next statement; the proc is updated too for completeness.
 	defer func() {
-		if retErr != nil {
-			markRowCountFailed(ses, proc)
+		if retErr == nil {
+			return
 		}
+		markRowCountFailed(ses, proc)
+
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
 	}()
 
 	if ses.GetTenantInfo() != nil {
@@ -5497,7 +5563,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := !stagedSQLMode && input.canUsePlanCache()
+	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -5687,31 +5754,41 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	if !canCache {
+		return nil
+	}
+	cacheKey := input.getHash()
+	if ses.isCached(cacheKey) {
+		return nil
+	}
+
 	cacheProtocolVersion := currentProtocolVersion(proc)
-	if canCache && !ses.isCached(input.getHash()) {
-		for _, cw := range cws {
-			tcw, ok := cw.(*TxnComputationWrapper)
-			if !ok || tcw.protocolVersion != cacheProtocolVersion {
-				canCache = false
-				break
-			}
+	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
+	for i, cw := range cws {
+		tcw, ok := cw.(*TxnComputationWrapper)
+		if !ok || tcw.protocolVersion != cacheProtocolVersion {
+			return nil
+		}
+		var hasPlanSnapshotTS bool
+		planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()
+		if !hasPlanSnapshotTS {
+			return nil
 		}
 	}
-	if canCache && !ses.isCached(input.getHash()) {
-		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]tree.Statement, len(cws))
-		for i, cw := range cws {
-			if checkNodeCanCache(cw.Plan()) {
-				plans[i] = cw.Plan()
-				stmts[i] = cw.GetAst()
-			} else {
-				return nil
-			}
-			cw.Clear()
+
+	plans := make([]*plan.Plan, len(cws))
+	stmts := make([]tree.Statement, len(cws))
+	for i, cw := range cws {
+		if checkNodeCanCache(cw.Plan()) {
+			plans[i] = cw.Plan()
+			stmts[i] = cw.GetAst()
+		} else {
+			return nil
 		}
-		Cached = true
-		ses.cachePlan(input.getHash(), stmts, plans, cacheProtocolVersion)
+		cw.Clear()
 	}
+	Cached = true
+	ses.cachePlanWithSnapshots(cacheKey, stmts, plans, planSnapshotTS, cacheProtocolVersion)
 
 	return nil
 }

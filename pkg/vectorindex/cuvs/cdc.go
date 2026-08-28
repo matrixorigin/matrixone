@@ -31,7 +31,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -857,11 +856,8 @@ func IncludeColSizes(colMetaJSON string) ([]int, error) {
 	if trimmed == "" || trimmed == "[]" {
 		return nil, nil
 	}
-	var meta []struct {
-		Name string `json:"name"`
-		Type int    `json:"type"`
-	}
-	if err := sonic.Unmarshal([]byte(trimmed), &meta); err != nil {
+	var meta []ColMetaEntry
+	if err := json.Unmarshal([]byte(trimmed), &meta); err != nil {
 		return nil, moerr.NewInternalErrorNoCtxf("IncludeColSizes: parse colMetaJSON: %v", err)
 	}
 	if len(meta) == 0 {

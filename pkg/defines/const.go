@@ -67,7 +67,10 @@ const (
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
 	MORPCVersion30     int64 = 30 // internal JSON comparison parameter function
 	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
-	MORPCLatestVersion       = MORPCVersion31
+	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
+	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
+	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
+	MORPCLatestVersion       = MORPCVersion34
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

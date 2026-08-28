@@ -288,6 +288,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
 	if s.Proc != nil {
 		s.Proc.CopyPlanSnapshotFrom(c.proc)
+		s.Proc.CopyStringShuffleHashAlgorithmFrom(c.proc)
 		for _, reg := range s.Proc.Reg.MergeReceivers {
 			reg.ResetTerminalStateForReuse()
 		}

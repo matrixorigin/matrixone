@@ -17,6 +17,7 @@ package frontend
 import (
 	"container/list"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -25,7 +26,9 @@ type cachedPlan struct {
 	sql             string
 	stmts           []tree.Statement
 	plans           []*plan.Plan
+	planSnapshotTS  []timestamp.Timestamp
 	protocolVersion int64
+	invalid         bool
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -52,6 +55,19 @@ func freeStmts(stmts []tree.Statement) {
 }
 
 func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	// Legacy internal callers get a conservative oldest-possible binding. The
+	// production cache path always supplies the actual generation snapshot.
+	pc.cacheWithPlanSnapshots(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)), versions...)
+}
+
+func (pc *planCache) cacheWithPlanSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
 	protocolVersion := currentProtocolVersion(nil)
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
@@ -59,6 +75,10 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 	if pc.cachePool == nil {
 		pc.cachePool = make(map[string]*list.Element)
 		pc.lruList = list.New()
+	}
+	if len(stmts) != len(plans) || len(planSnapshotTS) != len(plans) {
+		freeStmts(stmts)
+		return
 	}
 	for i := range stmts {
 		if plans[i] == nil {
@@ -73,6 +93,7 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 			sql:             sql,
 			stmts:           stmts,
 			plans:           plans,
+			planSnapshotTS:  planSnapshotTS,
 			protocolVersion: protocolVersion,
 		}
 		pc.lruList.MoveToFront(element)
@@ -82,6 +103,7 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 		sql:             sql,
 		stmts:           stmts,
 		plans:           plans,
+		planSnapshotTS:  planSnapshotTS,
 		protocolVersion: protocolVersion,
 	})
 	pc.cachePool[sql] = element
@@ -112,8 +134,12 @@ func (pc *planCache) get(sql string) *cachedPlan {
 		return nil
 	}
 	if element, ok := pc.cachePool[sql]; ok {
-		pc.lruList.MoveToFront(element)
 		cp := element.Value.(*cachedPlan)
+		if cp.invalid || len(cp.planSnapshotTS) != len(cp.plans) {
+			pc.remove(sql)
+			return nil
+		}
+		pc.lruList.MoveToFront(element)
 		return cp
 	}
 	return nil
@@ -123,8 +149,60 @@ func (pc *planCache) isCached(sql string) bool {
 	if pc.cachePool == nil {
 		return false
 	}
-	_, isCached := pc.cachePool[sql]
-	return isCached
+	element, isCached := pc.cachePool[sql]
+	if !isCached {
+		return false
+	}
+	cached := element.Value.(*cachedPlan)
+	return !cached.invalid && len(cached.planSnapshotTS) == len(cached.plans)
+}
+
+func (pc *planCache) updatePlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+) bool {
+	if pc.cachePool == nil || newPlan == nil {
+		return false
+	}
+	element, ok := pc.cachePool[sql]
+	if !ok {
+		return false
+	}
+	cached := element.Value.(*cachedPlan)
+	if cached.invalid || index < 0 || index >= len(cached.plans) ||
+		len(cached.planSnapshotTS) != len(cached.plans) ||
+		cached.plans[index] != expectedPlan {
+		return false
+	}
+	cached.plans[index] = newPlan
+	cached.planSnapshotTS[index] = planSnapshotTS
+	pc.lruList.MoveToFront(element)
+	return true
+}
+
+func (pc *planCache) invalidatePlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if pc.cachePool == nil {
+		return
+	}
+	element, ok := pc.cachePool[sql]
+	if !ok {
+		return
+	}
+	cached := element.Value.(*cachedPlan)
+	if index < 0 || index >= len(cached.plans) || cached.plans[index] != expectedPlan {
+		return
+	}
+	// Do not remove the entry here: its AST can still be borrowed by the
+	// wrapper that discovered the stale generation. The next lookup removes it
+	// after that wrapper has completed its lifecycle.
+	cached.invalid = true
 }
 
 func (pc *planCache) clean() {
