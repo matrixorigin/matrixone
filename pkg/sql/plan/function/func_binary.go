@@ -8728,7 +8728,7 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 }
 
 func secToTimeFromInt64(seconds int64) types.Time {
-	maxTime := types.MySQLTimeMaxForScale(0)
+	maxTime := types.MySQLTimeFunctionMaxForScale(0)
 	maxSeconds := int64(maxTime) / types.MicroSecsPerSec
 	if seconds > maxSeconds {
 		return maxTime
@@ -8740,7 +8740,7 @@ func secToTimeFromInt64(seconds int64) types.Time {
 }
 
 func secToTimeFromUint64(seconds uint64) types.Time {
-	maxTime := types.MySQLTimeMaxForScale(0)
+	maxTime := types.MySQLTimeFunctionMaxForScale(0)
 	maxSeconds := uint64(maxTime) / types.MicroSecsPerSec
 	if seconds > maxSeconds {
 		return maxTime
@@ -8752,7 +8752,7 @@ func secToTimeFromFloat64(seconds float64) (types.Time, bool) {
 	if math.IsNaN(seconds) {
 		return 0, true
 	}
-	clampTime := types.MySQLTimeMaxForScale(0)
+	clampTime := types.MySQLTimeFunctionMaxForScale(0)
 	maxInt64Seconds := float64(math.MaxInt64) / float64(types.MicroSecsPerSec)
 	if seconds >= maxInt64Seconds || math.IsInf(seconds, 1) {
 		return clampTime, false
@@ -8761,7 +8761,7 @@ func secToTimeFromFloat64(seconds float64) (types.Time, bool) {
 		return -clampTime, false
 	}
 	value := types.Time(math.Round(seconds * float64(types.MicroSecsPerSec)))
-	if !types.IsMySQLTime(value) {
+	if !types.IsMySQLTimeFunctionResult(value) {
 		if value < 0 {
 			return -clampTime, false
 		}
@@ -8851,7 +8851,7 @@ func secToTimeFromExactDecimal(value string) types.Time {
 				if negativeExponent {
 					return 0
 				}
-				clampTime := types.MySQLTimeMaxForScale(0)
+				clampTime := types.MySQLTimeFunctionMaxForScale(0)
 				if negative {
 					return -clampTime
 				}
@@ -8880,7 +8880,7 @@ func secToTimeFromExactDecimal(value string) types.Time {
 
 	integerValueDigits := significantDigits + exponent
 	if integerValueDigits > 7 {
-		clampTime := types.MySQLTimeMaxForScale(0)
+		clampTime := types.MySQLTimeFunctionMaxForScale(0)
 		if negative {
 			return -clampTime
 		}
@@ -8911,8 +8911,8 @@ func secToTimeFromExactDecimal(value string) types.Time {
 	}
 
 	result := types.Time(totalMicroseconds)
-	if !types.IsMySQLTime(result) {
-		result = types.MySQLTimeMaxForScale(0)
+	if !types.IsMySQLTimeFunctionResult(result) {
+		result = types.MySQLTimeFunctionMaxForScale(0)
 	}
 	if negative {
 		return -result
@@ -8964,7 +8964,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 		value, null := getTimeValue(i)
 		if !null {
 			value = value.TruncateToScale(rs.GetType().Scale)
-			value = types.ClampMySQLTimeForScale(value, rs.GetType().Scale)
+			value = types.ClampMySQLTimeFunctionForScale(value, rs.GetType().Scale)
 		}
 		if err := rs.Append(value, null); err != nil {
 			return err

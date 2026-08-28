@@ -10138,7 +10138,7 @@ func TestTimeFormat(t *testing.T) {
 
 func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	max0 := types.MySQLTimeMaxForScale(0)
+	max0 := types.MySQLTimeFunctionMaxForScale(0)
 
 	t.Run("signed integer saturates", func(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc,
@@ -10177,7 +10177,7 @@ func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {
 					types.TimeFromClock(true, 0, 39, 38, 700000),
 					types.TimeFromClock(false, 0, 0, 1, 0),
 					types.TimeFromClock(false, 0, 0, 1, 1),
-					types.MySQLTimeMax, max0, max0, -max0, 0,
+					types.MySQLTimeFunctionMax, max0, max0, -max0, 0,
 				},
 				[]bool{false, false, false, false, false, false, false, false, true}),
 			SecToTime)
@@ -10188,17 +10188,18 @@ func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {
 	t.Run("exact decimal text preserves rounding and clamps exponents", func(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"2378.7", "-2378.7", "1.0000004", "1.0000005", "3020400", "-3020400", "1e999999999", "-1e999999999", "1e-999999999", "foo", ""},
-				[]bool{false, false, false, false, false, false, false, false, false, false, true})},
+				[]string{"2378.7", "-2378.7", "1.0000004", "1.0000005", "3020399.999999", "-3020399.999999", "3020400", "-3020400", "1e999999999", "-1e999999999", "1e-999999999", "foo", ""},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true})},
 			NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
 				[]types.Time{
 					types.TimeFromClock(false, 0, 39, 38, 700000),
 					types.TimeFromClock(true, 0, 39, 38, 700000),
 					types.TimeFromClock(false, 0, 0, 1, 0),
 					types.TimeFromClock(false, 0, 0, 1, 1),
+					types.MySQLTimeFunctionMax, -types.MySQLTimeFunctionMax,
 					max0, -max0, max0, -max0, 0, 0, 0,
 				},
-				[]bool{false, false, false, false, false, false, false, false, false, false, true}),
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true}),
 			SecToTime)
 		ok, info := fcTC.Run()
 		require.True(t, ok, info)

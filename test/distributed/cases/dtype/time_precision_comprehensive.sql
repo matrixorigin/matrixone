@@ -96,11 +96,12 @@ ORDER BY id;
 
 DROP TABLE t_time_boundary;
 
--- TIME(6) accepts the fractional endpoint but rejects the next hour in strict mode
+-- TIME columns accept only the whole-second endpoint in strict mode.
 DROP TABLE IF EXISTS t_time_range;
 CREATE TABLE t_time_range (id INT, t6 TIME(6));
-INSERT INTO t_time_range VALUES (1, '838:59:59.999999');
-INSERT INTO t_time_range VALUES (2, '839:00:00');
+INSERT INTO t_time_range VALUES (1, '838:59:59.000000');
+INSERT INTO t_time_range VALUES (2, '838:59:59.000001');
+INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
 SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
 DROP TABLE t_time_range;
 

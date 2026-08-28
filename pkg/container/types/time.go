@@ -34,7 +34,12 @@ const (
 	// MySQLTimeMax is the largest value accepted by a MySQL TIME column.
 	// MatrixOne's Time representation deliberately has a wider internal range
 	// because intermediate duration expressions can exceed 838 hours.
-	MySQLTimeMax = Time((838*SecsPerHour+59*SecsPerMinute+59)*MicroSecsPerSec + MicroSecsPerSec - 1)
+	MySQLTimeMax = Time((838*SecsPerHour + 59*SecsPerMinute + 59) * MicroSecsPerSec)
+
+	// MySQLTimeFunctionMax is the largest value returned by MySQL duration
+	// functions such as SEC_TO_TIME. Unlike a TIME-column assignment, that
+	// result may retain microseconds at the 838:59:59 endpoint.
+	MySQLTimeFunctionMax = MySQLTimeMax + MicroSecsPerSec - 1
 )
 
 // no msec part
@@ -488,8 +493,16 @@ func IsMySQLTime(value Time) bool {
 }
 
 func MySQLTimeMaxForScale(scale int32) Time {
+	return MySQLTimeMax
+}
+
+func IsMySQLTimeFunctionResult(value Time) bool {
+	return value >= -MySQLTimeFunctionMax && value <= MySQLTimeFunctionMax
+}
+
+func MySQLTimeFunctionMaxForScale(scale int32) Time {
 	if scale >= 6 {
-		return MySQLTimeMax
+		return MySQLTimeFunctionMax
 	}
 	if scale < 0 {
 		scale = 0
@@ -498,7 +511,7 @@ func MySQLTimeMaxForScale(scale int32) Time {
 	for i := scale; i < 6; i++ {
 		factor *= 10
 	}
-	return MySQLTimeMax / factor * factor
+	return MySQLTimeFunctionMax / factor * factor
 }
 
 func ClampMySQLTime(value Time) Time {
@@ -507,6 +520,17 @@ func ClampMySQLTime(value Time) Time {
 
 func ClampMySQLTimeForScale(value Time, scale int32) Time {
 	maxValue := MySQLTimeMaxForScale(scale)
+	if value > maxValue {
+		return maxValue
+	}
+	if value < -maxValue {
+		return -maxValue
+	}
+	return value
+}
+
+func ClampMySQLTimeFunctionForScale(value Time, scale int32) Time {
+	maxValue := MySQLTimeFunctionMaxForScale(scale)
 	if value > maxValue {
 		return maxValue
 	}
