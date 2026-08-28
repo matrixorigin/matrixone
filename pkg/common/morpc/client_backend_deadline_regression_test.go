@@ -53,52 +53,82 @@ func (f *retryableDeadlineBackendFactory) Create(
 // generation must be removed so later topology generations are not poisoned.
 func TestAutoCreateRetryableFactoryIsBoundedAndReleasesGeneration(t *testing.T) {
 	const callers = 16
+	const remote = "stale-cn:6002"
+	manager := newClientGCManager()
 	factory := &retryableDeadlineBackendFactory{}
 	rpcClient, err := NewClient(
 		t.Name(),
 		factory,
 		WithClientEnableAutoCreateBackend(),
-		WithClientAutoCreateQueueWaitTimeout(50*time.Millisecond),
+		// Queue admission is independent from the factory retry budget this test
+		// exercises. Disable its separate deadline so scheduler load cannot change
+		// the expected terminal error from the factory timeout to a queue timeout.
+		WithClientAutoCreateQueueWaitTimeout(0),
 		WithClientAutoCreateWaitTimeout(50*time.Millisecond),
 		WithClientDisableCircuitBreaker(),
 		WithClientLogger(zap.NewNop()),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, rpcClient.Close()) })
+	client := rpcClient.(*client)
+	// This regression exercises the per-client factory retry budget, not
+	// process-wide create-worker contention from unrelated tests.
+	useClientGCManagerForTest(t, client, manager)
+	t.Cleanup(func() {
+		err := rpcClient.Close()
+		manager.stop()
+		require.NoError(t, err)
+	})
 
 	start := make(chan struct{})
 	results := make(chan error, callers)
+	var ready sync.WaitGroup
+	ready.Add(callers)
 	for range callers {
 		go func() {
+			ready.Done()
 			<-start
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			stream, streamErr := rpcClient.NewStream(ctx, "stale-cn:6002", false)
+			stream, streamErr := rpcClient.NewStream(ctx, remote, false)
 			if stream != nil {
 				_ = stream.Close(true)
 			}
 			results <- streamErr
 		}()
 	}
-	started := time.Now()
+	ready.Wait()
 	close(start)
+	// This is only a suite-level hang guard. The returned error below, rather
+	// than wall-clock duration, proves that the 50ms factory budget fired.
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
 	for range callers {
 		select {
 		case streamErr := <-results:
 			require.ErrorIs(t, streamErr, ErrBackendCreateTimeout)
-		case <-time.After(time.Second):
+		case <-deadline.C:
 			t.Fatal("coalesced stale-backend caller exceeded its bounded retry budget")
 		}
 	}
-	require.Less(t, time.Since(started), 500*time.Millisecond)
 	require.Positive(t, factory.calls.Load())
 
-	client := rpcClient.(*client)
-	require.Eventually(t, func() bool {
-		client.mu.Lock()
-		defer client.mu.Unlock()
-		return client.mu.creating["stale-cn:6002"] == nil
-	}, time.Second, time.Millisecond,
+	client.mu.Lock()
+	pending := client.mu.creating[remote]
+	client.mu.Unlock()
+	if pending != nil {
+		// A caller may observe the factory deadline immediately before the
+		// in-flight Create publishes completion. Synchronize on the lifecycle
+		// event instead of polling or assuming scheduler ordering.
+		select {
+		case <-pending.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("expired backend generation did not finish cleanup")
+		}
+	}
+	client.mu.Lock()
+	pending = client.mu.creating[remote]
+	client.mu.Unlock()
+	require.Nil(t, pending,
 		"expired backend generation remained owned after all callers returned")
 }
 

@@ -58,6 +58,7 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
+var _ engine.StatsRefresher = new(Engine)
 
 const (
 	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
@@ -1276,6 +1277,20 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64)
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+// RefreshTableStats synchronously replaces the local optimizer statistics for
+// key. The cache swap is the publication boundary observed by later plans.
+func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error) {
+	return refreshTableStats(ctx, key, e.globalStats)
+}
+
+type optimizerStatsStore interface {
+	refreshStatsWithMode(context.Context, pb.StatsInfoKey, string) (*pb.StatsInfo, error)
+}
+
+func refreshTableStats(ctx context.Context, key pb.StatsInfoKey, store optimizerStatsStore) (*pb.StatsInfo, error) {
+	return store.refreshStatsWithMode(ctx, key, "auto")
 }
 
 // GetGlobalStats returns the GlobalStats instance
