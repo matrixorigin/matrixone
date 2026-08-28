@@ -599,7 +599,8 @@ func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) 
 	require.NoError(t, err)
 	require.Nil(t, retComp, "the nested ABS marker uses main's regular runtime specialization")
 	require.NotSame(t, ordinaryPlan, runtimePlan)
-	require.False(t, cw.runtimeDirectResultSpecialization,
+	require.Equal(t, preparedRuntimeSpecializationNone,
+		cw.runtimeSpecializationMode&preparedRuntimeSpecializationDirectResult,
 		"the unrelated nested numeric marker must not expand direct-result admission")
 	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 	require.Equal(t, int32(types.T_text), root.ProjectList[0].Typ.Id,
@@ -1162,7 +1163,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, false)
+	}, false, preparedRuntimeSpecializationNone)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
@@ -1192,7 +1193,7 @@ func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *
 		"an approximate FLOAT peer must remain outside numeric-prefix specialization")
 }
 
-func TestBinaryDMLSkipsRuntimeSpecialization(t *testing.T) {
+func TestBinaryDMLReusesRuntimeSpecializationForStableDomain(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 216, "select ?")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
@@ -1200,8 +1201,8 @@ func TestBinaryDMLSkipsRuntimeSpecialization(t *testing.T) {
 	}()
 
 	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
-		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
 		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}},
 	})
 	require.NoError(t, err)
 	dmlPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
@@ -1212,13 +1213,19 @@ func TestBinaryDMLSkipsRuntimeSpecialization(t *testing.T) {
 			FilterList: []*plan.Expr{predicate},
 		}},
 	}}, IsPrepare: true}
-	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = dmlPlan
+	prepared := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	prepared.Plan = dmlPlan
+	prepared.ParamTypes = []int32{int32(types.T_text), int32(types.T_text)}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = true
-	prepareStmt.numericPrefixConsumer = true
+	prepareStmt.numericPrefixConsumer = false
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1.00"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
 
 	cachedCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
@@ -1228,12 +1235,116 @@ func TestBinaryDMLSkipsRuntimeSpecialization(t *testing.T) {
 	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Same(t, cachedCompile, retComp)
-	require.Same(t, dmlPlan, runtimePlan)
-	require.False(t, prepareStmt.runtimeSpecializationNeeded)
-	require.Nil(t, cw.paramVals,
-		"ordinary binary DML must not materialize values for a runtime plan rewrite")
-	require.Nil(t, cw.runtimeCachePlan)
+	require.Nil(t, retComp,
+		"the first runtime domain must compile its specialized DML plan")
+	require.NotSame(t, dmlPlan, runtimePlan)
+	require.True(t, prepareStmt.runtimeSpecializationNeeded)
+	require.NotNil(t, cw.paramVals)
+	require.Same(t, runtimePlan, cw.runtimeCachePlan)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	cw.proc.SetPrepareParams(nil)
+	prepareStmt.params.Free(cw.proc.Mp())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("2"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("2.00"), false, cw.proc.Mp()))
+
+	retComp, secondPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp,
+		"stable prepared DML parameter domains must reuse the specialized compile")
+	require.Same(t, runtimePlan, secondPlan)
+	root := secondPlan.GetQuery().Nodes[secondPlan.GetQuery().Steps[0]]
+	require.Len(t, root.FilterList, 1)
+	executor, err := colexec.NewExpressionExecutor(cw.proc, root.FilterList[0])
+	require.NoError(t, err)
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0),
+		"the cached plan must read the current values instead of the first execution's literals")
+	executor.Free()
+
+	oldKey := prepareStmt.runtimeSpecializationKey
+	cw.proc.SetPrepareParams(nil)
+	prepareStmt.params.Free(cw.proc.Mp())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1.5"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1.50"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_DOUBLE), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	retComp, switchedPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp, "a changed runtime domain must not reuse the preceding compile")
+	require.NotSame(t, runtimePlan, switchedPlan)
+	require.NotEqual(t, oldKey, cw.runtimeCacheKey)
+}
+
+func BenchmarkBinaryDMLRuntimeSpecializationCache(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 217, "select ?, ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}},
+	})
+	require.NoError(b, err)
+	dmlPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_UPDATE,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+	prepared := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	prepared.Plan = dmlPlan
+	prepared.ParamTypes = []int32{int32(types.T_text), int32(types.T_text)}
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = true
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1.00"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(b, err)
+	if owned && stmt != nil {
+		stmt.Free()
+	}
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(b, cw.installRuntimeCacheCandidate(runtimeCompile))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		retComp, currentPlan, currentStmt, _, currentOwned, runErr := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if runErr != nil || retComp != runtimeCompile || currentPlan != runtimePlan {
+			b.Fatalf("runtime DML cache miss: comp=%p plan=%p err=%v", retComp, currentPlan, runErr)
+		}
+		if currentOwned && currentStmt != nil {
+			currentStmt.Free()
+		}
+	}
 }
 
 func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *testing.T) {
@@ -1335,7 +1446,9 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	mixedA := []any{decimal("9.0"), integer("1")}
 	mixedB := []any{decimal("8.0"), integer("2")}
 	require.True(t, preparedRuntimeCacheSupports(mixedA))
-	require.Equal(t, preparedRuntimeSemanticKey(mixedA), preparedRuntimeSemanticKey(mixedB))
+	require.Equal(t,
+		preparedRuntimeSemanticKey(preparedRuntimeSpecializationGeneric, mixedA),
+		preparedRuntimeSemanticKey(preparedRuntimeSpecializationGeneric, mixedB))
 
 	textA := []any{plan2.ParamValue{
 		Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal,
@@ -1346,7 +1459,12 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 		RuntimeType: types.T_text.ToType(), HasRuntimeType: true,
 	}}
 	require.True(t, preparedRuntimeCacheSupports(textA))
-	require.Equal(t, preparedRuntimeSemanticKey(textA), preparedRuntimeSemanticKey(textB))
+	require.Equal(t,
+		preparedRuntimeSemanticKey(preparedRuntimeSpecializationGeneric, textA),
+		preparedRuntimeSemanticKey(preparedRuntimeSpecializationGeneric, textB))
+	require.NotEqual(t,
+		preparedRuntimeSemanticKey(preparedRuntimeSpecializationGeneric, textA),
+		preparedRuntimeSemanticKey(preparedRuntimeSpecializationNumericPrefix, textA))
 	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
 }
 

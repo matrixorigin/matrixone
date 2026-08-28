@@ -5702,7 +5702,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			PrepareParamKind:    vector.PrepareParamDecimal,
 			EnableNumericPrefix: true,
 		},
-	}, true)
+	}, true, preparedRuntimeSpecializationNumericPrefix)
 	retryPlan, err := buildPlanForCompileRetry(
 		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
 	require.NoError(t, err)
@@ -5731,7 +5731,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 			IsBinaryProtocol: true,
 			RuntimeType:      types.T_int64.ToType(),
 			HasRuntimeType:   true,
-		}}, true))
+		}}, true, preparedRuntimeSpecializationDirectResult))
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
 	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
