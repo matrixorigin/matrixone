@@ -564,13 +564,11 @@ function run_tests(){
             return 0
         fi
 
-        # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues packages intentionally keep embedded
-        # clusters alive for most of their test processes.
+        # The issues packages intentionally keep embedded clusters alive for
+        # most of their test processes, so they retain exclusive runner access.
+        # The former logservice/TAE members of this group now allocate independent
+        # ports with collision retry and belong in the normal parallel scope.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/logservice \
-            ./pkg/vm/engine/tae/logstore \
-            ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
             ./pkg/tests/issues \
             ./pkg/tests/issues/isolated); then
             logger "ERR" "Failed to resolve serial race-test packages"
