@@ -657,16 +657,16 @@ func TestMakeSpecialOrderedPercentileExec(t *testing.T) {
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
 	for _, id := range []int64{AggIdOfPercentileCont, AggIdOfPercentileDisc} {
-		exec, ok, err := makeSpecialAggExec(mp, id, false, false, types.T_int64.ToType())
+		exec, ok, err := makeSpecialAggExec(mp, id, false, false, false, types.T_int64.ToType())
 		require.True(t, ok)
 		require.NoError(t, err)
 		require.NotNil(t, exec)
 		exec.Free()
 
-		_, ok, err = makeSpecialAggExec(mp, id, false, false)
+		_, ok, err = makeSpecialAggExec(mp, id, false, false, false)
 		require.True(t, ok)
 		require.Error(t, err)
-		_, ok, err = makeSpecialAggExec(mp, id, false, false, types.T_int64.ToType(), types.T_int64.ToType())
+		_, ok, err = makeSpecialAggExec(mp, id, false, false, false, types.T_int64.ToType(), types.T_int64.ToType())
 		require.True(t, ok)
 		require.Error(t, err)
 	}
