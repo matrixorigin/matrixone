@@ -505,6 +505,104 @@ func TestLocalE2EAccessLifecycleCleanupUsesFreshContextAndReportsFailures(t *tes
 	}
 }
 
+func expectAccessLifecycleCleanup(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+func TestLocalE2EAccessLifecycleCaseReportsCleanupFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnError(errors.New("create failed"))
+	mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnError(errors.New("table cleanup failed"))
+	mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).accessLifecycleCase(context.Background())
+	if result.Status != "failed" || !strings.Contains(result.Error, "create failed") || !strings.Contains(result.Error, "table cleanup failed") || result.Details["cleanup_error"] == "" {
+		t.Fatalf("cleanup failure was not preserved by the lifecycle case: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("cleanup after create failure: %v", err)
+	}
+}
+
+func TestLocalE2EAccessLifecycleCaseReportsAdmissionFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(sqlmock.Sqlmock)
+		errSub string
+	}{
+		{
+			name: "catalog lookup failure",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("CALL iceberg_register_access").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").WillReturnError(errors.New("catalog lookup failed"))
+				expectAccessLifecycleCleanup(mock)
+			},
+			errSub: "catalog lookup failed",
+		},
+		{
+			name: "mapping admission failure",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("CALL iceberg_register_access").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+				mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnError(errors.New("mapping admission failed"))
+				expectAccessLifecycleCleanup(mock)
+			},
+			errSub: "mapping admission failed",
+		},
+		{
+			name: "unexpected dependency error",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("CALL iceberg_register_access").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+				mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("DROP ICEBERG CATALOG").WillReturnError(errors.New("permission denied"))
+				expectAccessLifecycleCleanup(mock)
+			},
+			errSub: "unexpected reason",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			tt.setup(mock)
+			result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).accessLifecycleCase(context.Background())
+			if result.Status != "failed" || !strings.Contains(result.Error, tt.errSub) {
+				t.Fatalf("expected failure containing %q, got %+v", tt.errSub, result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestLocalE2EAccessLifecycleCaseRejectsAmbiguousCatalog(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("CALL iceberg_register_access").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)).AddRow(uint64(43)))
+	expectAccessLifecycleCleanup(mock)
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).accessLifecycleCase(context.Background())
+	if result.Status != "failed" || !strings.Contains(result.Error, "not uniquely resolved") {
+		t.Fatalf("ambiguous catalog was accepted: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("cleanup after ambiguous catalog: %v", err)
+	}
+}
+
 func TestLocalE2EConcurrentCreateMappingAndDropCase(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -571,6 +669,23 @@ func TestLocalE2EConcurrentCreateMappingAndDropCase(t *testing.T) {
 				t.Fatalf("unmet expectations: %v", err)
 			}
 		})
+	}
+}
+
+func TestLocalE2EConcurrentCreateMappingAndDropCaseReportsCleanupFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnError(errors.New("create failed"))
+	mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnError(errors.New("table cleanup failed"))
+	mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
+	if result.Status != "failed" || !strings.Contains(result.Error, "create failed") || !strings.Contains(result.Error, "table cleanup failed") || result.Details["cleanup_error"] == "" {
+		t.Fatalf("cleanup failure was not preserved by the concurrent lifecycle case: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("cleanup after concurrent create failure: %v", err)
 	}
 }
 

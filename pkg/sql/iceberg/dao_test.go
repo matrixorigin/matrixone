@@ -826,6 +826,11 @@ func TestDAOAdditionalSQLBuilders(t *testing.T) {
 			want: []string{"from mo_catalog.mo_iceberg_catalogs", "name = 'cat'"},
 		},
 		{
+			name: "catalog by name for update",
+			sql:  GetCatalogByNameForUpdateSQL(1, "cat"),
+			want: []string{"from mo_catalog.mo_iceberg_catalogs", "name = 'cat'", "for update"},
+		},
+		{
 			name: "catalog by id",
 			sql:  GetCatalogByIDSQL(1, 7),
 			want: []string{"from mo_catalog.mo_iceberg_catalogs", "catalog_id = 7"},
