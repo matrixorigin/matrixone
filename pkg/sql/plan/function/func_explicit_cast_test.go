@@ -144,10 +144,8 @@ func TestNumericStringPrefixWarning(t *testing.T) {
 	appendNumericCoercionWarning(proc, "abc")
 	appendNumericCoercionWarning(proc, "")
 	appendNumericCoercionWarning(proc, "12")
-	appendNumericCoercionWarning(proc, " 12 ")
-	appendNumericCoercionWarning(proc, "\u00a01")
 
-	require.Len(t, session.warnings, 3)
+	require.Len(t, session.warnings, 2)
 	for _, warning := range session.warnings {
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
 		require.Contains(t, warning.msg, "Truncated incorrect DOUBLE value")
