@@ -896,6 +896,14 @@ func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 }
 
 func (ag *aggState) insertArgValue(mp *mpool.MPool, kbuf, value []byte) error {
+	return ag.insertArgValueWithInserter(mp, kbuf, value, nil)
+}
+
+func (ag *aggState) insertArgValueWithInserter(
+	mp *mpool.MPool,
+	kbuf, value []byte,
+	inserter *arenaskl.Inserter,
+) error {
 	if ag.argSkl == nil {
 		return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
@@ -907,7 +915,14 @@ func (ag *aggState) insertArgValue(mp *mpool.MPool, kbuf, value []byte) error {
 
 	add := func(list *arenaskl.Skiplist, key []byte) error {
 		if ag.allocation != nil {
-			return list.AddWithPlan(key, value, arenaskl.MakeAddPlan(key))
+			plan := arenaskl.MakeAddPlan(key)
+			if inserter != nil {
+				return inserter.AddWithPlan(list, key, value, plan)
+			}
+			return list.AddWithPlan(key, value, plan)
+		}
+		if inserter != nil {
+			return inserter.Add(list, key, value)
 		}
 		return list.Add(key, value)
 	}
@@ -979,6 +994,9 @@ func (ag *aggState) insertArgValue(mp *mpool.MPool, kbuf, value []byte) error {
 		}
 	}
 	it.Close()
+	if inserter != nil {
+		*inserter = arenaskl.Inserter{}
+	}
 	if err = add(newArgSkl, kbuf); err != nil {
 		mp.Free(argBuf)
 		return err
@@ -1060,6 +1078,7 @@ func (ag *aggState) insertPreparedArg(
 }
 
 func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY uint16, info *aggInfo) error {
+	var inserter arenaskl.Inserter
 	merge := func(k []byte) error {
 		kcpy, err := ag.resizeArgScratch(mp, len(k))
 		if err != nil {
@@ -1073,7 +1092,7 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		if info.preserveDistinctInputOrder {
 			return ag.fillDistinctArgInInputOrder(mp, y, kcpy)
 		}
-		fnerr := ag.insertArg(mp, kcpy)
+		fnerr := ag.insertArgValueWithInserter(mp, kcpy, nil, &inserter)
 		if fnerr == nil {
 			ag.argCnt[y] += 1
 			if ag.argCnt[y] == 0 {

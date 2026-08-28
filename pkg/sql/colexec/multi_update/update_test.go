@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -46,15 +47,27 @@ func TestSimpleInterface(t *testing.T) {
 	op.Release()
 }
 
+func TestMoColumnsWriteContext(t *testing.T) {
+	update := NewArgument()
+	update.MultiUpdateCtx = []*MultiUpdateCtx{{
+		TableDef:      &plan.TableDef{TblId: catalog.MO_COLUMNS_ID, Name: catalog.MO_COLUMNS_UPDATE},
+		TargetTableID: catalog.MO_COLUMNS_ID,
+	}}
+
+	ctx := update.writeContext(context.Background(), catalog.MO_COLUMNS_ID)
+	require.NotNil(t, ctx.Value(defines.MoColumnsUpdateKey{}))
+	require.Nil(t, update.writeContext(context.Background(), catalog.MO_TABLES_ID).Value(defines.MoColumnsUpdateKey{}))
+}
+
 func TestUpdateSingleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 
 	proc, case1 = buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, true)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestUpdateTableWithUniqueKey(t *testing.T) {
@@ -62,7 +75,7 @@ func TestUpdateTableWithUniqueKey(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
@@ -630,7 +643,9 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, writer.free(proc)) }()
 
-	bats, _ := prepareTestInsertBatchs(proc.Mp(), 1, false, false)
+	// Keep the full-block ownership-transfer path and its partial-block fallback
+	// in one focused test instead of making every S3 matrix case use large data.
+	bats, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
 	require.NoError(t, writer.sortAndSyncOneTable(
 		proc,
 		tableDef,
@@ -640,7 +655,9 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 		bats,
 		true,
 	))
-	require.Nil(t, bats[0])
+	for _, bat := range bats {
+		require.Nil(t, bat)
+	}
 	require.NotNil(t, writer.insertBlockInfo[0])
 }
 
@@ -650,7 +667,7 @@ func TestUpdateS3SingleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestUpdateS3TableWithUniqueKey(t *testing.T) {
@@ -658,7 +675,7 @@ func TestUpdateS3TableWithUniqueKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // ----- util function ----
@@ -666,7 +683,9 @@ func buildUpdateTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl, relResetExpectErr)
 
-	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 3, hasUniqueKey, hasSecondaryKey)
+	batchs, affectRows := prepareUpdateTestBatchs(
+		proc.GetMPool(), 3, colexec.DefaultBatchSize, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, relResetExpectErr)
@@ -677,21 +696,29 @@ func buildUpdateS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, _ := prepareUpdateTestBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	batchs, _ := prepareUpdateTestBatchs(
+		proc.GetMPool(), testS3BatchCount, testS3BatchRows, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
-func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+func prepareUpdateTestBatchs(
+	mp *mpool.MPool,
+	size int,
+	rowsPerBatch int,
+	hasUniqueKey bool,
+	hasSecondaryKey bool,
+) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	mainObjectID := types.NewObjectid()
 	uniqueObjectID := types.NewObjectid()
 	secondaryObjectID := types.NewObjectid()
 	for i := 0; i < size; i++ {
-		rowCount := colexec.DefaultBatchSize
+		rowCount := rowsPerBatch
 		if i == size-1 {
 			rowCount = rowCount / 2
 		}

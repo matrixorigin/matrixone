@@ -2671,6 +2671,154 @@ func TestToSubIfUnsubscribed_Concurrent(t *testing.T) {
 	assert.True(t, exists)
 }
 
+func TestToSubIfUnsubscribedPreservesStateInstalledWhileWaitingReady(t *testing.T) {
+	testCases := []struct {
+		name  string
+		state SubscribeState
+	}{
+		{name: "subscribing", state: Subscribing},
+		{name: "response received", state: SubRspReceived},
+		{name: "subscribed", state: Subscribed},
+		{name: "unsubscribing", state: Unsubscribing},
+		{name: "table not found", state: SubRspTableNotExist},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			const (
+				dbID    = uint64(1000)
+				tableID = uint64(100)
+			)
+
+			var c PushClient
+			c.subscribed.m = make(map[uint64]*subEntry)
+			c.subscriber = newLogTailSubscriber()
+
+			var sendCount atomic.Int32
+			c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+				sendCount.Add(1)
+				return nil
+			}
+
+			baseCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &waitReadyObservedContext{
+				Context: baseCtx,
+				checked: make(chan struct{}),
+			}
+			type result struct {
+				state SubscribeState
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() {
+				state, err := c.toSubIfUnsubscribed(ctx, dbID, tableID)
+				done <- result{state: state, err: err}
+			}()
+
+			select {
+			case <-ctx.checked:
+			case <-time.After(time.Second):
+				c.subscriber.setReady()
+				t.Fatal("subscription did not wait for subscriber readiness")
+			}
+
+			entry := &subEntry{dbID: dbID, state: tc.state}
+			c.subscribed.rw.Lock()
+			c.subscribed.m[tableID] = entry
+			c.subscribed.rw.Unlock()
+			c.subscriber.setReady()
+
+			select {
+			case res := <-done:
+				require.NoError(t, res.err)
+				require.Equal(t, tc.state, res.state)
+			case <-time.After(time.Second):
+				cancel()
+				t.Fatal("subscription did not finish after subscriber became ready")
+			}
+			require.Equal(t, int32(0), sendCount.Load())
+
+			c.subscribed.rw.RLock()
+			got := c.subscribed.m[tableID]
+			c.subscribed.rw.RUnlock()
+			require.Same(t, entry, got)
+		})
+	}
+}
+
+func TestToSubIfUnsubscribedConcurrentWaitReadySingleSend(t *testing.T) {
+	const (
+		dbID       = uint64(1000)
+		tableID    = uint64(100)
+		goroutines = 8
+	)
+
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.subscriber = newLogTailSubscriber()
+
+	var sendCount atomic.Int32
+	c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+		sendCount.Add(1)
+		return nil
+	}
+
+	type result struct {
+		state SubscribeState
+		err   error
+	}
+	results := make(chan result, goroutines)
+	contexts := make([]*waitReadyObservedContext, 0, goroutines)
+	cancels := make([]context.CancelFunc, 0, goroutines)
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+		c.subscriber.setReady()
+	}()
+
+	for range goroutines {
+		baseCtx, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		ctx := &waitReadyObservedContext{
+			Context: baseCtx,
+			checked: make(chan struct{}),
+		}
+		contexts = append(contexts, ctx)
+		go func() {
+			state, err := c.toSubIfUnsubscribed(ctx, dbID, tableID)
+			results <- result{state: state, err: err}
+		}()
+	}
+
+	for _, ctx := range contexts {
+		select {
+		case <-ctx.checked:
+		case <-time.After(time.Second):
+			t.Fatal("not all subscriptions reached the readiness wait")
+		}
+	}
+	c.subscriber.setReady()
+
+	for range goroutines {
+		select {
+		case res := <-results:
+			require.NoError(t, res.err)
+			require.Equal(t, Subscribing, res.state)
+		case <-time.After(time.Second):
+			t.Fatal("subscription did not finish after subscriber became ready")
+		}
+	}
+	require.Equal(t, int32(1), sendCount.Load())
+
+	c.subscribed.rw.RLock()
+	entry := c.subscribed.m[tableID]
+	c.subscribed.rw.RUnlock()
+	require.NotNil(t, entry)
+	require.Equal(t, Subscribing, entry.state)
+}
+
 // TestIsNotSubscribing_Concurrent tests concurrent isNotSubscribing calls
 func TestIsNotSubscribing_Concurrent(t *testing.T) {
 	ctx := context.Background()

@@ -1295,7 +1295,8 @@ const (
 
 	lockMoAccountNameFormat = `select account_name from mo_catalog.__mo_account_lock where account_name = "%s" for update;`
 
-	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
+	deletePitrFromMoPitrFormat          = `delete from mo_catalog.mo_pitr where create_account = %d;`
+	deleteFeatureLimitByAccountIDFormat = `delete from mo_catalog.mo_feature_limit where account_id = %d;`
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
@@ -1329,6 +1330,8 @@ const (
 
 	// operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
+
+	getRoleNameOfUserRoleFormat = `select r.role_name from mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_id = %d;`
 
 	getRoleIdOfUserIdFormat = `select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d;`
 
@@ -1778,6 +1781,10 @@ func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
 	return fmt.Sprintf(deletePitrFromMoPitrFormat, accountId)
 }
 
+func getSqlForDeleteFeatureLimitByAccountID(accountID int64) string {
+	return fmt.Sprintf(deleteFeatureLimitByAccountIDFormat, accountID)
+}
+
 func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 	err := inputNameIsInvalid(ctx, user)
 	if err != nil {
@@ -1868,6 +1875,10 @@ func getSqlForRoleOfUser(ctx context.Context, userID int64, roleName string) (st
 		return "", err
 	}
 	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName), nil
+}
+
+func getSqlForRoleNameOfUserRole(userID, roleID int64) string {
+	return fmt.Sprintf(getRoleNameOfUserRoleFormat, userID, roleID)
 }
 
 func getSqlForRoleIdOfUserId(userId int) string {
@@ -4324,6 +4335,33 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			if rtnErr != nil {
 				return rtnErr
 			}
+		}
+
+		// mo_branch_metadata is globally stored and its creator column is a
+		// semantic ownership key. Keep deleted rows that still protect live
+		// descendants, and reclaim the edge only after its complete subtree is
+		// deleted. This also allows a later child-account drop to reclaim a
+		// retained ancestor edge.
+		if rtnErr = reclaimAccountOwnedBranchMetadataWithBH(ctx, bh, uint64(accountId)); rtnErr != nil {
+			return rtnErr
+		}
+
+		// The dropped tenant's user snapshots and PITR rows were removed above.
+		// Compact ALTER generations in this same transaction so account cleanup
+		// does not leave historical rows behind indefinitely. The shared
+		// compactor retains generations still required by an external historical
+		// source or a live descendant.
+		if rtnErr = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); rtnErr != nil {
+			return rtnErr
+		}
+
+		// mo_feature_limit is globally stored but owns rows by account_id rather
+		// than the cluster-table account_id column used by generic cleanup.
+		sql = getSqlForDeleteFeatureLimitByAccountID(accountId)
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		ts := time.Now().UTC().UnixNano()

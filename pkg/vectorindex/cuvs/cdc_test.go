@@ -810,6 +810,63 @@ func TestSplitIncludeBytes_NoNulls(t *testing.T) {
 	}
 }
 
+func TestIncludeMetadataLoadAndSplit(t *testing.T) {
+	bindings := []IncludeBinding{
+		{Name: `tier"name`, Pos: 0, TypeCode: 0, SizeBytes: 4},
+		{Name: `hash\value`, Pos: 1, TypeCode: 4, SizeBytes: 8},
+	}
+	meta, err := MarshalColMetaJSON([]ColMetaEntry{
+		{Name: bindings[0].Name, Type: bindings[0].TypeCode},
+		{Name: bindings[1].Name, Type: bindings[1].TypeCode},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	includeBytesPerRow, err := CdcIncludeBytesPerRow(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if includeBytesPerRow != 13 {
+		t.Fatalf("includeBytesPerRow: got %d, want 13", includeBytesPerRow)
+	}
+
+	row0, err := EncodeIncludeRow(bindings, []any{int32(-7), uint64(11)}, includeBytesPerRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row1, err := EncodeIncludeRow(bindings, []any{int32(9), nil}, includeBytesPerRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	include := append(row0, row1...)
+	cols, nulls, err := SplitIncludeBytes(meta, include, 2, includeBytesPerRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 2 || len(nulls) != 2 {
+		t.Fatalf("unexpected col/null counts: %d/%d", len(cols), len(nulls))
+	}
+	if got := int32(binary.LittleEndian.Uint32(cols[0][0:4])); got != -7 {
+		t.Fatalf("col0 row0: got %d, want -7", got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(cols[0][4:8])); got != 9 {
+		t.Fatalf("col0 row1: got %d, want 9", got)
+	}
+	if got := binary.LittleEndian.Uint64(cols[1][0:8]); got != 11 {
+		t.Fatalf("col1 row0: got %d, want 11", got)
+	}
+	if nulls[0] != nil {
+		t.Fatalf("col0 should have no nulls, got %v", nulls[0])
+	}
+	if nulls[1] == nil || nulls[1][0] != 1<<1 {
+		t.Fatalf("col1 null bitmap: got %v, want row 1 null", nulls[1])
+	}
+
+	if _, err := CdcIncludeBytesPerRow(meta + " trailing"); err == nil {
+		t.Fatal("expected malformed metadata error")
+	}
+}
+
 func TestNextChunkIdSql(t *testing.T) {
 	got := NextChunkIdSql(testTblcfg(), "idx-1", vectorindex.Tag_CdcEvents)
 	want := fmt.Sprintf(

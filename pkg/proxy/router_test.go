@@ -797,6 +797,14 @@ func TestCanReuseCachedCNRequiresCurrentRouteEligibility(t *testing.T) {
 	}}
 	require.True(t, ru.CanReuseCachedCN(nil, commonClient))
 	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
+	hc.Lock()
+	hc.value.CNStores[0].ViewMetadataAdmissionGeneration = 1
+	hc.Unlock()
+	mc.ForceRefresh(true)
+	require.False(t, ru.CanReuseCachedCN(cn, commonClient),
+		"cached reuse must reject a same-UUID process replacement")
+	cn.admissionGeneration = 1
+	require.True(t, ru.CanReuseCachedCN(cn, commonClient))
 	ru.health = newCNHealthChecker(withCNHealthFailThreshold(1))
 	ru.health.reportFailure(cn.uuid, "cn1-addr")
 	require.False(t, ru.CanReuseCachedCN(cn, commonClient), "unhealthy CN must not receive cached sessions")

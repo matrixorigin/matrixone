@@ -853,6 +853,187 @@ func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
 	}
 }
 
+func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	previousCreateTxnOpTimeout := pu.SV.CreateTxnOpTimeout.Duration
+	t.Cleanup(func() {
+		pu.TxnClient = previousTxnClient
+		pu.SV.CreateTxnOpTimeout.Duration = previousCreateTxnOpTimeout
+	})
+	pu.SV.CreateTxnOpTimeout.Duration = time.Nanosecond
+
+	entered := make(chan struct{})
+	deadlineC := make(chan time.Time, 1)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			deadline, _ := ctx.Deadline()
+			deadlineC <- deadline
+			close(entered)
+			<-ctx.Done()
+			return nil, context.Cause(ctx)
+		},
+	)
+	pu.TxnClient = txnClient
+
+	bh := ses.InitBackExec(nil, "", fakeDataSetFetcher2, &BackgroundExecOption{
+		cancelTxnCreateWithRequest: true,
+	}).(*backExec)
+	defer bh.Close()
+	require.ErrorContains(t,
+		bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{ses: bh.backSes}),
+		"request context is required for cancellable transaction creation",
+	)
+
+	reqDeadline := time.Now().Add(time.Hour)
+	reqCtx, cancel := context.WithDeadline(
+		defines.AttachAccountId(context.Background(), sysAccountID),
+		reqDeadline,
+	)
+	defer cancel()
+	errC := make(chan error, 1)
+	go func() {
+		errC <- bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{
+			reqCtx: reqCtx,
+			ses:    bh.backSes,
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("transaction creation did not enter txn client")
+	}
+	gotDeadline := <-deadlineC
+	require.False(t, gotDeadline.IsZero())
+	require.WithinDuration(t, reqDeadline, gotDeadline, time.Millisecond,
+		"the request deadline, not CreateTxnOpTimeout, must own authentication transaction creation")
+	cancel()
+
+	select {
+	case err := <-errC:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("transaction creation did not stop after request cancellation")
+	}
+}
+
+func TestOrdinaryBackgroundTxnCreationKeepsCreateTxnTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	previousCreateTxnOpTimeout := pu.SV.CreateTxnOpTimeout.Duration
+	t.Cleanup(func() {
+		pu.TxnClient = previousTxnClient
+		pu.SV.CreateTxnOpTimeout.Duration = previousCreateTxnOpTimeout
+	})
+	const createTimeout = time.Hour
+	pu.SV.CreateTxnOpTimeout.Duration = createTimeout
+
+	deadlineC := make(chan time.Time, 1)
+	wantErr := moerr.NewInternalErrorNoCtx("stop after context capture")
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp, _ ...client.TxnOption) (client.TxnOperator, error) {
+			deadline, _ := ctx.Deadline()
+			deadlineC <- deadline
+			return nil, wantErr
+		},
+	)
+	pu.TxnClient = txnClient
+
+	bh := ses.InitBackExec(nil, "", fakeDataSetFetcher2).(*backExec)
+	defer bh.Close()
+	requestCtx, cancelRequest := context.WithTimeout(
+		defines.AttachAccountId(context.Background(), sysAccountID),
+		time.Second,
+	)
+	defer cancelRequest()
+	started := time.Now()
+	err := bh.backSes.GetTxnHandler().createTxnOpUnsafe(&ExecCtx{
+		reqCtx: requestCtx,
+		ses:    bh.backSes,
+	})
+	require.ErrorIs(t, err, wantErr)
+	gotDeadline := <-deadlineC
+	require.False(t, gotDeadline.IsZero())
+	require.WithinDuration(t, started.Add(createTimeout), gotDeadline, time.Second,
+		"ordinary transaction creation must retain CreateTxnOpTimeout ownership")
+}
+
+func TestTxnHandlerDoesNotOwnKafkaProgress(t *testing.T) {
+	newState := func(t *testing.T) (*Session, *ExecCtx, *testTxnOp) {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+		ses.txnHandler.txnOp = op
+		ses.txnHandler.txnCtx = ctx
+
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		return ses, execCtx, op
+	}
+
+	t.Run("commit leaves publication to statement terminal", func(t *testing.T) {
+		ses, execCtx, op := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		execCtx.stmt = &tree.CommitTransaction{}
+		execCtx.txnOpt = FeTxnOption{byCommit: true, autoCommit: false}
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, 1, op.commitCalls)
+		require.Empty(t, calls)
+		require.Len(t, ses.kafkaProgressQueue, 1)
+
+		// executeStmtWithResponse owns this terminal action.
+		ses.FinalizeKafkaProgress(true)
+		require.Equal(t, []bool{true}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+
+	t.Run("rollback leaves discard to statement terminal", func(t *testing.T) {
+		ses, execCtx, op := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+
+		var calls []bool
+		ses.EnqueueKafkaProgress(func(publish bool) { calls = append(calls, publish) })
+		execCtx.stmt = &tree.RollbackTransaction{}
+		execCtx.txnOpt = FeTxnOption{byRollback: true, autoCommit: false}
+
+		require.NoError(t, ses.GetTxnHandler().Rollback(execCtx))
+		require.Equal(t, 1, op.rollbackCalls)
+		require.Empty(t, calls)
+		require.Len(t, ses.kafkaProgressQueue, 1)
+
+		// executeStmtWithResponse owns this terminal action.
+		ses.FinalizeKafkaProgress(false)
+		require.Equal(t, []bool{false}, calls)
+		require.Empty(t, ses.kafkaProgressQueue)
+	})
+}
+
 func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)

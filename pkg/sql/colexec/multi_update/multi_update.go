@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -330,6 +332,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 				return source.Delete(newCtx, batBufs[actionDelete], name)
 			})
@@ -359,6 +362,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 				return source.Write(newCtx, batBufs[actionInsert])
 			})
@@ -749,6 +753,16 @@ func targetTableID(ctx *MultiUpdateCtx) uint64 {
 		return ctx.TargetTableID
 	}
 	return ctx.TableDef.TblId
+}
+
+func (update *MultiUpdate) writeContext(ctx context.Context, tableID uint64) context.Context {
+	for _, updateCtx := range update.MultiUpdateCtx {
+		if updateCtx != nil && updateCtx.TableDef != nil &&
+			targetTableID(updateCtx) == tableID && updateCtx.TableDef.Name == catalog.MO_COLUMNS_UPDATE {
+			return context.WithValue(ctx, defines.MoColumnsUpdateKey{}, true)
+		}
+	}
+	return ctx
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {
