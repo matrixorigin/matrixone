@@ -53,6 +53,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		}
 	}
 	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
+	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.groupingAware = false
