@@ -1306,6 +1306,32 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
 }
 
+func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
+	integer := func(value string) []any {
+		return []any{plan2.ParamValue{
+			Value: value, PrepareParamKind: vector.PrepareParamInteger,
+			SourceType: types.T_int64.ToType(), HasSourceType: true,
+		}}
+	}
+	require.NotEqual(t, preparedRuntimeSemanticKey(integer("200")), preparedRuntimeSemanticKey(integer("10")),
+		"SQL source metadata must not replace the value-derived comparison domain")
+
+	decimal := func(value string, width, scale int32) []any {
+		return []any{plan2.ParamValue{
+			Value: value, PrepareParamKind: vector.PrepareParamDecimal,
+			SourceType: types.New(types.T_decimal128, width, scale), HasSourceType: true,
+		}}
+	}
+	require.Equal(t,
+		preparedRuntimeSemanticKey(decimal("2.5", 20, 5)),
+		preparedRuntimeSemanticKey(decimal("3.5", 20, 5)),
+		"values in one SQL arithmetic domain should reuse the specialized plan")
+	require.NotEqual(t,
+		preparedRuntimeSemanticKey(decimal("2.5", 20, 5)),
+		preparedRuntimeSemanticKey(decimal("2.5", 30, 8)),
+		"a different SQL source domain must not reuse stale arithmetic metadata")
+}
+
 func TestPreparedDirectResultSemanticKeyPreservesDecimalMetadataDomain(t *testing.T) {
 	decimal := func(value string, width, scale int32) []any {
 		return []any{plan2.ParamValue{
@@ -1640,6 +1666,41 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
 	require.Equal(t, "session-binary", params.GetStringAt(2))
+}
+
+func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+
+	decimalType := plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 3}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
+	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
+
+	args := []*plan.Expr{
+		{
+			Typ:  decimalType,
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_decimal"}},
+		},
+		{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_text"}},
+		},
+	}
+	params, paramVals, _, _, err := buildExecuteUserParams(cw.proc, args)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+
+	require.Equal(t, "2.500", params.GetStringAt(0))
+	decimalParam, ok := paramVals[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.True(t, decimalParam.HasSourceType)
+	require.Equal(t, types.New(types.T_decimal128, 12, 3), decimalParam.SourceType)
+	require.Equal(t, vector.PrepareParamDecimal, decimalParam.PrepareParamKind)
+
+	textParam, ok := paramVals[1].(plan2.ParamValue)
+	require.True(t, ok)
+	require.False(t, textParam.HasSourceType,
+		"an unresolved execute argument must keep the existing text fallback")
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

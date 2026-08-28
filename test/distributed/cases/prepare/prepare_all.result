@@ -641,7 +641,8 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ 0 + ?[3,38,0]  𝄀
+18446744073709551615
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
@@ -836,4 +837,22 @@ deallocate prepare prepared_set_error;
 deallocate prepare prepared_set_reserved_error;
 deallocate prepare prepared_set_system_error;
 drop table prepared_set_values;
+prepare issue25408_runtime_reexecute from 'select ? + 1 as plus_one';
+set @issue25408_runtime_value = '2';
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[-5,64,0]  𝄀
+3
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[3,38,1]  𝄀
+3.5
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[3,38,1]  𝄀
+4.5
+set @issue25408_runtime_value = -2;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+➤ plus_one[-5,64,0]  𝄀
+-1
+deallocate prepare issue25408_runtime_reexecute;
 SET TIME_ZONE = "SYSTEM";

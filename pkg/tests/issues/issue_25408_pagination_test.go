@@ -51,6 +51,84 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table "+dbName+".page(id int)")
 		execSQLRequire(t, ctx, db, "insert into "+dbName+".page values (1),(2),(3)")
 
+		type scalarObservation struct {
+			value        string
+			databaseType string
+		}
+		observeScalar := func(t *testing.T, rows *sql.Rows, queryErr error) scalarObservation {
+			t.Helper()
+			require.NoError(t, queryErr)
+			defer rows.Close()
+
+			columnTypes, typeErr := rows.ColumnTypes()
+			require.NoError(t, typeErr)
+			require.Len(t, columnTypes, 1)
+			require.True(t, rows.Next())
+			var value string
+			require.NoError(t, rows.Scan(&value))
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+			return scalarObservation{
+				value:        value,
+				databaseType: columnTypes[0].DatabaseTypeName(),
+			}
+		}
+
+		t.Run("SQL PREPARE runtime numeric type reuse", func(t *testing.T) {
+			execSQLRequire(t, ctx, db,
+				"prepare issue25408_runtime from 'select ? + 1 as plus_one'")
+			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_runtime")
+
+			for _, execution := range []struct {
+				assignment       string
+				wantValue        string
+				wantDatabaseType string
+			}{
+				{
+					assignment: "set @issue25408_runtime = '2'", wantValue: "3", wantDatabaseType: "DOUBLE",
+				},
+				{
+					assignment: "set @issue25408_runtime = 2.5", wantValue: "3.5", wantDatabaseType: "DECIMAL",
+				},
+				{
+					assignment: "set @issue25408_runtime = 3.5", wantValue: "4.5", wantDatabaseType: "DECIMAL",
+				},
+				{
+					assignment: "set @issue25408_runtime = -2", wantValue: "-1", wantDatabaseType: "BIGINT",
+				},
+			} {
+				execSQLRequire(t, ctx, db, execution.assignment)
+				preparedRows, preparedErr := db.QueryContext(
+					ctx, "execute issue25408_runtime using @issue25408_runtime")
+				prepared := observeScalar(t, preparedRows, preparedErr)
+				require.Equal(t, execution.wantValue, prepared.value)
+				require.Equal(t, execution.wantDatabaseType, prepared.databaseType,
+					"prepared execution must use the current variable's numeric category")
+			}
+		})
+
+		t.Run("COM_STMT runtime numeric type reuse", func(t *testing.T) {
+			stmt, prepareErr := db.PrepareContext(ctx, "select ? + 1 as plus_one")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+
+			for _, execution := range []struct {
+				value            any
+				wantValue        string
+				wantDatabaseType string
+			}{
+				{value: int64(2), wantValue: "3", wantDatabaseType: "BIGINT"},
+				{value: float64(2.5), wantValue: "3.5", wantDatabaseType: "DOUBLE"},
+				{value: int64(-2), wantValue: "-1", wantDatabaseType: "BIGINT"},
+			} {
+				preparedRows, preparedErr := stmt.QueryContext(ctx, execution.value)
+				prepared := observeScalar(t, preparedRows, preparedErr)
+				require.Equal(t, execution.wantValue, prepared.value)
+				require.Equal(t, execution.wantDatabaseType, prepared.databaseType,
+					"binary prepared execution must use the current parameter's numeric category")
+			}
+		})
+
 		assertRows := func(t *testing.T, query string, want ...int) {
 			t.Helper()
 			rows, queryErr := db.QueryContext(ctx, query)

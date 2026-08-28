@@ -438,6 +438,10 @@ type ResetParamRefRule struct {
 	// their ordinary string domains.
 	numericPrefixParamPositions map[int]bool
 	numericPrefixParamKinds     map[int]types.StringConversionKind
+	// sqlExecuteNumericParams carries the logical source value of SQL EXECUTE
+	// user variables. It is consulted only by arithmetic consumers; comparison
+	// domains continue to use the dedicated common-type paths above.
+	sqlExecuteNumericParams []*plan.Expr
 	// numericPrefixDependent records rewritten expressions whose value domain
 	// was selected from an execute-time numeric-prefix parameter. The dependency
 	// propagates through binder-inserted casts so enclosing consumers can remove
@@ -917,6 +921,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if directParam := arg.GetP(); directParam != nil {
 				paramPos, hasParamPos = int(directParam.Pos), directParam.Pos >= 0
 			}
+			useSQLExecuteNumericSource := hasParamPos &&
+				preparedFunctionArgUsesSQLExecuteNumericSource(
+					e, functionName, i, len(exprImpl.F.Args)) &&
+				paramPos < len(rule.sqlExecuteNumericParams) &&
+				rule.sqlExecuteNumericParams[paramPos] != nil
 			if hasParamPos && rule.numericPrefixParamPositions[paramPos] {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
@@ -949,6 +958,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
+			if useSQLExecuteNumericSource {
+				source := rule.sqlExecuteNumericParams[paramPos]
+				boundArgs[i] = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
+				needResetFunction = true
+				compareArgTypes = true
+				// SourceType already represents the SQL value's numeric contract.
+				// Do not also reinterpret the same argument through the text-prefix
+				// specialization selected for comparisons and common-value peers.
+				numericPrefixArgs[i] = false
+			}
 			if preparedExprContainsNumericComparisonFallback(
 				rewrittenArg, rule.numericComparisonTextFallbackExprs,
 			) {
@@ -1782,6 +1801,22 @@ func windowHasNumericPrefixDependency(
 		}
 	}
 	return false
+}
+
+func preparedFunctionArgUsesSQLExecuteNumericSource(
+	parent *plan.Expr,
+	name string,
+	argIndex int,
+	argCount int,
+) bool {
+	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() {
+		return false
+	}
+	if !isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name) {
+		return false
+	}
+	return !numericFunctionHasSelectiveContext(name) ||
+		numericFunctionArgKeepsContext(name, argIndex, argCount)
 }
 
 func preparedExprFunctionObj(expr *plan.Expr) int64 {

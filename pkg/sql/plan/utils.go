@@ -4373,6 +4373,13 @@ type ParamValue struct {
 	// binary-protocol value without being a binary string literal.
 	IsBinaryProtocol bool
 	PrepareParamKind vector.PrepareParamKind
+	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
+	// is deliberately separate from RuntimeType: SQL parameters are transported
+	// through a text vector, and their source type is used only after an
+	// arithmetic consumer establishes a numeric domain. Comparisons keep their
+	// existing common-type and numeric-prefix contracts.
+	SourceType    types.Type
+	HasSourceType bool
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -5128,6 +5135,34 @@ func PreparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	return preparedRuntimeParamExpr(ctx, value, isBin, runtimeType)
 }
 
+func preparedSQLExecuteNumericParamExpr(
+	ctx context.Context,
+	value any,
+	isBin bool,
+	sourceType types.Type,
+) (*Expr, error) {
+	source, err := preparedRuntimeParamExpr(ctx, value, isBin, sourceType)
+	if err != nil {
+		return nil, err
+	}
+	if isStringBackedType(sourceType) {
+		// A SQL string user variable enters arithmetic through MySQL's
+		// approximate numeric-prefix domain. Keep that distinct from a DECIMAL
+		// user variable, even though both arrive in the frontend's text vector.
+		return appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
+	}
+	if sourceType.Oid == types.T_bool {
+		return makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_int64))
+	}
+	if sourceType.Oid == types.T_bit {
+		return makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_uint64))
+	}
+	if sourceType.IsNumeric() || sourceType.Oid == types.T_year {
+		return source, nil
+	}
+	return nil, nil
+}
+
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
 	rawText := fmt.Sprintf("%v", value)
 	text := strings.TrimSpace(rawText)
@@ -5333,6 +5368,7 @@ func replaceParamVals(
 	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
+	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
 		isBin := false
@@ -5350,6 +5386,19 @@ func replaceParamVals(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
+			if param.HasSourceType && param.Value != nil {
+				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
+					ctx, param.Value, param.IsBin, param.SourceType)
+				if err != nil {
+					return false, err
+				}
+				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
+					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
+						Typ:  makePlan2Type(&param.SourceType),
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
+					})
+				}
+			}
 		}
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
@@ -5397,6 +5446,7 @@ func replaceParamVals(
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
 	if preserveDMLWrites {
 		paramRule.preserveRoots = preparedDMLWriteExpressions(plan0.GetQuery())
 	}

@@ -1301,6 +1301,72 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
 }
 
+func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(t *testing.T) {
+	ctx := context.Background()
+	makeParam := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+	}
+	makeQuery := func(t *testing.T, expr *planpb.Expr) *planpb.Plan {
+		t.Helper()
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			StmtType: planpb.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_VALUE_SCAN,
+				ProjectList: []*planpb.Expr{expr},
+			}},
+		}}}
+	}
+	makeAddition := func(t *testing.T) *planpb.Plan {
+		t.Helper()
+		addition, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
+			makeParam(), makePlan2Int64ConstExprWithType(1),
+		})
+		require.NoError(t, err)
+		return makeQuery(t, addition)
+	}
+
+	stringFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeAddition(t), []any{ParamValue{
+			Value: "2", SourceType: types.New(types.T_varchar, 1, 0), HasSourceType: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_float64), stringResult.Typ.Id)
+	require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, stringFilled))
+	require.True(t, preparedExprContainsParam(stringResult), stringResult.String())
+
+	decimalFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeAddition(t), []any{ParamValue{
+			Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	decimalResult := decimalFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.True(t, types.T(decimalResult.Typ.Id).IsDecimal(), decimalResult.String())
+	require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, decimalFilled))
+	require.True(t, preparedExprContainsParam(decimalResult), decimalResult.String())
+
+	intType := types.T_int32.ToType()
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		{Typ: makePlan2Type(&intType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+		makeParam(),
+	})
+	require.NoError(t, err)
+	comparisonFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeQuery(t, comparison), []any{ParamValue{
+			Value: "9.0", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+		}})
+	require.NoError(t, err)
+	comparisonResult := comparisonFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_int32), comparisonResult.GetF().Args[1].Typ.Id,
+		"a SQL source type must not replace the comparison domain")
+}
+
 func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {
 	ctx := context.Background()
 	param := func(pos int32) *planpb.Expr {

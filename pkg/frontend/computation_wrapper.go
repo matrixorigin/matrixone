@@ -1640,6 +1640,14 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Width, runtimeType.Scale)
+		if param.HasSourceType {
+			// SQL EXECUTE arithmetic specializes from the user variable's logical
+			// type. Keep that dependency in the cache identity without replacing
+			// the value-derived domain above: comparison specialization still
+			// relies on the latter to separate values such as 200 and 10.
+			fmt.Fprintf(&key, "source:%d:%d:%d;",
+				param.SourceType.Oid, param.SourceType.Width, param.SourceType.Scale)
+		}
 	}
 	return key.String()
 }
@@ -2036,12 +2044,18 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
-		paramVals[i] = plan2.ParamValue{
+		paramValue := plan2.ParamValue{
 			Value:               param,
 			IsBin:               paramIsBin[i],
 			PrepareParamKind:    paramKinds[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
+		if arg.Typ.Id != 0 {
+			paramValue.SourceType = types.New(
+				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+			paramValue.HasSourceType = true
+		}
+		paramVals[i] = paramValue
 	}
 	return
 }

@@ -627,5 +627,19 @@ deallocate prepare prepared_set_reserved_error;
 deallocate prepare prepared_set_system_error;
 drop table prepared_set_values;
 
+-- @case
+-- @desc:SQL PREPARE rebinds the current user-variable numeric type on every execution
+-- @label:bvt
+prepare issue25408_runtime_reexecute from 'select ? + 1 as plus_one';
+set @issue25408_runtime_value = '2';
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+set @issue25408_runtime_value = -2;
+execute issue25408_runtime_reexecute using @issue25408_runtime_value;
+deallocate prepare issue25408_runtime_reexecute;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

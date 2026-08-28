@@ -474,6 +474,42 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name       string
+		value      any
+		sourceType types.Type
+		wantType   types.T
+		wantNil    bool
+	}{
+		{name: "string uses approximate numeric conversion", value: "2tail",
+			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
+		{name: "boolean uses integer arithmetic", value: true,
+			sourceType: types.T_bool.ToType(), wantType: types.T_int64},
+		{name: "bit uses unsigned arithmetic", value: "5",
+			sourceType: types.T_bit.ToType(), wantType: types.T_uint64},
+		{name: "integer retains exact type", value: int64(5),
+			sourceType: types.T_int64.ToType(), wantType: types.T_int64},
+		{name: "year retains numeric type", value: int32(2026),
+			sourceType: types.T_year.ToType(), wantType: types.T_year},
+		{name: "date is not an arithmetic source", value: "2026-08-28",
+			sourceType: types.T_date.ToType(), wantNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := preparedSQLExecuteNumericParamExpr(
+				ctx, test.value, false, test.sourceType)
+			require.NoError(t, err)
+			if test.wantNil {
+				require.Nil(t, expr)
+				return
+			}
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.wantType), expr.Typ.Id)
+		})
+	}
+}
+
 func TestPreparedRuntimeDecimalTypeBoundaries(t *testing.T) {
 	for _, digits := range []int{65, 66, 67, 76} {
 		value := strings.Repeat("9", digits)
