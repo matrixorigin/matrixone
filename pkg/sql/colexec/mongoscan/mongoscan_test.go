@@ -276,7 +276,7 @@ func TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall(t *testi
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
 		}
 	})
 
@@ -284,10 +284,10 @@ func TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall(t *testi
 	// payload. A rollback before Prepare must fail before any client/driver call.
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, `{"filter":{"value":1}}`, false)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
 	scan := NewArgument().WithScan(spec)
 	scan.Dependencies = deps
-	require.ErrorContains(t, scan.Prepare(proc), "MORPC protocol version 33")
+	require.ErrorContains(t, scan.Prepare(proc), "MORPC protocol version 35")
 	require.Empty(t, collection.findSpecs)
 	require.Empty(t, collection.aggregateSpecs)
 	require.NoError(t, deps.Pool.Close(t.Context()))
@@ -582,12 +582,12 @@ func TestMongoScanExplicitQueryDeadlineRejectsBufferedDocument(t *testing.T) {
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
 	t.Cleanup(func() {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
 		}
 	})
 
