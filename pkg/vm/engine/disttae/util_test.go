@@ -16,10 +16,12 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math/rand"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -661,24 +663,452 @@ func TestConcurrentExecutor_Run(t *testing.T) {
 	require.Equal(t, 3, ex.GetConcurrency())
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	ex.AppendTask(func() error {
-		defer wg.Done()
-		return nil
-	})
-
-	wg.Add(1)
-	ex.AppendTask(func() error {
-		defer wg.Done()
-		return context.Canceled
-	})
-
-	wg.Add(1)
-	ex.AppendTask(func() error {
-		defer wg.Done()
-		return io.EOF
-	})
+	submit := func(task concurrentTask) {
+		wg.Add(1)
+		err := ex.AppendTask(ctx, task, func(error) {
+			wg.Done()
+		})
+		if err != nil {
+			wg.Done()
+		}
+		require.NoError(t, err)
+	}
+	submit(func() error { return nil })
+	submit(func() error { return context.Canceled })
+	submit(func() error { return io.EOF })
 	wg.Wait()
+}
+
+func TestConcurrentExecutorRejectsQueuedTasksOnShutdown(t *testing.T) {
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	defer stopExecutor()
+	ex.Run(executorCtx)
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	require.NoError(t, ex.AppendTask(context.Background(), func() error {
+		close(firstStarted)
+		<-releaseFirst
+		return nil
+	}, func(err error) {
+		if err != nil {
+			t.Errorf("running task was unexpectedly rejected: %v", err)
+		}
+	}))
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		t.Fatal("executor did not start its admitted task")
+	}
+
+	secondRan := atomic.Bool{}
+	secondRejected := make(chan error, 1)
+	require.NoError(t, ex.AppendTask(context.Background(), func() error {
+		secondRan.Store(true)
+		return nil
+	}, func(err error) {
+		secondRejected <- err
+	}))
+
+	stopExecutor()
+	<-ex.(*concurrentExecutor).stopCh
+	close(releaseFirst)
+	select {
+	case err := <-secondRejected:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("executor shutdown abandoned an admitted task")
+	}
+	require.False(t, secondRan.Load())
+
+	err := ex.AppendTask(context.Background(), func() error { return nil }, nil)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func visibleObjectStateForExecutorTest(t *testing.T, count int) *logtailreplay.PartitionState {
+	t.Helper()
+	ctx := context.Background()
+	state := logtailreplay.NewPartitionState("", true, 42, false)
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	for i := 0; i < count; i++ {
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(int64(i+1), 0),
+		}, false))
+	}
+	return state
+}
+
+// delayedLifecycleContext models a conforming lifecycle whose Done predicate is
+// observable before its AfterFunc notification is dispatched. This keeps the
+// cancellation race deterministic without sleeps or scheduler assumptions.
+type delayedLifecycleContext struct {
+	done chan struct{}
+
+	mu        sync.Mutex
+	err       error
+	callbacks []*delayedLifecycleCallback
+	// cancelOnRegister closes Done while context.AfterFunc is registering its
+	// callback, but before that callback is dispatched.
+	cancelOnRegister bool
+}
+
+type delayedLifecycleCallback struct {
+	active bool
+	fn     func()
+}
+
+func newDelayedLifecycleContext() *delayedLifecycleContext {
+	return &delayedLifecycleContext{done: make(chan struct{})}
+}
+
+func (c *delayedLifecycleContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *delayedLifecycleContext) Done() <-chan struct{}       { return c.done }
+func (c *delayedLifecycleContext) Value(any) any               { return nil }
+
+func (c *delayedLifecycleContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *delayedLifecycleContext) AfterFunc(fn func()) func() bool {
+	c.mu.Lock()
+	callback := &delayedLifecycleCallback{active: true, fn: fn}
+	c.callbacks = append(c.callbacks, callback)
+	if c.cancelOnRegister && c.err == nil {
+		c.err = context.Canceled
+		close(c.done)
+	}
+	c.mu.Unlock()
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !callback.active {
+			return false
+		}
+		callback.active = false
+		return true
+	}
+}
+
+func (c *delayedLifecycleContext) cancelWithoutNotification() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = context.Canceled
+	close(c.done)
+}
+
+type inlineLifecycleExecutor struct {
+	lifecycle context.Context
+}
+
+func (e *inlineLifecycleExecutor) AppendTask(
+	ctx context.Context,
+	task concurrentTask,
+	complete func(error),
+) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	err := task()
+	if complete != nil {
+		complete(err)
+	}
+	return nil
+}
+
+func (*inlineLifecycleExecutor) Run(context.Context) {}
+
+func (e *inlineLifecycleExecutor) LifecycleContext() context.Context {
+	return e.lifecycle
+}
+
+func (*inlineLifecycleExecutor) GetConcurrency() int { return 1 }
+
+func TestForeachVisibleObjectsPropagatesConcurrentTaskError(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 2)
+	ex := newConcurrentExecutor(2)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	defer stopExecutor()
+	ex.Run(executorCtx)
+
+	wantErr := errors.New("object metadata unavailable")
+	allStarted := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(allStarted) }) })
+	var calls atomic.Int32
+	result := make(chan error, 1)
+	go func() {
+		result <- ForeachVisibleObjects(
+			context.Background(), state, types.MaxTs(),
+			func(_ context.Context, _ objectio.ObjectEntry) error {
+				call := calls.Add(1)
+				if call == 2 {
+					releaseOnce.Do(func() { close(allStarted) })
+				}
+				<-allStarted
+				if call == 1 {
+					return wantErr
+				}
+				return nil
+			},
+			ex,
+			false,
+		)
+	}()
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent visible-object traversal did not join its tasks")
+	}
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, int32(2), calls.Load(), "one successful and one failed task must both be joined")
+}
+
+func TestForeachVisibleObjectsHonorsCancellationBeforeAdmission(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancel()
+
+	var called atomic.Bool
+	err := ForeachVisibleObjects(
+		ctx, state, types.MaxTs(),
+		func(context.Context, objectio.ObjectEntry) error {
+			called.Store(true)
+			return nil
+		},
+		newConcurrentExecutor(1),
+		false,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, called.Load())
+}
+
+func TestForeachVisibleObjectsCancelsInFlightTask(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	defer stopExecutor()
+	ex.Run(executorCtx)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	taskStarted := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- ForeachVisibleObjects(
+			ctx, state, types.MaxTs(),
+			func(taskCtx context.Context, _ objectio.ObjectEntry) error {
+				close(taskStarted)
+				<-taskCtx.Done()
+				return context.Cause(taskCtx)
+			},
+			ex,
+			false,
+		)
+	}()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start the admitted visible-object task")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("in-flight object task ignored caller cancellation")
+	}
+}
+
+func TestForeachVisibleObjectsCancelsInFlightTaskOnExecutorShutdown(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	defer stopExecutor()
+	ex.Run(executorCtx)
+
+	taskStarted := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- ForeachVisibleObjects(
+			context.Background(), state, types.MaxTs(),
+			func(taskCtx context.Context, _ objectio.ObjectEntry) error {
+				close(taskStarted)
+				<-taskCtx.Done()
+				return context.Cause(taskCtx)
+			},
+			ex,
+			false,
+		)
+	}()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start the admitted visible-object task")
+	}
+	stopExecutor()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("in-flight object task outlived executor shutdown")
+	}
+}
+
+func TestForeachVisibleObjectsRejectsExecutorShutdownWhenTaskReturnsNil(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	t.Cleanup(stopExecutor)
+	ex.Run(executorCtx)
+
+	taskStarted := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- ForeachVisibleObjects(
+			context.Background(), state, types.MaxTs(),
+			func(taskCtx context.Context, _ objectio.ObjectEntry) error {
+				close(taskStarted)
+				<-taskCtx.Done()
+				// Model a callback that observes shutdown only as a release
+				// signal and fails to propagate the context error itself.
+				return nil
+			},
+			ex,
+			false,
+		)
+	}()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start the admitted visible-object task")
+	}
+	stopExecutor()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled,
+			"executor shutdown must remain visible even when a callback returns nil")
+	case <-time.After(time.Second):
+		t.Fatal("visible-object traversal did not join the shutdown task")
+	}
+}
+
+func TestForeachVisibleObjectsReadsLifecyclePredicateAfterJoin(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	lifecycle := newDelayedLifecycleContext()
+	ex := &inlineLifecycleExecutor{lifecycle: lifecycle}
+
+	err := ForeachVisibleObjects(
+		context.Background(), state, types.MaxTs(),
+		func(context.Context, objectio.ObjectEntry) error {
+			lifecycle.cancelWithoutNotification()
+			return nil
+		},
+		ex,
+		false,
+	)
+	require.ErrorIs(t, err, context.Canceled,
+		"executor shutdown is a failed traversal even before async notification dispatch")
+}
+
+func TestForeachVisibleObjectsClosesLifecycleWatcherRegistrationRace(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	lifecycle := newDelayedLifecycleContext()
+	lifecycle.cancelOnRegister = true
+	ex := &inlineLifecycleExecutor{lifecycle: lifecycle}
+	var called atomic.Bool
+
+	err := ForeachVisibleObjects(
+		context.Background(), state, types.MaxTs(),
+		func(context.Context, objectio.ObjectEntry) error {
+			called.Store(true)
+			return nil
+		},
+		ex,
+		false,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, called.Load(),
+		"work must not be admitted after lifecycle cancellation becomes observable")
+}
+
+func TestCollectAndCalculateStatsRejectsStoppedExecutorOnZeroObjectFastPath(t *testing.T) {
+	lifecycle, cancel := context.WithCancel(context.Background())
+	cancel()
+	ex := &inlineLifecycleExecutor{lifecycle: lifecycle}
+	req := &updateStatsRequest{
+		statsInfo:       plan2.NewStatsInfo(),
+		tableDef:        &plan.TableDef{Cols: []*plan.ColDef{{Name: "__mo_rowid"}}},
+		approxObjectNum: 0,
+	}
+
+	_, err := CollectAndCalculateStats(context.Background(), req, ex)
+	require.ErrorIs(t, err, context.Canceled,
+		"the zero-object fast path must not bypass executor lifecycle failure")
+}
+
+func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {
+	ctx := context.Background()
+	state := logtailreplay.NewPartitionState("", true, 42, false)
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	location := objectio.NewRandomLocation(1, 128)
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsLocation(stats, location)
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(1, 0),
+	}, false))
+	require.Equal(t, 1, state.ApproxDataObjectsNum())
+
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	published := plan2.NewStatsInfo()
+	req := &updateStatsRequest{
+		statsInfo: published,
+		tableDef: &plan.TableDef{
+			Name: "events",
+			Cols: []*plan.ColDef{
+				{Name: "event_id", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "__mo_rowid", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+			},
+		},
+		partitionState:  state,
+		fs:              fs,
+		ts:              types.MaxTs(),
+		approxObjectNum: 1,
+		samplingMode:    "full",
+	}
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	defer stopExecutor()
+	ex.Run(executorCtx)
+
+	_, err = CollectAndCalculateStats(ctx, req, ex)
+	require.Error(t, err)
+	require.Zero(t, published.TableCnt)
+	require.Zero(t, published.AccurateObjectNumber)
+	require.Empty(t, published.NdvMap)
+	require.Empty(t, published.ShuffleRangeMap)
 }
 
 func TestShrinkBatchWithRowids(t *testing.T) {
