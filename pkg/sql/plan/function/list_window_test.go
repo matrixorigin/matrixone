@@ -204,6 +204,27 @@ func TestWindowFunctionRetType(t *testing.T) {
 	})
 }
 
+func TestRankingWindowFunctionRetType(t *testing.T) {
+	want := map[int]types.T{
+		RANK:         types.T_uint64,
+		ROW_NUMBER:   types.T_uint64,
+		DENSE_RANK:   types.T_uint64,
+		PERCENT_RANK: types.T_float64,
+		NTILE:        types.T_int64,
+	}
+
+	for i := range supportedWindowInNewFramework {
+		fn := &supportedWindowInNewFramework[i]
+		wantType, ok := want[fn.functionId]
+		if !ok {
+			continue
+		}
+		require.Equal(t, wantType, fn.Overloads[0].retType(nil).Oid)
+		delete(want, fn.functionId)
+	}
+	require.Empty(t, want)
+}
+
 // TestCumeDistCheckFn tests the checkFn for CUME_DIST window function
 func TestCumeDistCheckFn(t *testing.T) {
 	// Find CUME_DIST function

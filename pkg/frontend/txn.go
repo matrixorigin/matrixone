@@ -75,7 +75,9 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
-	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
+	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback ||
+		isErrorRollbackWholeTxn(execErr) ||
+		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
@@ -697,7 +699,29 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		consumeNextTxnIsolation = consumeNext
 	}
 
-	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	var (
+		tempCtx    context.Context
+		tempCancel context.CancelFunc
+	)
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.cancelTxnCreateWithRequest {
+		if execCtx.reqCtx == nil {
+			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
+		}
+		// Authentication owns a short-lived background transaction. Its handshake
+		// deadline is the single timeout owner of the freshness wait; applying the
+		// ordinary CreateTxnOpTimeout here would silently shorten a configuration
+		// that was validated against ConnectTimeout. The child still guarantees
+		// prompt cleanup when TxnClient.New returns before the handshake does.
+		tempCtx, tempCancel = context.WithCancel(execCtx.reqCtx)
+	} else {
+		// Ordinary session transaction creation intentionally keeps the long-lived
+		// transaction context and its existing operation timeout.
+		tempCtx, tempCancel = context.WithTimeoutCause(
+			th.txnCtx,
+			pu.SV.CreateTxnOpTimeout.Duration,
+			moerr.CauseCreateTxnOpUnsafe,
+		)
+	}
 	defer tempCancel()
 
 	txnClient := pu.TxnClient
@@ -928,7 +952,7 @@ type ddlVisibilityTarget struct {
 // DDL sender refreshes membership again after fan-out and repeats if any ready
 // generation changed. A failed target is retried only after authoritative
 // revalidation proves that exact generation/address tuple has departed.
-// Protocol v33 is a deployment gate: mixed-version
+// Protocol v35 is a deployment gate: mixed-version
 // clusters retain legacy behavior without invoking an old receiver's fatal
 // SyncCommit path.
 func syncDDLCommitToBarrierReadyCNs(
@@ -944,7 +968,7 @@ func syncDDLCommitToBarrierReadyCNs(
 	qc := pu.QueryClient
 	protocol, ok := moruntime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	protocolVersion, valid := protocol.(int64)
-	if !ok || !valid || protocolVersion < defines.MORPCVersion33 {
+	if !ok || !valid || protocolVersion < defines.MORPCVersion35 {
 		return nil
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())

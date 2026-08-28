@@ -230,3 +230,35 @@ mo_tables  ¦  CREATE TABLE `mo_tables` (
   PRIMARY KEY (`account_id`,`reldatabase`,`relname`),
   UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`)
 )
+drop database if exists issue_27661;
+create database issue_27661;
+use issue_27661;
+create table unsigned_flags (signed_tiny tinyint, unsigned_tiny tinyint unsigned, signed_small smallint, unsigned_small smallint unsigned, signed_int int, unsigned_int int unsigned, signed_big bigint, unsigned_big bigint unsigned, bit_col bit(8), decimal_col decimal(10,2));
+select attname, att_is_unsigned, mo_show_visible_bin(atttyp, 2) as data_type from mo_catalog.mo_columns where att_database = 'issue_27661' and att_relname = 'unsigned_flags' and att_is_hidden = 0 order by attnum;
+➤ attname[12,256,0]  ¦  att_is_unsigned[-6,8,0]  ¦  data_type[12,65535,0]  𝄀
+signed_tiny  ¦  0  ¦  TINYINT  𝄀
+unsigned_tiny  ¦  1  ¦  TINYINT UNSIGNED  𝄀
+signed_small  ¦  0  ¦  SMALLINT  𝄀
+unsigned_small  ¦  1  ¦  SMALLINT UNSIGNED  𝄀
+signed_int  ¦  0  ¦  INT  𝄀
+unsigned_int  ¦  1  ¦  INT UNSIGNED  𝄀
+signed_big  ¦  0  ¦  BIGINT  𝄀
+unsigned_big  ¦  1  ¦  BIGINT UNSIGNED  𝄀
+bit_col  ¦  0  ¦  BIT  𝄀
+decimal_col  ¦  0  ¦  DECIMAL
+alter table unsigned_flags add column unsigned_added bigint unsigned;
+alter table unsigned_flags modify column signed_int int unsigned;
+select attname, att_is_unsigned, mo_show_visible_bin(atttyp, 2) as data_type from mo_catalog.mo_columns where att_database = 'issue_27661' and att_relname = 'unsigned_flags' and att_is_hidden = 0 order by attnum;
+➤ attname[12,256,0]  ¦  att_is_unsigned[-6,8,0]  ¦  data_type[12,65535,0]  𝄀
+signed_tiny  ¦  0  ¦  TINYINT  𝄀
+unsigned_tiny  ¦  1  ¦  TINYINT UNSIGNED  𝄀
+signed_small  ¦  0  ¦  SMALLINT  𝄀
+unsigned_small  ¦  1  ¦  SMALLINT UNSIGNED  𝄀
+signed_int  ¦  1  ¦  INT UNSIGNED  𝄀
+unsigned_int  ¦  1  ¦  INT UNSIGNED  𝄀
+signed_big  ¦  0  ¦  BIGINT  𝄀
+unsigned_big  ¦  1  ¦  BIGINT UNSIGNED  𝄀
+bit_col  ¦  0  ¦  BIT  𝄀
+decimal_col  ¦  0  ¦  DECIMAL  𝄀
+unsigned_added  ¦  1  ¦  BIGINT UNSIGNED
+drop database issue_27661;

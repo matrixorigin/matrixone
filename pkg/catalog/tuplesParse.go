@@ -102,6 +102,9 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_COLUMNS_ID {
+		if e.TableName == MO_COLUMNS_UPDATE {
+			return e, es[1:], nil
+		}
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		batstr := ""
 		if bat != nil {

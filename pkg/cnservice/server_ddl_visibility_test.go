@@ -282,7 +282,7 @@ func TestPrepareDDLVisibilityBarrierRejectsMissingProductionDependencies(t *test
 func TestPrepareDDLVisibilityBarrierSkipsFrontierSyncDuringRollingUpgrade(t *testing.T) {
 	const serviceID = "ddl-visibility-mixed-version-test"
 	rt := moruntime.DefaultRuntime()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion32)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
 	moruntime.SetupServiceBasedRuntime(serviceID, rt)
 
 	s := &service{cfg: &Config{UUID: serviceID}}

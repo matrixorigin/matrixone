@@ -107,6 +107,11 @@ const (
 	IcebergWrite
 	TableClone
 	MongoScan
+	// ShuffleStable is a wire-only capability marker. New decoders rebuild the
+	// ordinary Shuffle operator from it; older decoders reject the unknown
+	// opcode before execution instead of silently using legacy key ownership.
+	// Keep its numeric value stable and append future opcodes after it.
+	ShuffleStable
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -181,6 +186,7 @@ func init() {
 		IcebergWrite:            "IcebergWrite",
 		TableClone:              "TableClone",
 		MongoScan:               "MongoScan",
+		ShuffleStable:           "ShuffleStable",
 	}
 
 	// Initialize StrToOperatorMap
