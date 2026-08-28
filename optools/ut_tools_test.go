@@ -325,7 +325,8 @@ func TestUTShardStagesRejectUnknownValues(t *testing.T) {
 		script string
 	}{
 		{name: "shard", script: `source "$1"; list_ut_shard_stages unknown`},
-		{name: "stage", script: `source "$1"; UT_SHARD=all; should_run_ut_stage unknown`},
+		{name: "stage", script: `source "$1"; UT_SHARD=all; UT_SHARD_ROUTING_ERROR=0; should_run_ut_stage unknown; status=$?; (( UT_SHARD_ROUTING_ERROR == 1 )) || exit 3; exit "${status}"`},
+		{name: "selected shard", script: `source "$1"; UT_SHARD=unknown; UT_SHARD_ROUTING_ERROR=0; should_run_ut_stage light; status=$?; (( UT_SHARD_ROUTING_ERROR == 1 )) || exit 3; exit "${status}"`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -340,20 +341,26 @@ func TestUTShardStagesRejectUnknownValues(t *testing.T) {
 func TestValidateCompletePartition(t *testing.T) {
 	tests := []struct {
 		name       string
+		expected   string
 		groups     []string
 		wantStatus int
 		wantError  string
 	}{
 		{name: "complete", groups: []string{"a", "b\nc"}},
+		{name: "duplicate expected", expected: "a\nb\nb\nc", groups: []string{"a", "b\nc"}, wantStatus: 1, wantError: "UT package occurs 2 times in expected scope: b"},
 		{name: "missing", groups: []string{"a", "b"}, wantStatus: 1, wantError: "Missing UT package from partition: c"},
 		{name: "duplicate", groups: []string{"a\nb", "b\nc"}, wantStatus: 1, wantError: "UT package occurs 2 times in partition: b"},
 		{name: "unexpected", groups: []string{"a\nb", "c\nd"}, wantStatus: 1, wantError: "Unexpected UT package in partition: d"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			expected := test.expected
+			if expected == "" {
+				expected = "a\nb\nc"
+			}
 			script := `source "$1"; validate_complete_partition "UT package" "${EXPECTED}" "${GROUP_ONE}" "${GROUP_TWO}"`
 			output, status := runUTToolsBash(t, script,
-				"EXPECTED=a\nb\nc",
+				"EXPECTED="+expected,
 				"GROUP_ONE="+test.groups[0],
 				"GROUP_TWO="+test.groups[1],
 			)

@@ -127,15 +127,22 @@ function list_ut_shard_stages() {
 function should_run_ut_stage() {
     if (( $# != 1 )); then
         echo "Usage: should_run_ut_stage STAGE" >&2
+        UT_SHARD_ROUTING_ERROR=1
         return 2
     fi
 
     if ! list_ut_shard_stages all | grep -Fxq "$1"; then
         echo "Unknown UT stage '$1'" >&2
+        UT_SHARD_ROUTING_ERROR=1
         return 2
     fi
 
-    list_ut_shard_stages "${UT_SHARD:-all}" | grep -Fxq "$1"
+    local selected_stages
+    if ! selected_stages=$(list_ut_shard_stages "${UT_SHARD:-all}"); then
+        UT_SHARD_ROUTING_ERROR=1
+        return 2
+    fi
+    printf '%s\n' "${selected_stages}" | grep -Fxq "$1"
 }
 
 # validate_complete_partition proves that the supplied groups are a disjoint,
@@ -169,11 +176,15 @@ function validate_complete_partition() {
             done <<< "${group}"
         done
     } | awk -F '\t' -v label="${label}" '
-        $1 == "expected" { expected[$2] = 1; next }
+        $1 == "expected" { expected[$2]++; next }
         $1 == "actual" { actual[$2]++; next }
         END {
             failed = 0
             for (package in expected) {
+                if (expected[package] != 1) {
+                    print label " occurs " expected[package] " times in expected scope: " package > "/dev/stderr"
+                    failed = 1
+                }
                 if (!(package in actual)) {
                     print "Missing " label " from partition: " package > "/dev/stderr"
                     failed = 1

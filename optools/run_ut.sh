@@ -55,6 +55,7 @@ CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
 RAW_COVERAGE="coverage.out"
 IS_BUILD_FAIL=""
 UT_TEST_STATUS=0
+UT_SHARD_ROUTING_ERROR=0
 PLAN_RACE_TEST_BINARY=""
 ENGINE_RACE_TEST_BINARY=""
 ENGINE_RACE_JOB_PID=""
@@ -794,7 +795,7 @@ function run_tests(){
             plan_status=$?
         fi
 
-        if (( light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
+        if (( UT_SHARD_ROUTING_ERROR != 0 || light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
