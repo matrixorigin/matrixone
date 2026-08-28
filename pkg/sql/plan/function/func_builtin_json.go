@@ -60,6 +60,7 @@ func normalizeJsonComparisonParam(
 		}
 		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
 		resultVector.SetPrepareParamType(paramType)
+		resultVector.SetPreparedJSONComparisonParam()
 		return nil
 	}
 
@@ -84,6 +85,7 @@ func normalizeJsonComparisonParam(
 		}
 		resultVector.SetPrepareParamKind(kind)
 		resultVector.SetPrepareParamType(paramType)
+		resultVector.SetPreparedJSONComparisonParam()
 		return nil
 	}
 
@@ -138,6 +140,7 @@ func normalizeJsonComparisonParam(
 		return err
 	}
 	resultVector.SetPrepareParamType(paramType)
+	resultVector.SetPreparedJSONComparisonParam()
 	return nil
 }
 

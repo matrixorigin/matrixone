@@ -1006,7 +1006,7 @@ func TestJSONComparisonParamRemoteProtocolValidationMixedTypes(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
 	require.ErrorContains(t,
 		validateRemoteJSONComparisonParamPipelineProtocol(proc, remotePipeline),
-		"requires MORPC protocol version 30")
+		"require MORPC protocol version 30")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
 	require.NoError(t,

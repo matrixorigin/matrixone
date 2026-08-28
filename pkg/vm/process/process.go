@@ -194,14 +194,25 @@ func (proc *Process) SetPrepareParamsWithReusableMeta(
 	kinds []vector.PrepareParamKind,
 	metadata []bool,
 ) []bool {
-	generated := prepareParamMetadata(prepareParams, isBin, kinds)
-	if cap(metadata) < len(generated) {
-		metadata = make([]bool, len(generated))
-	} else {
-		metadata = metadata[:len(generated)]
-		clear(metadata)
-	}
-	copy(metadata, generated)
+	metadata = prepareParamMetadataWithTypesReuse(
+		prepareParams, isBin, kinds, nil, metadata)
+	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	return metadata
+}
+
+// SetPrepareParamsWithReusableTypedMeta is the allocation-stable counterpart
+// of SetPrepareParamsWithTypedMeta. Cached prepared statements reuse the
+// packed metadata buffer across executions, including transitions between the
+// four-section category form and the twelve-section exact-type form.
+func (proc *Process) SetPrepareParamsWithReusableTypedMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
+	metadata []bool,
+) []bool {
+	metadata = prepareParamMetadataWithTypesReuse(
+		prepareParams, isBin, kinds, paramTypes, metadata)
 	proc.setPrepareParams(prepareParams, metadata, nil, false)
 	return metadata
 }
@@ -293,12 +304,23 @@ func prepareParamMetadataWithTypes(
 	kinds []vector.PrepareParamKind,
 	paramTypes []types.T,
 ) []bool {
+	return prepareParamMetadataWithTypesReuse(
+		prepareParams, isBin, kinds, paramTypes, nil)
+}
+
+func prepareParamMetadataWithTypesReuse(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
+	metadata []bool,
+) []bool {
 	paramCount := 0
 	if prepareParams != nil {
 		paramCount = prepareParams.Length()
 	}
 	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0 && len(paramTypes) == 0) {
-		return nil
+		return metadata[:0]
 	}
 	hasMetadata := false
 	hasType := false
@@ -311,13 +333,19 @@ func prepareParamMetadataWithTypes(
 		}
 	}
 	if !hasMetadata && !hasType {
-		return nil
+		return metadata[:0]
 	}
 	sectionCount := 4
 	if hasType {
 		sectionCount += 8
 	}
-	metadata := make([]bool, paramCount*sectionCount)
+	metadataLength := paramCount * sectionCount
+	if cap(metadata) < metadataLength {
+		metadata = make([]bool, metadataLength)
+	} else {
+		metadata = metadata[:metadataLength]
+		clear(metadata)
+	}
 	copy(metadata[:paramCount], isBin)
 	for i := 0; i < paramCount && i < len(kinds); i++ {
 		metadata[paramCount+i] = kinds[i]&1 != 0

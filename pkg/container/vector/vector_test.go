@@ -5460,11 +5460,14 @@ func TestPrepareParamTypeIsScalarAndClearedOnReset(t *testing.T) {
 	vec := NewVec(types.T_text.ToType())
 	vec.SetPrepareParamKind(PrepareParamInteger)
 	vec.SetPrepareParamType(types.T_int16)
+	vec.SetPreparedJSONComparisonParam()
 	require.Equal(t, types.T_int16, vec.GetPrepareParamType())
+	require.True(t, vec.IsPreparedJSONComparisonParam())
 
 	vec.ResetWithSameType()
 	require.Equal(t, types.T_any, vec.GetPrepareParamType())
 	require.False(t, vec.HasPrepareParamKind())
+	require.False(t, vec.IsPreparedJSONComparisonParam())
 }
 
 func TestPrepareParamKindForType(t *testing.T) {

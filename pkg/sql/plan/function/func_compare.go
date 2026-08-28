@@ -42,8 +42,8 @@ func comparePreparedJSON(
 	cmp func(int) bool,
 	selectList *FunctionSelectList,
 ) error {
-	leftIsParam := parameters[0].HasPrepareParamKind()
-	rightIsParam := parameters[1].HasPrepareParamKind()
+	leftIsParam := parameters[0].IsPreparedJSONComparisonParam()
+	rightIsParam := parameters[1].IsPreparedJSONComparisonParam()
 	if leftIsParam == rightIsParam {
 		return moerr.NewInternalError(proc.Ctx, "prepared JSON comparison requires exactly one typed parameter")
 	}
@@ -734,7 +734,7 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 			return a == b
 		}, selectList)
 	case types.T_json:
-		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
 			return comparePreparedJSON(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
 		}
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
@@ -900,7 +900,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return a == b
 		}, selectList)
 	case types.T_json:
-		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
 			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
 		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
@@ -1640,7 +1640,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a != b
 		}, selectList)
 	case types.T_json:
-		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
 			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
 		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {

@@ -110,6 +110,11 @@ type Vector struct {
 	// FIXME: Bad design! Will be deleted soon.
 	isBin            bool
 	prepareParamKind PrepareParamKind
+	// preparedJSONComparisonParam is expression identity, not value lineage.
+	// It is set only on the result of __mo_json_comparison_param so ordinary
+	// JSON vectors that carry string-conversion provenance cannot enter the
+	// prepared-only comparison path.
+	preparedJSONComparisonParam bool
 	// prepareParamType keeps the concrete SQL type of a direct prepared
 	// parameter independently from its coarse string-conversion category. It is
 	// scalar because one ParamRef resolves to one value for an execution; the
@@ -658,6 +663,19 @@ func (v *Vector) SetPrepareParamType(typ types.T) {
 	v.prepareParamType = typ
 }
 
+// IsPreparedJSONComparisonParam reports whether this vector is the direct
+// output of the prepared JSON comparison adapter. Unlike PrepareParamKind,
+// this marker must not be inferred from or merged with value provenance.
+func (v *Vector) IsPreparedJSONComparisonParam() bool {
+	return v != nil && v.preparedJSONComparisonParam
+}
+
+// SetPreparedJSONComparisonParam marks the direct adapter result. The marker
+// is cleared by Reset together with the rest of the transient parameter state.
+func (v *Vector) SetPreparedJSONComparisonParam() {
+	v.preparedJSONComparisonParam = true
+}
+
 // GetPrepareParamKindAt returns the source category for one logical row.
 // Constants use their single physical value for every logical row. The scalar
 // field remains the common fast path; heterogeneous vectors consult the
@@ -1147,6 +1165,7 @@ func (v *Vector) resetPrepareParamKind() {
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = false
 	v.prepareParamType = types.T_any
+	v.preparedJSONComparisonParam = false
 	v.releasePrepareParamKinds()
 }
 

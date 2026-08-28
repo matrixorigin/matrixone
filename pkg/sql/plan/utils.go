@@ -4375,75 +4375,68 @@ func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil {
 		return nil
 	}
-	query := preparePlan.GetQuery()
-	if query == nil && preparePlan.GetDdl() != nil {
-		query = preparePlan.GetDdl().GetQuery()
-	}
-	if query == nil {
+	positions := make(map[int32]struct{})
+	seen := make(map[*plan.Expr]struct{})
+	// The protobuf owner walker covers every present and future plan field. The
+	// expression collector below owns tree recursion because owner walking stops
+	// at each expression root.
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedJSONComparisonParamPositions(expr, positions, seen)
 		return nil
-	}
+	})
 
-	rule := &preparedJSONComparisonParamRule{
-		positions: make(map[int32]struct{}),
-		seen:      make(map[*plan.Expr]struct{}),
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
 	}
-	queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
-	_ = NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background())
-	_ = visitMissingNodeExprs(query, query.Steps, []VisitPlanRule{rule})
-
-	positions := make([]int32, 0, len(rule.positions))
-	for position := range rule.positions {
-		positions = append(positions, position)
-	}
-	slices.Sort(positions)
-	return positions
+	slices.Sort(result)
+	return result
 }
 
-type preparedJSONComparisonParamRule struct {
-	positions map[int32]struct{}
-	seen      map[*plan.Expr]struct{}
-}
-
-func (rule *preparedJSONComparisonParamRule) MatchNode(*Node) bool { return false }
-func (rule *preparedJSONComparisonParamRule) IsApplyExpr() bool    { return true }
-func (rule *preparedJSONComparisonParamRule) ApplyNode(*Node) error {
-	return nil
-}
-
-func (rule *preparedJSONComparisonParamRule) ApplyExpr(expr *Expr) (*Expr, error) {
+func collectPreparedJSONComparisonParamPositions(
+	expr *plan.Expr,
+	positions map[int32]struct{},
+	seen map[*plan.Expr]struct{},
+) {
 	if expr == nil {
-		return nil, nil
+		return
 	}
-	if _, ok := rule.seen[expr]; ok {
-		return expr, nil
+	if _, ok := seen[expr]; ok {
+		return
 	}
-	rule.seen[expr] = struct{}{}
+	seen[expr] = struct{}{}
 
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
 			len(impl.F.Args) == 1 {
 			if param := impl.F.Args[0].GetP(); param != nil {
-				rule.positions[param.Pos] = struct{}{}
+				positions[param.Pos] = struct{}{}
 			}
 		}
 		for _, arg := range impl.F.Args {
-			if _, err := rule.ApplyExpr(arg); err != nil {
-				return nil, err
-			}
+			collectPreparedJSONComparisonParamPositions(arg, positions, seen)
 		}
 	case *plan.Expr_W:
-		if _, err := applyWindowExpr(expr, rule.ApplyExpr); err != nil {
-			return nil, err
+		window := impl.W
+		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen)
+		for _, item := range window.GetPartitionBy() {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+		for _, order := range window.GetOrderBy() {
+			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen)
+		}
+		if frame := window.GetFrame(); frame != nil {
+			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen)
 		}
 	case *plan.Expr_List:
 		for _, item := range impl.List.List {
-			if _, err := rule.ApplyExpr(item); err != nil {
-				return nil, err
-			}
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
 		}
+	case *plan.Expr_Sub:
+		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen)
 	}
-	return expr, nil
 }
 
 func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {

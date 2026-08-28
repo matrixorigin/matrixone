@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1228,6 +1229,8 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.directResultParamPositionsSet = true
+		prepareStmt.jsonComparisonParamPositions =
+			plan2.PreparedJSONComparisonParamPositions(executionPlan)
 		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
@@ -1348,6 +1351,13 @@ func initExecuteStmtParamWithResolverInSession(
 			clear(prepareStmt.paramKinds)
 		}
 		hasParamKind := false
+		hasConcreteType := false
+		if cap(prepareStmt.paramConcreteTypes) < paramCount {
+			prepareStmt.paramConcreteTypes = make([]types.T, paramCount)
+		} else {
+			prepareStmt.paramConcreteTypes = prepareStmt.paramConcreteTypes[:paramCount]
+			clear(prepareStmt.paramConcreteTypes)
+		}
 		directPositionIndex := 0
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
@@ -1355,6 +1365,14 @@ func initExecuteStmtParamWithResolverInSession(
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
 			prepareStmt.paramKinds[i] = kind
+			if _, relevant := slices.BinarySearch(
+				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
+				concreteType := runtimeParamTypes[i].Oid
+				if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported && expectedKind == kind {
+					prepareStmt.paramConcreteTypes[i] = concreteType
+					hasConcreteType = true
+				}
+			}
 			for directPositionIndex < len(directResultPositions) &&
 				directResultPositions[directPositionIndex] < int32(i) {
 				directPositionIndex++
@@ -1377,7 +1395,11 @@ func initExecuteStmtParamWithResolverInSession(
 			runtimeNumericPrefixCandidate = preparedPlanHasStaticExactNumericPeer(executionPlan) &&
 				preparedPlanAdmitsPotentialDecimal(executionPlan, paramCount)
 		}
-		if hasParamKind {
+		if hasConcreteType {
+			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
+				prepareStmt.params, nil, prepareStmt.paramKinds,
+				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata)
+		} else if hasParamKind {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
 				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata)
 		} else {
@@ -1418,11 +1440,17 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
+			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+		if paramTypes != nil {
+			cwft.proc.SetOwnedPrepareParamsWithTypedMeta(
+				params, paramIsBin, paramKinds, paramTypes)
+		} else {
+			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+		}
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -2051,11 +2079,13 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
+	typedPositions []int32,
 ) (
 	params *vector.Vector,
 	paramVals []any,
 	paramIsBin []bool,
 	paramKinds []vector.PrepareParamKind,
+	paramTypes []types.T,
 	err error,
 ) {
 	params = vector.NewVec(types.T_text.ToType())
@@ -2089,6 +2119,15 @@ func buildExecuteUserParams(
 			}
 		} else {
 			paramKinds[i] = prepareParamKindFromValue(param)
+		}
+		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
+			concreteType := types.T(inferUserDefinedVarType(param).Id)
+			if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported && expectedKind == paramKinds[i] {
+				if paramTypes == nil {
+					paramTypes = make([]types.T, len(args))
+				}
+				paramTypes[i] = concreteType
+			}
 		}
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {

@@ -8140,7 +8140,11 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			}
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
-				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+				if lit, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(NULL) must count zero values, not all input rows.
+					if lit.Lit == nil || lit.Lit.Isnull {
+						return nil, nil, nil
+					}
 					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
