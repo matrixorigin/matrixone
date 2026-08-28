@@ -1315,11 +1315,13 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
 static-check: config err-check
 	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
