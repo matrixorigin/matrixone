@@ -418,6 +418,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		Pattern:          []byte(pattern),
 		Boolean:          mode == int64(tree.FULLTEXT_BOOLEAN),
 		BagOfWords:       mode == int64(tree.FULLTEXT_BM25),
+		JSONProbe:        mode == fulltext2.JSONProbeMode,
 		Algo:             fulltext2ScoreAlgo(proc),
 		FilterBytes:      u.filterBytes,
 		IncludePredsJSON: includePreds,

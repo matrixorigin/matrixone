@@ -221,7 +221,15 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	cdc := fulltext2.NewCdc(int32(pkTyp.Id))
 	cdc.IncludeTypes = includeTypes
 	return &Fulltext2SqlWriter{
-		cfg:          fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
+		cfg: fulltext2.TableConfig{
+			DbName: info.DBName, IndexTable: storage, MetadataTable: meta,
+			Parser:       flat["parser"],
+			PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true",
+			// json term shape, from the same persisted algo params the CREATE
+			// build reads, so both halves of the index emit identical terms.
+			JSONNoKeys:   flat[catalog.IndexAlgoParamJSONIncludeKeys] == "false",
+			JSONFullPath: flat[catalog.IndexAlgoParamJSONIncludeFullPath] == "true",
+		},
 		pkType:       int32(pkTyp.Id),
 		pkPos:        pkPos,
 		textPos:      textPos,
@@ -340,6 +348,26 @@ func (w *Fulltext2SqlWriter) rowText(ctx context.Context, row []any) (string, er
 			return "", nil
 		}
 	}
+	// Tuple json: emit the FINISHED terms in the length-prefixed carrier rather
+	// than flattened text. Flattening discards the keys, and the terms are raw
+	// packed bytes that a '\n'-joined text blob cannot carry. The CDC blob is
+	// itself length-prefixed and CRC-checked (Cdc.Encode), so binary rides
+	// through safely; CdcTokenizer just decodes it. This is the ISCP half of the
+	// CREATE/ISCP pair — fulltext2_create.rowTerms calls the same per-column
+	// encoder, in the same column order, with the same ordinal positions.
+	if w.cfg.UsesJSONTupleTerms() {
+		opt := w.cfg.JSONTermOptions()
+		var terms []string
+		for _, pos := range w.textPos {
+			ts, err := fulltext2.JSONTupleColumn(row[pos], opt)
+			if err != nil {
+				return "", err
+			}
+			terms = append(terms, ts...)
+		}
+		return fulltext2.EncodeJSONTermCarrier(terms), nil
+	}
+
 	isJSON := fulltext2.IsJSONParser(w.cfg.Parser)
 	jsonValue := fulltext2.IsJSONValueParser(w.cfg.Parser)
 	var b strings.Builder

@@ -59,6 +59,17 @@ type TableConfig struct {
 	// retrieval only; ~half the footprint, FST kept). Sourced from the persisted
 	// position_free algo_param so every build path (create, CDC tail, compact) agrees.
 	PositionFree bool `json:"position_free,omitempty"`
+	// JSONNoKeys / JSONFullPath are the json word breaker's term shape, sourced
+	// from the persisted algo params so every build path (create, CDC tail,
+	// compact) emits identical terms.
+	//
+	// JSONNoKeys is INVERTED on purpose. Keys are ON by default, so the zero
+	// value of a TableConfig has to mean "keys on": a plain `bool IncludeKeys`
+	// would make any config that forgot to set it silently emit no tuple terms
+	// at all, which is exactly the kind of half-built index this design keeps
+	// guarding against.
+	JSONNoKeys   bool `json:"json_no_keys,omitempty"`
+	JSONFullPath bool `json:"json_full_path,omitempty"`
 	FromSource   bool `json:"from_source,omitempty"`
 	// IncludeTypes is the INCLUDE columns' types.T in column order. The build SQL passes the
 	// INCLUDE source columns as the trailing fulltext2_create args (after the text columns),

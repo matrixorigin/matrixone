@@ -390,6 +390,18 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 	return raw, nil
 }
 
+// termRangeTerms expands an inclusive [lo,hi] term range, over the loaded FST
+// when present and the build-side sorted key list otherwise — the same dual
+// representation prefixTerms handles. A loaded segment has NO sortedTerms (it is
+// build-side only), so a range that consulted just that slice would silently
+// return nothing for every persisted segment.
+func (s *Segment) termRangeTerms(lo, hi string) ([]string, error) {
+	if s.dict != nil {
+		return s.dict.rangeTerms(lo, hi)
+	}
+	return s.TermRange(lo, hi), nil
+}
+
 // prefixTerms expands a word* prefix to its matching terms, over the loaded FST
 // or the build-side sorted key list.
 func (s *Segment) prefixTerms(prefix string) ([]string, error) {
