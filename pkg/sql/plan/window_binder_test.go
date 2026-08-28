@@ -476,6 +476,36 @@ func allWindowSpecs(queryPlan *planpb.Plan) []*planpb.WindowSpec {
 	return result
 }
 
+func queryHasReachableTable(query *planpb.Query, table string) bool {
+	visited := make(map[int32]struct{})
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if _, ok := visited[nodeID]; ok || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return false
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.GetObjRef().GetObjName() == table {
+			return true
+		}
+		for _, child := range node.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, step := range query.Steps {
+		if visit(step) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
 	t.Helper()
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
@@ -725,6 +755,42 @@ func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 		prepare := logicPlan.GetDcl().GetPrepare()
 		require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 		require.Len(t, prepare.Plan.GetQuery().Params, 1)
+	})
+}
+
+func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
+	const sql = "select 1 from nation window unused_w as (order by (select r_name from region limit 1))"
+
+	t.Run("ordinary plan", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t, sql)
+		require.NoError(t, err)
+		require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
+		dependency := queryPlan.GetQuery().GetCatalogDependencies()[0]
+		require.Equal(t, "region", dependency.GetObjName())
+		require.False(t, queryHasReachableTable(queryPlan.GetQuery(), "region"))
+	})
+
+	t.Run("used window control", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t,
+			"select sum(n_nationkey) over unused_w from nation window unused_w as (order by (select r_name from region limit 1))")
+		require.NoError(t, err)
+		require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
+		require.Equal(t, "region", queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
+	})
+
+	t.Run("prepare schema invalidation", func(t *testing.T) {
+		logicPlan, err := runOneStmt(
+			NewMockOptimizer(false), t,
+			"prepare unused_named_window_dependency from '"+sql+"'",
+		)
+		require.NoError(t, err)
+		prepare := logicPlan.GetDcl().GetPrepare()
+		require.Len(t, prepare.GetSchemas(), 2)
+		refs := map[string]bool{}
+		for _, schema := range prepare.GetSchemas() {
+			refs[schema.GetObjName()] = true
+		}
+		require.Equal(t, map[string]bool{"nation": true, "region": true}, refs)
 	})
 }
 

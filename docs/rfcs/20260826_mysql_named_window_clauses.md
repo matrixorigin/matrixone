@@ -73,11 +73,16 @@ name separately.
 
 Later in the same query-builder flow, `validateNamedWindowDefinitions` performs
 the distinct validation-only bind of every named declaration. Its parameter
-positions are merged into the real query metadata so an unused declaration
-still has the prepared-statement arity required by the protocol. Reusing one
-declaration does not duplicate its markers. This validation-only phase is not
-the resolver or expansion owner: it preserves semantic validation and parameter
-metadata for declarations that are not reached by a window function.
+positions and catalog dependency closure (table/view/plugin metadata, including
+snapshots) are merged into the real query metadata so an unused declaration
+still has the prepared-statement arity and invalidation set required by the
+protocol. Its validation-only scans are retained outside executable query steps
+for the existing frontend authorization walk; a declaration may be unused at
+execution but cannot resolve objects without the corresponding privilege.
+Reusing one declaration does not duplicate its markers or dependencies. This
+validation-only phase is not the resolver or expansion owner: it preserves
+semantic validation and metadata for declarations that are not reached by a
+window function.
 
 ### Scope, complexity, and lifecycle
 
@@ -115,7 +120,7 @@ compatibility over accepting an ambiguous extension.
 |---|---|---|
 | grammar, AST formatting, traversal | parser/tree/frontend unit tests | named reuse and inheritance result rows |
 | ordered resolution and inheritance errors | planner/moerr unit tests with code and SQLSTATE assertions | undefined-name rejection |
-| marker retention and reuse de-duplication | planner/frontend prepared metadata tests | prepare an unused named window and execute it with one parameter |
+| marker and dependency retention | planner/frontend tests cover de-duplicated metadata, prepare schemas, and denied SELECT on a validation-only subquery relation | prepare an unused named window and execute it with one parameter |
 | 127 cap and inline occurrence counting | planner boundary tests, including nested-select control | 127 declarations accepted and 128 rejected |
 
 The BVT uses a four-row table in its own database, deterministic ordering, no

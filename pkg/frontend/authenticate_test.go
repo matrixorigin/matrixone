@@ -6909,6 +6909,52 @@ func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
 	})
 }
 
+func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
+	const (
+		dbName = "tpch"
+		userID = 1
+		roleID = 2
+		nation = "nation"
+		region = "region"
+	)
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
+	require.NoError(t, err)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
+	require.Equal(t, region, queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "test_account",
+		User:          "named_window_reader",
+		DefaultRole:   "named_window_reader_role",
+		TenantID:      1,
+		UserID:        userID,
+		DefaultRoleID: roleID,
+	})
+
+	sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+	addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, nation, map[PrivilegeType]bool{
+		PrivilegeTypeSelect: true,
+	})
+	addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, region, map[PrivilegeType]bool{
+		PrivilegeTypeSelect: false,
+	})
+	sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, newBh(ctrl, sql2result))
+	defer bhStub.Reset()
+
+	ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+		ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
 	pkName := "id"
 	if fakePK {

@@ -340,11 +340,12 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode            []*BindContext
-	nameByColRef         map[[2]int32]string
-	protectedScans       map[int32]int
-	updateTargetScans    map[int32]struct{}
-	projectSpecialGuards map[int32]*specialIndexGuard
+	ctxByNode             []*BindContext
+	windowValidationScans []*plan.Node
+	nameByColRef          map[[2]int32]string
+	protectedScans        map[int32]int
+	updateTargetScans     map[int32]struct{}
+	projectSpecialGuards  map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic

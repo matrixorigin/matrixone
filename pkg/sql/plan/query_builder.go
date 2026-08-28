@@ -3798,6 +3798,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	for _, scan := range builder.windowValidationScans {
+		if scan == nil {
+			continue
+		}
+		scan.NodeId = int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	}
 	return builder.qry, nil
 }
 

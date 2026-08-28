@@ -669,6 +669,10 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 			return err
 		}
 	}
+	if err := mergeWindowValidationDependencies(builder, validationBuilder); err != nil {
+		return err
+	}
+	appendWindowValidationPrivilegeScans(builder, validationBuilder)
 	if builder.isPrepareStatement {
 		seen := make(map[int]struct{})
 		for _, metadata := range builder.qry.Params {
@@ -715,6 +719,58 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 			}
 		}
 	}
+	return nil
+}
+
+// appendWindowValidationPrivilegeScans makes validation-only relations visible
+// to the existing frontend authorization walk without connecting them to a
+// query step. They are ownership metadata, never executable plan roots.
+func appendWindowValidationPrivilegeScans(builder, validationBuilder *QueryBuilder) {
+	for _, node := range validationBuilder.qry.Nodes {
+		if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil || node.TableDef == nil {
+			continue
+		}
+		builder.windowValidationScans = append(builder.windowValidationScans, &plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			ObjRef:       DeepCopyObjectRef(node.ObjRef),
+			TableDef:     DeepCopyTableDef(node.TableDef, true),
+			ParentObjRef: DeepCopyObjectRef(node.ParentObjRef),
+			ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
+			OriginViews:  append([]string(nil), node.OriginViews...),
+			DirectView:   node.DirectView,
+		})
+	}
+}
+
+// mergeWindowValidationDependencies retains the catalog closure discovered
+// while binding declarations that are not used by an executable window
+// function. Those declarations still undergo semantic binding, so their table,
+// view, and plugin-index dependencies must participate in privilege checks and
+// prepared-plan invalidation without adding executable nodes to the query.
+func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder) error {
+	dependencyRule := NewGetParamRule()
+	for _, node := range validationBuilder.qry.Nodes {
+		if node != nil {
+			dependencyRule.MatchNode(node)
+		}
+	}
+
+	dependencies := append([]*plan.ObjectRef(nil), validationBuilder.qry.CatalogDependencies...)
+	dependencies = appendPrepareSchemas(dependencies, dependencyRule.schemas...)
+	for _, dependency := range dependencyRule.indexDependencies {
+		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
+			dependency.baseRef, dependency.tableName, dependency.snapshot)
+		if err != nil {
+			return err
+		}
+		if objRef == nil || tableDef == nil {
+			return moerr.NewInternalErrorf(
+				builder.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+		}
+		dependencies = appendPrepareSchemas(
+			dependencies, prepareSchemaRefWithSnapshot(objRef, tableDef, dependency.snapshot))
+	}
+	builder.qry.CatalogDependencies = appendPrepareSchemas(builder.qry.CatalogDependencies, dependencies...)
 	return nil
 }
 
