@@ -944,6 +944,33 @@ func TestForcedObjectLifecycleTxnConsumesNextIsolation(t *testing.T) {
 	})
 }
 
+func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
+	preparedStmt := &PrepareStmt{
+		Name:            "binary_drop",
+		defaultDatabase: "prepare_db",
+		PrepareStmt:     &tree.DropTable{},
+	}
+	binaryInput := newBinaryExecuteUserInput("drop table t", preparedStmt, false)
+	require.Equal(t, "prepare_db", binaryInput.preparedDefaultDatabase)
+	require.Same(t, preparedStmt.PrepareStmt, binaryInput.stmt)
+
+	execCtx := &ExecCtx{persistentDropTableTargets: tree.TableNames{
+		tree.NewTableName(tree.Identifier("stale"), tree.ObjectNamePrefix{}, nil),
+	}}
+	execCtx.beginStatementGeneration(binaryInput)
+	require.Equal(t, "prepare_db", execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.persistentDropTableTargets)
+
+	// A following direct statement in the same COM_QUERY/request must not inherit
+	// any PREPARE-time binding or ownership-cleanup target snapshot.
+	execCtx.persistentDropTableTargets = tree.TableNames{
+		tree.NewTableName(tree.Identifier("next"), tree.ObjectNamePrefix{}, nil),
+	}
+	execCtx.beginStatementGeneration(&UserInput{})
+	require.Empty(t, execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.persistentDropTableTargets)
+}
+
 func TestEffectiveStatementForTxn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.Background()

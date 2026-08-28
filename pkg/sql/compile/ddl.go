@@ -2996,22 +2996,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	//2. drop index table
 	for _, indexTableName := range dropIndexTableNames {
-		if _, err = d.Relation(c.proc.Ctx, indexTableName, nil); err != nil {
+		if err = c.dropIndexChildRelation(
+			d, qry.Database, indexTableName, oldTableDef.GetIsTemporary(),
+		); err != nil {
 			return err
-		}
-
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, indexTableName, c.proc.GetTxnOperator()); err != nil {
-			return err
-		}
-
-		if err = d.Delete(c.proc.Ctx, indexTableName); err != nil {
-			return err
-		}
-
-		if oldTableDef.GetIsTemporary() {
-			if session := c.proc.GetSession(); session != nil {
-				session.RemoveTempTableByRealName(indexTableName)
-			}
 		}
 	}
 
@@ -3657,6 +3645,49 @@ func (c *Compile) deleteRolePrivilegesForDroppedRelation(objectID uint64) error 
 	)
 }
 
+func (c *Compile) dropIndexChildRelation(
+	database engine.Database,
+	databaseName string,
+	relationName string,
+	isTemporary bool,
+) error {
+	var logicalID uint64
+	if !isTemporary {
+		// User GRANT now rejects hidden relations, but rolling upgrades and legacy
+		// catalogs can still contain grants. Join the same database->relation lock
+		// protocol before resolving and deleting the child identity.
+		if err := lockMoTable(c, databaseName, relationName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+	relation, err := database.Relation(c.proc.Ctx, relationName, nil)
+	if err != nil {
+		return err
+	}
+	if !isTemporary {
+		logicalID = plan2.SnapshotTableID(relation.GetTableDef(c.proc.Ctx))
+	}
+	if err = maybeDeleteAutoIncrement(
+		c.proc.Ctx, c.proc.GetService(), database, relationName, c.proc.GetTxnOperator(),
+	); err != nil {
+		return err
+	}
+	if err = database.Delete(c.proc.Ctx, relationName); err != nil {
+		return err
+	}
+	if logicalID != 0 {
+		if err = c.deleteRolePrivilegesForDroppedRelation(logicalID); err != nil {
+			return err
+		}
+	}
+	if isTemporary {
+		if session := c.proc.GetSession(); session != nil {
+			session.RemoveTempTableByRealName(relationName)
+		}
+	}
+	return nil
+}
+
 func lockDroppedRelation(
 	c *Compile,
 	dbName string,
@@ -3955,20 +3986,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	}
 
 	for _, name := range qry.IndexTableNames {
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+		if err = c.dropIndexChildRelation(dbSource, dbName, name, isTemp); err != nil {
 			return err
 		}
-
-		if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
-			return err
-		}
-
-		if isTemp {
-			if sess := c.proc.GetSession(); sess != nil {
-				sess.RemoveTempTableByRealName(name)
-			}
-		}
-
 	}
 
 	if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {

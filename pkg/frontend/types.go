@@ -1109,6 +1109,14 @@ type ExecCtx struct {
 	rewriteEnabled bool
 }
 
+func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.effectiveTxnDefaultDatabase = ""
+	if input != nil {
+		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
+	}
+	execCtx.persistentDropTableTargets = nil
+}
+
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 	previous := execCtx.rootSQLOverride
 	execCtx.rootSQLOverride = &rootSQL

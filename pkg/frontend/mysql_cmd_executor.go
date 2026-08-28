@@ -4505,6 +4505,15 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	return stats, nil
 }
 
+func bindSessionDatabaseForStatement(ses *Session, defaultDatabase string) func() {
+	if defaultDatabase == "" || defaultDatabase == ses.GetDatabaseName() {
+		return func() {}
+	}
+	currentDatabase := ses.GetDatabaseName()
+	ses.SetDatabaseName(defaultDatabase)
+	return func() { ses.SetDatabaseName(currentDatabase) }
+}
+
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
 func authenticateUserCanExecutePrepareOrExecute(
 	reqCtx context.Context,
@@ -4519,11 +4528,8 @@ func authenticateUserCanExecutePrepareOrExecute(
 	// Unqualified names in a prepared AST retain their PREPARE-time binding.
 	// Authorization must resolve that same object rather than the database that
 	// happens to be active when EXECUTE runs.
-	if defaultDatabase != "" && defaultDatabase != ses.GetDatabaseName() {
-		currentDatabase := ses.GetDatabaseName()
-		ses.SetDatabaseName(defaultDatabase)
-		defer ses.SetDatabaseName(currentDatabase)
-	}
+	restoreDatabase := bindSessionDatabaseForStatement(ses, defaultDatabase)
+	defer restoreDatabase()
 
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
@@ -5689,6 +5695,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		} else {
 			currentSQLRecord = sqlRecord[i]
 		}
+		// ExecCtx spans the whole request, while these fields belong to one
+		// statement generation. Reset before authorization/admission, then inject
+		// binary PREPARE metadata captured before doComQuery.
+		execCtx.beginStatementGeneration(currentInput)
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
 		installStatementRemap(execCtx, cw)
@@ -5730,10 +5740,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			ses.ClearDDLOwnerRoleID()
-			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
-			if err != nil {
-				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
-				return err
+			authStats, authErr := func() (statistic.StatsArray, error) {
+				restoreDatabase := bindSessionDatabaseForStatement(
+					ses, execCtx.effectiveTxnDefaultDatabase,
+				)
+				defer restoreDatabase()
+				return authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
+			}()
+			if authErr != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, authErr)
+				return authErr
 			}
 			statsInfo.PermissionAuth.Add(&authStats)
 		}
@@ -5997,6 +6013,16 @@ func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string,
 	return nil
 }
 
+func newBinaryExecuteUserInput(sql string, prepareStmt *PrepareStmt, cursorRequested bool) *UserInput {
+	return &UserInput{
+		sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt,
+		preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true,
+		preparedDefaultDatabase: prepareStmt.defaultDatabase,
+		isCursorExecute:         cursorRequested,
+		remapDb:                 prepareStmt.remapDb,
+	}
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -6167,7 +6193,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, isCursorExecute: cursorRequested, remapDb: prepareStmt.remapDb})
+		err = doComQuery(ses, execCtx, newBinaryExecuteUserInput(sql, prepareStmt, cursorRequested))
 		if err != nil {
 			prepareStmt.closeCursor()
 			markRowCountFailed(ses, ses.GetProc())
