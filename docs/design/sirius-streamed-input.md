@@ -1,0 +1,563 @@
+# Sirius streamed MatrixOne input protocol
+
+Status: proposed for design approval
+
+Design version: 1
+
+Approval: pending distinct reviewer approval
+
+Owner: MatrixOne query execution
+
+Owning issue: [#27586](https://github.com/matrixorigin/matrixone/issues/27586)
+
+Implementation: MatrixOne [#27599](https://github.com/matrixorigin/matrixone/pull/27599), Sirius [#6](https://github.com/matrixorigin/sirius/pull/6), sidecar [#14](https://github.com/matrixorigin/mo-sirius-sidecar/pull/14)
+
+## 1. Decision
+
+MatrixOne may execute an eligible table scan at its transaction snapshot and
+stream the resulting MatrixOne-native batches to a separately running Sirius
+sidecar. Sirius consumes those batches through a GPU-native scan operator and
+returns MatrixOne-native result batches. Arrow Flight supplies authenticated
+RPC framing only; Arrow record batches are not the data representation in
+either direction.
+
+This is an explicit, single-CN compatibility path selected by
+`/*+ SIDECAR STREAM */`. It does not replace or alter direct `TaeRead`, and it
+does not silently fall back to MatrixOne execution after the explicit stream
+mode has been selected.
+
+The protocol is version 5. It requires an exact capability-document match
+across MatrixOne, the sidecar, and Sirius. Mixed protocol revisions fail before
+result rows are exposed.
+
+After approval, any semantic change to this document increments the design
+version and requires fresh approval. Editorial corrections may retain the
+version only when they do not change a protocol, ownership, resource, rollout,
+or acceptance contract.
+
+## 2. Problem and invariants
+
+Direct `TaeRead` is efficient when the sidecar can read every object needed for
+an admitted snapshot. It cannot cover all MatrixOne-visible states, including
+unflushed committed rows, visible tombstones, or storage not reachable by the
+sidecar. The streamed path keeps snapshot and storage semantics in MatrixOne
+while retaining Sirius execution for the remainder of the plan.
+
+The primary correctness invariant is:
+
+> For every `StreamRead`, Sirius consumes exactly the projected rows and schema
+> produced by the MatrixOne scan at the statement snapshot, once and only once,
+> without cross-query reuse or resources surviving terminal execution.
+
+The supporting invariants are:
+
+1. MatrixOne is the sole owner of transaction visibility, native scan,
+   MVCC/tombstone application, scan filtering, and scan projection.
+2. A stream identity is bound to one account, query, snapshot, schema,
+   capability set, and expiry. It is single-use within one execution ticket.
+3. Every input frame is acknowledged only after Sirius has copied the bytes it
+   needs and the sidecar no longer retains that frame as the current input.
+4. Input, result, plan, ticket, and execution counts have hard bounds.
+5. Cancellation can interrupt a blocked input acknowledgement, blocked result
+   receive, and Sirius worker independently of the data path.
+6. MatrixOne does not release snapshot/query resources until local producers,
+   the sidecar execution, and all sidecar input handlers are quiescent.
+7. Direct `TaeRead` keeps its existing schema, physical-type, lease, and
+   fallback contract.
+
+The negation of the contract includes lost or duplicate batches, using a stream
+from another account/query/snapshot, acknowledging a batch before ownership is
+transferred, unbounded buffering under a slow consumer, releasing resources
+before quiescence, executing on DuckDB CPU, or accepting a different wire ABI.
+
+## 3. Scope
+
+### 3.1 Included
+
+- Explicit `SIDECAR STREAM` execution for read-only `SELECT` statements.
+- One MatrixOne CN and its paired sidecar per execution.
+- Up to 16 independently named `StreamRead` inputs in one Substrait plan.
+- Native MatrixOne scan filters, projections, offsets, and limits below the
+  stream boundary.
+- Sirius GPU execution of admitted Substrait joins, filters, projections,
+  aggregates, sorts, fetches, and references.
+- MatrixOne-native input and result batches over mutually authenticated Flight.
+- Success, prepare failure, producer failure, consumer failure, cancellation,
+  timeout, disconnect, sidecar shutdown, and result-side early completion.
+
+### 3.2 Excluded
+
+- Multi-CN producer fan-in or a remote/distributed scan scheduler.
+- Current-transaction writes or a transaction workspace with prior writes.
+- Replaying one physical scan node through multiple `ReferenceRel` consumers.
+- Transparent replacement of direct `TaeRead`.
+- A general remote-execution framework.
+- A stable public MatrixOne batch ABI across arbitrary MatrixOne releases.
+- Production enablement without the rollout and acceptance gates in this
+  document.
+
+## 4. Alternatives
+
+### 4.1 Direct `TaeRead`
+
+The sidecar reads flushed TAE objects directly. This avoids CN scan and network
+serialization and remains the preferred analytical fast path. It cannot
+represent every MatrixOne-visible state and requires storage accessibility plus
+GC-safe object leases. The streamed path therefore complements rather than
+replaces it.
+
+### 4.2 Arrow record batches over Flight
+
+This was the original experiment in #27586. Arrow is interoperable and already
+fits Flight, but MatrixOne would need an additional conversion and dependency at
+both input and result boundaries. Sirius would then convert Arrow/DuckDB chunks
+again for its GPU-native path. That duplicates type mapping, allocations, and
+copies in the hot path.
+
+### 4.3 MatrixOne-native batches over Flight (selected)
+
+MatrixOne already owns the source batches and result consumer. Reusing
+`Batch.MarshalBinary` avoids Arrow-Go in MatrixOne and lets Sirius reuse its
+GPU-native TAE vector decoder. The cost is a deliberately strict, same-release
+wire ABI. Exact capability negotiation, codec versioning, endian/size markers,
+canonical decoding, and coordinated rollout contain that cost.
+
+## 5. Architecture and ownership
+
+The data path is:
+
+```text
+MO planner
+  -> export Substrait with StreamRead leaves
+  -> prepare one sidecar execution and validate result schema
+  -> attach every DoPut input
+  -> start local-CN snapshot scan producers
+  -> MOB1 / MO Batch.MarshalBinary frames
+  -> sidecar one-slot StreamRead sources
+  -> Sirius GPU_MO_SCAN and GPU physical plan
+  -> MOB1 / canonical flat MO result frames over DoGet
+  -> MO result decoder and existing result writer
+```
+
+MatrixOne owns the statement transaction, scan pipeline, source batches,
+producer goroutine, Flight client, decoded result batches, and final MySQL
+write. The sidecar owns Flight admission, ticket/idempotency registry,
+query-local input registry, Sirius connection/transaction, result frame slot,
+execution worker, and input-handler join. Sirius owns the physical GPU plan,
+task scheduling, GPU-native source conversion, pipeline data, and result packer.
+
+Ownership transfer for one input frame is:
+
+```text
+MO scan batch
+  -> MO marshalled payload
+  -> Flight DoPut frame
+  -> sidecar one-slot native_batch_view
+  -> Sirius staged host representation
+  -> consumed acknowledgement
+  -> MO releases payload and scan batch
+```
+
+The acknowledgement is the linearization point. Before it, MatrixOne retains
+the frame's source lifetime. After it, Sirius owns a copy and MatrixOne may
+produce the next frame.
+
+## 6. Admission and plan contract
+
+Stream mode is admitted only when all of these conditions hold:
+
+- the statement is an explicit streamed `SELECT`, not internal or prepared
+  execution;
+- the transaction workspace is read-only and has no current or snapshot write
+  offset;
+- every exported scan has one occurrence and an admitted physical input type;
+- the plan has 1 through 16 stream inputs;
+- all scan scopes remain on the current CN;
+- every `StreamRead` schema is the deterministic post-scan native schema;
+- the Substrait plan and result schema pass the exact capability contract.
+
+MatrixOne retains semantic operators above the scan in Substrait. It clears
+native scan aggregation because the semantic aggregate remains in Sirius. It
+keeps native scan filtering, projection, offset, and limit at the source.
+
+`CHAR` and `VARCHAR` are represented as Substrait `VarChar` while the physical
+input vector keeps its original MatrixOne OID, width, charset, and nullability.
+Sirius accepts both physical OIDs as the same string family. This is a protocol
+mapping, not a catalog or planner rewrite.
+
+## 7. Wire protocol
+
+### 7.1 Transport and authentication
+
+All calls use Arrow Flight over gRPC with TLS 1.2 or newer. MatrixOne verifies
+the sidecar server certificate and presents the configured CN client
+certificate. The sidecar requires a trusted client certificate. Endpoint
+redirection is rejected, so the authenticated connection is the only data
+channel.
+
+The streamed path does not call the direct-read HTTPS resolver and exposes no
+object path or storage credential. The direct `TaeRead` resolver and its
+separate sidecar client identity remain unchanged.
+
+### 7.2 Capability negotiation
+
+At connection initialization, MatrixOne calls `GetCapabilities`. The returned
+document must be byte-for-byte equal to MatrixOne's document. Its SHA-256 hash
+is repeated in `ExecuteSubstraitRequest`, every `StreamRead`, and
+`FlightInfo.app_metadata`.
+
+The version-5 capability fixes these values:
+
+- Substrait 0.78.0;
+- `StreamRead` version 1 with feature bits 0;
+- native batch frame/codec version 1;
+- native result schema version 1;
+- little endian, 16-byte MatrixOne type records, and 24-byte varlena records;
+- at most 16 stream inputs and one buffered input slot per read;
+- at most 4 MiB per input batch payload;
+- at most 16 MiB per Substrait plan;
+- the exact operator, expression, function, join, and type allow-lists.
+
+Any change to these semantics requires a new protocol or feature bit and a new
+capability document. Unknown fields, enums, flags, or feature bits are rejected.
+
+### 7.3 Prepare
+
+MatrixOne sends `ExecuteSubstraitRequest` through `GetFlightInfo`:
+
+| Field | Contract |
+| --- | --- |
+| `protocol_version` | exactly 5 |
+| `substrait_version` | exactly `0.78.0` |
+| `capability_hash` | exact negotiated SHA-256 |
+| `max_batch_bytes` | non-zero and no more than the sidecar result limit |
+| `max_input_batch_bytes` | non-zero and no more than 4 MiB or the sidecar limit |
+| `deadline_unix_ms` | future time, capped by the sidecar ticket TTL |
+| `plan` | non-empty, at most 16 MiB |
+| `query_id` | 16-byte statement identity |
+| `account_id` | MatrixOne tenant identity |
+| `idempotency_key` | SHA-256 of little-endian account ID followed by query ID |
+| `result_schema` | canonical native result schema v1 |
+
+The sidecar fingerprints the whole request. Reusing an idempotency key with a
+different fingerprint is terminal. A matching unclaimed prepare may return the
+same ticket. Tickets are 32 random bytes and single-use. `FlightInfo` must have
+one local endpoint, no redirection, the exact result schema, and the capability
+hash.
+
+The prepare response is the last point at which the non-stream direct mode may
+choose native fallback. Explicit `SIDECAR STREAM` is strict: prepare or
+admission failure is returned to the statement and is never hidden by native
+execution. No result row or schema is exposed before prepare validation.
+
+### 7.4 `StreamRead`
+
+Each Substrait extension read contains:
+
+| Field | Contract |
+| --- | --- |
+| protocol/feature bits | version 1, bits 0 |
+| `stream_ref` | 32 cryptographically random bytes, unique in the plan |
+| `query_id` | the 16-byte prepare identity |
+| `account_id` | equal to the prepare account |
+| `snapshot_ts` | 12-byte MatrixOne statement snapshot |
+| `schema_digest` | SHA-256 of the deterministic `NamedStruct` |
+| `capability_hash` | exact negotiated hash |
+| expiry | future and within MatrixOne's signed timestamp range |
+
+Sirius and the sidecar reject identity, schema, capability, expiry, duplicate,
+and unknown-field mismatches before binding the query-local `mo_stream_scan`
+view.
+
+### 7.5 Native input `DoPut`
+
+Every input is attached before `DoGet` starts. The command descriptor contains
+the ticket and `stream_ref`. The server first returns a `ready` acknowledgement
+with zero counters. Data frames use `FlightData.app_metadata`; Arrow data bodies
+and schemas are forbidden on this stream.
+
+The native envelope is:
+
+```text
+offset  size  value
+0       4     "MOB1"
+4       2     little-endian codec version 1
+6       2     zero flags/reserved
+8       8     non-zero contiguous sequence
+16      8     payload byte length
+24      N     canonical MatrixOne Batch.MarshalBinary payload
+```
+
+One payload is at most the negotiated input limit and never more than 4 MiB.
+MatrixOne splits a larger scan batch at row boundaries; a single row larger
+than the limit is rejected. The sidecar validates vector count, physical types,
+row lengths, attributes, null maps, areas, metadata, sequence, and trailing
+bytes before publishing the frame.
+
+The server has one input slot per read. It acknowledges a frame only after the
+Sirius scan copies all required bytes into bounded staging. A slow consumer
+therefore blocks `DoPut`, which blocks the MatrixOne producer. The cumulative
+acknowledged batch, row, and byte counters must exactly match both endpoints.
+
+Producer EOF receives a final `complete` acknowledgement only after consumer
+EOF. If the plan prunes a read or result completion makes further input
+unnecessary, the sidecar returns `complete + not_needed` with exact counters.
+
+### 7.6 Native result `DoGet`
+
+`DoGet` claims the ticket once. Flight emits its mandatory empty Arrow transport
+schema first. Every later `FlightData.data_header` contains one `MOB1` result
+frame; data bodies, metadata, descriptors, and redirection are forbidden.
+
+The sidecar splits GPU result batches at row boundaries so each payload is at
+most `max_batch_bytes`. Result vectors are canonical flat MatrixOne vectors.
+MatrixOne remarshal-checks the batch, rejects trailing or non-canonical bytes,
+rejects non-flat/constant/dictionary result vectors, validates every physical
+type and nullability field against the negotiated result schema, then gives the
+batch to the existing result writer. It does not request the next frame until
+the writer returns and the current batch is released.
+
+## 8. Type compatibility
+
+The first version deliberately supports the TPC-H family:
+
+| Family | Input | Substrait/Sirius | Result |
+| --- | --- | --- | --- |
+| boolean | MatrixOne `bool` | `bool` | exact `bool` |
+| signed integers | `int8/16/32/64` | `i8/16/32/64` | exact signed OID |
+| unsigned extract | not admitted as a streamed physical input | semantic `i64` | checked conversion to MO `uint32` |
+| floating point | `float32/64` | `fp32/64` | exact floating OID |
+| strings | physical `char` or `varchar` | `VarChar` | negotiated `char` or `varchar` |
+| decimal | MO decimal64 for precision up to 18; decimal128 for 19 through 38 | Substrait decimal | exact width/scale and checked result conversion |
+| date | MO date epoch | Substrait Unix-day date | checked conversion to MO date |
+
+Timestamp, binary/blob, JSON, arrays, UUID, enum, row-id, and any unlisted
+physical type are rejected. Width, scale, charset, nullability, vector class,
+and fixed physical size are part of validation, not advisory metadata.
+
+## 9. State machines and terminal ownership
+
+### 9.1 MatrixOne execution
+
+| From | Event / linearization | To | Required side effects |
+| --- | --- | --- | --- |
+| native | stream admission succeeds | admitted | bind snapshot and create stream identities |
+| admitted | exact prepare/schema succeeds | prepared | own ticket and cancellation identity |
+| prepared | every input returns `ready` | attached | no result worker has started yet |
+| attached | `DoGet` claims ticket | running | start result worker and local scan producer |
+| running | result EOF | result-complete | retire/interrupt all producers, join producer |
+| any prepared/running | error, cancel, timeout, panic, shutdown | cancelling | abort inputs, interrupt `DoGet`, send `CancelExecution` |
+| result-complete/cancelling | sidecar says `quiesced` or `not-found` | quiesced | sidecar worker and handlers are no longer owners |
+| quiesced | local producers joined and cleanup succeeds | terminal | release query/snapshot resources |
+
+The result EOF is authoritative success. It retires an input even if the sidecar
+pruned it before its first data frame. `Retire` has a cancellation path
+independent of the input mutex so it can interrupt a blocked attachment or
+acknowledgement.
+
+If prepare may have succeeded but its ticket is unavailable, MatrixOne cancels
+by idempotency key. If quiescence or release cannot be proved, the execution is
+retained by the reconciliation owner, which retries with bounded exponential
+delay. Snapshot resources are not released before quiescence.
+
+### 9.2 Sidecar execution
+
+| State | Accepted events | Terminal transition |
+| --- | --- | --- |
+| preparing | same-idempotency replay or cancellation identity | publish one ticket or cancel preparation |
+| prepared/unclaimed | attach inputs, `DoGet` claim, cancel, deadline | cancellation releases resolutions without starting work |
+| claimed/running | input frames/EOF, result reads, cancel, deadline | worker records success/failure/cancel and becomes quiescent |
+| quiescent | input-handler detach | remove ticket/idempotency record after handler count reaches zero |
+
+`CancelExecution` first publishes cancellation to every input, then interrupts
+Sirius and the DuckDB connection, then waits for both worker quiescence and zero
+active `DoPut` handlers. Multiple cancellation callers share one serialized
+worker join. Deadline reaping and server shutdown use the same terminal path.
+
+### 9.3 Sirius execution
+
+Sirius permits `PREPARED -> RUNNING -> SUCCEEDED|FAILED|CANCELLED` and
+`PREPARED -> CANCELLED`. The transition to `RUNNING` is single-use. All terminal
+paths release query-local resolved views and stream-source references. The
+actual backend is marked `SIRIUS_GPU` immediately before execution; successful
+completion without a backend mark is invalid.
+
+## 10. Q1-Q3 resource closure
+
+### Q1: destruction ownership
+
+| Resource | Creator | Effective terminal owner |
+| --- | --- | --- |
+| MO stream identity and scan scope | MO compile | compile release after producer join |
+| Flight prepare/ticket/idempotency | sidecar registry | terminal callback after worker and handlers quiesce |
+| input frame slot | sidecar `stream_input` | consume/not-needed/cancel path |
+| Sirius staged/pinned host data | GPU scan task | task/representation destruction |
+| GPU pipeline data | Sirius repositories | existing pipeline/memory manager cleanup |
+| result frame slot | sidecar execution entry | `DoGet` read or cancellation |
+| decoded MO result batch | MO result loop | per-frame deferred clean |
+| query-local DuckDB views/transaction | sidecar execution entry | resolution destruction and connection rollback |
+
+### Q2: wait-for closure
+
+The possible waits are input-slot publication, input consumption, producer EOF,
+result-frame publication, result receive, worker join, handler join, and cleanup
+reconciliation. Every data wait observes cancellation/not-needed/deadline.
+Cancellation does not take an input's data mutex before cancelling its gRPC
+context. Sidecar cancellation wakes input and result condition variables and
+interrupts Sirius/DuckDB. All RPCs are bounded by the minimum of caller,
+request, lease-safe, and sidecar ticket deadlines.
+
+### Q3: accumulation bounds
+
+| Accumulation | Hard bound |
+| --- | --- |
+| plan | 16 MiB |
+| stream inputs per execution | 16 |
+| sidecar slot per input | one frame, at most 4 MiB payload |
+| input wire payload retained per execution | at most 64 MiB plus framing |
+| Sirius expanded input batch | 64 MiB |
+| Sirius staged input per active read task | 96 MiB encoded plus at most 96 MiB pinned copy during transfer |
+| result slot | one frame, at most negotiated result limit (default 64 MiB) |
+| result schema | 1 MiB and 4096 columns |
+| active tickets | configured limit, default 128 |
+| reconciliation retry | one worker per retained execution, delay capped at 5 seconds, stopped by runtime close |
+
+The GPU-native source must reserve the 96 MiB staging maximum from Sirius's
+host-memory manager; the 4 MiB wire limit is not a valid reservation estimate.
+Ordinary staging strings outside the managed pinned allocation add at most a
+second 96 MiB copy while the task materializes its pinned representation.
+
+For `R` active stream reads and `E` concurrently running stream executions, the
+stream-specific host envelope is bounded by approximately:
+
+```text
+E * (R * (4 MiB input slot + 96 MiB staging + 96 MiB transient copy)
+     + negotiated result slot)
+```
+
+with `R <= 16`. Deployment must set active-ticket and Sirius host-memory limits
+so this worst-case envelope fits. Admission failure is preferable to swapping,
+OOM, or unbounded queueing. Acceptance evidence records measured peaks under a
+deliberately slow consumer and confirms the enforced bound.
+
+This is the stream-specific host envelope, not the complete Sirius GPU budget.
+GPU operators remain subject to Sirius's independent reservation and usage
+limits. The current allocator may eagerly create a pool at the configured GPU
+usage limit during startup, so deployment must choose an absolute or fractional
+limit that fits alongside the driver, sidecar, and concurrent query working
+sets. Acceptance records configured, startup-reserved, peak-reserved, and
+peak-used GPU bytes; a successful small query is not evidence that an SF10 join
+or aggregate fits.
+
+## 11. Security and failure containment
+
+- Flight mTLS authenticates the paired CN; certificates and private keys never
+  appear in plans, tickets, logs, or artifacts.
+- Account and query identities must agree in prepare and every `StreamRead`.
+- Stream/ticket identities are random and single-use; idempotency identities are
+  deterministic only within the authenticated account/query pair.
+- Capability and schema hashes prevent cross-version or cross-schema reuse.
+- Unknown fields, malformed frames, overflow, non-canonical batches, oversized
+  rows, unsupported vector classes, and endpoint redirects are terminal.
+- Stream mode exposes no TAE path, manifest, object credential, or resolver
+  endpoint.
+- One sidecar is paired with one local CN. A sidecar is not shared across CNs.
+- Failure is contained to the statement and its query-local sidecar entry.
+
+## 12. Compatibility, rollout, and rollback
+
+The MatrixOne native batch representation is an internal ABI. Protocol v5 is
+therefore supported only for the exact capability document and pinned
+MatrixOne/Sirius/sidecar revisions validated together. It is not a promise that
+an arbitrary older or newer MatrixOne batch codec is compatible.
+
+Rollout order is:
+
+1. merge and publish merge-ready Sirius and sidecar revisions;
+2. deploy the paired sidecar and verify capability negotiation while stream mode
+   remains unused;
+3. deploy MatrixOne with stream mode disabled by default;
+4. run the acceptance matrix on one local CN/sidecar pair;
+5. permit explicit `SIDECAR STREAM` use only after approval.
+
+Mixed CN revisions are allowed only because each CN negotiates with its own
+sidecar and the feature is explicit. A mismatched pair rejects negotiation. A
+rolling upgrade must update a pair as one unit before enabling stream mode.
+
+Rollback disables explicit stream use and restores the previously pinned
+sidecar image. Direct `TaeRead` and native MatrixOne execution remain available
+and unchanged. Protocol or schema mismatch never triggers post-visibility
+fallback.
+
+## 13. Observability
+
+Acceptance and production diagnostics must identify one query without exposing
+secrets:
+
+- protocol/capability revision and outcome;
+- prepare, first-input, first-result, quiescence, and cleanup durations;
+- input batches/rows/payload bytes and result batches/rows/payload bytes;
+- GPU backend evidence showing `GPU_MO_SCAN` and `SIRIUS_GPU` actually started;
+- cancellation source and terminal outcome;
+- active tickets, active input handlers, retained reconciliation owners;
+- MatrixOne allocation-account terminal snapshot;
+- sidecar host peak, GPU peak/utilization, and storage/network byte counters.
+
+Query, stream, and ticket values must be logged only as bounded opaque hashes.
+Certificate material, SQL values, batch contents, object paths, and credentials
+must not be logged.
+
+## 14. Verification and acceptance gates
+
+The feature is not merge-ready until evidence names the exact three revisions
+and closes every row below.
+
+| Contract | Required evidence |
+| --- | --- |
+| protocol and schema | cross-repository codec fixtures plus malformed/version/hash/schema/type/sequence/size controls |
+| one-pass ownership | duplicate claim/ref/attachment rejection and exact cumulative acknowledgements |
+| success lifecycle | producer join, sidecar worker quiescence, zero input handlers, zero retained execution after result EOF |
+| early/pruned input | result EOF before first batch and `not_needed` after current/previous acknowledgement |
+| cancellation | cancel while input ack is blocked and while result receive/write is blocked; bounded termination |
+| injected failure | MO producer failure, sidecar input failure, Sirius consumer failure, disconnect, timeout, and retryable cleanup |
+| slow consumer | measured bounded MO/sidecar host memory with a consumer held behind a deterministic barrier |
+| GPU execution | query-scoped evidence records `SIRIUS_GPU` and logs `GPU_MO_SCAN` consuming streamed sequences; no DuckDB CPU fallback |
+| correctness | typed native-MO equality for all 22 TPC-H SF1 queries on one reused process |
+| SF10 decision data | Q1, Q6, and Q9 typed equality plus storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
+| snapshot advantage | unflushed committed tail and visible tombstone cases equal native MatrixOne while direct `TaeRead` rejects them |
+| static/build quality | MatrixOne SCA/UT/BVT/coverage; Sirius build matrix and tests; sidecar CUDA build/tests and review |
+
+Functional lifecycle tests use deterministic barriers rather than sleeps.
+Performance and capacity measurements run in the performance harness, not as
+wall-clock assertions in ordinary unit tests.
+
+## 15. Delivery pins
+
+The final evidence record must replace `pending` with immutable merge-ready
+commits:
+
+| Component | PR | Approved commit | CI/evidence |
+| --- | --- | --- | --- |
+| MatrixOne | #27599 | pending | pending |
+| Sirius | #6 | pending | pending |
+| sidecar | #14 | pending | pending |
+
+The sidecar submodule must point to the approved Sirius commit. The MatrixOne PR
+body must link this design at its approved commit and the final evidence record.
+
+## 16. Decision log
+
+| Decision | Rationale |
+| --- | --- |
+| retain direct `TaeRead` | it remains the lower-copy fast path for eligible flushed tables |
+| select MO native instead of Arrow record batches | avoids Arrow-Go and duplicate conversion while accepting an exact same-release ABI |
+| strict explicit stream mode | never hides a protocol, security, or GPU failure behind native execution |
+| one local CN per sidecar | keeps snapshot and cancellation ownership local; multi-CN fan-in is a separate design |
+| attach all inputs before `DoGet` | prevents a pruned plan from retiring a ticket before its handler can attach |
+| one acknowledged slot per input | gives deterministic backpressure and ownership transfer |
+| flat-only result vectors | prevents tiny compressed frames from expanding into unbounded MatrixOne result work |
+| exact capability equality | rejects mixed ABI revisions before execution rather than attempting unsafe compatibility |
+
+There are no deferred correctness or lifecycle decisions. Production enablement
+remains blocked on design approval and the acceptance evidence in sections 14
+and 15.
