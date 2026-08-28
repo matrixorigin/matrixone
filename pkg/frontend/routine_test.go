@@ -1652,9 +1652,9 @@ func wireChangeUserRequest(username, plugin string) []byte {
 }
 
 func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
-	previousParameters := getPu("")
-	previousRoutineManager := getRtMgr("")
-	previousSessionAlloc := getSessionAlloc("")
+	previousServerVars, ok := serverVarsMap.Load("")
+	require.True(t, ok)
+	serverVarsMap.Store("", &ServerLevelVariables{})
 	parameters := &config.FrontendParameters{}
 	parameters.SetDefaultValues()
 	parameters.SkipCheckUser = true
@@ -1670,9 +1670,7 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 		_ = clientConn.Close()
 		_ = serverConn.Close()
 		rm.cancelCtx()
-		setRtMgr("", previousRoutineManager)
-		setSessionAlloc("", previousSessionAlloc)
-		setPu("", previousParameters)
+		serverVarsMap.Store("", previousServerVars)
 	})
 	serverDone := make(chan struct{})
 	go func() {
