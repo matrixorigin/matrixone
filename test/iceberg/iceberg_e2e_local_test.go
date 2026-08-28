@@ -505,6 +505,75 @@ func TestLocalE2EAccessLifecycleCleanupUsesFreshContextAndReportsFailures(t *tes
 	}
 }
 
+func TestLocalE2EConcurrentCreateMappingAndDropCase(t *testing.T) {
+	tests := []struct {
+		name       string
+		createErr  error
+		dropErr    error
+		state      []driver.Value
+		wantState  string
+		wantCreate bool
+	}{
+		{
+			name:       "create wins and publishes mapping with catalog",
+			dropErr:    errors.New("catalog has a newly created table mapping"),
+			state:      []driver.Value{1, 1},
+			wantState:  "1\t1",
+			wantCreate: true,
+		},
+		{
+			name:      "drop wins and leaves no mapping",
+			createErr: errors.New("iceberg catalog concurrent does not exist"),
+			state:     []driver.Value{0, 0},
+			wantState: "0\t0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			mock.MatchExpectationsInOrder(false)
+			cfg := localE2ETestConfig()
+
+			mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+				WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+			mock.ExpectBegin()
+			mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs where account_id = 0 and catalog_id = 42 for update").
+				WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+			mock.ExpectCommit()
+			createExpectation := mock.ExpectExec("CREATE EXTERNAL TABLE")
+			if tt.createErr != nil {
+				createExpectation.WillReturnError(tt.createErr)
+			} else {
+				createExpectation.WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			dropExpectation := mock.ExpectExec("DROP ICEBERG CATALOG")
+			if tt.dropErr != nil {
+				dropExpectation.WillReturnError(tt.dropErr)
+			} else {
+				dropExpectation.WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
+				WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables"}).AddRow(tt.state...))
+			if tt.wantCreate {
+				mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+			}
+
+			result := (&caseRunner{cfg: cfg, db: db}).concurrentCreateMappingAndDropCase(context.Background())
+			if result.Status != "passed" || !sameLines([]string{tt.wantState}, result.Actual) {
+				t.Fatalf("unexpected concurrent result: %+v", result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestLocalE2EAccessLifecycleCaseCleansUpAfterRegisterFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
