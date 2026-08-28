@@ -5673,6 +5673,9 @@ func foldDecimalStringComparisonConstants(proc *process.Process, name string, ar
 				!types.T(folded.Typ.Id).IsMySQLString() {
 				continue
 			}
+			if _, ok := decimalStringLiteralValue(folded); !ok {
+				continue
+			}
 			pair[stringPos] = folded
 			return
 		}
@@ -5804,22 +5807,40 @@ func sameDecimalComparisonType(left, right plan.Type) bool {
 	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
 }
 
-// decimalStringLiteralValue recognizes character-string literals and cast
-// chains rooted in one. Runtime strings, NULLs, and raw hex/bit literals retain
-// the generic REAL comparison path.
+func decimalStringEffectiveDomain(expr *Expr) types.StringDomain {
+	if expr == nil {
+		return types.StringDomainNone
+	}
+	staticDomain := types.StaticStringDomain(makeTypeByPlan2Expr(expr))
+	literal := expr.GetLit()
+	if literal == nil {
+		return staticDomain
+	}
+	switch literal.LiteralForm {
+	case plan.StringLiteralForm_STRING_LITERAL_NONE:
+		return staticDomain
+	case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+		return types.StringDomainText
+	case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plan.StringLiteralForm_STRING_LITERAL_BIT:
+		return types.StringDomainBinary
+	default:
+		return types.StringDomainNone
+	}
+}
+
+// decimalStringLiteralValue recognizes effective-text literals and text-only
+// cast chains rooted in one. Static binary targets are semantic boundaries even
+// when their source is an ordinary text literal. Raw hex/bit forms remain on
+// their existing runtime numeric interpretation.
 func decimalStringLiteralValue(expr *Expr) (string, bool) {
-	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+	if expr == nil || decimalStringEffectiveDomain(expr) != types.StringDomainText {
 		return "", false
 	}
 	if literal := expr.GetLit(); literal != nil {
 		value, ok := literal.Value.(*plan.Literal_Sval)
 		if !ok || literal.Isnull || literal.IsBin {
-			return "", false
-		}
-		switch literal.LiteralForm {
-		case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
-			plan.StringLiteralForm_STRING_LITERAL_HEX,
-			plan.StringLiteralForm_STRING_LITERAL_BIT:
 			return "", false
 		}
 		return value.Sval, true

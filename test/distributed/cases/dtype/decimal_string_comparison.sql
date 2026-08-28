@@ -39,6 +39,17 @@ SELECT id FROM boundary_values
 WHERE d = CAST('9007199254740992.0001' AS VARCHAR) ORDER BY id;
 SELECT id FROM boundary_values
 WHERE d = CONCAT('9007199254740992.', '0001') ORDER BY id;
+
+-- Binary string domains retain their generic approximate comparison domain.
+SELECT id FROM boundary_values
+WHERE d = _binary '9007199254740992.0001' ORDER BY id;
+SELECT id FROM boundary_values
+WHERE d = CAST('9007199254740992.0001' AS BINARY(21)) ORDER BY id;
+SELECT id FROM boundary_values
+WHERE d = CAST('9007199254740992.0001' AS VARBINARY(21)) ORDER BY id;
+SELECT id FROM boundary_values
+WHERE d = CAST(CONCAT('9007199254740992.', '0001') AS VARBINARY(21)) ORDER BY id;
+
 SELECT id FROM boundary_values
 WHERE d = CAST('9007199254740992.0001' AS DECIMAL(20,4)) ORDER BY id;
 SELECT id FROM boundary_values FORCE INDEX (idx_d)
@@ -93,6 +104,8 @@ ORDER BY id;
 -- Prefixes and extension tokens stay in the runtime DOUBLE coercion path.
 CREATE TABLE token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
 INSERT INTO token_values VALUES (1, 16), (2, 100);
+SELECT id FROM token_values WHERE d = X'10' ORDER BY id;
+SELECT id FROM token_values WHERE d = b'10000' ORDER BY id;
 SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
 SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;

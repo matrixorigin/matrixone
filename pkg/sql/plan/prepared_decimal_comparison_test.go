@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -327,6 +328,96 @@ func TestDecimalStringMultiInKeepsRealCoercion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecimalBinaryStringDomainsKeepRealCoercion(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	value := "9007199254740992.0001"
+
+	binaryIntroducer := makePlan2StringConstExprWithType(value)
+	binaryIntroducer.Typ.Charset = uint32(types.CharsetBinary)
+	binaryIntroducer.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+
+	rawBit := makePlan2StringConstExprWithType(value, true)
+	rawBit.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BIT
+
+	binaryCharset := makePlan2StringConstExprWithType(value)
+	binaryCharset.Typ.Charset = uint32(types.CharsetBinary)
+	binaryCharset.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_NONE
+
+	makeBinaryCast := func(oid types.T) *planpb.Expr {
+		target := types.New(oid, int32(len(value)), 0)
+		expr, err := appendExplicitCastBeforeExpr(
+			ctx.GetContext(), makePlan2StringConstExprWithType(value), makePlan2Type(&target))
+		require.NoError(t, err)
+		return expr
+	}
+
+	controls := []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{name: "binary introducer", expr: binaryIntroducer},
+		{name: "raw hex", expr: makePlan2StringConstExprWithType(value, true)},
+		{name: "raw bit", expr: rawBit},
+		{name: "binary charset", expr: binaryCharset},
+		{name: "static varbinary literal", expr: makePlan2VarBinaryConstExprWithType(value)},
+		{name: "cast as binary", expr: makeBinaryCast(types.T_binary)},
+		{name: "cast as varbinary", expr: makeBinaryCast(types.T_varbinary)},
+		{name: "cast as blob", expr: makeBinaryCast(types.T_blob)},
+	}
+	for _, tc := range controls {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<=>", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType),
+				DeepCopyExpr(tc.expr),
+			})
+			require.NoError(t, err)
+			for _, arg := range expr.GetF().Args {
+				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+			}
+		})
+	}
+
+	t.Run("folded binary expression", func(t *testing.T) {
+		concat, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "concat", []*planpb.Expr{
+			makePlan2StringConstExprWithType("9007199254740992."),
+			makePlan2StringConstExprWithType("0001"),
+		})
+		require.NoError(t, err)
+		target := types.New(types.T_varbinary, int32(len(value)), 0)
+		binaryExpr, err := appendExplicitCastBeforeExpr(ctx.GetContext(), concat, makePlan2Type(&target))
+		require.NoError(t, err)
+		folded, err := ConstantFold(
+			batch.EmptyForConstFoldBatch, DeepCopyExpr(binaryExpr), ctx.GetProcess(), false, true)
+		require.NoError(t, err)
+		require.NotNil(t, folded.GetLit())
+		require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(makeTypeByPlan2Expr(folded)))
+		require.Equal(t, planpb.StringLiteralForm_STRING_LITERAL_NONE, folded.GetLit().LiteralForm)
+
+		expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "<=>", []*planpb.Expr{
+			makePreparedDecimalComparisonColumn(decimalType),
+			binaryExpr,
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		}
+	})
+
+	t.Run("text override on binary static type", func(t *testing.T) {
+		textOverride := makePlan2VarBinaryConstExprWithType(value)
+		textOverride.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_TEXT
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<=>", []*planpb.Expr{
+			makePreparedDecimalComparisonColumn(decimalType),
+			textOverride,
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().Args {
+			require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type: %+v", arg.Typ)
+		}
+	})
 }
 
 func TestDecimalStringLiteralCastUsesExactCoercion(t *testing.T) {
