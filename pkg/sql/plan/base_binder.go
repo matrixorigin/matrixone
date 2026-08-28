@@ -4882,6 +4882,32 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "timestamp":
+		// The pair overload advertises FSP=6 for string columns and parameters,
+		// whose values are unknown while binding. For a direct string literal,
+		// MySQL derives DATETIME(fsp) from the parsed value's fractional digits.
+		if len(args) == 2 {
+			fsp := int32(0)
+			for i := range args {
+				argumentFSP := argsType[i].Scale
+				if argsType[i].Oid == types.T_any {
+					argumentFSP = 6
+				} else if types.T(args[i].Typ.Id) == types.T_varchar ||
+					types.T(args[i].Typ.Id) == types.T_char ||
+					types.T(args[i].Typ.Id) == types.T_text {
+					argumentFSP = 6
+					if literalFSP, ok := timestampPairLiteralFSP(args[i], i == 0); ok {
+						argumentFSP = literalFSP
+					}
+				}
+				if argumentFSP > fsp {
+					fsp = argumentFSP
+				}
+			}
+			returnType.Width = fsp
+			returnType.Scale = fsp
+		}
+
 	case "timestampadd":
 		if len(args) >= 3 {
 			inputType := argsType[2]
@@ -5093,6 +5119,68 @@ func temporalFunctionFSPFromPlanExpr(expr *Expr) (int32, bool) {
 		return 0, false
 	}
 	return int32(fsp.I64Val), true
+}
+
+func timestampPairLiteralFSP(expr *Expr, datetime bool) (int32, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	value, ok := literal.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	text := strings.TrimSpace(value.Sval)
+	if datetime {
+		if parsed, err := types.ParseDatetime(text, 6); err != nil || parsed == types.ZeroDatetime {
+			return 0, false
+		}
+	} else {
+		if text == "" {
+			return 0, false
+		}
+		if strings.IndexByte(text, 'T') >= 0 {
+			parsed, err := types.ParseDatetime(text, 6)
+			if err != nil || parsed == types.ZeroDatetime {
+				return 0, false
+			}
+		} else {
+			parseText := text
+			dateTimeText := false
+			if space := strings.IndexByte(text, ' '); space >= 0 {
+				day := text[:space]
+				if strings.HasPrefix(day, "-") {
+					day = day[1:]
+					parseText = text[1:]
+				}
+				if day == "" {
+					return 0, false
+				}
+				if _, err := strconv.ParseUint(day, 10, 64); err != nil {
+					parsed, datetimeErr := types.ParseDatetime(text, 6)
+					if datetimeErr != nil || parsed == types.ZeroDatetime {
+						return 0, false
+					}
+					dateTimeText = true
+				}
+			}
+			if !dateTimeText {
+				if _, err := types.ParseTime(parseText, 6); err != nil {
+					return 0, false
+				}
+			}
+		}
+	}
+
+	dot := strings.IndexByte(text, '.')
+	if dot < 0 {
+		return 0, true
+	}
+	digits := len(text) - dot - 1
+	if digits > 6 {
+		digits = 6
+	}
+	return int32(digits), true
 }
 
 func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {

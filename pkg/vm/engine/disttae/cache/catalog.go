@@ -638,6 +638,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	names := bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF)
 	comments := bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF)
 	isHiddens := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
+	isUnsigneds := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX + MO_OFF))
 	isAutos := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
 	constraintTypes := bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF)
 	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
@@ -664,6 +665,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 			Name:            names.GetStringAt(i),
 			Comment:         comments.GetStringAt(i),
 			IsHidden:        isHiddens[i],
+			IsUnsigned:      isUnsigneds[i],
 			IsAutoIncrement: isAutos[i],
 			HasDef:          hasDefs[i],
 			HasUpdate:       hasUpdates[i],

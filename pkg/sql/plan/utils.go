@@ -4209,23 +4209,21 @@ func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 }
 
 // PreparedPlanHasDirectResultParams reports whether a visible SELECT result
-// column is ultimately sourced from a parameter marker.  Such a marker is
-// special for COM_STMT_EXECUTE: the execute-time wire type is also the result
-// column's physical domain, so a numeric descriptor cannot safely reuse the
-// prepare-time TEXT result metadata.
+// column is ultimately sourced from a parameter marker.
 func PreparedPlanHasDirectResultParams(preparePlan *Plan) bool {
 	return len(PreparedPlanDirectResultParamPositions(preparePlan)) > 0
 }
 
-// PreparedPlanDirectResultParamPositions returns parameter positions that flow
-// directly into visible SELECT projection columns.  Projection, sort, and
-// set-operation nodes may be inserted between the result and the marker, so
-// follow column references through those pass-through nodes.  Parameters
-// nested in a function (for example ABS(?)) are intentionally excluded: the
-// function owns the result domain and is covered by the regular specialization
-// scan instead.
+// PreparedPlanDirectResultParamPositions returns the zero-based parameter
+// positions that flow directly into visible SELECT result columns. Optimizer
+// passes can insert projection and pass-through nodes above the original
+// marker, so this traces output ordinals and ColRefs back to the marker while
+// deliberately excluding parameters nested in ordinary result functions.
+//
+// Callers must compute this once per prepared-plan generation. It is not an
+// execute-time predicate: walking the plan on every COM_STMT_EXECUTE previously
+// caused a material prepared-statement hot-path regression.
 func PreparedPlanDirectResultParamPositions(preparePlan *Plan) []int32 {
-	positions := make(map[int32]struct{})
 	if preparePlan == nil {
 		return nil
 	}
@@ -4244,6 +4242,8 @@ func PreparedPlanDirectResultParamPositions(preparePlan *Plan) []int32 {
 	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
 		return nil
 	}
+
+	positions := make(map[int32]struct{})
 	seen := make(map[directResultTraceKey]struct{})
 	for colPos := range query.Nodes[rootID].ProjectList {
 		collectDirectResultParamPositions(query, rootID, int32(colPos), positions, seen)
@@ -4291,28 +4291,48 @@ func collectDirectResultParamPositions(
 		if collectDirectResultParamFromExpr(expr, positions) {
 			return
 		}
-		if col := expr.GetCol(); col != nil {
-			childColPos := col.ColPos
-			switch node.NodeType {
-			case plan.Node_UNION, plan.Node_UNION_ALL,
-				plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
-				plan.Node_MINUS, plan.Node_MINUS_ALL:
-				for _, childID := range node.Children {
-					collectDirectResultParamPositions(query, childID, childColPos, positions, seen)
+		col := expr.GetCol()
+		if col == nil {
+			return
+		}
+		childColPos := col.ColPos
+		switch node.NodeType {
+		case plan.Node_UNION, plan.Node_UNION_ALL,
+			plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL:
+			// A set operation owns a common-type result rather than transparently
+			// forwarding one branch. PREPARE-time coercion can materialize the
+			// other branches, so direct-result specialization must not guess a new
+			// common domain from the surviving plan.
+			return
+		case plan.Node_AGG:
+			// DISTINCT over a real row source is represented by PROJECT -> AGG.
+			// The AGG projection references its grouping output with rel_pos=-1;
+			// following child 0 at the same ordinal skips the owned group expression.
+			if col.RelPos < 0 && col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+				groupExpr := node.GroupBy[col.ColPos]
+				if collectDirectResultParamFromExpr(groupExpr, positions) {
+					return
+				}
+				if groupCol := groupExpr.GetCol(); groupCol != nil && len(node.Children) == 1 {
+					collectDirectResultParamPositions(
+						query, node.Children[0], groupCol.ColPos, positions, seen)
 				}
 				return
 			}
-			if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
-				collectDirectResultParamPositions(query, node.Children[col.RelPos], childColPos, positions, seen)
-				return
-			}
-			if len(node.Children) == 1 {
-				collectDirectResultParamPositions(query, node.Children[0], childColPos, positions, seen)
-			}
+		}
+		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			collectDirectResultParamPositions(query, node.Children[col.RelPos], childColPos, positions, seen)
+			return
+		}
+		if len(node.Children) == 1 {
+			collectDirectResultParamPositions(query, node.Children[0], childColPos, positions, seen)
 		}
 		return
 	}
 
+	// Some physical pass-through nodes have no projection. Preserve the output
+	// ordinal through their sole child.
 	if len(node.Children) == 1 {
 		collectDirectResultParamPositions(query, node.Children[0], colPos, positions, seen)
 	}
@@ -4326,9 +4346,8 @@ func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) 
 		positions[param.Pos] = struct{}{}
 		return true
 	}
-	// Implicit casts are inserted by overload resolution and preserve the
-	// marker's result-domain provenance. Explicit CAST(? AS ...) owns a fixed
-	// result type and must not trigger direct-result specialization.
+	// Implicit overload casts preserve marker provenance. Explicit CAST owns a
+	// fixed result domain and must remain outside direct-result specialization.
 	if isImplicitPreparedParamCast(expr) {
 		fn := expr.GetF()
 		return len(fn.Args) > 0 && collectDirectResultParamFromExpr(fn.Args[0], positions)
@@ -4461,6 +4480,16 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
+	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
+	// numeric-prefix domain used by common-type consumers; a direct result uses
+	// this scale-preserving domain without parsing the packet again.
+	DirectResultType    types.Type
+	HasDirectResultType bool
+	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
+	// protocol scanner. Typed literal construction uses it instead of reparsing
+	// the potentially max-packet-sized raw Value.
+	MaterializedValue string
 	// RetainParamRef records that a specialized query plan will be cached and
 	// therefore must retain this parameter as runtime provenance even when the
 	// parameter itself is unrelated to numeric-prefix specialization.
@@ -4616,6 +4645,255 @@ func preparedBoundedDecimalExponent(value string, compensation int64) (int64, bo
 
 func absInt64Within(value, limit int64) bool {
 	return value >= -limit && value <= limit
+}
+
+// PreparedDecimalRuntimeTypes parses one complete binary-protocol DECIMAL
+// lexeme and returns both domains needed by prepared execution. normalized is
+// the trailing-zero-free domain used by numeric-prefix/common-type consumers;
+// visible preserves the lexeme's effective scale for a direct result. The scan
+// performs no input-length allocation, even for a max_allowed_packet-sized
+// value.
+func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, ok bool) {
+	normalized, visible, _, ok = preparedDecimalRuntimeDomains(value, false)
+	return normalized, visible, ok
+}
+
+// PreparedDecimalRuntimeDomains additionally returns a bounded canonical
+// lexeme suitable for typed literal materialization.
+func PreparedDecimalRuntimeDomains(value string) (normalized, visible types.Type, canonical string, ok bool) {
+	return preparedDecimalRuntimeDomains(value, true)
+}
+
+func preparedDecimalRuntimeDomains(
+	value string,
+	materialize bool,
+) (normalized, visible types.Type, canonical string, ok bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	pos := 0
+	negative := value[pos] == '-'
+	if value[pos] == '+' || value[pos] == '-' {
+		pos++
+	}
+	if pos == len(value) {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	var digitCount, leadingZeros, fractionalDigits, trailingZeros int64
+	var coefficient [76]byte
+	coefficientLen := 0
+	seenDigit, seenPoint, seenNonZero := false, false, false
+	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
+		ch := value[pos]
+		switch {
+		case ch >= '0' && ch <= '9':
+			seenDigit = true
+			digitCount++
+			if seenPoint {
+				fractionalDigits++
+			}
+			if !seenNonZero {
+				if ch == '0' {
+					leadingZeros++
+				} else {
+					seenNonZero = true
+				}
+			} else if ch == '0' {
+				trailingZeros++
+			} else {
+				trailingZeros = 0
+			}
+			if seenNonZero {
+				if coefficientLen < len(coefficient) {
+					coefficient[coefficientLen] = ch
+				}
+				coefficientLen++
+			}
+		case ch == '.' && !seenPoint:
+			seenPoint = true
+		default:
+			return types.Type{}, types.Type{}, "", false
+		}
+		pos++
+	}
+	if !seenDigit {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	exponent, exponentState, valid := scanPreparedDecimalExponent(value[pos:])
+	if !valid {
+		return types.Type{}, types.Type{}, "", false
+	}
+	coefficientDigits := digitCount - leadingZeros
+	if coefficientDigits == 0 {
+		// Zero is representable independently of a positive exponent. Only the
+		// effective negative scale can exceed Decimal256.
+		var scale int64
+		switch exponentState {
+		case preparedExponentHugePositive:
+			scale = 0
+		case preparedExponentHugeNegative:
+			return types.Type{}, types.Type{}, "", false
+		default:
+			netExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
+			if !bounded || netExponent < -int64(types.T_decimal256.ToType().Width) {
+				return types.Type{}, types.Type{}, "", false
+			}
+			if netExponent < 0 {
+				scale = -netExponent
+			}
+		}
+		visible, ok = preparedDecimalTypeForWidth(max(int64(1), scale), scale)
+		if !ok {
+			return types.Type{}, types.Type{}, "", false
+		}
+		canonical := ""
+		if materialize {
+			canonical = "0"
+		}
+		return types.New(types.T_decimal64, 1, 0), visible, canonical, true
+	}
+	if exponentState != preparedExponentFinite {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	visibleExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
+	if !bounded {
+		return types.Type{}, types.Type{}, "", false
+	}
+	visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
+	if !ok {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	normalizedExponent, bounded := addPreparedDecimalExponent(
+		exponent, -fractionalDigits+trailingZeros)
+	if !bounded {
+		return types.Type{}, types.Type{}, "", false
+	}
+	normalized, ok = preparedDecimalTypeFromCoefficient(
+		coefficientDigits-trailingZeros, normalizedExponent)
+	if !ok || coefficientLen != int(coefficientDigits) || coefficientLen > len(coefficient) {
+		return types.Type{}, types.Type{}, "", false
+	}
+	if !materialize {
+		return normalized, visible, "", true
+	}
+	var canonicalBuilder strings.Builder
+	canonicalBuilder.Grow(coefficientLen + 5)
+	if negative {
+		canonicalBuilder.WriteByte('-')
+	}
+	canonicalBuilder.Write(coefficient[:coefficientLen])
+	if visibleExponent != 0 {
+		canonicalBuilder.WriteByte('e')
+		canonicalBuilder.WriteString(strconv.FormatInt(visibleExponent, 10))
+	}
+	return normalized, visible, canonicalBuilder.String(), true
+}
+
+type preparedExponentState uint8
+
+const (
+	preparedExponentFinite preparedExponentState = iota
+	preparedExponentHugePositive
+	preparedExponentHugeNegative
+)
+
+func scanPreparedDecimalExponent(value string) (int64, preparedExponentState, bool) {
+	if value == "" {
+		return 0, preparedExponentFinite, true
+	}
+	if value[0] != 'e' && value[0] != 'E' {
+		return 0, preparedExponentFinite, false
+	}
+	value = value[1:]
+	if value == "" {
+		return 0, preparedExponentFinite, false
+	}
+	negative := false
+	if value[0] == '+' || value[0] == '-' {
+		negative = value[0] == '-'
+		value = value[1:]
+	}
+	if value == "" {
+		return 0, preparedExponentFinite, false
+	}
+	for len(value) > 0 && value[0] == '0' {
+		value = value[1:]
+	}
+	if value == "" {
+		return 0, preparedExponentFinite, true
+	}
+	for i := range len(value) {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, preparedExponentFinite, false
+		}
+	}
+	if len(value) > 19 {
+		if negative {
+			return 0, preparedExponentHugeNegative, true
+		}
+		return 0, preparedExponentHugePositive, true
+	}
+	magnitude, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || magnitude > math.MaxInt64 {
+		if negative {
+			return 0, preparedExponentHugeNegative, true
+		}
+		return 0, preparedExponentHugePositive, true
+	}
+	exponent := int64(magnitude)
+	if negative {
+		exponent = -exponent
+	}
+	return exponent, preparedExponentFinite, true
+}
+
+func addPreparedDecimalExponent(exponent, compensation int64) (int64, bool) {
+	if compensation > 0 && exponent > math.MaxInt64-compensation ||
+		compensation < 0 && exponent < math.MinInt64-compensation {
+		return 0, false
+	}
+	return exponent + compensation, true
+}
+
+func preparedDecimalTypeFromCoefficient(coefficientDigits, exponent int64) (types.Type, bool) {
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if coefficientDigits < 1 || exponent < -maxWidth || exponent > maxWidth {
+		return types.Type{}, false
+	}
+	if exponent >= 0 {
+		return preparedDecimalTypeForWidth(coefficientDigits+exponent, 0)
+	}
+	scale := -exponent
+	return preparedDecimalTypeForWidth(max(coefficientDigits, scale), scale)
+}
+
+func preparedDecimalTypeForWidth(width, scale int64) (types.Type, bool) {
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if width < 1 || width > maxWidth || scale < 0 || scale > maxWidth || scale > width {
+		return types.Type{}, false
+	}
+	w, s := int32(width), int32(scale)
+	switch {
+	case w <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, w, s), true
+	case w <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, w, s), true
+	default:
+		return types.New(types.T_decimal256, w, s), true
+	}
+}
+
+// PreparedDecimalRuntimeType derives the scale-preserving visible domain of a
+// complete binary-protocol DECIMAL lexeme.
+func PreparedDecimalRuntimeType(value string) (types.Type, bool) {
+	_, visible, ok := PreparedDecimalRuntimeTypes(value)
+	return visible, ok
 }
 
 func preparedDecimalType(value string) (types.Type, bool) {
@@ -5146,8 +5424,14 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserveDMLWriteArgs ...bool) (bool, error) {
+func replaceParamVals(
+	ctx context.Context,
+	plan0 *Plan,
+	paramVals []any,
+	preserveDMLWriteArgs ...bool,
+) (bool, error) {
 	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
+	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -5158,6 +5442,9 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 		retainParamRef := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
+			if param.MaterializedValue != "" {
+				val = param.MaterializedValue
+			}
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
@@ -5168,6 +5455,8 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
 		}
+		_, directRuntimeResult := slices.BinarySearch(directResultPositions, int32(i))
+		directRuntimeResult = directRuntimeResult && hasRuntimeType
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -5185,10 +5474,10 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 				if err != nil {
 					return false, err
 				}
-				if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
-					params[i].GetLit().Src = &plan.Expr{
+				if numericPrefixSource || retainParamRef || directRuntimeResult {
+					attachPreparedRuntimeParamSource(params[i], &plan.Expr{
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
-					}
+					})
 				}
 				continue
 			}
@@ -5201,7 +5490,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 				},
 			}
 		}
-		if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
+		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 			}
@@ -5264,21 +5553,6 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 			}
 		}
 	}
-	directSelectRuntimeParam := make(map[int]bool)
-	if query := plan0.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
-		for _, node := range query.Nodes {
-			if node == nil {
-				continue
-			}
-			for _, expr := range node.ProjectList {
-				param := expr.GetP()
-				if param != nil && int(param.Pos) >= 0 && int(param.Pos) < len(paramVals) &&
-					runtimeParamHasExplicitType(paramVals[param.Pos]) {
-					directSelectRuntimeParam[int(param.Pos)] = true
-				}
-			}
-		}
-	}
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
 		if name != "nth_value" || len(args) != 2 {
 			return nil
@@ -5319,17 +5593,163 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserv
 	}
 	refreshPreparedPlanProjectionTypes(plan0)
 
-	// A direct SELECT parameter is part of the result-column contract. Its
-	// execute-time numeric domain must therefore be reflected in the copied
-	// plan even when it is not wrapped by a function overload.
-	specialized := paramRule.specialized
-	for pos := range directSelectRuntimeParam {
-		if runtimeParamHasExplicitType(paramVals[pos]) {
-			specialized = true
-			break
-		}
+	// A direct SELECT parameter is part of the result-column contract. Propagate
+	// its execute-time type through transparent projection/sort/distinct nodes
+	// so the final visible ColDef agrees with the rewritten source expression.
+	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
+	return paramRule.specialized || directResultSpecialized, nil
+}
+
+func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {
+	query := plan0.GetQuery()
+	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) == 0 {
+		return false
 	}
-	return specialized, nil
+	rootID := query.Steps[len(query.Steps)-1]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
+		return false
+	}
+	memo := make(map[directResultTraceKey]plan.Type)
+	found := make(map[directResultTraceKey]bool)
+	specialized := false
+	for colPos := range query.Nodes[rootID].ProjectList {
+		_, direct := propagatePreparedDirectResultTypeAt(
+			query, rootID, int32(colPos), paramVals, memo, found)
+		specialized = specialized || direct
+	}
+	return specialized
+}
+
+func propagatePreparedDirectResultTypeAt(
+	query *plan.Query,
+	nodeID, colPos int32,
+	paramVals []any,
+	memo map[directResultTraceKey]plan.Type,
+	found map[directResultTraceKey]bool,
+) (plan.Type, bool) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return plan.Type{}, false
+	}
+	key := directResultTraceKey{nodeID: nodeID, colPos: colPos}
+	if direct, ok := found[key]; ok {
+		return memo[key], direct
+	}
+	// Publish a negative entry before recursion so malformed cyclic plans stay
+	// total instead of recursing indefinitely.
+	found[key] = false
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return plan.Type{}, false
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		return plan.Type{}, false
+	}
+
+	if int(colPos) >= len(node.ProjectList) {
+		if len(node.Children) != 1 {
+			return plan.Type{}, false
+		}
+		typ, direct := propagatePreparedDirectResultTypeAt(
+			query, node.Children[0], colPos, paramVals, memo, found)
+		if direct {
+			memo[key], found[key] = typ, true
+		}
+		return typ, direct
+	}
+	expr := node.ProjectList[colPos]
+	if expr == nil {
+		return plan.Type{}, false
+	}
+	if position, ok := preparedRuntimeSourceParamPosition(expr); ok &&
+		position >= 0 && position < len(paramVals) && runtimeParamHasExplicitType(paramVals[position]) {
+		memo[key], found[key] = expr.Typ, true
+		return expr.Typ, true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return plan.Type{}, false
+	}
+	if node.NodeType == plan.Node_AGG && col.RelPos < 0 &&
+		col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+		groupExpr := node.GroupBy[col.ColPos]
+		if position, ok := preparedRuntimeSourceParamPosition(groupExpr); ok &&
+			position >= 0 && position < len(paramVals) && runtimeParamHasExplicitType(paramVals[position]) {
+			expr.Typ = groupExpr.Typ
+			memo[key], found[key] = groupExpr.Typ, true
+			return groupExpr.Typ, true
+		}
+		groupCol := groupExpr.GetCol()
+		if groupCol == nil || len(node.Children) != 1 {
+			return plan.Type{}, false
+		}
+		typ, direct := propagatePreparedDirectResultTypeAt(
+			query, node.Children[0], groupCol.ColPos, paramVals, memo, found)
+		if !direct {
+			return plan.Type{}, false
+		}
+		groupExpr.Typ = typ
+		expr.Typ = typ
+		memo[key], found[key] = typ, true
+		return typ, true
+	}
+	childID := int32(-1)
+	if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+		childID = node.Children[col.RelPos]
+	} else if len(node.Children) == 1 {
+		childID = node.Children[0]
+	}
+	if childID < 0 {
+		return plan.Type{}, false
+	}
+	typ, direct := propagatePreparedDirectResultTypeAt(
+		query, childID, col.ColPos, paramVals, memo, found)
+	if !direct {
+		return plan.Type{}, false
+	}
+	expr.Typ = typ
+	memo[key], found[key] = typ, true
+	return typ, true
+}
+
+func preparedRuntimeSourceParamPosition(expr *Expr) (int, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return int(param.Pos), true
+	}
+	literal := expr.GetLit()
+	if literal != nil && literal.Src != nil && literal.Src.GetP() != nil {
+		return int(literal.Src.GetP().Pos), true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 {
+		return 0, false
+	}
+	return preparedRuntimeSourceParamPosition(fn.Args[0])
+}
+
+func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
+	if expr == nil || source == nil {
+		return false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		literal.Src = source
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 {
+		return false
+	}
+	literal := fn.Args[0].GetLit()
+	if literal == nil {
+		return false
+	}
+	literal.Src = source
+	return true
 }
 
 // refreshPreparedPlanProjectionTypes repairs synthetic column expressions

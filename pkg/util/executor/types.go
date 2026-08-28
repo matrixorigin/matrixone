@@ -102,6 +102,7 @@ type StatementOption struct {
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
 	disableLock              bool
+	allowMoColumnsUpdate     bool
 }
 
 // Result exec sql result

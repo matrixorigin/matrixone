@@ -340,13 +340,17 @@ type PrepareStmt struct {
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool
-	// numericPrefixConsumer is computed once per prepared-plan generation so
-	// ordinary COM_STMT Query executions never scan or copy the cached plan.
-	numericPrefixConsumer bool
-	hasPaginationParams   bool
-	hasLagLeadParams      bool
-	paramKinds            []vector.PrepareParamKind
-	paramMetadata         []bool
+	// Static prepared-plan capabilities are computed once per plan generation so
+	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
+	// result positions identify parameters whose binary runtime type is also the
+	// visible result-column type.
+	numericPrefixConsumer         bool
+	directResultParamPositions    []int32
+	directResultParamPositionsSet bool
+	hasPaginationParams           bool
+	hasLagLeadParams              bool
+	paramKinds                    []vector.PrepareParamKind
+	paramMetadata                 []bool
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
@@ -372,12 +376,6 @@ type PrepareStmt struct {
 	// EXECUTE.
 	runtimeSpecializationPlan   *plan.Plan
 	runtimeSpecializationNeeded bool
-	// directResultParamPositions is computed with the prepared plan and reused
-	// by COM_STMT_EXECUTE. A direct marker's execute-time numeric domain is also
-	// the visible result-column domain; ordinary predicates and nested
-	// expressions use the regular specialization scan instead.
-	directResultParamPositions    []int32
-	directResultParamPositionsSet bool
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -712,6 +710,9 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	// cancelTxnCreateWithRequest is reserved for short-lived background
+	// transactions whose request context owns a blocked TxnClient.New call.
+	cancelTxnCreateWithRequest bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -760,18 +761,14 @@ func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Co
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
 		return
 	}
-	// Runtime-specialized compiles share the session process (and its borrowed
-	// prepare-parameter vector).  Compile.Release calls Process.Free, which
-	// clears that shared vector.  Preserve it while evicting the previous
-	// semantic-category entry; otherwise a cache miss that replaces an older
-	// category can make the current execution's ParamRef see an empty process.
-	// PrepareStmt.proc is updated by each COM_STMT_EXECUTE and is the shared
-	// session process used to build both the old and replacement runtime compiles.
-	proc := prepareStmt.proc
-	var prepareParams process.PrepareParamsState
-	if proc != nil {
-		prepareParams = proc.DetachPrepareParams()
-		defer proc.RestorePrepareParams(prepareParams)
+	// Compile/operator release resets execution-owned process state. Keep the
+	// current COM_STMT parameter generation detached while replacing an older
+	// runtime category, then restore it for the candidate that is about to run.
+	// Without this guard, a successful category replacement can publish the new
+	// compile but execute it with an empty prepare-parameter vector.
+	if prepareStmt.proc != nil {
+		prepareParams := prepareStmt.proc.DetachPrepareParams()
+		defer prepareStmt.proc.RestorePrepareParams(prepareParams)
 	}
 	runtimeCompile.FreeOperator()
 	runtimeCompile.SetIsPrepare(false)
@@ -803,8 +800,15 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.closeCursor()
+	// Release the runtime compile while the current parameter vector is still
+	// valid; releaseRuntimeCompile temporarily detaches and restores it.
+	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.params != nil {
+		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
+			prepareStmt.proc.SetPrepareParams(nil)
+		}
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
+		prepareStmt.params = nil
 	}
 
 	if prepareStmt.compile != nil {
@@ -813,7 +817,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
-	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
