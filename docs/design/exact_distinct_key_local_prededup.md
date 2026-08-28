@@ -7,7 +7,8 @@ Owner issue: [#27720](https://github.com/matrixorigin/matrixone/issues/27720)
 Related bounded-memory work:
 [#27698](https://github.com/matrixorigin/matrixone/issues/27698)
 
-Implementation branch: `codex/distinct-key-local-prededup`
+Implementation PR:
+[#27790](https://github.com/matrixorigin/matrixone/pull/27790)
 
 ## Problem and invariant
 
