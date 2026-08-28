@@ -91,3 +91,105 @@ function list_embedded_cluster_test_packages() {
 
     printf '%s\n' "${discovered_packages}" | sed '/^$/d' | LC_ALL=C sort -u
 }
+
+# list_ut_shard_stages is the single source of truth for the race-UT shard
+# contract. Keep the all-suite path explicit so a newly introduced stage cannot
+# run only in UT_SHARD=all while being silently absent from every CI shard.
+function list_ut_shard_stages() {
+    if (( $# != 1 )); then
+        echo "Usage: list_ut_shard_stages SHARD" >&2
+        return 2
+    fi
+
+    case "$1" in
+        all)
+            printf '%s\n' light hnsw serial embedded heavy plan
+            ;;
+        light)
+            printf '%s\n' light hnsw
+            ;;
+        issues)
+            printf '%s\n' serial
+            ;;
+        embedded)
+            printf '%s\n' embedded
+            ;;
+        heavy-plan)
+            printf '%s\n' heavy plan
+            ;;
+        *)
+            echo "Unknown UT shard '$1'" >&2
+            return 2
+            ;;
+    esac
+}
+
+function should_run_ut_stage() {
+    if (( $# != 1 )); then
+        echo "Usage: should_run_ut_stage STAGE" >&2
+        return 2
+    fi
+
+    if ! list_ut_shard_stages all | grep -Fxq "$1"; then
+        echo "Unknown UT stage '$1'" >&2
+        return 2
+    fi
+
+    list_ut_shard_stages "${UT_SHARD:-all}" | grep -Fxq "$1"
+}
+
+# validate_complete_partition proves that the supplied groups are a disjoint,
+# complete partition of the authoritative item scope. It is cheap enough to run
+# before every shard and makes routing or discovery drift fail closed instead of
+# producing a green run with missing or duplicated coverage.
+function validate_complete_partition() {
+    if (( $# < 3 )); then
+        echo "Usage: validate_complete_partition LABEL EXPECTED GROUP [GROUP...]" >&2
+        return 2
+    fi
+
+    local label=$1
+    local expected=$2
+    shift 2
+    local group
+    local package
+
+    {
+        while IFS= read -r package; do
+            if [[ -n "${package}" ]]; then
+                printf 'expected\t%s\n' "${package}"
+            fi
+        done <<< "${expected}"
+
+        for group in "$@"; do
+            while IFS= read -r package; do
+                if [[ -n "${package}" ]]; then
+                    printf 'actual\t%s\n' "${package}"
+                fi
+            done <<< "${group}"
+        done
+    } | awk -F '\t' -v label="${label}" '
+        $1 == "expected" { expected[$2] = 1; next }
+        $1 == "actual" { actual[$2]++; next }
+        END {
+            failed = 0
+            for (package in expected) {
+                if (!(package in actual)) {
+                    print "Missing " label " from partition: " package > "/dev/stderr"
+                    failed = 1
+                }
+            }
+            for (package in actual) {
+                if (!(package in expected)) {
+                    print "Unexpected " label " in partition: " package > "/dev/stderr"
+                    failed = 1
+                }
+                if (actual[package] != 1) {
+                    print label " occurs " actual[package] " times in partition: " package > "/dev/stderr"
+                    failed = 1
+                }
+            }
+            exit failed
+        }
+    '
+}

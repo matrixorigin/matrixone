@@ -406,9 +406,10 @@ ut: $(UT_PREREQUISITES)
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	# The race suite is split into light, exclusive, heavy, and plan shards.
-	# Keep the outer budget above the per-package timeout so an expanded main
-	# branch cannot be killed while later shards are still making progress.
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress.
 	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 

@@ -259,3 +259,110 @@ func TestListEmbeddedClusterTestPackagesPreservesGoListFailure(t *testing.T) {
 		t.Fatalf("expected one go list attempt, got %q", attempts)
 	}
 }
+
+func runUTToolsBash(t *testing.T, script string, env ...string) ([]byte, int) {
+	t.Helper()
+
+	toolsPath, err := filepath.Abs("ut_tools.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", script, "bash", toolsPath)
+	cmd.Env = append(os.Environ(), env...)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return output, 0
+	}
+	if exitError, ok := err.(*exec.ExitError); ok {
+		return output, exitError.ExitCode()
+	}
+	t.Fatalf("run UT tools bash: %v", err)
+	return nil, 0
+}
+
+func TestUTShardStagesFormCompleteDisjointMap(t *testing.T) {
+	script := `source "$1"
+for shard in all light issues embedded heavy-plan; do
+    stages=$(list_ut_shard_stages "${shard}") || exit $?
+    printf '%s=' "${shard}"
+    printf '%s\n' "${stages}" | paste -sd, -
+done
+for shard in light issues embedded heavy-plan; do
+    UT_SHARD=${shard}
+    for stage in light hnsw serial embedded heavy plan; do
+        if should_run_ut_stage "${stage}"; then
+            printf '%s:%s\n' "${shard}" "${stage}"
+        else
+            status=$?
+            if (( status != 1 )); then exit "${status}"; fi
+        fi
+    done
+done`
+	output, status := runUTToolsBash(t, script)
+	if status != 0 {
+		t.Fatalf("shard map failed with status %d: %s", status, output)
+	}
+
+	expected := `all=light,hnsw,serial,embedded,heavy,plan
+light=light,hnsw
+issues=serial
+embedded=embedded
+heavy-plan=heavy,plan
+light:light
+light:hnsw
+issues:serial
+embedded:embedded
+heavy-plan:heavy
+heavy-plan:plan`
+	if actual := strings.TrimSpace(string(output)); actual != expected {
+		t.Fatalf("unexpected shard map:\n%s\nexpected:\n%s", actual, expected)
+	}
+}
+
+func TestUTShardStagesRejectUnknownValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		script string
+	}{
+		{name: "shard", script: `source "$1"; list_ut_shard_stages unknown`},
+		{name: "stage", script: `source "$1"; UT_SHARD=all; should_run_ut_stage unknown`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output, status := runUTToolsBash(t, test.script)
+			if status != 2 {
+				t.Fatalf("expected status 2, got %d: %s", status, output)
+			}
+		})
+	}
+}
+
+func TestValidateCompletePartition(t *testing.T) {
+	tests := []struct {
+		name       string
+		groups     []string
+		wantStatus int
+		wantError  string
+	}{
+		{name: "complete", groups: []string{"a", "b\nc"}},
+		{name: "missing", groups: []string{"a", "b"}, wantStatus: 1, wantError: "Missing UT package from partition: c"},
+		{name: "duplicate", groups: []string{"a\nb", "b\nc"}, wantStatus: 1, wantError: "UT package occurs 2 times in partition: b"},
+		{name: "unexpected", groups: []string{"a\nb", "c\nd"}, wantStatus: 1, wantError: "Unexpected UT package in partition: d"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			script := `source "$1"; validate_complete_partition "UT package" "${EXPECTED}" "${GROUP_ONE}" "${GROUP_TWO}"`
+			output, status := runUTToolsBash(t, script,
+				"EXPECTED=a\nb\nc",
+				"GROUP_ONE="+test.groups[0],
+				"GROUP_TWO="+test.groups[1],
+			)
+			if status != test.wantStatus {
+				t.Fatalf("expected status %d, got %d: %s", test.wantStatus, status, output)
+			}
+			if test.wantError != "" && !strings.Contains(string(output), test.wantError) {
+				t.Fatalf("missing error %q in output: %s", test.wantError, output)
+			}
+		})
+	}
+}
