@@ -140,20 +140,39 @@ func TestPlanCacheUpdatesPlanAndSnapshotAsOneGeneration(t *testing.T) {
 	firstTS := timestamp.Timestamp{PhysicalTime: 10}
 	oldTS := timestamp.Timestamp{PhysicalTime: 20}
 	newTS := timestamp.Timestamp{PhysicalTime: 30}
-	pc.cacheWithPlanSnapshots(
+	firstStats := optimizerStatsTableKey{accountID: 1, tableID: 10}
+	secondStats := optimizerStatsTableKey{accountID: 2, tableID: 20}
+	rebuiltStats := optimizerStatsTableKey{accountID: 2, tableID: 21}
+	pc.cacheWithPlanSnapshotsAndStatsVersions(
 		"sql",
 		[]tree.Statement{firstStmt, secondStmt},
 		[]*plan.Plan{firstPlan, oldPlan},
 		[]timestamp.Timestamp{firstTS, oldTS},
+		[]map[optimizerStatsTableKey]uint64{
+			{firstStats: 1},
+			{secondStats: 2},
+		},
 	)
 
-	require.False(t, pc.updatePlanGeneration("sql", 1, firstPlan, newPlan, newTS))
-	require.True(t, pc.updatePlanGeneration("sql", 1, oldPlan, newPlan, newTS))
+	require.False(t, pc.updatePlanGeneration("sql", 1, firstPlan, newPlan, newTS, nil))
+	require.False(t, pc.updatePlanGeneration(
+		"sql", 1, oldPlan, newPlan, newTS,
+		map[optimizerStatsTableKey]uint64{firstStats: 3}),
+		"a replacement cannot combine two versions of one dependency")
+	require.True(t, pc.updatePlanGeneration(
+		"sql", 1, oldPlan, newPlan, newTS,
+		map[optimizerStatsTableKey]uint64{rebuiltStats: 3}))
 	cached := pc.get("sql")
 	require.Same(t, firstPlan, cached.plans[0])
 	require.Equal(t, firstTS, cached.planSnapshotTS[0])
 	require.Same(t, newPlan, cached.plans[1])
 	require.Equal(t, newTS, cached.planSnapshotTS[1])
+	require.Equal(t, map[optimizerStatsTableKey]uint64{
+		firstStats:   1,
+		rebuiltStats: 3,
+	}, cached.statsVersions)
+	require.Equal(t, map[optimizerStatsTableKey]uint64{firstStats: 1}, cached.planStatsVersions[0])
+	require.Equal(t, map[optimizerStatsTableKey]uint64{rebuiltStats: 3}, cached.planStatsVersions[1])
 
 	pc.invalidatePlanGeneration("sql", 1, oldPlan)
 	require.True(t, pc.isCached("sql"), "an obsolete generation cannot invalidate its replacement")
@@ -313,6 +332,77 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.False(t, ses.isCached("x"))
 	require.NotPanics(t, func() { ses.cleanCache() })
 	require.NotPanics(t, func() { ses.releasePlanCache() })
+}
+
+func TestMergeOptimizerStatsVersionsRejectsMixedGenerations(t *testing.T) {
+	first := optimizerStatsTableKey{accountID: 7, tableID: 1}
+	second := optimizerStatsTableKey{accountID: 8, tableID: 1}
+	versions := map[optimizerStatsTableKey]uint64{first: 10}
+	require.True(t, mergeOptimizerStatsVersions(versions,
+		map[optimizerStatsTableKey]uint64{first: 10, second: 20}))
+	require.Equal(t, map[optimizerStatsTableKey]uint64{first: 10, second: 20}, versions)
+	require.False(t, mergeOptimizerStatsVersions(versions,
+		map[optimizerStatsTableKey]uint64{first: 11}))
+	require.Equal(t, uint64(10), versions[first])
+}
+
+func TestSessionReportsStaleStatsWithoutFreeingBorrowedCachedAST(t *testing.T) {
+	const service = "stale-stats-borrowed-ast"
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+
+	key := optimizerStatsTableKey{accountID: 7, tableID: 11}
+	stmt := &trackedStatement{}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{service: service},
+		planCache:     newPlanCache(1),
+	}
+	ses.cachePlanWithStatsVersions(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{{}},
+		map[optimizerStatsTableKey]uint64{key: 0})
+	require.True(t, ses.isCached("cached"))
+
+	advanceOptimizerStatsVersion(service, key)
+	require.False(t, ses.isCached("cached"))
+	require.Zero(t, stmt.freed, "an executing wrapper may still borrow this AST")
+
+	require.Nil(t, ses.getCachedPlan("cached"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+var optimizerStatsVersionsCurrentSink bool
+
+func BenchmarkOptimizerStatsVersionsCurrent(b *testing.B) {
+	const (
+		service   = "optimizer-stats-version-benchmark"
+		accountID = uint32(7)
+	)
+	InitServerLevelVars(service)
+	b.Cleanup(func() { serverVarsMap.Delete(service) })
+
+	for _, tc := range []struct {
+		name       string
+		dependency int
+	}{
+		{name: "no-dependency", dependency: 0},
+		{name: "one-table", dependency: 1},
+		{name: "four-tables", dependency: 4},
+		{name: "sixteen-tables", dependency: 16},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			versions := make(map[optimizerStatsTableKey]uint64, tc.dependency)
+			for tableID := 1; tableID <= tc.dependency; tableID++ {
+				versions[optimizerStatsTableKey{
+					accountID: accountID,
+					tableID:   uint64(tableID),
+				}] = 0
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				optimizerStatsVersionsCurrentSink = optimizerStatsVersionsCurrent(service, versions)
+			}
+		})
+	}
 }
 
 func TestSessionRemoveCachedPlanOnlyEvictsTarget(t *testing.T) {

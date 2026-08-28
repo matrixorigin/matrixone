@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -985,6 +986,77 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 	}
 
 	return
+}
+
+// PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
+// an ABS argument whose overload was deferred until execution.  This is kept
+// as a plan-introspection helper for tests and diagnostics; execute-time
+// eligibility is cached on PrepareStmt and must not call this walker for every
+// execution.
+func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
+	return len(PreparedPlanNumericFallbackParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanNumericFallbackParamPositions returns the parameter positions
+// whose value supplies a deferred numeric ABS argument.  The result is plan
+// metadata, not an execute-time decision: callers can compute it once when a
+// prepared plan is built and use it to decide whether runtime values must be
+// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// on every ordinary execution.
+func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+			return nil
+		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
+	return expr != nil && expr.GetPreparedNumeric().GetFallback()
+}
+
+func ensurePreparedNumericMetadata(expr *plan.Expr) *plan.PreparedNumericMetadata {
+	if expr == nil {
+		return nil
+	}
+	if expr.PreparedNumeric == nil {
+		expr.PreparedNumeric = &plan.PreparedNumericMetadata{}
+	}
+	return expr.PreparedNumeric
+}
+
+func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.PreparedNumericMetadata {
+	if metadata == nil {
+		return nil
+	}
+	return &plan.PreparedNumericMetadata{
+		Fallback:             metadata.Fallback,
+		ParamPos:             metadata.ParamPos,
+		FallbackSource:       metadata.FallbackSource,
+		FallbackSourceNodeId: metadata.FallbackSourceNodeId,
+		FallbackSourceColPos: metadata.FallbackSourceColPos,
+	}
 }
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
@@ -2886,7 +2958,10 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
-	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
+	rule := &decrementParamOrdinalRule{
+		seen:         make(map[*plan.ParamRef]struct{}),
+		seenFallback: make(map[*plan.Expr]struct{}),
+	}
 	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
 	if err := visit.Visit(ctx); err != nil {
 		return err
@@ -3778,6 +3853,15 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "cast" && isExplicitPreparedCast(expr) {
+			// The user-selected cast owns the parameter domain. Its direct marker
+			// does not require runtime specialization, but a nested expression can
+			// still contain a genuinely deferred overload of its own.
+			for _, arg := range exprImpl.F.Args {
+				rule.scanExpr(arg, false)
+			}
+			return
+		}
 		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
 			for argIndex, arg := range exprImpl.F.Args {
 				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
@@ -3821,6 +3905,9 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 
 func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {
 	if !preparedExprContainsParam(expr) {
+		return false
+	}
+	if isExplicitPreparedCast(expr) {
 		return false
 	}
 	// A comparison against a table column already has a prepare-time cast to
@@ -4012,6 +4099,19 @@ func preparedRuntimeParamTypeCandidates() []types.Type {
 // with a same-domain literal is otherwise handled by the cached parameter
 // executor.
 func FillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
+}
+
+// FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time
+// path for a prepared plan whose deferred numeric overload positions were
+// computed when the plan was built. The caller has already made the
+// eligibility decision, so this uses the normal specialization walk without
+// changing the cached plan in place.
+func FillValuesOfParamsInPlanWithPreparedNumericOverload(
 	ctx context.Context,
 	preparePlan *Plan,
 	paramVals []any,
@@ -5476,6 +5576,12 @@ func replaceParamVals(
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.setPreparedPlan(plan0)
+	// Keep the original execute-time values and protocol categories on the
+	// rebinding rule.  The plan parameters above intentionally use their
+	// prepare-time transport literals; overloaded functions such as ABS need
+	// the runtime category to select an exact integer/decimal overload.
+	paramRule.SetParamValues(paramVals)
 	if preserveDMLWrites {
 		paramRule.preserveRoots = preparedDMLWriteExpressions(plan0.GetQuery())
 	}
@@ -6253,4 +6359,67 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 	}
 	pk := tableDef.GetPkey()
 	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
+}
+
+// isExecutionConstantExpr reports whether an expression is a value that is unknown at
+// plan time but CONSTANT for the whole execution: a prepared parameter marker,
+// optionally wrapped in monotone casts (`CAST(? AS DOUBLE)`).
+//
+// The distinction that matters is against a per-ROW expression such as a column
+// reference. Both are "not a literal", but only this kind can be constant-folded once
+// before a scan and used as a fixed bound; a column reference varies per row and must
+// stay a residual filter. Optimizer rules that want to admit `?` where they previously
+// demanded a literal should test this, never merely `GetLit() == nil`.
+//
+// EVERY argument of a wrapper is checked, not only the first. Some wrappers have a
+// value-affecting second argument -- `round(?, digits)` -- so `round(?, per_row_col)`
+// is a different value on every row even though argument 0 is a parameter. Following
+// argument 0 alone reports that as constant, and the bound is then peeled into one
+// scan-wide range that cannot be folded, failing the read.
+//
+// The expression must also actually CONTAIN a parameter: an all-literal expression is
+// handled by the literal path, and reporting it here would route it down the runtime
+// branch instead.
+func isExecutionConstantExpr(expr *plan.Expr) bool {
+	constant, hasParam := execConstantExpr(expr, 0)
+	return constant && hasParam
+}
+
+// execConstantExpr returns whether expr is constant for the execution, and whether it
+// contains a parameter marker at all.
+func execConstantExpr(expr *plan.Expr, depth int) (constant, hasParam bool) {
+	if expr == nil || depth > 8 {
+		return false, false
+	}
+	if expr.GetP() != nil {
+		return true, true
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return true, false // fixed for the execution, but not a parameter
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return false, false
+	}
+	switch fn.Func.ObjName {
+	case "cast":
+		// Argument 1 is the TARGET TYPE, not a value, so only argument 0 carries data.
+		return execConstantExpr(fn.Args[0], depth+1)
+	case "round", "floor", "ceil":
+		// Every argument here is a value, and every one of them affects the result:
+		// round(x, digits) moves with digits. Checking argument 0 alone would accept
+		// round(?, per_row_col).
+		for _, arg := range fn.Args {
+			argConst, argParam := execConstantExpr(arg, depth+1)
+			if !argConst {
+				return false, false
+			}
+			hasParam = hasParam || argParam
+		}
+		return true, hasParam
+	default:
+		// An unlisted function may have any arity or any per-row argument; refuse
+		// rather than guess which of its arguments are value-affecting.
+		return false, false
+	}
 }

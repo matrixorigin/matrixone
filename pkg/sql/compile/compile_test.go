@@ -1908,6 +1908,27 @@ func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T)
 		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
+func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(function.VAR_POP) << 32},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
+	require.False(t, c.supportsRemoteVarianceAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep exponent-scaled variance state local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+	require.True(t, c.supportsRemoteVarianceAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
 func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, _ := newShuffleGroupTestNodes(16)

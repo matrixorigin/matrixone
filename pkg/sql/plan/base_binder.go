@@ -332,7 +332,8 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	}
 	internal := t.InternalType
 	switch defines.MysqlType(internal.Oid) {
-	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
 		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
@@ -1200,6 +1201,12 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	// hasParamRef identifies an actual prepared marker in the scanned
+	// expression. hasParam is broader: scalar subqueries use it to preserve
+	// deferred numeric-context propagation even when their result type cannot
+	// be inferred statically. Callers that need to distinguish a marker from a
+	// deferred-but-unknown scalar expression must use hasParamRef.
+	hasParamRef  bool
 	hasVar       bool
 	hasUnknown   bool
 	incompatible bool
@@ -1209,6 +1216,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.hasParamRef = s.hasParamRef || other.hasParamRef
 	s.hasVar = s.hasVar || other.hasVar
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
@@ -1268,7 +1276,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
-		return numericAstTypeScan{hasParam: true}, nil
+		return numericAstTypeScan{hasParam: true, hasParamRef: true}, nil
 	case *tree.VarExpr:
 		if expr.System {
 			return numericAstTypeScan{hasUnknown: true}, nil
@@ -1283,13 +1291,12 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
 		}
-		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
-		// Keep scalar subqueries as deferred parameter-bearing operands even
-		// when their projection type cannot be determined statically. This
-		// preserves assignment-target propagation for expressions whose
-		// parameters are hidden behind unsupported projection shapes.
-		scan.hasParam = true
-		return scan, err
+		// A scalar subquery is only parameter-bearing when its projection really
+		// contains a marker.  Unknown result type and parameter provenance are
+		// separate states: treating every literal scalar subquery as a parameter
+		// would make an otherwise statically typed expression enter the deferred
+		// numeric overload path.
+		return b.numericScalarSubqueryAstTypes(expr, depth)
 	case *tree.ParenExpr:
 		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
@@ -1315,7 +1322,32 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		return numericAstTypedOperand(typ), nil
+		scan := numericAstTypedOperand(typ)
+		// The explicit cast fixes the resulting type, but its source can still
+		// contain a prepared marker. Preserve that marker for callers that need
+		// to decide whether the value is execution-time supplied.
+		source, err := b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		scan.hasParam = source.hasParam
+		scan.hasParamRef = source.hasParamRef
+		scan.hasVar = source.hasVar
+		return scan, nil
+	case *tree.BitCastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		scan := numericAstTypedOperand(typ)
+		source, err := b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		scan.hasParam = source.hasParam
+		scan.hasParamRef = source.hasParamRef
+		scan.hasVar = source.hasVar
+		return scan, nil
 	case *tree.NumVal:
 		bound, err := b.bindNumVal(expr, Type{})
 		if err != nil {
@@ -1356,6 +1388,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 						return numericAstTypeScan{}, scanErr
 					}
 					scan.hasParam = scan.hasParam || argScan.hasParam
+					scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
 					scan.hasVar = scan.hasVar || argScan.hasVar
 				}
 				return scan, nil
@@ -1367,6 +1400,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					return numericAstTypeScan{}, scanErr
 				}
 				scan.hasParam = scan.hasParam || argScan.hasParam
+				scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
 				scan.hasVar = scan.hasVar || argScan.hasVar
 			}
 			return scan, nil
@@ -1374,7 +1408,22 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if !makeTypeByPlan2Type(typ).IsNumeric() {
 			return numericAstTypeScan{}, nil
 		}
-		return numericAstTypedOperand(typ), nil
+		scan := numericAstTypedOperand(typ)
+		// A statically known return type does not mean that all of the
+		// expression's inputs are known at prepare time. Preserve marker and
+		// variable provenance through this branch as well; otherwise a nested
+		// expression such as ABS((SELECT ROUND(? + 0))) can silently lose the
+		// marker after ROUND's integer type is inferred.
+		for _, arg := range expr.Exprs {
+			argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+			if scanErr != nil {
+				return numericAstTypeScan{}, scanErr
+			}
+			scan.hasParam = scan.hasParam || argScan.hasParam
+			scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+			scan.hasVar = scan.hasVar || argScan.hasVar
+		}
+		return scan, nil
 	case *tree.CaseExpr:
 		var scan numericAstTypeScan
 		for _, when := range expr.Whens {
@@ -1402,6 +1451,16 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			}
 		}
 		return numericAstTypeScan{hasUnknown: true}, nil
+	case *tree.Tuple:
+		var scan numericAstTypeScan
+		for _, item := range expr.Exprs {
+			itemScan, err := b.numericAstTypesInternalWithHint(item, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(itemScan)
+		}
+		return scan, nil
 	default:
 		return numericAstTypeScan{}, nil
 	}
@@ -1536,6 +1595,13 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	case *tree.ParenSelect:
 		owner = selectStmt.Select
 	default:
+		// Keep the scanner independent of the parser's choice of wrapper. A
+		// scalar subquery can be represented directly by a SELECT clause or a
+		// UNION statement in unit-constructed ASTs, and both still expose the
+		// same numeric projection information.
+		owner = &tree.Select{Select: subquery.Select}
+	}
+	if owner == nil || owner.Select == nil {
 		return numericAstTypeScan{}, nil
 	}
 	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
@@ -2776,6 +2842,23 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNotSupported(b.GetContext(),
 			"ordered-set percentile window functions")
 	}
+	// Resolve ambiguous scalar numeric overloads while the statement is being
+	// prepared. The parameter itself remains a ParamRef under the DOUBLE cast;
+	// ABS records this fallback so execution can rebind integer protocol values
+	// exactly, while SLEEP keeps the stable DOUBLE domain for the cached plan.
+	if b.builder != nil && b.builder.isPrepareStatement {
+		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
+			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sleep")) {
+			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
+			if err != nil {
+				return nil, err
+			}
+			if !hasPreparedParam {
+				return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+			}
+			return b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+		}
+	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 
@@ -2824,11 +2907,45 @@ func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, e
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "grouping", args)
 }
 
+// hasPreparedNumericParamExprs uses the same numeric AST scan that drives
+// assignment/operator context inference.  Keeping parameter discovery in that
+// scanner is important: it understands scalar subqueries, selective CASE/IF
+// result arguments, aliases/CTEs, and the other numeric expression forms that
+// may be introduced by the parser.  A second hand-maintained AST allowlist can
+// silently route an omitted form back to the broken integer overload.
+func (b *baseBinder) hasPreparedNumericParamExprs(exprs []tree.Expr, depth int32) (bool, error) {
+	for _, expr := range exprs {
+		scan, err := b.numericAstTypesInternalWithHint(
+			expr, depth, b.numericAstColumnResolver(), nil,
+		)
+		if err != nil {
+			return false, err
+		}
+		if scan.hasParamRef {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
+	// ABS and SLEEP both have integer and floating-point overloads. A bare
+	// prepared parameter has TEXT transport type at PREPARE time, so letting
+	// the generic overload resolver choose an integer cast makes valid binary
+	// executions such as ABS(-1.5) and SLEEP(0.01) fail before the function can
+	// see the value. Use DOUBLE as the deferred prepare-time domain. ABS marks
+	// that fallback so execution can restore an exact integer overload when the
+	// protocol reports an integer parameter; explicit user DOUBLE casts remain
+	// ordinary DOUBLE expressions.
+	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sleep")) {
+		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
 	if isPreparedNumericAggregate(name, argCount) {
 		return nil, true
 	}
@@ -2838,6 +2955,239 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 		return &target, true
 	}
 	return nil, false
+}
+
+func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {
+	if expr == nil {
+		return
+	}
+	metadata := ensurePreparedNumericMetadata(expr)
+	metadata.Fallback = true
+	// Keep an explicitly invalid position until a marker is found.  Protobuf's
+	// int32 zero value is a valid marker position, so leaving the field at zero
+	// would make a malformed/legacy fallback look as though it belonged to the
+	// first parameter.
+	metadata.ParamPos = -1
+	pos, ok := firstPlanParamPosition(expr)
+	if !ok {
+		pos, ok = b.firstPreparedParamPosition(expr, make(map[int32]struct{}))
+	}
+	if ok && pos >= 0 {
+		metadata.ParamPos = pos
+		// Scalar subqueries are flattened into a projected column before the
+		// execute-time replacement rule runs.  Keep the same provenance on the
+		// inner projection so rebinding can restore the complete expression
+		// (for example ROUND(?) or ? + 0) instead of replacing the projected
+		// column with the raw parameter and silently dropping the subquery.
+		_, _, _ = b.markPreparedNumericSubquerySources(expr, pos, make(map[int32]struct{}))
+	}
+}
+
+func firstPlanParamPosition(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if pos, ok := firstPlanParamPosition(arg); ok {
+				return pos, true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if pos, ok := firstPlanParamPosition(item); ok {
+				return pos, true
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return firstPlanParamPosition(sub.Child)
+	}
+	return 0, false
+}
+
+// firstPreparedParamPosition extends firstPlanParamPosition to the query
+// nodes referenced by scalar subqueries.  Expr_Sub.Child contains the left
+// operand for quantified subqueries, but a scalar subquery's actual parameter
+// normally lives in its PROJECT node, so it is not visible from the expression
+// wrapper after binding.
+func (b *baseBinder) firstPreparedParamPosition(expr *plan.Expr, visited map[int32]struct{}) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if pos, ok := firstPlanParamPosition(expr); ok {
+		return pos, true
+	}
+	if sub := expr.GetSub(); sub != nil && b.builder != nil && b.builder.qry != nil &&
+		sub.Typ == plan.SubqueryRef_SCALAR && sub.NodeId >= 0 && int(sub.NodeId) < len(b.builder.qry.Nodes) {
+		if _, ok := visited[sub.NodeId]; ok {
+			return 0, false
+		}
+		visited[sub.NodeId] = struct{}{}
+		node := b.builder.qry.Nodes[sub.NodeId]
+		if node != nil {
+			for _, projection := range node.ProjectList {
+				if pos, ok := b.firstPreparedParamPosition(projection, visited); ok {
+					return pos, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func (b *baseBinder) markPreparedNumericSubquerySources(
+	expr *plan.Expr,
+	pos int32,
+	visited map[int32]struct{},
+) (int32, int32, bool) {
+	if expr == nil {
+		return 0, 0, false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if nodeID, colPos, ok := b.markPreparedNumericSubquerySources(arg, pos, visited); ok {
+				metadata := ensurePreparedNumericMetadata(expr)
+				metadata.FallbackSource = true
+				metadata.FallbackSourceNodeId = nodeID
+				metadata.FallbackSourceColPos = colPos
+				return nodeID, colPos, true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if nodeID, colPos, ok := b.markPreparedNumericSubquerySources(item, pos, visited); ok {
+				metadata := ensurePreparedNumericMetadata(expr)
+				metadata.FallbackSource = true
+				metadata.FallbackSourceNodeId = nodeID
+				metadata.FallbackSourceColPos = colPos
+				return nodeID, colPos, true
+			}
+		}
+	case *plan.Expr_Sub:
+		if exprImpl.Sub == nil || exprImpl.Sub.Typ != plan.SubqueryRef_SCALAR ||
+			b.builder == nil || b.builder.qry == nil || exprImpl.Sub.NodeId < 0 ||
+			int(exprImpl.Sub.NodeId) >= len(b.builder.qry.Nodes) {
+			if exprImpl.Sub != nil {
+				return b.markPreparedNumericSubquerySources(exprImpl.Sub.Child, pos, visited)
+			}
+			return 0, 0, false
+		}
+		if _, ok := visited[exprImpl.Sub.NodeId]; ok {
+			return 0, 0, false
+		}
+		visited[exprImpl.Sub.NodeId] = struct{}{}
+		node := b.builder.qry.Nodes[exprImpl.Sub.NodeId]
+		if node == nil {
+			return 0, 0, false
+		}
+		for colPos, projection := range node.ProjectList {
+			if projection == nil || !planExprContainsParamPosition(projection, pos) {
+				continue
+			}
+			projectionMetadata := ensurePreparedNumericMetadata(projection)
+			projectionMetadata.Fallback = true
+			projectionMetadata.ParamPos = pos
+			projectionMetadata.FallbackSource = true
+			projectionMetadata.FallbackSourceNodeId = exprImpl.Sub.NodeId
+			projectionMetadata.FallbackSourceColPos = int32(colPos)
+			exprMetadata := ensurePreparedNumericMetadata(expr)
+			exprMetadata.FallbackSource = true
+			exprMetadata.FallbackSourceNodeId = exprImpl.Sub.NodeId
+			exprMetadata.FallbackSourceColPos = int32(colPos)
+			b.markPreparedNumericSubquerySources(projection, pos, visited)
+			return exprImpl.Sub.NodeId, int32(colPos), true
+		}
+	}
+	return 0, 0, false
+}
+
+func planExprContainsParamPosition(expr *plan.Expr, pos int32) bool {
+	if expr == nil {
+		return false
+	}
+	found := false
+	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+		if param := candidate.GetP(); param != nil && param.Pos == pos {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
+func containsExplicitFloatCast(expr tree.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *tree.CastExpr:
+		if typ, ok := e.Type.(*tree.T); ok {
+			switch defines.MysqlType(typ.InternalType.Oid) {
+			case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
+				return true
+			}
+		}
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.BitCastExpr:
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.BinaryExpr:
+		return containsExplicitFloatCast(e.Left) || containsExplicitFloatCast(e.Right)
+	case *tree.UnaryExpr:
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.ParenExpr:
+		return containsExplicitFloatCast(e.Expr)
+	case *tree.FuncExpr:
+		return containsExplicitFloatCasts(e.Exprs)
+	case *tree.CaseExpr:
+		if containsExplicitFloatCast(e.Expr) {
+			return true
+		}
+		for _, when := range e.Whens {
+			if when != nil && (containsExplicitFloatCast(when.Cond) || containsExplicitFloatCast(when.Val)) {
+				return true
+			}
+		}
+		return containsExplicitFloatCast(e.Else)
+	case *tree.Tuple:
+		return containsExplicitFloatCasts(e.Exprs)
+	case *tree.Subquery:
+		return containsExplicitFloatCastInSelect(e.Select)
+	default:
+		return false
+	}
+}
+
+func containsExplicitFloatCasts(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if containsExplicitFloatCast(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return containsExplicitFloatCastInSelect(stmt.Select)
+	case *tree.ParenSelect:
+		return containsExplicitFloatCastInSelect(stmt.Select)
+	case *tree.UnionClause:
+		return containsExplicitFloatCastInSelect(stmt.Left) || containsExplicitFloatCastInSelect(stmt.Right)
+	case *tree.SelectClause:
+		for _, item := range stmt.Exprs {
+			if containsExplicitFloatCast(item.Expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
@@ -2856,9 +3206,16 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
+	// Binding can normalize the parsed CAST node in place. Snapshot the user's
+	// explicit floating-point boundary before that mutation so
+	// ABS(CAST(? AS DOUBLE)) remains on its fixed DOUBLE overload.
+	hasExplicitFloatCast := containsExplicitFloatCast(astArgs[0])
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
+	}
+	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
+		b.markPreparedNumericFallback(arg)
 	}
 	return bindFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},

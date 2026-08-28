@@ -1274,6 +1274,12 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 		if err != nil {
 			continue
 		}
+		// Values that still need coercion can make the binder expand the IN back
+		// into an OR-of-equalities. That is not a merge and must not be reported
+		// as progress to normalizeColumnDomain's fixpoint loop.
+		if mergedFn := merged.GetF(); mergedFn != nil && mergedFn.Func.ObjName == "or" {
+			continue
+		}
 		for _, pos := range group.positions {
 			skip[pos] = struct{}{}
 		}
