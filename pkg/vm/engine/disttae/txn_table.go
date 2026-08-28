@@ -441,6 +441,13 @@ func ForeachVisibleObjects(
 		if firstErr != nil {
 			return firstErr
 		}
+		// Executor shutdown is a failed traversal even when a running callback
+		// ignores taskCtx and happens to return nil. Without this check, the
+		// caller can publish a partial accumulator after the executor lifecycle
+		// has already canceled the work group.
+		if cause := context.Cause(taskCtx); cause != nil {
+			return cause
+		}
 	}
 	if err != nil {
 		return err

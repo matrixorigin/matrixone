@@ -107,6 +107,13 @@ It intentionally does not provide:
    queued request, carries a non-nil scheduling-record pointer as its lifetime
    token. Logtail's cache-existence check and token capture use the same cleanup
    lock order, so removal cannot fall between those two producer steps.
+8. An explicit refresh creates its table-lifetime token only after subscription
+   and catalog resolution succeed, while holding the subscription lifecycle
+   read lock. A failed subscription therefore retains no scheduling entry, and
+   unsubscribe cleanup cannot fall between validation and token capture.
+9. A first statistics read whose subscription fails returns without enqueueing
+   automatic work. Retrying through the worker queue would create cache and
+   scheduling state before any subscription lifetime can own its cleanup.
 
 ## 4. Identity and visibility
 
@@ -208,7 +215,8 @@ The terminal behavior is:
 | --- | --- | --- | --- | --- |
 | derived query fails | unchanged | unchanged | unchanged | error |
 | frontend admission canceled | unchanged | unchanged | unchanged | cancellation |
-| explicit subscribe/catalog resolution fails | unchanged | unchanged | unchanged | error |
+| explicit subscribe/catalog resolution fails | unchanged | no generation retained before a cleanup owner exists | unchanged | error |
+| initial statistics-read subscription fails | unchanged | no automatic work or generation admitted | unchanged | no statistics |
 | automatic subscribe/catalog resolution fails | last-good entry retained; nil completion sentinel only when absent | failed generation closed | unchanged | not an ANALYZE result |
 | task submission canceled/rejected | unchanged | failed generation closed | unchanged | error |
 | object task fails or is canceled | unchanged; local partial object discarded | failed generation closed | unchanged | error |
@@ -226,7 +234,9 @@ error and waits for all admitted work before returning. Waiting is required
 because callbacks mutate a refresh-local accumulator; returning early would let
 old work race a discarded accumulator. Callback I/O receives the request
 context, so cancellation terminates the expensive work without polling or
-sleeps.
+sleeps. After joining all admitted work, traversal also checks the shared task
+context itself: executor shutdown remains a failed traversal even if a running
+callback ignored cancellation and returned `nil`.
 
 Cancellation and deadline errors remain cancellation/deadline errors at the
 public refresh boundary. Other object/metadata failures may be wrapped with
@@ -328,9 +338,12 @@ checks on affected plan-cache hits.
 | failed engine refresh does not advance/cache | frontend publisher failure UT |
 | one successful and one failed object task rejects partial stats | concurrent visible-object UT |
 | pre-canceled, in-flight canceled, and shutdown-rejected work terminates | executor/visible-object cancellation UT |
+| shutdown cannot become success when an in-flight callback returns nil | executor-lifecycle traversal UT |
 | same-table refresh order; unrelated-table concurrency | frontend and engine admission race UT |
 | failed automatic refresh preserves last-good stats and completes an absent first generation | injected subscribe-failure state-transition UT |
 | table cleanup reclaims both statistics and refresh-scheduling entries; first-queued, late automatic, and late explicit work cannot recreate them or target a replacement lifetime | `RemoveTid` ownership/generation UT |
+| failed explicit subscription creates no ownerless scheduling generation | injected subscribe-failure UT |
+| failed initial-read subscription queues no ownerless automatic generation | injected subscribe-failure UT |
 | slow generation-N read cannot overwrite N+1 | session-cache race UT |
 | plan build spanning publication is not cached | plan-cache generation UT |
 | physical account/view/temporary/transaction rules | focused frontend table-driven UT and ANALYZE BVT |

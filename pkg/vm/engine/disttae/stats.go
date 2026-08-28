@@ -409,6 +409,25 @@ func (gs *GlobalStats) currentOrCreateUpdateRecord(key pb.StatsInfoKey) *updateR
 	return rec
 }
 
+// currentOrCreateSubscribedUpdateRecord captures the scheduling generation
+// only while the subscription that owns its cleanup is still current. Explicit
+// refreshes call this after toSubscribeTable succeeds, so a failed subscription
+// cannot leave metadata that no unsubscribe path can reclaim. Holding the
+// subscription read lock across record creation also prevents cleanup from
+// falling between subscription validation and token capture.
+func (gs *GlobalStats) currentOrCreateSubscribedUpdateRecord(
+	key pb.StatsInfoKey,
+) (*updateRecord, bool) {
+	gs.engine.pClient.subscribed.rw.RLock()
+	defer gs.engine.pClient.subscribed.rw.RUnlock()
+
+	ent, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || ent == nil || ent.dbID != key.DatabaseID || ent.state != Subscribed {
+		return nil, false
+	}
+	return gs.currentOrCreateUpdateRecord(key), true
+}
+
 func (gs *GlobalStats) subscribedEntry(key pb.StatsInfoKey) *subEntry {
 	gs.engine.pClient.subscribed.rw.RLock()
 	defer gs.engine.pClient.subscribed.rw.RUnlock()
@@ -482,7 +501,13 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		key.DatabaseID,
 		key.DbName)
 
-	if err == nil && ps.ApproxDataObjectsNum() == 0 {
+	if err != nil {
+		// A failed initial subscription has no table-lifetime cleanup owner.
+		// Retrying through updateC would create a scheduling generation (and
+		// potentially a nil cache sentinel) that RemoveTid can never reclaim.
+		return nil
+	}
+	if ps.ApproxDataObjectsNum() == 0 {
 		return nil
 	}
 
@@ -1171,7 +1196,6 @@ func (gs *GlobalStats) refreshStatsWithMode(
 		return nil, err
 	}
 	defer release()
-	generation := gs.currentOrCreateUpdateRecord(key)
 
 	// Get partition state
 	ps, err := gs.engine.pClient.toSubscribeTable(
@@ -1189,6 +1213,15 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	if table == nil || table.TableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
+	}
+
+	// The subscription owns eventual RemoveTid cleanup. Capture the refresh
+	// generation only after subscription and catalog resolution succeed, and
+	// only while that exact subscription lifetime is still current.
+	generation, ok := gs.currentOrCreateSubscribedUpdateRecord(key)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"table statistics refresh crossed subscription boundary for table %d", key.TableID)
 	}
 
 	// Create stats info

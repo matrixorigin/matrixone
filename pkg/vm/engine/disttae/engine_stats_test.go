@@ -19,6 +19,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -201,4 +202,76 @@ func TestCoordinateStatsUpdateSubscribeFailurePreservesLastPublishedStats(t *tes
 			"the first failed automatic generation must still wake synchronous waiters")
 		require.Nil(t, got)
 	})
+}
+
+func TestExplicitStatsRefreshSubscribeFailureDoesNotRetainGeneration(t *testing.T) {
+	key := pb.StatsInfoKey{
+		AccId: 1, DatabaseID: 10, TableID: 42, DbName: "db", TableName: "events",
+	}
+	gs := &GlobalStats{engine: &Engine{}}
+	gs.initStatsRefreshAdmission()
+	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+
+	fault.Enable()
+	t.Cleanup(func() { fault.Disable() })
+	removeFault, err := objectio.InjectLogging(
+		objectio.FJ_CNSubscribeTableFail, key.DbName, key.TableName, 0, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(removeFault)
+
+	stats, err := gs.refreshStatsWithMode(context.Background(), key, "auto")
+	require.Error(t, err)
+	require.Nil(t, stats)
+
+	gs.updatingMu.Lock()
+	_, retained := gs.updatingMu.updating[key]
+	gs.updatingMu.Unlock()
+	require.False(t, retained,
+		"a failed subscription has no cleanup owner and must not create a generation")
+}
+
+func TestInitialStatsGetSubscribeFailureDoesNotQueueOwnerlessGeneration(t *testing.T) {
+	key := pb.StatsInfoKey{
+		AccId: 1, DatabaseID: 10, TableID: 42, DbName: "db", TableName: "events",
+	}
+	gs := &GlobalStats{
+		engine:       &Engine{},
+		updateC:      make(chan statsUpdateJob, 1),
+		queueWatcher: newQueueWatcher(),
+	}
+	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+	gs.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+	gs.mu.cond = sync.NewCond(&gs.mu)
+
+	fault.Enable()
+	t.Cleanup(func() { fault.Disable() })
+	removeFault, err := objectio.InjectLogging(
+		objectio.FJ_CNSubscribeTableFail, key.DbName, key.TableName, 0, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(removeFault)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan *pb.StatsInfo, 1)
+	go func() { result <- gs.Get(ctx, key, true) }()
+
+	select {
+	case got := <-result:
+		require.Nil(t, got)
+	case <-gs.updateC:
+		cancel()
+		<-result
+		t.Fatal("a failed initial subscription queued work without a cleanup owner")
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("stats get did not terminate after subscription failure")
+	}
+
+	gs.updatingMu.Lock()
+	_, retained := gs.updatingMu.updating[key]
+	gs.updatingMu.Unlock()
+	require.False(t, retained)
+	require.Empty(t, gs.updateC)
 }

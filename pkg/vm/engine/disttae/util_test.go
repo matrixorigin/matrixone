@@ -879,6 +879,45 @@ func TestForeachVisibleObjectsCancelsInFlightTaskOnExecutorShutdown(t *testing.T
 	}
 }
 
+func TestForeachVisibleObjectsRejectsExecutorShutdownWhenTaskReturnsNil(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	ex := newConcurrentExecutor(1)
+	executorCtx, stopExecutor := context.WithCancel(context.Background())
+	t.Cleanup(stopExecutor)
+	ex.Run(executorCtx)
+
+	taskStarted := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- ForeachVisibleObjects(
+			context.Background(), state, types.MaxTs(),
+			func(taskCtx context.Context, _ objectio.ObjectEntry) error {
+				close(taskStarted)
+				<-taskCtx.Done()
+				// Model a callback that observes shutdown only as a release
+				// signal and fails to propagate the context error itself.
+				return nil
+			},
+			ex,
+			false,
+		)
+	}()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start the admitted visible-object task")
+	}
+	stopExecutor()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled,
+			"executor shutdown must remain visible even when a callback returns nil")
+	case <-time.After(time.Second):
+		t.Fatal("visible-object traversal did not join the shutdown task")
+	}
+}
+
 func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {
 	ctx := context.Background()
 	state := logtailreplay.NewPartitionState("", true, 42, false)
