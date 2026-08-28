@@ -1581,6 +1581,14 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
+					// Clearing the cache is also the explicit synchronization point
+					// for externally changed role membership. Refresh it now, outside
+					// the caller's transaction snapshot, instead of allowing the next
+					// authorization check to repopulate the cache from stale state.
+					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
+					if err != nil {
+						return err
+					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -1588,13 +1596,16 @@ func doSetVar(
 				}
 			}
 		} else if assign.System && name == "enable_privilege_cache" {
-			ok, err = valueIsBoolTrue(value)
+			_, err = valueIsBoolTrue(value)
 			if err != nil {
 				return err
 			}
 
-			//disable privilege cache. clean the cache.
-			if !ok {
+			// Every session cache-mode assignment is a synchronization boundary.
+			// In particular, enabling must discard decisions that may have been
+			// produced while caching was disabled before a concurrent REVOKE.
+			// SET GLOBAL does not change this session's cache mode.
+			if !assign.Global {
 				cache := ses.GetPrivilegeCache()
 				if cache != nil {
 					cache.invalidate()
@@ -2770,7 +2781,10 @@ func createPrepareStmtInSession(
 		protocolVersion:    protocolVersion,
 		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
-		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan),
+		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
+			prepareControl.Plan),
+		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
+			prepareControl.Plan),
 		directResultParamPositionsSet: true,
 		hasPaginationParams:           plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
 		hasLagLeadParams:              len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
@@ -5330,6 +5344,35 @@ func countUpdateChangedRows(ses *Session) bool {
 	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
 }
 
+// rollbackWholeTxnOnPreExecutionError applies mo_rollback_txn_on_error to a
+// failure that never reached the executor.
+//
+// A parse error or a privilege rejection returns from doComQuery long before
+// finishTxnFunc, which is where the setting is otherwise honoured. Without this
+// the setting would quietly mean "any error the executor produced", exempting
+// the ones that never got that far: with it on,
+// `BEGIN; INSERT ...; selec 1; COMMIT;` would still COMMIT the row.
+//
+// It is called from the defer every COM_QUERY error path converges on. A
+// statement that already rolled back has left no active transaction, so the
+// guard below makes this a no-op for the errors finishTxnFunc handled, rather
+// than rolling back twice.
+func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
+	if !sessionRollsBackTxnOnError(ses, retErr) {
+		return
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
+		return
+	}
+	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
+		// The statement's own error is what the client asked about; a failure
+		// to roll back is logged, not substituted for it.
+		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
+			zap.Error(rbErr), zap.Error(retErr))
+	}
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
@@ -5424,9 +5467,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// is reseeded from the session on the next query, so the session value drives
 	// the next statement; the proc is updated too for completeness.
 	defer func() {
-		if retErr != nil {
-			markRowCountFailed(ses, proc)
+		if retErr == nil {
+			return
 		}
+		markRowCountFailed(ses, proc)
+
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
 	}()
 
 	if ses.GetTenantInfo() != nil {

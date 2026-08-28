@@ -1040,6 +1040,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	cancelTxnCreateWithRequest      bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64

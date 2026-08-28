@@ -1912,6 +1912,43 @@ func TestCloseCancelsAdmittedSnapshotWait(t *testing.T) {
 	)
 }
 
+func TestRequestCancelCleansAdmittedSnapshotWait(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(ctx, timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("admitted transaction did not enter snapshot wait")
+			}
+			cancel()
+
+			select {
+			case err := <-errC:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("admitted snapshot wait did not return after request cancellation")
+			}
+
+			client := tc.(*txnClient)
+			require.Zero(t, client.atomic.activeTxnCount.Load())
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			require.Zero(t, client.mu.users)
+			require.Empty(t, client.mu.waitActiveTxns)
+		},
+		WithTimestampWaiter(waiter),
+	)
+}
+
 func TestCloseCancelsRealTimestampWait(t *testing.T) {
 	tw := NewTimestampWaiter(runtime.DefaultRuntime().Logger()).(*timestampWaiter)
 	defer tw.Close()
@@ -2014,32 +2051,56 @@ func TestCloseCancelsLegacySnapshotWait(t *testing.T) {
 }
 
 func TestCloseCancelsWaitLogTailAppliedAt(t *testing.T) {
-	waiter := &legacyBlockingTimestampWaiter{entered: make(chan struct{}, 1)}
-	RunTxnTests(
-		func(tc TxnClient, _ rpc.TxnSender) {
-			client := tc.(*txnClient)
-			errC := make(chan error, 1)
-			go func() {
-				_, err := client.WaitLogTailAppliedAt(context.Background(), timestamp.Timestamp{})
-				errC <- err
-			}()
-
-			select {
-			case <-waiter.entered:
-			case <-time.After(time.Second):
-				t.Fatal("WaitLogTailAppliedAt did not enter timestamp wait")
-			}
-
-			require.NoError(t, tc.Close())
-			select {
-			case err := <-errC:
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
-			case <-time.After(time.Second):
-				t.Fatal("WaitLogTailAppliedAt did not return after client close")
-			}
+	tests := []struct {
+		name      string
+		newWaiter func() (TimestampWaiter, <-chan struct{})
+	}{
+		{
+			name: "close-aware waiter",
+			newWaiter: func() (TimestampWaiter, <-chan struct{}) {
+				waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+				return waiter, waiter.entered
+			},
 		},
-		WithTimestampWaiter(waiter),
-	)
+		{
+			name: "legacy waiter",
+			newWaiter: func() (TimestampWaiter, <-chan struct{}) {
+				waiter := &legacyBlockingTimestampWaiter{entered: make(chan struct{}, 1)}
+				return waiter, waiter.entered
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			waiter, entered := tt.newWaiter()
+			RunTxnTests(
+				func(tc TxnClient, _ rpc.TxnSender) {
+					client := tc.(*txnClient)
+					errC := make(chan error, 1)
+					go func() {
+						_, err := client.WaitLogTailAppliedAt(context.Background(), timestamp.Timestamp{})
+						errC <- err
+					}()
+
+					select {
+					case <-entered:
+					case <-time.After(time.Second):
+						t.Fatal("WaitLogTailAppliedAt did not enter timestamp wait")
+					}
+
+					require.NoError(t, tc.Close())
+					select {
+					case err := <-errC:
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+					case <-time.After(time.Second):
+						t.Fatal("WaitLogTailAppliedAt did not return after client close")
+					}
+				},
+				WithTimestampWaiter(waiter),
+			)
+		})
+	}
 }
 
 func TestCanceledMaxActiveWaitRemovesQueueEntry(t *testing.T) {
@@ -2381,6 +2442,42 @@ func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
 	v.mu.Lock()
 	assert.Equal(t, 0, len(v.mu.waitActiveTxns))
 	v.mu.Unlock()
+}
+
+func TestDetermineTxnSnapshotHonorsMinimum(t *testing.T) {
+	tests := []struct {
+		name                       string
+		enableSacrificingFreshness bool
+		minimum                    timestamp.Timestamp
+		want                       timestamp.Timestamp
+	}{
+		{
+			name:    "freshness mode preserves a later caller minimum",
+			minimum: timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7},
+			want:    timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7},
+		},
+		{
+			name:    "freshness mode advances an older caller minimum",
+			minimum: timestamp.Timestamp{PhysicalTime: 50},
+			want:    timestamp.Timestamp{PhysicalTime: 100},
+		},
+		{
+			name:                       "sacrificing freshness keeps caller minimum",
+			enableSacrificingFreshness: true,
+			minimum:                    timestamp.Timestamp{PhysicalTime: 50},
+			want:                       timestamp.Timestamp{PhysicalTime: 50},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &txnClient{
+				clock:                      clock.NewHLCClock(func() int64 { return 100 }, 0),
+				enableSacrificingFreshness: tt.enableSacrificingFreshness,
+			}
+			require.Equal(t, tt.want, client.determineTxnSnapshot(tt.minimum))
+		})
+	}
 }
 
 func TestWaitAbortMarked(t *testing.T) {

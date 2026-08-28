@@ -351,6 +351,11 @@ type PrepareStmt struct {
 	hasLagLeadParams              bool
 	paramKinds                    []vector.PrepareParamKind
 	paramMetadata                 []bool
+	// numericOverloadParamPositions is computed from explicit plan metadata
+	// once per prepared-plan generation.  It identifies ABS arguments whose
+	// runtime integer/decimal domain may require overload rebinding without
+	// rescanning the full plan for every EXECUTE.
+	numericOverloadParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -705,6 +710,9 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExecOption struct {
 	fromRealUser       bool
 	forcePessimisticRC bool
+	// cancelTxnCreateWithRequest is reserved for short-lived background
+	// transactions whose request context owns a blocked TxnClient.New call.
+	cancelTxnCreateWithRequest bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
