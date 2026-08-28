@@ -473,6 +473,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
+	ctx.scope = s
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -613,6 +614,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
+			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
+			// This appended wire opcode is deliberately unknown to pre-v33
+			// receivers, which then fail before execution instead of silently
+			// rebuilding a legacy-hash Shuffle.
+			in.Op = int32(vm.ShuffleStable)
+		}
 		in.Shuffle = &pipeline.Shuffle{}
 		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
 		in.Shuffle.ShuffleType = t.ShuffleType
@@ -624,6 +632,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
 		in.Shuffle.DrainAllBuckets = t.DrainAllBuckets
+		in.Shuffle.StringHashKey = t.StringHashKey
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -1153,8 +1162,32 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op = arg
-	case vm.Shuffle:
+	case vm.Shuffle, vm.ShuffleStable:
 		t := opr.GetShuffle()
+		wireAlgorithm := process.StringShuffleHashLegacy
+		if vm.OpType(opr.Op) == vm.ShuffleStable {
+			wireAlgorithm = process.StringShuffleHashComplete
+		}
+		if wireAlgorithm == process.StringShuffleHashComplete &&
+			(t.ShuffleType != int32(plan.ShuffleType_Hash) || !t.StringHashKey) {
+			return nil, moerr.NewInvalidStateNoCtx(
+				"complete string shuffle hash marker requires a string-key hash shuffle")
+		}
+		processAlgorithm := process.StringShuffleHashLegacy
+		var proc *process.Process
+		if ctx != nil && ctx.scope != nil {
+			proc = ctx.scope.Proc
+		}
+		if proc != nil {
+			processAlgorithm = proc.StringShuffleHashAlgorithm()
+		}
+		if proc != nil && t.ShuffleType == int32(plan.ShuffleType_Hash) &&
+			t.StringHashKey &&
+			processAlgorithm != wireAlgorithm {
+			return nil, moerr.NewInvalidStateNoCtxf(
+				"string shuffle hash algorithm mismatch: pipeline=%d process=%d",
+				wireAlgorithm, processAlgorithm)
+		}
 		arg := shuffle.NewArgument()
 		arg.ShuffleColIdx = t.ShuffleColIdx
 		arg.ShuffleType = t.ShuffleType
@@ -1166,6 +1199,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.ShuffleExpr = t.ShuffleExpr
 		arg.DrainAllBuckets = t.DrainAllBuckets
+		arg.StringHashKey = t.StringHashKey
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1634,7 +1668,7 @@ func validateRemoteAggregateProtocol(
 		if isVarianceAggregate(agg) &&
 			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
 			return moerr.NewNotSupportedNoCtx(
-				"variance remote execution requires MORPC protocol version 32",
+				"variance remote execution requires MORPC protocol version 35",
 			)
 		}
 		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
@@ -1678,7 +1712,7 @@ func procSupportsRemoteVarianceAggregates(proc *process.Process) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion32
+	return ok && version >= defines.MORPCVersion35
 }
 
 func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {

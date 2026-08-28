@@ -2711,6 +2711,70 @@ func TestRebuildStaleCachedStatementsRemapsModeTwoQualifiedColumns(t *testing.T)
 	require.Equal(t, "dstmix", insert.ColumnNames[0].DbName())
 }
 
+func TestGetComputationWrapperRestoresCachedPlanGenerationSnapshot(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.planCache = newPlanCache(1)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	stmt := &trackedStatement{}
+	cachedPlan := &plan0.Plan{}
+	planTS := timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}
+	ses.cachePlanWithSnapshots(
+		input.getHash(),
+		[]tree.Statement{stmt},
+		[]*plan0.Plan{cachedPlan},
+		[]timestamp.Timestamp{planTS},
+	)
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = input
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	tcw := cws[0].(*TxnComputationWrapper)
+	require.Same(t, cachedPlan, tcw.Plan())
+	require.True(t, tcw.stmtBorrowed)
+	require.Equal(t, input.getHash(), tcw.cachedPlanSQL)
+	require.Same(t, cachedPlan, tcw.cachedPlanGeneration)
+	require.True(t, tcw.planGenerationReused)
+	gotTS, ok := tcw.PlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, planTS, gotTS)
+
+	tcw.Free()
+	require.Zero(t, stmt.freed)
+	ses.cleanCache()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestCachedPlanReuseWaitsForPlanSnapshotProtocol(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	ses := &Session{planCache: newPlanCache(1)}
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	ses.cachePlanWithSnapshots(
+		input.getHash(),
+		[]tree.Statement{&trackedStatement{}},
+		[]*plan0.Plan{{}},
+		[]timestamp.Timestamp{{PhysicalTime: 10}},
+		defines.MORPCVersion31,
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	// The cache entry was built under the previous protocol and is evicted
+	// rather than becoming reusable when the cluster gate advances.
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

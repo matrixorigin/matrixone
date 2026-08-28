@@ -207,7 +207,7 @@ func (exec *varStdDevExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups
 }
 
 // The legacy representation is count, sum, sum-of-squares. It is retained
-// only while a remote pipeline can still be executed by a pre-v32 CN.
+// only while a remote pipeline can still be executed by a pre-v35 CN.
 func (exec *varStdDevExec[T, A]) batchFillLegacy(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	scale := exec.aggInfo.argTypes[0].Scale

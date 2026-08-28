@@ -1757,6 +1757,14 @@ execute window_27352 using @window_bound;
 deallocate prepare window_27352;
 drop table t_window_27352;
 
+-- Regression for issue #27343: ranking vectors are unsigned at the operator
+-- boundary, so an unsigned consumer must not reinterpret its maximum value.
+drop table if exists t_window_27343;
+create table t_window_27343(id int);
+insert into t_window_27343 values (1);
+select rn from (select row_number() over () as rn from t_window_27343) ranked where rn <= cast(18446744073709551615 as unsigned);
+drop table t_window_27343;
+
 drop table t_desc;
 drop database test_range_desc;
 

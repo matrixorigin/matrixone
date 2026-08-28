@@ -410,11 +410,11 @@ func TestVarianceRemoteProtocolValidation(t *testing.T) {
 	)}
 
 	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, variance),
-		"requires MORPC protocol version 32")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+		"requires MORPC protocol version 35")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, variance),
-		"requires MORPC protocol version 32")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+		"requires MORPC protocol version 35")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, variance))
 }
 

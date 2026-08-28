@@ -503,7 +503,7 @@ func BenchmarkUpdateVarianceStateNormalRange(b *testing.B) {
 	}
 }
 
-func TestLegacyVarianceStateKeepsPreV32WireLayout(t *testing.T) {
+func TestLegacyVarianceStateKeepsPreV35WireLayout(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	param := types.New(types.T_decimal128, 38, 20)
@@ -619,7 +619,7 @@ func TestVarianceIntermediateStateWireLayouts(t *testing.T) {
 
 	for _, tc := range tests {
 		for _, legacy := range []bool{true, false} {
-			layout := "v32"
+			layout := "v35"
 			if legacy {
 				layout = "legacy"
 			}
@@ -777,7 +777,7 @@ func TestScaledStdDevIntermediateStateWireRoundTrip(t *testing.T) {
 
 	state := source.(*varStdDevExec[float64, float64])
 	exponent := vector.MustFixedColNoTypeCheck[int64](state.state[0].vecs[3])[0]
-	require.NotZero(t, exponent, "the test must exercise the v32 exponent sidecar")
+	require.NotZero(t, exponent, "the test must exercise the v35 exponent sidecar")
 
 	var wire bytes.Buffer
 	require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))

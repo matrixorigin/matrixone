@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1014,6 +1015,79 @@ func TestDoUpgrade(t *testing.T) {
 			assert.NoError(t, err)
 		},
 	)
+}
+
+func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		protocol   string
+		wantErr    bool
+		wantPrefix []string
+	}{
+		{
+			name:       "older writer blocks snapshot",
+			protocol:   `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:31"}`,
+			wantErr:    true,
+			wantPrefix: []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"},
+		},
+		{
+			name:     "all writers ready before snapshot",
+			protocol: `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:32"}`,
+			wantPrefix: []string{
+				"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+				"select account_id from mo_account where account_id > -1 order by account_id limit 16",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					h := newTestVersionHandler("2.0.0", "1.2.0", versions.No, versions.Yes, 2)
+					h.metadata.RequiredProtocolVersion = defines.MORPCVersion32
+					var calls []string
+					b := newServiceForTest(
+						sid,
+						&memLocker{},
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+							return executor.Result{}, nil
+						}),
+						func(s *service) { s.handles = []VersionHandle{h} },
+					)
+					b.upgrade.upgradeTenantBatch = 16
+
+					txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+					txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+					txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+						calls = append(calls, sql)
+						if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+							return newBootstrapStringResult(test.protocol), nil
+						}
+						return executor.Result{}, nil
+					}, txnOperator)
+
+					_, err := b.doUpgrade(context.Background(), versions.VersionUpgrade{
+						FromVersion:    "1.2.0",
+						ToVersion:      "2.0.0",
+						FinalVersion:   "2.0.0",
+						State:          versions.StateCreated,
+						UpgradeTenant:  versions.Yes,
+						UpgradeCluster: versions.No,
+					}, txnExecutor)
+					if test.wantErr {
+						require.ErrorContains(t, err, "node")
+					} else {
+						require.NoError(t, err)
+					}
+					require.GreaterOrEqual(t, len(calls), len(test.wantPrefix))
+					require.Equal(t, test.wantPrefix, calls[:len(test.wantPrefix)])
+				},
+			)
+		})
+	}
 }
 
 func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {

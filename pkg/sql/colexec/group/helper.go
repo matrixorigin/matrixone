@@ -1555,7 +1555,7 @@ func useLegacyVarianceStateForRemote(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion32
+	return !ok || !valid || version < defines.MORPCVersion35
 }
 
 // freeAggListPartial frees the first n aggregators in the list.
