@@ -1013,6 +1013,9 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
 			return nil
 		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
 		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
 			positions[pos] = struct{}{}
 		}
@@ -1030,7 +1033,30 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
-	return expr != nil && expr.PreparedNumericFallback
+	return expr != nil && expr.GetPreparedNumeric().GetFallback()
+}
+
+func ensurePreparedNumericMetadata(expr *plan.Expr) *plan.PreparedNumericMetadata {
+	if expr == nil {
+		return nil
+	}
+	if expr.PreparedNumeric == nil {
+		expr.PreparedNumeric = &plan.PreparedNumericMetadata{}
+	}
+	return expr.PreparedNumeric
+}
+
+func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.PreparedNumericMetadata {
+	if metadata == nil {
+		return nil
+	}
+	return &plan.PreparedNumericMetadata{
+		Fallback:             metadata.Fallback,
+		ParamPos:             metadata.ParamPos,
+		FallbackSource:       metadata.FallbackSource,
+		FallbackSourceNodeId: metadata.FallbackSourceNodeId,
+		FallbackSourceColPos: metadata.FallbackSourceColPos,
+	}
 }
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
@@ -3827,6 +3853,15 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "cast" && isExplicitPreparedCast(expr) {
+			// The user-selected cast owns the parameter domain. Its direct marker
+			// does not require runtime specialization, but a nested expression can
+			// still contain a genuinely deferred overload of its own.
+			for _, arg := range exprImpl.F.Args {
+				rule.scanExpr(arg, false)
+			}
+			return
+		}
 		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
 			for argIndex, arg := range exprImpl.F.Args {
 				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
@@ -3870,6 +3905,9 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 
 func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {
 	if !preparedExprContainsParam(expr) {
+		return false
+	}
+	if isExplicitPreparedCast(expr) {
 		return false
 	}
 	// A comparison against a table column already has a prepare-time cast to

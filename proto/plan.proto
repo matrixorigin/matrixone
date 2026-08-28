@@ -240,6 +240,18 @@ message Function {
   AggregateConfigType agg_config_type = 4;
 }
 
+// PreparedNumericMetadata is sparse planner provenance for a numeric overload
+// that cannot be selected until COM_STMT_EXECUTE supplies a parameter type.
+// It is kept behind one optional pointer on Expr because the metadata is rare;
+// ordinary expressions must not carry five always-resident scalar fields.
+message PreparedNumericMetadata {
+  bool fallback = 1;
+  int32 param_pos = 2;
+  bool fallback_source = 3;
+  int32 fallback_source_node_id = 4;
+  int32 fallback_source_col_pos = 5;
+}
+
 message Expr {
   Type typ = 1 [(gogoproto.nullable) = false];
   oneof expr {
@@ -262,24 +274,13 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
-  // prepared_numeric_fallback marks an expression whose numeric overload was
-  // deferred while a prepared parameter had no execute-time type.  It is
-  // planner metadata, not an executor memo identity (AuxId), and therefore
-  // survives plan copies and RPC serialization explicitly.
-  bool prepared_numeric_fallback = 19;
-  // prepared_numeric_param_pos identifies the parameter that supplies the
-  // deferred numeric value.  A negative value means the expression has no
-  // single source position (for example a malformed/legacy plan); callers
-  // must then fall back to the ordinary replacement path.
-  int32 prepared_numeric_param_pos = 20;
-  // prepared_numeric_fallback_source identifies a scalar-subquery projection
-  // that owns the deferred value.  Flattening can leave the ABS consumer with
-  // only a ColRef, so the executor uses this node/column identity to update
-  // the reference type after rebinding the inner projection.  This is
-  // explicit plan metadata and is deliberately independent of aux_id.
-  bool prepared_numeric_fallback_source = 21;
-  int32 prepared_numeric_fallback_source_node_id = 22;
-  int32 prepared_numeric_fallback_source_col_pos = 23;
+  // prepared_numeric is explicit planner metadata, not an executor memo
+  // identity (AuxId), and therefore survives plan copies and RPC
+  // serialization. A negative param_pos means there is no single source
+  // marker. The source identity lets a flattened scalar-subquery consumer
+  // refresh its ColRef type after the inner projection is rebound.
+  PreparedNumericMetadata prepared_numeric = 19;
+  reserved 20 to 23;
 }
 
 message FoldVal {

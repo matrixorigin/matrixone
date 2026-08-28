@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,25 +33,68 @@ import (
 
 func TestPreparedNumericFallbackMetadataSurvivesProtoRoundTrip(t *testing.T) {
 	original := &planpb.Expr{
-		Typ:                                 planpb.Type{Id: int32(types.T_float64)},
-		PreparedNumericFallback:             true,
-		PreparedNumericParamPos:             0,
-		PreparedNumericFallbackSource:       true,
-		PreparedNumericFallbackSourceNodeId: 7,
-		PreparedNumericFallbackSourceColPos: 2,
+		Typ: planpb.Type{Id: int32(types.T_float64)},
+		PreparedNumeric: &planpb.PreparedNumericMetadata{
+			Fallback:             true,
+			ParamPos:             0,
+			FallbackSource:       true,
+			FallbackSourceNodeId: 7,
+			FallbackSourceColPos: 2,
+		},
 	}
 	payload, err := proto.Marshal(original)
 	require.NoError(t, err)
 
 	var restored planpb.Expr
 	require.NoError(t, proto.Unmarshal(payload, &restored))
-	require.True(t, restored.PreparedNumericFallback)
-	require.Equal(t, int32(0), restored.PreparedNumericParamPos)
-	require.True(t, restored.PreparedNumericFallbackSource)
-	require.Equal(t, int32(7), restored.PreparedNumericFallbackSourceNodeId)
-	require.Equal(t, int32(2), restored.PreparedNumericFallbackSourceColPos)
+	metadata := restored.GetPreparedNumeric()
+	require.NotNil(t, metadata)
+	require.True(t, metadata.GetFallback())
+	require.Equal(t, int32(0), metadata.GetParamPos())
+	require.True(t, metadata.GetFallbackSource())
+	require.Equal(t, int32(7), metadata.GetFallbackSourceNodeId())
+	require.Equal(t, int32(2), metadata.GetFallbackSourceColPos())
 	require.Zero(t, restored.AuxId,
 		"prepared numeric provenance must not be encoded as an executor memo id")
+}
+
+func TestPreparedNumericMetadataIsSparse(t *testing.T) {
+	require.Nil(t, (&planpb.Expr{}).GetPreparedNumeric())
+	// Five resident scalar fields made Expr 184 bytes. One optional pointer
+	// keeps ordinary expressions at a bounded 168 bytes on 64-bit targets.
+	require.Equal(t, uintptr(168), unsafe.Sizeof(planpb.Expr{}))
+}
+
+var benchmarkPreparedNumericDeepCopySink *planpb.Expr
+
+func BenchmarkDeepCopyExprPreparedNumericMetadata(b *testing.B) {
+	ordinary := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "abs"},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_float64)},
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			}},
+		}},
+	}
+	prepared := DeepCopyExpr(ordinary)
+	prepared.PreparedNumeric = &planpb.PreparedNumericMetadata{Fallback: true, ParamPos: 0}
+
+	for _, test := range []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{name: "ordinary", expr: ordinary},
+		{name: "prepared-metadata", expr: prepared},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				benchmarkPreparedNumericDeepCopySink = DeepCopyExpr(test.expr)
+			}
+		})
+	}
 }
 
 func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
@@ -203,8 +247,7 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	}
 
 	deferredArg := functionExpr("cast", paramExpr(0), floatTypeExprForTest())
-	deferredArg.PreparedNumericFallback = true
-	deferredArg.PreparedNumericParamPos = 0
+	deferredArg.PreparedNumeric = &planpb.PreparedNumericMetadata{Fallback: true, ParamPos: 0}
 	deferredAbs := functionExpr("abs", deferredArg)
 	queryPlan := &Plan{Plan: &Plan_Query{Query: &Query{
 		Steps: []int32{0},
@@ -212,10 +255,12 @@ func TestPreparedNumericPlanHelpersCoverDeferredAndIntegerPaths(t *testing.T) {
 	}}}
 	require.True(t, PreparedPlanHasDeferredNumericFunction(queryPlan))
 	deferredSubqueryArg := &planpb.Expr{
-		Typ:                     floatType,
-		PreparedNumericFallback: true,
-		PreparedNumericParamPos: 0,
-		Expr:                    &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{Child: deferredArg}},
+		Typ: floatType,
+		PreparedNumeric: &planpb.PreparedNumericMetadata{
+			Fallback: true,
+			ParamPos: 0,
+		},
+		Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{Child: deferredArg}},
 	}
 	deferredSubqueryAbs := functionExpr("abs", deferredSubqueryArg)
 	queryPlan.GetQuery().Nodes = []*Node{{NodeType: planpb.Node_PROJECT, ProjectList: []*planpb.Expr{deferredSubqueryAbs}}}
@@ -592,6 +637,18 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		"prepare stmt_abs_explicit_double from 'select abs(cast(? as double))'")
 	require.NoError(t, err)
 	queryPlan = prepared.GetDcl().GetPrepare().Plan
+	require.Empty(t, PreparedPlanNumericFallbackParamPositions(queryPlan),
+		"an explicit DOUBLE cast fixes the overload at PREPARE time")
+	fn = findPlanFunctionExpr(queryPlan, "abs")
+	require.NotNil(t, fn)
+	require.True(t, isExplicitPreparedCast(fn.GetF().Args[0]))
+	copiedPlan := DeepCopyPlan(queryPlan)
+	copiedFn := findPlanFunctionExpr(copiedPlan, "abs")
+	require.NotNil(t, copiedFn)
+	require.Truef(t, isExplicitPreparedCast(copiedFn.GetF().Args[0]),
+		"explicit cast overload was lost: original=%d copied=%d",
+		fn.GetF().Args[0].GetF().GetFunc().GetObj(), copiedFn.GetF().Args[0].GetF().GetFunc().GetObj())
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
 		ParamValue{Value: "9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})

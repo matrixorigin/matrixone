@@ -300,11 +300,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	// projected ColRef.  Preserve the explicit prepared-numeric provenance on
 	// the replacement so execute-time ABS rebinding can still recover the
 	// parameter's exact protocol domain.
-	fallback := expr.PreparedNumericFallback
-	fallbackPos := expr.PreparedNumericParamPos
-	fallbackSource := expr.PreparedNumericFallbackSource
-	fallbackSourceNodeID := expr.PreparedNumericFallbackSourceNodeId
-	fallbackSourceColPos := expr.PreparedNumericFallbackSourceColPos
+	preparedNumeric := copyPreparedNumericMetadata(expr.GetPreparedNumeric())
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -320,12 +316,8 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx, nullResultRejected)
 	}
 	if err == nil && memoID < 0 && ctx != nil {
-		if fallback {
-			expr.PreparedNumericFallback = true
-			expr.PreparedNumericParamPos = fallbackPos
-			expr.PreparedNumericFallbackSource = fallbackSource
-			expr.PreparedNumericFallbackSourceNodeId = fallbackSourceNodeID
-			expr.PreparedNumericFallbackSourceColPos = fallbackSourceColPos
+		if preparedNumeric != nil {
+			expr.PreparedNumeric = copyPreparedNumericMetadata(preparedNumeric)
 		}
 		expr.AuxId = memoID
 		if ctx.flattenedVolatileExprs == nil {
@@ -333,12 +325,8 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 		}
 		ctx.flattenedVolatileExprs[memoID] = DeepCopyExpr(expr)
 	}
-	if err == nil && fallback {
-		expr.PreparedNumericFallback = true
-		expr.PreparedNumericParamPos = fallbackPos
-		expr.PreparedNumericFallbackSource = fallbackSource
-		expr.PreparedNumericFallbackSourceNodeId = fallbackSourceNodeID
-		expr.PreparedNumericFallbackSourceColPos = fallbackSourceColPos
+	if err == nil && preparedNumeric != nil {
+		expr.PreparedNumeric = copyPreparedNumericMetadata(preparedNumeric)
 	}
 
 	return nodeID, expr, err

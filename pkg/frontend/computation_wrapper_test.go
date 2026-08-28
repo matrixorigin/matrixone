@@ -1162,6 +1162,53 @@ func TestPreparedNumericOverloadSpecializationReusesRuntimeCategory(t *testing.T
 	floatParams.Free(cw.proc.Mp())
 }
 
+func TestPreparedExplicitDoubleAbsReusesOriginalCachedCompile(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 210, "select abs(cast(? as double))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(preparePlan)
+	require.Empty(t, prepareStmt.numericOverloadParamPositions,
+		"the parser-produced explicit cast must not be a deferred overload")
+
+	cachedCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = cachedCompile
+
+	install := func(value string, mysqlType defines.MysqlType) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		return params
+	}
+
+	integerParams := install("-9007199254740993", defines.MYSQL_TYPE_LONGLONG)
+	retComp, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, cachedCompile, retComp)
+	require.Same(t, preparePlan, firstPlan)
+	require.Nil(t, cw.runtimeCachePlan)
+	require.Nil(t, prepareStmt.runtimePlan)
+
+	cw.proc.SetPrepareParams(nil)
+	floatParams := install("-1.5", defines.MYSQL_TYPE_DOUBLE)
+	integerParams.Free(cw.proc.Mp())
+	retComp, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, cachedCompile, retComp,
+		"changing packet category under an explicit DOUBLE cast must reuse the original compile")
+	require.Same(t, preparePlan, secondPlan)
+	require.Nil(t, cw.runtimeCachePlan)
+	require.Nil(t, prepareStmt.runtimePlan)
+	cw.proc.SetPrepareParams(nil)
+	floatParams.Free(cw.proc.Mp())
+}
+
 func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	decimal := func(value string) plan2.ParamValue {
 		return plan2.ParamValue{Value: value, PrepareParamKind: vector.PrepareParamDecimal,

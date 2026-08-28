@@ -332,7 +332,8 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	}
 	internal := t.InternalType
 	switch defines.MysqlType(internal.Oid) {
-	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
 		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
@@ -2960,18 +2961,19 @@ func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {
 	if expr == nil {
 		return
 	}
-	expr.PreparedNumericFallback = true
+	metadata := ensurePreparedNumericMetadata(expr)
+	metadata.Fallback = true
 	// Keep an explicitly invalid position until a marker is found.  Protobuf's
 	// int32 zero value is a valid marker position, so leaving the field at zero
 	// would make a malformed/legacy fallback look as though it belonged to the
 	// first parameter.
-	expr.PreparedNumericParamPos = -1
+	metadata.ParamPos = -1
 	pos, ok := firstPlanParamPosition(expr)
 	if !ok {
 		pos, ok = b.firstPreparedParamPosition(expr, make(map[int32]struct{}))
 	}
 	if ok && pos >= 0 {
-		expr.PreparedNumericParamPos = pos
+		metadata.ParamPos = pos
 		// Scalar subqueries are flattened into a projected column before the
 		// execute-time replacement rule runs.  Keep the same provenance on the
 		// inner projection so rebinding can restore the complete expression
@@ -3050,18 +3052,20 @@ func (b *baseBinder) markPreparedNumericSubquerySources(
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			if nodeID, colPos, ok := b.markPreparedNumericSubquerySources(arg, pos, visited); ok {
-				expr.PreparedNumericFallbackSource = true
-				expr.PreparedNumericFallbackSourceNodeId = nodeID
-				expr.PreparedNumericFallbackSourceColPos = colPos
+				metadata := ensurePreparedNumericMetadata(expr)
+				metadata.FallbackSource = true
+				metadata.FallbackSourceNodeId = nodeID
+				metadata.FallbackSourceColPos = colPos
 				return nodeID, colPos, true
 			}
 		}
 	case *plan.Expr_List:
 		for _, item := range exprImpl.List.List {
 			if nodeID, colPos, ok := b.markPreparedNumericSubquerySources(item, pos, visited); ok {
-				expr.PreparedNumericFallbackSource = true
-				expr.PreparedNumericFallbackSourceNodeId = nodeID
-				expr.PreparedNumericFallbackSourceColPos = colPos
+				metadata := ensurePreparedNumericMetadata(expr)
+				metadata.FallbackSource = true
+				metadata.FallbackSourceNodeId = nodeID
+				metadata.FallbackSourceColPos = colPos
 				return nodeID, colPos, true
 			}
 		}
@@ -3086,14 +3090,16 @@ func (b *baseBinder) markPreparedNumericSubquerySources(
 			if projection == nil || !planExprContainsParamPosition(projection, pos) {
 				continue
 			}
-			projection.PreparedNumericFallback = true
-			projection.PreparedNumericParamPos = pos
-			projection.PreparedNumericFallbackSource = true
-			projection.PreparedNumericFallbackSourceNodeId = exprImpl.Sub.NodeId
-			projection.PreparedNumericFallbackSourceColPos = int32(colPos)
-			expr.PreparedNumericFallbackSource = true
-			expr.PreparedNumericFallbackSourceNodeId = exprImpl.Sub.NodeId
-			expr.PreparedNumericFallbackSourceColPos = int32(colPos)
+			projectionMetadata := ensurePreparedNumericMetadata(projection)
+			projectionMetadata.Fallback = true
+			projectionMetadata.ParamPos = pos
+			projectionMetadata.FallbackSource = true
+			projectionMetadata.FallbackSourceNodeId = exprImpl.Sub.NodeId
+			projectionMetadata.FallbackSourceColPos = int32(colPos)
+			exprMetadata := ensurePreparedNumericMetadata(expr)
+			exprMetadata.FallbackSource = true
+			exprMetadata.FallbackSourceNodeId = exprImpl.Sub.NodeId
+			exprMetadata.FallbackSourceColPos = int32(colPos)
 			b.markPreparedNumericSubquerySources(projection, pos, visited)
 			return exprImpl.Sub.NodeId, int32(colPos), true
 		}
@@ -3200,11 +3206,15 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
+	// Binding can normalize the parsed CAST node in place. Snapshot the user's
+	// explicit floating-point boundary before that mutation so
+	// ABS(CAST(? AS DOUBLE)) remains on its fixed DOUBLE overload.
+	hasExplicitFloatCast := containsExplicitFloatCast(astArgs[0])
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
 	}
-	if strings.EqualFold(name, "abs") && !containsExplicitFloatCast(astArgs[0]) {
+	if strings.EqualFold(name, "abs") && !hasExplicitFloatCast {
 		b.markPreparedNumericFallback(arg)
 	}
 	return bindFuncExprAndConstFold(

@@ -281,9 +281,9 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
-	if e != nil && e.PreparedNumericFallback {
-		if mapped, ok := rule.params[int(e.PreparedNumericParamPos)]; ok {
-			e.PreparedNumericParamPos = int32(mapped)
+	if metadata := e.GetPreparedNumeric(); metadata.GetFallback() {
+		if mapped, ok := rule.params[int(metadata.ParamPos)]; ok {
+			metadata.ParamPos = int32(mapped)
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
@@ -369,14 +369,14 @@ func (rule *decrementParamOrdinalRule) ApplyNode(_ *Node) error {
 }
 
 func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	if e != nil && e.PreparedNumericFallback {
+	if metadata := e.GetPreparedNumeric(); metadata.GetFallback() {
 		if rule.seenFallback == nil {
 			rule.seenFallback = make(map[*plan.Expr]struct{})
 		}
 		if _, ok := rule.seenFallback[e]; !ok {
 			rule.seenFallback[e] = struct{}{}
-			if e.PreparedNumericParamPos > 0 {
-				e.PreparedNumericParamPos--
+			if metadata.ParamPos > 0 {
+				metadata.ParamPos--
 			}
 		}
 	}
@@ -1049,8 +1049,9 @@ func collectFlattenedPreparedNumericSourcePositions(expr *plan.Expr, positions m
 	if expr == nil {
 		return
 	}
-	if expr.GetCol() != nil && expr.PreparedNumericFallbackSource && expr.PreparedNumericParamPos >= 0 {
-		positions[expr.PreparedNumericParamPos] = struct{}{}
+	metadata := expr.GetPreparedNumeric()
+	if expr.GetCol() != nil && metadata.GetFallbackSource() && metadata.GetParamPos() >= 0 {
+		positions[metadata.GetParamPos()] = struct{}{}
 		return
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
@@ -1239,14 +1240,15 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	// the inner projection is rebound separately and the enclosing consumer only
 	// needs its refreshed type.  Replacing the column with the raw parameter
 	// would drop scalar-subquery filtering, LIMIT, and empty-result semantics.
-	if expr.GetCol() != nil && expr.PreparedNumericFallbackSource {
+	metadata := expr.GetPreparedNumeric()
+	if expr.GetCol() != nil && metadata.GetFallbackSource() {
 		return expr, false, nil
 	}
-	if expr.PreparedNumericFallback && expr.PreparedNumericParamPos >= 0 {
-		if _, selected := positions[expr.PreparedNumericParamPos]; !selected {
+	if metadata.GetFallback() && metadata.GetParamPos() >= 0 {
+		if _, selected := positions[metadata.GetParamPos()]; !selected {
 			return expr, false, nil
 		}
-		if bound, ok, err := rule.typedRuntimeParamExpr(int(expr.PreparedNumericParamPos)); err != nil || ok {
+		if bound, ok, err := rule.typedRuntimeParamExpr(int(metadata.GetParamPos())); err != nil || ok {
 			return bound, ok, err
 		}
 	}
@@ -1369,15 +1371,16 @@ func (rule *ResetParamRefRule) rebindPreparedDecimalExpr(expr *plan.Expr) (*Expr
 }
 
 func (rule *ResetParamRefRule) preparedNumericSourceType(expr *plan.Expr) (plan.Type, bool) {
-	if expr == nil || !expr.PreparedNumericFallbackSource || rule.preparedPlan == nil {
+	metadata := expr.GetPreparedNumeric()
+	if !metadata.GetFallbackSource() || rule.preparedPlan == nil {
 		return plan.Type{}, false
 	}
 	query := rule.preparedPlan.GetQuery()
 	if query == nil {
 		return plan.Type{}, false
 	}
-	nodeID := expr.PreparedNumericFallbackSourceNodeId
-	colPos := expr.PreparedNumericFallbackSourceColPos
+	nodeID := metadata.GetFallbackSourceNodeId()
+	colPos := metadata.GetFallbackSourceColPos()
 	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
 		return plan.Type{}, false
 	}
@@ -1392,7 +1395,7 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 	if expr == nil {
 		return nil, false, nil
 	}
-	if expr.GetCol() != nil && expr.PreparedNumericFallbackSource {
+	if expr.GetCol() != nil && expr.GetPreparedNumeric().GetFallbackSource() {
 		if typ, ok := rule.preparedNumericSourceType(expr); ok && !reflect.DeepEqual(expr.Typ, typ) {
 			copy := DeepCopyExpr(expr)
 			copy.Typ = typ
@@ -1475,7 +1478,7 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	// replacing its children so the complete source expression (ROUND(?),
 	// ? + 0, etc.) can be rebound without dropping the subquery semantics.
 	var fallbackSource *plan.Expr
-	if e.PreparedNumericFallback && e.GetCol() == nil && e.GetSub() == nil {
+	if e.GetPreparedNumeric().GetFallback() && e.GetCol() == nil && e.GetSub() == nil {
 		fallbackSource = DeepCopyExpr(e)
 	}
 	var rewritten *plan.Expr
@@ -1615,7 +1618,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// the explicit fallback metadata; the copy is the provenance source
 			// for the final ABS overload decision.
 			originalAbsArg = DeepCopyExpr(exprImpl.F.Args[0])
-			hasPreparedAbsValue = len(preparedNumericValueParamPositions(originalAbsArg)) > 0
+			hasPreparedAbsValue = isPreparedNumericFallbackExpr(originalAbsArg) &&
+				len(preparedNumericValueParamPositions(originalAbsArg)) > 0
 		}
 		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) {
 			rule.markSerializedDecimalParamTypes(e)
@@ -1840,7 +1844,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// reference.  Its inner projection has already been rebound above;
 			// refresh the reference type and rebind ABS, but keep the reference so
 			// empty/multi-row scalar-subquery semantics remain intact.
-			if originalAbsArg.PreparedNumericFallbackSource {
+			if originalAbsArg.GetPreparedNumeric().GetFallbackSource() {
 				refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(boundArgs[0])
 				if refreshErr != nil {
 					return nil, refreshErr
