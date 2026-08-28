@@ -68,7 +68,9 @@ const (
 	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
 	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
 	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
-	MORPCLatestVersion       = MORPCVersion32
+	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
+	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
+	MORPCLatestVersion       = MORPCVersion34
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

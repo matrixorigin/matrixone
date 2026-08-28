@@ -69,7 +69,9 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
-	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
+	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback ||
+		isErrorRollbackWholeTxn(execErr) ||
+		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
@@ -731,7 +733,29 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}
 
-	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	var (
+		tempCtx    context.Context
+		tempCancel context.CancelFunc
+	)
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.cancelTxnCreateWithRequest {
+		if execCtx.reqCtx == nil {
+			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
+		}
+		// Authentication owns a short-lived background transaction. Its handshake
+		// deadline is the single timeout owner of the freshness wait; applying the
+		// ordinary CreateTxnOpTimeout here would silently shorten a configuration
+		// that was validated against ConnectTimeout. The child still guarantees
+		// prompt cleanup when TxnClient.New returns before the handshake does.
+		tempCtx, tempCancel = context.WithCancel(execCtx.reqCtx)
+	} else {
+		// Ordinary session transaction creation intentionally keeps the long-lived
+		// transaction context and its existing operation timeout.
+		tempCtx, tempCancel = context.WithTimeoutCause(
+			th.txnCtx,
+			pu.SV.CreateTxnOpTimeout.Duration,
+			moerr.CauseCreateTxnOpUnsafe,
+		)
+	}
 	defer tempCancel()
 
 	txnClient := pu.TxnClient

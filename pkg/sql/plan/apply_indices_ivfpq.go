@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -66,12 +65,12 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, nil
 	}
 
-	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	params, err := decodeVectorIndexAlgoParams(metaDef.IndexAlgoParams)
 	if err != nil {
 		return nil, nil
 	}
-	opType, err := opTypeAst.StrictString()
-	if err != nil {
+	opType, ok := vectorIndexStringParam(params, catalog.IndexAlgoParamOpType)
+	if !ok {
 		return nil, nil
 	}
 

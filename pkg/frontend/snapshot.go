@@ -280,7 +280,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
@@ -293,12 +293,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
 	snapshotLevel = stmt.Object.SLevel.Level
-
-	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
-		if err = checkSnapshotQuota(ctx, ses, bh, 1, snapshotLevel.String()); err != nil {
-			return err
-		}
-	}
 
 	pubAccountName := string(stmt.Object.AccountName)
 	pubName := string(stmt.Object.PubName)
@@ -336,6 +330,14 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	// an empty owner set and forces an optimistic loser to retry.
 	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
 		return err
+	}
+	// Keep quota admission and snapshot publication in the same serialized
+	// transaction. Otherwise concurrent creators can all observe the old count
+	// before any of them publishes its mo_snapshots row.
+	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
+		if err = checkSnapshotQuota(ctx, ses, bh, 1, snapshotLevel.String()); err != nil {
+			return err
+		}
 	}
 
 	// 3.1 generate snapshot id

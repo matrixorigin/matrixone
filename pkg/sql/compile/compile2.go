@@ -132,6 +132,9 @@ func (c *Compile) Compile(
 	// pre-pipeline lock can advance an RC transaction's mutable snapshot. A
 	// normal data retry reuses the same plan and therefore keeps its binding.
 	c.bindPlanSnapshotForCompile()
+	// Freeze the owner mapping before any Shuffle is constructed. A retry
+	// inherits this execution value even if the deployment gate changes.
+	c.bindStringShuffleHashAlgorithmForCompile()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -1038,6 +1041,7 @@ func sameResultMetadata(left, right *plan.Plan) bool {
 }
 
 func (c *Compile) bindRetryPlanGeneration(runC *Compile, rebuildPlan bool) {
+	runC.inheritStringShuffleHashAlgorithm(c)
 	if !rebuildPlan {
 		runC.inheritPlanSnapshot(c)
 		return

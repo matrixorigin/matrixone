@@ -250,16 +250,17 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:                     "test-proc-id",
-			accountId:              catalog.System_Account,
-			unixTime:               time.Now().Unix(),
-			affectedRows:           42,
-			statementRuntimeIgnore: true,
-			planSnapshotTS:         timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
-			hasPlanSnapshotTS:      true,
-			planGenerationReused:   true,
-			txnClient:              txnClient,
-			txnOperator:            txnOperator,
+			id:                         "test-proc-id",
+			accountId:                  catalog.System_Account,
+			unixTime:                   time.Now().Unix(),
+			affectedRows:               42,
+			statementRuntimeIgnore:     true,
+			planSnapshotTS:             timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+			hasPlanSnapshotTS:          true,
+			planGenerationReused:       true,
+			stringShuffleHashAlgorithm: process.StringShuffleHashComplete,
+			txnClient:                  txnClient,
+			txnOperator:                txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
 				Length:         2,
 				Data:           append([]byte(nil), params.GetData()...),
@@ -300,6 +301,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
 	require.True(t, compile.proc.PlanGenerationReused())
+	require.Equal(t, process.StringShuffleHashComplete,
+		compile.proc.StringShuffleHashAlgorithm())
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -377,13 +380,14 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	procInfo := &pipeline.ProcessInfo{
-		Id:                     "test-proc-id",
-		AccountId:              catalog.System_Account,
-		UnixTime:               time.Now().Unix(),
-		AffectedRows:           42,
-		StatementRuntimeIgnore: true,
-		PlanSnapshotTs:         &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
-		PlanGenerationReused:   true,
+		Id:                         "test-proc-id",
+		AccountId:                  catalog.System_Account,
+		UnixTime:                   time.Now().Unix(),
+		AffectedRows:               42,
+		StatementRuntimeIgnore:     true,
+		PlanSnapshotTs:             &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+		PlanGenerationReused:       true,
+		StringShuffleHashAlgorithm: uint32(process.StringShuffleHashComplete),
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -415,9 +419,18 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.True(t, helper.hasPlanSnapshotTS)
 	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
 	require.True(t, helper.planGenerationReused)
+	require.Equal(t, process.StringShuffleHashComplete, helper.stringShuffleHashAlgorithm)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
+}
+
+func TestGenerateProcessHelperRejectsUnknownStringShuffleHashAlgorithm(t *testing.T) {
+	data, err := (&pipeline.ProcessInfo{StringShuffleHashAlgorithm: 99}).Marshal()
+	require.NoError(t, err)
+
+	_, err = generateProcessHelper(context.Background(), data, nil)
+	require.ErrorContains(t, err, "string shuffle hash algorithm 99 is not supported")
 }
 
 func TestNewMessageReceiverReturnsSnapshotRestoreError(t *testing.T) {
