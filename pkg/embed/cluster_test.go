@@ -78,6 +78,7 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
 	op := new(operator)
 	op.serviceType = metadata.ServiceType_CN
+	op.cfg.ServiceType = metadata.ServiceType_CN.String()
 	op.cfg.CN.Sirius.Enabled = true
 	op.cfg.CN.Sirius.BenchmarkNoGC = true
 	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}

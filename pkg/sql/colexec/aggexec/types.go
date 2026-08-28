@@ -670,7 +670,7 @@ func makeWindowExec(
 		aggID:     aggID,
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
-		retType:   types.T_int64.ToType(),
+		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
 	return makeRankDenseRankRowNumber(mp, info), nil

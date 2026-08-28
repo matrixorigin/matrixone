@@ -69,7 +69,7 @@ const (
 	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
 	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
 	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
-	MORPCVersion34     int64 = 34 // planner-only exact DISTINCT combine aggregates
+	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
 	MORPCLatestVersion       = MORPCVersion34
 )
 
