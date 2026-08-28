@@ -641,6 +641,15 @@ set @issue25408_runtime_value = -2;
 execute issue25408_runtime_reexecute using @issue25408_runtime_value;
 deallocate prepare issue25408_runtime_reexecute;
 
+prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
+set @issue25408_runtime_value = 2.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+set @issue25408_runtime_value = 3.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+set @issue25408_runtime_value = 4;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+deallocate prepare issue25408_runtime_divide;
+
 -- @case
 -- @desc:Prepared exact integer comparisons do not pass BIGINT/BIT text through DOUBLE
 -- @label:bvt

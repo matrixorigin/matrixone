@@ -485,6 +485,8 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	}{
 		{name: "string uses approximate numeric conversion", value: "2tail",
 			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
+		{name: "string without numeric prefix keeps existing error path", value: "not-a-number",
+			sourceType: types.New(types.T_varchar, 12, 0), wantNil: true},
 		{name: "boolean uses integer arithmetic", value: true,
 			sourceType: types.T_bool.ToType(), wantType: types.T_int64},
 		{name: "bit uses unsigned arithmetic", value: "5",

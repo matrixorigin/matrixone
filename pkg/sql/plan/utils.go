@@ -5152,6 +5152,12 @@ func preparedSQLExecuteNumericParamExpr(
 		return nil, err
 	}
 	if isStringBackedType(sourceType) {
+		if _, ok := function.GetNumericStringPrefix(fmt.Sprintf("%v", value)); !ok {
+			// An entirely non-numeric string must retain the existing cast/error
+			// contract of the prepared expression. The approximate arithmetic
+			// source path only owns strings with a MySQL numeric prefix.
+			return nil, nil
+		}
 		// A SQL string user variable enters arithmetic through MySQL's
 		// approximate numeric-prefix domain. Keep that distinct from a DECIMAL
 		// user variable, even though both arrive in the frontend's text vector.

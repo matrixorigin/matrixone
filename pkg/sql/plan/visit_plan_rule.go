@@ -951,16 +951,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// resolving the outer function again.
 				needResetFunction = true
 			}
-			rewrittenArg, applyErr := rule.ApplyExpr(arg)
-			err = applyErr
-			if err != nil {
-				return nil, err
+			var rewrittenArg *plan.Expr
+			if useSQLExecuteNumericSource {
+				// The prepare-time implicit cast is provisional. Materialize the
+				// SQL user variable's current source domain before descending into
+				// that cast; evaluating it first can reject a valid DECIMAL value
+				// using the overload selected for the initial TEXT marker.
+				source := rule.sqlExecuteNumericParams[paramPos]
+				rewrittenArg = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
+			} else {
+				var applyErr error
+				rewrittenArg, applyErr = rule.ApplyExpr(arg)
+				err = applyErr
+				if err != nil {
+					return nil, err
+				}
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
 			if useSQLExecuteNumericSource {
-				source := rule.sqlExecuteNumericParams[paramPos]
-				boundArgs[i] = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
 				needResetFunction = true
 				compareArgTypes = true
 				// SourceType already represents the SQL value's numeric contract.

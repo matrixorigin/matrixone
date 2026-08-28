@@ -107,6 +107,30 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
+		t.Run("SQL PREPARE division binds source before provisional cast", func(t *testing.T) {
+			execSQLRequire(t, ctx, db,
+				"prepare issue25408_divide from 'select ? / 2 as quotient'")
+			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_divide")
+
+			for _, execution := range []struct {
+				assignment string
+				directSQL  string
+			}{
+				{assignment: "set @issue25408_divide = 2.5", directSQL: "select 2.5 / 2 as quotient"},
+				{assignment: "set @issue25408_divide = 3.5", directSQL: "select 3.5 / 2 as quotient"},
+				{assignment: "set @issue25408_divide = 4", directSQL: "select 4 / 2 as quotient"},
+			} {
+				execSQLRequire(t, ctx, db, execution.assignment)
+				preparedRows, preparedErr := db.QueryContext(
+					ctx, "execute issue25408_divide using @issue25408_divide")
+				prepared := observeScalar(t, preparedRows, preparedErr)
+				directRows, directErr := db.QueryContext(ctx, execution.directSQL)
+				direct := observeScalar(t, directRows, directErr)
+				require.Equal(t, direct, prepared,
+					"prepared division must match a fresh expression for the current source domain")
+			}
+		})
+
 		t.Run("COM_STMT runtime numeric type reuse", func(t *testing.T) {
 			stmt, prepareErr := db.PrepareContext(ctx, "select ? + 1 as plus_one")
 			require.NoError(t, prepareErr)
