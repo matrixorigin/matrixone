@@ -191,22 +191,46 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	h := NewAppendMVCCHandle(obj)
 
-	txn1, txn2 := mockTxn(), mockTxn()
+	txn1, txn2, txn3 := mockTxn(), mockTxn(), mockTxn()
 	n1, _ := h.AddAppendNodeLocked(txn1, 0, 10)
 	n2, _ := h.AddAppendNodeLocked(txn2, 10, 20)
+	n3, _ := h.AddAppendNodeLocked(txn3, 20, 30)
 	assert.Equal(t, txnif.UncommitTS, n1.GetPrepare())
 	assert.Equal(t, txnif.UncommitTS, n2.GetPrepare())
+	assert.Equal(t, txnif.UncommitTS, n3.GetPrepare())
 
 	txn2.PrepareTS = types.BuildTS(2, 0)
 	assert.NoError(t, n2.PrepareCommit())
 	txn1.PrepareTS = types.BuildTS(3, 0)
 	assert.NoError(t, n1.PrepareCommit())
+	txn3.PrepareTS = types.BuildTS(4, 0)
+	assert.NoError(t, n3.PrepareCommit())
 	assert.Same(t, n2, h.appends.MVCC[0])
 	assert.Same(t, n1, h.appends.MVCC[1])
+	assert.Same(t, n3, h.appends.MVCC[2])
 	assert.Same(t, n1, h.rows[0])
 	assert.Same(t, n2, h.rows[1])
+	assert.Same(t, n3, h.rows[2])
 	assert.Same(t, n1, h.GetAppendNodeByRowLocked(5))
 	assert.Same(t, n2, h.GetAppendNodeByRowLocked(15))
+	assert.Same(t, n3, h.GetAppendNodeByRowLocked(25))
+
+	// Prepare order differs from physical row order. The selected ranges must
+	// still be assembled in physical order, with strict/inclusive TS bounds.
+	selection := h.GetRowSelectionAfterLocked(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	assert.Equal(t, uint32(0), selection.MinRow)
+	assert.Equal(t, uint32(20), selection.MaxRow)
+	assert.Nil(t, selection.Holes)
+
+	selection = h.GetRowSelectionAfterLocked(types.BuildTS(2, 0), types.BuildTS(4, 0))
+	assert.Equal(t, uint32(0), selection.MinRow)
+	assert.Equal(t, uint32(30), selection.MaxRow)
+	require.NotNil(t, selection.Holes)
+	assert.Equal(t, 10, selection.Holes.GetCardinality())
+	assert.True(t, selection.Holes.Contains(10))
+	assert.True(t, selection.Holes.Contains(19))
+	assert.False(t, selection.Holes.Contains(9))
+	assert.False(t, selection.Holes.Contains(20))
 }
 
 func TestAppendMVCCRollbackKeepsPhysicalHole(t *testing.T) {

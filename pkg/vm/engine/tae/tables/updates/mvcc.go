@@ -17,6 +17,7 @@ package updates
 import (
 	"context"
 	"slices"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -167,11 +168,41 @@ func (n *AppendMVCCHandle) GetRowSelectionInRangeLocked(start, end types.TS) (se
 }
 
 func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (selection index.RowSelection) {
-	for _, node := range n.rows {
-		prepare := node.Prepare
-		if prepare.GT(&start) && prepare.LE(&end) {
-			selection.AddRange(node.startRow, node.maxRow)
+	if end.LE(&start) {
+		return
+	}
+	// appends is ordered by PrepareTS, so restrict the work under the object
+	// lock to nodes in (start, end]. Their physical row ranges may be out of
+	// order because row allocation and Prepare happen independently; AddRange
+	// requires physical order, so only sort when that ordering was inverted.
+	first := sort.Search(len(n.appends.MVCC), func(i int) bool {
+		return n.appends.MVCC[i].Prepare.GT(&start)
+	})
+	last := sort.Search(len(n.appends.MVCC), func(i int) bool {
+		return n.appends.MVCC[i].Prepare.GT(&end)
+	})
+	selected := n.appends.MVCC[first:last]
+	ordered := true
+	for i := 1; i < len(selected); i++ {
+		if selected[i-1].startRow > selected[i].startRow {
+			ordered = false
+			break
 		}
+	}
+	if !ordered {
+		selected = slices.Clone(selected)
+		slices.SortFunc(selected, func(a, b *AppendNode) int {
+			if a.startRow < b.startRow {
+				return -1
+			}
+			if a.startRow > b.startRow {
+				return 1
+			}
+			return 0
+		})
+	}
+	for _, node := range selected {
+		selection.AddRange(node.startRow, node.maxRow)
 	}
 	return
 }
