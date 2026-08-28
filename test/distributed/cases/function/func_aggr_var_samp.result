@@ -189,6 +189,7 @@ select * from decimal02;
 -34243214324324342321313321321342342343  𝄀
 0
 select VAR_SAMP(col1) from decimal02;
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 invalid input: Can't convert Float64 To Decimal128: 1494093533837166931261344328780506188043635413695981476877493008122817544192.000000(38,6)
 drop table decimal02;
 drop table if exists test02;
