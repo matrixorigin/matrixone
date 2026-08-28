@@ -1,0 +1,75 @@
+drop user if exists issue27650_user;
+drop role if exists issue27650_target;
+drop role if exists issue27650_reader;
+drop database if exists issue27650_db;
+create role issue27650_reader;
+create role issue27650_target;
+create database issue27650_db;
+create table issue27650_db.t(v int);
+insert into issue27650_db.t values (27650);
+create user issue27650_user identified by '123456' default role issue27650_reader;
+grant connect on account * to issue27650_reader;
+grant select on table issue27650_db.t to issue27650_reader with grant option;
+grant issue27650_reader to issue27650_user;
+set session enable_privilege_cache = on;
+select current_role();
+➤ current_role()[12,65535,0]  𝄀
+issue27650_reader
+prepare issue27650_stmt from 'select v from issue27650_db.t';
+execute issue27650_stmt;
+➤ v[4,32,0]  𝄀
+27650
+begin;
+set session enable_privilege_cache = off;
+set role issue27650_reader;
+prepare issue27650_toggle_stmt from 'select v from issue27650_db.t';
+execute issue27650_toggle_stmt;
+➤ v[4,32,0]  𝄀
+27650
+revoke issue27650_reader from issue27650_user;
+select count(*) from mo_catalog.mo_user_grant ug
+join mo_catalog.mo_role r on ug.role_id = r.role_id
+join mo_catalog.mo_user u on ug.user_id = u.user_id
+where r.role_name = 'issue27650_reader' and u.user_name = 'issue27650_user';
+➤ count(*)[-5,64,0]  𝄀
+0
+set session enable_privilege_cache = on;
+select v from issue27650_db.t;
+internal error: do not have privilege to execute the statement
+execute issue27650_toggle_stmt;
+internal error: do not have privilege to execute the statement
+set session clear_privilege_cache = on;
+select v from issue27650_db.t;
+internal error: do not have privilege to execute the statement
+execute issue27650_stmt;
+internal error: do not have privilege to execute the statement
+rollback;
+grant select on table issue27650_db.t to issue27650_target;
+internal error: do not have privilege to execute the statement
+set role public;
+select current_role();
+➤ current_role()[12,65535,0]  𝄀
+public
+set role issue27650_reader;
+internal error: the role issue27650_reader has not be granted to the user issue27650_user
+set session enable_privilege_cache = on;
+select v from issue27650_db.t;
+internal error: do not have privilege to execute the statement
+grant issue27650_reader to issue27650_user;
+begin;
+commit;
+set role issue27650_reader;
+execute issue27650_stmt;
+➤ v[4,32,0]  𝄀
+27650
+set session enable_privilege_cache = on;
+select current_role();
+➤ current_role()[12,65535,0]  𝄀
+issue27650_reader
+select v from issue27650_db.t;
+➤ v[4,32,0]  𝄀
+27650
+drop user if exists issue27650_user;
+drop role if exists issue27650_target;
+drop role if exists issue27650_reader;
+drop database if exists issue27650_db;
