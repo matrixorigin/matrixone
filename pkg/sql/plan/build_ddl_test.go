@@ -5305,6 +5305,33 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		expression string
+		wantFSP    int32
+	}{
+		{name: "string literals fsp zero", expression: "timestamp('2024-01-15', '12:30:00')", wantFSP: 0},
+		{name: "string literals fsp one", expression: "timestamp('2024-01-15 10:00:00.1', '02:30:00')", wantFSP: 1},
+		{name: "second datetime literal fsp one", expression: "timestamp('2024-01-15', '2024-01-15 12:30:00.1')", wantFSP: 1},
+		{name: "string literals fsp six", expression: "timestamp('2024-01-15', '12:30:00.123456')", wantFSP: 6},
+		{name: "typed values fsp six", expression: "timestamp(cast('2024-01-15' as date), cast('12:30:00.123456' as time(6)))", wantFSP: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := buildSingleStmt(mock, t,
+				"create table timestamp_pair_ctas as select "+test.expression+" as pair_value")
+			require.NoError(t, err)
+
+			column := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.Equal(t, int32(types.T_datetime), column.Typ.Id)
+			require.Equal(t, test.wantFSP, column.Typ.Width)
+			require.Equal(t, test.wantFSP, column.Typ.Scale)
+			require.True(t, column.GetDefault().GetNullAbility())
+		})
+	}
+}
+
 func TestCreateTableAsSelectPreservesTimeWindowMicrosecondBoundaryScale(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mockTimeWindowScaleTable(t, mock, types.T_datetime.ToTypeWithScale(0))

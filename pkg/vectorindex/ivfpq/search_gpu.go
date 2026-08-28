@@ -19,6 +19,7 @@ package ivfpq
 import (
 	"context"
 	"math"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -159,7 +161,10 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		return err
 	}
 	if len(indexes) > 0 {
-		indexes, err = s.loadIndexes(sqlproc, indexes)
+		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
+		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
+		// index the very first deserialize then refuses.
+		indexes, err = s.loadIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type))
 		if err != nil {
 			return err
 		}
@@ -450,7 +455,109 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 }
 
 // loadIndexes loads each model's index data from the database.
-func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
+//
+// Auto-rotation at build time can commit N sub-indexes, each sized to fit 60%
+// of build-time free VRAM. But at search all N must be resident simultaneously
+// (the fan-out reads every sub-index per query), so the sum can exceed the
+// current free VRAM even though each individual model fit at build time.
+// Without an admission gate the first query would OOM after committing.
+//
+// That is admitted here as an aggregate, BEFORE the first deserialize. Doing it
+// per sub-index instead admits the early ones, spends the budget on them, and
+// refuses a later one -- failing after most of the memory is already taken, and
+// naming one sub-index rather than the total. The per-sub-index claims in
+// cgo/cuvs/device_memory.hpp remain the authoritative admission; this is a
+// pre-flight, and takes no reservation of its own.
+//
+// The aggregate needs the tars local (SHARDED attribution reads the shard sizes
+// out of the archive), so the download is split out of LoadIndex into
+// FetchArtifact and run first -- but it is re-checked after EACH tar rather than
+// only after the last, so an index that cannot fit is refused as soon as the
+// running total says so instead of after the whole download.
+//
+// budget is the pair of admission bounds, passed in rather than reached for, so a
+// test can drive a refusal at a chosen sub-index and prove the loop actually stops
+// -- the short-circuit is the whole point of checking per tar, and a version that
+// fetched them all would otherwise still pass every assertion. Production passes
+// cuvs.BudgetFor, the same value the CREATE gate is given.
+func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q],
+	budget memory.DeviceBudget) ([]*IvfpqModel[B, Q], error) {
+	// Fetch, admit, and only then load. Splitting the download from the load is
+	// what lets the gate see the SAME quantity CREATE checked: the device-resident
+	// components of each packed artifact, measured with cuvs.MeasureTar and reduced
+	// per physical device. Admitting metadata
+	// FileSize instead would charge the whole tar -- ids.bin, the INCLUDE blobs,
+	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
+	// then commit artifacts refused here at every free level.
+
+	// Tars this call fetched, and only those. Until the load loop below takes
+	// them over -- LoadIndex removes each one in view mode once Unpack has read
+	// it, and Destroy removes it on a failed load -- nothing else will: Load
+	// returns before it assigns s.Indexes or arms its deferred Destroy, so an
+	// early return from here is the end of the line. While the download lived
+	// inside LoadIndex its own defer covered this; now that it is hoisted out,
+	// a refusal from the aggregate gate would otherwise leak the whole
+	// multi-gigabyte download on every retried query.
+	var fetchedHere []*IvfpqModel[B, Q]
+	admitted := false
+	defer func() {
+		if admitted {
+			return
+		}
+		for _, idx := range fetchedHere {
+			if len(idx.Path) > 0 {
+				os.Remove(idx.Path)
+				idx.Path = ""
+			}
+		}
+	}()
+
+	comps := make([]map[string]int64, 0, len(indexes))
+	for _, idx := range indexes {
+		if len(idx.Path) == 0 {
+			fetched, ferr := idx.FetchArtifact(sqlproc, s.Tblcfg)
+			if ferr != nil {
+				return nil, ferr
+			}
+			idx.Path = fetched
+			fetchedHere = append(fetchedHere, idx)
+		}
+		sizes, merr := cuvs.MeasureTar(idx.Path)
+		if merr != nil {
+			return nil, merr
+		}
+		device := make(map[string]int64, len(sizes.Files))
+		for name, sz := range sizes.Files {
+			if !cuvs.IsHostResidentComponent(name) {
+				device[name] = sz
+			}
+		}
+		comps = append(comps, device)
+
+		// Re-check the RUNNING aggregate rather than waiting for the last tar.
+		// A sub-index only adds bytes to the device that holds it, so the peak is
+		// monotone: against this free reading the finished total can only be larger,
+		// and downloading the rest would cost minutes and gigabytes to reach the
+		// same refusal. Free is re-sampled per tar, so a transient dip can refuse
+		// where one late check would not have -- which is why the refusal says to
+		// retry, and is the same situational answer the single check gave at its
+		// own sample point. On the final pass measured == len(indexes), so this is
+		// also the complete gate; there is no separate check after the loop.
+		// Only the devices this index occupies: a SINGLE_GPU index loads onto
+		// devices[0] alone, so a busy or smaller second card must not veto it.
+		participants := memory.DeviceParticipants(s.Devices,
+			s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+		if err := memory.DeviceAggregateFitsFree(
+			memory.PerDeviceDemand(participants, comps),
+			len(comps), len(indexes), budget,
+		); err != nil {
+			return nil, err
+		}
+	}
+
+	// Past the gate the loads own the tars; the cleanup above must not race them.
+	admitted = true
+
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
