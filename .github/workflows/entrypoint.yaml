@@ -73,7 +73,7 @@ jobs:
     name: Matrixone CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/ci.yaml@codex/cap-sca-lint-memory
+    uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
       ut_parallel: 8
     secrets: inherit
