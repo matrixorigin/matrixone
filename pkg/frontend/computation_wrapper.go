@@ -1419,6 +1419,8 @@ func initExecuteStmtParamWithResolverInSession(
 		// numeric-prefix path can apply; avoid another full plan walk here.
 		runtimeNumericPrefixCandidate = prepareStmt.numericPrefixConsumer &&
 			preparedParamValuesEnableNumericPrefix(cwft.paramVals)
+		runtimeTextComparisonSpecialization = plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+			executionPlan, preparedRuntimeTextComparisonTypes(cwft.paramVals))
 	}
 	if runtimeNumericOverloadCandidate {
 		// Specialization materializes every ParamRef in the copied plan, not only
@@ -1453,7 +1455,7 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeCacheKey := ""
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
-	cacheableRuntimeQuery := executionPlan.GetQuery() != nil &&
+	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
@@ -1763,25 +1765,7 @@ func specializePreparedExecutionPlan(
 		plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
 	needsRuntimeSpecialization := needsForcedSpecialization ||
 		plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
-	runtimeTypes := make([]types.Type, len(paramVals))
-	for i, value := range paramVals {
-		param, ok := value.(plan2.ParamValue)
-		if !ok {
-			continue
-		}
-		if param.IsBinaryProtocol {
-			if param.HasRuntimeType {
-				runtimeTypes[i] = param.RuntimeType
-			} else if param.Value != nil {
-				runtimeTypes[i] = types.T_text.ToType()
-			}
-		} else if param.HasSourceType {
-			switch param.SourceType.Oid {
-			case types.T_char, types.T_varchar, types.T_text:
-				runtimeTypes[i] = types.T_text.ToType()
-			}
-		}
-	}
+	runtimeTypes := preparedRuntimeTextComparisonTypes(paramVals)
 	needsTextComparison := plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
 		executionPlan, runtimeTypes)
 	if !forceNumericOverload && !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
@@ -1810,6 +1794,29 @@ func specializePreparedExecutionPlan(
 		return runtimePlan, specialized, true, nil
 	}
 	return executionPlan, false, false, nil
+}
+
+func preparedRuntimeTextComparisonTypes(paramVals []any) []types.Type {
+	runtimeTypes := make([]types.Type, len(paramVals))
+	for i, value := range paramVals {
+		param, ok := value.(plan2.ParamValue)
+		if !ok {
+			continue
+		}
+		if param.IsBinaryProtocol {
+			if param.HasRuntimeType {
+				runtimeTypes[i] = param.RuntimeType
+			} else if param.Value != nil {
+				runtimeTypes[i] = types.T_text.ToType()
+			}
+		} else if param.HasSourceType {
+			switch param.SourceType.Oid {
+			case types.T_char, types.T_varchar, types.T_text:
+				runtimeTypes[i] = types.T_text.ToType()
+			}
+		}
+	}
+	return runtimeTypes
 }
 
 // preparedExecutionRetry is an immutable snapshot of the execution-time

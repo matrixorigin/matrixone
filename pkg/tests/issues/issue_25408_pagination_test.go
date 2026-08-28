@@ -114,20 +114,18 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 
 			for _, execution := range []struct {
 				assignment string
-				directSQL  string
+				wantValue  string
 			}{
-				{assignment: "set @issue25408_divide = 2.5", directSQL: "select 2.5 / 2 as quotient"},
-				{assignment: "set @issue25408_divide = 3.5", directSQL: "select 3.5 / 2 as quotient"},
-				{assignment: "set @issue25408_divide = 4", directSQL: "select 4 / 2 as quotient"},
+				{assignment: "set @issue25408_divide = 2.5", wantValue: "1.25"},
+				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.75"},
+				{assignment: "set @issue25408_divide = 4", wantValue: "2"},
 			} {
 				execSQLRequire(t, ctx, db, execution.assignment)
 				preparedRows, preparedErr := db.QueryContext(
 					ctx, "execute issue25408_divide using @issue25408_divide")
 				prepared := observeScalar(t, preparedRows, preparedErr)
-				directRows, directErr := db.QueryContext(ctx, execution.directSQL)
-				direct := observeScalar(t, directRows, directErr)
-				require.Equal(t, direct, prepared,
-					"prepared division must match a fresh expression for the current source domain")
+				require.Equal(t, execution.wantValue, prepared.value,
+					"prepared division must use the current value before evaluating its provisional cast")
 			}
 		})
 

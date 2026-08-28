@@ -1258,7 +1258,7 @@ func TestSpecializePreparedExecutionPlanAppliesBitTextComparison(t *testing.T) {
 			HasRuntimeType:   true,
 			IsBinaryProtocol: true,
 		},
-	}, true, false)
+	}, true, false, false)
 	require.NoError(t, err)
 	require.True(t, specialized)
 	require.True(t, applied)
