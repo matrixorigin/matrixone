@@ -74,6 +74,8 @@ func TestUseExplicitCastOverload(t *testing.T) {
 		{name: "signed", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "signed"}, want: true},
 		{name: "signed integer", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "integer"}, want: true},
 		{name: "unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), Unsigned: true}, want: true},
+		{name: "float", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_FLOAT), FamilyString: "float"}, want: true},
+		{name: "double", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_DOUBLE), FamilyString: "double"}, want: true},
 		{name: "decimal", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL), FamilyString: "decimal"}, want: true},
 		{name: "char", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_STRING), FamilyString: "char"}, want: true},
 		{name: "varchar", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VARCHAR), FamilyString: "varchar"}, want: true},

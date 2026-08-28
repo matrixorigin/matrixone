@@ -2986,6 +2986,70 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 	}
 }
 
+func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
+	const value = "12345678901234567890123456789012345.6789"
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select abs(?)")
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	// Drive the same COM_STMT_EXECUTE decoder used by clients.  DECIMAL values
+	// are length-encoded text on the wire, but their declared type must survive
+	// into execute-time ABS rebinding instead of being coerced through DOUBLE.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, prepareStmt.ParamTypes)
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	values, err := preparedParamValues(proc, prepareStmt.ParamTypes)
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	param := values[0].(plan.ParamValue)
+	require.Equal(t, value, param.Value)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
+
+	runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		ctx, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	var findAbs func(*planPb.Expr) *planPb.Expr
+	findAbs = func(expr *planPb.Expr) *planPb.Expr {
+		if expr == nil {
+			return nil
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.GetObjName() == "abs" {
+				return expr
+			}
+			for _, arg := range fn.Args {
+				if found := findAbs(arg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	var abs *planPb.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		if node != nil {
+			for _, projection := range node.ProjectList {
+				if abs = findAbs(projection); abs != nil {
+					break
+				}
+			}
+		}
+		if abs != nil {
+			break
+		}
+	}
+	require.NotNil(t, abs)
+	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
+}
+
 func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
 	data := make([]byte, 11)
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})

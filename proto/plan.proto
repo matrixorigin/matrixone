@@ -24,6 +24,11 @@ import "timestamp.proto";
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.protosizer_all) = true;
 option (gogoproto.sizer_all) = false;
+// Keep the generated message layout compatible with the checked-in bindings
+// and preserve unknown fields when plans cross mixed-version nodes.
+option (gogoproto.goproto_unrecognized_all) = true;
+option (gogoproto.goproto_sizecache_all) = true;
+option (gogoproto.goproto_unkeyed_all) = true;
 
 message Type {
   int32 id = 1;
@@ -239,6 +244,18 @@ message Function {
   bool syntax_explicit_cast = 5;
 }
 
+// PreparedNumericMetadata is sparse planner provenance for a numeric overload
+// that cannot be selected until COM_STMT_EXECUTE supplies a parameter type.
+// It is kept behind one optional pointer on Expr because the metadata is rare;
+// ordinary expressions must not carry five always-resident scalar fields.
+message PreparedNumericMetadata {
+  bool fallback = 1;
+  int32 param_pos = 2;
+  bool fallback_source = 3;
+  int32 fallback_source_node_id = 4;
+  int32 fallback_source_col_pos = 5;
+}
+
 message Expr {
   Type typ = 1 [(gogoproto.nullable) = false];
   oneof expr {
@@ -261,6 +278,13 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  // prepared_numeric is explicit planner metadata, not an executor memo
+  // identity (AuxId), and therefore survives plan copies and RPC
+  // serialization. A negative param_pos means there is no single source
+  // marker. The source identity lets a flattened scalar-subquery consumer
+  // refresh its ColRef type after the inner projection is rebound.
+  PreparedNumericMetadata prepared_numeric = 19;
+  reserved 20 to 23;
 }
 
 message FoldVal {

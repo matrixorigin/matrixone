@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"os"
 	"strconv"
@@ -656,10 +657,7 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return JoinMapResult{}, err
 		}
 		if ctxDone {
-			if err := ctx.Err(); err != nil {
-				return JoinMapResult{}, err
-			}
-			return JoinMapResult{}, nil
+			return JoinMapResult{}, resolveJoinMapCancellation(ctx, ctx.Err(), false)
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -679,6 +677,15 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			}
 			jm := result.JoinMap()
 			if result.IsBuildError() {
+				buildErr := result.BuildError()
+				if errors.Is(buildErr, context.Canceled) ||
+					errors.Is(buildErr, context.DeadlineExceeded) {
+					if err := resolveJoinMapCancellation(
+						ctx, result.Err(), errors.Is(buildErr, context.DeadlineExceeded),
+					); err != result.Err() {
+						return JoinMapResult{}, err
+					}
+				}
 				return result, nil
 			}
 			if jm == nil {
@@ -690,6 +697,27 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return result, nil
 		}
 	}
+}
+
+// resolveJoinMapCancellation applies the same precedence regardless of
+// whether cancellation is observed before or after the producer's terminal
+// message. Query deadlines remain classifiable as DeadlineExceeded; a
+// pipeline-local cancellation may instead carry the sibling's substantive
+// cause.
+func resolveJoinMapCancellation(ctx context.Context, err error, preserveDeadline bool) error {
+	if preserveDeadline {
+		return context.DeadlineExceeded
+	}
+	if ctx == nil || ctx.Err() == nil {
+		return err
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if cause := firstSubstantiveMoErr(context.Cause(ctx)); cause != nil {
+		return cause
+	}
+	return err
 }
 
 // SendJoinMapResult publishes one terminal dependency value without waiting
