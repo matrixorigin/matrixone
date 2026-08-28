@@ -231,11 +231,16 @@ func (s *service) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
 	defer cancel()
 
+	// Snapshot and send readiness under the same owner as startup, activation,
+	// and shutdown publication. Otherwise an older in-flight true heartbeat can
+	// arrive after activation has authoritatively published ingress=false.
+	s.ddlVisibilityBarrierMu.Lock()
 	hb := s.newCNStoreHeartbeat()
 	s.heartbeatInFlight.Store(true)
 	s.notifyCommandPoll()
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	s.heartbeatInFlight.Store(false)
+	s.ddlVisibilityBarrierMu.Unlock()
 	if err != nil {
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()

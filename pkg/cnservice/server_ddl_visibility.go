@@ -190,6 +190,12 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 
 	barrierCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
 	defer cancel()
+	if !pending {
+		// A command can arrive after startup fencing but before public listeners
+		// are started. Restore only the ingress state observed by the first
+		// activation attempt; retries after a fail-closed withdrawal retain it.
+		s.ddlVisibilityRestoreIngress.Store(s.viewMetadataIngressReady.Load())
+	}
 	s.ddlVisibilityActivationPending.Store(true)
 	s.ddlVisibilityActivationPrepared.Store(false)
 	s.ddlVisibilityActivationFenced.Store(false)
@@ -219,7 +225,8 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
 		return moerr.NewServiceUnavailableNoCtx("CN is closing")
 	}
-	if err := s.setDDLVisibilityIngressLocked(barrierCtx, true); err != nil {
+	if err := s.setDDLVisibilityIngressLocked(
+		barrierCtx, s.ddlVisibilityRestoreIngress.Load()); err != nil {
 		cleanupCtx, cleanupCancel := s.newDDLVisibilityBarrierContext(context.Background())
 		cleanupErr := s.setDDLVisibilityIngressLocked(cleanupCtx, false)
 		cleanupCancel()

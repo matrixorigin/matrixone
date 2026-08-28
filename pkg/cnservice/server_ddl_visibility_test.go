@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -188,6 +189,33 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 func (c *ddlVisibilityWithdrawalHAKeeperClient) Close() error {
 	c.closeCalls++
 	return nil
+}
+
+type ddlVisibilityHeartbeatOrderClient struct {
+	logservice.CNHAKeeperClient
+	mu           sync.Mutex
+	calls        int
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	completed    []logservicepb.CNStoreHeartbeat
+}
+
+func (c *ddlVisibilityHeartbeatOrderClient) SendCNHeartbeat(
+	_ context.Context,
+	hb logservicepb.CNStoreHeartbeat,
+) (logservicepb.CommandBatch, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+	if call == 1 {
+		close(c.firstStarted)
+		<-c.releaseFirst
+	}
+	c.mu.Lock()
+	c.completed = append(c.completed, hb)
+	c.mu.Unlock()
+	return logservicepb.CommandBatch{}, errors.New("stop heartbeat after ordering observation")
 }
 
 type ddlVisibilityCloseLockService struct {
@@ -452,6 +480,50 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 	require.Len(t, hakeeperClient.heartbeats, 2)
 	require.Equal(t, 5, cluster.refreshCalls)
 	require.Len(t, queryClient.requests, 5)
+}
+
+func TestHandleSetProtocolVersionPreservesPreStartIngress(t *testing.T) {
+	const serviceID = "ddl-visibility-pre-start-ingress-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, QueryAddress: "self:6001",
+		ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+	}}}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID, frontiers: map[string]timestamp.Timestamp{"self:6001": {}},
+	}
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	hakeeperClient := &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster}
+	s := &service{
+		cfg: cfg, _hakeeperClient: hakeeperClient, moCluster: cluster,
+		queryClient: queryClient, _txnClient: mock_frontend.NewMockTxnClient(gomock.NewController(t)),
+		config: util.NewConfigData(nil), viewMetadataAdmissionGeneration: generation,
+		ddlCommitGate: frontend.NewDDLCommitGate(),
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(false)
+
+	resp := &query.Response{}
+	require.NoError(t, s.handleSetProtocolVersion(context.Background(), &query.Request{
+		SetProtocolVersion: &query.SetProtocolVersionRequest{
+			Version: defines.MORPCVersion35, DDLVisibilityActivationTargets: []string{serviceID},
+		},
+	}, resp, nil))
+	require.Equal(t, defines.MORPCVersion35, resp.SetProtocolVersion.Version)
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, cluster.cnServices[0].ViewMetadataIngressReady)
+	require.Len(t, hakeeperClient.heartbeats, 2)
+	require.False(t, hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
+	require.False(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
+	release, err := s.ddlCommitGate.Enter(context.Background())
+	require.NoError(t, err)
+	release()
 }
 
 func TestHandleSetProtocolVersionFailsClosedWhenActivationSyncFails(t *testing.T) {
@@ -796,6 +868,48 @@ func TestWaitForDDLVisibilityBarrierPublicationHonorsCancellation(t *testing.T) 
 	err := s.waitForDDLVisibilityBarrierPublication(ctx, time.Second)
 	require.Error(t, err)
 	require.Equal(t, 1, cluster.refreshCalls)
+}
+
+func TestPeriodicHeartbeatCannotRepublishStaleIngressDuringActivation(t *testing.T) {
+	client := &ddlVisibilityHeartbeatOrderClient{
+		firstStarted: make(chan struct{}), releaseFirst: make(chan struct{}),
+	}
+	cfg := &Config{UUID: "ddl-visibility-heartbeat-order-test"}
+	cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	s := &service{
+		cfg: cfg, logger: zap.NewNop(), _hakeeperClient: client,
+		config: util.NewConfigData(nil),
+	}
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	heartbeatDone := make(chan struct{})
+	go func() {
+		s.heartbeat(context.Background())
+		close(heartbeatDone)
+	}()
+	<-client.firstStarted
+	activationStarted := make(chan struct{})
+	activationDone := make(chan struct{})
+	go func() {
+		close(activationStarted)
+		s.ddlVisibilityBarrierMu.Lock()
+		s.viewMetadataIngressReady.Store(false)
+		_, _ = client.SendCNHeartbeat(context.Background(), s.newCNStoreHeartbeat())
+		s.ddlVisibilityBarrierMu.Unlock()
+		close(activationDone)
+	}()
+	<-activationStarted
+	close(client.releaseFirst)
+	<-heartbeatDone
+	<-activationDone
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	require.Len(t, client.completed, 2)
+	require.True(t, client.completed[0].ViewMetadataIngressReady)
+	require.False(t, client.completed[1].ViewMetadataIngressReady,
+		"the activation withdrawal must complete after every older true heartbeat")
 }
 
 func TestServiceCloseWithdrawsDDLVisibilityBeforeQueryService(t *testing.T) {
