@@ -258,6 +258,9 @@ func (m *Merge) Main(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
+				if f.IsDir || !isETLFile(f.Name) {
+					continue
+				}
 				filepath := path.Join(rootPath, f.Name)
 				totalSize += f.Size
 				files = append(files, &FileMeta{filepath, f.Size})
@@ -583,14 +586,15 @@ func newETLReader(
 	service string,
 	tbl *table.Table,
 	fs fileservice.FileService,
-	path string,
+	filePath string,
 	size int64,
 	mp *mpool.MPool,
 ) (ETLReader, error) {
-	if strings.LastIndex(path, table.CsvExtension) > 0 {
-		return NewCSVReader(ctx, service, fs, path)
-	} else if strings.LastIndex(path, table.TaeExtension) > 0 {
-		r, err := etl.NewTaeReader(ctx, tbl, path, size, fs, mp)
+	switch path.Ext(filePath) {
+	case table.CsvExtension:
+		return NewCSVReader(ctx, service, fs, filePath)
+	case table.TaeExtension:
+		r, err := etl.NewTaeReader(ctx, tbl, filePath, size, fs, mp)
 		if err != nil {
 			r.Close()
 			return nil, err
@@ -601,9 +605,14 @@ func newETLReader(
 			return nil, err
 		}
 		return r, nil
-	} else {
-		panic("NOT Implements")
+	default:
+		return nil, moerr.NewNotSupportedf(ctx, "unsupported ETL file: %s", filePath)
 	}
+}
+
+func isETLFile(filePath string) bool {
+	ext := path.Ext(filePath)
+	return ext == table.CsvExtension || ext == table.TaeExtension
 }
 
 // NewCSVReader create new csv reader.
