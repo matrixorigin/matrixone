@@ -703,8 +703,9 @@ func execResultArrayHasData(arr []ExecResult) bool {
 }
 
 type BackgroundExecOption struct {
-	fromRealUser       bool
-	forcePessimisticRC bool
+	fromRealUser                   bool
+	forcePessimisticRC             bool
+	cloneSnapshotUsesBackgroundTxn bool
 	// cancelTxnCreateWithRequest is reserved for short-lived background
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
