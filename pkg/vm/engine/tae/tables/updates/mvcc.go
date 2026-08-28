@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -77,6 +78,10 @@ type AppendPrepareSnapshot struct {
 type appendPrepareEntry struct {
 	prepare          types.TS
 	startRow, maxRow uint32
+}
+
+type appendRowRange struct {
+	start, end uint32
 }
 
 func appendPrepareEntryLess(a, b appendPrepareEntry) bool {
@@ -251,7 +256,7 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterWithSnapshot(
 	if snapshot == nil {
 		return
 	}
-	selected := make([]appendPrepareEntry, 0)
+	selected := make([]appendRowRange, 0)
 	snapshot.tree.Ascend(appendPrepareEntry{prepare: start}, func(entry appendPrepareEntry) bool {
 		if !entry.prepare.GT(&start) {
 			return true
@@ -259,29 +264,29 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterWithSnapshot(
 		if entry.prepare.GT(&end) {
 			return false
 		}
-		selected = append(selected, entry)
+		selected = append(selected, appendRowRange{start: entry.startRow, end: entry.maxRow})
 		return true
 	})
-	ordered := true
-	for i := 1; i < len(selected); i++ {
-		if selected[i-1].startRow > selected[i].startRow {
-			ordered = false
-			break
-		}
+	if len(selected) == 0 {
+		return
 	}
-	if !ordered {
-		slices.SortFunc(selected, func(a, b appendPrepareEntry) int {
-			if a.startRow < b.startRow {
-				return -1
-			}
-			if a.startRow > b.startRow {
-				return 1
-			}
-			return 0
-		})
+	selection.MinRow = selected[0].start
+	selection.MaxRow = selected[0].end
+	for _, rows := range selected[1:] {
+		selection.MinRow = min(selection.MinRow, rows.start)
+		selection.MaxRow = max(selection.MaxRow, rows.end)
 	}
-	for _, entry := range selected {
-		selection.AddRange(entry.startRow, entry.maxRow)
+
+	// PrepareTS order and physical row order are independent. Building the
+	// complement bitmap is linear in the selected nodes plus the bounded row
+	// domain of one appendable object, and avoids sorting every dedup request.
+	holes := &nulls.Bitmap{}
+	holes.AddRange(uint64(selection.MinRow), uint64(selection.MaxRow))
+	for _, rows := range selected {
+		holes.GetBitmap().RemoveRange(uint64(rows.start), uint64(rows.end))
+	}
+	if holes.Any() {
+		selection.Holes = holes
 	}
 	return
 }
