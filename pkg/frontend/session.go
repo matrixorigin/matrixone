@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -295,8 +296,10 @@ type Session struct {
 
 	planCache *planCache
 
-	statsCache   *plan2.StatsCache
-	seqCurValues map[uint64]string
+	statsCacheMu       sync.Mutex
+	statsCache         *plan2.StatsCache
+	statsCacheVersions map[uint64]optimizerStatsCacheTag
+	seqCurValues       map[uint64]string
 
 	/*
 		CORNER CASE:
@@ -808,7 +811,83 @@ func (ses *Session) GetProc() *process.Process {
 }
 
 func (ses *Session) GetStatsCache() *plan2.StatsCache {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
 	return ses.statsCache
+}
+
+func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
+	return optimizerStatsTableKey{
+		accountID: ses.GetAccountId(),
+		tableID:   tableID,
+	}
+}
+
+type optimizerStatsCacheTag struct {
+	key     optimizerStatsTableKey
+	version uint64
+}
+
+func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	wrapper := ses.statsCache.Get(key.tableID)
+	tag, tagged := ses.statsCacheVersions[key.tableID]
+	if !wrapper.Exists() {
+		delete(ses.statsCacheVersions, key.tableID)
+	} else if !tagged && version == 0 {
+		// Accept caches created before version tracking only in the initial
+		// generation. Once any publication has happened, an untagged entry is
+		// conservatively stale.
+		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	} else if tag.key != key || tag.version != version {
+		ses.statsCache.Delete(key.tableID)
+		delete(ses.statsCacheVersions, key.tableID)
+	}
+	return ses.statsCache, version
+}
+
+func (ses *Session) cacheStatsIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) bool {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
+		return false
+	}
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	return true
+}
+
+func (ses *Session) cachePublishedStats(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+}
+
+func (ses *Session) initStatsCacheLocked() {
+	if ses.statsCache == nil {
+		ses.statsCache = plan2.NewStatsCache()
+	}
+	if ses.statsCacheVersions == nil {
+		ses.statsCacheVersions = make(map[uint64]optimizerStatsCacheTag)
+	}
 }
 
 func (ses *Session) GetSessionStart() time.Time {
@@ -1172,7 +1251,6 @@ func NewSession(
 	var txnOp TxnOperator
 	var err error
 	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
-
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
@@ -1195,8 +1273,9 @@ func NewSession(
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
 
-		timestampMap: map[TS]time.Time{},
-		statsCache:   plan2.NewStatsCache(),
+		timestampMap:       map[TS]time.Time{},
+		statsCache:         plan2.NewStatsCache(),
+		statsCacheVersions: make(map[uint64]optimizerStatsCacheTag),
 	}
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
@@ -1439,8 +1518,21 @@ func (ses *Session) IsBackgroundSession() bool {
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
-	ses.cachePlanWithSnapshots(
-		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)), versions...)
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	statsVersions map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		planStatsVersionsFromAggregate(len(plans), statsVersions), versions...)
 }
 
 func (ses *Session) cachePlanWithSnapshots(
@@ -1450,7 +1542,27 @@ func (ses *Session) cachePlanWithSnapshots(
 	planSnapshotTS []timestamp.Timestamp,
 	versions ...int64,
 ) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS,
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
+		return
+	}
+	statsVersions, versionsConsistent := aggregatePlanStatsVersions(planStatsVersions)
+	if !versionsConsistent || !optimizerStatsVersionsCurrent(ses.GetService(), statsVersions) {
+		// The plan crossed a statistics publication boundary while compiling.
+		// It may execute, but must not enter the cache with stale dependencies.
+		freeStmts(stmts)
 		return
 	}
 	ses.mu.Lock()
@@ -1463,7 +1575,8 @@ func (ses *Session) cachePlanWithSnapshots(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithPlanSnapshots(sql, stmts, plans, planSnapshotTS, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -1476,7 +1589,8 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 		return nil
 	}
 	cached := ses.planCache.get(sql)
-	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+	if cached != nil && (cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions)) {
 		ses.planCache.remove(sql)
 		return nil
 	}
@@ -1492,7 +1606,18 @@ func (ses *Session) isCached(sql string) bool {
 	if ses.planCache == nil {
 		return false
 	}
-	return ses.planCache.isCached(sql)
+	if !ses.planCache.isCached(sql) {
+		return false
+	}
+	cached := ses.planCache.cachePool[sql].Value.(*cachedPlan)
+	if cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions) {
+		// isCached is also queried while wrappers still borrow the cached AST at
+		// the end of execution. Report staleness without releasing that owner;
+		// the next getCachedPlan lookup removes it after all borrowers are gone.
+		return false
+	}
+	return true
 }
 
 func (ses *Session) removeCachedPlan(sql string) {
@@ -1512,6 +1637,7 @@ func (ses *Session) updateCachedPlanGeneration(
 	expectedPlan *plan.Plan,
 	newPlan *plan.Plan,
 	planSnapshotTS timestamp.Timestamp,
+	statsVersions map[optimizerStatsTableKey]uint64,
 ) bool {
 	if len(sql) == 0 {
 		return false
@@ -1522,7 +1648,7 @@ func (ses *Session) updateCachedPlanGeneration(
 		return false
 	}
 	return ses.planCache.updatePlanGeneration(
-		sql, index, expectedPlan, newPlan, planSnapshotTS)
+		sql, index, expectedPlan, newPlan, planSnapshotTS, statsVersions)
 }
 
 func (ses *Session) invalidateCachedPlanGeneration(

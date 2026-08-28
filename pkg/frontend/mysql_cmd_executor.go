@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -2085,9 +2086,122 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		if err != nil {
 			return err
 		}
+		if err := refreshAnalyzeTableStats(ses, execCtx, entry); err != nil {
+			return err
+		}
 		results = append(results, result)
 	}
 	execCtx.results = results
+	return nil
+}
+
+func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.AnalyzeTableEntry) error {
+	// The derived ANALYZE query observes the transaction workspace. The engine
+	// statistics cache is process-global and observes only committed catalog and
+	// object state, so publishing while a user transaction was already active
+	// would mix two visibility domains. Preserve the legacy derived result and
+	// leave global publication to an ANALYZE statement outside that transaction.
+	if !analyzeStatsPublicationAllowed(execCtx) {
+		return nil
+	}
+	ctx := execCtx.reqCtx
+	if entry == nil || entry.Table == nil || entry.Table.AtTsExpr != nil {
+		return nil
+	}
+
+	refresher, ok := getPu(ses.GetService()).StorageEngine.(engine.StatsRefresher)
+	if !ok {
+		// Engines without persistent optimizer statistics retain the legacy
+		// ANALYZE result behavior.
+		return nil
+	}
+
+	tcc := ses.GetTxnCompileCtx()
+	dbName := resolveAnalyzeDatabase(tcc, entry.Table)
+	if dbName == "" {
+		return moerr.NewNoDB(ctx)
+	}
+	obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
+	if err != nil {
+		return err
+	}
+	if obj == nil || tableDef == nil {
+		return moerr.NewNoSuchTable(ctx, dbName, string(entry.Table.Name()))
+	}
+	// Historical snapshots and publication-backed tables do not own the current
+	// local engine statistics generation. Non-physical relations keep the
+	// legacy derived-query result without asking disttae to subscribe to them.
+	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
+		return nil
+	}
+
+	accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
+	databaseID := tableDef.DbId
+	if databaseID == 0 {
+		databaseID, err = tcc.GetDatabaseId(obj.SchemaName, nil)
+		if err != nil {
+			return err
+		}
+	}
+	key := pbstats.StatsInfoKey{
+		AccId:      accountID,
+		DatabaseID: databaseID,
+		TableID:    uint64(obj.Obj),
+		DbName:     obj.SchemaName,
+		TableName:  obj.ObjName,
+	}
+	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+}
+
+func analyzeStatsPublicationAllowed(execCtx *ExecCtx) bool {
+	return execCtx != nil &&
+		execCtx.txnOpt.activeTxnAtStartKnown &&
+		!execCtx.txnOpt.activeTxnAtStart
+}
+
+func analyzeTableOwnsPersistentStats(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.IsTemporary || tableDef.ViewSql != nil {
+		return false
+	}
+	switch tableDef.TableType {
+	case "",
+		catalog.SystemOrdinaryRel,
+		catalog.SystemIndexRel,
+		catalog.SystemMaterializedRel,
+		catalog.SystemClusterRel,
+		catalog.SystemPartitionRel:
+		return true
+	default:
+		return false
+	}
+}
+
+func publishAnalyzeTableStats(
+	ses *Session,
+	ctx context.Context,
+	key pbstats.StatsInfoKey,
+	refresher engine.StatsRefresher,
+) error {
+	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
+	release, err := acquireOptimizerStatsPublisher(ctx, ses.GetService(), tableKey)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	stats, err := refresher.RefreshTableStats(ctx, key)
+	if err != nil {
+		return err
+	}
+	if stats == nil {
+		return moerr.NewInternalErrorf(ctx, "ANALYZE TABLE did not publish statistics for %s.%s", key.DbName, key.TableName)
+	}
+
+	// The engine cache swap above is the data publication boundary. Advancing
+	// this table's version invalidates only dependent session entries; unrelated
+	// table statistics and plans remain reusable.
+	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
+	ses.cachePublishedStats(tableKey, version, stats)
 	return nil
 }
 
@@ -5775,8 +5889,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	if ses.isCached(cacheKey) {
 		return nil
 	}
+	for _, cw := range cws {
+		if tcw, ok := cw.(*TxnComputationWrapper); ok && tcw.cachedPlanSQL == cacheKey {
+			// A publication or failed generation replacement made the entry stale
+			// while these wrappers still borrowed its AST. Do not republish the
+			// just-executed old plan without rebuilding its statistics dependencies.
+			// Wrapper cleanup runs first; the next lookup then evicts the stale owner.
+			return nil
+		}
+	}
 
 	cacheProtocolVersion := currentProtocolVersion(proc)
+	planStatsVersions := make([]map[optimizerStatsTableKey]uint64, len(cws))
 	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
 	for i, cw := range cws {
 		tcw, ok := cw.(*TxnComputationWrapper)
@@ -5788,6 +5912,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if !hasPlanSnapshotTS {
 			return nil
 		}
+		planStatsVersions[i] = tcw.optimizerStatsVersions
 	}
 
 	plans := make([]*plan.Plan, len(cws))
@@ -5802,7 +5927,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		cw.Clear()
 	}
 	Cached = true
-	ses.cachePlanWithSnapshots(cacheKey, stmts, plans, planSnapshotTS, cacheProtocolVersion)
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
 }

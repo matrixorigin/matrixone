@@ -103,6 +103,7 @@ func TestResolveViewDependencyAccount(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		obj      *pbplan.ObjectRef
+		tableDef *pbplan.TableDef
 		snapshot *pbplan.Snapshot
 		want     uint32
 	}{
@@ -115,6 +116,11 @@ func TestResolveViewDependencyAccount(t *testing.T) {
 			PubInfo: &pbplan.PubInfo{TenantId: 9}},
 			snapshot: &pbplan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 8}}, want: 9},
 		{name: "cluster table", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_CATALOG, ObjName: "cluster_table"}, want: 0},
+		{name: "relation kind alone keeps tenant context", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "cluster_table"},
+			tableDef: &pbplan.TableDef{TableType: catalog.SystemClusterRel}, want: 7},
+		{name: "publication overrides generic cluster name", obj: &pbplan.ObjectRef{
+			SchemaName: catalog.MO_CATALOG, ObjName: "cluster_table",
+			PubInfo: &pbplan.PubInfo{TenantId: 9}}, want: 9},
 		{name: "statement info", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT}, want: 0},
 		{name: "system relation overrides publisher", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM,
 			ObjName: catalog.MO_STATEMENT, PubInfo: &pbplan.PubInfo{TenantId: 9}}, want: 0},
@@ -122,7 +128,11 @@ func TestResolveViewDependencyAccount(t *testing.T) {
 		{name: "sql statement cu", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM_METRICS, ObjName: catalog.MO_SQL_STMT_CU}, want: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := tcc.ResolveViewDependencyAccount(test.obj, &pbplan.TableDef{}, test.snapshot)
+			tableDef := test.tableDef
+			if tableDef == nil {
+				tableDef = &pbplan.TableDef{}
+			}
+			got, err := tcc.ResolveViewDependencyAccount(test.obj, tableDef, test.snapshot)
 			require.NoError(t, err)
 			require.Equal(t, test.want, got)
 		})
