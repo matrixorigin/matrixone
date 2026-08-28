@@ -1,0 +1,146 @@
+name: PR 27584 32GiB UT Probe
+
+# One controlled validation of the immutable PR head. The trigger commit only
+# carries this workflow; checkout below pins the MatrixOne source under test.
+on:
+  push:
+    tags:
+      - ci-pr27584-32g-*
+
+concurrency:
+  group: pr27584-32g-ut-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ut-linux-x86:
+    name: Exact-head UT on amd64 8c32g
+    environment: ci
+    runs-on: amd64-mo-shanghai-8c32g
+    timeout-minutes: 180
+    steps:
+      - name: Verify runner capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          limit_file=/sys/fs/cgroup/memory.max
+          [[ -r "${limit_file}" ]]
+          limit=$(<"${limit_file}")
+          [[ "${limit}" =~ ^[0-9]+$ ]]
+          if (( limit < 34359738368 )); then
+            echo "runner memory limit is below 32 GiB"
+            exit 1
+          fi
+          echo "runner=${{ runner.name }}"
+          echo "memory_limit_bytes=${limit}"
+          echo "cpu_count=$(nproc)"
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: matrixorigin/matrixone
+          ref: dfe9822e542511ada59a221ea8cc54068d24463e
+          fetch-depth: "1"
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "${actual}" = dfe9822e542511ada59a221ea8cc54068d24463e
+          echo "matrixone_head=${actual}"
+
+      - name: Set up Go and Java
+        uses: matrixorigin/CI/actions/setup-env@80f198907347db235658bed66c0b8a5c09bfadeb
+        with:
+          setup-java: true
+          go-version-file: "${{ github.workspace }}/go.mod"
+
+      - name: Configure Shanghai Go proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'GOPROXY=http://goproxy.goproxy.svc.cluster.local|https://goproxy.cn|direct' >> "${GITHUB_ENV}"
+
+      - name: Run exact-head UT and capture cgroup evidence
+        id: ut
+        shell: bash
+        env:
+          endpoint: ${{ secrets.S3ENDPOINT }}
+          region: ${{ secrets.S3REGION }}
+          apikey: ${{ secrets.S3APIKEY }}
+          apisecret: ${{ secrets.S3APISECRET }}
+          bucket: ${{ secrets.S3BUCKET }}
+          UT_WORKDIR: ${{ github.workspace }}
+        run: |
+          set -uo pipefail
+          evidence="${RUNNER_TEMP}/pr27584-32g-ut-evidence"
+          mkdir -p "${evidence}"
+          chmod 0700 "${evidence}"
+
+          cgroup=/sys/fs/cgroup
+          current_file="${cgroup}/memory.current"
+          peak_file="${cgroup}/memory.peak"
+          events_file="${cgroup}/memory.events"
+          stat_file="${cgroup}/memory.stat"
+          for file in "${current_file}" "${events_file}" "${stat_file}"; do
+            if [[ ! -r "${file}" ]]; then
+              echo "required cgroup file missing: ${file}"
+              exit 1
+            fi
+          done
+
+          cp "${events_file}" "${evidence}/memory.events.before"
+          cp "${stat_file}" "${evidence}/memory.stat.before"
+          printf 'unix_seconds\tmemory_current_bytes\n' > "${evidence}/memory-current.tsv"
+          (
+            while true; do
+              printf '%s\t%s\n' "$(date +%s)" "$(<"${current_file}")" >> "${evidence}/memory-current.tsv"
+              sleep 1
+            done
+          ) &
+          monitor_pid=$!
+          cleanup_monitor() {
+            kill "${monitor_pid}" 2>/dev/null || true
+            wait "${monitor_pid}" 2>/dev/null || true
+          }
+          trap cleanup_monitor EXIT
+
+          phase=config
+          make clean > "${evidence}/ut.log" 2>&1 && make config >> "${evidence}/ut.log" 2>&1
+          rc=$?
+          if (( rc == 0 )); then
+            phase=ut
+            make ut UT_CONFIGURED=1 UT_PARALLEL=6 UT_TIMEOUT=40 >> "${evidence}/ut.log" 2>&1
+            rc=$?
+          fi
+
+          cleanup_monitor
+          trap - EXIT
+          cp "${events_file}" "${evidence}/memory.events.after"
+          cp "${stat_file}" "${evidence}/memory.stat.after"
+          if [[ -r "${peak_file}" ]]; then
+            cat "${peak_file}" > "${evidence}/memory.peak"
+          else
+            awk 'NR > 1 {if ($2 > max) max=$2} END {print max+0}' "${evidence}/memory-current.tsv" > "${evidence}/memory.peak"
+          fi
+          find ut-report/failed -type f -maxdepth 3 -print > "${evidence}/failed-files.txt" 2>/dev/null || true
+          find ut-report/failed -name result.txt -exec cat {} \; > "${evidence}/failed-results.txt" 2>/dev/null || true
+
+          oom_before=$(awk '$1 == "oom_kill" {print $2}' "${evidence}/memory.events.before")
+          oom_after=$(awk '$1 == "oom_kill" {print $2}' "${evidence}/memory.events.after")
+          peak=$(<"${evidence}/memory.peak")
+          printf '{\n  "pr_head": "dfe9822e542511ada59a221ea8cc54068d24463e",\n  "runner_label": "amd64-mo-shanghai-8c32g",\n  "ut_parallel": 6,\n  "phase": "%s",\n  "exit_code": %d,\n  "memory_peak_bytes": %s,\n  "oom_kill_delta": %d\n}\n' \
+            "${phase}" "${rc}" "${peak}" "$((oom_after - oom_before))" > "${evidence}/summary.json"
+          cat "${evidence}/summary.json"
+          exit "${rc}"
+
+      - name: Upload controlled evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr27584-32g-ut-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr27584-32g-ut-evidence
+          if-no-files-found: warn
+          retention-days: 14
