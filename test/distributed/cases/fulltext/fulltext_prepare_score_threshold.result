@@ -1,0 +1,228 @@
+drop database if exists ft_score_param;
+create database ft_score_param;
+use ft_score_param;
+create table docs(id bigint primary key, body text not null);
+insert into docs values
+(1,'fox zeta zeta'),
+(2,'fox fox zeta'),
+(3,'fox fox fox'),
+(4,'alpha alpha');
+create fulltext index ft on docs(body);
+select id from docs where match(body) against('fox' in natural language mode) > 0 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('fox' in natural language mode) >= 0.001 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from docs where match(body) against('fox' in natural language mode) >= 0 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from docs where match(body) against('fox' in natural language mode) > -1 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from docs where 0 > match(body) against('fox' in natural language mode) order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+prepare both_stmt from 'select id from docs where match(body) against(? in natural language mode) > ? order by id';
+set @term='fox';
+set @score=0;
+execute both_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+execute both_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set @hi=0.04;
+execute both_stmt using @term,@hi;
+➤ id[-5,64,0]  𝄀
+3
+set @neg=-1;
+execute both_stmt using @term,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+execute both_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare both_stmt;
+prepare score_stmt from 'select id from docs where match(body) against(''fox'' in natural language mode) > ? order by id';
+set @score=0;
+execute score_stmt using @score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare score_stmt;
+prepare term_stmt from 'select id from docs where match(body) against(? in natural language mode) > 0 order by id';
+set @term='fox';
+execute term_stmt using @term;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare term_stmt;
+prepare ge_stmt from 'select id from docs where match(body) against(? in natural language mode) >= ? order by id';
+set @term='fox';
+set @pos=0.001;
+execute ge_stmt using @term,@pos;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set @zero=0;
+execute ge_stmt using @term,@zero;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare ge_stmt;
+prepare cast_stmt from 'select id from docs where match(body) against(? in natural language mode) > cast(? as double) order by id';
+set @term='fox';
+set @score=0;
+execute cast_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare cast_stmt;
+prepare rev_stmt from 'select id from docs where ? < match(body) against(? in natural language mode) order by id';
+set @score=0;
+set @term='fox';
+execute rev_stmt using @score,@term;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare rev_stmt;
+prepare revbad_stmt from 'select id from docs where ? > match(body) against(? in natural language mode) order by id';
+set @score=0;
+set @term='fox';
+execute revbad_stmt using @score,@term;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare revbad_stmt;
+prepare and_stmt from 'select id from docs where match(body) against(? in natural language mode) > ? and id > 1 order by id';
+set @term='fox';
+set @score=0;
+execute and_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+3
+deallocate prepare and_stmt;
+select id from docs where match(body) against('fox' in natural language mode) < 5 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from docs where match(body) against('fox' in natural language mode) < 0 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+prepare lt_stmt from 'select id from docs where match(body) against(? in natural language mode) < ? order by id';
+set @term='fox';
+set @s=0;
+execute lt_stmt using @term,@s;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @s=5;
+execute lt_stmt using @term,@s;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare lt_stmt;
+prepare le_stmt from 'select id from docs where match(body) against(? in natural language mode) <= ? order by id';
+set @term='fox';
+set @s=0;
+execute le_stmt using @term,@s;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare le_stmt;
+select id from docs where match(body) against('fox' in natural language mode) > 0 and match(body) against('fox' in natural language mode) < 5 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+prepare band_stmt from 'select id from docs where match(body) against(''fox'' in natural language mode) > ? and match(body) against(''fox'' in natural language mode) < ? order by id';
+set @lo=0;
+set @hi=5;
+execute band_stmt using @lo,@hi;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set @neg=-1;
+execute band_stmt using @neg,@hi;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare band_stmt;
+prepare mixed_stmt from 'select id from docs where match(body) against(''fox'' in natural language mode) > 0 and match(body) against(''fox'' in natural language mode) < ? order by id';
+set @hi=5;
+execute mixed_stmt using @hi;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare mixed_stmt;
+prepare twomatch_stmt from 'select id from docs where match(body) against(? in natural language mode) > ? and match(body) against(? in natural language mode) < ? order by id';
+set @term='fox';
+set @lo=0;
+set @hi=5;
+execute twomatch_stmt using @term,@lo,@term,@hi;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare twomatch_stmt;
+set experimental_fulltext2_index = 1;
+create table docs2(id bigint primary key, body text not null);
+insert into docs2 select * from docs;
+create fulltext2 index ft2 on docs2(body);
+select id from docs2 where match(body) against('fox' in bm25 mode) > 0 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+prepare ft2_stmt from 'select id from docs2 where match(body) against(? in bm25 mode) > ? order by id';
+set @term='fox';
+set @score=0;
+execute ft2_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+execute ft2_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set @neg=-1;
+execute ft2_stmt using @term,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+execute ft2_stmt using @term,@score;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare ft2_stmt;
+prepare ft2_ge from 'select id from docs2 where match(body) against(? in bm25 mode) >= ? order by id';
+set @term='fox';
+set @zero=0;
+execute ft2_ge using @term,@zero;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+deallocate prepare ft2_ge;
+prepare ft2_null from 'select id from docs2 where match(body) against(? in bm25 mode) > ? order by id';
+set @nullterm=NULL;
+set @neg=-1;
+execute ft2_null using @nullterm,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @zero=0;
+execute ft2_null using @nullterm,@zero;
+➤ id[-5,64,0]
+execute ft2_null using @nullterm,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @term='fox';
+execute ft2_null using @term,@zero;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare ft2_null;
+set experimental_fulltext2_index = 0;
+prepare ft1_null from 'select id from docs where match(body) against(? in natural language mode) > ? order by id';
+set @nullterm=NULL;
+set @neg=-1;
+execute ft1_null using @nullterm,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @zero=0;
+execute ft1_null using @nullterm,@zero;
+invalid input: fulltext search pattern must not be NULL
+deallocate prepare ft1_null;
+drop database ft_score_param;
