@@ -687,6 +687,10 @@ func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
 
 	var executed []string
 	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
+			return newProtocolVersionResultValue(t,
+				`{"method":"GETPROTOCOLVERSION","result":"cn-a:35,cn-b:35"}`), nil
+		}
 		executed = append(executed, sql)
 		if sql == entry.PostSql {
 			upgraded = true
