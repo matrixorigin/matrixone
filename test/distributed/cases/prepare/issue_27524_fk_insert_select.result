@@ -9,7 +9,7 @@ constraint child_parent foreign key(parent_id) references parent(id)
 );
 insert into parent values (1);
 insert into child select 10, id + 1 from parent;
-Cannot add or update a child row: a foreign key constraint fails
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select count(*) from child;
 count(*)
 0

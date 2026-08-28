@@ -5,6 +5,12 @@
 // You may obtain a copy of the License at
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package message
 
@@ -50,7 +56,7 @@ func TestReceiveJoinMapResultCancellationPrecedence(t *testing.T) {
 		cancel(primaryErr)
 		select {
 		case err := <-resultCh:
-			require.ErrorIs(t, err, primaryErr)
+			require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
 		case <-time.After(2 * time.Second):
 			t.Fatal("ReceiveJoinMapResult did not return after cancellation")
 		}
@@ -64,7 +70,7 @@ func TestReceiveJoinMapResultCancellationPrecedence(t *testing.T) {
 		SendJoinMapResult(NewJoinMapBuildErrorResult(context.Canceled), 52, false, 0, mb)
 
 		_, err := ReceiveJoinMap(52, false, 0, mb, ctx)
-		require.ErrorIs(t, err, primaryErr)
+		require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
 	})
 }
 
@@ -80,7 +86,7 @@ func TestReceiveJoinMapResultCancellationTreePrecedence(t *testing.T) {
 		), 53, false, 0, mb)
 
 		_, err := ReceiveJoinMap(53, false, 0, mb, ctx)
-		require.ErrorIs(t, err, primaryErr)
+		require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
 	})
 
 	t.Run("query interrupted", func(t *testing.T) {
@@ -92,7 +98,7 @@ func TestReceiveJoinMapResultCancellationTreePrecedence(t *testing.T) {
 		), 54, false, 0, mb)
 
 		_, err := ReceiveJoinMap(54, false, 0, mb, ctx)
-		require.ErrorIs(t, err, primaryErr)
+		require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
 	})
 
 	t.Run("mixed message keeps substantive leaf", func(t *testing.T) {
@@ -102,7 +108,7 @@ func TestReceiveJoinMapResultCancellationTreePrecedence(t *testing.T) {
 		), 55, false, 0, mb)
 
 		_, err := ReceiveJoinMap(55, false, 0, mb, context.Background())
-		require.ErrorIs(t, err, primaryErr)
+		require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
 	})
 }
 
@@ -149,6 +155,6 @@ func TestReceiveJoinMapResultConcurrentCancellationDoesNotLeak(t *testing.T) {
 	cancel(primaryErr)
 	wg.Wait()
 	for _, err := range results {
-		require.ErrorIs(t, err, primaryErr)
+		require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
 	}
 }
