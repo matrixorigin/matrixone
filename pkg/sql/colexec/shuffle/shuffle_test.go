@@ -17,7 +17,9 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -736,6 +738,168 @@ func TestShuffleResetAndFreeReleaseRuntimeState(t *testing.T) {
 	arg.Free(proc, false, nil)
 	require.Nil(t, arg.ctr.exprExec)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestStableStringHashUsesFrozenExecutionContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := NewArgument()
+	defer arg.Release()
+	arg.BucketNum = 2
+
+	// An absent field from an older coordinator is legacy by construction.
+	require.NoError(t, arg.Prepare(proc))
+	require.False(t, arg.ctr.stableStringHash)
+	arg.Reset(proc, false, nil)
+
+	// A new execution can select the complete-key mapping explicitly.
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, arg.ctr.stableStringHash)
+	arg.Reset(proc, false, nil)
+
+	// Pipelines already created for that execution keep its immutable value if
+	// the coordinator admits the next execution under a rollback gate.
+	frozenChild := proc.NewNoContextChildProc(0)
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	require.NoError(t, arg.Prepare(frozenChild))
+	require.True(t, arg.ctr.stableStringHash)
+	arg.Reset(frozenChild, false, nil)
+
+	nextChild := proc.NewNoContextChildProc(0)
+	require.NoError(t, arg.Prepare(nextChild))
+	require.False(t, arg.ctr.stableStringHash)
+	arg.Reset(nextChild, false, nil)
+}
+
+func TestEqualStringKeysKeepOneOwnerAcrossCoordinatorAndRemoteProcesses(t *testing.T) {
+	coordinatorProc := testutil.NewProcess(t)
+	remoteProc := testutil.NewProcess(t)
+	defer coordinatorProc.Free()
+	defer remoteProc.Free()
+	coordinatorProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+	remoteProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+
+	coordinatorShuffle := NewArgument()
+	remoteShuffle := NewArgument()
+	defer func() {
+		coordinatorShuffle.Reset(coordinatorProc, false, nil)
+		coordinatorShuffle.Release()
+	}()
+	defer func() {
+		remoteShuffle.Reset(remoteProc, false, nil)
+		remoteShuffle.Release()
+	}()
+	coordinatorShuffle.BucketNum = 16
+	remoteShuffle.BucketNum = 16
+	require.NoError(t, coordinatorShuffle.Prepare(coordinatorProc))
+	require.NoError(t, remoteShuffle.Prepare(remoteProc))
+
+	// Find a deterministic counterexample for which changing algorithms would
+	// split one equal key across two owners.
+	var key []byte
+	for i := 0; i < 1024; i++ {
+		candidate := []byte(fmt.Sprintf("shared-prefix/%08d/shared-suffix", i))
+		if plan2.StableCharHashToRange(candidate, 16) !=
+			plan2.SimpleCharHashToRange(candidate, 16) {
+			key = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, key)
+
+	// A rollout rollback after Prepare affects only the next execution. Both
+	// running processes retain the complete-key contract carried on Process.
+	coordinatorProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	remoteProc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	coordinatorOwner := stringHashToRange(coordinatorShuffle, key, 16)
+	remoteOwner := stringHashToRange(remoteShuffle, key, 16)
+	require.Equal(t, coordinatorOwner, remoteOwner)
+	require.Equal(t, plan2.StableCharHashToRange(key, 16), coordinatorOwner)
+	require.NotEqual(t, plan2.SimpleCharHashToRange(key, 16), coordinatorOwner)
+}
+
+func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_text.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	values := [][]byte{
+		[]byte("common-prefix/00000000/common-suffix"),
+		[]byte("common-prefix/00000001/common-suffix"),
+		nil,
+		{},
+		[]byte("租户/共同前缀/00000002/共同后缀"),
+		{0, 1, 2, 0, 255, 128},
+	}
+	for row, value := range values {
+		require.NoError(t, vector.AppendBytes(vec, value, row == 2, mp))
+	}
+
+	const bucketNum = uint64(8)
+	arg := &Shuffle{}
+	arg.ctr.stableStringHash = true
+	sels := make([][]int32, bucketNum)
+	col, area := vector.MustVarlenaRawData(vec)
+	appendStringHashSels(arg, sels, vec, col, area, bucketNum, true)
+
+	for row, value := range values {
+		expectedBucket := uint64(0)
+		if row != 2 {
+			expectedBucket = plan2.StableCharHashToRange(value, bucketNum)
+		}
+		require.Contains(t, sels[expectedBucket], int32(row))
+	}
+}
+
+func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
+	for _, keyLength := range []int{8, 32, 64, 1024, 64 << 10, 1 << 20} {
+		rows := min(256, max(1, (4<<20)/keyLength))
+		mp := mpool.MustNewZero()
+		vec := vector.NewVec(types.T_text.ToType())
+		for row := 0; row < rows; row++ {
+			value := make([]byte, keyLength)
+			for i := range value {
+				value[i] = byte(i*131 + 17)
+			}
+			binary.LittleEndian.PutUint64(value[keyLength-8:], uint64(row))
+			if err := vector.AppendBytes(vec, value, false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		col, area := vector.MustVarlenaRawData(vec)
+		for _, mode := range []struct {
+			name   string
+			stable bool
+		}{
+			{name: "v32-sampled", stable: false},
+			{name: "v33-complete", stable: true},
+		} {
+			arg := &Shuffle{}
+			arg.ctr.stableStringHash = mode.stable
+			sels := make([][]int32, 16)
+			appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+
+			b.Run(fmt.Sprintf("%s/%dB/%drows", mode.name, keyLength, rows), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(rows * keyLength))
+				for b.Loop() {
+					for bucket := range sels {
+						sels[bucket] = sels[bucket][:0]
+					}
+					appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+				}
+			})
+		}
+
+		vec.Free(mp)
+		if mp.CurrNB() != 0 {
+			b.Fatalf("leaked %d bytes", mp.CurrNB())
+		}
+	}
 }
 
 func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {

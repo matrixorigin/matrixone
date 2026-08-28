@@ -298,6 +298,10 @@ type PkCheckByTN struct{}
 // Used by CCPR for cross-cluster tombstones.
 type SkipTransferKey struct{}
 
+// MoColumnsUpdateKey marks the internal upgrade path that is allowed to write
+// redundant fields in mo_catalog.mo_columns as ordinary table data.
+type MoColumnsUpdateKey struct{}
+
 // StartTS is the start timestamp of a statement.
 type StartTS struct{}
 

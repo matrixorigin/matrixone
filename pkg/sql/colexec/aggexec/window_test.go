@@ -1687,6 +1687,45 @@ func TestPercentRank(t *testing.T) {
 	})
 }
 
+func TestRankingWindowUnsignedResults(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	osVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(osVec, []int64{0, 2, 3, 5}, nil, mp))
+	defer osVec.Free(mp)
+
+	tests := []struct {
+		name string
+		id   int64
+		want []uint64
+	}{
+		{name: "rank", id: WinIdOfRank, want: []uint64{1, 1, 3, 4, 4}},
+		{name: "dense_rank", id: WinIdOfDenseRank, want: []uint64{1, 1, 2, 3, 3}},
+		{name: "row_number", id: WinIdOfRowNumber, want: []uint64{1, 2, 3, 4, 5}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exec, err := makeWindowExec(mp, test.id, false)
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(len(test.want)))
+			for row := 0; row < osVec.Length(); row++ {
+				require.NoError(t, exec.Fill(0, row, []*vector.Vector{osVec}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, types.T_uint64, results[0].GetType().Oid)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](results[0]))
+
+			results[0].Free(mp)
+			exec.Free()
+		})
+	}
+}
+
 // TestNtileExec_ParameterValidation tests parameter validation for makeNtileExec
 func TestNtileExec_ParameterValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -2572,7 +2611,7 @@ func TestSingleWindowFailedUnmarshalPreservesOwnedState(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	info := singleAggInfo{
 		aggID:     WinIdOfRowNumber,
-		retType:   types.T_int64.ToType(),
+		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
 	input := vector.NewVec(types.T_int64.ToType())

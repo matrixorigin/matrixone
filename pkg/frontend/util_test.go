@@ -1102,8 +1102,9 @@ func TestRewriteError(t *testing.T) {
 				err:      moerr.NewBadDBNoCtx("yyy"),
 				username: "abc",
 			},
-			want:  moerr.ER_BAD_DB_ERROR,
-			want1: "HY000",
+			want: moerr.ER_BAD_DB_ERROR,
+			// MySQL pairs ER_BAD_DB_ERROR with SQLSTATE 42000
+			want1: "42000",
 			want2: "Unknown database yyy",
 		},
 	}

@@ -50,11 +50,11 @@
 
 | 边界 | Owner | merge rule / version | Oracle |
 |---|---|---|---|
-| batch marshal/unmarshal | `pkg/container/batch/batch.go` | MORPC v33 trailer保留来源；v32 cached-plan-generation peer对source-only batch降级丢弃，旧 prepared metadata仍按旧gate拒绝 | 五类来源 buffered round-trip；v32 negative/v33 positive；invalid/reuse UT |
-| CN dispatch / remote result | dispatch sender、remote-run receiver | 双向使用 MORPC v33 source gate | dispatch/remoterun version-matrix UT |
+| batch marshal/unmarshal | `pkg/container/batch/batch.go` | MORPC v35 trailer保留来源；v34 unsigned-metadata peer对source-only batch降级丢弃，旧 prepared metadata仍按旧gate拒绝 | 五类来源 buffered round-trip；v34 negative/v35 positive；invalid/reuse UT |
+| CN dispatch / remote result | dispatch sender、remote-run receiver | 双向使用 MORPC v35 source gate | dispatch/remoterun version-matrix UT |
 | grouping batch codec | batch grouping codec | grouping bitmap与五类来源同时 round-trip | 五类来源 grouping streaming UT |
-| aggregate/group state encode/decode/merge | `aggexec.SaveIntermediateResult*`、`group.saveAggregateChunkForProtocol` | MORPC v33携带来源；旧协议显式省略；merge使用贡献规则；未知值拒绝且decoder可复用 | 五类 full/chunk round-trip、group protocol gate、same/mixed merge、invalid/reuse UT |
-| Process parameters | Process/frontend codecs | SQLPrepare/COMStmt/UserVariable保留至 Param executor；v33远端携带 | process/frontend UT |
+| aggregate/group state encode/decode/merge | `aggexec.SaveIntermediateResult*`、`group.saveAggregateChunkForProtocol` | MORPC v35携带来源；旧协议显式省略；merge使用贡献规则；未知值拒绝且decoder可复用 | 五类 full/chunk round-trip、group protocol gate、same/mixed merge、invalid/reuse UT |
+| Process parameters | Process/frontend codecs | SQLPrepare/COMStmt/UserVariable保留至 Param executor；v35远端携带 | process/frontend UT |
 | spill / selected-row materialization | selection/grouping codecs、spill owners | 精确行来源随payload写入/恢复 | selection/grouping/spill consumer UT |
 | storage / derived materialization | compile/storage operators | materialized vector逐行透明；重新计算表达式为Expression | local/materialized/remote BVT |
 
@@ -86,4 +86,4 @@
 - 未知来源：vector、batch、Literal/LiteralVec planner入口确定性拒绝。
 - public BVT：证明 projection、CTE、join、UNION、GROUP BY、DISTINCT、aggregate、materialization、flow-control、prepare-reuse 的 SQL 可达性和结果 bytes/NULL 等价；`HEX`/`COUNT`/`MAX` 不读取 source，因此不作为 source 传播 oracle。
 - source 传播由 typed owner oracle观察：planner rewrite、operator/vector、aggregate/group-state、value-window、dispatch sender、remote-result receiver分别直接断言 `GetStringSourceAt`。remote typed tests直接调用远端专用 `marshalRemoteBatch` 与 `messageReceiverOnServer.sendBatch`，从而确定性经过 v27 remote wire owner，不依赖本地 planner placement 或 BVT 调度概率。
-- 当前独立 StringSource wire capability：`MORPCVersion33`；`MORPCVersion32`归属main的cross-transaction logical-plan generation snapshot。
+- 当前独立 StringSource wire capability：`MORPCVersion35`；`MORPCVersion34`归属main的correct persisted unsigned-column metadata。

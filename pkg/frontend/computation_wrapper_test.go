@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -299,17 +301,18 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 	require.NoError(t, err)
 
 	prepareStmt := &PrepareStmt{
-		Name:                stmtName,
-		Sql:                 prepareString.Sql,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         stmts[0],
-		NativeMode:          ses.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     ses.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		getFromSendLongData: make(map[int]struct{}),
-		protocolVersion:     currentProtocolVersion(proc),
-		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(preparePlan.GetDcl().GetPrepare().Plan),
-		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(preparePlan.GetDcl().GetPrepare().Plan)) > 0,
+		Name:                       stmtName,
+		Sql:                        prepareString.Sql,
+		PreparePlan:                preparePlan,
+		PrepareStmt:                stmts[0],
+		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:         true,
+		getFromSendLongData:        make(map[int]struct{}),
+		protocolVersion:            currentProtocolVersion(proc),
+		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		hasPaginationParams:        plan2.PreparedPlanHasPaginationParams(preparePlan.GetDcl().GetPrepare().Plan),
+		hasLagLeadParams:           len(plan2.PreparedLagLeadParamPositions(preparePlan.GetDcl().GetPrepare().Plan)) > 0,
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
@@ -472,73 +475,139 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 	}
 }
 
-func TestInitExecuteStmtParamKeepsOrdinaryBinaryQueryOnCachedFastPath(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?, ?, ?, ?")
+func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 212, "select ? as result")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		prepareStmt.Close()
 	}()
+	require.Equal(t, []int32{0}, prepareStmt.directResultParamPositions)
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	for _, value := range []string{"1", "42", "12.5", "3.5"} {
-		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	resultExpr := func(queryPlan *plan.Plan) *plan.Expr {
+		query := queryPlan.GetQuery()
+		return query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
 	}
-	prepareStmt.ParamTypes = []byte{
-		byte(defines.MYSQL_TYPE_TINY), 0,
-		byte(defines.MYSQL_TYPE_LONGLONG), 0,
-		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
-		byte(defines.MYSQL_TYPE_DOUBLE), 0,
-	}
-	sentinel := compile.NewCompile(
+	ordinaryCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	prepareStmt.compile = sentinel
+	prepareStmt.compile = ordinaryCompile
+	ordinaryColDef := [][]byte{[]byte("prepare-time-text")}
+	prepareStmt.ColDefData = ordinaryColDef
 
+	var metadataTypes []plan.Type
+	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+		require.Len(t, columns, 1)
+		metadataTypes = append(metadataTypes, columns[0].Typ)
+		return [][]byte{[]byte(fmt.Sprintf("%d:%d:%d", columns[0].Typ.Id, columns[0].Typ.Width, columns[0].Typ.Scale))}, nil
+	}
+
+	install := func(value string, mysqlType defines.MysqlType, isNull bool) {
+		t.Helper()
+		cw.proc.SetPrepareParams(nil)
+		if prepareStmt.params != nil {
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), isNull, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		execCtx.prepareColDef = ordinaryColDef
+	}
+
+	install("-42", defines.MYSQL_TYPE_LONGLONG, false)
 	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	for i := 0; i < prepareStmt.params.Length(); i++ {
-		require.Equal(t, types.StringSourceCOMStmt, prepareStmt.params.GetStringSourceAt(i))
-	}
-	require.Nil(t, cw.paramVals, "ordinary COM_STMT Query must not infer runtime parameter types")
-	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, runtimePlan)
-	require.Same(t, sentinel, retComp, "ordinary COM_STMT Query must reuse the cached compile")
-	for i, want := range []vector.PrepareParamKind{
-		vector.PrepareParamBoolean,
-		vector.PrepareParamInteger,
-		vector.PrepareParamDecimal,
-		vector.PrepareParamFloat,
-	} {
-		require.Equal(t, want, cw.proc.GetPrepareParamKind(i), "parameter %d", i)
-	}
+	require.Equal(t, types.StringSourceCOMStmt, prepareStmt.params.GetStringSourceAt(0))
+	require.Nil(t, retComp)
+	require.NotSame(t, ordinaryPlan, runtimePlan)
+	require.Equal(t, int32(types.T_int64), resultExpr(runtimePlan).Typ.Id)
+	require.Equal(t, int32(types.T_int64), metadataTypes[len(metadataTypes)-1].Id)
+	require.NotEqual(t, ordinaryColDef, execCtx.prepareColDef)
+	require.Equal(t, ordinaryColDef, prepareStmt.ColDefData, "execution metadata must not mutate PREPARE metadata")
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	install("-43", defines.MYSQL_TYPE_LONGLONG, false)
+	retComp, reusedPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, runtimePlan, reusedPlan)
+
+	executor, err := colexec.NewExpressionExecutor(cw.proc, resultExpr(reusedPlan))
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, result.GetType().Oid)
+	require.Equal(t, int64(-43), vector.GetFixedAtNoTypeCheck[int64](result, 0),
+		"cached direct-result plan must read the current parameter value")
+
+	decimalText := "-12345678901234567890.123456789"
+	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
+	retComp, decimalPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, runtimePlan, decimalPlan)
+	decimalType := resultExpr(decimalPlan).Typ
+	require.Equal(t, int32(types.T_decimal128), decimalType.Id)
+	require.Equal(t, int32(29), decimalType.Width)
+	require.Equal(t, int32(9), decimalType.Scale)
+	require.Equal(t, decimalType, metadataTypes[len(metadataTypes)-1])
+	require.Same(t, runtimeCompile, prepareStmt.runtimeCompile,
+		"a category miss must retain the preceding live cache until compile succeeds")
+
+	decimalCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(decimalCompile))
+
+	// NULL has no stable runtime result type. It must return to the immutable
+	// prepare-time plan/metadata rather than leaking the preceding DECIMAL domain.
+	install("", defines.MYSQL_TYPE_NULL, true)
+	retComp, nullPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, ordinaryCompile, retComp)
+	require.Same(t, ordinaryPlan, nullPlan)
+	require.Equal(t, ordinaryColDef, execCtx.prepareColDef)
+	require.Same(t, decimalCompile, prepareStmt.runtimeCompile,
+		"an untyped NULL execution may leave the bounded numeric cache dormant")
 }
 
-func BenchmarkInitExecuteStmtParamOrdinaryBinaryQueryFastPath(b *testing.B) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 205, "select ?")
+func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 213, "select ? as direct_value, abs(?) as nested_value")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		prepareStmt.Close()
 	}()
+	require.Equal(t, []int32{0}, prepareStmt.directResultParamPositions)
+
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("text"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_LONG), 0,
+	}
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	prepareStmt.compile = compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	cachedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
-			execCtx, ses, cw, nil, prepareStmt.Name)
-		if err != nil || retComp != prepareStmt.compile || runtimePlan != cachedPlan || cw.paramVals != nil {
-			b.Fatalf("ordinary COM_STMT Query left cached fast path: comp=%p plan=%p params=%d err=%v",
-				retComp, runtimePlan, len(cw.paramVals), err)
-		}
-		if owned && stmt != nil {
-			stmt.Free()
-		}
-	}
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp, "the nested ABS marker uses main's regular runtime specialization")
+	require.NotSame(t, ordinaryPlan, runtimePlan)
+	require.False(t, cw.runtimeDirectResultSpecialization,
+		"the unrelated nested numeric marker must not expand direct-result admission")
+	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_text), root.ProjectList[0].Typ.Id,
+		"the direct VAR_STRING result must retain TEXT metadata")
 }
 
 func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
@@ -707,6 +776,23 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		})
 	}
 
+	for _, test := range []struct {
+		value     string
+		wantWidth int32
+		wantScale int32
+	}{
+		{value: "123", wantWidth: 3},
+		{value: "0.00", wantWidth: 1, wantScale: 0},
+		{value: "0e-30", wantWidth: 1, wantScale: 0},
+		{value: "1e-30", wantWidth: 30, wantScale: 30},
+	} {
+		got, ok := binaryProtocolPrepareParamType(
+			defines.MYSQL_TYPE_NEWDECIMAL, false, []byte(test.value))
+		require.True(t, ok, test.value)
+		require.Equal(t, test.wantWidth, got.Width, test.value)
+		require.Equal(t, test.wantScale, got.Scale, test.value)
+	}
+
 	decimal256, ok := binaryProtocolPrepareParamType(
 		defines.MYSQL_TYPE_NEWDECIMAL, false, []byte(strings.Repeat("9", 65)))
 	require.True(t, ok)
@@ -718,6 +804,146 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 
 	_, ok = binaryProtocolPrepareParamType(defines.MYSQL_TYPE_NULL, false, nil)
 	require.False(t, ok)
+}
+
+func TestBinaryProtocolRuntimeParamTypesDoesNotScanDecimalPayload(t *testing.T) {
+	params := vector.NewVec(types.T_text.ToType())
+	mp := mpool.MustNewZero()
+	defer params.Free(mp)
+	payload := append([]byte(strings.Repeat("0", 1<<20)), '1', '.', '0')
+	require.NoError(t, vector.AppendBytes(params, payload, false, mp))
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+	var runtimeTypes []types.Type
+	allocs := testing.AllocsPerRun(20, func() {
+		runtimeTypes = binaryProtocolRuntimeParamTypes(paramTypes, params)
+	})
+	require.Len(t, runtimeTypes, 1)
+	require.True(t, runtimeTypes[0].IsNumeric())
+	require.LessOrEqual(t, allocs, float64(1),
+		"OID-only text-comparison admission must not allocate an input-sized DECIMAL string")
+	require.Equal(t, payload, params.GetRawBytesAt(0), "category admission must not mutate packet provenance")
+}
+
+func BenchmarkBinaryProtocolRuntimeParamTypesLargeDecimal(b *testing.B) {
+	params := vector.NewVec(types.T_text.ToType())
+	mp := mpool.MustNewZero()
+	defer params.Free(mp)
+	payload := append([]byte(strings.Repeat("0", 1<<20)), '1', '.', '0')
+	require.NoError(b, vector.AppendBytes(params, payload, false, mp))
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	for b.Loop() {
+		runtimeTypes := binaryProtocolRuntimeParamTypes(paramTypes, params)
+		if len(runtimeTypes) != 1 || !runtimeTypes[0].IsNumeric() {
+			b.Fatal("DECIMAL packet was not classified as numeric")
+		}
+	}
+}
+
+func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 214, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0e+77"), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	value := values[0].(plan2.ParamValue)
+	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.RuntimeType)
+	require.True(t, value.HasRuntimeType)
+	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.DirectResultType)
+	require.True(t, value.HasDirectResultType)
+	require.Equal(t, "0", value.MaterializedValue)
+	require.Equal(t, "0", cw.proc.GetPrepareParams().GetStringAt(0),
+		"the restored typed ParamRef must execute against the bounded canonical lexeme")
+}
+
+func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 215, "select ?")
+	defer prepareStmt.Close()
+
+	payload := strings.Repeat("x", 1<<20)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte(payload), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	_, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), payload[:128])
+	require.Contains(t, err.Error(), "1048576 bytes")
+	require.Less(t, len(err.Error()), 160)
+}
+
+func BenchmarkBinaryDirectResultDecimalLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	positions := []int32{0}
+	paramVals := []any{plan2.ParamValue{Value: value}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		normalized, visible, canonical, hasVisible, ok := binaryProtocolPrepareParamDomains(
+			defines.MYSQL_TYPE_NEWDECIMAL, false, value)
+		if !ok || !hasVisible {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+		param := paramVals[0].(plan2.ParamValue)
+		param.RuntimeType = normalized
+		param.HasRuntimeType = true
+		param.DirectResultType = visible
+		param.HasDirectResultType = true
+		param.MaterializedValue = canonical
+		paramVals[0] = param
+		if err := applyBinaryDirectResultDecimalTypes(
+			context.Background(), paramVals, paramTypes, positions); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestApplyBinaryDirectResultDecimalTypesPreservesLexicalScale(t *testing.T) {
+	values := []any{
+		plan2.ParamValue{
+			Value: "0.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true,
+			DirectResultType: types.New(types.T_decimal64, 2, 2), HasDirectResultType: true,
+		},
+		plan2.ParamValue{
+			Value: "9.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true,
+			DirectResultType: types.New(types.T_decimal64, 3, 2), HasDirectResultType: true,
+		},
+	}
+	err := applyBinaryDirectResultDecimalTypes(
+		context.Background(), values,
+		[]byte{
+			byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+			byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+		},
+		[]int32{0},
+	)
+	require.NoError(t, err)
+	direct := values[0].(plan2.ParamValue)
+	require.Equal(t, types.T_decimal64, direct.RuntimeType.Oid)
+	require.Equal(t, int32(2), direct.RuntimeType.Width)
+	require.Equal(t, int32(2), direct.RuntimeType.Scale)
+	unrelated := values[1].(plan2.ParamValue)
+	require.Equal(t, int32(1), unrelated.RuntimeType.Width)
+	require.Zero(t, unrelated.RuntimeType.Scale)
 }
 
 func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
@@ -837,6 +1063,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 		}},
 	}}, IsPrepare: true}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
+	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	cw.plan = manualPlan
 
 	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.5tail", ""))
@@ -939,7 +1166,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false)
+	}, false, false)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
@@ -987,6 +1214,7 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 		}},
 	}}, IsPrepare: true}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
+	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(manualPlan, 1)
 	require.True(t, prepareStmt.numericPrefixConsumer)
 
@@ -1082,6 +1310,23 @@ func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
 	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
 }
 
+func TestPreparedDirectResultSemanticKeyPreservesDecimalMetadataDomain(t *testing.T) {
+	decimal := func(value string, width, scale int32) []any {
+		return []any{plan2.ParamValue{
+			Value: value, PrepareParamKind: vector.PrepareParamDecimal,
+			RuntimeType: types.New(types.T_decimal64, width, scale), HasRuntimeType: true,
+		}}
+	}
+	positions := []int32{0}
+	fixedScale := preparedDirectResultSemanticKey(decimal("9.0", 2, 1), positions)
+	sameMetadataDomain := preparedDirectResultSemanticKey(decimal("8.0", 2, 1), positions)
+	trailingZeroScale := preparedDirectResultSemanticKey(decimal("9.00", 3, 2), positions)
+
+	require.Equal(t, fixedScale, sameMetadataDomain)
+	require.NotEqual(t, fixedScale, trailingZeroScale,
+		"direct DECIMAL scale is visible metadata and must participate in the cache category")
+}
+
 func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
 	defer prepareStmt.Close()
@@ -1140,6 +1385,7 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) 
 		}},
 	}}, IsPrepare: true}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
+	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	prepareStmt.numericPrefixConsumer = true
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))

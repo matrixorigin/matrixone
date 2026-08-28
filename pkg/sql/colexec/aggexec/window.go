@@ -24,6 +24,10 @@ import (
 )
 
 func SingleWindowReturnType(_ []types.Type) types.Type {
+	return types.T_uint64.ToType()
+}
+
+func NtileReturnType(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
 
@@ -52,7 +56,7 @@ func readI64Slice(reader io.Reader, state string) (i64Slice, error) {
 // special structure for a single column window function.
 type singleWindowExec struct {
 	singleAggInfo
-	ret aggResultWithFixedType[int64]
+	ret aggResultWithFixedType[uint64]
 
 	// groups [][]int64
 	groups []i64Slice
@@ -61,7 +65,7 @@ type singleWindowExec struct {
 func makeRankDenseRankRowNumber(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &singleWindowExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mp, info.retType, info.emptyNull, 0, false),
+		ret:           initAggResultWithFixedTypeResult[uint64](mp, info.retType, info.emptyNull, 0, false),
 	}
 }
 
@@ -381,7 +385,7 @@ func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 			continue
 		}
 
-		sn := int64(1)
+		sn := uint64(1)
 		for i := 1; i < len(group); i++ {
 			m := int(group[i] - group[i-1])
 
@@ -390,7 +394,7 @@ func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 
 				values[x][y] = sn
 			}
-			sn += int64(m)
+			sn += uint64(m)
 		}
 	}
 	return exec.ret.flushAll(), nil
@@ -405,7 +409,7 @@ func (exec *singleWindowExec) flushDenseRank() ([]*vector.Vector, error) {
 			continue
 		}
 
-		sn := int64(1)
+		sn := uint64(1)
 		for i := 1; i < len(group); i++ {
 			m := int(group[i] - group[i-1])
 
@@ -433,7 +437,7 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 		for j := int64(1); j <= n; j++ {
 			x, y := exec.ret.updateNextAccessIdx(idx)
 
-			values[x][y] = j
+			values[x][y] = uint64(j)
 			idx++
 		}
 	}

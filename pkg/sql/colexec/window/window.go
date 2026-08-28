@@ -828,9 +828,9 @@ func (ctr *container) processOrderFuncRange(
 		}
 		return vec, nil
 	}
-	values := make([]int64, outputEnd-outputStart)
 	switch funcName {
 	case "row_number":
+		values := make([]uint64, outputEnd-outputStart)
 		for j := outputStart; j < outputEnd; j++ {
 			if err := checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
@@ -839,9 +839,16 @@ func (ctr *container) processOrderFuncRange(
 			if ctr.ps != nil {
 				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
 			}
-			values[j-outputStart] = int64(j - partitionStart + 1)
+			values[j-outputStart] = uint64(j - partitionStart + 1)
 		}
+		vec := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	case "ntile":
+		values := make([]int64, outputEnd-outputStart)
 		bucketCount, err := ctr.ntileBucketCount(idx)
 		if err != nil {
 			return nil, err
@@ -852,7 +859,14 @@ func (ctr *container) processOrderFuncRange(
 			}
 			values[j-outputStart] = ntileBucket(int64(j), int64(n), bucketCount)
 		}
+		vec := vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	case "rank", "dense_rank":
+		values := make([]uint64, outputEnd-outputStart)
 		peerIndex, peerStart, peerEnd := peerInterval(ctr.os, outputStart, n)
 		for j := outputStart; j < outputEnd; j++ {
 			if err := checkCanceled(proc, j-outputStart); err != nil {
@@ -867,20 +881,20 @@ func (ctr *container) processOrderFuncRange(
 				}
 			}
 			if funcName == "rank" {
-				values[j-outputStart] = int64(peerStart + 1)
+				values[j-outputStart] = uint64(peerStart + 1)
 			} else {
-				values[j-outputStart] = int64(peerIndex + 1)
+				values[j-outputStart] = uint64(peerIndex + 1)
 			}
 		}
+		vec := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("unsupported order window function: %s", funcName)
 	}
-	vec := vector.NewVec(types.T_int64.ToType())
-	if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
-		return nil, err
-	}
-	return vec, nil
 }
 
 func peerInterval(boundaries []int64, row int, rowCount int) (index, start, end int) {

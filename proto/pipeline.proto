@@ -91,6 +91,9 @@ message Shuffle {
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
   bool drain_all_buckets = 10;
+  // True when Hash shuffle routes CHAR/VARCHAR/TEXT keys and therefore needs
+  // the versioned complete-key owner contract.
+  bool string_hash_key = 11;
 }
 
 message Dispatch {
@@ -695,6 +698,12 @@ message ProcessInfo {
   // prepared cache. A receiver uses it only if the cluster protocol rolls back
   // before locking and the optional plan timestamp is no longer safe to send.
   bool plan_generation_reused = 15;
+  // Immutable string-key shuffle owner algorithm selected for this execution.
+  // Zero is the legacy sampled-key mapping used by older senders. Value 1 is
+  // the complete-key stable mapping introduced with MORPC version 33. The
+  // matching Shuffle wire opcode makes pre-v33 receivers reject the pipeline;
+  // the pair prevents a rollout change from silently splitting key ownership.
+  uint32 string_shuffle_hash_algorithm = 16;
 }
 
 message SessionInfo {

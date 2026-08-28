@@ -16,6 +16,14 @@
 
 #pragma once
 
+#include "device_memory.hpp"
+#include "helper.h"
+#include "host_memory.hpp"
+
+#include <filesystem>
+#include "index_cost.hpp"
+
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -52,6 +60,25 @@
 #include <iostream>
 
 namespace matrixone {
+
+// kStagingReserveFloorRowsNs / staging_grow_rows are the staging arenas' growth
+// rule, at namespace scope so a test can walk the REAL sequence rather than
+// restate it. `want` is the row count that must fit, `bound` is
+// staging_bound_rows(): double from a floor, cap at the bound, never go below
+// what is needed.
+//
+// The Go planner (memory.HostRowsFittingStaged) deliberately does NOT mirror this
+// schedule. It charges 2x the staged row cost, which is correct for any schedule
+// because the superseded buffer can never exceed `bound`. This is exposed so the
+// two can be checked against each other, not so the planner can copy it.
+inline constexpr uint64_t kStagingReserveFloorRowsNs = 4096;
+
+inline uint64_t staging_grow_rows(uint64_t want, uint64_t bound) {
+    uint64_t g = std::max<uint64_t>(want * 2, kStagingReserveFloorRowsNs);
+    g = std::min<uint64_t>(g, bound);
+    return std::max<uint64_t>(g, want);                     // never below what we need
+}
+
 
 using ::distance_type_t;
 using ::quantization_t;
@@ -304,8 +331,7 @@ inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
 // apply_pq_post_filter_locked uses FLT_MAX).
 // =============================================================================
 
-// Effective top-k for the cuVS call: clamp the caller's requested limit to
-// the shard / index row count. Pure host-side; raft-free.
+
 inline uint32_t clamp_k_to_index_size(uint32_t limit, uint64_t shard_sz) {
     return static_cast<uint32_t>(
         std::min<uint64_t>(static_cast<uint64_t>(limit), shard_sz));
@@ -538,12 +564,48 @@ public:
     // Used only when host_ids is non-empty.
     std::unordered_map<IdT, uint64_t> id_to_index_;
 
+    // id_to_index_ is DERIVED state, built on demand rather than during ingest.
+    //
+    // delete_id() is its only reader, and the lifecycle above forbids delete_id()
+    // before build(), so nothing can read it while a build is running. It is not
+    // serialized either -- save_ids() writes host_ids alone, and load_ids() rebuilds
+    // from that. Populating it per row during a build therefore cost one malloc per
+    // row, plus rehash spikes, for a structure Pack() throws away: ~40 bytes/row of
+    // host memory that no reader ever saw. On a narrow int8 vector that was more
+    // than a fifth of the whole per-row host cost, which is capacity taken from the
+    // index for nothing.
+    //
+    // INVARIANT: the map is either EMPTY (not built yet) or COMPLETE for host_ids.
+    // id_index_built_ separates "empty because unbuilt" from "empty because there
+    // are no ids", so an id-less index does not rebuild on every delete. Writers
+    // extend the map only once it is built; ensure_id_index() materialises it the
+    // first time a reader needs it.
+    bool id_index_built_ = false;
+
     // ---- Host-resident filter columns for pre-filtered search (protected by mutex_) ----
     // Populated before build() via set_filter_columns() + add_filter_chunk().
     // Retained for the lifetime of the index — search-time predicate eval reads
     // directly from this store (see filter.hpp / eval_filter_bitmap_cpu).
     // Empty means the index has no INCLUDE columns and only unfiltered search applies.
     FilterStore filter_host_;
+
+    // cost_ is this index's DEVICE cost model (index_cost.hpp). Each index type
+    // constructs its own concrete cost in its constructor, so "what does a row
+    // cost" and "what will this build peak at" have exactly one definition per
+    // index and every caller -- the capacity planner and the build claim alike --
+    // reads the same object.
+    std::unique_ptr<matrixone::index_cost_base> cost_;
+
+    // build_peak_bytes: what a build of `rows` rows is about to allocate. Routed
+    // through cost_ so the claim cannot drift from the planner's model.
+    // The per-index budget fraction, for the claim sites below and for
+    // rows_fitting. 0 when no cost class is attached, which the governor reads as
+    // "use the default".
+    size_t budget_percent() const { return cost_ ? cost_->budget_percent() : 0; }
+
+    size_t build_peak_bytes(uint64_t rows) const {
+        return cost_ ? cost_->build_peak_bytes(rows) : 0;
+    }
 
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
@@ -964,20 +1026,120 @@ public:
         set_ids_internal(ids, count_vectors, offset);
     }
 
+    // Materialise id_to_index_ from host_ids. CALLER MUST HOLD mutex_ (unique_lock):
+    // this takes no lock of its own, because its only caller already holds one and
+    // re-locking a shared_mutex here would deadlock.
+    //
+    // Sized up front, so the build the reader pays for is one allocation and n
+    // inserts rather than the doubling rehash sequence the per-row path incurred.
+    //
+    // Trusts the WHOLE of host_ids, which is sound because the writers refuse to
+    // leave a hole in it (see the all-ids-or-all-id-less guard in add_chunk). A
+    // hole would zero-fill, and a zero is indistinguishable from a legitimate
+    // external id 0.
+    // Host bytes per row of id_to_index_: 24 for the unordered_map node, 8 for
+    // the allocator header, 8 for the bucket slot. Mirrors
+    // memory.HostIDMapBytesPerRow, which is what the Go capacity model charges.
+    static constexpr size_t kIdMapBytesPerRow = 40;
+
+    // Claims the host memory a load is about to materialise out of `dir`.
+    //
+    // The artifact is the authoritative size here: a search-path load has no
+    // capacity to model from (IndexCapacity is resolved by the build operator
+    // and never written back), so sizing from config would claim nothing at all.
+    //
+    // The returned claim is meant to be held for the whole of load_dir and to
+    // drop on scope exit -- by then the components are materialised and the
+    // availability reading has moved by the same amount. Over-claims by
+    // manifest.json and by anything the loader frees again before returning,
+    // which is the direction that cannot under-admit.
+    host_memory_governor::reservation claim_host_components(const std::string& dir,
+                                                            const char* who) {
+        size_t          need = 0;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec) || fec) continue;
+            if (!matrixone::is_host_resident_component(it->path().filename().string()))
+                continue;
+            const auto n = it->file_size(fec);
+            if (!fec) need += static_cast<size_t>(n);
+        }
+        if (need == 0) return host_memory_governor::reservation();
+        return host_memory_governor::reserve(need, who);
+    }
+
+    void ensure_id_index() {
+        if (this->id_index_built_) return;
+        // Completeness check for the OTHER direction of the all-ids-or-none contract.
+        // The writers refuse a hole before the ids (add_chunk / set_ids_internal /
+        // the flush span), and run_extend refuses an id-less extend of an id-bearing
+        // index -- but rows can be appended from several independent sites and there
+        // is no single choke point to guard, so the invariant is asserted here, where
+        // the ambiguity actually bites and every one of those paths converges.
+        //
+        // host_ids.size() >= current_offset_ for a well-formed index: equal normally,
+        // greater when a constructor pre-filled ids to `count` and current_offset_ has
+        // not caught up. Smaller means rows exist that no id addresses, so the map
+        // cannot be complete and delete_id would silently miss them.
+        if (this->host_ids.size() < this->current_offset_) {
+            throw std::runtime_error(
+                "ensure_id_index: index has " + std::to_string(this->current_offset_) +
+                " rows but ids for only " + std::to_string(this->host_ids.size()) +
+                "; an index is either all-ids or all-id-less, not a mix");
+        }
+        // Materialising the map allocates for the WHOLE index at once -- around
+        // 3.5 GB at 88M rows -- on a path where failing to allocate leaves the
+        // index unloadable rather than merely refused. It is claimed here rather
+        // than at load because an index that never has a delete replayed never
+        // builds the map at all.
+        //
+        // Under delete_id's mutex_, and reserve() reads /proc (~39us on the dev
+        // box). id_index_built_ makes this once per index, not once per delete,
+        // so hoisting the sample into delete_id would turn one sample into one
+        // per deleted row.
+        const size_t need = this->host_ids.size() * kIdMapBytesPerRow;
+        host_memory_governor::reservation claim;
+        if (need > 0) claim = host_memory_governor::reserve(need, "id map");
+
+        this->id_to_index_.reserve(this->host_ids.size());
+        for (uint64_t i = 0; i < this->host_ids.size(); ++i) {
+            this->id_to_index_[this->host_ids[i]] = i;
+        }
+        claim.release();
+        this->id_index_built_ = true;
+    }
+
     void set_ids_internal(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
         // std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
         //           << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
         //           << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
+        // See the contract note in add_chunk: ids must extend or overwrite the
+        // existing range, never start past its end and leave a zero-filled hole.
+        if (this->host_ids.size() < offset) {
+            throw std::runtime_error(
+                "set_ids: would leave rows " + std::to_string(this->host_ids.size()) +
+                ".." + std::to_string(offset) + " without ids; an index is either "
+                "all-ids or all-id-less, not a mix");
+        }
         if (this->host_ids.size() < offset + count_vectors) {
             this->host_ids.resize(offset + count_vectors);
         }
         std::copy(ids, ids + count_vectors, this->host_ids.begin() + offset);
-        for (uint64_t i = 0; i < count_vectors; ++i) {
-            this->id_to_index_[ids[i]] = offset + i;
+        // Extend the map only if a reader already forced it into existence; otherwise
+        // leave it empty and let ensure_id_index() build it complete on demand.
+        if (this->id_index_built_) {
+            for (uint64_t i = 0; i < count_vectors; ++i) {
+                this->id_to_index_[ids[i]] = offset + i;
+            }
         }
     }
 
+    // Brings up the worker and whatever else the index needs before ingest or
+    // search. It allocates nothing on its own: the large host buffers are
+    // claimed and taken where they are used -- see allocate_host_capacity.
     virtual void start() {}
     virtual void build() {}
 
@@ -1074,12 +1236,32 @@ public:
         }
 
         if (ids) {
+            // An index is all-ids or all-id-less; a MIX is rejected here rather than
+                // silently tolerated. Writing ids at target_offset when host_ids ends
+                // before it leaves the rows in between zero-filled, and a zero is
+                // indistinguishable from a legitimate external id 0: search would report
+                // 0 for those rows (map_neighbor_id subscripts host_ids directly) and
+                // ensure_id_index would map id 0 onto one of them. Nothing constructs
+                // such an index today -- every entry point supplies ids for all chunks
+                // or none -- so this turns an unwritten assumption into a checked one,
+                // and is what lets ensure_id_index trust the whole of host_ids.
+            if (host_ids.size() < target_offset) {
+                throw std::runtime_error(
+                    "add_chunk: would leave rows " + std::to_string(host_ids.size()) +
+                    ".." + std::to_string(target_offset) + " without ids; an index is "
+                    "either all-ids or all-id-less, not a mix");
+            }
             if (host_ids.size() < current_offset_) {
                 host_ids.resize(current_offset_);
             }
             std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
-            for (uint64_t i = 0; i < chunk_count; ++i) {
-                id_to_index_[ids[i]] = target_offset + i;
+            // Build-time path: the map is unbuilt here by construction (delete_id
+            // cannot run before build()), so this loop is skipped and the per-row
+            // malloc never happens.
+            if (id_index_built_) {
+                for (uint64_t i = 0; i < chunk_count; ++i) {
+                    id_to_index_[ids[i]] = target_offset + i;
+                }
             }
         }
     }
@@ -1098,9 +1280,25 @@ public:
 
     void set_filter_columns(const std::string& col_meta_json, uint64_t total_count) {
         auto cols = parse_filter_col_meta(col_meta_json);
+
+        // FilterStore::init resizes every INCLUDE column to capacity * elem_size,
+        // so this is a capacity-sized host allocation like the vector buffer and
+        // claims the same way. A build with several fixed-width INCLUDE columns
+        // can spend more here than on a narrow vector.
+        //
+        // Claimed before the lock: the availability reading touches /proc and the
+        // cgroup files, and there is no reason to hold mutex_ across that.
+        size_t need = 0;
+        for (const auto& m : cols) {
+            need += static_cast<size_t>(total_count) * filter_col_elem_size(m.type);
+        }
+        host_memory_governor::reservation claim;
+        if (need > 0) claim = host_memory_governor::reserve(need, "filter columns");
+
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot set filter columns on built index");
         filter_host_.init(std::move(cols), total_count);
+        claim.release();
     }
 
     // null_bitmap: packed uint32 words, LSB-first (bit i = row i is not-null).
@@ -1143,6 +1341,9 @@ public:
         std::unique_lock<std::shared_mutex> lock(mutex_);
         uint64_t pos;
         if (!host_ids.empty()) {
+            // The only reader, and the only place the map is ever built. Under the
+            // unique_lock taken above, so ensure_id_index() must not take its own.
+            ensure_id_index();
             auto it = id_to_index_.find(id);
             if (it == id_to_index_.end()) return; // not found
             pos = it->second;
@@ -1190,6 +1391,7 @@ public:
     // Called under the staging lock inside a submit_main task, so a device is
     // current; a cudaMemGetInfo failure throws rather than guessing (see
     // cap_train_rows_to_gpu_mem).
+    //
     // Measured ONCE per index and reused. The builders stage one row per call,
     // so measuring per chunk would mean a cudaMemGetInfo driver call per row --
     // and, on a device too small for the requested sample, one "train sample
@@ -1200,54 +1402,94 @@ public:
     uint64_t staging_row_limit() {
         uint64_t cached = staging_row_limit_.load(std::memory_order_relaxed);
         if (cached != 0) return cached;
-        constexpr uint64_t kMaxRequestable =
-            static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
         uint64_t want;
         {
             // set_quantizer_train_limit writes this under unique_lock; read it
             // under the shared lock rather than racing it. The GPU query below
             // stays OUTSIDE the lock (CLAUDE.md rule 1).
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            want = std::min<uint64_t>(quantizer_train_limit_, kMaxRequestable);
+            want = quantizer_train_limit_;
         }
-        int64_t rows = cap_train_rows_to_gpu_mem(static_cast<int64_t>(want));
-        uint64_t limit = static_cast<uint64_t>(rows < 1 ? 1 : rows);
+        // The rule lives in matrixone::quantizer_staging_rows so the Go planner,
+        // which must charge this arena against the host budget, asks the same
+        // function instead of reimplementing it.
+        uint64_t limit = matrixone::quantizer_staging_rows(
+            static_cast<size_t>(dimension) * sizeof(B), want, this->budget_percent());
         staging_row_limit_.store(limit, std::memory_order_relaxed);
         return limit;
     }
 
+    // Thin wrapper over matrixone::rows_fitting_gpu_mem, which owns the
+    // fraction-of-free-VRAM rule shared with the index-build capacity bound. It throws rather than falling back
+    // to the requested count: this runs inside a submit_main task, so a device is current
+    // by construction and a cudaMemGetInfo failure means the context is already broken
+    // (sticky launch error, device reset). Returning requested_rows would send an
+    // unchecked upload into a dead context and surface the real fault later as an opaque
+    // allocation failure inside train().
+    //
+    // Re-caps the training sample at FLUSH, against the free VRAM that actually
+    // matters by then. Must use the index's own fraction: the upload claim in
+    // train_quantizer_from_host reserves at budget_percent(), so re-capping at the
+    // governor default would retain a sample the very next reservation refuses --
+    // 75% here against IVF-PQ's 65% there. Same defect the trainset probe had.
     int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
-        if (requested_rows < 1) requested_rows = 1;
-        size_t free_bytes = 0, total_bytes = 0;
-        cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
-        if (err != cudaSuccess) {
-            // Do NOT fall back to the requested count. This runs inside a
-            // submit_main task, so a device is current by construction and a
-            // failure means the context is already broken (sticky launch error,
-            // device reset). Returning requested_rows would send an unchecked
-            // upload into a dead context and surface the real fault later as an
-            // opaque allocation failure inside train().
-            throw std::runtime_error(
-                std::string("cap_train_rows_to_gpu_mem: cudaMemGetInfo failed: ") +
-                cudaGetErrorString(err));
+        return matrixone::cap_rows_to_gpu_mem(
+            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer",
+            this->budget_percent());
+    }
+
+    // Allocates the capacity-sized host buffers, claiming them from the host
+    // governor first.
+    //
+    // These are the build's large host allocations: flattened_host_dataset at
+    // capacity * dim * sizeof(T), and for the pre-allocating constructors
+    // host_ids at capacity * sizeof(IdT). Both are taken here in full, which is
+    // what lets ONE claim with ONE lifetime cover them.
+    //
+    // The claim is released as soon as the buffers exist, not when they are
+    // freed: from that moment the bytes are visible in the availability reading
+    // instead, and a claim still on the ledger would be counted twice. See
+    // host_memory_governor::reservation::release.
+    //
+    // resize()+clear() rather than reserve(): reserve() obtains the allocation
+    // but leaves the pages unfaulted, and the availability reading (cgroup
+    // usage, or MemAvailable) only moves once a page is touched -- so releasing
+    // the claim would leave the bytes counted in neither the ledger nor
+    // availability, and a second build could be admitted against them. The
+    // alternative is to hold the claim for the buffer's whole lifetime, which
+    // permits a bare reserve() but double-counts every page as ingest faults
+    // it. Faulting now costs one linear pass; holding costs a concurrent build
+    // this claim's worth of headroom for the length of the build. clear() then
+    // returns size() to 0 while KEEPING the capacity, so the append path and
+    // the host_ids.empty() id-less test are both unchanged.
+    //
+    // THROWS if the host cannot admit the buffers, which propagates out of the
+    // constructor and is reported to the caller as a failed index creation.
+    void allocate_host_capacity(const char* who, bool with_ids) {
+        const size_t rows      = static_cast<size_t>(this->count);
+        const size_t elems     = rows * this->dimension;
+        const size_t vec_bytes = elems * sizeof(T);
+        const size_t id_bytes  = with_ids ? rows * sizeof(IdT) : 0;
+        const size_t need      = vec_bytes + id_bytes;
+        if (need == 0) return;  // a zero-row index allocates nothing to claim for
+
+        auto claim = host_memory_governor::reserve(need, who);
+        this->flattened_host_dataset.resize(elems);
+        if (with_ids) {
+            this->host_ids.resize(this->count);
+            this->host_ids.clear();
         }
-        size_t per_row = static_cast<size_t>(dimension) * sizeof(B);
-        if (per_row == 0) {
-            throw std::runtime_error("cap_train_rows_to_gpu_mem: index dimension is 0");
-        }
-        int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row);
-        if (max_rows < 1) max_rows = 1;
-        if (requested_rows > max_rows) {
-            std::cerr << "[quantizer] train sample capped " << requested_rows
-                      << " -> " << max_rows << " rows to fit 60% of "
-                      << (free_bytes >> 20) << " MB free GPU mem (dim="
-                      << dimension << ")" << std::endl;
-            return max_rows;
-        }
-        return requested_rows;
+        claim.release();
     }
 
 
+    // Upper bound on rows this index can ever stage: the staging bound, further
+    // capped by the index's capacity (staging beyond capacity is impossible).
+    uint64_t staging_bound_rows(uint64_t stage_limit) const {
+        uint64_t bound = stage_limit;
+        if (this->count > 0) bound = std::min<uint64_t>(bound, this->count);
+        return bound < 1 ? 1 : bound;
+    }
 
     // Append `count` rows to the staging arenas and record the span describing
     // them. Caller holds mutex_ and has already clamped `count` to the room left
@@ -1260,14 +1502,6 @@ public:
     // load-bearing — offsets must both be "append", ids-ness must match (or the
     // merged span would claim ids it does not have, or hide ids it does), and
     // the rows must be physically adjacent in staging_data_.
-    // Upper bound on rows this index can ever stage: the staging bound, further
-    // capped by the index's capacity (staging beyond capacity is impossible).
-    uint64_t staging_bound_rows(uint64_t stage_limit) const {
-        uint64_t bound = stage_limit;
-        if (this->count > 0) bound = std::min<uint64_t>(bound, this->count);
-        return bound < 1 ? 1 : bound;
-    }
-
     // NOTE: the row-count parameter is deliberately NOT named `count` — that is
     // the member holding this index's constructor row count, and shadowing it
     // here silently sized the arena to the incoming chunk (1 row in production)
@@ -1284,23 +1518,81 @@ public:
         // per call) while never over-allocating more than 2x what is in use.
         const uint64_t bound = staging_bound_rows(stage_limit);
         const uint64_t need  = pending_total_count_ + n_rows;
-        if (staging_data_.capacity() < need * dimension) {
-            uint64_t grow = std::max<uint64_t>(need * 2, kStagingReserveFloorRows);
-            grow = std::min<uint64_t>(grow, bound);
-            grow = std::max<uint64_t>(grow, need);          // never below what we need
-            staging_data_.reserve(static_cast<size_t>(grow) * dimension);
+
+        auto grow_to = [&](uint64_t want) { return staging_grow_rows(want, bound); };
+        const bool grow_data = staging_data_.capacity() < need * dimension;
+        const bool grow_ids  = ids && staging_ids_.capacity() < need;
+        const uint64_t data_rows = grow_data ? grow_to(need) : 0;
+        const uint64_t ids_rows  = grow_ids ? grow_to(need) : 0;
+
+        // Claim what the growth ADDS, not what the arenas will hold: most calls
+        // fit the existing capacity and add nothing. One claim covers both
+        // arenas so a growth is admitted or refused as a unit.
+        //
+        // This runs under the caller's mutex_, and reserve() reads /proc and the
+        // cgroup files -- measured at ~39us per call on the dev box. It is taken
+        // only when the arenas actually grow, and growth is geometric toward the
+        // bound, so a whole build pays it a handful of times rather than once per
+        // staged row. Sampling before the lock instead would mean sampling on
+        // EVERY call, which is the far worse trade: production stages one row per
+        // call.
+        //
+        // Held across the growth AND the inserts, and the growth MATERIALISES the
+        // whole span before the claim is released.
+        //
+        // A bare reserve() would leave the geometric slack beyond `need`
+        // allocated but unfaulted, and cgroup usage only moves on fault. The
+        // claim covering that slack was then released against memory the kernel
+        // had not charged, and every later call that fits inside the slack takes
+        // no claim at all (grow_data is false) while faulting it. Two builders
+        // could each pass a growth admission, release having touched only their
+        // current rows, and then consume their unclaimed slack concurrently.
+        //
+        // resize-then-restore is the same idiom allocate_host_capacity uses:
+        // resize() value-initialises, which faults every page, and shrinking the
+        // size afterwards keeps the capacity. So by the time the claim drops, the
+        // bytes it stood for are charged to the availability the next caller
+        // reads, and no byte of the arena is accounted in neither place.
+        // The FULL replacement buffer, not the delta over the current capacity.
+        // A growing resize does not extend in place: it allocates the new buffer,
+        // copies, and only then frees the old one, so the transient peak is old +
+        // new. Availability already reflects the old buffer (its pages are
+        // faulted), so what still has to be admitted is the whole new one.
+        //
+        // Claiming the delta under-admits by the old buffer's size, and that gap
+        // is exactly what a peak has to cover: with an arena at S/2 resident and
+        // a target of S = 75% of initial free, the delta passes the budget while
+        // the allocation itself needs S against less free than that.
+        // The Go planner (memory.HostRowsFittingStaged) charges 2x the staged row
+        // cost so a plan it admits can always reach this bound. That factor rests
+        // on two properties of the code below, not on the doubling ratio: at most
+        // ONE superseded buffer is resident when the claim is taken, and the claim
+        // is exactly its replacement. Changing the ratio or the floor is safe;
+        // holding a second old buffer, or claiming more than the replacement, is
+        // not -- update the planner's charge with it.
+        size_t growth = 0;
+        if (grow_data) growth += static_cast<size_t>(data_rows) * dimension * sizeof(B);
+        if (grow_ids) growth += static_cast<size_t>(ids_rows) * sizeof(IdT);
+        host_memory_governor::reservation staging_claim;
+        if (growth > 0) staging_claim = host_memory_governor::reserve(growth, "quantizer staging");
+
+        if (grow_data) {
+            const size_t keep = staging_data_.size();
+            staging_data_.resize(static_cast<size_t>(data_rows) * dimension);
+            staging_data_.resize(keep);
         }
-        if (ids && staging_ids_.capacity() < need) {
-            uint64_t grow = std::max<uint64_t>(need * 2, kStagingReserveFloorRows);
-            grow = std::min<uint64_t>(grow, bound);
-            grow = std::max<uint64_t>(grow, need);
-            staging_ids_.reserve(static_cast<size_t>(grow));
+        if (grow_ids) {
+            const size_t keep = staging_ids_.size();
+            staging_ids_.resize(static_cast<size_t>(ids_rows));
+            staging_ids_.resize(keep);
         }
+
         const uint64_t start_row = pending_total_count_;
         const uint64_t ids_start = staging_ids_.size();
         staging_data_.insert(staging_data_.end(), rows, rows + n_rows * dimension);
         if (ids) staging_ids_.insert(staging_ids_.end(), ids, ids + n_rows);
         pending_total_count_ += n_rows;
+        staging_claim.release();
 
         if (!staging_spans_.empty()) {
             staged_span_t& last = staging_spans_.back();
@@ -1326,6 +1618,25 @@ public:
             // Scoped so the device matrix is released before the caller's
             // quantize pass — handing the VRAM back before the index build asks
             // for it (a 1M CAGRA build peaks at 7.65 of 8.15 GB).
+            //
+            // GOVERNED. This upload is n_rows x dimension of B and was the one
+            // large device allocation on this path taking no claim, so two int8
+            // builds could observe the same free VRAM and upload concurrently --
+            // cap_train_rows_to_gpu_mem is only a snapshot, not an admission, and
+            // a snapshot cannot serialise anything. The claim is declared BEFORE
+            // the matrix so it is destroyed after it, holding the ledger for the
+            // allocation's whole lifetime rather than just the decision.
+            //
+            // Covers the matrix, not quantizer_.train's internal scratch, which
+            // cuVS sizes; the matrix is the dominant term and the budget fraction
+            // is what the remainder rides in.
+            const size_t upload_bytes =
+                static_cast<size_t>(n_rows) * static_cast<size_t>(this->dimension) * sizeof(B);
+            matrixone::device_memory_governor::reservation train_claim;
+            if (upload_bytes > 0) {
+                train_claim = matrixone::device_memory_governor::reserve(
+                    upload_bytes, "quantizer::train upload", this->budget_percent());
+            }
             auto host_view = raft::make_host_matrix_view<const B, int64_t>(
                 rows, n_rows, static_cast<int64_t>(dimension));
             auto dev = raft::make_device_matrix<B, int64_t>(*res, n_rows, dimension);
@@ -1420,13 +1731,23 @@ public:
             }
 
             if (sp.has_ids) {
+                // Same all-ids-or-none contract as add_chunk; a span that starts past
+                // the end of host_ids would zero-fill the gap.
+                if (host_ids.size() < target_offset) {
+                    throw std::runtime_error(
+                        "flush_pending: would leave rows " + std::to_string(host_ids.size()) +
+                        ".." + std::to_string(target_offset) + " without ids; an index is "
+                        "either all-ids or all-id-less, not a mix");
+                }
                 if (host_ids.size() < current_offset_) {
                     host_ids.resize(current_offset_);
                 }
                 const IdT* span_ids = sids.data() + sp.ids_start;
                 std::copy(span_ids, span_ids + sp.count, host_ids.begin() + target_offset);
-                for (uint64_t i = 0; i < sp.count; ++i) {
-                    id_to_index_[span_ids[i]] = target_offset + i;
+                if (id_index_built_) {
+                    for (uint64_t i = 0; i < sp.count; ++i) {
+                        id_to_index_[span_ids[i]] = target_offset + i;
+                    }
                 }
             }
         }
@@ -1848,15 +2169,36 @@ public:
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
         is.read(reinterpret_cast<char*>(&size), sizeof(size));
+        // Read STRAIGHT into host_ids. The previous shape staged into a
+        // temp_ids(size) and then let set_ids copy it into host_ids, so both
+        // buffers were live at once and the load peaked at 2*size*sizeof(IdT) --
+        // ~1.4 GB at 88M rows where the retained array is ~704 MB. The host
+        // admission this path takes is sized from ids.bin, i.e. the RETAINED
+        // array, so the staging copy was demand nothing had admitted.
+        //
+        // Resizing under the lock and reading outside it keeps the lock off the
+        // file I/O: host_ids.data() is stable once resized, and nothing else can
+        // reach this index during a load.
+        IdT* dst = nullptr;
         {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             this->host_ids.clear();
             this->id_to_index_.clear();
+            // Back to "unbuilt", not "complete and empty": host_ids is repopulated
+            // below, and the map must be rebuilt from it on the next delete.
+            this->id_index_built_ = false;
+            if (size > 0) {
+                this->host_ids.resize(size);
+                dst = this->host_ids.data();
+            }
         }
         if (size > 0) {
-            std::vector<IdT> temp_ids(size);
-            is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
-            this->set_ids(temp_ids.data(), size);
+            is.read(reinterpret_cast<char*>(dst), size * sizeof(IdT));
+            if (!is) {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                this->host_ids.clear();
+                throw std::runtime_error("Short read loading IDs from: " + filename);
+            }
         }
     }
 
@@ -2157,6 +2499,22 @@ protected:
                 throw std::runtime_error(std::string(fn_name) + ": index not built");
             }
             if (n_rows == 0) return;
+            // The other half of the all-ids-or-all-id-less contract enforced by the
+            // writers (see add_chunk). Those catch a hole BEFORE the ids; this catches
+            // one after: extending an id-bearing index without ids leaves the new rows
+            // with no entry in host_ids, so search resolves them to -1 (map_neighbor_id
+            // falls back when global_pos runs past host_ids) and delete_id can never
+            // address them. Checked before any GPU work so the refusal costs nothing.
+            //
+            // An all-id-less extend of an all-id-less index is unaffected and stays
+            // supported -- host_ids is empty on both sides, and run_extend skips
+            // set_ids_internal entirely when new_ids is null.
+            if (!new_ids && !this->host_ids.empty()) {
+                throw std::runtime_error(
+                    std::string(fn_name) + ": index has ids for its existing " +
+                    std::to_string(this->host_ids.size()) + " rows, so the extension must "
+                    "supply them too; an index is either all-ids or all-id-less, not a mix");
+            }
             old_count = this->count;
         }
 
@@ -2228,8 +2586,19 @@ protected:
         raft_handle_wrapper_t& handle, const T* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // Claim the upload before allocating it. extend() decides how much it is
+        // about to move to the device well before it moves it, and that window is
+        // invisible to a live cudaMemGetInfo -- which is exactly what a claim is
+        // for. The claim ends when this returns: by then the buffer exists and
+        // every later admission sees it in the free figure, so holding it longer
+        // would count the same bytes twice.
+        const size_t upload_bytes = static_cast<size_t>(n_rows) * this->dimension * sizeof(T);
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload", this->budget_percent());
+        }
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         raft::copy(*res, device_view,
@@ -2247,8 +2616,25 @@ protected:
         raft_handle_wrapper_t& handle, const float* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // As upload_T_matrix, but this path can stage more than the destination:
+        // a non-float T also materialises the f32 source on device, and a half
+        // base adds a B buffer on top. Charge the peak, not just the result --
+        // under-claiming the staging is how a concurrent load gets admitted
+        // against memory this upload is about to take.
+        const size_t elems = static_cast<size_t>(n_rows) * this->dimension;
+        size_t upload_bytes = elems * sizeof(T);
+        if constexpr (!std::is_same_v<T, float>) {
+            upload_bytes += elems * sizeof(float);
+            if constexpr (!std::is_same_v<B, float>) {
+                upload_bytes += elems * sizeof(B);
+            }
+        }
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload", this->budget_percent());
+        }
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         if constexpr (std::is_same_v<T, float>) {
@@ -2257,7 +2643,7 @@ protected:
                            host_data, n_rows, this->dimension));
         } else {
             rmm::device_uvector<float> float_storage(
-                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
             auto float_view = raft::make_device_matrix_view<float, int64_t>(
                 float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
             raft::copy(*res, float_view,
@@ -2275,7 +2661,7 @@ protected:
                     // B == half: quantizer is half-source. Cast the f32 input to
                     // half on-device, then transform half -> T.
                     rmm::device_uvector<B> b_storage(
-                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
                     auto b_view = raft::make_device_matrix_view<B, int64_t>(
                         b_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
                     raft::copy(*res, b_view, float_view);
@@ -2337,7 +2723,8 @@ protected:
     // 60% of free GPU memory (cap_train_rows_to_gpu_mem / staging_row_limit).
     // 100k rows give a fine 0.99-quantile estimate at a few hundred MB of f32
     // even at high dim; 1M would be ~3-4 GB and get capped.
-    static constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
+    static constexpr uint64_t kDefaultQuantizerTrainLimit =
+        matrixone::kDefaultQuantizerTrainLimit;
     uint64_t quantizer_train_limit_ = kDefaultQuantizerTrainLimit;
     // Contiguous staging arena: ONE allocation sized to the staging bound (which
     // is known before the first row lands), appended into as rows arrive,
@@ -2352,7 +2739,7 @@ protected:
     // First reservation step for the staging arenas — big enough that a
     // one-row-per-call build does not thrash on the early doublings, small
     // enough to be irrelevant for a tiny table.
-    static constexpr uint64_t kStagingReserveFloorRows = 4096;
+    static constexpr uint64_t kStagingReserveFloorRows = kStagingReserveFloorRowsNs;
     // min(quantizer_train_limit_, GPU-trainable rows); measured once, then reused.
     // Atomic because staging_row_limit() runs OUTSIDE mutex_ (it issues a CUDA
     // driver query and may log, neither of which may happen under the lock).

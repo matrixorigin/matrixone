@@ -1494,6 +1494,21 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
+	// MySQL rolls back only the failing statement when a statement errors,
+	// leaving the transaction open, and that is MO's default. Turning this on
+	// makes any error roll back the whole transaction instead, for
+	// applications that treat a failed statement as fatal to the unit of work.
+	//
+	// Only errors do this. A warning (a truncated value, say) is reported
+	// through the same error type but never discards a transaction.
+	"mo_rollback_txn_on_error": {
+		Name:              "mo_rollback_txn_on_error",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_error"),
+		Default:           int8(0),
+	},
 	//whether TN does primary key uniqueness check against transaction's workspace or not.
 	"mo_pk_check_by_dn": {
 		Name:              "mo_pk_check_by_dn",
