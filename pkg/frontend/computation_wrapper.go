@@ -1488,12 +1488,25 @@ func compileOutputCallback(
 	}
 }
 
+type preparedExecutionRetry struct {
+	paramVals     []any
+	binaryExecute bool
+}
+
+func newPreparedExecutionRetry(paramVals []any, binaryExecute bool) *preparedExecutionRetry {
+	if len(paramVals) == 0 {
+		return nil
+	}
+	return &preparedExecutionRetry{paramVals: append([]any(nil), paramVals...), binaryExecute: binaryExecute}
+}
+
 func buildPlanForCompileRetry(
 	ctx context.Context,
 	ses FeSession,
 	compilerContext plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
+	preparedRetry ...*preparedExecutionRetry,
 ) (*plan2.Plan, error) {
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
@@ -1506,6 +1519,20 @@ func buildPlanForCompileRetry(
 	// compacting normalization path.
 	if retryPlan.IsPrepare && !forcePrepare {
 		_, _, err = plan2.ResetPreparePlan(compilerContext, retryPlan)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(preparedRetry) > 0 && preparedRetry[0] != nil {
+		if forcePrepare {
+			runtimePlan, _, fillErr := plan2.FillValuesOfParamsInPlanWithSpecialization(ctx, retryPlan, preparedRetry[0].paramVals)
+			return runtimePlan, fillErr
+		}
+		runtimePlan, _, fillErr := plan2.FillValuesOfParamsInPlanWithSpecialization(ctx, retryPlan, preparedRetry[0].paramVals)
+		if fillErr != nil {
+			return nil, fillErr
+		}
+		return runtimePlan, nil
 	}
 	return retryPlan, err
 }
