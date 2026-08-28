@@ -1319,33 +1319,111 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 	return proc.GetTopContext()
 }
 
+func isScopeCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// A joined result is cancellation fallout only when every leaf is
+	// cancellation-shaped. One cancellation sibling must not hide a
+	// substantive execution failure.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationError(child)
+		}
+	}
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+func isScopeCancellationFrom(err error, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationFrom(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationFrom(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+// normalizeScopeRunError distinguishes a substantive execution failure from
+// cancellation fallout. An internally canceled pipeline may finish
+// successfully, while query cancellation and substantive cancel causes remain
+// terminal and must poison the remote stream.
+func normalizeScopeRunError(
+	err error,
+	pipelineCtx context.Context,
+	queryCtx context.Context,
+) (error, bool) {
+	if err == nil || !isScopeCancellationError(err) ||
+		pipelineCtx == nil || pipelineCtx.Err() == nil {
+		return err, false
+	}
+	if queryCtx != nil {
+		if queryErr := queryCtx.Err(); queryErr != nil {
+			// WithTimeoutCause keeps DeadlineExceeded in Err and stores only
+			// diagnostics in Cause. Preserve the public timeout classification.
+			if errors.Is(queryErr, context.DeadlineExceeded) {
+				return queryErr, true
+			}
+			if !isScopeCancellationFrom(err, queryErr) {
+				return err, false
+			}
+			if cause := context.Cause(queryCtx); cause != nil {
+				return cause, true
+			}
+			return queryErr, true
+		}
+	}
+
+	// Cancellation is secondary only when every error leaf came from this
+	// pipeline. Preserve an independent error that merely raced cancellation.
+	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return err, false
+	}
+	if cause := context.Cause(pipelineCtx); cause != nil {
+		err = cause
+	}
+	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
+		return nil, true
+	}
+	return err, true
+}
+
 func suppressRemoteRunCancelError(
 	procCtx context.Context,
 	queryCtx context.Context,
 	err error,
 ) error {
-	if err == nil {
-		return nil
-	}
-	if procCtx == nil || procCtx.Err() == nil ||
-		(!moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) &&
-			!errors.Is(err, context.Canceled)) {
-		return err
-	}
-	// A canceled query owns the terminal result. Only cancellation of this
-	// pipeline alone can be treated as successful downstream early-stop.
-	if queryCtx != nil && queryCtx.Err() != nil {
-		if cause := context.Cause(queryCtx); cause != nil {
-			return cause
-		}
-		return queryCtx.Err()
-	}
-	if cause := context.Cause(procCtx); cause != nil &&
-		!moerr.IsMoErrCode(cause, moerr.ErrQueryInterrupted) &&
-		!errors.Is(cause, context.Canceled) {
-		return cause
-	}
-	return nil
+	err, _ = normalizeScopeRunError(err, procCtx, queryCtx)
+	return err
 }
 
 func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {

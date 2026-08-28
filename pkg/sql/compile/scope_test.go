@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -2121,15 +2122,17 @@ func TestNotifyMessageClean(t *testing.T) {
 
 func TestSuppressRemoteRunCancelError(t *testing.T) {
 	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancel(queryCtx)
 		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, nil, moerr.NewQueryInterrupted(ctx)))
+		require.NoError(t, suppressRemoteRunCancelError(ctx, queryCtx, moerr.NewQueryInterrupted(ctx)))
 	})
 
 	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancel(queryCtx)
 		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, nil, fmt.Errorf("open remote stream: %w", context.Canceled)))
+		require.NoError(t, suppressRemoteRunCancelError(ctx, queryCtx, fmt.Errorf("open remote stream: %w", context.Canceled)))
 	})
 
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
@@ -2168,6 +2171,42 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
 		cancelPipeline(substantiveErr)
 		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, context.Canceled)
+		require.ErrorIs(t, err, substantiveErr)
+	})
+
+	t.Run("keep deadline classification instead of timeout cause", func(t *testing.T) {
+		diagnostic := moerr.NewInternalErrorNoCtx("request timeout diagnostic")
+		requestCtx, cancelRequest := context.WithDeadlineCause(
+			context.Background(),
+			time.Now().Add(-time.Second),
+			diagnostic,
+		)
+		defer cancelRequest()
+		queryCtx, cancelQuery := context.WithCancel(requestCtx)
+		defer cancelQuery()
+		pipelineCtx, cancelPipeline := context.WithCancelCause(queryCtx)
+		defer cancelPipeline(nil)
+
+		<-pipelineCtx.Done()
+		require.ErrorIs(t, queryCtx.Err(), context.DeadlineExceeded)
+		require.Equal(t, diagnostic, context.Cause(queryCtx))
+		err := suppressRemoteRunCancelError(
+			pipelineCtx,
+			queryCtx,
+			moerr.NewQueryInterrupted(pipelineCtx),
+		)
+		require.Equal(t, context.DeadlineExceeded, err)
+	})
+
+	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
+		queryCtx := context.Background()
+		pipelineCtx, cancelPipeline := context.WithCancel(queryCtx)
+		cancelPipeline()
+		substantiveErr := moerr.NewInternalErrorNoCtx("operator failed")
+		joined := errors.Join(context.Canceled, substantiveErr)
+
+		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, joined)
+		require.ErrorIs(t, err, context.Canceled)
 		require.ErrorIs(t, err, substantiveErr)
 	})
 }
