@@ -81,7 +81,15 @@ It intentionally does not provide:
 3. Admission and executor submission observe caller cancellation. The shared
    traversal context also observes executor lifecycle cancellation, so shutdown
    cannot leave a producer blocked on a full queue, a running S3 task using an
-   orphaned request, or a caller waiting for abandoned queued work.
+   orphaned request, or a caller waiting for abandoned queued work. Async
+   cancellation callbacks are notification mechanisms, never terminal
+   predicates: refresh admission, zero-object fast paths, joined traversal, and
+   cache publication synchronously re-read the owning lifecycle context before
+   reporting or publishing success. Subscription and object I/O use a
+   refresh-local context that preserves request values/deadlines and is canceled
+   by either the request or the owner lifecycle. That linked context is created
+   only after fixed-stripe admission, bounding simultaneously registered owner
+   callbacks by the 64 refresh-admission tokens.
 4. Unrelated tables normally remain parallel. A bounded hash-stripe collision
    may serialize refresh control work but cannot affect query execution.
 5. A synchronous first-read waiter may sleep only while the exact refresh
@@ -298,9 +306,16 @@ error and waits for all admitted work before returning. Waiting is required
 because callbacks mutate a refresh-local accumulator; returning early would let
 old work race a discarded accumulator. Callback I/O receives the request
 context, so cancellation terminates the expensive work without polling or
-sleeps. After joining all admitted work, traversal also checks the shared task
-context itself: executor shutdown remains a failed traversal even if a running
-callback ignored cancellation and returned `nil`.
+sleeps. The executor lifecycle context is the durable predicate; the shared task
+context is only its cancellation-delivery path. Traversal uses a
+check/register/check sequence around that delivery callback and re-reads both
+contexts after joining all admitted work. Executor shutdown therefore remains a
+failed traversal even if callback dispatch is delayed or a running callback
+ignored cancellation and returned `nil`. The enclosing refresh applies the same
+owner-lifecycle predicate at admission and cache publication, including the
+zero-object path that does not traverse objects at all. A successful refresh
+linearizes at the final lifecycle and generation checks performed while the
+publication lock is held.
 
 Cancellation and deadline errors remain cancellation/deadline errors at the
 public refresh boundary. Other object/metadata failures may be wrapped with
@@ -358,8 +373,10 @@ approximately 181 ms and changed the next plan from stale non-shuffle to a
 sampling mode, S3 requests, and end-to-end ANALYZE latency.
 
 The executor repair keeps the existing closure and wait-group shape. It adds a
-success-path branch and error accumulator, plus executor lifecycle bookkeeping;
-it must not create one result channel or goroutine per object. Focused
+constant number of lifecycle reads per refresh, a success-path branch and error
+accumulator, plus executor lifecycle bookkeeping; it does not add a check, result
+channel, allocation, or goroutine per object. The refresh-local owner callback is
+registered only after fixed-stripe admission, so at most 64 are active. Focused
 benchmarks or allocation tests are required if the final implementation changes
 that property.
 
@@ -458,6 +475,13 @@ Decision log:
 - Treat condition-variable broadcasts only as hints. The cache/context/exact
   generation predicates are checked under the condition mutex, and every
   producer generation is captured under a live subscription cleanup owner.
+- Treat lifecycle callbacks only as cancellation delivery. Admission, joined
+  traversal, zero-object completion, and publication re-read the request and
+  owner contexts as durable predicates; linked owner callbacks are created only
+  after fixed-stripe admission.
+- Give each admitted automatic refresh one terminal owner that commits the
+  cache, advances metadata only when that commit succeeds, and finally releases
+  admission in that order.
 
 Open approval item: an independent reviewer must approve this exact design
 revision before the implementation is considered deliverable. There are no

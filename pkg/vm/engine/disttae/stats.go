@@ -367,13 +367,72 @@ func (gs *GlobalStats) acquireStatsRefresh(
 	ctx context.Context,
 	key pb.StatsInfoKey,
 ) (func(), error) {
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return nil, cause
+	}
 	admission := gs.refreshAdmission[optimizerStatsRefreshStripe(key)]
 	select {
 	case admission <- struct{}{}:
+		// Cancellation can race the select and make both cases ready. Recheck
+		// the authoritative caller and owner contexts before transferring the
+		// admission token to the caller.
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			<-admission
+			return nil, cause
+		}
 		return func() { <-admission }, nil
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
+	case <-gs.lifecycleDone():
+		return nil, gs.statsRefreshCancellationCause(ctx)
 	}
+}
+
+// statsRefreshCancellationCause treats the request context and the GlobalStats
+// owner lifecycle as durable predicates. Async callbacks may wake blocked work,
+// but they are never the source of truth for admission or publication.
+func (gs *GlobalStats) statsRefreshCancellationCause(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if gs.ctx != nil {
+		return context.Cause(gs.ctx)
+	}
+	return nil
+}
+
+// newStatsRefreshContext preserves request values and deadlines while linking
+// downstream subscription and object I/O to the GlobalStats owner lifecycle.
+// The returned context delivers cancellation; admission and publication still
+// re-read statsRefreshCancellationCause as their durable predicate.
+func (gs *GlobalStats) newStatsRefreshContext(
+	ctx context.Context,
+) (context.Context, func(), error) {
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return nil, nil, cause
+	}
+	if gs.ctx == nil {
+		return ctx, func() {}, nil
+	}
+	refreshCtx, cancelRefresh := context.WithCancelCause(ctx)
+	stopOwnerWatch := context.AfterFunc(gs.ctx, func() {
+		cause := context.Cause(gs.ctx)
+		if cause == nil {
+			cause = context.Canceled
+		}
+		cancelRefresh(cause)
+	})
+	stop := func() {
+		stopOwnerWatch()
+		cancelRefresh(nil)
+	}
+	// Close the owner check/register race without depending on callback
+	// dispatch. No downstream operation is admitted on the error path.
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		stop()
+		return nil, nil, cause
+	}
+	return refreshCtx, stop, nil
 }
 
 // RemoveTid removes every GlobalStats entry owned by the given table ID.
@@ -1206,15 +1265,27 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 	generation *updateRecord,
 	stats *pb.StatsInfo,
 	updated bool,
-) {
+) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	// GlobalStats shutdown is an authoritative failed-publication predicate.
+	// In particular, do not install a first-generation nil sentinel here: the
+	// lifecycle watcher already wakes waiters, and shutdown must leave the cache
+	// and its scheduling baseline unchanged.
+	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		return false
+	}
 	// The update record is also the automatic generation's table-lifetime
 	// token. RemoveTid deletes it under the same gs.mu -> updatingMu order; an
 	// old worker that completes afterward must not resurrect either cache.
 	if !gs.statsUpdateGenerationActive(key, generation) {
-		gs.mu.cond.Broadcast()
-		return
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		return false
 	}
 	if updated {
 		gs.mu.statsInfoMap[key] = stats
@@ -1222,7 +1293,10 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 		gs.mu.statsInfoMap[key] = nil
 	}
-	gs.mu.cond.Broadcast()
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	return updated
 }
 
 func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
@@ -1244,6 +1318,7 @@ func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
 	var updated bool
 	var actualObjectCount int64
 	var samplingRatio float64
+	var stats *pb.StatsInfo
 	release, err := gs.acquireStatsRefresh(wrapKey.Ctx, wrapKey.Key)
 	if err != nil {
 		// Worker admission opened this generation before refresh admission. Close it
@@ -1259,15 +1334,21 @@ func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
 		return
 	}
 	defer func() {
-		gs.completeStatsRefresh(
-			wrapKey.Key, generation, updated, actualObjectCount, samplingRatio, release)
+		gs.completeAutomaticStatsRefresh(
+			wrapKey.Key, generation, stats, updated,
+			actualObjectCount, samplingRatio, release)
 	}()
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(wrapKey.Ctx)
+	if err != nil {
+		return
+	}
+	defer stopRefresh()
 
 	// Get the latest partition state of the table.
 	//Notice that for snapshot read, subscribing the table maybe failed since the invalid table id,
 	//We should handle this case in next PR if needed.
 	ps, err := gs.engine.pClient.toSubscribeTable(
-		wrapKey.Ctx,
+		refreshCtx,
 		uint64(wrapKey.Key.AccId),
 		wrapKey.Key.TableID,
 		wrapKey.Key.TableName,
@@ -1279,12 +1360,11 @@ func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
 			wrapKey.Key.TableID,
 			wrapKey.Key.TableName,
 			err)
-		gs.completeAutomaticStatsCacheUpdate(wrapKey.Key, generation, nil, false)
 		return
 	}
-	stats := plan2.NewStatsInfo()
+	stats = plan2.NewStatsInfo()
 
-	newCtx := perfcounter.AttachS3RequestKey(wrapKey.Ctx, crs)
+	newCtx := perfcounter.AttachS3RequestKey(refreshCtx, crs)
 	updated, samplingRatio = gs.executeStatsUpdate(newCtx, ps, wrapKey.Key, stats)
 
 	// Get actual object count for baseline update
@@ -1301,21 +1381,25 @@ func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
 		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 	})
 
-	gs.completeAutomaticStatsCacheUpdate(wrapKey.Key, generation, stats, updated)
 }
 
-// completeStatsRefresh commits the automatic-refresh scheduling metadata
-// before another same-table refresh can enter. The statistics cache and its
-// object-count/sampling baseline therefore advance in one serialized order.
-func (gs *GlobalStats) completeStatsRefresh(
+// completeAutomaticStatsRefresh is the sole terminal owner for an admitted
+// automatic refresh. Cache publication decides whether the result committed;
+// only that committed result may advance scheduling metadata, and both happen
+// before the table-scoped admission token is released.
+func (gs *GlobalStats) completeAutomaticStatsRefresh(
 	key pb.StatsInfoKey,
 	generation *updateRecord,
-	updated bool,
+	stats *pb.StatsInfo,
+	calculated bool,
 	actualObjectCount int64,
 	samplingRatio float64,
 	release func(),
 ) {
-	gs.markAutomaticUpdateComplete(key, generation, updated, actualObjectCount, samplingRatio)
+	committed := gs.completeAutomaticStatsCacheUpdate(
+		key, generation, stats, calculated)
+	gs.markAutomaticUpdateComplete(
+		key, generation, committed, actualObjectCount, samplingRatio)
 	release()
 }
 
@@ -1339,16 +1423,24 @@ func (gs *GlobalStats) refreshStatsWithMode(
 		return nil, err
 	}
 	defer release()
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stopRefresh()
 
 	// Get partition state
 	ps, err := gs.engine.pClient.toSubscribeTable(
-		ctx,
+		refreshCtx,
 		uint64(key.AccId),
 		key.TableID,
 		key.TableName,
 		key.DatabaseID,
 		key.DbName)
 	if err != nil {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
 		return nil, moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
 	}
 
@@ -1389,9 +1481,9 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	}
 
 	// Execute stats update
-	samplingRatio, err := CollectAndCalculateStats(ctx, req, gs.concurrentExecutor)
+	samplingRatio, err := CollectAndCalculateStats(refreshCtx, req, gs.concurrentExecutor)
 	if err != nil {
-		if cause := context.Cause(ctx); cause != nil {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 			return nil, cause
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1399,11 +1491,14 @@ func (gs *GlobalStats) refreshStatsWithMode(
 		}
 		return nil, moerr.NewInternalErrorNoCtxf("failed to update stats: %v", err)
 	}
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
 	}
 
 	if !gs.publishStatsForGeneration(key, generation, stats) {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"table statistics refresh crossed cleanup boundary for table %d", key.TableID)
 	}
@@ -1430,6 +1525,9 @@ func (gs *GlobalStats) publishStatsForGeneration(
 	}
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+		return false
+	}
 	if !gs.statsUpdateGenerationActive(key, generation) {
 		if gs.mu.cond != nil {
 			gs.mu.cond.Broadcast()
@@ -1842,6 +1940,16 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	// The zero-object fast path below does not enter ForeachVisibleObjects. Keep
+	// executor shutdown as a failed refresh by checking its authoritative
+	// lifecycle before any successful early return.
+	if executor != nil {
+		if lifecycle := executor.LifecycleContext(); lifecycle != nil {
+			if cause := context.Cause(lifecycle); cause != nil {
+				return 0, cause
+			}
+		}
+	}
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {

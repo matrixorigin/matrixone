@@ -89,6 +89,50 @@ func TestOptimizerStatsRefreshAdmissionIsTableScopedAndCancelable(t *testing.T) 
 	require.Nil(t, releaseCanceled)
 }
 
+func TestOptimizerStatsRefreshAdmissionRejectsStoppedOwner(t *testing.T) {
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	stopOwner()
+	gs := &GlobalStats{ctx: ownerCtx}
+	gs.initStatsRefreshAdmission()
+
+	release, err := gs.acquireStatsRefresh(
+		context.Background(), pb.StatsInfoKey{AccId: 1, TableID: 42})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, release,
+		"a stopped GlobalStats owner must not transfer a refresh admission token")
+}
+
+func TestStatsRefreshContextPreservesRequestAndObservesOwnerStop(t *testing.T) {
+	type requestValueKey struct{}
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	requestCtx := context.WithValue(context.Background(), requestValueKey{}, "request-value")
+	gs := &GlobalStats{ctx: ownerCtx}
+
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(requestCtx)
+	require.NoError(t, err)
+	t.Cleanup(stopRefresh)
+	require.Equal(t, "request-value", refreshCtx.Value(requestValueKey{}))
+
+	stopOwner()
+	select {
+	case <-refreshCtx.Done():
+		require.ErrorIs(t, context.Cause(refreshCtx), context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("owner shutdown did not cancel downstream refresh work")
+	}
+}
+
+func TestStatsRefreshContextClosesOwnerWatcherRegistrationRace(t *testing.T) {
+	ownerCtx := newDelayedLifecycleContext()
+	ownerCtx.cancelOnRegister = true
+	gs := &GlobalStats{ctx: ownerCtx}
+
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(context.Background())
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, refreshCtx)
+	require.Nil(t, stopRefresh)
+}
+
 func TestCoordinateStatsUpdateCancellationReleasesUpdateGeneration(t *testing.T) {
 	gs := &GlobalStats{}
 	gs.initStatsRefreshAdmission()
@@ -115,10 +159,12 @@ func TestCoordinateStatsUpdateCancellationReleasesUpdateGeneration(t *testing.T)
 		"cancellation while waiting for refresh admission must close the update generation")
 }
 
-func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
+func TestCompleteAutomaticStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
 	gs := &GlobalStats{}
 	gs.initStatsRefreshAdmission()
 	gs.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
+	gs.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+	gs.mu.cond = sync.NewCond(&gs.mu)
 	key := pb.StatsInfoKey{AccId: 1, TableID: 42}
 
 	generation := &updateRecord{inProgress: true}
@@ -141,10 +187,11 @@ func TestCompleteStatsRefreshKeepsMetadataInsideAdmission(t *testing.T) {
 	// Waiting here after releasing forces the newer refresh to commit between
 	// release and any code that might incorrectly update the old baseline late.
 	var newerErr error
-	gs.completeStatsRefresh(key, generation, true, 1, 1.0, func() {
-		oldRelease()
-		newerErr = <-newerDone
-	})
+	gs.completeAutomaticStatsRefresh(
+		key, generation, &pb.StatsInfo{}, true, 1, 1.0, func() {
+			oldRelease()
+			newerErr = <-newerDone
+		})
 	require.NoError(t, newerErr)
 
 	gs.updatingMu.Lock()

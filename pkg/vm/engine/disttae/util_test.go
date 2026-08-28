@@ -744,6 +744,96 @@ func visibleObjectStateForExecutorTest(t *testing.T, count int) *logtailreplay.P
 	return state
 }
 
+// delayedLifecycleContext models a conforming lifecycle whose Done predicate is
+// observable before its AfterFunc notification is dispatched. This keeps the
+// cancellation race deterministic without sleeps or scheduler assumptions.
+type delayedLifecycleContext struct {
+	done chan struct{}
+
+	mu        sync.Mutex
+	err       error
+	callbacks []*delayedLifecycleCallback
+	// cancelOnRegister closes Done while context.AfterFunc is registering its
+	// callback, but before that callback is dispatched.
+	cancelOnRegister bool
+}
+
+type delayedLifecycleCallback struct {
+	active bool
+	fn     func()
+}
+
+func newDelayedLifecycleContext() *delayedLifecycleContext {
+	return &delayedLifecycleContext{done: make(chan struct{})}
+}
+
+func (c *delayedLifecycleContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *delayedLifecycleContext) Done() <-chan struct{}       { return c.done }
+func (c *delayedLifecycleContext) Value(any) any               { return nil }
+
+func (c *delayedLifecycleContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *delayedLifecycleContext) AfterFunc(fn func()) func() bool {
+	c.mu.Lock()
+	callback := &delayedLifecycleCallback{active: true, fn: fn}
+	c.callbacks = append(c.callbacks, callback)
+	if c.cancelOnRegister && c.err == nil {
+		c.err = context.Canceled
+		close(c.done)
+	}
+	c.mu.Unlock()
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !callback.active {
+			return false
+		}
+		callback.active = false
+		return true
+	}
+}
+
+func (c *delayedLifecycleContext) cancelWithoutNotification() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = context.Canceled
+	close(c.done)
+}
+
+type inlineLifecycleExecutor struct {
+	lifecycle context.Context
+}
+
+func (e *inlineLifecycleExecutor) AppendTask(
+	ctx context.Context,
+	task concurrentTask,
+	complete func(error),
+) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	err := task()
+	if complete != nil {
+		complete(err)
+	}
+	return nil
+}
+
+func (*inlineLifecycleExecutor) Run(context.Context) {}
+
+func (e *inlineLifecycleExecutor) LifecycleContext() context.Context {
+	return e.lifecycle
+}
+
+func (*inlineLifecycleExecutor) GetConcurrency() int { return 1 }
+
 func TestForeachVisibleObjectsPropagatesConcurrentTaskError(t *testing.T) {
 	state := visibleObjectStateForExecutorTest(t, 2)
 	ex := newConcurrentExecutor(2)
@@ -916,6 +1006,60 @@ func TestForeachVisibleObjectsRejectsExecutorShutdownWhenTaskReturnsNil(t *testi
 	case <-time.After(time.Second):
 		t.Fatal("visible-object traversal did not join the shutdown task")
 	}
+}
+
+func TestForeachVisibleObjectsReadsLifecyclePredicateAfterJoin(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	lifecycle := newDelayedLifecycleContext()
+	ex := &inlineLifecycleExecutor{lifecycle: lifecycle}
+
+	err := ForeachVisibleObjects(
+		context.Background(), state, types.MaxTs(),
+		func(context.Context, objectio.ObjectEntry) error {
+			lifecycle.cancelWithoutNotification()
+			return nil
+		},
+		ex,
+		false,
+	)
+	require.ErrorIs(t, err, context.Canceled,
+		"executor shutdown is a failed traversal even before async notification dispatch")
+}
+
+func TestForeachVisibleObjectsClosesLifecycleWatcherRegistrationRace(t *testing.T) {
+	state := visibleObjectStateForExecutorTest(t, 1)
+	lifecycle := newDelayedLifecycleContext()
+	lifecycle.cancelOnRegister = true
+	ex := &inlineLifecycleExecutor{lifecycle: lifecycle}
+	var called atomic.Bool
+
+	err := ForeachVisibleObjects(
+		context.Background(), state, types.MaxTs(),
+		func(context.Context, objectio.ObjectEntry) error {
+			called.Store(true)
+			return nil
+		},
+		ex,
+		false,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, called.Load(),
+		"work must not be admitted after lifecycle cancellation becomes observable")
+}
+
+func TestCollectAndCalculateStatsRejectsStoppedExecutorOnZeroObjectFastPath(t *testing.T) {
+	lifecycle, cancel := context.WithCancel(context.Background())
+	cancel()
+	ex := &inlineLifecycleExecutor{lifecycle: lifecycle}
+	req := &updateStatsRequest{
+		statsInfo:       plan2.NewStatsInfo(),
+		tableDef:        &plan.TableDef{Cols: []*plan.ColDef{{Name: "__mo_rowid"}}},
+		approxObjectNum: 0,
+	}
+
+	_, err := CollectAndCalculateStats(context.Background(), req, ex)
+	require.ErrorIs(t, err, context.Canceled,
+		"the zero-object fast path must not bypass executor lifecycle failure")
 }
 
 func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {

@@ -373,6 +373,15 @@ func ForeachVisibleObjects(
 	if cause := context.Cause(ctx); cause != nil {
 		return cause
 	}
+	var executorLifecycle context.Context
+	if executor != nil {
+		executorLifecycle = executor.LifecycleContext()
+		if executorLifecycle != nil {
+			if cause := context.Cause(executorLifecycle); cause != nil {
+				return cause
+			}
+		}
+	}
 	iter, err := state.NewObjectsIter(ts, true, visitTombstone)
 	if err != nil {
 		return err
@@ -381,16 +390,21 @@ func ForeachVisibleObjects(
 
 	taskCtx, cancelTasks := context.WithCancelCause(ctx)
 	defer cancelTasks(nil)
-	if executor != nil {
-		if lifecycle := executor.LifecycleContext(); lifecycle != nil {
-			stopLifecycleWatch := context.AfterFunc(lifecycle, func() {
-				cause := context.Cause(lifecycle)
-				if cause == nil {
-					cause = context.Canceled
-				}
-				cancelTasks(cause)
-			})
-			defer stopLifecycleWatch()
+	if executorLifecycle != nil {
+		stopLifecycleWatch := context.AfterFunc(executorLifecycle, func() {
+			cause := context.Cause(executorLifecycle)
+			if cause == nil {
+				cause = context.Canceled
+			}
+			cancelTasks(cause)
+		})
+		defer stopLifecycleWatch()
+		// Close the check/register race. AfterFunc is only a cancellation
+		// delivery mechanism; its callback runs asynchronously and is not the
+		// authoritative lifecycle predicate.
+		if cause := context.Cause(executorLifecycle); cause != nil {
+			cancelTasks(cause)
+			return cause
 		}
 	}
 	var (
@@ -447,6 +461,14 @@ func ForeachVisibleObjects(
 		// has already canceled the work group.
 		if cause := context.Cause(taskCtx); cause != nil {
 			return cause
+		}
+		// The lifecycle callback can be scheduled but not yet run. Read the
+		// executor-owned predicate directly before declaring the joined group a
+		// success.
+		if executorLifecycle != nil {
+			if cause := context.Cause(executorLifecycle); cause != nil {
+				return cause
+			}
 		}
 	}
 	if err != nil {

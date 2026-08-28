@@ -1758,7 +1758,8 @@ func TestRemoveTid(t *testing.T) {
 			assert.False(t, enqueueAfterCleanup)
 			assert.Nil(t, queuedAfterCleanup)
 			gs.completeAutomaticStatsCacheUpdate(k1, generation, plan2.NewStatsInfo(), true)
-			gs.completeStatsRefresh(k1, generation, true, 3, 1, func() {})
+			gs.completeAutomaticStatsRefresh(
+				k1, generation, plan2.NewStatsInfo(), true, 3, 1, func() {})
 
 			gs.mu.Lock()
 			_, ok1 := gs.mu.statsInfoMap[k1]
@@ -1785,7 +1786,8 @@ func TestRemoveTid(t *testing.T) {
 			gs.updatingMu.updating[k1] = replacement
 			gs.updatingMu.Unlock()
 			gs.completeAutomaticStatsCacheUpdate(k1, generation, plan2.NewStatsInfo(), true)
-			gs.completeStatsRefresh(k1, generation, true, 4, 0.5, func() {})
+			gs.completeAutomaticStatsRefresh(
+				k1, generation, plan2.NewStatsInfo(), true, 4, 0.5, func() {})
 			_, oldGenerationStarted := gs.startAutomaticUpdate(k1, generation)
 			assert.False(t, oldGenerationStarted, "an old queued generation should be rejected")
 
@@ -1886,6 +1888,42 @@ func TestRemoveTid(t *testing.T) {
 		})
 	})
 
+}
+
+func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	stopOwner()
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 10, TableID: 42}
+	lastGood := plan2.NewStatsInfo()
+	lastGood.TableCnt = 7
+	generation := &updateRecord{
+		inProgress:      true,
+		baseObjectCount: 7,
+		samplingRatio:   0.25,
+	}
+	gs := &GlobalStats{ctx: ownerCtx}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: lastGood}
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+	fresh := plan2.NewStatsInfo()
+	fresh.TableCnt = 42
+	releases := 0
+	gs.completeAutomaticStatsRefresh(
+		key, generation, fresh, true, 42, 1, func() { releases++ })
+	require.False(t, gs.publishStatsForGeneration(key, generation, fresh))
+	require.Equal(t, 1, releases)
+
+	gs.mu.Lock()
+	require.Same(t, lastGood, gs.mu.statsInfoMap[key],
+		"shutdown must preserve the last successfully published statistics")
+	gs.mu.Unlock()
+	gs.updatingMu.Lock()
+	require.False(t, generation.inProgress)
+	require.Equal(t, int64(7), generation.baseObjectCount,
+		"failed publication must not advance the object-count baseline")
+	require.Equal(t, 0.25, generation.samplingRatio)
+	gs.updatingMu.Unlock()
 }
 
 func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
