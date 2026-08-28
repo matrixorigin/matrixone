@@ -941,6 +941,104 @@ func TestMigrateConnectionFromMarksTypedSystemSnapshotTooLargeForLegacyReplay(t 
 	require.True(t, resp.SystemVariablesReplayable)
 }
 
+func TestClearPrivilegeCacheRefreshesActiveRoleGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		catalogErr error
+	}{
+		{name: "revoked membership is cached"},
+		{name: "catalog errors fail closed", catalogErr: fmt.Errorf("role grant catalog unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses := newTestSession(t, ctrl)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "test_account",
+				User:          "reader_user",
+				DefaultRole:   "reader_role",
+				TenantID:      1,
+				UserID:        2,
+				DefaultRoleID: 3,
+			})
+			ctx := defines.AttachAccountId(context.Background(), 1)
+			require.NoError(t, ses.SetSessionSysVar(ctx, "enable_privilege_cache", int8(1)))
+			ses.GetPrivilegeCache().setActiveRoleGrant(2, 3, true)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			if tc.catalogErr != nil {
+				bh.sql2err[roleGrantSQL] = tc.catalogErr
+			} else {
+				bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
+			}
+			var forcedPessimisticRC bool
+			stub := gostub.Stub(&NewBackgroundExec, func(
+				_ context.Context,
+				_ FeSession,
+				opts ...*BackgroundExecOption,
+			) BackgroundExec {
+				forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+				return bh
+			})
+			defer stub.Reset()
+
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set session clear_privilege_cache = on", 1)
+			require.NoError(t, err)
+			err = doSetVar(ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", false)
+			require.True(t, forcedPessimisticRC)
+			require.Contains(t, bh.executedSQLs, roleGrantSQL)
+			if tc.catalogErr != nil {
+				require.ErrorIs(t, err, tc.catalogErr)
+				_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+				require.False(t, cached)
+				return
+			}
+			require.NoError(t, err)
+			valid, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+			require.True(t, cached)
+			require.False(t, valid)
+		})
+	}
+}
+
+func TestEnablePrivilegeCacheInvalidatesDisabledModeRoleGrant(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "test_account",
+		User:          "reader_user",
+		DefaultRole:   "reader_role",
+		TenantID:      1,
+		UserID:        2,
+		DefaultRoleID: 3,
+	})
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_privilege_cache", int8(0)))
+	// Model the stale entry produced by the old OFF -> SET ROLE path.
+	ses.GetPrivilegeCache().setActiveRoleGrant(2, 3, true)
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set session enable_privilege_cache = on", 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", false))
+	_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+	require.False(t, cached)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+	bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	valid, _, err := validateActiveRoleGrantForAuthorization(ctx, ses)
+	require.NoError(t, err)
+	require.False(t, valid)
+	require.Contains(t, bh.executedSQLs, roleGrantSQL)
+}
+
 func TestCancelledNextTransactionIsolationRemainsReplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

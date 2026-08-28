@@ -297,6 +297,8 @@ func TestPreparedExplainAuthorizationRechecksExecutionPrivilege(t *testing.T) {
 			defer prepareStmt.Close()
 			stub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer stub.Reset()
+			bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(
+				[][]interface{}{{int64(3), int64(2), false}})
 
 			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
 			require.NoError(t, err, "a granted prepared statement must reach the compile path")
@@ -314,6 +316,112 @@ func TestPreparedExplainAuthorizationRechecksExecutionPrivilege(t *testing.T) {
 			require.NoError(t, err, "a re-granted prepared statement must be executable again")
 		})
 	}
+}
+
+func TestPreparedAuthorizationRejectsRevokedActiveRole(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	for _, tc := range []struct {
+		name   string
+		binary bool
+	}{
+		{name: "text execute", binary: false},
+		{name: "binary execute", binary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, prepareStmt, innerPlan, bh := newPreparedAuthorizationFixture(t, "select * from db1.t1")
+			defer prepareStmt.Close()
+			var forcedPessimisticRC bool
+			stub := gostub.Stub(&NewBackgroundExec, func(
+				_ context.Context,
+				_ FeSession,
+				opts ...*BackgroundExecOption,
+			) BackgroundExec {
+				forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+				return bh
+			})
+			defer stub.Reset()
+
+			roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
+			require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true))
+			require.True(t, forcedPessimisticRC)
+
+			// Revoking the active role leaves the role's table privilege intact. The
+			// same prepared handle must still be rejected after the session cache is
+			// cleared because the user no longer owns the active role.
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
+			ses.InvalidatePrivilegeCache()
+			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
+			require.Error(t, err)
+
+			// A committed re-grant plus another cache refresh restores the same
+			// session and prepared handle.
+			bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
+			ses.InvalidatePrivilegeCache()
+			require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true))
+		})
+	}
+}
+
+func TestPreparedAuthorizationActiveRoleGrantCacheBoundaries(t *testing.T) {
+	t.Run("catalog error is not cached", func(t *testing.T) {
+		cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+			return true, nil
+		})
+		defer cacheEnabledStub.Reset()
+
+		ses, prepareStmt, innerPlan, bh := newPreparedAuthorizationFixture(t, "select * from db1.t1")
+		defer prepareStmt.Close()
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
+
+		roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+		catalogErr := errors.New("role grant catalog unavailable")
+		bh.sql2err[roleGrantSQL] = catalogErr
+		err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true)
+		require.ErrorIs(t, err, catalogErr)
+		_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+		require.False(t, cached)
+
+		delete(bh.sql2err, roleGrantSQL)
+		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
+		require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true))
+	})
+
+	t.Run("disabled cache rechecks every execution", func(t *testing.T) {
+		cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+			return false, nil
+		})
+		defer cacheEnabledStub.Reset()
+
+		ses, prepareStmt, innerPlan, bh := newPreparedAuthorizationFixture(t, "select * from db1.t1")
+		defer prepareStmt.Close()
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
+
+		roleGrantSQL := getSqlForCheckUserGrantForAuthorization(3, 2)
+		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant([][]interface{}{{int64(3), int64(2), false}})
+		tablePrivilegeSQL := getSqlForCheckRoleHasTableLevelForStarStarWithObjType(
+			objectTypeTable, 3, PrivilegeTypeSelect)
+		bh.sql2result[tablePrivilegeSQL] = newMrsForCheckRoleHasPrivilege(
+			[][]interface{}{{int64(3), false}})
+		require.NoError(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true))
+
+		bh.sql2result[roleGrantSQL] = newMrsForCheckUserGrant(nil)
+		require.Error(t, runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, false, true))
+
+		var roleGrantChecks int
+		for _, sql := range bh.executedSQLs {
+			if sql == roleGrantSQL {
+				roleGrantChecks++
+			}
+		}
+		require.Equal(t, 2, roleGrantChecks)
+	})
 }
 
 func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {

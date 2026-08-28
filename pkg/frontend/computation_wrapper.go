@@ -1214,7 +1214,8 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
-		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(newPreparePlan.Plan)
+		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
+			newPreparePlan.Plan)
 		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
 		prepareStmt.hasLagLeadParams = len(plan2.PreparedLagLeadParamPositions(newPreparePlan.Plan)) > 0
 		prepareStmt.ColDefData = newColDefData
@@ -1300,12 +1301,18 @@ func initExecuteStmtParamWithResolverInSession(
 		preparedExplain = true
 	}
 	runtimeNumericPrefixCandidate := false
+	// The planner records deferred ABS overloads explicitly on the prepared
+	// plan.  Carry this bounded metadata into execution instead of walking every
+	// expression tree for each EXECUTE.
+	runtimeNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0 &&
+		executionPlan.GetQuery() != nil
 	runtimeDirectResultCandidate := false
 	runtimeTextComparisonSpecialization := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	hasNumericPrefixPacket := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
-		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain
+		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
+		runtimeNumericOverloadCandidate
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
@@ -1361,7 +1368,7 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
 		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
-			runtimeNumericPrefixCandidate || runtimeDirectResultCandidate
+			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate
 		if needsRuntimeParamVals {
 			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 			if err != nil {
@@ -1377,7 +1384,7 @@ func initExecuteStmtParamWithResolverInSession(
 				runtimeNumericPrefixCandidate = filterBinaryNumericPrefixCandidates(
 					executionPlan, cwft.paramVals, prepareStmt.ParamTypes)
 			}
-			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate {
+			if runtimeDirectResultCandidate && !runtimeNumericPrefixCandidate && !runtimeNumericOverloadCandidate {
 				restrictPreparedRuntimeTypesToDirectResults(cwft.paramVals, directResultPositions)
 			} else if runtimeDirectResultCandidate {
 				retainPreparedRuntimeParamRefs(cwft.paramVals)
@@ -1407,11 +1414,21 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	if !binaryExecute && executionPlan.GetQuery() != nil {
-		runtimeNumericPrefixCandidate = plan2.PreparedPlanNeedsNumericPrefixSpecialization(
-			executionPlan, cwft.paramVals)
-		if runtimeNumericPrefixCandidate {
-			retainPreparedRuntimeParamRefs(cwft.paramVals)
-		}
+		// SQL EXECUTE values are already decoded as ParamValue.  The prepared
+		// plan's cached prefix-consumer bit is sufficient to decide whether the
+		// numeric-prefix path can apply; avoid another full plan walk here.
+		runtimeNumericPrefixCandidate = prepareStmt.numericPrefixConsumer &&
+			preparedParamValuesEnableNumericPrefix(cwft.paramVals)
+	}
+	if runtimeNumericOverloadCandidate {
+		// Specialization materializes every ParamRef in the copied plan, not only
+		// the positions that select ABS's runtime overload. Preserve provenance
+		// for every parameter before caching so a same-category cache hit cannot
+		// retain an unrelated value from the first execution.
+		retainPreparedRuntimeParamRefs(cwft.paramVals)
+	}
+	if runtimeNumericPrefixCandidate {
+		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
 	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
 		return nil, nil, nil, originSQL, false, err
@@ -1434,11 +1451,13 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
+	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate
+	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil &&
 		(runtimeDirectResultCandidate ||
-			(runtimeNumericPrefixCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
+			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
-		if runtimeNumericPrefixCandidate {
+		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
 		} else {
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, directResultPositions)
@@ -1451,11 +1470,14 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	if cachedRuntimeCompile == nil &&
-		(!binaryExecute || runtimeNumericPrefixCandidate || runtimeDirectResultCandidate ||
-			binaryLiteralPlan || prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
-		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
-			reqCtx, executionPlan, cwft.paramVals, binaryExecute, runtimeDirectResultCandidate)
-		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
+		(!binaryExecute || runtimeSpecializationCandidate || binaryLiteralPlan ||
+			prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
+		var laterRuntimeSpecialized bool
+		runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
+			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
+			runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization)
+		runtimeSpecialized = runtimeSpecialized || laterRuntimeSpecialized
+		if err == nil && cacheableRuntimeQuery && laterRuntimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
 				cwft.runtimeCacheTarget = prepareStmt
@@ -1558,6 +1580,16 @@ func retainPreparedRuntimeParamRefs(paramVals []any) {
 		param.RetainParamRef = true
 		paramVals[i] = param
 	}
+}
+
+func preparedParamValuesEnableNumericPrefix(paramVals []any) bool {
+	for _, value := range paramVals {
+		param, ok := value.(plan2.ParamValue)
+		if ok && param.EnableNumericPrefix {
+			return true
+		}
+	}
+	return false
 }
 
 func restrictPreparedRuntimeTypesToDirectResults(paramVals []any, positions []int32) {
@@ -1715,8 +1747,11 @@ func specializePreparedExecutionPlan(
 	executionPlan *plan2.Plan,
 	paramVals []any,
 	binaryExecute bool,
+	forceNumericOverload bool,
 	directResultSpecialization bool,
+	forceSpecialization ...bool,
 ) (*plan2.Plan, bool, bool, error) {
+	needsForcedSpecialization := len(forceSpecialization) > 0 && forceSpecialization[0]
 	if len(paramVals) == 0 || executionPlan == nil ||
 		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
 			executionPlan.GetDcl().GetSetVariables() == nil) {
@@ -1724,8 +1759,10 @@ func specializePreparedExecutionPlan(
 	}
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
-	needsNumericPrefix := plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
-	needsRuntimeSpecialization := plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
+	needsNumericPrefix := !forceNumericOverload &&
+		plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
+	needsRuntimeSpecialization := needsForcedSpecialization ||
+		plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
 	runtimeTypes := make([]types.Type, len(paramVals))
 	for i, value := range paramVals {
 		param, ok := value.(plan2.ParamValue)
@@ -1747,17 +1784,22 @@ func specializePreparedExecutionPlan(
 	}
 	needsTextComparison := plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
 		executionPlan, runtimeTypes)
-	if !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
+	if !forceNumericOverload && !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
 		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization &&
 		!needsTextComparison {
 		return executionPlan, false, false, nil
 	}
 
-	// DML write expressions are consumed positionally by the writer and must
-	// retain their assignment casts.  Predicates and nested expressions are
-	// still rebound against execute-time parameter domains.
-	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
-		ctx, executionPlan, paramVals)
+	var runtimePlan *plan2.Plan
+	var specialized bool
+	var err error
+	if forceNumericOverload {
+		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+			ctx, executionPlan, paramVals)
+	} else {
+		runtimePlan, specialized, err = plan2.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+			ctx, executionPlan, paramVals)
+	}
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -2289,6 +2331,7 @@ func buildPlanForCompileRetry(
 	}
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
 		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute,
+		len(plan2.PreparedPlanNumericFallbackParamPositions(retryPlan)) > 0,
 		preparedRetry.directResultSpecialization)
 	if err != nil {
 		return nil, err
