@@ -38,6 +38,8 @@ WHERE '9007199254740992.0001' = d ORDER BY id;
 SELECT id FROM boundary_values
 WHERE d = CAST('9007199254740992.0001' AS VARCHAR) ORDER BY id;
 SELECT id FROM boundary_values
+WHERE d = CONCAT('9007199254740992.', '0001') ORDER BY id;
+SELECT id FROM boundary_values
 WHERE d = CAST('9007199254740992.0001' AS DECIMAL(20,4)) ORDER BY id;
 SELECT id FROM boundary_values FORCE INDEX (idx_d)
 WHERE d = '9007199254740992.0001' ORDER BY id;
@@ -58,6 +60,8 @@ WHERE d NOT IN ('9007199254740992.0001', '9007199254740992.9999') ORDER BY id;
 -- A runtime VARCHAR expression remains in the generic approximate domain.
 SELECT id FROM boundary_values
 WHERE d = s ORDER BY id;
+SELECT id FROM boundary_values
+WHERE d = CONCAT(s, '') ORDER BY id;
 
 CREATE TABLE scale_values (id INT PRIMARY KEY, d DECIMAL(10,4));
 INSERT INTO scale_values VALUES (1, 1.2345), (2, 1.2346);
@@ -90,13 +94,17 @@ ORDER BY id;
 CREATE TABLE token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
 INSERT INTO token_values VALUES (1, 16), (2, 100);
 SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
-SELECT id FROM token_values WHERE d = '1e2suffix' ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 SHOW WARNINGS;
-SELECT id FROM token_values WHERE d = '0x10foo' ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('0x', '10foo') ORDER BY id;
 
+SET @decimal_string_old_sql_mode = @@session.sql_mode;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
-SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
-SELECT id FROM token_values WHERE d = '1e2suffix' ORDER BY id;
-SET SESSION sql_mode = '';
+SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
+SET SESSION sql_mode = @decimal_string_old_sql_mode;
+SELECT @@session.sql_mode = @decimal_string_old_sql_mode AS sql_mode_restored;
+SET @decimal_string_old_sql_mode = NULL;
 
 DROP DATABASE decimal_string_comparison;

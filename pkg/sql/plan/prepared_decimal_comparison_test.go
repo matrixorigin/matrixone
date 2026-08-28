@@ -135,6 +135,113 @@ func TestDecimalStringLiteralComparisonsUseExactCoercion(t *testing.T) {
 	}
 }
 
+func TestFoldableDecimalStringComparisonUsesExactCoercion(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	makeConcat := func(parts ...string) *planpb.Expr {
+		args := make([]*planpb.Expr, len(parts))
+		for i, part := range parts {
+			args[i] = makePlan2StringConstExprWithType(part)
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "concat", args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	for _, stringLeft := range []bool{false, true} {
+		t.Run(fmt.Sprintf("scalar/string_left=%t", stringLeft), func(t *testing.T) {
+			decimal := makePreparedDecimalComparisonColumn(decimalType)
+			constant := makeConcat("9007199254740992.", "0001")
+			left, right := decimal, constant
+			if stringLeft {
+				left, right = constant, decimal
+			}
+			expr, err := bindFuncExprAndConstFold(
+				ctx.GetContext(), ctx.GetProcess(), "=", []*planpb.Expr{left, right})
+			require.NoError(t, err)
+			for _, arg := range expr.GetF().Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type: %+v", arg.Typ)
+			}
+		})
+	}
+
+	for _, name := range []string{"in", "not_in"} {
+		for _, stringLeft := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/string_left=%t", name, stringLeft), func(t *testing.T) {
+				decimal := makePreparedDecimalComparisonColumn(decimalType)
+				constant := makeConcat("9007199254740992.", "0001")
+				left, right := decimal, constant
+				if stringLeft {
+					left, right = constant, decimal
+				}
+				expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), name, []*planpb.Expr{
+					left,
+					{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{right}}}},
+				})
+				require.NoError(t, err)
+				operator := "="
+				if name == "not_in" {
+					operator = "!="
+				}
+				comparison := findPreparedDecimalComparisonFunction(expr, operator)
+				require.NotNil(t, comparison)
+				for _, arg := range comparison.GetF().Args {
+					require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type: %+v", arg.Typ)
+				}
+			})
+		}
+	}
+
+	t.Run("runtime varchar", func(t *testing.T) {
+		varcharColumn := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},
+		}
+		concat, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "concat", []*planpb.Expr{
+			varcharColumn,
+			makePlan2StringConstExprWithType(""),
+		})
+		require.NoError(t, err)
+		expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "=", []*planpb.Expr{
+			makePreparedDecimalComparisonColumn(decimalType),
+			concat,
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		}
+	})
+
+	t.Run("real-time function", func(t *testing.T) {
+		realTime, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "charset", []*planpb.Expr{
+			makePlan2StringConstExprWithType("100"),
+		})
+		require.NoError(t, err)
+		expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "=", []*planpb.Expr{
+			makePreparedDecimalComparisonColumn(decimalType),
+			realTime,
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		}
+	})
+
+	t.Run("folded suffix preserves runtime lexeme", func(t *testing.T) {
+		expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "=", []*planpb.Expr{
+			makePreparedDecimalComparisonColumn(decimalType),
+			makeConcat("1e2", "suffix"),
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		}
+		value, ok := decimalComparisonStringLiteral(expr)
+		require.True(t, ok)
+		require.Equal(t, "1e2suffix", value)
+	})
+}
+
 func TestDecimalStringLiteralComparisonPreservesNaturalScale(t *testing.T) {
 	ctx := context.Background()
 	expr, err := BindFuncExprImplByPlanExpr(ctx, "<", []*planpb.Expr{

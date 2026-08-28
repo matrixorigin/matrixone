@@ -3456,6 +3456,7 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	foldDecimalStringComparisonConstants(proc, name, args)
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -5289,6 +5290,53 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
+// foldDecimalStringComparisonConstants materializes only deterministic string
+// constants before the generic numeric overload resolver can erase their exact
+// value. Runtime expressions retain the existing REAL comparison domain.
+func foldDecimalStringComparisonConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || len(args) != 2 {
+		return
+	}
+
+	foldPair := func(pair []*Expr) {
+		for stringPos, decimalPos := range []int{1, 0} {
+			candidate, peer := pair[stringPos], pair[decimalPos]
+			if candidate == nil || peer == nil ||
+				!types.T(candidate.Typ.Id).IsMySQLString() ||
+				!types.T(peer.Typ.Id).IsDecimal() ||
+				candidate.GetLit() != nil || !rule.IsConstant(candidate, false) {
+				continue
+			}
+			if _, ok := decimalStringLiteralValue(candidate); ok {
+				continue
+			}
+			folded, err := ConstantFold(
+				batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate), proc, false, true)
+			if err != nil || folded == nil || folded.GetLit() == nil ||
+				!types.T(folded.Typ.Id).IsMySQLString() {
+				continue
+			}
+			pair[stringPos] = folded
+			return
+		}
+	}
+
+	if isDecimalComparisonOperator(name) {
+		foldPair(args)
+		return
+	}
+	if name != "in" && name != "not_in" {
+		return
+	}
+	list := args[1].GetList()
+	if list == nil || len(list.List) != 1 {
+		return
+	}
+	pair := []*Expr{args[0], list.List[0]}
+	foldPair(pair)
+	args[0], list.List[0] = pair[0], pair[1]
+}
+
 func isDecimalComparisonOperator(name string) bool {
 	switch name {
 	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
@@ -5409,6 +5457,12 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 	if literal := expr.GetLit(); literal != nil {
 		value, ok := literal.Value.(*plan.Literal_Sval)
 		if !ok || literal.Isnull || literal.IsBin {
+			return "", false
+		}
+		switch literal.LiteralForm {
+		case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			plan.StringLiteralForm_STRING_LITERAL_HEX,
+			plan.StringLiteralForm_STRING_LITERAL_BIT:
 			return "", false
 		}
 		return value.Sval, true

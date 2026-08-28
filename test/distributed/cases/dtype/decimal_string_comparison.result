@@ -51,6 +51,10 @@ WHERE d = CAST('9007199254740992.0001' AS VARCHAR) ORDER BY id;
 ➤ id[4,32,0]  𝄀
 2
 SELECT id FROM boundary_values
+WHERE d = CONCAT('9007199254740992.', '0001') ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SELECT id FROM boundary_values
 WHERE d = CAST('9007199254740992.0001' AS DECIMAL(20,4)) ORDER BY id;
 ➤ id[4,32,0]  𝄀
 2
@@ -82,6 +86,12 @@ WHERE d NOT IN ('9007199254740992.0001', '9007199254740992.9999') ORDER BY id;
 ➤ id[4,32,0]
 SELECT id FROM boundary_values
 WHERE d = s ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+SELECT id FROM boundary_values
+WHERE d = CONCAT(s, '') ORDER BY id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
 2  𝄀
@@ -124,19 +134,27 @@ INSERT INTO token_values VALUES (1, 16), (2, 100);
 SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
 ➤ id[4,32,0]  𝄀
 1
-SELECT id FROM token_values WHERE d = '1e2suffix' ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 ➤ id[4,32,0]  𝄀
 2
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '1e2suffix'
-SELECT id FROM token_values WHERE d = '0x10foo' ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('0x', '10foo') ORDER BY id;
 invalid input: "10foo" is invalid numeric string
+SET @decimal_string_old_sql_mode = @@session.sql_mode;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
-SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
 ➤ id[4,32,0]  𝄀
 1
-SELECT id FROM token_values WHERE d = '1e2suffix' ORDER BY id;
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 invalid input: "1e2suffix" is invalid numeric string
-SET SESSION sql_mode = '';
+SET SESSION sql_mode = @decimal_string_old_sql_mode;
+SELECT @@session.sql_mode = @decimal_string_old_sql_mode AS sql_mode_restored;
+➤ sql_mode_restored[-7,1,0]  𝄀
+1
+SET @decimal_string_old_sql_mode = NULL;
 DROP DATABASE decimal_string_comparison;
