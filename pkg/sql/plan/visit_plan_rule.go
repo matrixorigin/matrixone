@@ -1134,7 +1134,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		// carry an explicit numeric domain, represented by a non-text type on the
 		// replacement expression; preserve that domain for direct projections and
 		// for the function rebinding performed by the parent expression.
-		if param != nil && param.Typ.Id != int32(types.T_text) {
+		if param.Typ.Id != int32(types.T_text) {
 			typ = param.Typ
 		}
 		rewritten := &plan.Expr{
