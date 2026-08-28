@@ -1224,7 +1224,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_ANTI:
-			node.Stats.Outcnt = leftStats.Outcnt * (1 - rightSelectivity) * 0.5
+			node.Stats.Outcnt = estimateAntiJoinOutcnt(node, builder, leftStats, rightStats)
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
@@ -1474,6 +1474,67 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 	if node.Limit != nil {
 		applyLimitToStats(node.Stats, node.Limit, builder)
 	}
+}
+
+// estimateAntiJoinOutcnt estimates how many logical-left rows survive an ANTI
+// join. Child selectivity describes filtering within that child; it is not the
+// probability that a left join key is present on the right. In the absence of
+// key-overlap statistics, keep the uncertainty-neutral 50% estimate.
+//
+// A primary key on the left gives us a stronger structural bound: each right
+// input row can eliminate at most one left row. Apply that invariant to the
+// estimated input cardinalities without requiring key-overlap statistics.
+func estimateAntiJoinOutcnt(node *plan.Node, builder *QueryBuilder, leftStats, rightStats *Stats) float64 {
+	leftRows := math.Max(0, finiteOr(leftStats.Outcnt, 0))
+	rightRows := math.Max(0, finiteOr(rightStats.Outcnt, 0))
+	outcnt := leftRows * 0.5
+	if antiJoinLeftKeysArePrimaryKey(node, builder) {
+		outcnt = math.Max(outcnt, leftRows-rightRows)
+	}
+	return math.Min(leftRows, math.Max(0, outcnt))
+}
+
+// antiJoinLeftKeysArePrimaryKey deliberately proves only the base-table case.
+// Joins and aggregates can duplicate rows, so primary-key provenance through
+// those operators requires a separate uniqueness property rather than a tag
+// match alone.
+func antiJoinLeftKeysArePrimaryKey(node *plan.Node, builder *QueryBuilder) bool {
+	if node == nil || builder == nil || builder.qry == nil || len(node.Children) != 2 {
+		return false
+	}
+	left := builder.qry.Nodes[node.Children[0]]
+	if left == nil || left.NodeType != plan.Node_TABLE_SCAN || left.TableDef == nil ||
+		left.TableDef.Pkey == nil || len(left.TableDef.Pkey.Names) == 0 ||
+		len(left.BindingTags) != 1 {
+		return false
+	}
+	for _, name := range left.TableDef.Pkey.Names {
+		if _, ok := left.TableDef.Name2ColIndex[name]; !ok {
+			return false
+		}
+	}
+
+	leftTags := map[int32]bool{left.BindingTags[0]: true}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = true
+	}
+
+	leftKeyCols := make([]int32, 0, len(left.TableDef.Pkey.Names))
+	for _, condition := range node.OnList {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			continue
+		}
+		first, second := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+		switch {
+		case first != nil && second != nil && leftTags[first.RelPos] && rightTags[second.RelPos]:
+			leftKeyCols = append(leftKeyCols, first.ColPos)
+		case first != nil && second != nil && rightTags[first.RelPos] && leftTags[second.RelPos]:
+			leftKeyCols = append(leftKeyCols, second.ColPos)
+		}
+	}
+	return containsAllPKs(leftKeyCols, left.TableDef)
 }
 
 func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {

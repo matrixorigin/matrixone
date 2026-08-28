@@ -315,10 +315,66 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 		ReCalcNodeStats(2, builder, false, false, false)
 
 		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+		require.Equal(t, 50.0, join.Stats.Outcnt)
 		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
 		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
 		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
 		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+	})
+}
+
+func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	makeEquality := func(leftPos, rightPos int32) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+			GetColExpr(intType, 10, leftPos),
+			GetColExpr(intType, 20, rightPos),
+		})
+		require.NoError(t, err)
+		return expr
+	}
+	makeBuilder := func(onList []*planpb.Expr) (*QueryBuilder, *planpb.Node) {
+		left := &planpb.Node{
+			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10},
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "pk1", Typ: intType}, {Name: "pk2", Typ: intType}},
+				Name2ColIndex: map[string]int32{"pk1": 0, "pk2": 1},
+				Pkey:          &planpb.PrimaryKeyDef{Names: []string{"pk1", "pk2"}},
+			},
+			Stats: &planpb.Stats{Outcnt: 1000, Cost: 1000, Selectivity: 1, BlockNum: 1},
+		}
+		right := &planpb.Node{
+			NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{20},
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "k1", Typ: intType}, {Name: "k2", Typ: intType}},
+				Name2ColIndex: map[string]int32{"k1": 0, "k2": 1},
+			},
+			Stats: &planpb.Stats{Outcnt: 100, Cost: 100, Selectivity: 1, BlockNum: 1},
+		}
+		join := &planpb.Node{
+			NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_ANTI,
+			Children: []int32{0, 1}, OnList: onList, Stats: DefaultStats(),
+		}
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+		return builder, join
+	}
+
+	t.Run("complete primary key bounds the number of eliminated rows", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0), makeEquality(1, 1)})
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 900.0, join.Stats.Outcnt)
+	})
+
+	t.Run("partial primary key keeps the uncertainty default", func(t *testing.T) {
+		builder, join := makeBuilder([]*planpb.Expr{makeEquality(0, 0)})
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, 500.0, join.Stats.Outcnt)
 	})
 }
 

@@ -418,6 +418,9 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	child := builder.qry.Nodes[childID]
+	if reusableJoinShuffleChild(col, child, builder, afterRemap) {
+		return child, true
+	}
 	if child == nil || child.NodeType != plan.Node_AGG || child.Stats == nil ||
 		child.Stats.HashmapStats == nil || !child.Stats.HashmapStats.Shuffle ||
 		child.Stats.HashmapStats.ShuffleColIdx < 0 ||
@@ -449,6 +452,76 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	return child, true
+}
+
+// reusableJoinShuffleChild proves distribution lineage through a join whose
+// output preserves its logical left rows. A shuffled join remains partitioned
+// by its left equality key, so a following join on that exact output key can
+// reuse the distribution instead of falling back to a broadcast build.
+//
+// Keep this deliberately narrower than general equivalence propagation:
+// right/full preserving joins, expressions, and keys projected from the build
+// side fail closed because unmatched rows do not preserve those properties.
+func reusableJoinShuffleChild(
+	col *plan.ColRef,
+	child *plan.Node,
+	builder *QueryBuilder,
+	afterRemap bool,
+) bool {
+	if col == nil || child == nil || builder == nil || builder.qry == nil ||
+		child.NodeType != plan.Node_JOIN || child.IsRightJoin ||
+		child.Stats == nil || child.Stats.HashmapStats == nil ||
+		!child.Stats.HashmapStats.Shuffle {
+		return false
+	}
+	switch child.JoinType {
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+	default:
+		return false
+	}
+
+	shuffleIdx := child.Stats.HashmapStats.ShuffleColIdx
+	if shuffleIdx < 0 || int(shuffleIdx) >= len(child.OnList) {
+		return false
+	}
+	fn := child.OnList[shuffleIdx].GetF()
+	if fn == nil || len(fn.Args) != 2 {
+		return false
+	}
+
+	if afterRemap {
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		outputCol := child.ProjectList[col.ColPos].GetCol()
+		if outputCol == nil {
+			return false
+		}
+		for _, arg := range fn.Args {
+			keyCol := arg.GetCol()
+			if keyCol != nil && keyCol.RelPos == 0 &&
+				outputCol.RelPos == keyCol.RelPos && outputCol.ColPos == keyCol.ColPos {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(child.Children) != 2 {
+		return false
+	}
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(child.Children[0]) {
+		leftTags[tag] = true
+	}
+	for _, arg := range fn.Args {
+		keyCol := arg.GetCol()
+		if keyCol != nil && leftTags[keyCol.RelPos] &&
+			col.RelPos == keyCol.RelPos && col.ColPos == keyCol.ColPos {
+			return true
+		}
+	}
+	return false
 }
 
 func resetShuffleStrategy(hashmapStats *plan.HashMapStats) {
@@ -687,11 +760,9 @@ func planShuffleJoinCandidate(
 	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
 }
 
-// selectShuffleJoinCondition keeps the first condition that the current plan
-// can actually shuffle on after the existing range/hash recheck. It only scans
-// later conditions when an earlier condition is unsupported or rejected by
-// those rules. This removes predicate-order-dependent eligibility without
-// changing established valid plans.
+// selectShuffleJoinCondition prefers a condition that can reuse the probe's
+// existing partitioning. Among conditions that require a new shuffle, it keeps
+// the first eligible condition so predicate order remains the stable tie-break.
 func selectShuffleJoinCondition(
 	node *plan.Node,
 	builder *QueryBuilder,
@@ -702,6 +773,8 @@ func selectShuffleJoinCondition(
 ) (int, plan.HashMapStats) {
 	firstSupportedIdx := -1
 	var firstSupportedStats plan.HashMapStats
+	firstEligibleIdx := -1
+	var firstEligibleStats plan.HashMapStats
 
 	for i, condition := range onList {
 		fn := condition.GetF()
@@ -734,10 +807,19 @@ func selectShuffleJoinCondition(
 			firstSupportedStats = candidateStats
 		}
 		if eligible {
-			return i, candidateStats
+			if candidateStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+				return i, candidateStats
+			}
+			if firstEligibleIdx == -1 {
+				firstEligibleIdx = i
+				firstEligibleStats = candidateStats
+			}
 		}
 	}
 
+	if firstEligibleIdx != -1 {
+		return firstEligibleIdx, firstEligibleStats
+	}
 	return firstSupportedIdx, firstSupportedStats
 }
 

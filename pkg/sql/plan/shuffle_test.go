@@ -1070,6 +1070,106 @@ func TestDetermineShuffleForJoinPreservesReusableFirstCondition(t *testing.T) {
 	require.Equal(t, plan.ShuffleMethod_Reuse, node.Stats.HashmapStats.ShuffleMethod)
 }
 
+func TestDetermineShuffleForJoinReusesLeftKeyThroughJoinChain(t *testing.T) {
+	makeChildJoin := func(joinType plan.Node_JoinType) (*QueryBuilder, *plan.Node) {
+		left := makeShuffleJoinTestChild(10, 10_000_000)
+		build := makeShuffleJoinTestChild(20, 3_000_000)
+		childJoin := &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: joinType,
+			Children: []int32{0, 1},
+			OnList: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+			},
+			Stats: &plan.Stats{
+				Outcnt: 10_000_000,
+				HashmapStats: &plan.HashMapStats{
+					Shuffle:       true,
+					ShuffleColIdx: 0,
+					ShuffleType:   plan.ShuffleType_Range,
+					ShuffleMethod: plan.ShuffleMethod_Reuse,
+					ShuffleColMin: 10,
+					ShuffleColMax: 1_000_000,
+				},
+			},
+		}
+		right := makeShuffleJoinTestChild(30, 3_000_000)
+		parent := &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_LEFT,
+			Children: []int32{2, 3},
+			OnList: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, 64, 10, 30, 0),
+			},
+			Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+				HashmapSize: 3_000_000,
+			}},
+		}
+		return &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+			left, build, childJoin, right,
+		}}}, parent
+	}
+
+	t.Run("left join preserves its left partition key", func(t *testing.T) {
+		builder, parent := makeChildJoin(plan.Node_LEFT)
+
+		determineShuffleForJoin(parent, builder)
+
+		require.True(t, parent.Stats.HashmapStats.Shuffle)
+		require.Equal(t, int32(0), parent.Stats.HashmapStats.ShuffleColIdx)
+		require.Equal(t, plan.ShuffleMethod_Reuse, parent.Stats.HashmapStats.ShuffleMethod)
+		require.Equal(t, plan.ShuffleType_Range, parent.Stats.HashmapStats.ShuffleType)
+	})
+
+	t.Run("full join does not preserve one side as a distribution key", func(t *testing.T) {
+		builder, parent := makeChildJoin(plan.Node_OUTER)
+
+		determineShuffleForJoin(parent, builder)
+
+		require.False(t, parent.Stats.HashmapStats.Shuffle)
+		require.Equal(t, plan.ShuffleMethod_Normal, parent.Stats.HashmapStats.ShuffleMethod)
+	})
+
+	t.Run("left join build key cannot describe unmatched probe rows", func(t *testing.T) {
+		builder, parent := makeChildJoin(plan.Node_LEFT)
+		parent.OnList[0] = makeShuffleJoinEquality(t, types.T_int64, 64, 20, 30, 0)
+
+		determineShuffleForJoin(parent, builder)
+
+		require.False(t, parent.Stats.HashmapStats.Shuffle)
+		require.Equal(t, plan.ShuffleMethod_Normal, parent.Stats.HashmapStats.ShuffleMethod)
+	})
+}
+
+func TestReusableJoinShuffleChildAfterRemap(t *testing.T) {
+	child := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_LEFT,
+		Children: []int32{0, 1},
+		OnList: []*plan.Expr{
+			makeShuffleJoinEquality(t, types.T_int64, 64, 0, 1, 0),
+		},
+		ProjectList: []*plan.Expr{
+			GetColExpr(plan.Type{Id: int32(types.T_int64)}, 0, 0),
+			GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0),
+		},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			Shuffle:       true,
+			ShuffleColIdx: 0,
+			ShuffleMethod: plan.ShuffleMethod_Reuse,
+		}},
+	}
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+		makeShuffleJoinTestChild(10, 1),
+		makeShuffleJoinTestChild(20, 1),
+	}}}
+
+	require.True(t, reusableJoinShuffleChild(
+		&plan.ColRef{RelPos: 0, ColPos: 0}, child, builder, true))
+	require.False(t, reusableJoinShuffleChild(
+		&plan.ColRef{RelPos: 0, ColPos: 1}, child, builder, true))
+}
+
 func TestDetermineShuffleForJoinReuseMatchesChildPartition(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1228,6 +1328,7 @@ func TestDetermineShuffleForJoinSkipsCandidateRejectedByFinalRecheck(t *testing.
 	tests := []struct {
 		name            string
 		expressionFirst bool
+		expressionOnly  bool
 		hashmapSize     float64
 		wantIdx         int32
 		wantType        plan.ShuffleType
@@ -1249,8 +1350,17 @@ func TestDetermineShuffleForJoinSkipsCandidateRejectedByFinalRecheck(t *testing.
 			wantMethod:      plan.ShuffleMethod_Reuse,
 		},
 		{
-			name:            "hash threshold is inclusive",
+			name:            "reusable key avoids an otherwise eligible reshuffle",
 			expressionFirst: true,
+			hashmapSize:     threshHoldForHashShuffle,
+			wantIdx:         1,
+			wantType:        plan.ShuffleType_Range,
+			wantMethod:      plan.ShuffleMethod_Reuse,
+		},
+		{
+			name:            "hash threshold is inclusive without a reusable key",
+			expressionFirst: true,
+			expressionOnly:  true,
 			hashmapSize:     threshHoldForHashShuffle,
 			wantIdx:         0,
 			wantType:        plan.ShuffleType_Hash,
@@ -1265,6 +1375,9 @@ func TestDetermineShuffleForJoinSkipsCandidateRejectedByFinalRecheck(t *testing.
 			conditions := []*plan.Expr{reusableKey, expressionKey}
 			if tt.expressionFirst {
 				conditions = []*plan.Expr{expressionKey, reusableKey}
+			}
+			if tt.expressionOnly {
+				conditions = []*plan.Expr{expressionKey}
 			}
 
 			left := makeShuffleJoinTestChild(10, 10_000_000)
