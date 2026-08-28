@@ -1196,7 +1196,7 @@ func buildPreparedRuntimePlanForFrontendTest(t testing.TB, sql string) *plan.Pla
 	optimizer := plan2.NewMockOptimizer(false)
 	stmts, err := mysql.Parse(
 		optimizer.CurrentContext().GetContext(),
-		fmt.Sprintf("prepare issue27807_stmt from '%s'", sql),
+		fmt.Sprintf("prepare prepared_runtime_stmt from '%s'", sql),
 		1,
 	)
 	require.NoError(t, err)
