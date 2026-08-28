@@ -16403,8 +16403,13 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+		oldNewBackgroundExec := NewBackgroundExec
+		defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+		var forcedPessimisticRC bool
+		NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		}
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -16452,6 +16457,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
 
 		commitErr := errors.New("snapshot commit conflict")
 		bh.sql2err["commit;"] = commitErr
