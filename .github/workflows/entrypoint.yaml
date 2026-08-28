@@ -75,7 +75,10 @@ jobs:
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
-      ut_parallel: 8
+      # Leave one runner CPU for race-detector/native work inside a package.
+      # Eight package slots made CPU-heavy HNSW tests the light-stage straggler.
+      ut_parallel: 7
+      ut_sharded: true
     secrets: inherit
 
   matrixone-ut-coverage:
