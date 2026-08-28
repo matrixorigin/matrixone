@@ -30,8 +30,15 @@ catalog metadata.
 The first owner of access metadata is the frontend built-in procedure. It owns
 the transaction that reads the catalog row with `FOR UPDATE`, deletes the
 selected residency-policy row(s), conditionally deletes the principal mapping,
-and commits or rolls back as one unit. `handleDropIcebergCatalog` remains the
-consumer that checks all catalog-owned dependencies before deleting the catalog.
+and commits or rolls back as one unit. Every other producer of a dependency
+checked by `DROP ICEBERG CATALOG` follows the same admission rule: table mapping
+creation uses its outer DDL transaction, while DAO publication of refs, publish
+jobs, orphan-file records, and maintenance jobs locks and validates the catalog
+row in one internal transaction before writing the dependency. A producer that
+arrives after DROP commits therefore fails its validation instead of publishing
+an orphan; a DROP that arrives after publication observes the dependency and is
+rejected. `handleDropIcebergCatalog` remains the consumer that checks all
+catalog-owned dependencies before deleting the catalog.
 
 ## API and Authorization
 
@@ -60,6 +67,7 @@ cleanup transaction.
 | registered | unregister scope | `BEGIN`; lock catalog row | scope policy removed | rollback on every query or delete error |
 | policy removed | count remaining relevant policies | same transaction | principal retained or deleted | rollback on count/read error |
 | no relevant policies | delete principal mapping | same transaction | no access metadata | rollback on delete/commit error |
+| catalog exists | publish refs/jobs/orphan metadata | lock catalog row in publisher transaction | dependency visible | rollback on validation or publication error |
 | metadata removed and no mappings | normal drop | existing dependency check | catalog deleted | rejected drop leaves every row intact |
 
 The policy count includes a cluster policy and the target account policy because
@@ -104,9 +112,10 @@ for inspection.
 
 ## Verification and Acceptance
 
-Focused frontend unit tests prove authorization, scope predicate selection,
-commit/rollback behavior, principal retention while another scope remains, and
-invalid option/scope rejection. The local Iceberg E2E lifecycle case proves the
+Focused frontend and DAO unit tests prove authorization, prefix-complete scope
+deletion, commit/rollback behavior, principal retention while another scope
+remains, and catalog-lock-before-maintenance-publication. The local Iceberg E2E
+lifecycle case proves the
 public sequence: create catalog, register access, create a mapping, verify
 ordinary drop is atomically rejected, remove mapping, unregister access, drop
 catalog, and verify zero catalog-owned rows. Its SQL-mock tests additionally

@@ -161,7 +161,8 @@ func TestExecuteIcebergUnregisterAccessCallCommitsAtomicCleanup(t *testing.T) {
 	wantSQL := []string{
 		"begin;",
 		catalogSQL,
-		"delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and (scope_type = 'cluster' or (scope_type = 'account' and account_id = 0))",
+		"delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and scope_type = 'cluster' and account_id = 0",
+		"delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and scope_type = 'account' and account_id = 0",
 		clusterCountSQL,
 		accountCountSQL,
 		"delete from mo_catalog.mo_iceberg_principal_map where account_id = 0 and catalog_id = 7",
@@ -177,7 +178,7 @@ func TestExecuteIcebergUnregisterAccessCallRollsBackOnCleanupFailure(t *testing.
 	bh := &backgroundExecTest{}
 	bh.init()
 	catalogSQL := icebergsql.GetCatalogByNameSQL(0, "tiera") + " for update"
-	deleteSQL := "delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and (scope_type = 'cluster' or (scope_type = 'account' and account_id = 0))"
+	deleteSQL := "delete from mo_catalog.mo_iceberg_residency_policy where catalog_id = 7 and scope_type = 'cluster' and account_id = 0"
 	bh.sql2result[catalogSQL] = icebergCallResult([]interface{}{uint32(0), uint64(7), "tiera", "rest", "https://catalog.example/rest"})
 	bh.sql2err[deleteSQL] = errors.New("delete failed")
 	stub := gostub.StubFunc(&NewBackgroundExec, bh)
@@ -295,16 +296,16 @@ func TestIcebergUnregisterAccessScopeAuthorization(t *testing.T) {
 func TestIcebergUnregisterResidencyWhere(t *testing.T) {
 	tests := []struct {
 		scope string
-		want  string
+		want  []string
 	}{
-		{scope: model.ResidencyScopeCluster, want: "scope_type = 'cluster'"},
-		{scope: icebergAccessScopeAll, want: "(scope_type = 'cluster' or (scope_type = 'account' and account_id = 9))"},
-		{scope: model.ResidencyScopeAccount, want: "scope_type = 'account' and account_id = 9"},
+		{scope: model.ResidencyScopeCluster, want: []string{"scope_type = 'cluster' and account_id = 0"}},
+		{scope: icebergAccessScopeAll, want: []string{"scope_type = 'cluster' and account_id = 0", "scope_type = 'account' and account_id = 9"}},
+		{scope: model.ResidencyScopeAccount, want: []string{"scope_type = 'account' and account_id = 9"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.scope, func(t *testing.T) {
-			if got := icebergUnregisterResidencyWhere(tt.scope, 9); got != tt.want {
-				t.Fatalf("scope predicate = %q, want %q", got, tt.want)
+			if got := icebergUnregisterResidencyWhere(tt.scope, 9); strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Fatalf("scope predicates = %q, want %q", got, tt.want)
 			}
 		})
 	}

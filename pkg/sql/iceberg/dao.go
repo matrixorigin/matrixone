@@ -41,6 +41,11 @@ type SQLExecutor interface {
 	Query(ctx context.Context, sql string) (RowsScanner, error)
 }
 
+type transactionalSQLExecutor interface {
+	SQLExecutor
+	ExecTxn(ctx context.Context, fn func(SQLExecutor) error) error
+}
+
 type DAO struct {
 	exec SQLExecutor
 }
@@ -141,7 +146,10 @@ func (d *DAO) InsertPrincipalMap(ctx context.Context, mapping model.PrincipalMap
 	if err := ValidatePrincipalMap(ctx, mapping); err != nil {
 		return err
 	}
-	return d.execSQL(ctx, InsertPrincipalMapSQL(mapping))
+	return d.publishCatalogDependency(ctx, mapping.AccountID, mapping.CatalogID, func(exec SQLExecutor) error {
+		_, err := exec.Exec(ctx, InsertPrincipalMapSQL(mapping))
+		return err
+	})
 }
 
 func (d *DAO) ListPrincipalMaps(ctx context.Context, accountID uint32, catalogID uint64) ([]model.PrincipalMap, error) {
@@ -177,7 +185,10 @@ func (d *DAO) InsertResidencyPolicy(ctx context.Context, policy model.ResidencyP
 	if err := ValidateResidencyPolicy(ctx, policy); err != nil {
 		return err
 	}
-	return d.execSQL(ctx, InsertResidencyPolicySQL(policy))
+	return d.publishCatalogDependency(ctx, policy.AccountID, policy.CatalogID, func(exec SQLExecutor) error {
+		_, err := exec.Exec(ctx, InsertResidencyPolicySQL(policy))
+		return err
+	})
 }
 
 func (d *DAO) InsertResidencyPolicyWithPrivilege(ctx context.Context, actorAccountID uint32, isClusterAdmin bool, policy model.ResidencyPolicy) error {
@@ -352,15 +363,17 @@ func (d *DAO) RefreshRefCache(ctx context.Context, refs []model.RefCache) error 
 		return err
 	}
 	first := normalized[0]
-	if err := d.execSQL(ctx, DeleteRefCacheSQL(first.AccountID, first.CatalogID, first.Namespace, first.TableName)); err != nil {
-		return err
-	}
-	for _, ref := range normalized {
-		if err := d.execSQL(ctx, InsertRefCacheSQL(ref)); err != nil {
+	return d.publishCatalogDependency(ctx, first.AccountID, first.CatalogID, func(exec SQLExecutor) error {
+		if _, err := exec.Exec(ctx, DeleteRefCacheSQL(first.AccountID, first.CatalogID, first.Namespace, first.TableName)); err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, ref := range normalized {
+			if _, err := exec.Exec(ctx, InsertRefCacheSQL(ref)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (d *DAO) InsertPublishJob(ctx context.Context, job model.PublishJob) error {
@@ -370,7 +383,10 @@ func (d *DAO) InsertPublishJob(ctx context.Context, job model.PublishJob) error 
 	if err := ValidatePublishJob(ctx, job); err != nil {
 		return err
 	}
-	return d.execSQL(ctx, InsertPublishJobSQL(job))
+	return d.publishCatalogDependency(ctx, job.AccountID, job.TargetCatalogID, func(exec SQLExecutor) error {
+		_, err := exec.Exec(ctx, InsertPublishJobSQL(job))
+		return err
+	})
 }
 
 func (d *DAO) UpdatePublishJobStatus(ctx context.Context, accountID uint32, jobID, status, errorCategory string, expectedVersion uint64) error {
@@ -390,7 +406,10 @@ func (d *DAO) InsertOrphanFile(ctx context.Context, file model.OrphanFile) error
 	if err := ValidateOrphanFile(ctx, file); err != nil {
 		return err
 	}
-	return d.execSQL(ctx, InsertOrphanFileSQL(file))
+	return d.publishCatalogDependency(ctx, file.AccountID, file.CatalogID, func(exec SQLExecutor) error {
+		_, err := exec.Exec(ctx, InsertOrphanFileSQL(file))
+		return err
+	})
 }
 
 func (d *DAO) ListOrphanCleanupCandidates(ctx context.Context, accountID uint32, limit int) ([]model.OrphanFile, error) {
@@ -433,7 +452,30 @@ func (d *DAO) InsertMaintenanceJob(ctx context.Context, job model.MaintenanceJob
 	if err := ValidateMaintenanceJob(ctx, job); err != nil {
 		return err
 	}
-	return d.execSQL(ctx, InsertMaintenanceJobSQL(job))
+	return d.publishCatalogDependency(ctx, job.AccountID, job.CatalogID, func(exec SQLExecutor) error {
+		_, err := exec.Exec(ctx, InsertMaintenanceJobSQL(job))
+		return err
+	})
+}
+
+// publishCatalogDependency makes the catalog row the admission lock for every
+// DAO-owned dependency table checked by DROP ICEBERG CATALOG. The production
+// internal executor supplies ExecTxn; lightweight SQL-builder fakes retain the
+// direct path so their unit tests can stay independent of transaction wiring.
+func (d *DAO) publishCatalogDependency(ctx context.Context, accountID uint32, catalogID uint64, publish func(SQLExecutor) error) error {
+	if txExec, ok := d.exec.(transactionalSQLExecutor); ok {
+		return txExec.ExecTxn(ctx, func(exec SQLExecutor) error {
+			var lockedCatalogID uint64
+			if err := exec.QueryRow(ctx, GetCatalogByIDForUpdateSQL(accountID, catalogID)).Scan(&lockedCatalogID); err != nil {
+				return err
+			}
+			if lockedCatalogID != catalogID {
+				return moerr.NewInternalErrorf(ctx, "iceberg catalog lifecycle lock selected unexpected catalog %d", lockedCatalogID)
+			}
+			return publish(exec)
+		})
+	}
+	return publish(d.exec)
 }
 
 func (d *DAO) UpdateMaintenanceJobStatus(ctx context.Context, accountID uint32, jobID, status, errorCategory string, snapshotAfter string, rewrittenFileCount, removedFileCount uint64, expectedVersion uint64) error {
@@ -896,6 +938,10 @@ func GetCatalogByIDSQL(accountID uint32, catalogID uint64) string {
 		accountID,
 		catalogID,
 	)
+}
+
+func GetCatalogByIDForUpdateSQL(accountID uint32, catalogID uint64) string {
+	return GetCatalogByIDSQL(accountID, catalogID) + " for update"
 }
 
 func GetTableMappingSQL(accountID uint32, databaseID uint64, tableID uint64) string {

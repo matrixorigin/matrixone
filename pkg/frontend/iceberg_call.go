@@ -345,13 +345,15 @@ func executeIcebergUnregisterAccessCall(ctx context.Context, ses FeSession, call
 	if catalogID == 0 {
 		return nil, moerr.NewInvalidInputf(ctx, "iceberg catalog %s does not exist for account %d", call.Target, targetAccountID)
 	}
-	if err = bh.Exec(ctx, fmt.Sprintf(
-		"delete from mo_catalog.%s where catalog_id = %d and %s",
-		sqliceberg.TableResidencyPolicy,
-		catalogID,
-		icebergUnregisterResidencyWhere(scopeType, targetAccountID),
-	)); err != nil {
-		return nil, err
+	for _, where := range icebergUnregisterResidencyWhere(scopeType, targetAccountID) {
+		if err = bh.Exec(ctx, fmt.Sprintf(
+			"delete from mo_catalog.%s where catalog_id = %d and %s",
+			sqliceberg.TableResidencyPolicy,
+			catalogID,
+			where,
+		)); err != nil {
+			return nil, err
+		}
 	}
 
 	remainingPolicies, err := icebergAccessResidencyPolicyCount(ctx, bh, targetAccountID, catalogID)
@@ -397,14 +399,17 @@ func icebergUnregisterAccessScope(ctx context.Context, tenant *TenantInfo, opts 
 	}
 }
 
-func icebergUnregisterResidencyWhere(scopeType string, accountID uint32) string {
+func icebergUnregisterResidencyWhere(scopeType string, accountID uint32) []string {
 	switch scopeType {
 	case model.ResidencyScopeCluster:
-		return "scope_type = 'cluster'"
+		return []string{"scope_type = 'cluster' and account_id = 0"}
 	case icebergAccessScopeAll:
-		return fmt.Sprintf("(scope_type = 'cluster' or (scope_type = 'account' and account_id = %d))", accountID)
+		return []string{
+			"scope_type = 'cluster' and account_id = 0",
+			fmt.Sprintf("scope_type = 'account' and account_id = %d", accountID),
+		}
 	default:
-		return fmt.Sprintf("scope_type = 'account' and account_id = %d", accountID)
+		return []string{fmt.Sprintf("scope_type = 'account' and account_id = %d", accountID)}
 	}
 }
 

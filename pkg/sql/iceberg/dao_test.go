@@ -35,6 +35,16 @@ type fakeExec struct {
 	rows RowsScanner
 }
 
+type transactionalFakeExec struct {
+	fakeExec
+	txnCalls int
+}
+
+func (f *transactionalFakeExec) ExecTxn(ctx context.Context, fn func(SQLExecutor) error) error {
+	f.txnCalls++
+	return fn(f)
+}
+
 type zeroAffectedExec struct {
 	fakeExec
 }
@@ -566,6 +576,26 @@ func TestMaintenanceJobAuditSQL(t *testing.T) {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("maintenance job status SQL missing %q: %s", want, sql)
 		}
+	}
+}
+
+func TestMaintenanceJobPublicationLocksCatalogInSameTransaction(t *testing.T) {
+	exec := &transactionalFakeExec{fakeExec: fakeExec{row: staticRow{values: []any{uint64(7)}}}}
+	err := NewDAO(exec).InsertMaintenanceJob(context.Background(), model.MaintenanceJob{
+		AccountID: 0, JobID: "maint-lock", CatalogID: 7, Namespace: "gold", TableName: "orders",
+		Operation: "rewrite_manifests", Status: "pending", Version: 1,
+	})
+	if err != nil {
+		t.Fatalf("publish maintenance job: %v", err)
+	}
+	if exec.txnCalls != 1 || len(exec.sqls) != 2 {
+		t.Fatalf("expected one transaction with lock then publication, got calls=%d sql=%#v", exec.txnCalls, exec.sqls)
+	}
+	if !strings.HasSuffix(exec.sqls[0], "for update") || !strings.Contains(exec.sqls[0], "catalog_id = 7") {
+		t.Fatalf("missing catalog lifecycle lock: %s", exec.sqls[0])
+	}
+	if !strings.Contains(exec.sqls[1], "mo_iceberg_maintenance_jobs") {
+		t.Fatalf("missing maintenance publication: %s", exec.sqls[1])
 	}
 }
 
