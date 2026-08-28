@@ -416,6 +416,8 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+UT_SHARD ?= all
+export UT_SHARD
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

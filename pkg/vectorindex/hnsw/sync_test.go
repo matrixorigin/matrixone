@@ -691,25 +691,41 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 		}
 	})
 
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldRunTxn := runTxn
+	t.Cleanup(func() {
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+		runTxn = oldRunTxn
+	})
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
 	runTxn = mock_runTxn
 	indexes := mockMoIndexes()
 
-	cdc := vectorindex.VectorIndexCdc[T]{Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, 100)}
-
-	key := int64(0)
+	// The fixture has two existing files containing keys 0..199. Exercise one
+	// update in each file plus eleven inserts: at capacity ten, the inserts must
+	// roll over into two new models. Thirteen entries also keep all eight build
+	// workers active. Preserve the original ten Update cycles as repeated
+	// lifecycle/stability coverage, while removing entries that only duplicated
+	// work inside each cycle and became prohibitively expensive under -race.
+	keys := []int64{0, 100}
+	for key := int64(200); key < 211; key++ {
+		keys = append(keys, key)
+	}
+	cdc := vectorindex.VectorIndexCdc[T]{
+		Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, len(keys)),
+	}
 	v := []T{0.1, 0.2, 0.3}
 
-	// 0 - 199 key exists, 200 - 399 new insert
-	for i := 0; i < 400; i++ {
+	for _, key := range keys {
 		e := vectorindex.VectorIndexCdcEntry[T]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
 		cdc.Data = append(cdc.Data, e)
-		key += 1
 	}
 
-	rand.Seed(uint64(time.Now().UnixNano()))
-	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+	r := rand.New(rand.NewSource(99))
+	r.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
 	var err error
 	var sync *HnswSync[T]
@@ -726,9 +742,17 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 	}
 
 	defer sync.Destroy()
-	for i := 0; i < 10; i++ {
+	err = sync.Update(sqlproc, &cdc)
+	require.NoError(t, err)
+	require.Equal(t, int32(11), sync.ninsert.Load())
+	require.Equal(t, int32(2), sync.nupdate.Load())
+	require.Len(t, sync.indexes, 4)
+
+	for cycle := 1; cycle < 10; cycle++ {
 		err = sync.Update(sqlproc, &cdc)
-		require.Nil(t, err)
+		require.NoError(t, err, "update cycle %d", cycle+1)
+		require.Zero(t, sync.ninsert.Load(), "update cycle %d", cycle+1)
+		require.Equal(t, int32(len(cdc.Data)), sync.nupdate.Load(), "update cycle %d", cycle+1)
 	}
 
 	err = sync.Save(sqlproc)

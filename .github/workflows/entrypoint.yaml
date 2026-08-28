@@ -73,9 +73,14 @@ jobs:
     name: Matrixone CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/ci.yaml@main
+    # Use CI#438's opt-in shard contract for this canary. Switch back to @main
+    # after that prerequisite merges; the required-check summary is unchanged.
+    uses: matrixorigin/CI/.github/workflows/ci.yaml@codex/shard-ut-critical-path
     with:
-      ut_parallel: 8
+      # Leave one runner CPU for race-detector/native work inside a package.
+      # Eight package slots made CPU-heavy HNSW tests the light-stage straggler.
+      ut_parallel: 7
+      ut_sharded: true
     secrets: inherit
 
   matrixone-ut-coverage:

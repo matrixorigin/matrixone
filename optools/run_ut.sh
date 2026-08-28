@@ -41,6 +41,7 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 LOG="$G_TS-$TEST_TYPE.log"
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+UT_SHARD=${UT_SHARD:-"all"}
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # Two shards cut the measured engine/test race runtime roughly in half while
@@ -481,6 +482,22 @@ function remove_packages_from_scope(){
     printf '%s\n' "${scope}"
 }
 
+function should_run_ut_stage(){
+    local stage=$1
+
+    case "${UT_SHARD}:${stage}" in
+        all:* | \
+        light-plan:light | light-plan:plan | \
+        cluster:serial | cluster:embedded | \
+        heavy:heavy)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 function run_tests(){
     cd $BUILD_WKSP
     horiz_rule
@@ -490,9 +507,24 @@ function run_tests(){
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  UT SHARD:        $UT_SHARD"
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL total package slots"
     horiz_rule
+
+    case "${UT_SHARD}" in
+        all | light-plan | cluster | heavy) ;;
+        *)
+            logger "ERR" "UT_SHARD must be all, light-plan, cluster, or heavy; got '${UT_SHARD}'"
+            UT_TEST_STATUS=1
+            return 0
+            ;;
+    esac
+    if [[ "${SKIP_TESTS}" == "race" && "${UT_SHARD}" != "all" ]]; then
+        logger "ERR" "split UT shards require race mode; got SKIP_TESTS=race with UT_SHARD=${UT_SHARD}"
+        UT_TEST_STATUS=1
+        return 0
+    fi
 
     logger "INF" "Clean go test cache"
     go clean -testcache
@@ -564,13 +596,11 @@ function run_tests(){
             return 0
         fi
 
-        # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues packages intentionally keep embedded
-        # clusters alive for most of their test processes.
+        # The issues packages intentionally keep embedded clusters alive for
+        # most of their test processes, so they retain exclusive runner access.
+        # The former logservice/TAE members of this group now allocate independent
+        # ports with collision retry and belong in the normal parallel scope.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/logservice \
-            ./pkg/vm/engine/tae/logstore \
-            ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
             ./pkg/tests/issues \
             ./pkg/tests/issues/isolated); then
             logger "ERR" "Failed to resolve serial race-test packages"
@@ -628,35 +658,38 @@ function run_tests(){
             ${cluster_test_scope} \
             ${resource_heavy_test_scope})
 
-        if [[ -n "${light_test_scope}" ]]; then
+        : > "${UT_REPORT}"
+        if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
             logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope > $UT_REPORT
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope >> $UT_REPORT
             light_status=$?
-        else
-            : > "${UT_REPORT}"
         fi
 
-        logger "INF" "Run exclusive race-test packages serially"
-        for package in ${serial_test_scope}; do
-            logger "INF" "Run exclusive race-test package ${package}"
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
-            package_status=$?
-            if (( package_status != 0 )); then
-                serial_status=1
-                logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
-            fi
-        done
+        if should_run_ut_stage serial; then
+            logger "INF" "Run exclusive race-test packages serially"
+            for package in ${serial_test_scope}; do
+                logger "INF" "Run exclusive race-test package ${package}"
+                LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
+                package_status=$?
+                if (( package_status != 0 )); then
+                    serial_status=1
+                    logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
+                fi
+            done
+        fi
 
         # These packages link embedded clusters with substantial race-detector
         # memory. The runner-wide file-lock admission keeps complete cluster
         # lifecycles serialized across test binaries. Allow one additional
         # package process to overlap linking, setup, and non-cluster work without
         # returning to the six-way contention that starved HAKeeper.
-        logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p "${cluster_package_parallel}" -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
-        cluster_status=$?
+        if should_run_ut_stage embedded; then
+            logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p "${cluster_package_parallel}" -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
+            cluster_status=$?
+        fi
 
-        if (( shard_engine == 1 )); then
+        if should_run_ut_stage heavy && (( shard_engine == 1 )); then
             # engine/test is dominated by serial fixture lifecycles inside one
             # process. Build it once and split every discovered top-level test
             # across fresh race processes. The effective shard count and the
@@ -679,40 +712,44 @@ function run_tests(){
             else
                 resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
             fi
-        else
+        elif should_run_ut_stage heavy; then
             resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
-        logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope >> $UT_REPORT
-        resource_heavy_status=$?
+        if should_run_ut_stage heavy; then
+            logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope >> $UT_REPORT
+            resource_heavy_status=$?
 
-        if (( shard_engine == 1 )); then
-            if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
-                wait "${ENGINE_RACE_JOB_PID}"
-                engine_status=$?
-                ENGINE_RACE_JOB_PID=""
-            else
-                # Keep the helper's process-group TERM trap scoped to a
-                # subshell even when a low budget requires sequential waves.
-                run_engine_race_shards "${engine_package}" "${engine_race_parallel}" &
-                ENGINE_RACE_JOB_PID=$!
-                wait "${ENGINE_RACE_JOB_PID}"
-                engine_status=$?
-                ENGINE_RACE_JOB_PID=""
+            if (( shard_engine == 1 )); then
+                if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
+                    wait "${ENGINE_RACE_JOB_PID}"
+                    engine_status=$?
+                    ENGINE_RACE_JOB_PID=""
+                else
+                    # Keep the helper's process-group TERM trap scoped to a
+                    # subshell even when a low budget requires sequential waves.
+                    run_engine_race_shards "${engine_package}" "${engine_race_parallel}" &
+                    ENGINE_RACE_JOB_PID=$!
+                    wait "${ENGINE_RACE_JOB_PID}"
+                    engine_status=$?
+                    ENGINE_RACE_JOB_PID=""
+                fi
+                if [[ -s "${ENGINE_RACE_REPORT}" ]]; then
+                    cat "${ENGINE_RACE_REPORT}" >> "${UT_REPORT}"
+                fi
+                rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}".*
+                ENGINE_RACE_TEST_BINARY=""
+                ENGINE_RACE_REPORT=""
             fi
-            if [[ -s "${ENGINE_RACE_REPORT}" ]]; then
-                cat "${ENGINE_RACE_REPORT}" >> "${UT_REPORT}"
-            fi
-            rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}" "${ENGINE_RACE_REPORT}".*
-            ENGINE_RACE_TEST_BINARY=""
-            ENGINE_RACE_REPORT=""
+
+            report_cgroup_memory_usage "Resource-heavy UT"
         fi
 
-        report_cgroup_memory_usage "Resource-heavy UT"
-
-        run_plan_race_shards "${plan_package}"
-        plan_status=$?
+        if should_run_ut_stage plan; then
+            run_plan_race_shards "${plan_package}"
+            plan_status=$?
+        fi
 
         if (( light_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
