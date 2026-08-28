@@ -75,6 +75,22 @@ func TestTime_StringAndString2(t *testing.T) {
 	}
 }
 
+func TestMySQLTimeRange(t *testing.T) {
+	max := TimeFromClock(false, 838, 59, 59, 999999)
+	require.Equal(t, max, MySQLTimeMax)
+	require.True(t, IsMySQLTime(max))
+	require.True(t, IsMySQLTime(-max))
+	require.False(t, IsMySQLTime(max+1))
+	require.False(t, IsMySQLTime(-max-1))
+	require.Equal(t, max, ClampMySQLTime(max+1))
+	require.Equal(t, -max, ClampMySQLTime(-max-1))
+	require.Equal(t, TimeFromClock(false, 838, 59, 59, 0), MySQLTimeMaxForScale(0))
+	require.Equal(t, TimeFromClock(false, 838, 59, 59, 900000), MySQLTimeMaxForScale(1))
+	require.Equal(t, TimeFromClock(false, 838, 59, 59, 999000), MySQLTimeMaxForScale(3))
+	require.Equal(t, max, MySQLTimeMaxForScale(6))
+	require.Equal(t, TimeFromClock(false, 838, 59, 59, 0), ClampMySQLTimeForScale(max, 0))
+}
+
 func TestTime_ParseTimeFromString(t *testing.T) {
 	testCases := []struct {
 		name     string

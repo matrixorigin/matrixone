@@ -432,6 +432,94 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 	}
 }
 
+func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
+	timeType := types.T_time.ToTypeWithScale(6)
+	max := types.MySQLTimeMax
+
+	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn) (*vector.Vector, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{input, NewFunctionTestInput(timeType, []types.Time{}, nil)},
+			NewFunctionTestResult(timeType, false, nil, nil), cast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		return tc.DebugRun()
+	}
+
+	stringInput := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"838:59:59.999999", "839:00:00", "-839:00:00"}, nil)
+
+	t.Run("strict string assignment accepts both endpoints", func(t *testing.T) {
+		input := NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"838:59:59.999999", "-838:59:59.999999"}, nil)
+		result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, -max}, values)
+	})
+
+	t.Run("strict string assignment rejects extended time", func(t *testing.T) {
+		_, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
+
+	t.Run("nonstrict string assignment clamps", func(t *testing.T) {
+		result, err := run(t, stringInput, "", NewAssignCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, max, -max}, values)
+	})
+
+	t.Run("insert ignore string assignment clamps", func(t *testing.T) {
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, max, -max}, values)
+	})
+
+	timeInput := NewFunctionTestInput(timeType,
+		[]types.Time{types.TimeFromClock(false, 839, 0, 0, 0)}, nil)
+	t.Run("strict time expression assignment rejects extended time", func(t *testing.T) {
+		_, err := run(t, timeInput, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
+
+	t.Run("ordinary expression cast preserves MatrixOne extended time", func(t *testing.T) {
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{
+			max,
+			types.TimeFromClock(false, 839, 0, 0, 0),
+			types.TimeFromClock(true, 839, 0, 0, 0),
+		}, values)
+	})
+
+	t.Run("scale zero rejects values that round over the endpoint", func(t *testing.T) {
+		target := types.T_time.ToType()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return "STRICT_TRANS_TABLES", nil
+		})
+		input := NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"838:59:59.500000"}, nil)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{input, NewFunctionTestInput(target, []types.Time{}, nil)},
+			NewFunctionTestResult(target, false, nil, nil), NewAssignCast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		_, err := tc.DebugRun()
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
+}
+
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetType := types.New(types.T_float32, 5, 2)

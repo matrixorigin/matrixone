@@ -30,6 +30,11 @@ const (
 	// (9223372036854775807(max int64)/1000000(msec) - 1)/3600(sec per hour) - 1 = 2562047787
 	MinHourInTime, MaxHourInTime     = 0, 2562047787
 	MinInputIntTime, MaxInputIntTime = -25620477875959, 25620477875959
+
+	// MySQLTimeMax is the largest value accepted by a MySQL TIME column.
+	// MatrixOne's Time representation deliberately has a wider internal range
+	// because intermediate duration expressions can exceed 838 hours.
+	MySQLTimeMax = Time((838*SecsPerHour+59*SecsPerMinute+59)*MicroSecsPerSec + MicroSecsPerSec - 1)
 )
 
 // no msec part
@@ -476,6 +481,39 @@ func ValidTime(h, m, s uint64) bool {
 		return false
 	}
 	return true
+}
+
+func IsMySQLTime(value Time) bool {
+	return value >= -MySQLTimeMax && value <= MySQLTimeMax
+}
+
+func MySQLTimeMaxForScale(scale int32) Time {
+	if scale >= 6 {
+		return MySQLTimeMax
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	factor := Time(1)
+	for i := scale; i < 6; i++ {
+		factor *= 10
+	}
+	return MySQLTimeMax / factor * factor
+}
+
+func ClampMySQLTime(value Time) Time {
+	return ClampMySQLTimeForScale(value, 6)
+}
+
+func ClampMySQLTimeForScale(value Time, scale int32) Time {
+	maxValue := MySQLTimeMaxForScale(scale)
+	if value > maxValue {
+		return maxValue
+	}
+	if value < -maxValue {
+		return -maxValue
+	}
+	return value
 }
 
 func isDateType(s string) bool {

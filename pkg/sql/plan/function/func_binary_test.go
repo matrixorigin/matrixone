@@ -10136,6 +10136,75 @@ func TestTimeFormat(t *testing.T) {
 	}
 }
 
+func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	max0 := types.MySQLTimeMaxForScale(0)
+
+	t.Run("signed integer saturates", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{3020399, 3020400, -3020399, -3020400, math.MaxInt64, math.MinInt64, 0},
+				[]bool{false, false, false, false, false, false, true})},
+			NewFunctionTestResult(types.T_time.ToType(), false,
+				[]types.Time{
+					max0, max0, -max0, -max0,
+					max0, -max0, 0,
+				},
+				[]bool{false, false, false, false, false, false, true}),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("unsigned integer saturates without wrapping", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{3020399, 3020400, math.MaxUint64}, nil)},
+			NewFunctionTestResult(types.T_time.ToType(), false,
+				[]types.Time{max0, max0, max0}, nil),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("floating point preserves microseconds", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToTypeWithScale(6),
+				[]float64{2378.7, -2378.7, 1.0000004, 1.0000005, 3020399.9999991, 3020400, math.Inf(1), math.Inf(-1), math.NaN()}, nil)},
+			NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+				[]types.Time{
+					types.TimeFromClock(false, 0, 39, 38, 700000),
+					types.TimeFromClock(true, 0, 39, 38, 700000),
+					types.TimeFromClock(false, 0, 0, 1, 0),
+					types.TimeFromClock(false, 0, 0, 1, 1),
+					types.MySQLTimeMax, max0, max0, -max0, 0,
+				},
+				[]bool{false, false, false, false, false, false, false, false, true}),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("exact decimal text preserves rounding and clamps exponents", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"2378.7", "-2378.7", "1.0000004", "1.0000005", "3020400", "-3020400", "1e999999999", "-1e999999999", "1e-999999999", "foo", ""},
+				[]bool{false, false, false, false, false, false, false, false, false, false, true})},
+			NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+				[]types.Time{
+					types.TimeFromClock(false, 0, 39, 38, 700000),
+					types.TimeFromClock(true, 0, 39, 38, 700000),
+					types.TimeFromClock(false, 0, 0, 1, 0),
+					types.TimeFromClock(false, 0, 0, 1, 1),
+					max0, -max0, max0, -max0, 0, 0, 0,
+				},
+				[]bool{false, false, false, false, false, false, false, false, false, false, true}),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func TestMakeTimeFractionAndSign(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)

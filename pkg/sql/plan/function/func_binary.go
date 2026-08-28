@@ -8727,100 +8727,246 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	return nil
 }
 
+func secToTimeFromInt64(seconds int64) types.Time {
+	maxTime := types.MySQLTimeMaxForScale(0)
+	maxSeconds := int64(maxTime) / types.MicroSecsPerSec
+	if seconds > maxSeconds {
+		return maxTime
+	}
+	if seconds < -maxSeconds {
+		return -maxTime
+	}
+	return types.Time(seconds * types.MicroSecsPerSec)
+}
+
+func secToTimeFromUint64(seconds uint64) types.Time {
+	maxTime := types.MySQLTimeMaxForScale(0)
+	maxSeconds := uint64(maxTime) / types.MicroSecsPerSec
+	if seconds > maxSeconds {
+		return maxTime
+	}
+	return types.Time(seconds * types.MicroSecsPerSec)
+}
+
+func secToTimeFromFloat64(seconds float64) (types.Time, bool) {
+	if math.IsNaN(seconds) {
+		return 0, true
+	}
+	clampTime := types.MySQLTimeMaxForScale(0)
+	maxInt64Seconds := float64(math.MaxInt64) / float64(types.MicroSecsPerSec)
+	if seconds >= maxInt64Seconds || math.IsInf(seconds, 1) {
+		return clampTime, false
+	}
+	if seconds <= -maxInt64Seconds || math.IsInf(seconds, -1) {
+		return -clampTime, false
+	}
+	value := types.Time(math.Round(seconds * float64(types.MicroSecsPerSec)))
+	if !types.IsMySQLTime(value) {
+		if value < 0 {
+			return -clampTime, false
+		}
+		return clampTime, false
+	}
+	return value, false
+}
+
+// secToTimeFromExactDecimal converts the numeric prefix of a textual value to
+// microseconds without routing DECIMAL input through float64. The bounded
+// calculation also handles arbitrarily large exponents without allocating a
+// proportional big integer.
+func secToTimeFromExactDecimal(value string) types.Time {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 {
+		return 0
+	}
+
+	end := 0
+	negative := false
+	if value[end] == '+' || value[end] == '-' {
+		negative = value[end] == '-'
+		end++
+	}
+
+	totalDigits := 0
+	firstNonzeroDigit := -1
+	lastNonzeroDigit := -1
+	integerStart := end
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		if value[end] != '0' {
+			if firstNonzeroDigit == -1 {
+				firstNonzeroDigit = totalDigits
+			}
+			lastNonzeroDigit = totalDigits
+		}
+		end++
+		totalDigits++
+	}
+	integerEnd := end
+	fractionStart := end
+	fractionEnd := end
+	if end < len(value) && value[end] == '.' {
+		end++
+		fractionStart = end
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			if value[end] != '0' {
+				if firstNonzeroDigit == -1 {
+					firstNonzeroDigit = totalDigits
+				}
+				lastNonzeroDigit = totalDigits
+			}
+			end++
+			totalDigits++
+		}
+		fractionEnd = end
+	}
+	if totalDigits == 0 || firstNonzeroDigit == -1 {
+		return 0
+	}
+
+	exponent := 0
+	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
+		end++
+		negativeExponent := false
+		if end < len(value) && (value[end] == '+' || value[end] == '-') {
+			negativeExponent = value[end] == '-'
+			end++
+		}
+		exponentStart := end
+		exponentMagnitude := 0
+		exponentLimit := totalDigits + 14
+		exponentOverflow := false
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			digit := int(value[end] - '0')
+			if !exponentOverflow {
+				if exponentMagnitude > (exponentLimit-digit)/10 {
+					exponentOverflow = true
+				} else {
+					exponentMagnitude = exponentMagnitude*10 + digit
+				}
+			}
+			end++
+		}
+		if end != exponentStart {
+			if exponentOverflow {
+				if negativeExponent {
+					return 0
+				}
+				clampTime := types.MySQLTimeMaxForScale(0)
+				if negative {
+					return -clampTime
+				}
+				return clampTime
+			}
+			if negativeExponent {
+				exponent = -exponentMagnitude
+			} else {
+				exponent = exponentMagnitude
+			}
+		}
+	}
+
+	significantDigits := lastNonzeroDigit - firstNonzeroDigit + 1
+	fractionDigits := fractionEnd - fractionStart
+	trailingZeroDigits := totalDigits - lastNonzeroDigit - 1
+	exponent += trailingZeroDigits - fractionDigits
+	integerDigits := integerEnd - integerStart
+	significantDigitAt := func(index int) byte {
+		index += firstNonzeroDigit
+		if index < integerDigits {
+			return value[integerStart+index]
+		}
+		return value[fractionStart+index-integerDigits]
+	}
+
+	integerValueDigits := significantDigits + exponent
+	if integerValueDigits > 7 {
+		clampTime := types.MySQLTimeMaxForScale(0)
+		if negative {
+			return -clampTime
+		}
+		return clampTime
+	}
+
+	scaledDigits := integerValueDigits + 6
+	if scaledDigits <= 0 {
+		if scaledDigits == 0 && significantDigitAt(0) >= '5' {
+			if negative {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	}
+
+	var totalMicroseconds int64
+	keptDigits := min(significantDigits, scaledDigits)
+	for i := 0; i < keptDigits; i++ {
+		totalMicroseconds = totalMicroseconds*10 + int64(significantDigitAt(i)-'0')
+	}
+	for i := significantDigits; i < scaledDigits; i++ {
+		totalMicroseconds *= 10
+	}
+	if scaledDigits < significantDigits && significantDigitAt(scaledDigits) >= '5' {
+		totalMicroseconds++
+	}
+
+	result := types.Time(totalMicroseconds)
+	if !types.IsMySQLTime(result) {
+		result = types.MySQLTimeMaxForScale(0)
+	}
+	if negative {
+		return -result
+	}
+	return result
+}
+
 // SecToTime: SEC_TO_TIME(seconds) - Returns the seconds argument, converted to hours, minutes, and seconds, as a TIME value.
 func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
+	var getTimeValue func(uint64) (types.Time, bool)
 
-	// seconds can be int64, uint64, or float64
-	secondsType := ivecs[0].GetType().Oid
-
-	// Create parameter extractor based on type
-	var getSecondsValue func(uint64) (int64, bool)
-
-	switch secondsType {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		secondsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getSecondsValue = func(i uint64) (int64, bool) {
-			val, null := secondsParam.GetValue(i)
-			return val, null
+	switch ivecs[0].GetType().Oid {
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool) {
+			value, null := param.GetValue(i)
+			return secToTimeFromInt64(value), null
 		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		secondsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getSecondsValue = func(i uint64) (int64, bool) {
-			val, null := secondsParam.GetValue(i)
-			return int64(val), null
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool) {
+			value, null := param.GetValue(i)
+			return secToTimeFromUint64(value), null
 		}
-	case types.T_float32, types.T_float64:
-		secondsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getSecondsValue = func(i uint64) (int64, bool) {
-			val, null := secondsParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool) {
+			value, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return secToTimeFromFloat64(value)
+		}
+	case types.T_varchar:
+		param := vector.GenerateFunctionStrParameter(ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool) {
+			value, null := param.GetStrValue(i)
+			if null {
+				return 0, true
+			}
+			return secToTimeFromExactDecimal(functionUtil.QuickBytesToStr(value)), false
 		}
 	default:
-		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", secondsType)
+		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", ivecs[0].GetType().Oid)
 	}
 
-	// MySQL TIME range: -838:59:59 to 838:59:59
-	// In seconds: -3020399 to 3020399
-	const maxTimeSeconds = 3020399 // 838*3600 + 59*60 + 59
-	const minTimeSeconds = -3020399
-
 	for i := uint64(0); i < uint64(length); i++ {
-		seconds, null := getSecondsValue(i)
-
-		if null {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
+		value, null := getTimeValue(i)
+		if !null {
+			value = value.TruncateToScale(rs.GetType().Scale)
+			value = types.ClampMySQLTimeForScale(value, rs.GetType().Scale)
 		}
-
-		// Check if seconds is within valid TIME range
-		if seconds > maxTimeSeconds || seconds < minTimeSeconds {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Convert seconds to hours, minutes, and seconds
-		// Handle negative values
-		isNegative := seconds < 0
-		if isNegative {
-			seconds = -seconds
-		}
-
-		hours := seconds / 3600
-		remainingSeconds := seconds % 3600
-		minutes := remainingSeconds / 60
-		secs := remainingSeconds % 60
-
-		// Check if hours exceed MySQL TIME limit (838:59:59)
-		// MySQL TIME range is -838:59:59 to 838:59:59
-		if hours > 838 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Create TIME value using TimeFromClock
-		// isNegative: true if the time should be negative
-		timeValue := types.TimeFromClock(isNegative, uint64(hours), uint8(minutes), uint8(secs), 0)
-
-		// Validate the resulting time
-		h := timeValue.Hour()
-		if h < 0 {
-			h = -h
-		}
-		if !types.ValidTime(uint64(h), uint64(timeValue.Minute()), uint64(timeValue.Sec())) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := rs.Append(timeValue, false); err != nil {
+		if err := rs.Append(value, null); err != nil {
 			return err
 		}
 	}

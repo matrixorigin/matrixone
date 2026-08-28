@@ -492,6 +492,39 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
 }
 
+func TestSecToTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	decimalResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.New(types.T_decimal128, 20, 3),
+	})
+	require.NoError(t, err)
+	require.True(t, decimalResult.needCast)
+	require.Equal(t, types.T_varchar, decimalResult.targetTypes[0].Oid)
+	require.Equal(t, int32(3), decimalResult.targetTypes[0].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(3), decimalResult.retType)
+
+	stringResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, stringResult.needCast)
+	require.Equal(t, int32(-1), stringResult.targetTypes[0].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), stringResult.retType)
+
+	floatResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		{Oid: types.T_float64, Size: 8, Scale: -1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), floatResult.retType)
+}
+
 func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

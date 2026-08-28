@@ -86,15 +86,23 @@ INSERT INTO t_time_boundary VALUES (2, 'next minute', CAST('12:34:59.999999' AS 
 -- Round to next hour: 59:59.999999 -> next hour
 INSERT INTO t_time_boundary VALUES (3, 'next hour', CAST('12:59:59.999999' AS TIME(0)));
 
--- Maximum TIME boundary: 838:59:59.999999
-INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.500000' AS TIME(0)));
+-- Maximum value that rounds within the TIME(0) boundary
+INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.499999' AS TIME(0)));
 
--- Expected results: 12:34:57, 12:35:00, 13:00:00, 839:00:00
+-- Expected results: 12:34:57, 12:35:00, 13:00:00, 838:59:59
 SELECT id, description, t0
 FROM t_time_boundary
 ORDER BY id;
 
 DROP TABLE t_time_boundary;
+
+-- TIME(6) accepts the fractional endpoint but rejects the next hour in strict mode
+DROP TABLE IF EXISTS t_time_range;
+CREATE TABLE t_time_range (id INT, t6 TIME(6));
+INSERT INTO t_time_range VALUES (1, '838:59:59.999999');
+INSERT INTO t_time_range VALUES (2, '839:00:00');
+SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
+DROP TABLE t_time_range;
 
 -- ============================================================================
 -- Test 4: Negative TIME values
@@ -277,4 +285,3 @@ FROM t_time_dateadd;
 DROP TABLE t_time_dateadd;
 
 DROP DATABASE test_time_precision;
-

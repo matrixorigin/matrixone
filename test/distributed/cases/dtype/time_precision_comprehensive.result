@@ -51,7 +51,7 @@ t0 TIME(0)
 INSERT INTO t_time_boundary VALUES (1, 'next second', CAST('12:34:56.999999' AS TIME(0)));
 INSERT INTO t_time_boundary VALUES (2, 'next minute', CAST('12:34:59.999999' AS TIME(0)));
 INSERT INTO t_time_boundary VALUES (3, 'next hour', CAST('12:59:59.999999' AS TIME(0)));
-INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.500000' AS TIME(0)));
+INSERT INTO t_time_boundary VALUES (4, 'max time', CAST('838:59:59.499999' AS TIME(0)));
 SELECT id, description, t0
 FROM t_time_boundary
 ORDER BY id;
@@ -59,8 +59,17 @@ ORDER BY id;
 1  ¦  next second  ¦  12:34:57  𝄀
 2  ¦  next minute  ¦  12:35:00  𝄀
 3  ¦  next hour  ¦  13:00:00  𝄀
-4  ¦  max time  ¦  839:00:00
+4  ¦  max time  ¦  838:59:59
 DROP TABLE t_time_boundary;
+DROP TABLE IF EXISTS t_time_range;
+CREATE TABLE t_time_range (id INT, t6 TIME(6));
+INSERT INTO t_time_range VALUES (1, '838:59:59.999999');
+INSERT INTO t_time_range VALUES (2, '839:00:00');
+Data truncation: data out of range: data type time, value '839:00:00.000000'
+SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
+➤ id[4,32,0]  ¦  t6[12,-1,0]  𝄀
+1  ¦  838:59:59.999999
+DROP TABLE t_time_range;
 DROP TABLE IF EXISTS t_time_negative;
 CREATE TABLE t_time_negative (
 id INT,

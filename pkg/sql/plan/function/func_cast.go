@@ -937,8 +937,8 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 
 // NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
 // SQL-mode-sensitive targets. It applies strict/non-strict behavior at runtime
-// for width-constrained strings and YEAR values. For CHAR/VARCHAR only, excess
-// trailing spaces are accepted in strict mode too.
+// for width-constrained strings, YEAR values, and TIME column boundaries. For
+// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too.
 func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	mode := castModeAssignment
 	if isStrictSqlMode(proc) {
@@ -1081,7 +1081,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = boolToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_bit:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = bitToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = bitToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
 		err = int8ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
@@ -1129,7 +1129,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = datetimeToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
-		err = timeToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = timeToOthers(execProc.Ctx, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 		err = timestampToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -1336,7 +1336,8 @@ func boolToOthers(ctx context.Context,
 
 func bitToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[uint64],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
@@ -1390,7 +1391,7 @@ func bitToOthers(proc *process.Process,
 		return bitToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1462,7 +1463,7 @@ func int8ToOthers(proc *process.Process,
 		return signedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1531,7 +1532,7 @@ func int16ToOthers(proc *process.Process,
 		return signedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1600,7 +1601,7 @@ func int32ToOthers(proc *process.Process,
 		return signedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1669,7 +1670,7 @@ func int64ToOthers(proc *process.Process,
 		return signedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1740,7 +1741,7 @@ func uint8ToOthers(proc *process.Process,
 		return unsignedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1811,7 +1812,7 @@ func uint16ToOthers(proc *process.Process,
 		return unsignedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1882,7 +1883,7 @@ func uint32ToOthers(proc *process.Process,
 		return unsignedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -1953,7 +1954,7 @@ func uint64ToOthers(proc *process.Process,
 		return unsignedToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return integerToTime(ctx, source, rs, length, selectList)
+		return integerToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
@@ -2231,7 +2232,8 @@ func timestampToOthers(proc *process.Process,
 
 func timeToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Time],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -2268,7 +2270,7 @@ func timeToOthers(ctx context.Context,
 		return timeToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return timeToTime(ctx, source, rs, length, toType.Scale)
+		return timeToTime(ctx, source, rs, length, toType.Scale, mode)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2351,7 +2353,7 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return decimal64ToTime(source, rs, length, selectList)
+		return decimal64ToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2418,7 +2420,7 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToFloat(ctx, source, rs, length, 64)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return decimal128ToTime(source, rs, length, selectList)
+		return decimal128ToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return decimal128ToDatetime(source, rs, length, selectList)
@@ -2721,7 +2723,7 @@ func strTypeToOthers(proc *process.Process,
 		return strToDatetime(proc, source, rs, length, selectList, assignmentCast)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return strToTime(source, rs, length, selectList)
+		return strToTime(ctx, source, rs, length, selectList, mode)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		zone := time.Local
@@ -4106,7 +4108,7 @@ func integerToTimestamp[T constraints.Integer](
 func integerToTime[T constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Time
@@ -4123,6 +4125,10 @@ func integerToTime[T constraints.Integer](
 				return moerr.NewOutOfRangef(ctx, "time", "value %d", v)
 			}
 			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
+			if err != nil {
+				return err
+			}
+			result, err = mysqlTimeForCast(ctx, result, mode, toType.Scale)
 			if err != nil {
 				return err
 			}
@@ -4531,7 +4537,7 @@ func timeToTime(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Time], length int,
-	targetScale int32) error {
+	targetScale int32, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -4546,12 +4552,27 @@ func timeToTime(
 			if targetScale < 6 {
 				result = result.TruncateToScale(targetScale)
 			}
+			result, err := mysqlTimeForCast(ctx, result, mode, targetScale)
+			if err != nil {
+				return err
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func mysqlTimeForCast(ctx context.Context, value types.Time, mode castMode, scale int32) (types.Time, error) {
+	maxValue := types.MySQLTimeMaxForScale(scale)
+	if !mode.isAssignment() || (value >= -maxValue && value <= maxValue) {
+		return value, nil
+	}
+	if mode.strictStringWidth() {
+		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value.String2(scale))
+	}
+	return types.ClampMySQLTimeForScale(value, scale), nil
 }
 
 func datetimeToDatetime(
@@ -5416,8 +5437,8 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 }
 
 func decimal64ToTime(
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
+	ctx context.Context, from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	fromtype := from.GetType()
@@ -5433,6 +5454,10 @@ func decimal64ToTime(
 			if err != nil {
 				return err
 			}
+			result, err = mysqlTimeForCast(ctx, result, mode, totype.Scale)
+			if err != nil {
+				return err
+			}
 			if err = to.Append(result, false); err != nil {
 				return err
 			}
@@ -5442,8 +5467,8 @@ func decimal64ToTime(
 }
 
 func decimal128ToTime(
-	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
+	ctx context.Context, from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	fromtype := from.GetType()
@@ -5456,6 +5481,10 @@ func decimal128ToTime(
 			}
 		} else {
 			result, err := types.ParseDecimal128ToTime(v, fromtype.Scale, totype.Scale)
+			if err != nil {
+				return err
+			}
+			result, err = mysqlTimeForCast(ctx, result, mode, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -7951,8 +7980,8 @@ func strToDate(proc *process.Process,
 }
 
 func strToTime(
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
+	ctx context.Context, from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Time
@@ -7966,6 +7995,10 @@ func strToTime(
 		} else {
 			s := convertByteSliceToString(v)
 			val, err := types.ParseTime(s, totype.Scale)
+			if err != nil {
+				return err
+			}
+			val, err = mysqlTimeForCast(ctx, val, mode, totype.Scale)
 			if err != nil {
 				return err
 			}
