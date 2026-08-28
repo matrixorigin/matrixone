@@ -487,7 +487,7 @@ function should_run_ut_stage(){
 
     case "${UT_SHARD}:${stage}" in
         all:* | \
-        light:light | \
+        light:light | light:hnsw | \
         issues:serial | \
         embedded:embedded | \
         heavy-plan:heavy | heavy-plan:plan)
@@ -559,6 +559,7 @@ function run_tests(){
         logger "INF" "Run UT with race check"
         local plan_package
         local engine_package
+        local hnsw_package
         local serial_test_scope
         local cluster_test_scope
         local resource_heavy_test_scope
@@ -567,6 +568,7 @@ function run_tests(){
         local cluster_package_parallel=2
         local package_status=0
         local light_status=0
+        local hnsw_status=0
         local serial_status=0
         local cluster_status=0
         local resource_heavy_status=0
@@ -593,6 +595,11 @@ function run_tests(){
         fi
         if ! engine_package=$(go list ${GO_MODULE_MODE} ./pkg/vm/engine/test); then
             logger "ERR" "Failed to resolve ./pkg/vm/engine/test"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if ! hnsw_package=$(go list ${GO_MODULE_MODE} ./pkg/vectorindex/hnsw); then
+            logger "ERR" "Failed to resolve ./pkg/vectorindex/hnsw"
             UT_TEST_STATUS=1
             return 0
         fi
@@ -624,6 +631,7 @@ function run_tests(){
         cluster_test_scope=$(remove_packages_from_scope \
             "${cluster_test_scope}" \
             "${plan_package}" \
+            "${hnsw_package}" \
             ${serial_test_scope})
 
         # Dependency-based group precedence remains authoritative. If this
@@ -648,6 +656,7 @@ function run_tests(){
             "${resource_heavy_test_scope}" \
             "${plan_package}" \
             "${engine_package}" \
+            "${hnsw_package}" \
             ${serial_test_scope} \
             ${cluster_test_scope})
 
@@ -655,6 +664,7 @@ function run_tests(){
             "${test_scope}" \
             "${plan_package}" \
             "${engine_package}" \
+            "${hnsw_package}" \
             ${serial_test_scope} \
             ${cluster_test_scope} \
             ${resource_heavy_test_scope})
@@ -664,6 +674,16 @@ function run_tests(){
             logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
             LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope >> $UT_REPORT
             light_status=$?
+        fi
+
+        # HNSW owns native worker pools inside its test binary. Running it as
+        # one package slot after the normal light wave preserves its full-batch
+        # and repeated-lifecycle targets without letting package concurrency
+        # turn CPU scheduling delay into a multi-minute light-stage straggler.
+        if should_run_ut_stage hnsw; then
+            logger "INF" "Run HNSW race-test package with exclusive runner CPU"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}" >> $UT_REPORT
+            hnsw_status=$?
         fi
 
         if should_run_ut_stage serial; then
@@ -752,7 +772,7 @@ function run_tests(){
             plan_status=$?
         fi
 
-        if (( light_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
+        if (( light_status != 0 || hnsw_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || engine_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi

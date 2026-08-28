@@ -528,8 +528,10 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 		key += 1
 	}
 
-	rand.Seed(uint64(time.Now().UnixNano()))
-	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+	seed := uint64(time.Now().UnixNano())
+	t.Logf("CDC shuffle seed: %d", seed)
+	r := rand.New(rand.NewSource(seed))
+	r.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
 	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
 	require.Nil(t, err)
@@ -704,12 +706,10 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 	runTxn = mock_runTxn
 	indexes := mockMoIndexes()
 
-	// The fixture has two existing files containing keys 0..199. Exercise one
-	// update in each file plus eleven inserts: at capacity ten, the inserts must
-	// roll over into two new models. Thirteen entries also keep all eight build
-	// workers active. Preserve the original ten Update cycles as repeated
-	// lifecycle/stability coverage, while removing entries that only duplicated
-	// work inside each cycle and became prohibitively expensive under -race.
+	// The preceding one-shot SmallCap test retains the full 400-row mixed batch.
+	// This test owns the orthogonal repeated-lifecycle target: one update from
+	// each existing file plus eleven inserts cross the capacity-10 boundary into
+	// two models. Thirteen rows also distribute work to all eight build workers.
 	keys := []int64{0, 100}
 	for key := int64(200); key < 211; key++ {
 		keys = append(keys, key)
@@ -724,6 +724,8 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 		cdc.Data = append(cdc.Data, e)
 	}
 
+	// Keep this lifecycle regression reproducible; the adjacent full-batch test
+	// retains time-seeded shuffle diversity.
 	r := rand.New(rand.NewSource(99))
 	r.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
@@ -747,6 +749,8 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 	require.Equal(t, int32(11), sync.ninsert.Load())
 	require.Equal(t, int32(2), sync.nupdate.Load())
 	require.Len(t, sync.indexes, 4)
+	require.Equal(t, int64(10), sync.indexes[2].Len.Load())
+	require.Equal(t, int64(1), sync.indexes[3].Len.Load())
 
 	for cycle := 1; cycle < 10; cycle++ {
 		err = sync.Update(sqlproc, &cdc)
