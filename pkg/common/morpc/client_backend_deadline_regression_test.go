@@ -58,7 +58,10 @@ func TestAutoCreateRetryableFactoryIsBoundedAndReleasesGeneration(t *testing.T) 
 		t.Name(),
 		factory,
 		WithClientEnableAutoCreateBackend(),
-		WithClientAutoCreateQueueWaitTimeout(50*time.Millisecond),
+		// Queue admission is independent from the factory retry budget this test
+		// exercises. Keep it non-competing so scheduler load cannot change the
+		// expected terminal error from the factory timeout to a queue timeout.
+		WithClientAutoCreateQueueWaitTimeout(time.Hour),
 		WithClientAutoCreateWaitTimeout(50*time.Millisecond),
 		WithClientDisableCircuitBreaker(),
 		WithClientLogger(zap.NewNop()),
