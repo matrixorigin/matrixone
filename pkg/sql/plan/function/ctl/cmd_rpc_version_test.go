@@ -142,14 +142,44 @@ func requireVersionValue(t *testing.T, version int64) {
 
 type addressRecordingQueryClient struct {
 	testQClient
-	address string
+	address  string
+	deadline time.Time
 }
 
 func (c *addressRecordingQueryClient) SendMessage(
-	_ context.Context, address string, _ *query.Request,
+	ctx context.Context, address string, _ *query.Request,
 ) (*query.Response, error) {
 	c.address = address
+	c.deadline, _ = ctx.Deadline()
 	return nil, moerr.NewInternalErrorNoCtx("send error")
+}
+
+func TestTransferToCNAllowsActivationFence(t *testing.T) {
+	const serviceID = "activation-cn"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	mc := clusterservice.NewMOCluster(
+		"",
+		nil,
+		3*time.Second,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{{
+				ServiceID: serviceID, QueryAddress: "activation-cn:6001",
+				WorkState: metadata.WorkState_Working,
+			}},
+			nil,
+		),
+	)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+
+	qcli := &addressRecordingQueryClient{}
+	started := time.Now()
+	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion35)
+	require.Error(t, err)
+	require.Equal(t, "activation-cn:6001", qcli.address)
+	require.WithinDuration(t, started.Add(time.Minute), qcli.deadline, time.Second)
 }
 
 func Test_transferToTN(t *testing.T) {

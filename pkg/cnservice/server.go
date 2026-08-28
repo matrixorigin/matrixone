@@ -511,6 +511,10 @@ func (s *service) closeService() error {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
 		s.closeViewMetadataAdmission()
+		// Prevent an already-admitted protocol command from republishing the
+		// barrier after shutdown begins. Other QueryService methods remain live
+		// until authoritative withdrawal, preserving the stale-target retry path.
+		s.ddlVisibilityBarrierClosing.Store(true)
 		// Stop periodic heartbeats before publishing the final false readiness.
 		// QueryService remains available until the authoritative inventory has
 		// observed the withdrawal, so healthy CNs cannot target a closed barrier.

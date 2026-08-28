@@ -195,7 +195,11 @@ func transferToCN(qt qclient.QueryClient, target string, version int64) (resp *q
 			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
 				Version: version,
 			}
-			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferToCN)
+			// Live protocol activation may withdraw CN ingress and wait for a
+			// bounded logtail frontier fence before acknowledging the transition.
+			// Keep the caller deadline above the CN's default 30-second discovery
+			// bound instead of truncating the safety fence at the historical 1s.
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseTransferToCN)
 			defer cancel()
 
 			resp, err = qt.SendMessage(ctx, cn.QueryAddress, req)

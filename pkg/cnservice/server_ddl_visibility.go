@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -38,6 +39,16 @@ func ddlVisibilityBarrierSupported(serviceID string) bool {
 // frontier held by the already-published barrier participants before public
 // SQL ingress can be admitted.
 func (s *service) prepareDDLVisibilityBarrier() error {
+	s.ddlVisibilityBarrierMu.Lock()
+	defer s.ddlVisibilityBarrierMu.Unlock()
+	if err := s.prepareDDLVisibilityBarrierLocked(); err != nil {
+		return err
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	return nil
+}
+
+func (s *service) prepareDDLVisibilityBarrierLocked() error {
 	supported := ddlVisibilityBarrierSupported(s.cfg.UUID)
 	if supported && (s.moCluster == nil || s.queryClient == nil || s._txnClient == nil) {
 		// Focused service tests may construct only the dependencies relevant to
@@ -76,11 +87,16 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 // heartbeat task has terminated, so no previously captured ready heartbeat can
 // overwrite this final withdrawal.
 func (s *service) withdrawDDLVisibilityBarrier() error {
-	ingressWasReady := s.viewMetadataIngressReady.Swap(false)
-	barrierWasReady := s.ddlVisibilityBarrierReady.Swap(false)
-	if !ingressWasReady && !barrierWasReady {
-		return nil
-	}
+	s.ddlVisibilityBarrierMu.Lock()
+	defer s.ddlVisibilityBarrierMu.Unlock()
+	ctx, cancel := s.newDDLVisibilityBarrierContext(context.Background())
+	defer cancel()
+	return s.withdrawDDLVisibilityBarrierLocked(ctx)
+}
+
+func (s *service) withdrawDDLVisibilityBarrierLocked(ctx context.Context) error {
+	s.viewMetadataIngressReady.Store(false)
+	s.ddlVisibilityBarrierReady.Store(false)
 	if s.viewMetadataAdmissionGeneration == 0 {
 		return nil
 	}
@@ -88,21 +104,99 @@ func (s *service) withdrawDDLVisibilityBarrier() error {
 		return moerr.NewInternalErrorNoCtx("DDL visibility barrier withdrawal dependencies are unavailable")
 	}
 
-	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
 	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
-	retryInterval := s.cfg.HAKeeper.HeatbeatInterval.Duration
+	return s.waitForDDLVisibilityBarrierWithdrawal(ctx, s.ddlVisibilityBarrierRetryInterval())
+}
+
+func (s *service) newDDLVisibilityBarrierContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := 30 * time.Second
+	if s.cfg != nil && s.cfg.HAKeeper.DiscoveryTimeout.Duration > 0 {
+		timeout = s.cfg.HAKeeper.DiscoveryTimeout.Duration
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func (s *service) ddlVisibilityBarrierRetryInterval() time.Duration {
+	retryInterval := time.Duration(0)
+	if s.cfg != nil {
+		retryInterval = s.cfg.HAKeeper.HeatbeatInterval.Duration
+	}
 	if retryInterval < minClusterReadinessRetryInterval {
 		retryInterval = minClusterReadinessRetryInterval
 	}
-	return s.waitForDDLVisibilityBarrierWithdrawal(ctx, retryInterval)
+	return retryInterval
+}
+
+// setProtocolVersion serializes the live protocol transition with startup and
+// shutdown. Before startup preparation, changing the runtime value is enough:
+// the normal startup path will observe it and fence before ingress. Once this
+// generation has been published, the first transition into v35 must withdraw,
+// catch up, and republish before the new capability becomes visible locally.
+func (s *service) setProtocolVersion(ctx context.Context, version int64) error {
+	s.ddlVisibilityBarrierMu.Lock()
+	defer s.ddlVisibilityBarrierMu.Unlock()
+
+	if s.cfg == nil {
+		return moerr.NewInternalError(ctx, "CN configuration is unavailable")
+	}
+	rt := moruntime.ServiceRuntime(s.cfg.UUID)
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return moerr.NewInternalError(ctx, "protocol version not found")
+	}
+	current, ok := value.(int64)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid protocol version")
+	}
+	if current >= defines.MORPCVersion35 || version < defines.MORPCVersion35 ||
+		!s.ddlVisibilityBarrierPrepared.Load() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		return nil
+	}
+	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
+		return moerr.NewServiceUnavailableNoCtx("CN is closing")
+	}
+	if s.viewMetadataAdmissionGeneration == 0 || s.cfg == nil || s._hakeeperClient == nil ||
+		s.moCluster == nil || s.queryClient == nil || s._txnClient == nil || s.config == nil {
+		return moerr.NewInternalError(ctx, "DDL visibility activation dependencies are unavailable")
+	}
+
+	barrierCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
+	defer cancel()
+	if err := s.withdrawDDLVisibilityBarrierLocked(barrierCtx); err != nil {
+		return err
+	}
+	if err := s.syncStartupDDLVisibilityFrontier(barrierCtx); err != nil {
+		return err
+	}
+	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
+		return moerr.NewServiceUnavailableNoCtx("CN is closing")
+	}
+
+	// The local gates are opened before their heartbeat is sent, but ingress is
+	// not externally routable until HAKeeper publishes that heartbeat. The
+	// runtime version remains old until publication is authoritative.
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+	_, publishErr := s._hakeeperClient.SendCNHeartbeat(barrierCtx, s.newCNStoreHeartbeat())
+	if publishErr == nil {
+		publishErr = s.waitForDDLVisibilityBarrierPublication(
+			barrierCtx, s.ddlVisibilityBarrierRetryInterval())
+	}
+	if publishErr != nil {
+		// A successful heartbeat followed by an uncertain refresh may already
+		// have published true. Always issue a fresh bounded withdrawal before
+		// returning the activation failure.
+		cleanupCtx, cleanupCancel := s.newDDLVisibilityBarrierContext(context.Background())
+		cleanupErr := s.withdrawDDLVisibilityBarrierLocked(cleanupCtx)
+		cleanupCancel()
+		return errors.Join(moerr.AttachCause(barrierCtx, publishErr), cleanupErr)
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+	return nil
 }
 
 func (s *service) waitForDDLVisibilityBarrierWithdrawal(

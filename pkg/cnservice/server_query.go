@@ -140,6 +140,10 @@ func (s *service) initQueryService() error {
 }
 
 func (s *service) initQueryCommandHandler() {
+	// Override queryservice's generic runtime-only setter so a live CN can
+	// execute the v35 DDL visibility activation fence before acknowledging the
+	// protocol transition.
+	s.addQueryCommandHandler(query.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion)
 	s.addQueryCommandHandler(query.CmdMethod_KillConn, s.handleKillConn)
 	s.addQueryCommandHandler(query.CmdMethod_AlterAccount, s.handleAlterAccount)
 	s.addQueryCommandHandler(query.CmdMethod_TraceSpan, s.handleTraceSpan)
@@ -203,6 +207,23 @@ func (s *service) closeQueryService() error {
 		}
 		return nil
 	})
+}
+
+func (s *service) handleSetProtocolVersion(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
+	if req == nil || req.SetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	version := req.SetProtocolVersion.Version
+	if err := s.setProtocolVersion(ctx, version); err != nil {
+		return err
+	}
+	resp.SetProtocolVersion = &query.SetProtocolVersionResponse{Version: version}
+	return nil
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {

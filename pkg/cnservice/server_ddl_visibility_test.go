@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -126,6 +127,7 @@ type ddlVisibilityWithdrawalHAKeeperClient struct {
 	cluster               *ddlVisibilityTestCluster
 	queryClosed           <-chan struct{}
 	sendErr               error
+	sendErrors            map[int]error
 	heartbeats            []logservicepb.CNStoreHeartbeat
 	queryClosedBeforeSend bool
 	closeCalls            int
@@ -141,6 +143,9 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 	default:
 	}
 	c.heartbeats = append(c.heartbeats, hb)
+	if err := c.sendErrors[len(c.heartbeats)]; err != nil {
+		return logservicepb.CommandBatch{}, err
+	}
 	if c.sendErr != nil {
 		return logservicepb.CommandBatch{}, c.sendErr
 	}
@@ -259,6 +264,7 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 		viewMetadataAdmissionGeneration: 7,
 	}
 	require.NoError(t, s.prepareDDLVisibilityBarrier())
+	require.True(t, s.ddlVisibilityBarrierPrepared.Load())
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.Equal(t, 1, cluster.refreshCalls)
 	require.Equal(t, []string{"self:6001", "peer:6001"}, queryClient.requests)
@@ -276,6 +282,7 @@ func TestPrepareDDLVisibilityBarrierRejectsMissingProductionDependencies(t *test
 
 	err := s.prepareDDLVisibilityBarrier()
 	require.ErrorContains(t, err, "dependencies are unavailable")
+	require.False(t, s.ddlVisibilityBarrierPrepared.Load())
 	require.False(t, s.ddlVisibilityBarrierReady.Load())
 }
 
@@ -287,7 +294,277 @@ func TestPrepareDDLVisibilityBarrierSkipsFrontierSyncDuringRollingUpgrade(t *tes
 
 	s := &service{cfg: &Config{UUID: serviceID}}
 	require.NoError(t, s.prepareDDLVisibilityBarrier())
+	require.True(t, s.ddlVisibilityBarrierPrepared.Load())
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
+}
+
+func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
+	const serviceID = "ddl-visibility-live-activation-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	targetTS := timestamp.Timestamp{PhysicalTime: 300, LogicalTime: 4}
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{
+		{
+			ServiceID: serviceID, QueryAddress: "self:6001",
+			ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		},
+		{
+			ServiceID: "peer", QueryAddress: "peer:6001",
+			ViewMetadataAdmissionGeneration: 9, DDLVisibilityBarrierReady: true,
+		},
+	}}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID,
+		frontiers: map[string]timestamp.Timestamp{"peer:6001": targetTS},
+	}
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).DoAndReturn(
+		func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+			version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, ok)
+			require.Equal(t, defines.MORPCVersion34, version,
+				"v35 must not become visible before the activation frontier is applied")
+			require.False(t, cluster.cnServices[0].DDLVisibilityBarrierReady,
+				"the transitioning CN must be authoritatively withdrawn while applying the frontier")
+			return targetTS.Next(), nil
+		})
+	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	hakeeperClient := &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster}
+	s := &service{
+		cfg:                             cfg,
+		_hakeeperClient:                 hakeeperClient,
+		moCluster:                       cluster,
+		queryClient:                     queryClient,
+		_txnClient:                      txnClient,
+		config:                          util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: generation,
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	req := &query.Request{SetProtocolVersion: &query.SetProtocolVersionRequest{
+		Version: defines.MORPCVersion35,
+	}}
+	resp := &query.Response{}
+	require.NoError(t, s.handleSetProtocolVersion(context.Background(), req, resp, nil))
+	require.Equal(t, defines.MORPCVersion35, resp.SetProtocolVersion.Version)
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion35, version)
+	require.Equal(t, []string{"peer:6001"}, queryClient.requests)
+	require.Equal(t, []query.CmdMethod{query.CmdMethod_GetCommit}, queryClient.methods)
+	require.Equal(t, 1, queryClient.releases)
+	require.Len(t, hakeeperClient.heartbeats, 2)
+	require.False(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
+	require.False(t, hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
+	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityBarrierReady)
+	require.True(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
+	require.Equal(t, 2, cluster.refreshCalls)
+	require.True(t, s.ddlVisibilityBarrierReady.Load())
+	require.True(t, s.viewMetadataIngressReady.Load())
+
+	// Repeating an already-active version must not withdraw or re-run the fence.
+	resp = &query.Response{}
+	require.NoError(t, s.handleSetProtocolVersion(context.Background(), req, resp, nil))
+	require.Equal(t, defines.MORPCVersion35, resp.SetProtocolVersion.Version)
+	require.Len(t, hakeeperClient.heartbeats, 2)
+	require.Equal(t, 2, cluster.refreshCalls)
+	require.Len(t, queryClient.requests, 1)
+}
+
+func TestHandleSetProtocolVersionFailsClosedWhenActivationSyncFails(t *testing.T) {
+	const serviceID = "ddl-visibility-live-activation-failure-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	targetTS := timestamp.Timestamp{PhysicalTime: 300, LogicalTime: 4}
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{
+		{
+			ServiceID: serviceID, QueryAddress: "self:6001",
+			ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		},
+		{ServiceID: "peer", QueryAddress: "peer:6001", DDLVisibilityBarrierReady: true},
+	}}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID,
+		frontiers: map[string]timestamp.Timestamp{"peer:6001": targetTS},
+	}
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	syncErr := errors.New("logtail activation sync failed")
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(timestamp.Timestamp{}, syncErr)
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	hakeeperClient := &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster}
+	s := &service{
+		cfg:                             cfg,
+		_hakeeperClient:                 hakeeperClient,
+		moCluster:                       cluster,
+		queryClient:                     queryClient,
+		_txnClient:                      txnClient,
+		config:                          util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: generation,
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	resp := &query.Response{}
+	err := s.handleSetProtocolVersion(context.Background(), &query.Request{
+		SetProtocolVersion: &query.SetProtocolVersionRequest{Version: defines.MORPCVersion35},
+	}, resp, nil)
+	require.ErrorIs(t, err, syncErr)
+	require.Nil(t, resp.SetProtocolVersion)
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion34, version)
+	require.Len(t, hakeeperClient.heartbeats, 1)
+	require.False(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
+	require.False(t, s.ddlVisibilityBarrierReady.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, cluster.cnServices[0].DDLVisibilityBarrierReady)
+}
+
+func TestHandleSetProtocolVersionWithdrawsAfterActivationPublishFails(t *testing.T) {
+	const serviceID = "ddl-visibility-live-activation-publish-failure-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	targetTS := timestamp.Timestamp{PhysicalTime: 300, LogicalTime: 4}
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{
+		{
+			ServiceID: serviceID, QueryAddress: "self:6001",
+			ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		},
+		{ServiceID: "peer", QueryAddress: "peer:6001", DDLVisibilityBarrierReady: true},
+	}}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID,
+		frontiers: map[string]timestamp.Timestamp{"peer:6001": targetTS},
+	}
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS.Next(), nil)
+	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	publishErr := errors.New("activation publication failed")
+	hakeeperClient := &ddlVisibilityWithdrawalHAKeeperClient{
+		cluster: cluster, sendErrors: map[int]error{2: publishErr},
+	}
+	s := &service{
+		cfg:                             cfg,
+		_hakeeperClient:                 hakeeperClient,
+		moCluster:                       cluster,
+		queryClient:                     queryClient,
+		_txnClient:                      txnClient,
+		config:                          util.NewConfigData(nil),
+		viewMetadataAdmissionGeneration: generation,
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	err := s.handleSetProtocolVersion(context.Background(), &query.Request{
+		SetProtocolVersion: &query.SetProtocolVersionRequest{Version: defines.MORPCVersion35},
+	}, &query.Response{}, nil)
+	require.ErrorIs(t, err, publishErr)
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion34, version)
+	require.Len(t, hakeeperClient.heartbeats, 3)
+	require.False(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
+	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityBarrierReady)
+	require.False(t, hakeeperClient.heartbeats[2].DDLVisibilityBarrierReady)
+	require.False(t, s.ddlVisibilityBarrierReady.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, cluster.cnServices[0].DDLVisibilityBarrierReady)
+	require.Equal(t, 2, cluster.refreshCalls)
+}
+
+func TestSetProtocolVersionBeforeBarrierPreparationDefersToStartupFence(t *testing.T) {
+	const serviceID = "ddl-visibility-pre-start-activation-test"
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	s := &service{cfg: &Config{UUID: serviceID}}
+
+	require.NoError(t, s.setProtocolVersion(context.Background(), defines.MORPCVersion35))
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion35, version)
+	require.False(t, s.ddlVisibilityBarrierPrepared.Load())
+	require.False(t, s.ddlVisibilityBarrierReady.Load())
+}
+
+func TestInitQueryCommandHandlerOverridesProtocolActivation(t *testing.T) {
+	const serviceID = "ddl-visibility-public-protocol-handler-test"
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	queryService := &closeRecordingQueryService{
+		handlers: make(map[query.CmdMethod]func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error),
+	}
+	s := &service{cfg: &Config{UUID: serviceID}, queryService: queryService}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierClosing.Store(true)
+	s.initQueryCommandHandler()
+
+	handler, ok := queryService.handlers[query.CmdMethod_SetProtocolVersion]
+	require.True(t, ok)
+	resp := &query.Response{}
+	err := handler(context.Background(), &query.Request{
+		SetProtocolVersion: &query.SetProtocolVersionRequest{Version: defines.MORPCVersion35},
+	}, resp, nil)
+	require.ErrorContains(t, err, "CN is closing")
+	require.Nil(t, resp.SetProtocolVersion)
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion34, version)
+}
+
+func TestSetProtocolVersionRejectsActivationDuringClose(t *testing.T) {
+	const serviceID = "ddl-visibility-closing-activation-test"
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	s := &service{cfg: &Config{UUID: serviceID}}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierClosing.Store(true)
+
+	err := s.setProtocolVersion(context.Background(), defines.MORPCVersion35)
+	require.ErrorContains(t, err, "CN is closing")
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion34, version)
+}
+
+func TestWithdrawDDLVisibilityBarrierHandlesPartialService(t *testing.T) {
+	t.Run("zero generation has no authoritative publication", func(t *testing.T) {
+		s := &service{}
+		s.ddlVisibilityBarrierReady.Store(true)
+		s.viewMetadataIngressReady.Store(true)
+		require.NoError(t, s.withdrawDDLVisibilityBarrierLocked(context.Background()))
+		require.False(t, s.ddlVisibilityBarrierReady.Load())
+		require.False(t, s.viewMetadataIngressReady.Load())
+	})
+
+	t.Run("published generation requires dependencies", func(t *testing.T) {
+		s := &service{cfg: &Config{}, viewMetadataAdmissionGeneration: 1}
+		err := s.withdrawDDLVisibilityBarrierLocked(context.Background())
+		require.ErrorContains(t, err, "withdrawal dependencies are unavailable")
+	})
 }
 
 func TestWaitForDDLVisibilityBarrierPublicationHonorsCancellation(t *testing.T) {
