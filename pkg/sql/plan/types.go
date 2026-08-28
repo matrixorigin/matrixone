@@ -300,6 +300,14 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// SubscriptionMetadataProvider enumerates the subscriptions that are visible
+// to the current account. CompilerContext implementations may provide it so
+// account-wide metadata views can expose local and subscribed schemas without
+// choosing a catalog from the syntactic shape of an outer predicate.
+type SubscriptionMetadataProvider interface {
+	GetSubscriptionMetas(snapshot *Snapshot) ([]*SubscriptionMeta, error)
+}
+
 // UserVariableTypeResolver is an optional extension implemented by session
 // compiler contexts. User variables are stored as text on the frontend wire
 // path, but their assignment type is part of the statement contract used by
@@ -593,12 +601,6 @@ type orderResolutionMetadata struct {
 
 type BindContext struct {
 	binder Binder
-
-	// subscriptionMetadataScopes belongs to one query-block owner and is keyed
-	// by that block's STATISTICS alias. activeSubscriptionMetadata is installed
-	// only while the matching table expression expands its built-in view.
-	subscriptionMetadataScopes map[string]*SubscriptionMeta
-	activeSubscriptionMetadata *SubscriptionMeta
 
 	// outputColumnProvenance records planner-local source or pure-NULL identity
 	// by output position. An explicit None prevents later transparent-boundary

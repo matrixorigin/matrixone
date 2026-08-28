@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -29,6 +30,52 @@ import (
 )
 
 var _ plan2.ViewDependencyIdentityResolver = (*TxnCompilerContext)(nil)
+
+func TestSubscriptionMetasFromSubInfos(t *testing.T) {
+	metas := subscriptionMetasFromSubInfos([]*pubsub.SubInfo{
+		{
+			SubName:        "Zulu",
+			PubAccountId:   42,
+			PubAccountName: "publisher",
+			PubName:        "pub_z",
+			PubDbName:      "db_z",
+			PubTables:      "t1,t2",
+			Status:         pubsub.SubStatusNormal,
+		},
+		nil,
+		{SubName: "deleted", Status: pubsub.SubStatusDeleted},
+		{SubName: "unauthorized", Status: pubsub.SubStatusNotAuthorized},
+		{SubName: "", Status: pubsub.SubStatusNormal},
+		{
+			SubName:        "alpha",
+			PubAccountId:   7,
+			PubAccountName: "publisher_b",
+			PubName:        "pub_a",
+			PubDbName:      "db_a",
+			PubTables:      pubsub.TableAll,
+			Status:         pubsub.SubStatusNormal,
+		},
+	})
+
+	require.Equal(t, []*pbplan.SubscriptionMeta{
+		{
+			Name:        "pub_a",
+			AccountId:   7,
+			DbName:      "db_a",
+			AccountName: "publisher_b",
+			SubName:     "alpha",
+			Tables:      pubsub.TableAll,
+		},
+		{
+			Name:        "pub_z",
+			AccountId:   42,
+			DbName:      "db_z",
+			AccountName: "publisher",
+			SubName:     "Zulu",
+			Tables:      "t1,t2",
+		},
+	}, metas)
+}
 
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
 	ses := &Session{}

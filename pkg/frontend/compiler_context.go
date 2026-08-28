@@ -52,6 +52,7 @@ import (
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
+var _ plan2.SubscriptionMetadataProvider = &TxnCompilerContext{}
 
 // resolveUdfInCallerTxnKey asks ResolveUdf to use the transaction that is
 // compiling the statement. Clone restores function metadata and dependent
@@ -1316,6 +1317,47 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
+}
+
+// GetSubscriptionMetas returns every active subscription schema visible to the
+// current account. mo_subs is the account-level catalog abstraction used by
+// SHOW SUBSCRIPTIONS; filtering its status here also keeps withdrawn and
+// deleted publications out of account-wide information_schema metadata.
+func (tcc *TxnCompilerContext) GetSubscriptionMetas(snapshot *plan2.Snapshot) ([]*plan.SubscriptionMeta, error) {
+	tempCtx := tcc.execCtx.reqCtx
+	if plan2.IsSnapshotValid(snapshot) && snapshot.Tenant != nil {
+		tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+	}
+
+	bh := tcc.getOrCreateBackExec(tempCtx)
+	bh.ClearExecResultSet()
+	subInfos, err := getSubInfosFromSub(tempCtx, bh, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return subscriptionMetasFromSubInfos(subInfos), nil
+}
+
+func subscriptionMetasFromSubInfos(subInfos []*pubsub.SubInfo) []*plan.SubscriptionMeta {
+	metas := make([]*plan.SubscriptionMeta, 0, len(subInfos))
+	for _, subInfo := range subInfos {
+		if subInfo == nil || subInfo.Status != pubsub.SubStatusNormal || subInfo.SubName == "" {
+			continue
+		}
+		metas = append(metas, &plan.SubscriptionMeta{
+			Name:        subInfo.PubName,
+			AccountId:   subInfo.PubAccountId,
+			DbName:      subInfo.PubDbName,
+			AccountName: subInfo.PubAccountName,
+			SubName:     subInfo.SubName,
+			Tables:      subInfo.PubTables,
+		})
+	}
+	slices.SortFunc(metas, func(left, right *plan.SubscriptionMeta) int {
+		return cmp.Compare(strings.ToLower(left.SubName), strings.ToLower(right.SubName))
+	})
+	return metas
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {

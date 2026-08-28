@@ -74,6 +74,16 @@ select count(*) as account_wide_subscription_rows
 from information_schema.statistics where table_name = 'visible_t';
 select count(*) as account_wide_local_rows
 from information_schema.statistics where table_name = 'local_t';
+select count(*) as join_on_subscription_rows
+from information_schema.statistics s
+join mo_catalog.mo_database d
+  on s.table_schema = 'idx_meta_sub_db' and d.datname = s.table_schema
+where s.table_name = 'visible_t';
+select count(*) as derived_subscription_rows
+from (select table_schema, table_name, index_name from information_schema.statistics) s
+where s.table_schema = 'idx_meta_sub_db' and s.table_name = 'visible_t';
+select count(*) as account_wide_unpublished_rows
+from information_schema.statistics where table_name = 'unpublished_t';
 set @jdbc_schema = 'idx_meta_sub_db';
 set @jdbc_table = 'visible_t';
 prepare jdbc_index_info from
