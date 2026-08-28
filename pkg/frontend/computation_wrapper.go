@@ -1210,10 +1210,11 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
+		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(newPreparePlan.Plan)
-		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
 		prepareStmt.hasLagLeadParams = len(plan2.PreparedLagLeadParamPositions(newPreparePlan.Plan)) > 0
 		prepareStmt.ColDefData = newColDefData
@@ -1279,9 +1280,18 @@ func initExecuteStmtParamWithResolverInSession(
 			prepareStmt.compileNeedsRebuild = false
 		}
 	}
+	// Decide from the plan shape once per prepared-plan generation. This keeps
+	// ordinary write-only statements on their cached compile while allowing
+	// domain-sensitive predicates/expressions to be rebound for each binary
+	// execution.
+	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
+		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
+		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
+	}
+	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
+		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
-	dmlWritePlan := preparedPlanHasDMLWritePath(executionPlan)
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	preparedExplain := false
@@ -1291,6 +1301,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	runtimeNumericPrefixCandidate := false
 	runtimeDirectResultCandidate := false
+	runtimeTextComparisonSpecialization := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	hasNumericPrefixPacket := false
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
@@ -1302,6 +1313,11 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
+		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
+		if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
+			runtimeTextComparisonSpecialization = true
+			needsRuntimeSpecialization = true
+		}
 		if cap(prepareStmt.paramKinds) < paramCount {
 			prepareStmt.paramKinds = make([]vector.PrepareParamKind, paramCount)
 		} else {
@@ -1331,19 +1347,12 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
 		}
-		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate && !dmlWritePlan {
+		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
 			// Older/rebuilt plan shapes can hide the candidate behind generated
 			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
 			// ordinary integer TPCC executions never enter it.
 			runtimeNumericPrefixCandidate = preparedPlanHasStaticExactNumericPeer(executionPlan) &&
 				preparedPlanAdmitsPotentialDecimal(executionPlan, paramCount)
-		}
-		if dmlWritePlan {
-			// DML writers consume positional assignment projections from the cached
-			// prepared plan. Do not send them through the generic runtime plan
-			// rewriter: changing those projections can drop or misroute writes, and
-			// copying/recompiling the plan also regresses the TPCC hot path.
-			runtimeNumericPrefixCandidate = false
 		}
 		if hasParamKind {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
@@ -1351,7 +1360,7 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
-		needsRuntimeParamVals = needsRuntimeParamVals ||
+		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
 			runtimeNumericPrefixCandidate || runtimeDirectResultCandidate
 		if needsRuntimeParamVals {
 			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
@@ -1375,6 +1384,13 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			cwft.runtimeDirectResultSpecialization = runtimeDirectResultCandidate
 		}
+		// Text-vs-numeric comparisons use a plan-local DOUBLE conversion and
+		// warning semantics. Do not put that plan in the numeric-prefix cache:
+		// replacing an older cached compile would release operators that share
+		// this execution process before the new plan runs.
+		if runtimeTextComparisonSpecialization {
+			runtimeNumericPrefixCandidate = false
+		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
@@ -1390,7 +1406,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
-	if !binaryExecute && executionPlan.GetQuery() != nil && !dmlWritePlan {
+	if !binaryExecute && executionPlan.GetQuery() != nil {
 		runtimeNumericPrefixCandidate = plan2.PreparedPlanNeedsNumericPrefixSpecialization(
 			executionPlan, cwft.paramVals)
 		if runtimeNumericPrefixCandidate {
@@ -1436,7 +1452,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	if cachedRuntimeCompile == nil &&
 		(!binaryExecute || runtimeNumericPrefixCandidate || runtimeDirectResultCandidate ||
-			binaryLiteralPlan || prepareStmt.hasPaginationParams) {
+			binaryLiteralPlan || prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
 		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
 			reqCtx, executionPlan, cwft.paramVals, binaryExecute, runtimeDirectResultCandidate)
 		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
@@ -1467,6 +1483,7 @@ func initExecuteStmtParamWithResolverInSession(
 			execCtx.prepareColDef = colDefData
 		}
 	}
+
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling or Sirius intent must be evaluated for this execution,
 	// so neither can reuse a native topology compiled under prepare-time defaults.
@@ -1685,22 +1702,6 @@ func preparedPlanHasStaticExactNumericPeer(preparePlan *plan2.Plan) bool {
 	return found
 }
 
-func preparedPlanHasDMLWritePath(executionPlan *plan2.Plan) bool {
-	if executionPlan == nil {
-		return false
-	}
-	query := executionPlan.GetQuery()
-	if query == nil {
-		return false
-	}
-	switch query.StmtType {
-	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
-		return true
-	default:
-		return false
-	}
-}
-
 func specializePreparedExecutionPlan(
 	ctx context.Context,
 	executionPlan *plan2.Plan,
@@ -1716,12 +1717,16 @@ func specializePreparedExecutionPlan(
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	needsNumericPrefix := plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
+	needsRuntimeSpecialization := plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
 	if !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
-		!plan2.PreparedPlanHasPaginationParams(executionPlan) {
+		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization {
 		return executionPlan, false, false, nil
 	}
 
-	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
+	// DML write expressions are consumed positionally by the writer and must
+	// retain their assignment casts.  Predicates and nested expressions are
+	// still rebound against execute-time parameter domains.
+	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
 		ctx, executionPlan, paramVals)
 	if err != nil {
 		return nil, false, false, err
@@ -1965,6 +1970,24 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		values[i] = paramValue
 	}
 	return values, nil
+}
+
+func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) []types.Type {
+	if params == nil || params.Length() == 0 {
+		return nil
+	}
+	runtimeTypes := make([]types.Type, params.Length())
+	for i := range runtimeTypes {
+		if params.IsNull(uint64(i)) || i*2+1 >= len(paramTypes) {
+			continue
+		}
+		mysqlType := defines.MysqlType(paramTypes[i*2])
+		isUnsigned := paramTypes[i*2+1]&0x80 != 0
+		if runtimeType, ok := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned); ok {
+			runtimeTypes[i] = runtimeType
+		}
+	}
+	return runtimeTypes
 }
 
 func buildExecuteUserParams(

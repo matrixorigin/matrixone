@@ -363,6 +363,14 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// runtimeSpecializationPlan records the plan for which the static
+	// execute-time specialization decision was made. Most prepared DML only
+	// needs parameter values and can reuse the prepare-time compile; keeping the
+	// decision with the plan avoids copying and walking the whole plan on every
+	// EXECUTE.
+	runtimeSpecializationPlan   *plan.Plan
+	runtimeSpecializationNeeded bool
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -813,6 +821,8 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
 }
 
