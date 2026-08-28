@@ -2153,6 +2153,13 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
 	// This is a guard, not the fix -- #27817 tracks PrefixIn itself, and closing it
 	// makes this branch removable.
 	checkOrder := !vec.GetSorted()
+	if !checkOrder && !prefixSearch {
+		// Flagged, and no prefix search to second-guess the flag: nothing to verify.
+		// Without this the walk below runs to completion doing nothing, once per
+		// zone map, for every flagged varlen IN payload -- which is what
+		// ConstructInExpr now publishes on the transfer path.
+		return true
+	}
 	col, area := vector.MustVarlenaRawData(vec)
 	prev := col[0].GetByteSlice(area)
 	for i := 1; i < len(col); i++ {
