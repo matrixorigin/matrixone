@@ -851,7 +851,6 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 	}()
-
 	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
 	require.NoError(t, err)
 	require.Len(t, values, 1)
@@ -940,6 +939,61 @@ func TestApplyBinaryDirectResultDecimalTypesPreservesLexicalScale(t *testing.T) 
 	unrelated := values[1].(plan2.ParamValue)
 	require.Equal(t, int32(1), unrelated.RuntimeType.Width)
 	require.Zero(t, unrelated.RuntimeType.Scale)
+}
+
+func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 113, "select abs(?)")
+	defer prepareStmt.Close()
+
+	value := "12345678901234567890123456789012345.6789"
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+	cw.proc.SetPrepareParamsWithMeta(
+		params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	values, err := preparedParamValues(cw.proc, paramTypes)
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	param, ok := values[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.Equal(t, value, param.Value)
+	require.Equal(t, vector.PrepareParamDecimal, param.PrepareParamKind)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
+	require.Equal(t, int32(39), param.RuntimeType.Width)
+	require.Equal(t, int32(4), param.RuntimeType.Scale)
+
+	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		context.Background(), prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	var abs *plan.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		for _, projection := range node.ProjectList {
+			if projection.GetF() != nil && projection.GetF().Func.GetObjName() == "abs" {
+				abs = projection
+				break
+			}
+		}
+		if abs != nil {
+			break
+		}
+	}
+	require.NotNil(t, abs)
+	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
+	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
+	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
 }
 
 func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
@@ -1061,6 +1115,8 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 	cw.plan = manualPlan
+	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(manualPlan, 1)
+	require.True(t, prepareStmt.numericPrefixConsumer)
 
 	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.5tail", ""))
 	execCtx.input.isBinaryProtExecute = false
@@ -1162,7 +1218,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, false)
+	}, false, false, false)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
@@ -1263,6 +1319,9 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	require.True(t, cw.completeRuntimeCacheCandidate(replacement, nil))
+	// Evicting the previous semantic-category compile must not clear the
+	// parameter vector borrowed by the execution that installs its replacement.
+	require.Same(t, thirdParams, cw.proc.GetPrepareParams())
 	require.Same(t, thirdPlan, prepareStmt.runtimePlan)
 	require.Same(t, replacement, prepareStmt.runtimeCompile)
 	require.NotEqual(t, oldKey, prepareStmt.runtimeSpecializationKey)
@@ -1277,6 +1336,105 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Nil(t, retComp)
 	require.NotSame(t, manualPlan, textPlan)
 	require.Same(t, textParams, cw.proc.GetPrepareParams())
+}
+
+func TestPreparedNumericOverloadSpecializationReusesRuntimeCategory(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 209, "select abs(?)")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(preparePlan)
+	require.Equal(t, []int32{0}, prepareStmt.numericOverloadParamPositions)
+
+	install := func(value string, mysqlType defines.MysqlType) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		return params
+	}
+
+	firstParams := install("-9007199254740993", defines.MYSQL_TYPE_LONGLONG)
+	retComp, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, preparePlan, firstPlan)
+	require.Same(t, firstPlan, cw.runtimeCachePlan)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+
+	cw.proc.SetPrepareParams(nil)
+	secondParams := install("-7", defines.MYSQL_TYPE_LONGLONG)
+	firstParams.Free(cw.proc.Mp())
+	retComp, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp,
+		"a repeated INT64 execution must reuse the specialized compile")
+	require.Same(t, firstPlan, secondPlan,
+		"a repeated INT64 execution must reuse the specialized plan")
+
+	cw.proc.SetPrepareParams(nil)
+	floatParams := install("-1.5", defines.MYSQL_TYPE_DOUBLE)
+	secondParams.Free(cw.proc.Mp())
+	retComp, floatPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, firstPlan, floatPlan,
+		"changing the runtime numeric category must build a new bounded variant")
+	cw.proc.SetPrepareParams(nil)
+	floatParams.Free(cw.proc.Mp())
+}
+
+func TestPreparedExplicitDoubleAbsReusesOriginalCachedCompile(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 210, "select abs(cast(? as double))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(preparePlan)
+	require.Empty(t, prepareStmt.numericOverloadParamPositions,
+		"the parser-produced explicit cast must not be a deferred overload")
+
+	cachedCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = cachedCompile
+
+	install := func(value string, mysqlType defines.MysqlType) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		return params
+	}
+
+	integerParams := install("-9007199254740993", defines.MYSQL_TYPE_LONGLONG)
+	retComp, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, cachedCompile, retComp)
+	require.Same(t, preparePlan, firstPlan)
+	require.Nil(t, cw.runtimeCachePlan)
+	require.Nil(t, prepareStmt.runtimePlan)
+
+	cw.proc.SetPrepareParams(nil)
+	floatParams := install("-1.5", defines.MYSQL_TYPE_DOUBLE)
+	integerParams.Free(cw.proc.Mp())
+	retComp, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, cachedCompile, retComp,
+		"changing packet category under an explicit DOUBLE cast must reuse the original compile")
+	require.Same(t, preparePlan, secondPlan)
+	require.Nil(t, cw.runtimeCachePlan)
+	require.Nil(t, prepareStmt.runtimePlan)
+	cw.proc.SetPrepareParams(nil)
+	floatParams.Free(cw.proc.Mp())
 }
 
 func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
