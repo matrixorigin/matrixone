@@ -18,20 +18,33 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 type readerPathCaptureEngine struct {
 	engine.Engine
+	database               engine.Database
 	buildBlockReadersCalls int
+}
+
+func (e *readerPathCaptureEngine) Database(
+	context.Context,
+	string,
+	client.TxnOperator,
+) (engine.Database, error) {
+	return e.database, nil
 }
 
 func (e *readerPathCaptureEngine) BuildBlockReaders(
@@ -48,18 +61,42 @@ func (e *readerPathCaptureEngine) BuildBlockReaders(
 	return []engine.Reader{new(readutil.EmptyReader)}, nil
 }
 
+type readerPathCaptureDatabase struct {
+	engine.Database
+	relation engine.Relation
+}
+
+func (db *readerPathCaptureDatabase) Relation(
+	context.Context,
+	string,
+	any,
+) (engine.Relation, error) {
+	return db.relation, nil
+}
+
 type readerPathCaptureRelation struct {
 	engine.Relation
 	buildReadersCalls int
+	rangesCalls       int
+	rangesData        engine.RelData
+	readerRelData     engine.RelData
 	ctx               context.Context
 	hint              engine.FilterHint
+}
+
+func (r *readerPathCaptureRelation) Ranges(
+	context.Context,
+	engine.RangesParam,
+) (engine.RelData, error) {
+	r.rangesCalls++
+	return r.rangesData, nil
 }
 
 func (r *readerPathCaptureRelation) BuildReaders(
 	ctx context.Context,
 	_ any,
 	_ *plan.Expr,
-	_ engine.RelData,
+	relData engine.RelData,
 	_ int,
 	_ int,
 	_ bool,
@@ -67,6 +104,7 @@ func (r *readerPathCaptureRelation) BuildReaders(
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
 	r.buildReadersCalls++
+	r.readerRelData = relData
 	r.ctx = ctx
 	r.hint = filterHint
 	return []engine.Reader{new(readutil.EmptyReader)}, nil
@@ -83,12 +121,6 @@ func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
 		{
 			name:              "local scope reads complete relation data",
 			cnCount:           2,
-			wantRelationCalls: 1,
-		},
-		{
-			name:              "single remote scope reads complete relation data",
-			isRemote:          true,
-			cnCount:           1,
 			wantRelationCalls: 1,
 		},
 		{
@@ -131,79 +163,102 @@ func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
 	}
 }
 
-func TestSingleRemoteRelationReaderPreservesRemoteMetadata(t *testing.T) {
+func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 	tests := []struct {
-		name                     string
-		tableName                string
-		tableType                string
-		account                  *plan.PubInfo
-		serializedFilter         []byte
-		contextFilter            []byte
-		wantMembershipFilter     []byte
-		wantReaderContextAccount uint32
+		name                 string
+		tableName            string
+		tableType            string
+		pubInfo              *plan.PubInfo
+		membershipFilter     []byte
+		wantReaderAccount    uint32
+		wantMembershipFilter []byte
 	}{
 		{
-			name:                     "serialized fulltext metadata",
-			tableName:                "__mo_index_secondary_fulltext",
-			tableType:                catalog.FullTextIndex_TblType,
-			account:                  &plan.PubInfo{TenantId: 42},
-			serializedFilter:         []byte{1, 2, 3},
-			wantMembershipFilter:     []byte{1, 2, 3},
-			wantReaderContextAccount: 42,
+			name:                 "published fulltext table",
+			tableName:            "__mo_index_secondary_fulltext",
+			tableType:            catalog.FullTextIndex_TblType,
+			pubInfo:              &plan.PubInfo{TenantId: 42},
+			membershipFilter:     []byte{1, 2, 3},
+			wantReaderAccount:    42,
+			wantMembershipFilter: []byte{1, 2, 3},
 		},
 		{
-			name:                     "context fulltext metadata fallback",
-			tableName:                "__mo_index_secondary_fulltext",
-			tableType:                catalog.FullTextIndex_TblType,
-			account:                  &plan.PubInfo{TenantId: 43},
-			contextFilter:            []byte{4, 5, 6},
-			wantMembershipFilter:     []byte{4, 5, 6},
-			wantReaderContextAccount: 43,
-		},
-		{
-			name:                     "cluster table account",
-			tableName:                "cluster_table",
-			tableType:                catalog.SystemClusterRel,
-			wantReaderContextAccount: catalog.System_Account,
+			name:              "cluster table",
+			tableName:         "cluster_table",
+			tableType:         catalog.SystemClusterRel,
+			wantReaderAccount: catalog.System_Account,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			if len(test.contextFilter) > 0 {
-				proc.Ctx = context.WithValue(
-					proc.Ctx,
+			ctrl := gomock.NewController(t)
+			tableDef := &plan.TableDef{Name: test.tableName, TableType: test.tableType}
+			node := &plan.Node{
+				ObjRef: &plan.ObjectRef{
+					SchemaName: "test_db",
+					ObjName:    tableDef.Name,
+					PubInfo:    test.pubInfo,
+				},
+				TableDef: tableDef,
+			}
+			memoryRanges := readutil.NewBlockListRelationData(1)
+			captureRelation := &readerPathCaptureRelation{rangesData: memoryRanges}
+			captureEngine := &readerPathCaptureEngine{
+				database: &readerPathCaptureDatabase{relation: captureRelation},
+			}
+
+			senderProc := testutil.NewProcess(t)
+			if len(test.membershipFilter) > 0 {
+				senderProc.Ctx = context.WithValue(
+					senderProc.Ctx,
 					defines.FulltextMembershipFilter{},
-					test.contextFilter,
+					test.membershipFilter,
 				)
 			}
-			tableDef := &plan.TableDef{Name: test.tableName, TableType: test.tableType}
-			captureRelation := new(readerPathCaptureRelation)
-			scope := &Scope{
-				Proc:     proc,
-				IsRemote: true,
+			senderScope := &Scope{
+				Magic: Remote,
+				Proc:  senderProc,
 				DataSource: &Source{
-					Rel:                   captureRelation,
-					node:                  &plan.Node{TableDef: tableDef},
-					TableDef:              tableDef,
-					AccountId:             test.account,
-					MembershipFilterBytes: test.serializedFilter,
-					FilterList:            []*plan.Expr{plan2.MakeFalseExpr()},
+					Rel:          captureRelation,
+					node:         node,
+					TableDef:     tableDef,
+					SchemaName:   node.ObjRef.SchemaName,
+					RelationName: tableDef.Name,
 				},
 				NodeInfo: engine.Node{Mcpu: 1, CNCNT: 1},
 			}
-			compile := NewMockCompile(t)
-			compile.proc = proc
-			compile.e = new(readerPathCaptureEngine)
+			encodeCtx := &scopeContext{regs: make(map[*process.WaitRegister]int32)}
+			encodeCtx.root = encodeCtx
+			encoded, _, err := generatePipeline(senderScope, encodeCtx, 1)
+			require.NoError(t, err)
 
-			readers, err := scope.buildReaders(compile)
+			remoteProc := testutil.NewProcess(t)
+			remoteProc.Ctx = defines.AttachAccountId(remoteProc.Ctx, 99)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			remoteProc.Base.TxnOperator = txnOperator
+			decodeCtx := &scopeContext{regs: make(map[*process.WaitRegister]int32)}
+			decodeCtx.root = decodeCtx
+			decoded, err := generateScope(remoteProc, encoded, decodeCtx, true)
+			require.NoError(t, err)
+			require.Nil(t, decoded.DataSource.Rel,
+				"relation handles are local execution state and are not serialized")
+
+			compile := &Compile{proc: remoteProc, e: captureEngine}
+			readers, err := decoded.buildReaders(compile)
 			require.NoError(t, err)
 			require.Len(t, readers, 1)
+			require.Equal(t, 1, captureRelation.rangesCalls)
+			require.Equal(t, 1, captureRelation.buildReadersCalls)
+			require.Zero(t, captureEngine.buildBlockReadersCalls)
+			require.Same(t, memoryRanges, captureRelation.readerRelData)
+			firstBlock := captureRelation.readerRelData.GetBlockInfo(0)
+			require.True(t, firstBlock.IsMemBlk())
 			require.Equal(t, test.wantMembershipFilter, captureRelation.hint.MembershipFilterBytes)
 			accountID, err := defines.GetAccountId(captureRelation.ctx)
 			require.NoError(t, err)
-			require.Equal(t, test.wantReaderContextAccount, accountID)
+			require.Equal(t, test.wantReaderAccount, accountID)
 		})
 	}
 }

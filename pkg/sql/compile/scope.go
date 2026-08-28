@@ -926,6 +926,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 				return err
 			}
 		}
+		// Remote scope decoding intentionally does not carry relation handles.
+		// When this scope owns the complete scan, retain the relation opened on
+		// the executing CN so buildReaders can consume the in-memory sentinel
+		// returned by Policy_CollectAllData instead of stripping it.
+		if s.IsRemote {
+			s.DataSource.Rel = engine.NewRelationHandle(rel)
+		}
 		return nil
 	}
 
@@ -1643,8 +1650,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 			}
-			if s.DataSource.AccountId != nil {
-				ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
+			account := s.DataSource.AccountId
+			if account == nil && s.DataSource.node != nil && s.DataSource.node.ObjRef != nil {
+				account = s.DataSource.node.ObjRef.PubInfo
+			}
+			if account != nil {
+				ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
 			}
 		}
 		stats := statistic.StatsInfoFromContext(ctx)
