@@ -1235,18 +1235,6 @@ func newHistoricalCreateSQLResult(t *testing.T, createSQL string) executor.Resul
 	return result.GetResult()
 }
 
-func newProtocolVersionResult(t *testing.T) executor.Result {
-	t.Helper()
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
-	result.NewBatchWithRowCount(1)
-	if err := executor.AppendStringRows(result, 0, []string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:13, cn-b:13"}`}); err != nil {
-		t.Fatalf("append protocol version result: %v", err)
-	}
-	return result.GetResult()
-}
-
 func newLegacyForeignKeyIndexResult(t *testing.T, rows [][]string) executor.Result {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
