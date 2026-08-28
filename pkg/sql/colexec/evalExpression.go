@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -2075,6 +2076,33 @@ func EvaluateFilterByZoneMap(
 	return
 }
 
+// zoneMapInVector decodes an IN / prefix_in payload for zone-map pruning and
+// guarantees the sorted order its consumers assume. ZM.AnyIn and ZM.PrefixIn
+// binary-search the value list, so an unsorted payload makes them probe the
+// wrong element and skip objects or blocks that do hold matching rows.
+//
+// Producers are not required to sort. The pk_filter path normalizes for exactly
+// this reason (normalizePKInVector), and this path must establish the same
+// invariant rather than trust its input.
+//
+// Payloads carrying NULLs are returned untouched: AnyIn routes them to
+// anyInNullableVec, a linear scan that does not depend on order.
+func zoneMapInVector(data []byte) (*vector.Vector, bool) {
+	// InplaceSortAndCompact writes through to the payload's backing bytes, which
+	// belong to the plan expression and may be reused across blocks or shipped to
+	// another CN. Decoding over a private copy keeps pruning from ever mutating
+	// them, and costs one copy per query because the decoded vector is cached.
+	vec := vector.NewVec(types.T_any.ToType())
+	if err := vec.UnmarshalBinary(bytes.Clone(data)); err != nil {
+		return nil, false
+	}
+	if vec.GetSorted() || vec.IsConst() || vec.GetNulls().Any() {
+		return vec, true
+	}
+	vec.InplaceSortAndCompact()
+	return vec, true
+}
+
 func GetExprZoneMap(
 	ctx context.Context,
 	proc *process.Process,
@@ -2133,8 +2161,12 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
+						vec, decoded := zoneMapInVector(data.Vec.Data)
+						if !decoded {
+							zms[expr.AuxId].Reset()
+							vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
+							return zms[expr.AuxId]
+						}
 						vecs[rid] = vec
 					} else {
 						zms[expr.AuxId].Reset()
@@ -2206,8 +2238,12 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
+						vec, decoded := zoneMapInVector(data.Vec.Data)
+						if !decoded {
+							zms[expr.AuxId].Reset()
+							vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
+							return zms[expr.AuxId]
+						}
 						vecs[rid] = vec
 					} else {
 						zms[expr.AuxId].Reset()
