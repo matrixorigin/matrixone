@@ -230,13 +230,16 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	s.ddlVisibilityActivationPending.Store(true)
 	s.ddlVisibilityActivationPrepared.Store(false)
 	s.ddlVisibilityActivationFenced.Store(false)
-	// Withdraw routing before waiting for already-admitted old-protocol DDL.
-	// Block deliberately remains engaged on timeout; ingress must be equally
-	// fail-closed throughout that retry window.
+	// Stop new old-protocol DDL admission before the fallible authoritative
+	// withdrawal. Both withdrawal and subsequent drain failures deliberately
+	// leave the gate blocked for a fail-closed retry.
+	if err := s.ddlCommitGate.BlockNew(); err != nil {
+		return err
+	}
 	if err := s.setDDLVisibilityIngressLocked(barrierCtx, false); err != nil {
 		return err
 	}
-	if err := s.ddlCommitGate.Block(barrierCtx); err != nil {
+	if err := s.ddlCommitGate.WaitDrained(barrierCtx); err != nil {
 		return err
 	}
 

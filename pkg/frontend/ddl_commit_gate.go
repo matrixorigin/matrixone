@@ -78,7 +78,9 @@ func (g *DDLCommitGate) EnablePublicDDL() {
 func (g *DDLCommitGate) PublicDDLEnabled() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.publicDDL && !g.closed
+	// Close rejects every later Enter, but a DDL transaction admitted before
+	// shutdown retains the eligibility it had when public listeners were live.
+	return g.publicDDL
 }
 
 func (g *DDLCommitGate) Enter(ctx context.Context) (func(), error) {
@@ -116,16 +118,21 @@ func (g *DDLCommitGate) Enter(ctx context.Context) (func(), error) {
 	}
 }
 
-func (g *DDLCommitGate) Block(ctx context.Context) error {
+func (g *DDLCommitGate) BlockNew() error {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.closed {
-		g.mu.Unlock()
 		return moerr.NewServiceUnavailableNoCtx("DDL commit gate is closed")
 	}
 	if !g.blocked {
 		g.blocked = true
 		g.signalLocked()
 	}
+	return nil
+}
+
+func (g *DDLCommitGate) WaitDrained(ctx context.Context) error {
+	g.mu.Lock()
 	for g.active > 0 {
 		changed := g.changed
 		g.mu.Unlock()
@@ -142,6 +149,13 @@ func (g *DDLCommitGate) Block(ctx context.Context) error {
 	}
 	g.mu.Unlock()
 	return nil
+}
+
+func (g *DDLCommitGate) Block(ctx context.Context) error {
+	if err := g.BlockNew(); err != nil {
+		return err
+	}
+	return g.WaitDrained(ctx)
 }
 
 func (g *DDLCommitGate) Unblock() {

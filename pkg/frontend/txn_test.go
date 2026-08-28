@@ -1268,7 +1268,18 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 			}
 		})
 
-		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		commitEntered := make(chan struct{})
+		allowCommit := make(chan struct{})
+		op.commitHook = func() {
+			close(commitEntered)
+			<-allowCommit
+		}
+		commitDone := make(chan error, 1)
+		go func() { commitDone <- ses.GetTxnHandler().Commit(execCtx) }()
+		<-commitEntered
+		gate.Close()
+		close(allowCommit)
+		require.NoError(t, <-commitDone)
 		require.Equal(t, []ddlSyncRequest{
 			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
 			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},

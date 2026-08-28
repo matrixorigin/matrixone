@@ -63,6 +63,7 @@ func TestDDLCommitGateLinearizesBlockAndCommit(t *testing.T) {
 
 func TestDDLCommitGateCancellationAndClose(t *testing.T) {
 	gate := NewDDLCommitGate()
+	gate.EnablePublicDDL()
 	release, err := gate.Enter(context.Background())
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -76,6 +77,8 @@ func TestDDLCommitGateCancellationAndClose(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	gate.Close()
+	require.True(t, gate.PublicDDLEnabled(),
+		"an admitted public background DDL retains shutdown fan-out eligibility")
 	_, err = gate.Enter(context.Background())
 	require.ErrorContains(t, err, "closed")
 	err = gate.Block(context.Background())
