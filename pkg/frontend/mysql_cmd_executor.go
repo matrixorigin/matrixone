@@ -2895,7 +2895,10 @@ func createPrepareStmtInSession(
 		protocolVersion:    protocolVersion,
 		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
-		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan),
+		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
+			prepareControl.Plan),
+		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
+			prepareControl.Plan),
 		directResultParamPositionsSet: true,
 		hasPaginationParams:           plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
 		hasLagLeadParams:              len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
