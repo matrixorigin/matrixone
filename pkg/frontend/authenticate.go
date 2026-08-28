@@ -3727,6 +3727,10 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		if err != nil {
 			return err
 		}
+		enableCache, err := privilegeCacheIsEnabled(ctx, ses)
+		if err != nil {
+			return err
+		}
 
 		// step3 : switch the default role and role id;
 		account.SetDefaultRoleID(uint32(roleId))
@@ -3734,7 +3738,12 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
-		ses.markActiveRoleGrantValid()
+		// SET ROLE validated membership in the transaction above, but a session
+		// with privilege caching disabled must not leave a grant decision behind
+		// for a later OFF -> ON transition to reuse after REVOKE.
+		if enableCache {
+			ses.markActiveRoleGrantValid()
+		}
 
 		return err
 	}

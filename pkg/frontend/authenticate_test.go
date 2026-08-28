@@ -10315,6 +10315,23 @@ func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
 		convey.So(cached, convey.ShouldBeTrue)
 		convey.So(valid, convey.ShouldBeTrue)
 
+		// A role switch while privilege caching is disabled must not publish a
+		// membership decision that a later cache enable could reuse.
+		convey.So(ses.SetSessionSysVar(context.Background(), "enable_privilege_cache", int8(0)), convey.ShouldBeNil)
+		roleSQL, err = getSqlForRoleIdOfRole(context.Background(), "role3")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+		bh.sql2result[getSqlForCheckUserGrant(7, int64(tenant.UserID))] = newMrsForCheckUserGrant([][]interface{}{
+			{int64(7), int64(tenant.UserID), false},
+		})
+		err = doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
+			Role: &tree.Role{UserName: "role3"},
+		})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(7))
+		_, cached = ses.GetPrivilegeCache().getActiveRoleGrant(tenant.GetUserID(), 7)
+		convey.So(cached, convey.ShouldBeFalse)
+
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil
 		ses.ruleCacheMu.RUnlock()

@@ -23,11 +23,26 @@ execute issue27650_stmt;
 begin;
 -- @session}
 
+-- Exercise the cache OFF -> SET ROLE -> REVOKE -> ON transition on a second
+-- already-open connection, including both text and prepared authorization.
+-- @session:id=4&user=sys:issue27650_user:issue27650_reader&password=123456{
+set session enable_privilege_cache = off;
+set role issue27650_reader;
+prepare issue27650_toggle_stmt from 'select v from issue27650_db.t';
+execute issue27650_toggle_stmt;
+-- @session}
+
 revoke issue27650_reader from issue27650_user;
 select count(*) from mo_catalog.mo_user_grant ug
 join mo_catalog.mo_role r on ug.role_id = r.role_id
 join mo_catalog.mo_user u on ug.user_id = u.user_id
 where r.role_name = 'issue27650_reader' and u.user_name = 'issue27650_user';
+
+-- @session:id=4&user=sys:issue27650_user:issue27650_reader&password=123456{
+set session enable_privilege_cache = on;
+select v from issue27650_db.t;
+execute issue27650_toggle_stmt;
+-- @session}
 
 -- @session:id=1&user=sys:issue27650_user:issue27650_reader&password=123456{
 set session clear_privilege_cache = on;

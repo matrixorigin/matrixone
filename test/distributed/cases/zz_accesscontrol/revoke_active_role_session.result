@@ -20,6 +20,12 @@ execute issue27650_stmt;
 ➤ v[4,32,0]  𝄀
 27650
 begin;
+set session enable_privilege_cache = off;
+set role issue27650_reader;
+prepare issue27650_toggle_stmt from 'select v from issue27650_db.t';
+execute issue27650_toggle_stmt;
+➤ v[4,32,0]  𝄀
+27650
 revoke issue27650_reader from issue27650_user;
 select count(*) from mo_catalog.mo_user_grant ug
 join mo_catalog.mo_role r on ug.role_id = r.role_id
@@ -27,6 +33,11 @@ join mo_catalog.mo_user u on ug.user_id = u.user_id
 where r.role_name = 'issue27650_reader' and u.user_name = 'issue27650_user';
 ➤ count(*)[-5,64,0]  𝄀
 0
+set session enable_privilege_cache = on;
+select v from issue27650_db.t;
+internal error: do not have privilege to execute the statement
+execute issue27650_toggle_stmt;
+internal error: do not have privilege to execute the statement
 set session clear_privilege_cache = on;
 select v from issue27650_db.t;
 internal error: do not have privilege to execute the statement

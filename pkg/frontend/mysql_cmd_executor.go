@@ -1596,13 +1596,16 @@ func doSetVar(
 				}
 			}
 		} else if assign.System && name == "enable_privilege_cache" {
-			ok, err = valueIsBoolTrue(value)
+			_, err = valueIsBoolTrue(value)
 			if err != nil {
 				return err
 			}
 
-			//disable privilege cache. clean the cache.
-			if !ok {
+			// Every session cache-mode assignment is a synchronization boundary.
+			// In particular, enabling must discard decisions that may have been
+			// produced while caching was disabled before a concurrent REVOKE.
+			// SET GLOBAL does not change this session's cache mode.
+			if !assign.Global {
 				cache := ses.GetPrivilegeCache()
 				if cache != nil {
 					cache.invalidate()
