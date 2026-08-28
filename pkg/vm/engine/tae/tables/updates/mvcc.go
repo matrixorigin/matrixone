@@ -344,17 +344,28 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 }
 
 func (n *AppendMVCCHandle) FillInCommitTSVecLocked(commitTSVec containers.Vector, maxrow uint32, mp *mpool.MPool) {
+	var cursor uint32
 	for _, node := range n.rows {
 		if node.startRow >= maxrow {
 			break
 		}
-		rows := node.maxRow - node.startRow
-		if node.maxRow > maxrow {
-			rows = maxrow - node.startRow
+		// Freeze may have installed payload rows for a transaction that later
+		// fails queue dedup before an AppendNode owns that physical range. Keep
+		// the commit-TS vector aligned with physical row offsets; scan selection
+		// holes delete these placeholder rows before they become visible.
+		for cursor < node.startRow {
+			commitTSVec.Append(txnif.UncommitTS, false)
+			cursor++
 		}
-		for i := 0; i < int(rows); i++ {
+		end := min(node.maxRow, maxrow)
+		for cursor < end {
 			commitTSVec.Append(node.GetCommitTS(), false)
+			cursor++
 		}
+	}
+	for cursor < maxrow {
+		commitTSVec.Append(txnif.UncommitTS, false)
+		cursor++
 	}
 }
 
