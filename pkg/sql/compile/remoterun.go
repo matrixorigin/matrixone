@@ -102,7 +102,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteJSONComparisonParamPipelineProtocol(proc, p); err != nil {
+	if err = validateRemoteMORPCVersion30PipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -169,7 +169,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
-		if err = validateRemoteJSONComparisonParamPipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteMORPCVersion30PipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
@@ -1794,18 +1794,23 @@ func validateRemoteStringProvenancePipelineProtocol(
 	return nil
 }
 
-func validateRemoteJSONComparisonParamPipelineProtocol(
+func validateRemoteMORPCVersion30PipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	required, err := plan.RequiresMORPCVersion30JSONComparisonParam(p)
+	numericPrefix, jsonComparisonParam, err := plan.RequiredMORPCVersion30Features(p)
 	if err != nil {
 		return err
 	}
-	if !required {
+	if !numericPrefix && !jsonComparisonParam {
 		return nil
 	}
-	if proc == nil || !supportsRemoteJSONComparisonParam(proc.GetService()) {
+	if proc == nil || !supportsRemoteMORPCVersion30(proc.GetService()) {
+		if numericPrefix {
+			return moerr.NewNotSupportedNoCtx(
+				"prepared numeric-prefix casts require MORPC protocol version 30",
+			)
+		}
 		return moerr.NewNotSupportedNoCtx(
 			"prepared JSON comparison parameters require MORPC protocol version 30",
 		)

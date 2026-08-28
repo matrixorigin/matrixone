@@ -6572,7 +6572,7 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
-func supportsRemoteJSONComparisonParam(service string) bool {
+func supportsRemoteMORPCVersion30(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return false

@@ -966,8 +966,11 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 }
 
-func TestJSONComparisonParamRemoteProtocolValidationMixedTypes(t *testing.T) {
+func TestMORPCVersion30RemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -978,39 +981,124 @@ func TestJSONComparisonParamRemoteProtocolValidationMixedTypes(t *testing.T) {
 		}
 	})
 
-	comparisonParam := func(typ types.Type, pos int32) *planpb.Expr {
+	cast := func(charset uint32) *planpb.Expr {
+		text := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "12.5tail"}}},
+		}
 		return &planpb.Expr{
-			Typ: planpb.Type{Id: int32(typ.Oid)},
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 4, Scale: 2, Charset: charset},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "cast"},
+				Args: []*planpb.Expr{text},
+			}},
+		}
+	}
+	comparisonParam := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_json)},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{
 					Obj:     int64(577) << 32,
 					ObjName: "__mo_json_comparison_param",
 				},
 				Args: []*planpb.Expr{{
-					Typ:  planpb.Type{Id: int32(typ.Oid)},
+					Typ:  planpb.Type{Id: int32(types.T_text)},
 					Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
 				}},
 			}},
 		}
 	}
-
-	remotePipeline := &pipeline.Pipeline{
-		InstructionList: []*pipeline.Instruction{{
-			ProjectList: []*planpb.Expr{
-				comparisonParam(types.T_bool.ToType(), 0),
-				comparisonParam(types.T_varchar.ToType(), 1),
-			},
-		}},
+	makeScope := func(expressions ...*planpb.Expr) *Scope {
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: expressions}},
+			}}},
+		}
 	}
+	t.Run("instruction expression owner", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{
+				ProjectList: []*planpb.Expr{comparisonParam(0), comparisonParam(1)},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+		err := validateRemoteMORPCVersion30PipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "prepared JSON comparison parameters require MORPC protocol version 30")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
-	require.ErrorContains(t,
-		validateRemoteJSONComparisonParamPipelineProtocol(proc, remotePipeline),
-		"require MORPC protocol version 30")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+		require.NoError(t, validateRemoteMORPCVersion30PipelineProtocol(proc, remotePipeline))
+	})
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
-	require.NoError(t,
-		validateRemoteJSONComparisonParamPipelineProtocol(proc, remotePipeline))
+	tests := []struct {
+		name             string
+		expressions      []*planpb.Expr
+		v29ErrorContains string
+	}{
+		{
+			name:        "ordinary cast",
+			expressions: []*planpb.Expr{cast(0)},
+		},
+		{
+			name:             "numeric prefix only",
+			expressions:      []*planpb.Expr{cast(255)},
+			v29ErrorContains: "prepared numeric-prefix casts require MORPC protocol version 30",
+		},
+		{
+			name:             "JSON comparison only",
+			expressions:      []*planpb.Expr{comparisonParam(0), comparisonParam(1)},
+			v29ErrorContains: "prepared JSON comparison parameters require MORPC protocol version 30",
+		},
+		{
+			name:             "both v30 features",
+			expressions:      []*planpb.Expr{comparisonParam(0), cast(255)},
+			v29ErrorContains: "require MORPC protocol version 30",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+			v29Data, _, _, _, err := prepareRemoteRunSendingData(
+				"", makeScope(test.expressions...), proc, nil, uuid.Nil)
+			if test.v29ErrorContains != "" {
+				require.ErrorContains(t, err, test.v29ErrorContains)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			} else {
+				require.NoError(t, err)
+				decoded, decodeErr := decodeScope(v29Data, proc, true, nil)
+				require.NoError(t, decodeErr)
+				decoded.release()
+			}
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+			v30Data, _, _, _, err := prepareRemoteRunSendingData(
+				"", makeScope(test.expressions...), proc, nil, uuid.Nil)
+			require.NoError(t, err)
+			decoded, err := decodeScope(v30Data, proc, true, nil)
+			require.NoError(t, err)
+			decoded.release()
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+			decoded, err = decodeScope(v30Data, proc, true, nil)
+			if test.v29ErrorContains != "" {
+				require.ErrorContains(t, err, test.v29ErrorContains)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Nil(t, decoded)
+
+				decoded, err = decodeScope(v30Data, nil, true, nil)
+				require.ErrorContains(t, err, test.v29ErrorContains)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Nil(t, decoded)
+			} else {
+				require.NoError(t, err)
+				decoded.release()
+			}
+		})
+	}
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

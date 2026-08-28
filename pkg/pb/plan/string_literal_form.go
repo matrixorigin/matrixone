@@ -149,70 +149,8 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 // RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
 // planner-injected CAST that uses the numeric-prefix sentinel.
 func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
-	required := false
-	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
-		if !required {
-			required = expr.requiresMORPCVersion30NumericPrefix()
-		}
-		return nil
-	})
-	return required, err
-}
-
-func (m *Expr) requiresMORPCVersion30NumericPrefix() bool {
-	if m == nil {
-		return false
-	}
-	if m.Typ.Charset == 255 {
-		fn := m.GetF()
-		if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") {
-			return true
-		}
-	}
-	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion30NumericPrefix() {
-		return true
-	}
-	if fn := m.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if arg.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-	}
-	if list := m.GetList(); list != nil {
-		for _, item := range list.List {
-			if item.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-	}
-	if sub := m.GetSub(); sub != nil && sub.Child.requiresMORPCVersion30NumericPrefix() {
-		return true
-	}
-	if window := m.GetW(); window != nil {
-		if window.WindowFunc.requiresMORPCVersion30NumericPrefix() {
-			return true
-		}
-		for _, item := range window.PartitionBy {
-			if item.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil && order.Expr.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-	}
-	return false
+	numericPrefix, _, err := RequiredMORPCVersion30Features(owner)
+	return numericPrefix, err
 }
 
 // RequiresMORPCVersion30JSONComparisonParam reports whether an owner contains
@@ -220,64 +158,36 @@ func (m *Expr) requiresMORPCVersion30NumericPrefix() bool {
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an
 // implementation detail and the receiver dispatches it by ID after decoding.
 func RequiresMORPCVersion30JSONComparisonParam(owner any) (bool, error) {
-	required := false
-	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
-		required = required || exprContainsJSONComparisonParam(expr)
-		return nil
-	})
-	return required, err
+	_, jsonComparisonParam, err := RequiredMORPCVersion30Features(owner)
+	return jsonComparisonParam, err
 }
 
 const internalJSONComparisonParamFunctionID int32 = 577
 
-func exprContainsJSONComparisonParam(expr *Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if fn := expr.GetF(); fn != nil {
-		if fn.Func != nil && int32(fn.Func.Obj>>32) == internalJSONComparisonParamFunctionID {
-			return true
-		}
-		for _, arg := range fn.Args {
-			if exprContainsJSONComparisonParam(arg) {
-				return true
+// RequiredMORPCVersion30Features reports the independent v30 expression
+// features present in owner. Keep the features separate so callers can retain
+// precise diagnostics, while sharing one owner walk so adding one v30 feature
+// cannot accidentally replace another feature's compatibility gate.
+func RequiredMORPCVersion30Features(owner any) (
+	numericPrefix bool,
+	jsonComparisonParam bool,
+	err error,
+) {
+	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
+		return VisitExprTree(expr, func(current *Expr) error {
+			fn := current.GetF()
+			if !numericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+				strings.EqualFold(fn.Func.GetObjName(), "cast") {
+				numericPrefix = true
 			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if exprContainsJSONComparisonParam(item) {
-				return true
+			if !jsonComparisonParam && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == internalJSONComparisonParamFunctionID {
+				jsonComparisonParam = true
 			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil && exprContainsJSONComparisonParam(sub.Child) {
-		return true
-	}
-	if window := expr.GetW(); window != nil {
-		if exprContainsJSONComparisonParam(window.WindowFunc) {
-			return true
-		}
-		for _, item := range window.PartitionBy {
-			if exprContainsJSONComparisonParam(item) {
-				return true
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil && exprContainsJSONComparisonParam(order.Expr) {
-				return true
-			}
-		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil && exprContainsJSONComparisonParam(window.Frame.Start.Val) {
-				return true
-			}
-			if window.Frame.End != nil && exprContainsJSONComparisonParam(window.Frame.End.Val) {
-				return true
-			}
-		}
-	}
-	return false
+			return nil
+		})
+	})
+	return
 }
 
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {

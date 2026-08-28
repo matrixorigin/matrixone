@@ -281,4 +281,27 @@ func TestRequiresMORPCVersion30JSONComparisonParam(t *testing.T) {
 	required, err = RequiresMORPCVersion30JSONComparisonParam(ordinary)
 	require.NoError(t, err)
 	require.False(t, required)
+
+	prefixCast := &Expr{
+		Typ: Type{Id: 14, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{ordinary},
+		}},
+	}
+	mixedOwner := &struct{ Expressions []*Expr }{Expressions: []*Expr{{
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "coalesce"},
+			Args: []*Expr{ordinary, prefixCast, jsonComparison(param(Type{Id: 1}, 0))},
+		}},
+	}}}
+	numericPrefix, jsonComparisonParam, err := RequiredMORPCVersion30Features(mixedOwner)
+	require.NoError(t, err)
+	require.True(t, numericPrefix)
+	require.True(t, jsonComparisonParam)
+
+	numericPrefix, jsonComparisonParam, err = RequiredMORPCVersion30Features(ordinary)
+	require.NoError(t, err)
+	require.False(t, numericPrefix)
+	require.False(t, jsonComparisonParam)
 }
