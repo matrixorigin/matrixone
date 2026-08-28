@@ -17,8 +17,8 @@ package updates
 import (
 	"context"
 	"slices"
-	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/tidwall/btree"
 )
 
 func init() {
@@ -57,8 +58,47 @@ type AppendMVCCHandle struct {
 	appends *txnbase.MVCCSlice[*AppendNode]
 	// rows contains the same nodes in physical row order. Append payload and
 	// commit/abort vectors must always be interpreted through this view.
-	rows           []*AppendNode
+	rows []*AppendNode
+	// prepareTree is an immutable, copy-on-write snapshot used by dedup to
+	// select (PrepareTS, row range) entries without holding the object lock.
+	// Tree items contain values rather than AppendNode pointers because an
+	// AppendNode's transaction timestamps are updated in place.
+	prepareTree    atomic.Pointer[AppendPrepareSnapshot]
 	appendListener func(txnif.AppendNode) error
+}
+
+// AppendPrepareSnapshot is an immutable view of the append PrepareTS index.
+// Its contents are intentionally private; callers may only use the pointer as
+// a generation token when validating a selection after taking the object lock.
+type AppendPrepareSnapshot struct {
+	tree *btree.BTreeG[appendPrepareEntry]
+}
+
+type appendPrepareEntry struct {
+	prepare          types.TS
+	startRow, maxRow uint32
+}
+
+func appendPrepareEntryLess(a, b appendPrepareEntry) bool {
+	if !a.prepare.EQ(&b.prepare) {
+		return a.prepare.LT(&b.prepare)
+	}
+	return a.startRow < b.startRow
+}
+
+func newAppendPrepareTree() *btree.BTreeG[appendPrepareEntry] {
+	return btree.NewBTreeGOptions(appendPrepareEntryLess, btree.Options{
+		Degree:  64,
+		NoLocks: true,
+	})
+}
+
+func appendPrepareEntryFromNode(node *AppendNode) appendPrepareEntry {
+	return appendPrepareEntry{
+		prepare:  node.Prepare,
+		startRow: node.startRow,
+		maxRow:   node.maxRow,
+	}
 }
 
 func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
@@ -68,6 +108,7 @@ func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 		rows:    make([]*AppendNode, 0),
 	}
+	node.prepareTree.Store(&AppendPrepareSnapshot{tree: newAppendPrepareTree()})
 	return node
 }
 
@@ -84,6 +125,7 @@ func (n *AppendMVCCHandle) ReleaseAppends() {
 	defer n.Unlock()
 	n.appends = nil
 	n.rows = nil
+	n.prepareTree.Store(nil)
 }
 
 func compareAppendPrepare(a, b *AppendNode) int {
@@ -105,6 +147,7 @@ func compareAppendPrepare(a, b *AppendNode) int {
 func (n *AppendMVCCHandle) insertPrepareLocked(node *AppendNode) {
 	off, _ := slices.BinarySearchFunc(n.appends.MVCC, node, compareAppendPrepare)
 	n.appends.MVCC = slices.Insert(n.appends.MVCC, off, node)
+	n.updatePrepareTreeLocked(nil, node)
 }
 
 func (n *AppendMVCCHandle) removePrepareLocked(node *AppendNode) {
@@ -129,9 +172,32 @@ func (n *AppendMVCCHandle) insertRowLocked(node *AppendNode) {
 	n.rows = slices.Insert(n.rows, off, node)
 }
 
-func (n *AppendMVCCHandle) reorderPrepareLocked(node *AppendNode) {
+func (n *AppendMVCCHandle) reorderPrepareLocked(node *AppendNode, oldPrepare types.TS) {
 	n.removePrepareLocked(node)
-	n.insertPrepareLocked(node)
+	off, _ := slices.BinarySearchFunc(n.appends.MVCC, node, compareAppendPrepare)
+	n.appends.MVCC = slices.Insert(n.appends.MVCC, off, node)
+	old := appendPrepareEntry{prepare: oldPrepare, startRow: node.startRow}
+	n.updatePrepareTreeLocked(&old, node)
+}
+
+func (n *AppendMVCCHandle) updatePrepareTreeLocked(oldEntry *appendPrepareEntry, node *AppendNode) {
+	oldSnapshot := n.prepareTree.Load()
+	if oldSnapshot == nil {
+		panic("append prepare tree is released")
+	}
+	newTree := oldSnapshot.tree.Copy()
+	if oldEntry != nil {
+		if _, deleted := newTree.Delete(*oldEntry); !deleted {
+			panic("append prepare entry not found")
+		}
+	}
+	if node != nil {
+		newTree.Set(appendPrepareEntryFromNode(node))
+	}
+	newSnapshot := &AppendPrepareSnapshot{tree: newTree}
+	if !n.prepareTree.CompareAndSwap(oldSnapshot, newSnapshot) {
+		panic("concurrent append prepare tree mutation")
+	}
 }
 
 // only for internal usage
@@ -167,21 +233,35 @@ func (n *AppendMVCCHandle) GetRowSelectionInRangeLocked(start, end types.TS) (se
 	return
 }
 
-func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (selection index.RowSelection) {
+func (n *AppendMVCCHandle) GetRowSelectionAfter(start, end types.TS) (selection index.RowSelection) {
+	selection, _ = n.GetRowSelectionAfterWithSnapshot(start, end)
+	return
+}
+
+// GetRowSelectionAfterWithSnapshot returns a selection and the immutable
+// snapshot from which it was built. Callers that build the selection before
+// taking the object lock must validate the snapshot after acquiring the lock.
+func (n *AppendMVCCHandle) GetRowSelectionAfterWithSnapshot(
+	start, end types.TS,
+) (selection index.RowSelection, snapshot *AppendPrepareSnapshot) {
 	if end.LE(&start) {
 		return
 	}
-	// appends is ordered by PrepareTS, so restrict the work under the object
-	// lock to nodes in (start, end]. Their physical row ranges may be out of
-	// order because row allocation and Prepare happen independently; AddRange
-	// requires physical order, so only sort when that ordering was inverted.
-	first := sort.Search(len(n.appends.MVCC), func(i int) bool {
-		return n.appends.MVCC[i].Prepare.GT(&start)
+	snapshot = n.prepareTree.Load()
+	if snapshot == nil {
+		return
+	}
+	selected := make([]appendPrepareEntry, 0)
+	snapshot.tree.Ascend(appendPrepareEntry{prepare: start}, func(entry appendPrepareEntry) bool {
+		if !entry.prepare.GT(&start) {
+			return true
+		}
+		if entry.prepare.GT(&end) {
+			return false
+		}
+		selected = append(selected, entry)
+		return true
 	})
-	last := sort.Search(len(n.appends.MVCC), func(i int) bool {
-		return n.appends.MVCC[i].Prepare.GT(&end)
-	})
-	selected := n.appends.MVCC[first:last]
 	ordered := true
 	for i := 1; i < len(selected); i++ {
 		if selected[i-1].startRow > selected[i].startRow {
@@ -190,8 +270,7 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (sele
 		}
 	}
 	if !ordered {
-		selected = slices.Clone(selected)
-		slices.SortFunc(selected, func(a, b *AppendNode) int {
+		slices.SortFunc(selected, func(a, b appendPrepareEntry) int {
 			if a.startRow < b.startRow {
 				return -1
 			}
@@ -201,10 +280,14 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (sele
 			return 0
 		})
 	}
-	for _, node := range selected {
-		selection.AddRange(node.startRow, node.maxRow)
+	for _, entry := range selected {
+		selection.AddRange(entry.startRow, entry.maxRow)
 	}
 	return
+}
+
+func (n *AppendMVCCHandle) IsPrepareSnapshotCurrent(snapshot *AppendPrepareSnapshot) bool {
+	return snapshot == n.prepareTree.Load()
 }
 
 // it collects all append nodes in the range [start, end]
@@ -369,6 +452,7 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 		an = last
 		created = false
 		an.SetMaxRow(maxRow)
+		n.updatePrepareTreeLocked(nil, an)
 	}
 	return
 }
