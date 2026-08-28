@@ -2150,6 +2150,8 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
 	// predicate read [true,false]; sort.Search runs off the end and prunes a block
 	// that "a" matches. Checking adjacent pairs suffices: if one needle is a proper
 	// prefix of a later one, every needle between them carries that prefix too.
+	// This is a guard, not the fix -- #27817 tracks PrefixIn itself, and closing it
+	// makes this branch removable.
 	checkOrder := !vec.GetSorted()
 	col, area := vector.MustVarlenaRawData(vec)
 	prev := col[0].GetByteSlice(area)

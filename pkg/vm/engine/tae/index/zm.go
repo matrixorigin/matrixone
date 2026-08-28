@@ -787,7 +787,8 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 // this, so callers must check it separately (colexec.zoneMapInVector does, and
 // keeps the block when it fails). Today's producers cannot trip it anyway: packer
 // and serial encodings are self-delimiting and IVF centroid prefixes are
-// fixed-length, so no encoded value byte-prefixes another.
+// fixed-length, so no encoded value byte-prefixes another. Tracked as #27817;
+// fixing it here would let that caller-side check go away.
 //
 // Callers that cannot guarantee the order must establish it or check it before
 // calling (see colexec.zoneMapInVector); a wrong answer here silently drops rows.
