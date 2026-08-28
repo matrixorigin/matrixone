@@ -1185,6 +1185,20 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	if len(node.GroupBy) == 0 {
 		return
 	}
+	if builder != nil {
+		if _, ok := builder.distinctKeyLocalPreAggs[node]; ok {
+			resetShuffleStrategy(node.Stats.HashmapStats)
+			node.Stats.HashmapStats.Shuffle = false
+			return
+		}
+		if idx, ok := builder.distinctKeyShuffleCols[node]; ok &&
+			idx >= 0 && int(idx) < len(node.GroupBy) {
+			resetShuffleStrategy(node.Stats.HashmapStats)
+			node.Stats.HashmapStats.Shuffle = true
+			node.Stats.HashmapStats.ShuffleColIdx = idx
+			return
+		}
+	}
 	// Non-COUNT DISTINCT states cannot be combined by MergeGroup today. DOP
 	// planning therefore keeps the complete aggregate on one CN. A shuffle in
 	// front of that single owner adds hashing and dispatch without exposing any
@@ -1209,21 +1223,7 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	// be orders of magnitude larger. Compare that state with the input using the
 	// same reduction-factor model: shuffling a large input is justified only when
 	// the retained exact state is itself a material fraction of that input.
-	distinctStateNDV := countDistinctStateNDV(node, builder)
-	distinctStateShuffle := false
-	if distinctStateNDV > 0 && child.Stats.Outcnt > 0 {
-		// Base-column statistics are not conditional on filters or joins. Apply
-		// the same selectivity exponent used by aggregate cardinality costing,
-		// then cap by rows reaching this node. This keeps the rule conservative
-		// when a globally high-NDV column becomes low-NDV after selection.
-		distinctStateRows := estimateNDVAfterSelection(
-			distinctStateNDV, child.Stats)
-		if distinctStateRows > 0 {
-			distinctRatio := distinctStateRows / child.Stats.Outcnt
-			distinctFactor := 1 / math.Pow(distinctRatio, 0.8)
-			distinctStateShuffle = distinctStateRows >= threshHoldForShuffleGroup*distinctFactor
-		}
-	}
+	_, distinctStateShuffle := shouldShuffleDistinctState(node, child, builder)
 	if !standardShuffle && !distinctStateShuffle {
 		return
 	}
@@ -1335,6 +1335,56 @@ func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
 		}
 	}
 	return maxNDV
+}
+
+func shouldShuffleDistinctState(
+	node *plan.Node,
+	child *plan.Node,
+	builder *QueryBuilder,
+) (float64, bool) {
+	if child == nil || child.Stats == nil || child.Stats.Outcnt <= 0 {
+		return -1, false
+	}
+	distinctStateRows := estimateNDVAfterSelection(
+		countDistinctStateNDV(node, builder), child.Stats)
+	if distinctStateRows <= 0 {
+		return distinctStateRows, false
+	}
+	distinctRatio := distinctStateRows / child.Stats.Outcnt
+	distinctFactor := 1 / math.Pow(distinctRatio, 0.8)
+	return distinctStateRows,
+		distinctStateRows >= threshHoldForShuffleGroup*distinctFactor
+}
+
+// shouldUseDistinctKeyPreAggregation selects the complement of complete final-
+// group ownership. The selected topology preserves the existing local pair
+// Group, then distributes only its surviving (group keys, DISTINCT key) rows.
+func shouldUseDistinctKeyPreAggregation(node *plan.Node, builder *QueryBuilder) bool {
+	if node == nil || builder == nil || builder.qry == nil || builder.compCtx == nil ||
+		len(node.Children) != 1 || node.Children[0] < 0 ||
+		int(node.Children[0]) >= len(builder.qry.Nodes) {
+		return false
+	}
+	child := builder.qry.Nodes[node.Children[0]]
+	distinctRows, shouldShuffle := shouldShuffleDistinctState(node, child, builder)
+	if !shouldShuffle || distinctRows < shuffleDistinctGroupMinNDV {
+		return false
+	}
+	if len(node.GroupBy) == 0 {
+		return true
+	}
+	highestGroupNDV := float64(-1)
+	for i, groupBy := range node.GroupBy {
+		if i < len(node.GroupingFlag) && !node.GroupingFlag[i] {
+			continue
+		}
+		ndv := max(groupBy.Ndv, getExprNdv(groupBy, builder))
+		highestGroupNDV = max(
+			highestGroupNDV,
+			estimateNDVAfterSelection(ndv, child.Stats),
+		)
+	}
+	return highestGroupNDV > 0 && highestGroupNDV < shuffleDistinctGroupMinNDV
 }
 
 func estimateNDVAfterSelection(ndv float64, stats *plan.Stats) float64 {
