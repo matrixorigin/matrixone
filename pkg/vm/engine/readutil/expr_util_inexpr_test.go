@@ -126,3 +126,42 @@ func TestNormalizeInPayloadRejectsCorruptData(t *testing.T) {
 		require.Error(t, err, "corrupt payload len=%d must be reported", len(bad))
 	}
 }
+
+// InplaceSortAndCompact permutes only the value column and drops NULLs outright
+// when compaction fires, so a nullable payload must bypass it: the rows have to
+// survive intact even though that costs the sorted flag, and therefore pruning.
+// Unreachable from today's PK-derived callers -- this pins the guard for the next
+// caller, which would otherwise publish a filter with its NULLs silently removed.
+func TestConstructInExprPreservesNullablePayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	src := vector.NewVec(types.T_int64.ToType())
+	defer src.Free(mp)
+	// The duplicate matters: without it compaction never fires and only the
+	// misalignment shows. With it, an unguarded sort rebuilds the vector through
+	// appendList(..., nil) and the NULL disappears entirely.
+	require.NoError(t, vector.AppendFixed(src, int64(30), false, mp))
+	require.NoError(t, vector.AppendFixed(src, int64(0), true, mp))
+	require.NoError(t, vector.AppendFixed(src, int64(30), false, mp))
+	require.NoError(t, vector.AppendFixed(src, int64(10), false, mp))
+
+	expr, err := ConstructInExpr(context.Background(), "pk", src)
+	require.NoError(t, err)
+	literal := expr.GetF().Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	got := vector.NewVec(types.T_any.ToType())
+	defer got.Free(mp)
+	require.NoError(t, got.UnmarshalBinary(literal.Data))
+
+	require.Equal(t, 4, got.Length(), "the NULL row must not be dropped")
+	require.True(t, got.GetNulls().Contains(1), "the NULL must stay at its original position")
+	require.False(t, got.GetSorted(), "a nullable payload cannot claim sorted order")
+	require.Equal(t, int32(4), literal.Len)
+
+	col := vector.MustFixedColWithTypeCheck[int64](got)
+	require.Equal(t, int64(30), col[0], "values must keep their bitmap-aligned order")
+	require.Equal(t, int64(30), col[2])
+	require.Equal(t, int64(10), col[3])
+}

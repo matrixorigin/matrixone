@@ -2117,10 +2117,11 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 // unknown exactly as it treats unsorted.
 //
 // The sorted flag is authoritative when set: InplaceSortAndCompact sets it
-// unconditionally and it is marshalled with the payload, so every planner-folded
-// IN list carries it. It is not a universal invariant, though --
-// readutil.ConstructInExpr serialises a caller-supplied vector verbatim (transfer
-// and snapshot filtering both do), so an unordered payload arrives with no flag.
+// unconditionally and it is marshalled with the payload, so a folded IN list that
+// went through it carries it. It is not a universal invariant, though: constant
+// folding marshals a function result verbatim, and deliberately leaves a nullable
+// IN list unsorted to keep its null bitmap aligned with its values (both in
+// pkg/sql/plan/rule/constant_fold.go), so an unordered payload arrives with no flag.
 //
 // For varlen the order is verified directly, in the byte order AnyIn and PrefixIn
 // search, with a NULL slot's empty payload sorting first exactly as they see it.

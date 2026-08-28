@@ -95,10 +95,23 @@ func ConstructInExpr(
 // It decodes into its own vector rather than sorting the caller's: callers pass
 // vectors they use positionally elsewhere, and reordering one in place would
 // mis-associate rows against its parallel arrays.
+//
+// A payload carrying NULLs is returned unchanged. InplaceSortAndCompact permutes
+// only the value column, so the null bitmap would be left indexing the wrong rows,
+// and compaction rebuilds the vector with a nil bitmap, dropping the NULLs
+// outright; planner constant folding and normalizePKInVector both sidestep it the
+// same way. Publishing that payload unsorted and unflagged costs nothing beyond
+// pruning, because zone-map filtering refuses to binary-search an unflagged
+// payload and keeps the block. Today's callers all pass PK-derived vectors, which
+// cannot be NULL -- the guard is here so a future one cannot silently publish a
+// corrupted filter.
 func normalizeInPayload(data []byte) ([]byte, int, error) {
 	owned := vector.NewVec(types.T_any.ToType())
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, 0, err
+	}
+	if owned.GetNulls().Any() {
+		return data, owned.Length(), nil
 	}
 	owned.InplaceSortAndCompact() // also sets the sorted flag
 	// Returned directly rather than branched on: there is nothing to unwind here,

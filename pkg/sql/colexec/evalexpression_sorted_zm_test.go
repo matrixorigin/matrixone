@@ -275,7 +275,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T)
 	for _, n := range []int64{30, 10} {
 		require.NoError(t, vector.AppendFixed(vec, n, false, mp))
 	}
-	require.False(t, vec.GetSorted(), "ConstructInExpr marshals without sorting or flagging")
+	require.False(t, vec.GetSorted(), "constant folding marshals such a payload without sorting or flagging")
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
 
