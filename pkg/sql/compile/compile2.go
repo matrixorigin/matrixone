@@ -106,6 +106,20 @@ func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
 	}
 }
 
+func markInsertTableScansNotLockMeta(query *plan.Query) {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
+			continue
+		}
+
+		// INSERT plans can share an ObjectRef between a target-table scan and
+		// the write context. NotLockMeta is local to the scan: the write target
+		// must still contribute its shared metadata lock so concurrent DDL waits.
+		node.ObjRef = plan2.DeepCopyObjectRef(node.ObjRef)
+		node.ObjRef.NotLockMeta = true
+	}
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -181,11 +195,7 @@ func (c *Compile) Compile(
 					}
 				}
 			case plan.Query_INSERT:
-				for _, n := range qry.Query.Nodes {
-					if n.NodeType == plan.Node_TABLE_SCAN {
-						n.ObjRef.NotLockMeta = true
-					}
-				}
+				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
 			default:
 				c.needLockMeta = true
