@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1664,6 +1665,12 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isVarianceAggregate(agg) &&
+			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
+			return moerr.NewNotSupportedNoCtx(
+				"variance remote execution requires MORPC protocol version 35",
+			)
+		}
 		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
 			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
 			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
@@ -1687,6 +1694,25 @@ func validateRemoteAggregateProtocol(
 		}
 	}
 	return nil
+}
+
+func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
+	switch agg.GetAggID() {
+	case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+		aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+		return true
+	}
+	return false
+}
+
+func procSupportsRemoteVarianceAggregates(proc *process.Process) bool {
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion35
 }
 
 func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
