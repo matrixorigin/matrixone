@@ -332,9 +332,11 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		return tree.String(statement, dialect.MYSQL)
 	case *tree.CreateTable:
 		// A datastream external table's WITH options may carry an 'apikey'
-		// secret; re-rendering the AST redacts it (DataStreamOption.Format),
-		// so the raw CREATE text never reaches statement logging.
-		if stmt.DataStreamParam != nil {
+		// secret, and an ESQL/SQL foreign table's inline 'config' carries
+		// credentials; re-rendering the AST redacts them
+		// (DataStreamOption.Format / ForeignTableOption.Format), so the raw
+		// CREATE text never reaches statement logging.
+		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
 			return tree.String(statement, dialect.MYSQL)
 		}
 		return text
@@ -3994,6 +3996,15 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryInProgress(false)
 
 	err = executeStmtWithTxn(ses, nil, execCtx)
+	// Deferred Kafka scan progress is OWNED BY THE TRANSACTION terminal
+	// (TxnHandler.Commit/Rollback): a successful statement inside BEGIN /
+	// autocommit=0 must not publish until the enclosing transaction commits,
+	// or BEGIN; INSERT..SELECT FROM kafka_t; ROLLBACK would advance the
+	// exactly-once chain past rows that were rolled back. A FAILED statement
+	// discards here as a belt (its rollback path also discards).
+	if err != nil {
+		ses.FinalizeKafkaProgress(false)
+	}
 	if err != nil {
 		return abortStagedReturning(execCtx, err)
 	}
@@ -4458,6 +4469,35 @@ func executeStmt(ses *Session,
 }
 
 // execute query
+// rollbackWholeTxnOnPreExecutionError applies mo_rollback_txn_on_error to a
+// failure that never reached the executor.
+//
+// A parse error or a privilege rejection returns from doComQuery long before
+// finishTxnFunc, which is where the setting is otherwise honoured. Without this
+// the setting would quietly mean "any error the executor produced", exempting
+// the ones that never got that far: with it on,
+// `BEGIN; INSERT ...; selec 1; COMMIT;` would still COMMIT the row.
+//
+// It is called from the defer every COM_QUERY error path converges on. A
+// statement that already rolled back has left no active transaction, so the
+// guard below makes this a no-op for the errors finishTxnFunc handled, rather
+// than rolling back twice.
+func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
+	if !sessionRollsBackTxnOnError(ses, retErr) {
+		return
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
+		return
+	}
+	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
+		// The statement's own error is what the client asked about; a failure
+		// to roll back is logged, not substituted for it.
+		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
+			zap.Error(rbErr), zap.Error(retErr))
+	}
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
@@ -4549,9 +4589,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// is reseeded from the session on the next query, so the session value drives
 	// the next statement; the proc is updated too for completeness.
 	defer func() {
-		if retErr != nil {
-			markRowCountFailed(ses, proc)
+		if retErr == nil {
+			return
 		}
+		markRowCountFailed(ses, proc)
+
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
 	}()
 
 	if ses.GetTenantInfo() != nil {

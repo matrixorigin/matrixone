@@ -766,6 +766,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 			DatastreamScan:              t.Es.DatastreamScan,
+			ForeignScan:                 t.Es.ForeignScan,
+			KafkaScan:                   t.Es.KafkaScan,
 		}
 		in.ProjectList = t.ProjectList
 	case *mongoscan.MongoScan:
@@ -1265,6 +1267,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
 					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
 					DatastreamScan:              t.DatastreamScan,
+					ForeignScan:                 t.ForeignScan,
+					KafkaScan:                   t.KafkaScan,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),

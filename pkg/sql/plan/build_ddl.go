@@ -41,7 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1168,6 +1171,58 @@ func buildCreateTable(
 				Properties: &plan.PropertiesDef{Properties: properties},
 			},
 		})
+	} else if stmt.ForeignParam != nil {
+		cfg, err := foreignext.ParseTableOptions(ctx.GetContext(), stmt.ForeignParam)
+		if err != nil {
+			return nil, err
+		}
+		// Validate the JSON shape of an inline config without dialing (the
+		// session-variable fallback is resolved at scan time, so there is
+		// nothing to validate here for it).
+		if cfg.ConfigJSON != "" {
+			if err := foreigntvf.ValidateConfig(ctx.GetContext(), foreigntvf.Kind(cfg.Kind), cfg.ConfigJSON); err != nil {
+				return nil, err
+			}
+		}
+		// Like MongoDB/datastream, the durable typed feature bit is the
+		// discriminator that cannot be injected through the user-controlled
+		// rel_createsql JSON of a generic external table.
+		createTable.TableDef.FeatureFlag |= features.ForeignExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: foreignext.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
+	} else if stmt.KafkaParam != nil {
+		cfg, err := sqlkafka.ParseTableOptions(ctx.GetContext(), stmt.KafkaParam)
+		if err != nil {
+			return nil, err
+		}
+		// The consumer group carries the committed-offset exactly-once
+		// bookmark; default it per table so it is stable across sessions and
+		// persisted concretely in the envelope.
+		if cfg.Group == "" {
+			cfg.Group = sqlkafka.DefaultGroup(createTable.Database, createTable.TableDef.Name)
+		}
+		// Like MongoDB/datastream/foreign, the durable typed feature bit is
+		// the discriminator that cannot be injected through the
+		// user-controlled rel_createsql JSON of a generic external table.
+		createTable.TableDef.FeatureFlag |= features.KafkaExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlkafka.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
@@ -1373,6 +1428,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colName := def.Name.ColName()
 			// only used in error message and ColDef.OriginName
 			colNameOrigin := def.Name.ColNameOrigin()
+			// __mo_filepath / __mo_query are the synthetic hidden columns of
+			// external scans and are hidden BY NAME in star expansion and the
+			// external readers; a real column with either name would silently
+			// disappear from SELECT * or shadow the synthetic value.
+			if catalog.IsReservedExternalColName(colName) {
+				return moerr.NewInvalidInputf(ctx.GetContext(),
+					"column name %s is reserved for external table scans", colNameOrigin)
+			}
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
 				case *tree.AttributeCheckConstraint:

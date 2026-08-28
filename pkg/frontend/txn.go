@@ -67,7 +67,9 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 		return execErr
 	}
-	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
+	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback ||
+		isErrorRollbackWholeTxn(execErr) ||
+		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
@@ -505,8 +507,15 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPCommitBeforeCommitUnsafe)
 		err = th.commitUnsafe(execCtx)
 		if err != nil {
+			// the transaction did not become durable: discard any deferred
+			// Kafka progress instead of skipping messages
+			sessionFinalizeKafkaProgress(execCtx, false)
 			return err
 		}
+		// the TRANSACTION terminal: rows are durable now, publish deferred
+		// Kafka progress (commit + LAST_KAFKA_MESSAGE_ID). Inside BEGIN /
+		// autocommit=0 the deferring branch below keeps it queued instead.
+		sessionFinalizeKafkaProgress(execCtx, true)
 	}
 	//do nothing
 	return nil
@@ -643,6 +652,10 @@ func (th *TxnHandler) rollback(
 ) error {
 	execCtx.ses.EnterFPrint(FPRollback)
 	defer execCtx.ses.ExitFPrint(FPRollback)
+	// any rollback (full transaction or statement-level within one) makes
+	// this statement's rows non-durable: deferred Kafka progress must be
+	// discarded, never published — the chain replays, it never skips
+	sessionFinalizeKafkaProgress(execCtx, false)
 	var err error
 	var hasRecovered bool
 	th.mu.Lock()

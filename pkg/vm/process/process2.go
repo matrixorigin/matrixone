@@ -109,6 +109,12 @@ func NewTopProcess(
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
+		// The interactive session travels with the child procs: operators and
+		// builtins reach optional session capabilities (temp tables, the
+		// esql_tvf/sql_tvf foreign connection cache, Kafka scan progress)
+		// through proc.GetSession(). A remote proc is built from scratch on
+		// the receiving CN and correctly keeps a nil session.
+		Session: proc.Session,
 	}
 
 	if dataEntryCount > 0 {
@@ -124,7 +130,8 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 // channelBufferSize and nilbatchCnt is the extra information for Reg.
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
-		Base: proc.Base,
+		Base:    proc.Base,
+		Session: proc.Session,
 	}
 
 	if dataEntryCount > 0 {

@@ -77,6 +77,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2044,6 +2045,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return c.compileDatastreamScan(node, strictSqlMode)
 	}
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_FOREIGN_TB) {
+		return c.compileForeignScan(node, strictSqlMode)
+	}
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_KAFKA_TB) {
+		return c.compileKafkaScan(node, strictSqlMode)
+	}
+
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
 		if err != nil {
@@ -2160,6 +2168,130 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 	}
 
 	param := external.DatastreamExternParam()
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// compileForeignScan compiles a scan of an ESQL/SQL foreign external table.
+// The query texts to run are derived from __mo_query predicates (falling back
+// to the table's 'query' option) and become the scan's FileList: one query is
+// one virtual file. The scope is pinned to the session's CN with Mcpu=1 --
+// the session-local connection cache must be reachable, and foreign queries
+// within one scan run sequentially. Separate scans in one MO query are
+// separate scopes and run concurrently.
+func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	fs := node.ExternScan.GetForeignScan()
+	if fs == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "foreign external table is missing scan metadata")
+	}
+
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return nil, err
+	}
+	if len(queryList) == 0 {
+		if fs.DefaultQuery == "" {
+			return nil, moerr.NewInvalidInputf(c.proc.Ctx,
+				"%s external table requires a __mo_query = '<text>' predicate or a 'query' table option", fs.Kind)
+		}
+		queryList = []string{fs.DefaultQuery}
+	}
+	// Apply ALL query-level conjuncts to the candidate list (the generating
+	// =/IN ones trivially pass; non-generating ones like LIKE may prune) and
+	// keep only row-level conjuncts in the compile-owned node's FilterList.
+	fileSize := make([]int64, len(queryList))
+	for i := range fileSize {
+		fileSize[i] = -1
+	}
+	queryList, fileSize, residual, err := external.FilterFileList(c.proc.Ctx, node, c.proc, queryList, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	// Predicate pushdown, SQL only and opt-in ('pushdown' = 'true'): wrap each
+	// query text as a derived table carrying the conjuncts MO can render, and
+	// stop evaluating those locally -- the source has them now.
+	//
+	// Opting in is a statement about the source: that its result columns are
+	// the DECLARED ones, by name, because a WHERE clause has to name what it
+	// filters and MO writes the names it knows. The reader checks that claim
+	// against the columns the source actually answers with, and errors when it
+	// does not hold. Predicates MO cannot render stay local, since there is
+	// nothing to send.
+	if fs.Pushdown && fs.Kind == foreignext.KindSQL && len(residual) > 0 {
+		// Bare identifiers: the quoting character is dialect-specific, and
+		// sql_tvf speaks to PostgreSQL as well as MySQL.
+		filter, pushed := sqldatastream.DeparseFiltersBareIdents(
+			residual, pushdownCols(node.TableDef.Cols), c.proc.GetSessionInfo().TimeZone)
+		if filter != "" {
+			for i := range queryList {
+				queryList[i] = foreignext.WrapPushdownQuery(queryList[i], filter)
+			}
+			kept := make([]*plan.Expr, 0, len(residual))
+			for i, expr := range residual {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			residual = kept
+		}
+	}
+	node.FilterList = residual
+
+	param := external.ForeignExternParam(fs.Kind)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// pushdownCols masks the synthetic external-scan columns out of a scan's
+// column list.  They exist only inside MO -- __mo_query selects which query
+// runs, the error-mode columns are synthesized by the reader -- so a conjunct
+// mentioning one must never be rendered into the source's WHERE clause.  The
+// deparser resolves column refs by position and already refuses a nil entry,
+// so blanking the slot is enough.
+//
+// The mask is by name, which is blunter than the (name, ColId) scoping used
+// elsewhere: a pre-existing schema may hold a REAL column called __mo_query,
+// and masking it merely costs that one conjunct its pushdown.
+func pushdownCols(cols []*plan.ColDef) []*plan.ColDef {
+	masked := make([]*plan.ColDef, len(cols))
+	for i, col := range cols {
+		if col == nil || catalog.IsReservedExternalColName(col.Name) {
+			continue
+		}
+		masked[i] = col
+	}
+	return masked
+}
+
+// compileKafkaScan compiles a scan of a Kafka external table. The read
+// position/limits come from the __mo_read_* control predicates (consumed
+// here); the scope is pinned to the session's CN with Mcpu=1 — the read is a
+// single ordered partition consume, and LAST_KAFKA_MESSAGE_ID() lives in the
+// session.
+func (c *Compile) compileKafkaScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ks := node.ExternScan.GetKafkaScan()
+	if ks == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "kafka external table is missing scan metadata")
+	}
+	if err := external.DeriveKafkaReadControl(c.proc.Ctx, node, c.proc); err != nil {
+		return nil, err
+	}
+
+	param := external.KafkaExternParam(ks)
 	param.Ctx = c.proc.Ctx
 
 	scope := c.constructScopeForExternal(c.addr, false)
@@ -5958,12 +6090,22 @@ func scopeTreeSinkScanNode(s *Scope, visitedScopes map[*Scope]bool, visitedOps m
 	return engine.Node{}, false
 }
 
+// operatorTreeContainsSinkScan reports whether the operator tree contains a
+// CN-pinned local source: a SINK_SCAN merge (consumes an in-process
+// PipelineEdge) or an ESQL/SQL foreign external scan (its connection cache
+// lives only on the interactive session's CN). Either one must keep its
+// owning CN inside the shuffle receiver stage set, or no receiver tree would
+// ever start the scope and every shuffle receiver would wait forever.
 func operatorTreeContainsSinkScan(op vm.Operator, visited map[vm.Operator]bool) bool {
 	if op == nil || visited[op] {
 		return false
 	}
 	visited[op] = true
 	if mergeOp, ok := op.(*merge.Merge); ok && mergeOp.SinkScan {
+		return true
+	}
+	if ext, ok := op.(*external.External); ok && ext.Es != nil &&
+		(ext.Es.ForeignScan != nil || ext.Es.KafkaScan != nil) {
 		return true
 	}
 	base := op.GetOperatorBase()

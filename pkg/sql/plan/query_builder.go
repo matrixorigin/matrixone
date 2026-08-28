@@ -36,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -838,6 +840,23 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 	}
 }
 
+// externalScanTolerates reports whether the query still references one of the
+// columns that turn an external scan's parse errors into rows
+// (__mo_error_message / __mo_error_text). __mo_file_line is deliberately not
+// one of them: it is position metadata, and asking for it alone must not stop
+// a bad record from failing the query.
+func externalScanTolerates(node *plan.Node, colTag int32, colRefCnt map[[2]int32]int) bool {
+	for i, col := range node.TableDef.Cols {
+		if colRefCnt[[2]int32{colTag, int32(i)}] == 0 {
+			continue
+		}
+		if catalog.IsExternalErrorToleranceCol(col.Name, col.ColId) {
+			return true
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -991,10 +1010,20 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		colTag := node.BindingTags[0]
 		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
+		// An external scan that reports parse errors must read the whole
+		// record. Whether a record failed is a property of the record, not of
+		// the projection: pruning the column that fails to convert would make
+		// `select __mo_error_message from t` -- the query that asks which
+		// records failed -- answer "none", because nothing was converted.
+		keepAllRecordCols := node.NodeType == plan.Node_EXTERNAL_SCAN &&
+			externalScanTolerates(node, colTag, colRefCnt)
+
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{colTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
-				continue
+				if !keepAllRecordCols || col.Hidden || catalog.IsReservedExternalColName(col.Name) {
+					continue
+				}
 			}
 
 			internalRemapping.addColRef(globalRef)
@@ -5451,6 +5480,9 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 	cols := make([]*plan.ColDef, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
+			catalog.IsForeignQueryCol(col.Name, col.ColId) ||
+			catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
+			catalog.IsExternalErrorCol(col.Name, col.ColId) ||
 			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
@@ -9278,6 +9310,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			var icebergEnv sqliceberg.CreateSQLEnvelope
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
 			var datastreamCfg sqldatastream.Config
+			var foreignCfg foreignext.Config
+			var kafkaCfg sqlkafka.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -9305,6 +9339,24 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					if isDataStream {
 						datastreamCfg = cfg
 						externType = plan.ExternType_DATASTREAM_TB
+					} else {
+						fcfg, isForeign, err := IsForeignTableDef(builder.GetContext(), tableDef)
+						if err != nil {
+							return 0, err
+						}
+						if isForeign {
+							foreignCfg = fcfg
+							externType = plan.ExternType_FOREIGN_TB
+						} else {
+							kcfg, isKafka, err := IsKafkaTableDef(builder.GetContext(), tableDef)
+							if err != nil {
+								return 0, err
+							}
+							if isKafka {
+								kafkaCfg = kcfg
+								externType = plan.ExternType_KAFKA_TB
+							}
+						}
 					}
 				}
 			}
@@ -9342,8 +9394,62 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Recheck: datastreamCfg.Recheck,
 					ApiKey:  datastreamCfg.APIKey,
 				}
+			} else if externType == plan.ExternType_FOREIGN_TB {
+				externScan.ForeignScan = &plan.ForeignScan{
+					Kind:         foreignCfg.Kind,
+					Config:       foreignCfg.ConfigJSON,
+					DefaultQuery: foreignCfg.DefaultQuery,
+					// Both the option and the plan field are the positive
+					// form, so the zero value -- any path that forgets to set
+					// it -- is the safe "send the query verbatim".
+					Pushdown: foreignCfg.Pushdown,
+				}
+			} else if externType == plan.ExternType_KAFKA_TB {
+				// Read-control defaults; compileKafkaScan overwrites them from
+				// the __mo_read_* WHERE conjuncts.
+				externScan.KafkaScan = &plan.KafkaScan{
+					Brokers:        kafkaCfg.Brokers,
+					Topic:          kafkaCfg.Topic,
+					Partition:      kafkaCfg.Partition,
+					Autocommit:     kafkaCfg.Autocommit,
+					Group:          kafkaCfg.Group,
+					Format:         kafkaCfg.Format,
+					Separator:      kafkaCfg.Separator,
+					HasStartId:     false,
+					Size:           0,
+					TimeoutSeconds: 10,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
+			}
+			// Error-mode columns for the text-format scans (issue #27517). They
+			// are appended for every engine whose records go through the shared
+			// CSV/JSONL parsing, so a bad record can be reported instead of
+			// failing the query. Parquet/Iceberg/Mongo have their own typed
+			// readers and are excluded. For FOREIGN_TB they must come BEFORE
+			// __mo_query, which has to stay the last column.
+			if externType == plan.ExternType_EXTERNAL_TB ||
+				externType == plan.ExternType_KAFKA_TB ||
+				externType == plan.ExternType_DATASTREAM_TB ||
+				externType == plan.ExternType_FOREIGN_TB {
+				varcharT := plan.Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+					Table: table,
+				}
+				for _, ec := range []struct {
+					id   uint64
+					name string
+					typ  plan.Type
+				}{
+					{catalog.ExternalFileLineColId, catalog.ExternalFileLine, plan.Type{Id: int32(types.T_int64), Table: table}},
+					{catalog.ExternalErrorMessageColId, catalog.ExternalErrorMessage, varcharT},
+					{catalog.ExternalErrorTextColId, catalog.ExternalErrorText, varcharT},
+				} {
+					tableDef.Cols = append(tableDef.Cols, &ColDef{
+						ColId: ec.id, Name: ec.name, Typ: ec.typ,
+					})
+				}
 			}
 			if externType == plan.ExternType_EXTERNAL_TB {
 				col := &ColDef{
@@ -9356,6 +9462,52 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
+			} else if externType == plan.ExternType_FOREIGN_TB {
+				// The hidden query-text column: `__mo_query = '<text>'`
+				// predicates select what is sent to the foreign source, and
+				// each returned row carries the text that produced it. Must
+				// stay the LAST column (the query-level filter classifier
+				// requires it).
+				col := &ColDef{
+					ColId: catalog.ExternalQueryColId,
+					Name:  catalog.ExternalQuery,
+					Typ: plan.Type{
+						Id:    int32(types.T_varchar),
+						Width: types.MaxVarcharLen,
+						Table: table,
+					},
+				}
+				tableDef.Cols = append(tableDef.Cols, col)
+			} else if externType == plan.ExternType_KAFKA_TB {
+				// Synthetic Kafka columns: four per-message metadata columns
+				// and three WHERE-only read controls (their conjuncts are
+				// consumed by compileKafkaScan; selecting one returns the
+				// effective value the scan used). All are hidden from
+				// SELECT * via catalog.IsKafkaHiddenCol.
+				varcharT := plan.Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+					Table: table,
+				}
+				bigintT := plan.Type{Id: int32(types.T_int64), Table: table}
+				tsT := plan.Type{Id: int32(types.T_timestamp), Scale: 3, Table: table}
+				for _, kc := range []struct {
+					id   uint64
+					name string
+					typ  plan.Type
+				}{
+					{catalog.KafkaMessageIDColId, catalog.KafkaMessageID, bigintT},
+					{catalog.KafkaMessageTSColId, catalog.KafkaMessageTS, tsT},
+					{catalog.KafkaMessageKeyColId, catalog.KafkaMessageKey, varcharT},
+					{catalog.KafkaMessageValueColId, catalog.KafkaMessageValue, varcharT},
+					{catalog.KafkaReadStartIDColId, catalog.KafkaReadStartID, bigintT},
+					{catalog.KafkaReadSizeColId, catalog.KafkaReadSize, bigintT},
+					{catalog.KafkaReadTimeoutColId, catalog.KafkaReadTimeout, bigintT},
+				} {
+					tableDef.Cols = append(tableDef.Cols, &ColDef{
+						ColId: kc.id, Name: kc.name, Typ: kc.typ,
+					})
+				}
 			}
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
@@ -9683,7 +9835,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			}
 			originCols[i] = cols[i]
 			cols[i] = strings.ToLower(cols[i])
-			colIsHidden[i] = col.Hidden
+			// The synthetic __mo_query column of a foreign scan is hidden from
+			// star expansion (identified by its reserved ColId, so a real
+			// __mo_query column in a pre-existing schema stays visible).
+			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId) ||
+				catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
+				catalog.IsExternalErrorCol(col.Name, col.ColId)
 			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString
@@ -10052,6 +10209,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, nil)
 		case "parse_jsonl_file":
 			nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, nil)
+		case "esql_tvf":
+			nodeId, err = builder.buildEsqlTvf(tbl, ctx, exprs, nil)
+		case "sql_tvf":
+			nodeId, err = builder.buildSqlTvf(tbl, ctx, exprs, nil)
 		case "table_stats":
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
 		case "load_file_chunks":
