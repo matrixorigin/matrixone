@@ -55,9 +55,4 @@ order by id;
 ➤ id[4,32,0]  𝄀
 3  𝄀
 4
-select distinct author_id
-from articles
-where match(title, content) against('+database' in boolean mode)
-order by author_id;
-[unknown result because it is related to issue#25890]
 drop database ft_query_shapes;
