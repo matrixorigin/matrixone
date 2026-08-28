@@ -691,6 +691,9 @@ func doLock(
 		Group:           opts.group,
 		SnapShotTs:      txnOp.CreateTS(),
 	}
+	if err = setPlanSnapshotForLock(ctx, tableID, txn.IsRCIsolation(), proc, &options); err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
 		if options.ForwardTo == "" {
@@ -969,6 +972,55 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, newTS, nil
+}
+
+func setPlanSnapshotForLock(
+	ctx context.Context,
+	tableID uint64,
+	isRC bool,
+	proc *process.Process,
+	options *lock.LockOptions,
+) error {
+	options.PlanSnapshotTs = nil
+	planSnapshotTS := proc.PlanSnapshotTSForTransport()
+	// When the plan snapshot is at or after a non-empty transaction creation
+	// timestamp, CreateTS is an exact or conservative fallback and no extra wire
+	// field is needed. A mirror transaction has no local CreateTS; do not let its
+	// zero value bypass the wire/gate decision if placement changes in the future.
+	if planSnapshotTS == nil ||
+		(!options.SnapShotTs.IsEmpty() && !planSnapshotTS.Less(options.SnapShotTs)) {
+		return nil
+	}
+	if !planSnapshotWireSupported(proc) {
+		// The frontend rollout gate can change after a cached/prepared plan was
+		// admitted. Close that TOCTOU window at the final local boundary: rebuild
+		// the plan in the current transaction instead of sending a field that an
+		// old lock owner would silently ignore.
+		if proc.PlanGenerationReused() {
+			if !isRC {
+				return moerr.NewTxnWWConflict(ctx, tableID,
+					"table definition compatibility changed")
+			}
+			return retryWithDefChangedError
+		}
+		// With freshness sacrifice enabled, a freshly built plan can legitimately
+		// bind a snapshot older than CreateTS. Rebuilding it would bind the same
+		// snapshot forever. Preserve the legacy CreateTS fence during the rollout;
+		// only an actually reused generation requires the v32 field to be safe.
+		return nil
+	}
+	options.PlanSnapshotTs = planSnapshotTS
+	return nil
+}
+
+func planSnapshotWireSupported(proc *process.Process) bool {
+	value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(
+		runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion32
 }
 
 type lockRetryState struct {

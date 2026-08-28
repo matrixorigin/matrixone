@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -44,6 +45,18 @@ func TestSimpleInterface(t *testing.T) {
 	op.String(buf)
 
 	op.Release()
+}
+
+func TestMoColumnsWriteContext(t *testing.T) {
+	update := NewArgument()
+	update.MultiUpdateCtx = []*MultiUpdateCtx{{
+		TableDef:      &plan.TableDef{TblId: catalog.MO_COLUMNS_ID, Name: catalog.MO_COLUMNS_UPDATE},
+		TargetTableID: catalog.MO_COLUMNS_ID,
+	}}
+
+	ctx := update.writeContext(context.Background(), catalog.MO_COLUMNS_ID)
+	require.NotNil(t, ctx.Value(defines.MoColumnsUpdateKey{}))
+	require.Nil(t, update.writeContext(context.Background(), catalog.MO_TABLES_ID).Value(defines.MoColumnsUpdateKey{}))
 }
 
 func TestUpdateSingleTable(t *testing.T) {

@@ -129,7 +129,7 @@ use information_schema;
 show tables;
 -- @ignore:0
 desc key_column_usage;
-select table_name, column_name from key_column_usage limit 2;
+select table_name, column_name from key_column_usage where table_schema = '__nonexistent_schema__' limit 2;
 desc columns;
 select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 desc views;

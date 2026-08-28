@@ -133,6 +133,15 @@ type AlterLineageCompactionPlan struct {
 	SnapshotNames []string
 }
 
+// BranchReclaimPlan contains the branch-owned rows that can be reclaimed
+// after an account drop. Metadata rows are retained while any descendant is
+// live because their parent links are needed to protect that descendant's
+// ancestor snapshots.
+type BranchReclaimPlan struct {
+	MetadataTableIDs []uint64
+	SnapshotNames    []string
+}
+
 // NewBranchReclaimDag builds the reclaim DAG from a flat list of metadata
 // rows (shape shared with NewDAG).
 func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
@@ -444,19 +453,11 @@ func (d BranchReclaimDag) subtreeAllDeletedMemo(
 	return true
 }
 
-// ComputeBranchReclaimDropList walks the DAG starting from `deadTIDs`,
-// climbing to every ancestor and re-checking subtree-all-deleted. The return
-// value is the (sorted, deduplicated) list of snames that must be removed
-// from mo_snapshots to release protection (§5.3).
-//
-// Both the ancestor walk (this function) and the subtree check
-// (SubtreeAllDeleted) are cycle-safe — a corrupt `mo_branch_metadata` row
-// that produces a parent-cycle must never hang the drop path.
-func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []string {
-	candidates := make(map[uint64]struct{}, len(deadTIDs)*2)
-	for _, tid := range deadTIDs {
+func branchReclaimCandidates(dag BranchReclaimDag, roots []uint64) map[uint64]struct{} {
+	candidates := make(map[uint64]struct{}, len(roots)*2)
+	for _, tid := range roots {
 		cursor := tid
-		// `walkVisited` is scoped to a single dead-tid walk so we can
+		// `walkVisited` is scoped to a single root walk so we can
 		// distinguish "hit a sibling's already-seen ancestor" (benign)
 		// from "hit a node in our own walk's history" (cycle).
 		walkVisited := make(map[uint64]struct{})
@@ -472,7 +473,7 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 			}
 			walkVisited[cursor] = struct{}{}
 			if _, seen := candidates[cursor]; seen {
-				// Already covered by a previous dead tid's walk (normal
+				// Already covered by a previous root's walk (normal
 				// fan-out): nothing new above this cursor.
 				break
 			}
@@ -484,13 +485,18 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 			cursor = meta.ParentTableID
 		}
 	}
+	return candidates
+}
+
+func branchReclaimableTableIDs(dag BranchReclaimDag, roots []uint64) []uint64 {
+	candidates := branchReclaimCandidates(dag, roots)
 
 	// Memoise subtree results so `O(candidates)` × `O(subtree)` does not
 	// become quadratic when many candidates share ancestors (cascaded drop
 	// of a wide subtree).
 	memo := make(map[uint64]bool, len(dag.Info))
 	visited := make(map[uint64]struct{}, len(dag.Info))
-	var drops []string
+	var tableIDs []uint64
 	for tid := range candidates {
 		meta, ok := dag.Info[tid]
 		if !ok {
@@ -504,8 +510,51 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 			continue
 		}
 		if dag.subtreeAllDeletedMemo(tid, memo, visited) {
-			drops = append(drops, BranchSnapshotName(tid))
+			tableIDs = append(tableIDs, tid)
 		}
+	}
+	sort.Slice(tableIDs, func(i, j int) bool { return tableIDs[i] < tableIDs[j] })
+	return tableIDs
+}
+
+// ComputeAccountBranchReclaimPlan returns the safe branch metadata and
+// protect-snapshot rows to remove while dropping accountID. It starts at all
+// metadata rows created in that account and walks through their ancestors, so
+// a later child-account drop can reclaim a retained ancestor row. A row is
+// returned only when its complete descendant subtree is deleted; this keeps
+// the DAG connected for live cross-account descendants.
+func ComputeAccountBranchReclaimPlan(
+	dag BranchReclaimDag,
+	accountID uint64,
+) BranchReclaimPlan {
+	var roots []uint64
+	for tableID, meta := range dag.Info {
+		if meta.Creator == accountID {
+			roots = append(roots, tableID)
+		}
+	}
+	tableIDs := branchReclaimableTableIDs(dag, roots)
+	plan := BranchReclaimPlan{MetadataTableIDs: tableIDs}
+	for _, tableID := range tableIDs {
+		plan.SnapshotNames = append(plan.SnapshotNames, BranchSnapshotName(tableID))
+	}
+	sort.Strings(plan.SnapshotNames)
+	return plan
+}
+
+// ComputeBranchReclaimDropList walks the DAG starting from `deadTIDs`,
+// climbing to every ancestor and re-checking subtree-all-deleted. The return
+// value is the (sorted, deduplicated) list of snames that must be removed
+// from mo_snapshots to release protection (§5.3).
+//
+// Both the ancestor walk (this function) and the subtree check
+// (SubtreeAllDeleted) are cycle-safe — a corrupt `mo_branch_metadata` row
+// that produces a parent-cycle must never hang the drop path.
+func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []string {
+	tableIDs := branchReclaimableTableIDs(dag, deadTIDs)
+	drops := make([]string, 0, len(tableIDs))
+	for _, tableID := range tableIDs {
+		drops = append(drops, BranchSnapshotName(tableID))
 	}
 	sort.Strings(drops)
 	return drops
@@ -536,6 +585,27 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 		b.WriteByte('\'')
 	}
 	b.WriteByte(')')
+	return b.String()
+}
+
+// BuildBranchMetadataDeleteSQL returns a guarded DELETE for reclaimable
+// normal branch metadata. The table_deleted and level predicates are repeated
+// at execution time so a stale caller cannot remove a live or ALTER lineage
+// row even if its table-id list was computed earlier.
+func BuildBranchMetadataDeleteSQL(tableIDs []uint64) string {
+	if len(tableIDs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(160 + len(tableIDs)*20)
+	b.WriteString("delete from mo_catalog.mo_branch_metadata where table_id in (")
+	for i, tableID := range tableIDs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatUint(tableID, 10))
+	}
+	b.WriteString(") and table_deleted = true and (level != 'alter' and level not like 'alter:%')")
 	return b.String()
 }
 

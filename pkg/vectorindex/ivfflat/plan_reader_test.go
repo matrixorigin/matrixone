@@ -615,12 +615,12 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}))
 	require.ErrorContains(t, err, "runtime membership key set is empty")
 
-	_, hasBound, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
+	_, hasBound, _, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
 	require.NoError(t, err)
 	require.False(t, hasBound)
-	_, _, err = vectorDistanceBound(plan.BoundType_INCLUSIVE, nil)
+	_, _, _, err = vectorDistanceBound(plan.BoundType_INCLUSIVE, nil)
 	require.ErrorContains(t, err, "did not fold to a numeric literal")
-	_, _, err = vectorDistanceBound(plan.BoundType(99), nil)
+	_, _, _, err = vectorDistanceBound(plan.BoundType(99), nil)
 	require.ErrorContains(t, err, "invalid IVF distance bound type")
 
 	rangeExclusive := &plan.DistRange{

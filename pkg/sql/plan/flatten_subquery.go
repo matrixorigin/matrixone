@@ -296,6 +296,11 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 		}
 	}
 	var err error
+	// Flattening a scalar subquery can replace the Expr_Sub node with a
+	// projected ColRef.  Preserve the explicit prepared-numeric provenance on
+	// the replacement so execute-time ABS rebinding can still recover the
+	// parameter's exact protocol domain.
+	preparedNumeric := copyPreparedNumericMetadata(expr.GetPreparedNumeric())
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -311,11 +316,17 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx, nullResultRejected)
 	}
 	if err == nil && memoID < 0 && ctx != nil {
+		if preparedNumeric != nil {
+			expr.PreparedNumeric = copyPreparedNumericMetadata(preparedNumeric)
+		}
 		expr.AuxId = memoID
 		if ctx.flattenedVolatileExprs == nil {
 			ctx.flattenedVolatileExprs = make(map[int32]*plan.Expr)
 		}
 		ctx.flattenedVolatileExprs[memoID] = DeepCopyExpr(expr)
+	}
+	if err == nil && preparedNumeric != nil {
+		expr.PreparedNumeric = copyPreparedNumericMetadata(preparedNumeric)
 	}
 
 	return nodeID, expr, err
@@ -2115,7 +2126,7 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 		}},
 	}
 	rowNumberCol := GetColExpr(rowNumberFunc.Typ, windowTag, 0)
-	upperBound := makePlan2Int64ConstExprWithType(int64(offset + limit))
+	upperBound := MakePlan2Uint64ConstExprWithType(offset + limit)
 	rowFilter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=", []*plan.Expr{
 		DeepCopyExpr(rowNumberCol),
 		upperBound,
@@ -2124,7 +2135,7 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 		return 0, err
 	}
 	if offset > 0 {
-		lowerBound := makePlan2Int64ConstExprWithType(int64(offset))
+		lowerBound := MakePlan2Uint64ConstExprWithType(offset)
 		afterOffset, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), ">", []*plan.Expr{
 			DeepCopyExpr(rowNumberCol),
 			lowerBound,
