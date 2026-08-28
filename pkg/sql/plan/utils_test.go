@@ -740,6 +740,40 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 	}))
 }
 
+func TestPreparedDirectResultParamRefRetentionOwnedByCaller(t *testing.T) {
+	makePlan := func() *plan.Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*plan.Node{{
+				NodeType: plan.Node_VALUE_SCAN,
+				ProjectList: []*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_text)},
+					Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+				}},
+			}},
+		}}}
+	}
+	fill := func(retain bool) *plan.Expr {
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+			context.Background(), makePlan(), []any{ParamValue{
+				Value: "42", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+				IsBinaryProtocol: true, RetainParamRef: retain,
+			}})
+		require.NoError(t, err)
+		require.Equal(t, retain, specialized,
+			"only the caller-owned provenance mark may make a direct result cacheable")
+		return filled.GetQuery().Nodes[0].ProjectList[0]
+	}
+
+	withoutOwnerMark := fill(false)
+	require.Nil(t, withoutOwnerMark.GetLit().GetSrc(),
+		"generic replacement must not rediscover direct-result positions")
+	withOwnerMark := fill(true)
+	require.NotNil(t, withOwnerMark.GetLit().GetSrc())
+	require.Equal(t, int32(0), withOwnerMark.GetLit().GetSrc().GetP().Pos)
+}
+
 func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
 	for _, test := range []struct {
 		name string

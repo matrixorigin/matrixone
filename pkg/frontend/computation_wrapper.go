@@ -1214,7 +1214,6 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
-		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(newPreparePlan.Plan)
 		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
 		prepareStmt.hasLagLeadParams = len(plan2.PreparedLagLeadParamPositions(newPreparePlan.Plan)) > 0
 		prepareStmt.ColDefData = newColDefData
@@ -1454,7 +1453,8 @@ func initExecuteStmtParamWithResolverInSession(
 		(!binaryExecute || runtimeNumericPrefixCandidate || runtimeDirectResultCandidate ||
 			binaryLiteralPlan || prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
 		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
-			reqCtx, executionPlan, cwft.paramVals, binaryExecute, runtimeDirectResultCandidate)
+			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
+			needsRuntimeSpecialization, runtimeDirectResultCandidate)
 		if err == nil && cacheableRuntimeQuery && runtimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
 			if err == nil {
@@ -1702,11 +1702,15 @@ func preparedPlanHasStaticExactNumericPeer(preparePlan *plan2.Plan) bool {
 	return found
 }
 
+// specializePreparedExecutionPlan consumes both generation-cached static plan
+// capability and execute-specific direct-result admission. It must not derive
+// the static capability itself because this function is on the EXECUTE hot path.
 func specializePreparedExecutionPlan(
 	ctx context.Context,
 	executionPlan *plan2.Plan,
 	paramVals []any,
 	binaryExecute bool,
+	needsRuntimeSpecialization bool,
 	directResultSpecialization bool,
 ) (*plan2.Plan, bool, bool, error) {
 	if len(paramVals) == 0 || executionPlan == nil ||
@@ -1717,7 +1721,6 @@ func specializePreparedExecutionPlan(
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	needsNumericPrefix := plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
-	needsRuntimeSpecialization := plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
 	if !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
 		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization {
 		return executionPlan, false, false, nil
@@ -2251,9 +2254,13 @@ func buildPlanForCompileRetry(
 			ctx, retryPlan, preparedRetry.paramVals)
 		return runtimePlan, err
 	}
+	// A definition-change retry owns a newly built plan generation. Derive its
+	// static capability once here rather than reusing the preceding generation's
+	// decision or making the execute helper rescan every invocation.
+	needsRuntimeSpecialization := plan2.PreparedPlanNeedsRuntimeSpecialization(retryPlan)
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
 		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute,
-		preparedRetry.directResultSpecialization)
+		needsRuntimeSpecialization, preparedRetry.directResultSpecialization)
 	if err != nil {
 		return nil, err
 	}

@@ -1135,6 +1135,74 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.False(t, requiresV26)
 }
 
+func buildPreparedRuntimePlanForFrontendTest(t testing.TB, sql string) *plan.Plan {
+	t.Helper()
+	optimizer := plan2.NewMockOptimizer(false)
+	stmts, err := mysql.Parse(
+		optimizer.CurrentContext().GetContext(),
+		fmt.Sprintf("prepare issue27807_stmt from '%s'", sql),
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	defer stmts[0].Free()
+
+	prepared, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	require.NoError(t, err)
+	prepareControl := prepared.GetDcl().GetPrepare()
+	require.NotNil(t, prepareControl)
+	require.NotNil(t, prepareControl.GetPlan().GetQuery())
+	return prepareControl.GetPlan()
+}
+
+func preparedArithmeticDMLParamValues() []any {
+	return []any{
+		plan2.ParamValue{
+			Value: "1", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+			IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger,
+		},
+		plan2.ParamValue{
+			Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+			IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger,
+		},
+	}
+}
+
+func TestSpecializePreparedExecutionPlanDoesNotRecomputeStaticCapability(t *testing.T) {
+	preparedPlan := buildPreparedRuntimePlanForFrontendTest(t,
+		"update nation set n_regionkey = n_regionkey + ? where n_nationkey = ?")
+	require.True(t, plan2.PreparedPlanNeedsRuntimeSpecialization(preparedPlan),
+		"the arithmetic write is the TPCC-shaped positive control")
+
+	runtimePlan, specialized, applied, err := specializePreparedExecutionPlan(
+		context.Background(), preparedPlan, preparedArithmeticDMLParamValues(),
+		true, false, false)
+	require.NoError(t, err)
+	require.False(t, specialized)
+	require.False(t, applied)
+	require.Same(t, preparedPlan, runtimePlan,
+		"the execution helper must consume the generation-cached decision instead of rescanning the plan")
+}
+
+func BenchmarkSpecializePreparedTPCCArithmeticUpdate(b *testing.B) {
+	preparedPlan := buildPreparedRuntimePlanForFrontendTest(b,
+		"update nation set n_regionkey = n_regionkey + ? where n_nationkey = ?")
+	needsRuntimeSpecialization := plan2.PreparedPlanNeedsRuntimeSpecialization(preparedPlan)
+	require.True(b, needsRuntimeSpecialization)
+	paramVals := preparedArithmeticDMLParamValues()
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _, _, err := specializePreparedExecutionPlan(
+			ctx, preparedPlan, paramVals, true, needsRuntimeSpecialization, false)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 	ctx := context.Background()
 	floatType := types.T_float32.ToType()
@@ -1162,7 +1230,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, false)
+	}, false, false, false)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)

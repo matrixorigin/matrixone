@@ -1573,7 +1573,10 @@ func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing
 	require.False(t, specialized, "same-domain text execution should reuse the cached plan")
 
 	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
-		ParamValue{Value: "5", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{
+			Value: "5", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+			RetainParamRef: true,
+		},
 	})
 	require.NoError(t, err)
 	require.True(t, specialized, "direct numeric result metadata must be specialized")

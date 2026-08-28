@@ -4392,7 +4392,9 @@ type ParamValue struct {
 	MaterializedValue string
 	// RetainParamRef records that a specialized query plan will be cached and
 	// therefore must retain this parameter as runtime provenance even when the
-	// parameter itself is unrelated to numeric-prefix specialization.
+	// parameter itself is unrelated to numeric-prefix specialization. The
+	// frontend also sets it from generation-cached direct-result positions;
+	// generic parameter replacement must not rediscover those positions.
 	RetainParamRef bool
 	// EnableNumericPrefix records that the deployment-wide protocol version can
 	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
@@ -5331,7 +5333,6 @@ func replaceParamVals(
 	preserveDMLWriteArgs ...bool,
 ) (bool, error) {
 	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
-	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -5355,8 +5356,6 @@ func replaceParamVals(
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
 		}
-		_, directRuntimeResult := slices.BinarySearch(directResultPositions, int32(i))
-		directRuntimeResult = directRuntimeResult && hasRuntimeType
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -5374,7 +5373,7 @@ func replaceParamVals(
 				if err != nil {
 					return false, err
 				}
-				if numericPrefixSource || retainParamRef || directRuntimeResult {
+				if numericPrefixSource || retainParamRef {
 					attachPreparedRuntimeParamSource(params[i], &plan.Expr{
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
@@ -5390,7 +5389,7 @@ func replaceParamVals(
 				},
 			}
 		}
-		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
+		if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 			}
