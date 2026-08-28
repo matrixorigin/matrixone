@@ -23,8 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +52,8 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 	execSQLRequire(t, ctx, rootDB, fmt.Sprintf(
 		"create account `%s` admin_name 'admin' identified by '111'", tenantName,
 	))
-	defer execSQLMaybe(t, ctx, rootDB, fmt.Sprintf("drop account if exists `%s`", tenantName))
+	defer cleanupIssue26095SQL(t, rootDB,
+		fmt.Sprintf("drop account if exists `%s`", tenantName))
 	tenantID := queryIssue26095AccountID(t, ctx, rootDB, tenantName)
 	require.NotZero(t, tenantID)
 	tenantDB := openIssue26095DB(t, ctx, fmt.Sprintf(
@@ -58,85 +63,86 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 	require.Equal(t, tenantID, queryIssue26095CurrentAccountID(t, ctx, tenantDB))
 
 	accounts := []struct {
-		name       string
-		id         uint32
-		db         *sql.DB
-		roundCount int
+		name string
+		id   uint32
+		db   *sql.DB
 	}{
-		{name: "sys", id: 0, db: rootDB, roundCount: 3},
-		{name: "tenant", id: tenantID, db: tenantDB, roundCount: 1},
+		{name: "sys", id: 0, db: rootDB},
+		{name: "tenant", id: tenantID, db: tenantDB},
 	}
-	if testing.Short() {
-		// Each round covers the same three concurrent deletion contracts. Keep
-		// one system-account sample in CI and retain the full repetition for
-		// explicit stress runs.
-		accounts[0].roundCount = 1
-	}
-	base := strings.ToLower(testutils.GetDatabaseName(t))
+	// Leave room for the account and operation suffixes below.
+	base := fmt.Sprintf("db_issue26095_%d", time.Now().Nanosecond())
 	for _, account := range accounts {
 		t.Run(account.name, func(t *testing.T) {
-			for round := 0; round < account.roundCount; round++ {
-				t.Run(fmt.Sprintf("plain_drop_table_round_%d", round), func(t *testing.T) {
-					dbName := fmt.Sprintf("%s_%s_plain_%d", base, account.name, round)
-					defer execSQLMaybe(t, ctx, account.db, fmt.Sprintf("drop database if exists `%s`", dbName))
-					createSiblingBranches(t, ctx, account.db, dbName)
-					tableIDs := queryIssue26095TableIDs(t, ctx, rootDB, account.id, dbName, "b%")
-					requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
+			t.Run("plain_drop_table", func(t *testing.T) {
+				dbName := fmt.Sprintf("%s_%s_plain", base, account.name)
+				defer cleanupIssue26095SQL(t, account.db,
+					fmt.Sprintf("drop database if exists `%s`", dbName))
+				createSiblingBranches(t, ctx, account.db, dbName, cn, account.id)
+				tableIDs := queryIssue26095TableIDs(t, ctx, cn, account.id, dbName, "b%")
+				requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
 
-					statements := make([]string, 4)
-					for i := range statements {
-						statements[i] = fmt.Sprintf("drop table `%s`.`b%d`", dbName, i)
-					}
-					runConcurrentStatements(t, ctx, account.db, statements)
-					require.Equal(t, 0, countIssue26095Tables(t, ctx, account.db, dbName))
-					requireIssue26095Reclaimed(t, ctx, rootDB, tableIDs)
+				statements := make([]string, issue26095SiblingBranches)
+				for i := range statements {
+					statements[i] = fmt.Sprintf("drop table `%s`.`b%d`", dbName, i)
+				}
+				runConcurrentStatements(t, ctx, account.db, statements)
+				require.Equal(t, 0, countIssue26095Tables(t, ctx, account.db, dbName))
+				requireIssue26095Reclaimed(t, ctx, rootDB, tableIDs)
+			})
+
+			t.Run("branch_delete_table", func(t *testing.T) {
+				dbName := fmt.Sprintf("%s_%s_branch", base, account.name)
+				defer cleanupIssue26095SQL(t, account.db,
+					fmt.Sprintf("drop database if exists `%s`", dbName))
+				createSiblingBranches(t, ctx, account.db, dbName, cn, account.id)
+				tableIDs := queryIssue26095TableIDs(t, ctx, cn, account.id, dbName, "b%")
+				requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
+
+				statements := make([]string, issue26095SiblingBranches)
+				for i := range statements {
+					statements[i] = fmt.Sprintf("data branch delete table `%s`.`b%d`", dbName, i)
+				}
+				runConcurrentStatements(t, ctx, account.db, statements)
+				require.Equal(t, 0, countIssue26095Tables(t, ctx, account.db, dbName))
+				requireIssue26095Reclaimed(t, ctx, rootDB, tableIDs)
+			})
+
+			t.Run("branch_delete_database", func(t *testing.T) {
+				source := fmt.Sprintf("%s_%s_source", base, account.name)
+				left := fmt.Sprintf("%s_%s_left", base, account.name)
+				right := fmt.Sprintf("%s_%s_right", base, account.name)
+				defer cleanupIssue26095SQL(t, account.db,
+					fmt.Sprintf("drop database if exists `%s`", left),
+					fmt.Sprintf("drop database if exists `%s`", right),
+					fmt.Sprintf("drop database if exists `%s`", source))
+				execSQLRequire(t, ctx, account.db, fmt.Sprintf("create database `%s`", source))
+				execSQLRequire(t, ctx, account.db, fmt.Sprintf("create table `%s`.`t1` (id int primary key)", source))
+				execSQLRequire(t, ctx, account.db, fmt.Sprintf("create table `%s`.`t2` (id bigint primary key)", source))
+				execSQLRequire(t, ctx, account.db, fmt.Sprintf("data branch create database `%s` from `%s`", left, source))
+				execSQLRequire(t, ctx, account.db, fmt.Sprintf("data branch create database `%s` from `%s`", right, source))
+				waitIssue26095BranchTables(t, account.id, cn, left, "t1", "t2")
+				waitIssue26095BranchTables(t, account.id, cn, right, "t1", "t2")
+				tableIDs := append(
+					queryIssue26095TableIDs(t, ctx, cn, account.id, left, "t%"),
+					queryIssue26095TableIDs(t, ctx, cn, account.id, right, "t%")...,
+				)
+				requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
+
+				runConcurrentStatements(t, ctx, account.db, []string{
+					fmt.Sprintf("data branch delete database `%s`", left),
+					fmt.Sprintf("data branch delete database `%s`", right),
 				})
-
-				t.Run(fmt.Sprintf("branch_delete_table_round_%d", round), func(t *testing.T) {
-					dbName := fmt.Sprintf("%s_%s_branch_%d", base, account.name, round)
-					defer execSQLMaybe(t, ctx, account.db, fmt.Sprintf("drop database if exists `%s`", dbName))
-					createSiblingBranches(t, ctx, account.db, dbName)
-					tableIDs := queryIssue26095TableIDs(t, ctx, rootDB, account.id, dbName, "b%")
-					requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
-
-					statements := make([]string, 4)
-					for i := range statements {
-						statements[i] = fmt.Sprintf("data branch delete table `%s`.`b%d`", dbName, i)
-					}
-					runConcurrentStatements(t, ctx, account.db, statements)
-					require.Equal(t, 0, countIssue26095Tables(t, ctx, account.db, dbName))
-					requireIssue26095Reclaimed(t, ctx, rootDB, tableIDs)
-				})
-
-				t.Run(fmt.Sprintf("branch_delete_database_round_%d", round), func(t *testing.T) {
-					source := fmt.Sprintf("%s_%s_source_%d", base, account.name, round)
-					left := fmt.Sprintf("%s_%s_left_%d", base, account.name, round)
-					right := fmt.Sprintf("%s_%s_right_%d", base, account.name, round)
-					for _, name := range []string{left, right, source} {
-						defer execSQLMaybe(t, ctx, account.db, fmt.Sprintf("drop database if exists `%s`", name))
-					}
-					execSQLRequire(t, ctx, account.db, fmt.Sprintf("create database `%s`", source))
-					execSQLRequire(t, ctx, account.db, fmt.Sprintf("create table `%s`.`t1` (id int primary key)", source))
-					execSQLRequire(t, ctx, account.db, fmt.Sprintf("create table `%s`.`t2` (id bigint primary key)", source))
-					execSQLRequire(t, ctx, account.db, fmt.Sprintf("data branch create database `%s` from `%s`", left, source))
-					execSQLRequire(t, ctx, account.db, fmt.Sprintf("data branch create database `%s` from `%s`", right, source))
-					tableIDs := append(
-						queryIssue26095TableIDs(t, ctx, rootDB, account.id, left, "t%"),
-						queryIssue26095TableIDs(t, ctx, rootDB, account.id, right, "t%")...,
-					)
-					requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
-
-					runConcurrentStatements(t, ctx, account.db, []string{
-						fmt.Sprintf("data branch delete database `%s`", left),
-						fmt.Sprintf("data branch delete database `%s`", right),
-					})
-					require.Equal(t, 0, countIssue26095Databases(t, ctx, account.db, left, right))
-					requireIssue26095Reclaimed(t, ctx, rootDB, tableIDs)
-				})
-			}
+				require.Equal(t, 0, countIssue26095Databases(t, ctx, account.db, left, right))
+				requireIssue26095Reclaimed(t, ctx, rootDB, tableIDs)
+			})
 		})
 	}
 }
+
+// The reported table-level deadlock used four independent sessions. Keep that
+// concurrency degree and remove only repeated rounds of the same contract.
+const issue26095SiblingBranches = 4
 
 func openIssue26095DB(t *testing.T, ctx context.Context, dsn string) *sql.DB {
 	t.Helper()
@@ -167,42 +173,69 @@ func queryIssue26095CurrentAccountID(t *testing.T, ctx context.Context, db *sql.
 	return accountID
 }
 
-func createSiblingBranches(t *testing.T, ctx context.Context, db *sql.DB, dbName string) {
+func createSiblingBranches(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	dbName string,
+	cn embed.ServiceOperator,
+	accountID uint32,
+) {
 	t.Helper()
 	execSQLRequire(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	execSQLRequire(t, ctx, db, fmt.Sprintf("create table `%s`.`root_t` (id int primary key)", dbName))
-	for i := 0; i < 4; i++ {
+	for i := 0; i < issue26095SiblingBranches; i++ {
 		execSQLRequire(t, ctx, db, fmt.Sprintf(
 			"data branch create table `%s`.`b%d` from `%s`.`root_t`",
 			dbName, i, dbName,
 		))
+	}
+	waitIssue26095BranchTables(t, accountID, cn, dbName, "b0", "b1", "b2", "b3")
+}
+
+func waitIssue26095BranchTables(
+	t *testing.T,
+	accountID uint32,
+	cn embed.ServiceOperator,
+	dbName string,
+	tableNames ...string,
+) {
+	t.Helper()
+	testutils.WaitDatabaseCreatedWithAccount(t, int32(accountID), dbName, cn)
+	for _, tableName := range tableNames {
+		testutils.WaitTableCreatedWithAccount(t, int32(accountID), dbName, tableName, cn)
 	}
 }
 
 func queryIssue26095TableIDs(
 	t *testing.T,
 	ctx context.Context,
-	db *sql.DB,
+	cn embed.ServiceOperator,
 	accountID uint32,
 	dbName string,
 	tablePattern string,
 ) []uint64 {
 	t.Helper()
-	rows, err := db.QueryContext(ctx,
-		"select rel_id from mo_catalog.mo_tables "+
-			"where account_id = ? and reldatabase = ? and relname like ? order by rel_id",
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	query := fmt.Sprintf(
+		"select rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname like '%s' order by rel_id",
 		accountID, dbName, tablePattern,
 	)
+	result, err := exec.Exec(
+		defines.AttachAccountId(ctx, accountID),
+		query,
+		executor.Options{}.
+			WithAccountID(accountID).
+			WithWaitCommittedLogApplied(),
+	)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer result.Close()
 
 	var tableIDs []uint64
-	for rows.Next() {
-		var tableID uint64
-		require.NoError(t, rows.Scan(&tableID))
-		tableIDs = append(tableIDs, tableID)
-	}
-	require.NoError(t, rows.Err())
+	result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		tableIDs = append(tableIDs, executor.GetFixedRows[uint64](cols[0])...)
+		return true
+	})
 	require.NotEmpty(t, tableIDs)
 	return tableIDs
 }
@@ -252,6 +285,7 @@ func queryIssue26095Count(t *testing.T, ctx context.Context, db *sql.DB, query s
 
 func runConcurrentStatements(t *testing.T, ctx context.Context, db *sql.DB, statements []string) {
 	t.Helper()
+	require.GreaterOrEqual(t, len(statements), 2)
 	connections := make([]*sql.Conn, len(statements))
 	for i := range connections {
 		conn, err := db.Conn(ctx)
@@ -261,22 +295,38 @@ func runConcurrentStatements(t *testing.T, ctx context.Context, db *sql.DB, stat
 	}
 
 	start := make(chan struct{})
+	ready := make(chan struct{}, len(statements))
 	errs := make(chan error, len(statements))
 	var wg sync.WaitGroup
 	wg.Add(len(statements))
 	for i, statement := range statements {
 		go func(conn *sql.Conn, sqlText string) {
 			defer wg.Done()
+			ready <- struct{}{}
 			<-start
 			_, err := conn.ExecContext(ctx, sqlText)
 			errs <- err
 		}(connections[i], statement)
+	}
+	for range statements {
+		<-ready
 	}
 	close(start)
 	wg.Wait()
 	close(errs)
 	for err := range errs {
 		require.NoError(t, err)
+	}
+}
+
+func cleanupIssue26095SQL(t *testing.T, db *sql.DB, statements ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Errorf("issue 26095 cleanup failed for %q: %v", statement, err)
+		}
 	}
 }
 

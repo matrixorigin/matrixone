@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,6 +53,59 @@ type runSQLCoordinatorWithSQL interface {
 	CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error
 }
 
+func statementHasSQLCalcFoundRows(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok || selectStmt == nil {
+		return false
+	}
+	for selectStmt != nil {
+		switch body := selectStmt.Select.(type) {
+		case *tree.SelectClause:
+			return body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			selectStmt = body.Select
+		case *tree.UnionClause:
+			return selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func statementHasSQLCalcFoundRowsPagination(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok || selectStmt == nil {
+		return false
+	}
+	hasPagination := false
+	for selectStmt != nil {
+		hasPagination = hasPagination || selectStmt.Limit != nil
+		switch body := selectStmt.Select.(type) {
+		case *tree.SelectClause:
+			return hasPagination && body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			selectStmt = body.Select
+		case *tree.UnionClause:
+			return hasPagination && selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return statementHasSQLCalcFoundRows(stmt)
+	case *tree.ParenSelect:
+		return statementHasSQLCalcFoundRows(stmt.Select)
+	default:
+		return false
+	}
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -65,6 +119,7 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
 	// clear the last query context to avoid process reuse.
@@ -77,6 +132,9 @@ func (c *Compile) Compile(
 	// pre-pipeline lock can advance an RC transaction's mutable snapshot. A
 	// normal data retry reuses the same plan and therefore keeps its binding.
 	c.bindPlanSnapshotForCompile()
+	// Freeze the owner mapping before any Shuffle is constructed. A retry
+	// inherits this execution value even if the deployment gate changes.
+	c.bindStringShuffleHashAlgorithmForCompile()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -147,9 +205,16 @@ func (c *Compile) Compile(
 	// but before Sirius can export the logical plan. This preserves optimizer
 	// estimates while ensuring both native and offloaded execution see the same
 	// finite top-level LIMIT.
+	c.materializedSQLSelectLimitOwner = nil
+	defer func() {
+		c.materializedSQLSelectLimitOwner = nil
+	}()
 	materialization, materializeErr := c.materializeSQLSelectLimit(queryPlan)
 	if materializeErr != nil {
 		return materializeErr
+	}
+	if statementHasSQLCalcFoundRows(c.stmt) {
+		c.materializedSQLSelectLimitOwner = materialization.root
 	}
 	if materialization.query != nil {
 		defer materialization.restore()
@@ -654,6 +719,8 @@ func rewriteAutoModeToPre(stmt tree.Statement) bool {
 		return rewriteAutoModeToPre(s.Statement)
 	case *tree.Insert:
 		return rewriteAutoModeInSelect(s.Rows)
+	case *tree.MultiInsert:
+		return rewriteAutoModeInSelect(s.Source)
 	case *tree.Replace:
 		return rewriteAutoModeInSelect(s.Rows)
 	default:
@@ -689,6 +756,8 @@ func forceModePre(stmt tree.Statement) bool {
 		return forceModePre(s.Statement)
 	case *tree.Insert:
 		sel = s.Rows
+	case *tree.MultiInsert:
+		sel = s.Source
 	case *tree.Replace:
 		sel = s.Rows
 	default:
@@ -827,6 +896,12 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
 		return e
 	}
+	// A retry is a new statement execution generation. Do not let a generated
+	// value from the rolled-back attempt win the new attempt's result, and
+	// restore the session-visible LAST_INSERT_ID baseline until the retry
+	// generates a replacement value.
+	c.proc.SetStatementLastInsertID(0)
+	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
@@ -878,7 +953,7 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
-func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
+func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
@@ -886,7 +961,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
-	runC.reusePlanSnapshot = !defChanged
+	c.bindRetryPlanGeneration(runC, rebuildPlan)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	c.copyAllocationAccountLifecycleTo(runC)
@@ -902,23 +977,80 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 			runC.Release()
 		}
 	}()
-	if defChanged {
-		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc(topContext)
+	planForRetry := c.pn
+	if rebuildPlan {
+		planForRetry, e = c.buildPlanFunc(topContext)
 		if e != nil {
 			return nil, e
 		}
-		c.pn = pn
-		// Update c.anal.qry to point to the new plan's Query
-		// This ensures fillPlanNodeAnalyzeInfo uses the correct nodes
-		if qry, ok := pn.Plan.(*plan.Plan_Query); ok && c.anal != nil {
+		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
+			return nil, e
+		}
+	}
+	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
+		return nil, e
+	}
+	if rebuildPlan {
+		// Publish the rebuilt logical plan and its immutable binding together,
+		// after physical compilation succeeds. A subsequent ordinary retry must
+		// inherit this generation rather than the one that first hit the fence.
+		c.pn = planForRetry
+		c.inheritPlanSnapshot(runC)
+		// Update c.anal.qry to point to the new plan's Query. This ensures
+		// fillPlanNodeAnalyzeInfo uses the correct nodes.
+		if qry, ok := planForRetry.Plan.(*plan.Plan_Query); ok && c.anal != nil {
 			c.anal.qry = qry.Query
 		}
 	}
-	if e = runC.Compile(topContext, c.pn, c.fill); e != nil {
-		return nil, e
-	}
 	return runC, nil
+}
+
+func (c *Compile) validateRetryResultMetadata(
+	ctx context.Context,
+	rebuilt *plan.Plan,
+) error {
+	if selectStmt, ok := c.stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 &&
+		len(plan2.GetResultColumnsFromPlan(rebuilt)) != len(selectStmt.IntoVars) {
+		// SELECT INTO validates arity before the first attempt. Repeat that
+		// validation at the definition-retry boundary because an empty rebuilt
+		// result never reaches the row callback that also checks arity.
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	if !c.resultMetadataFrozen || sameResultMetadata(c.pn, rebuilt) {
+		return nil
+	}
+	// Returning the definition-change error from buildRetryCompile is terminal
+	// for this Run invocation (it is not fed back through canRetry). This avoids
+	// executing rows with a schema different from metadata already sent while
+	// preserving the client-visible request to retry/reprepare.
+	return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+}
+
+func sameResultMetadata(left, right *plan.Plan) bool {
+	leftColumns := plan2.GetResultColumnsFromPlan(left)
+	rightColumns := plan2.GetResultColumnsFromPlan(right)
+	if len(leftColumns) != len(rightColumns) {
+		return false
+	}
+	for i := range leftColumns {
+		if !proto.Equal(leftColumns[i], rightColumns[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) bindRetryPlanGeneration(runC *Compile, rebuildPlan bool) {
+	runC.inheritStringShuffleHashAlgorithm(c)
+	if !rebuildPlan {
+		runC.inheritPlanSnapshot(c)
+		return
+	}
+	// The retry's rebuilt plan and physical topology form a new generation.
+	// Frontend prepared state from the old generation is now ineligible even if
+	// rebuilding or running the retry later fails. This applies equally to a
+	// cached prepared Compile and to an uncached prepared logical plan.
+	c.planGenerationRebuilt = true
 }
 
 // InitPipelineContextToExecuteQuery initializes the context for each pipeline tree.

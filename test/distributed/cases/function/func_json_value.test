@@ -41,5 +41,7 @@ select json_value(json_object('k1', 'v1', 'k2', 42), '$.k2');
 select json_value(json_array(1, 2, 3), '$[0]');
 select json_value(json_array(1, 2, 3), '$[2]');
 
--- wildcard / non-simple path should error
+-- non-simple paths return NULL for zero/multiple matches and the scalar for one match
 select json_value('{"a":1,"b":2}', '$.*');
+select json_value('{"a":1,"b":2}', '$[*]');
+select json_value('{"a":1,"b":2}', '$**.a');

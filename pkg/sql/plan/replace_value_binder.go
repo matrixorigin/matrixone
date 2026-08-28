@@ -52,7 +52,7 @@ func (b *ReplaceValueBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _
 	colName := strings.ToLower(astExpr.ColName())
 	colIdx, ok := b.tableDef.Name2ColIndex[colName]
 	if !ok {
-		return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
+		return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
 	}
 	// A generated column has no accessible DEFAULT value; resolving it as
 	// DEFAULT(col) would either silently return NULL or fail with a confusing

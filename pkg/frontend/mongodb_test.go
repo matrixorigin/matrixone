@@ -356,6 +356,67 @@ func TestShowMongoDBConnectionsValidation(t *testing.T) {
 	}, nil), "are disabled")
 }
 
+func TestMongoDBStatementsHavePrivilegeDefinitions(t *testing.T) {
+	statements := []tree.Statement{
+		&tree.CreateMongoDBConnection{Name: "source"},
+		&tree.AlterMongoDBConnection{Name: "source"},
+		&tree.DropMongoDBConnection{Name: "source"},
+		&tree.ShowMongoDBConnections{},
+	}
+
+	for _, stmt := range statements {
+		t.Run(stmt.GetStatementType(), func(t *testing.T) {
+			require.NotPanics(t, func() {
+				priv := determinePrivilegeSetOfStatement(stmt)
+				require.NotNil(t, priv)
+				require.Equal(t, objectTypeNone, priv.objectType())
+				require.Equal(t, privilegeKindSpecial, priv.privilegeKind())
+				require.Equal(t, specialTagAdmin, priv.special)
+			})
+		})
+	}
+
+	showPriv := determinePrivilegeSetOfStatement(&tree.ShowMongoDBConnections{})
+	require.True(t, showPriv.canExecInRestricted)
+}
+
+func TestShowMongoDBConnectionsPrivilegeBoundary(t *testing.T) {
+	stmt := &tree.ShowMongoDBConnections{}
+	priv := determinePrivilegeSetOfStatement(stmt)
+	tests := []struct {
+		name    string
+		tenant  *TenantInfo
+		allowed bool
+	}{
+		{
+			name:    "system administrator",
+			tenant:  &TenantInfo{Tenant: sysAccountName, DefaultRole: moAdminRoleName},
+			allowed: true,
+		},
+		{
+			name:    "account administrator",
+			tenant:  &TenantInfo{Tenant: "tenant", DefaultRole: accountAdminRoleName},
+			allowed: true,
+		},
+		{
+			name:    "ordinary role",
+			tenant:  &TenantInfo{Tenant: "tenant", DefaultRole: "readonly"},
+			allowed: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses := &Session{}
+			ses.SetPrivilege(priv)
+			ses.SetTenantInfo(test.tenant)
+			allowed, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(t.Context(), ses, stmt)
+			require.NoError(t, err)
+			require.Equal(t, test.allowed, allowed)
+		})
+	}
+}
+
 func TestMongoDBTableMappingRequiresConnectionUsageFallback(t *testing.T) {
 	stmt := &tree.CreateTable{MongoDBParam: &tree.MongoDBTableParam{}}
 	require.False(t, canCreateMongoDBTableMapping(stmt, &TenantInfo{Tenant: "tenant", DefaultRole: "readonly"}))

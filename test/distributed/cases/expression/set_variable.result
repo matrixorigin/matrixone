@@ -1,36 +1,36 @@
 SET @val = CAST(0 AS UNSIGNED);
 select @val;
-@val
+➤ @val[-5,64,0]  𝄀
 0
 SET @val = CAST(0 AS bool);
 select @val;
-@val
-false
+➤ @val[-7,1,0]  𝄀
+0
 SET @val = CAST(0 AS varchar);
 select @val;
-@val
+➤ @val[12,65535,0]  𝄀
 0
 SET @val = CAST(0 AS char);
 select @val;
-@val
+➤ @val[12,65535,0]  𝄀
 0
 SET @val = CAST("2022-10-10" AS date);
 select @val;
-@val
+➤ @val[91,64,0]  𝄀
 2022-10-10
 SET @val = CAST("2022-10-10" AS datetime);
 select @val;
-@val
+➤ @val[93,64,0]  𝄀
 2022-10-10 00:00:00
 SET @val = CAST("2022-10-10" AS timestamp);
 select @val;
-@val
+➤ @val[93,64,0]  𝄀
 2022-10-10 00:00:00
 SET @val = CAST('0' AS text);
 select @val;
-@val
+➤ @val[12,65535,0]  𝄀
 0
 SET @val = CAST('0' AS blob);
 select @val;
-@val
+➤ @val[-3,65535,0]  𝄀
 0

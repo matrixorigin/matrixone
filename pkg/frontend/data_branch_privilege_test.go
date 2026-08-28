@@ -79,6 +79,7 @@ func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 		dbName           = "db1"
 	)
 	expectedWhere := buildTableInfoListWhereClause(dbName, "", accountID) +
+		fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel)) +
 		fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemViewRel))
 	expected := fmt.Sprintf(
 		"select rel_id, relname from %s.%s where %s",

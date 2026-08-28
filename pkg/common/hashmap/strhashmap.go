@@ -75,11 +75,7 @@ func NewStrHashMapWithAllocations(
 
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
-		mp:            m,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+		mp: m,
 	}
 }
 
@@ -111,15 +107,16 @@ func (itr *strHashmapIterator) prepareHashKeys(
 	if err := validateIteratorVectors(vecs, start, count); err != nil {
 		return err
 	}
+	itr.ensureCapacity(count)
 	for i := 0; i < count; i++ {
-		itr.keyLengths[i] = 0
+		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
 	add := func(row int, size int) error {
-		if size < 0 || itr.keyLengths[row] > maxInt-size {
+		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
 		}
-		itr.keyLengths[row] += size
+		itr.zValues[row] += int64(size)
 		return nil
 	}
 	for _, vec := range vecs {
@@ -234,15 +231,17 @@ func (itr *strHashmapIterator) prepareHashKeys(
 
 	total := 0
 	for i := 0; i < count; i++ {
-		if itr.keyLengths[i] < 16 {
-			itr.keyLengths[i] = 16
+		if itr.zValues[i] < 16 {
+			itr.zValues[i] = 16
 		}
-		if total > maxInt-itr.keyLengths[i] {
+		keyLength := int(itr.zValues[i])
+		if total > maxInt-keyLength {
 			return mpool.ErrAllocationAccountInvalid
 		}
-		total += itr.keyLengths[i]
+		total += keyLength
 	}
 	if cap(itr.keyBuffer) < total {
+		itr.clearKeys()
 		if allocation := itr.mp.iteratorAllocation; allocation != nil {
 			var next []byte
 			var err error
@@ -266,15 +265,19 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				return err
 			}
 			itr.keyBuffer = next
+			itr.keyBufferMP = itr.mp.mp
+			itr.keyBufferAllocation = allocation
 		} else {
 			itr.keyBuffer = make([]byte, total)
+			itr.keyBufferMP = nil
+			itr.keyBufferAllocation = nil
 		}
 	}
 	itr.keyBuffer = itr.keyBuffer[:total]
 	storage := itr.keyBuffer
 	offset := 0
 	for i := 0; i < count; i++ {
-		end := offset + itr.keyLengths[i]
+		end := offset + int(itr.zValues[i])
 		itr.keys[i] = storage[offset:offset:end]
 		offset = end
 	}

@@ -374,7 +374,13 @@ func clonePartitionTargetContexts(contexts []*MultiUpdateCtx) []*MultiUpdateCtx 
 	cloned := make([]*MultiUpdateCtx, len(contexts))
 	for i, ctx := range contexts {
 		cloned[i] = ctx.clone()
+		// selectPartitionTargetRows already accounted for selector semantics.
+		// Partition-local writers must not count physical inserts again when
+		// semantic selectors were present; ordinary single-target updates still
+		// derive affected rows from their physical inserts.
 		cloned[i].DedupByTargetRowID = false
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0
+		cloned[i].AffectedRowsCols = nil
 	}
 	return cloned
 }
@@ -386,7 +392,11 @@ func clonePartitionPhaseContexts(
 	cloned := make([]*MultiUpdateCtx, len(contexts))
 	for i, ctx := range contexts {
 		cloned[i] = ctx.clone()
+		// Partition-key moves share the selection result across delete and
+		// insert phases, so neither phase may count semantic selectors again.
 		cloned[i].DedupByTargetRowID = false
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0
+		cloned[i].AffectedRowsCols = nil
 		if deletePhase {
 			cloned[i].InsertCols = nil
 		} else {
@@ -606,15 +616,18 @@ func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
 
 func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 	v := &MultiUpdateCtx{
-		InsertCols:         ctx.InsertCols,
-		DeleteCols:         ctx.DeleteCols,
-		PartitionCols:      ctx.PartitionCols,
-		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-		InsertPkColIdx:     ctx.InsertPkColIdx,
-		IgnoreAffectedRows: ctx.IgnoreAffectedRows,
-		DedupByTargetRowID: ctx.DedupByTargetRowID,
-		TargetUpdateCtxIdx: ctx.TargetUpdateCtxIdx,
-		TargetTableID:      ctx.TargetTableID,
+		InsertCols:                   ctx.InsertCols,
+		DeleteCols:                   ctx.DeleteCols,
+		PartitionCols:                ctx.PartitionCols,
+		SkipInsertOnNullPk:           ctx.SkipInsertOnNullPk,
+		InsertPkColIdx:               ctx.InsertPkColIdx,
+		IgnoreAffectedRows:           ctx.IgnoreAffectedRows,
+		DedupByTargetRowID:           ctx.DedupByTargetRowID,
+		TargetUpdateCtxIdx:           ctx.TargetUpdateCtxIdx,
+		ChangedRowsCol:               ctx.ChangedRowsCol,
+		AffectedRowsCols:             append([]int(nil), ctx.AffectedRowsCols...),
+		SuppressPhysicalAffectedRows: ctx.SuppressPhysicalAffectedRows,
+		TargetTableID:                ctx.TargetTableID,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

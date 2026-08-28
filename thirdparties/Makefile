@@ -43,6 +43,10 @@ CROARING_DIR=CRoaring-4.7.0
 CROARING_TAR=$(CROARING_DIR).tar.gz
 CROARING_TMP=_croaring_build
 CROARING_CFLAGS=-O3 -fPIC -std=c11
+JEMALLOC_DIR=_jemalloc_build
+JEMALLOC_TAR=jemalloc-5.3.1.tar.bz2
+JEMALLOC_SHA256=3826bc80232f22ed5c4662f3034f799ca316e819103bdc7bb99018a421706f92
+JEMALLOC_CONFIGURE_FLAGS=--disable-shared --enable-static --enable-stats --with-jemalloc-prefix=mo_je_ --with-private-namespace=mo_je_
 
 # Prebuilt onnxruntime shared library (CPU-only) from the MatrixOne thirdparty
 # mirror. GPU (linux_x64_gpu_cuda12) is intentionally not fetched here.
@@ -56,6 +60,10 @@ CROARING_CFLAGS=-O3 -fPIC -std=c11
 ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# The MatrixOne CI builder image ships these pinned artifacts. Keep this a
+# versioned directory so a base-image update cannot accidentally satisfy a
+# different ONNX Runtime version. A local build simply falls back to DOWNLOAD.
+ONNX_PREBUILT_DIR ?= /opt/matrixone/onnxruntime/$(ONNX_VERSION)
 ONNX_SUPPORTED=
 ifeq ($(UNAME_S)_$(UNAME_M),darwin_arm64)
   ONNX_SUPPORTED=1
@@ -84,13 +92,13 @@ else ifeq ($(UNAME_S)_$(UNAME_M),linux_arm64)
   ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
 endif
 
-all: init usearch xxhash croaring onnxruntime
+all: init usearch xxhash croaring jemalloc onnxruntime
 
 init:
 	mkdir -p install
 	mkdir -p install/include install/lib
 
-usearch: stringzilla fp16 simsimd install/include/usearch.h
+usearch: install/include/usearch.h
 
 stringzilla: install/include/stringzilla/stringzilla.h
 
@@ -102,28 +110,28 @@ simsimd: install/include/simsimd/simsimd.h
 
 xxhash: install/include/xxhash.h
 
-install/include/xxhash.h:
+install/include/xxhash.h: | init
 	mkdir -p $(XXHASH_TMP)
-	tar zxvf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
+	tar zxf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
 	cp $(XXHASH_TMP)/xxhash.h install/include
 	rm -rf $(XXHASH_TMP)
 
-install/include/fp16.h:
+install/include/fp16.h: | init
 	rm -rf $(FP16_DIR)
 	mkdir -p $(FP16_DIR)
-	tar zxvf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
+	tar zxf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
 	cp -r $(FP16_DIR)/include/* install/include
 
-install/include/simsimd/simsimd.h:
+install/include/simsimd/simsimd.h: | init
 	rm -rf $(SIMSIMD_DIR)
 	mkdir -p $(SIMSIMD_DIR)
-	tar zxvf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
+	tar zxf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
 	cp -r $(SIMSIMD_DIR)/include/* install/include
 
-install/include/stringzilla/stringzilla.h:
+install/include/stringzilla/stringzilla.h: | init
 	rm -rf $(STRINGZILLA_DIR)
 	mkdir -p $(STRINGZILLA_DIR)
-	tar zxvf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
+	tar zxf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
 USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include -DCMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -143,10 +151,10 @@ ifeq ($(MO_CL_SIMSIMD),1)
   endif
 endif
 
-install/include/usearch.h:
+install/include/usearch.h: install/include/fp16.h install/include/simsimd/simsimd.h install/include/stringzilla/stringzilla.h | init
 	rm -rf $(USEARCH_DIR)
 	mkdir -p $(USEARCH_DIR)
-	tar zxvf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
+	tar zxf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
 	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
@@ -170,9 +178,29 @@ endif
 
 croaring: install/lib/libroaring.a
 
+jemalloc: install/lib/libjemalloc.a
+
+# jemalloc is statically linked into mo-service and all public symbols are
+# prefixed with mo_je_. This keeps Memory Cache's allocator independent from
+# libc malloc and the C/C++ dependencies already linked into MatrixOne.
+install/lib/libjemalloc.a: | init
+	@actual="$$(shasum -a 256 $(JEMALLOC_TAR) | awk '{print $$1}')"; \
+	if [ "$$actual" != "$(JEMALLOC_SHA256)" ]; then \
+		echo "jemalloc tarball checksum mismatch: $$actual" >&2; \
+		exit 1; \
+	fi
+	rm -rf $(JEMALLOC_DIR)
+	mkdir -p $(JEMALLOC_DIR)
+	tar xjf $(JEMALLOC_TAR) -C $(JEMALLOC_DIR) --strip-components=1
+	(cd $(JEMALLOC_DIR) && CC="$(CC)" CFLAGS="$(CFLAGS) -fPIC" ./configure $(JEMALLOC_CONFIGURE_FLAGS))
+	$(MAKE) -C $(JEMALLOC_DIR) build_lib
+	cp $(JEMALLOC_DIR)/lib/libjemalloc.a install/lib/libjemalloc.a
+	cp $(JEMALLOC_DIR)/include/jemalloc/jemalloc.h install/include/jemalloc.h
+	rm -rf $(JEMALLOC_DIR)
+
 # Build CRoaring as a static lib from its single-file amalgamation, and install
 # the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
-install/lib/libroaring.a:
+install/lib/libroaring.a: | init
 	rm -rf $(CROARING_TMP)
 	mkdir -p $(CROARING_TMP)
 	tar zxf $(CROARING_TAR) -C $(CROARING_TMP) --strip-components=1
@@ -189,7 +217,14 @@ install/lib/libroaring.a:
 #   macOS arm64  -> onnxruntime_arm64.dylib
 ifeq ($(ONNX_SUPPORTED),1)
 onnxruntime: | init
-	$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"
+	@if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
+		echo "using prebuilt ONNX Runtime $(ONNX_VERSION) from $(ONNX_PREBUILT_DIR)"; \
+		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "install/lib/$(ONNX_LIB)"; \
+		actual_sha256="$$(sha256sum "install/lib/$(ONNX_LIB)" | awk '{print $$1}')"; \
+		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "install/lib/$(ONNX_LIB)"; exit 1; }; \
+	else \
+		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"; \
+	fi
 else
 onnxruntime:
 	$(error unsupported ONNX Runtime platform: $(UNAME_S)/$(UNAME_M))
@@ -199,6 +234,6 @@ test-download:
 	$(PWD)/download_test
 
 clean:
-	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
+	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP) $(JEMALLOC_DIR)
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring onnxruntime test-download
+.PHONY: usearch stringzilla fp16 simsimd init croaring jemalloc onnxruntime test-download

@@ -73,19 +73,23 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 		return rejected, nil
 	}
 	def := rel.GetTableDef(ctx)
-	if def == nil || def.TblId != read.TableID || def.IsTemporary || (def.TableType != "" && def.TableType != "r") {
+	if def == nil || def.DbId != read.DatabaseID || def.TblId != read.TableID || def.IsTemporary || (def.TableType != "" && def.TableType != "r") {
 		rejected.NonTAE = true
 		return rejected, nil
 	}
-	currentSchema, err := substrait.CanonicalSchema(def)
+	if def.Version != read.SchemaVersion {
+		return rejected, moerr.NewInternalErrorNoCtxf("table %d physical schema changed after planning", read.TableID)
+	}
+	plannedDef, ok := projectPlannedColumns(def, read.Columns)
+	if !ok {
+		return rejected, moerr.NewInternalErrorNoCtxf("table %d physical schema changed after planning", read.TableID)
+	}
+	currentSchema, err := substrait.CanonicalSchema(plannedDef)
 	if err != nil {
 		return rejected, err
 	}
 	if !bytes.Equal(currentSchema, read.Schema) {
 		return rejected, moerr.NewInternalErrorNoCtxf("table %d schema changed after planning", read.TableID)
-	}
-	if def.Version != read.SchemaVersion || !sameColumnMapping(def, read.Columns) {
-		return rejected, moerr.NewInternalErrorNoCtxf("table %d physical schema changed after planning", read.TableID)
 	}
 	var ts types.TS
 	if err := ts.Unmarshal(snapshot); err != nil {
@@ -206,7 +210,7 @@ func newManifestBuilder(def *planpb.TableDef, accountID, databaseID uint64, data
 	if def == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("nil table definition")
 	}
-	if accountID == 0 || databaseID == 0 || def.TblId == 0 || maximum <= 0 {
+	if databaseID == 0 || def.TblId == 0 || maximum <= 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("invalid manifest identity or size bound")
 	}
 	columns := make([]manifestColumn, 0, len(def.Cols))
@@ -289,24 +293,39 @@ func decimalGrowth(value uint64) int {
 	return digits - 1
 }
 
-func sameColumnMapping(def *planpb.TableDef, planned []substrait.ColumnMapping) bool {
-	if def == nil {
-		return false
+func projectPlannedColumns(def *planpb.TableDef, planned []substrait.ColumnMapping) (*planpb.TableDef, bool) {
+	if def == nil || len(planned) == 0 {
+		return nil, false
 	}
-	visible := 0
+	byID := make(map[uint64]*planpb.ColDef, len(def.Cols))
 	for _, column := range def.Cols {
 		if column == nil {
-			return false
+			return nil, false
 		}
 		if column.Hidden {
 			continue
 		}
-		if visible >= len(planned) || planned[visible].ColumnID != column.ColId || planned[visible].SequenceNumber != column.Seqnum {
-			return false
+		if _, exists := byID[column.ColId]; exists {
+			return nil, false
 		}
-		visible++
+		byID[column.ColId] = column
 	}
-	return visible == len(planned)
+	columns := make([]*planpb.ColDef, 0, len(planned))
+	seen := make(map[uint64]struct{}, len(planned))
+	for _, mapping := range planned {
+		column := byID[mapping.ColumnID]
+		if column == nil || column.Seqnum != mapping.SequenceNumber {
+			return nil, false
+		}
+		if _, duplicate := seen[mapping.ColumnID]; duplicate {
+			return nil, false
+		}
+		seen[mapping.ColumnID] = struct{}{}
+		columns = append(columns, column)
+	}
+	projected := *def
+	projected.Cols = columns
+	return &projected, true
 }
 
 func buildManifest(def *planpb.TableDef, accountID, databaseID uint64, dataDir string, stats []objectio.ObjectStats) ([]byte, []string, error) {

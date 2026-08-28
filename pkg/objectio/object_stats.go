@@ -48,6 +48,7 @@ const (
 	ObjectFlag_Appendable = 1 << iota
 	ObjectFlag_Sorted
 	ObjectFlag_CNCreated
+	ObjectFlag_CNDeleted
 )
 
 var ZeroObjectStats ObjectStats
@@ -168,6 +169,18 @@ func (des *ObjectStats) GetSorted() bool {
 func (des *ObjectStats) GetCNCreated() bool {
 	return des[reservedOffset]&ObjectFlag_CNCreated != 0
 }
+
+func (des *ObjectStats) GetCNDeleted() bool {
+	return des[reservedOffset]&ObjectFlag_CNDeleted != 0
+}
+
+func SetObjectStatsCNDeleted(des *ObjectStats, cnDeleted bool) {
+	if cnDeleted {
+		des[reservedOffset] |= ObjectFlag_CNDeleted
+	} else {
+		des[reservedOffset] &^= ObjectFlag_CNDeleted
+	}
+}
 func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])
 }
@@ -266,6 +279,11 @@ func (des *ObjectStats) FlagString() string {
 		flags += "0"
 	}
 	if des.GetCNCreated() {
+		flags += "1"
+	} else {
+		flags += "0"
+	}
+	if des.GetCNDeleted() {
 		flags += "1"
 	} else {
 		flags += "0"

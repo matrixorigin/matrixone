@@ -201,7 +201,7 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
 }
 
-func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
+func TestMongoDBExternalScanCatalogStateAndPrepare(t *testing.T) {
 	newMock := func(createSQL string) *MockOptimizer {
 		mock := NewMockOptimizer(false)
 		mock.ctxt.dbs["telemetry_source"] = true
@@ -233,13 +233,56 @@ func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 	})
 
 	t.Run("prepared scan", func(t *testing.T) {
-		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(mapping))
-		stmts, err := parsers.Parse(mock.ctxt.GetContext(), dialect.MYSQL,
-			"select value from telemetry_source.events_external", 1)
+		preparedMapping := mapping
+		preparedMapping.Columns = append([]sqlmongodb.ColumnMapping(nil), mapping.Columns...)
+		preparedMapping.Columns[0].Conversion = sqlmongodb.ConversionTryNull
+		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(preparedMapping))
+		prepareControl, err := buildPrepare(tree.NewPrepareString("mongo_ps",
+			"select count(*) from telemetry_source.events_external where value > ?"), &mock.ctxt)
 		require.NoError(t, err)
-		_, err = BuildPlan(&mock.ctxt, stmts[0], true)
-		require.ErrorContains(t, err, "prepared MongoDB external scans")
+		prepare := prepareControl.GetDcl().GetPrepare()
+		require.NotNil(t, prepare)
+		require.Len(t, prepare.ParamTypes, 1)
+		prepared := prepare.Plan
+
+		preparedScan := findMongoDBScanNode(prepared)
+		require.NotNil(t, preparedScan)
+		require.Len(t, preparedScan.FilterList, 1)
+		require.Nil(t, preparedScan.ExternScan.MongodbScan.PushedPredicate,
+			"an unbound parameter must not be pushed to MongoDB")
+		require.Equal(t, "mo-residual:f", preparedScan.ExternScan.MongodbScan.ResidualFilterDigest)
+
+		runtimeFilters := make([]string, 0, 2)
+		for _, value := range []int64{10, 20} {
+			runtimePlan, err := FillValuesOfParamsInPlan(t.Context(), prepared, []any{value})
+			require.NoError(t, err)
+			runtimeScan := findMongoDBScanNode(runtimePlan)
+			require.NotNil(t, runtimeScan)
+			require.Len(t, runtimeScan.FilterList, 1)
+			runtimeFilters = append(runtimeFilters, runtimeScan.FilterList[0].String())
+		}
+		require.NotEqual(t, runtimeFilters[0], runtimeFilters[1],
+			"each execution must bind its own parameter value")
+
+		// The CAST around a prepared value remains conservative for MongoDB
+		// pushdown. The original filter is always retained as an MO residual, and
+		// repeated execution leaves the cached plan parameterized for the next run.
+		pushed, _ := sqlmongodb.PushdownPlanFilters(
+			t.Context(), preparedScan.FilterList, preparedScan.ExternScan.MongodbScan.Columns)
+		require.Nil(t, pushed)
 	})
+}
+
+func findMongoDBScanNode(logicPlan *Plan) *plan.Node {
+	if logicPlan == nil || logicPlan.GetQuery() == nil {
+		return nil
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.GetExternScan().GetMongodbScan() != nil {
+			return node
+		}
+	}
+	return nil
 }
 
 func TestCanPruneSampleExprs(t *testing.T) {
@@ -490,6 +533,114 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
 	require.True(t, exprContainsFunc(projectExpr, "concat"))
 	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {
+	storedCaseSensitive := int64(0)
+	for _, test := range []struct {
+		name   string
+		target string
+		views  map[string]ViewData
+	}{
+		{
+			name:   "direct view",
+			target: "v_direct",
+			views: map[string]ViewData{
+				"v_direct": {
+					Stmt:                "create view v_direct as select Nation.n_name from Nation",
+					DefaultDatabase:     "db",
+					LowerCaseTableNames: &storedCaseSensitive,
+				},
+			},
+		},
+		{
+			name:   "nested view",
+			target: "v_outer",
+			views: map[string]ViewData{
+				"v_inner": {
+					Stmt:                "create view v_inner as select Nation.n_name from Nation",
+					DefaultDatabase:     "db",
+					LowerCaseTableNames: &storedCaseSensitive,
+				},
+				"v_outer": {
+					Stmt:            "create view v_outer as select v_inner.n_name from v_inner",
+					DefaultDatabase: "db",
+				},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, nodeID := buildViewsForLowerCaseTest(t, test.target, test.views)
+			require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
+			require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
+		})
+	}
+}
+
+func buildViewsForLowerCaseTest(
+	t *testing.T,
+	target string,
+	views map[string]ViewData,
+) (*QueryBuilder, int32) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	type relation struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+	store := map[string]relation{
+		"db.Nation": {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: "Nation"},
+			table: &plan.TableDef{
+				DbName: "db", Name: "Nation", TableType: catalog.SystemOrdinaryRel,
+				Cols: []*ColDef{{Name: "n_name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 60, Table: "Nation"}}},
+			},
+		},
+	}
+	for name, data := range views {
+		viewJSON, err := json.Marshal(data)
+		require.NoError(t, err)
+		store["db."+name] = relation{
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: name},
+			table: &plan.TableDef{
+				DbName: "db", Name: name, TableType: catalog.SystemViewRel,
+				Cols:    []*ColDef{{Name: "n_name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 60, Table: name}}},
+				ViewSql: &plan.ViewDef{View: string(viewJSON)},
+			},
+		}
+	}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			relation := store[schemaName+"."+tableName]
+			return relation.obj, relation.table, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	tableName := &tree.TableName{}
+	tableName.SchemaName = "db"
+	tableName.ObjectName = tree.Identifier(target)
+	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
+	require.NoError(t, err)
+	return builder, nodeID
 }
 
 func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
@@ -3444,6 +3595,350 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
+	tests := []struct {
+		name         string
+		fillMode     tree.FillMode
+		fillTypes    []types.Type
+		fillNames    []string
+		wantErr      bool
+		errorType    string
+		wantFillType plan.Node_FillType
+	}{
+		{
+			name:         "int64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_int64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "float64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_float64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "decimal256",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.New(types.T_decimal256, 65, 0)},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:      "varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:      "bool",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_bool.ToType()},
+			wantErr:   true,
+			errorType: "BOOL",
+		},
+		{
+			name:      "datetime",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_datetime.ToType()},
+			wantErr:   true,
+			errorType: "DATETIME",
+		},
+		{
+			name:      "json",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_json.ToType()},
+			wantErr:   true,
+			errorType: "JSON",
+		},
+		{
+			name:      "any",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_any.ToType()},
+			wantErr:   true,
+			errorType: "ANY",
+		},
+		{
+			name:      "mixed numeric and varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:         "boundary carriers are excluded",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_datetime.ToType(), types.T_datetime.ToType(), types.T_int64.ToType()},
+			fillNames:    []string{TimeWindowStart, TimeWindowEnd, "value"},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "varchar prev remains supported",
+			fillMode:     tree.FillPrev,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_PREV,
+		},
+		{
+			name:         "varchar next remains supported",
+			fillMode:     tree.FillNext,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_NEXT,
+		},
+		{
+			name:         "varchar value remains supported",
+			fillMode:     tree.FillValue,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_VALUE,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+			bindCtx.times = make([]*plan.Expr, len(tt.fillTypes))
+			for i, fillType := range tt.fillTypes {
+				name := "value"
+				if i < len(tt.fillNames) {
+					name = tt.fillNames[i]
+				}
+				bindCtx.times[i] = &plan.Expr{
+					Typ: makePlan2Type(&fillType),
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(i),
+						Name:   name,
+					}},
+				}
+			}
+
+			fillVal := tree.Expr(nil)
+			if tt.fillMode == tree.FillValue {
+				fillVal = tree.NewNumVal(int64(0), "0", false, tree.P_int64)
+			}
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+					Unit: "second",
+				},
+				Fill: &tree.Fill{Mode: tt.fillMode, Val: fillVal},
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			fillType, _, _, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+				require.Contains(t, err.Error(), "FILL(LINEAR) does not support aggregate result type")
+				require.Contains(t, err.Error(), tt.errorType)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantFillType, fillType)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillRejectsOrderByOnlyAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_order", Obj: 42}
+	mock.ctxt.tables["tw_order"] = &plan.TableDef{
+		Name: "tw_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}},
+		},
+	}
+
+	_, err := runOneStmt(mock, t, `select series_id, _wstart, max(series_id) as numeric_fill
+from tw_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(value), series_id, _wstart`)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Equal(t,
+		"not supported: FILL(LINEAR) does not support aggregate result type VARCHAR",
+		err.Error())
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsOrderByOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order"] = &plan.TableDef{
+		Name: "tw_numeric_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillDeduplicatesSelectedOrderByAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order_selected"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order_selected", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order_selected"] = &plan.TableDef{
+		Name: "tw_numeric_order_selected",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order_selected
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(shown), max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_having", Obj: 42}
+	mock.ctxt.tables["tw_numeric_having"] = &plan.TableDef{
+		Name: "tw_numeric_having",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_having
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+	var havingFilter *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) == 1 {
+			havingFilter = node
+			break
+		}
+	}
+	require.NotNil(t, havingFilter)
+	require.True(t, havingFilter.FilterIsBarrier)
+	require.Len(t, havingFilter.Children, 1)
+	require.Equal(t, fillNode.NodeId, havingFilter.Children[0])
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyAggregateWithoutSelection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_having_only"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_having_only", Obj: 42}
+	mock.ctxt.tables["tw_having_only"] = &plan.TableDef{
+		Name: "tw_having_only",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart
+from tw_having_only
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 1)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -4811,7 +5306,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 	boundHavingList, err := builder.bindHaving(bindCtx, selectClause.Having, NewHavingBinder(builder, bindCtx))
 	require.NoError(t, err)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), nodeID)
 	require.Equal(t, 3, len(builder.qry.Nodes))
@@ -4861,7 +5356,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindCtx.windows, 1)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
 

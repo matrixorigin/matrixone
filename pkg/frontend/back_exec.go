@@ -407,11 +407,15 @@ func doComQueryInBack(
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
+		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
+	if process.HasSystemCTELimits(execCtx.reqCtx) {
+		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
+	}
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
@@ -668,6 +672,9 @@ func executeStmtInBack(backSes *backSession,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.completeCompileExecution(c, err)
+			}
 			// Preserve the historical BackgroundExec projection for engine-backed
 			// execution. This is return-only data; the authoritative statement
 			// resource root is sealed independently and must not ingest it again.
@@ -880,6 +887,8 @@ func executeStmtInSameSession(
 	execCtx *ExecCtx,
 	stmt tree.Statement,
 	preparedExpression bool,
+	preparedParamVals []any,
+	preparedBinaryExecute bool,
 ) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
@@ -933,10 +942,12 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                 stmt,
-		isInternalInput:      true,
-		isSetExpression:      true,
-		isPreparedExpression: preparedExpression,
+		stmt:                  stmt,
+		isInternalInput:       true,
+		isSetExpression:       true,
+		isPreparedExpression:  preparedExpression,
+		preparedParamVals:     preparedParamVals,
+		preparedBinaryExecute: preparedBinaryExecute,
 	})
 }
 
@@ -1029,6 +1040,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	cancelTxnCreateWithRequest      bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1579,4 +1591,20 @@ func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 		return false, false
 	}
 	return backSes.upstream.GetSqlModeNoAutoValueOnZero()
+}
+
+// AppendWarningDiagnostic forwards expression warnings produced by a
+// background/stored-procedure process to the client session that owns it.
+func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningDiagnostic(code, msg)
+}
+
+func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningBatch(total, codes, messages)
 }

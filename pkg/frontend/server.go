@@ -64,8 +64,10 @@ var initConnectionID uint32 = 1000
 var ConnIDAllocKey = "____server_conn_id"
 
 const (
-	clientDisconnectProbeInterval = 5 * time.Second
-	clientDisconnectProbeGrace    = 30 * time.Second
+	// The request handler owns the connection read loop while a statement is
+	// executing, so probe every active request from the first monitor tick.
+	clientDisconnectProbeInterval = time.Second
+	clientDisconnectProbeGrace    = 0
 )
 
 // MOServer MatrixOne Server
@@ -797,5 +799,9 @@ func (mo *MOServer) applyInteractiveWaitTimeout(ctx context.Context, ses *Sessio
 	}
 	if err = ses.SetSessionSysVar(ctx, "wait_timeout", val); err != nil {
 		ses.Errorf(ctx, "set wait_timeout from interactive_timeout failed: %v", err)
+		return
 	}
+	// The interactive handshake deterministically reproduces this assignment
+	// on the target, so it must not make legacy replay fail closed.
+	ses.markMigrationSystemVarReplayable("wait_timeout", true)
 }

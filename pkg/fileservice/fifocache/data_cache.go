@@ -100,9 +100,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 var _ fscache.DataCache = new(DataCache)
 
 func (d *DataCache) Available() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	ret := d.fifo.capacity() - d.fifo.used1 - d.fifo.used2
+	ret := d.fifo.capacity() - d.fifo.Used()
 	if ret < 0 {
 		ret = 0
 	}
@@ -182,24 +180,22 @@ func (d *DataCache) CurrentSeq(key query.CacheKey) (uint64, bool) {
 	return d.fifo.CurrentSeq(key)
 }
 
-func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
+func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) (bool, error) {
 	logicalSize := value.Size()
 	size := value.Capacity()
 	if logicalSize < 0 || size < logicalSize {
 		panic("cache data reports an invalid logical size or backing capacity")
 	}
-	_, rejected := d.fifo.Set(ctx, key, dataCacheValue{
+	inserted, rejected := d.fifo.Set(ctx, key, dataCacheValue{
 		data:        value,
 		logicalSize: logicalSize,
 	}, size)
 	if rejected {
-		return fscache.ErrCacheAdmissionRejected
+		return false, fscache.ErrCacheAdmissionRejected
 	}
-	return nil
+	return inserted, nil
 }
 
 func (d *DataCache) Used() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	return d.fifo.used1 + d.fifo.used2
+	return d.fifo.Used()
 }

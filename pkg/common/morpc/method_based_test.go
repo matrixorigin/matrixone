@@ -166,6 +166,7 @@ func TestRPCSend(t *testing.T) {
 }
 
 func TestRequestCanBeFilter(t *testing.T) {
+	filtered := make(chan struct{}, 1)
 	runRPCTests(
 		t,
 		func(
@@ -184,16 +185,26 @@ func TestRequestCanBeFilter(t *testing.T) {
 				1,
 				fn,
 				false)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*10)
 			defer cancel()
 
 			f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: 1})
 			require.NoError(t, err)
 			defer f.Close()
+			select {
+			case <-filtered:
+				cancel()
+			case <-ctx.Done():
+				require.FailNow(t, "request was not filtered", ctx.Err())
+			}
 			_, err = f.Get()
 			require.Error(t, err)
 		},
 		WithHandleMessageFilter[*testMethodBasedMessage, *testMethodBasedMessage](func(tmbm *testMethodBasedMessage) bool {
+			select {
+			case filtered <- struct{}{}:
+			default:
+			}
 			return false
 		}),
 	)

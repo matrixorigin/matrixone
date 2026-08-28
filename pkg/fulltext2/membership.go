@@ -94,6 +94,56 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 type prefilter struct {
 	docFilter docfilter.MembershipFilter
 	include   []compiledIncludePred
+	// scoreRange is the pushed-down `MATCH(...) <op> const` range. Unlike the two above it is
+	// NOT a Membership: a document's score does not exist until it has been scored, so it
+	// cannot skip a doc before scoring. It is applied where a scored doc becomes a result --
+	// streamSink.push* on the streaming path, runTopK's slice on the top-k path -- which is
+	// still worth doing: the rows never cross the TVF into the join above.
+	scoreRange *ScoreRange
+}
+
+// ScoreRange is a relevance interval pushed into the search: the engine drops a scored
+// document outside it instead of handing it to the plan's Filter above the join.
+//
+// Both ends are optional and carry their own inclusivity so `>`, `>=`, `<`, `<=` and any
+// AND-combination of them map onto one object. The planner rounds each bound OUTWARD in
+// float32 space before pushing it (see fulltext2ScoreRangeFromFilters): the SQL comparison
+// runs in double while scores are float32, and the engine must never drop a row the SQL
+// predicate would keep. Callers can therefore rely on Min <= the SQL literal and Max >= it.
+// The plan keeps its own Filter, so a slightly wide range costs nothing.
+type ScoreRange struct {
+	Min          float32 `json:"min,omitempty"`
+	Max          float32 `json:"max,omitempty"`
+	HasMin       bool    `json:"has_min,omitempty"`
+	HasMax       bool    `json:"has_max,omitempty"`
+	MinInclusive bool    `json:"min_inc,omitempty"`
+	MaxInclusive bool    `json:"max_inc,omitempty"`
+}
+
+// contains reports whether score falls in the range. A nil range accepts everything.
+func (r *ScoreRange) contains(score float32) bool {
+	if r == nil {
+		return true
+	}
+	if r.HasMin {
+		if r.MinInclusive {
+			if score < r.Min {
+				return false
+			}
+		} else if score <= r.Min {
+			return false
+		}
+	}
+	if r.HasMax {
+		if r.MaxInclusive {
+			if score > r.Max {
+				return false
+			}
+		} else if score >= r.Max {
+			return false
+		}
+	}
+	return true
 }
 
 // mkAllow returns a per-segment WHERE-prefilter Membership over seg's ords (the docfilter

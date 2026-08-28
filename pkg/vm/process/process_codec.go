@@ -71,6 +71,14 @@ func (proc *Process) BuildProcessInfo(
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
+		procInfo.PlanGenerationReused = proc.PlanGenerationReused()
+		stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+			uint32(proc.StringShuffleHashAlgorithm()),
+		)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.StringShuffleHashAlgorithm = uint32(stringShuffleHashAlgorithm)
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -224,6 +232,12 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+		value.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return nil, err
+	}
 	service := ""
 	if c.lockService != nil {
 		service = c.lockService.GetConfig().ServiceID
@@ -274,8 +288,10 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	proc.SetStringShuffleHashAlgorithm(stringShuffleHashAlgorithm)
 	if value.PlanSnapshotTs != nil {
 		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+		proc.SetPlanGenerationReused(value.PlanGenerationReused)
 	}
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
@@ -402,6 +418,18 @@ func resolveSqlMode(proc *Process) string {
 		if v, err := f("sql_mode", true, false); err == nil {
 			if s, ok := v.(string); ok {
 				if s == "" {
+					// Internal/background processes can retain a resolver from the
+					// executor that supplied the process. An empty value from that
+					// resolver is a compiled default, not an instruction to discard
+					// the session snapshot captured for remote execution. Keep an
+					// explicit empty sentinel as non-strict, but preserve any other
+					// snapshot so a second CN forward cannot silently lose strict
+					// assignment-cast behavior.
+					if proc.Base != nil && !proc.Base.IsFrontend {
+						if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" {
+							return snapshot
+						}
+					}
 					return EmptySqlModeSentinel // explicitly non-strict
 				}
 				return s
@@ -411,6 +439,9 @@ func resolveSqlMode(proc *Process) string {
 	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
 	// captured from the upstream CN so it survives a second forward
 	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
+	if proc.Base == nil {
+		return ""
+	}
 	return proc.Base.SessionInfo.SqlMode
 }
 

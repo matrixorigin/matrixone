@@ -217,8 +217,17 @@ func (hb *HashmapBuilder) Prepare(
 
 	if hb.IsDedup {
 		hb.delColIdx = delColIdx
-		hb.dedupDeleteMarkerColIdx = dedupDeleteMarkerColIdx
-		hb.dedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList
+		// The marker index is optional, while zero is both a valid column index
+		// and the Go zero value for operators built outside the compiler. A real
+		// column-zero marker carries its keep list; zero without one means absent.
+		if dedupDeleteMarkerColIdx > 0 ||
+			(dedupDeleteMarkerColIdx == 0 && len(dedupDeleteKeepColIdxList) > 0) {
+			hb.dedupDeleteMarkerColIdx = dedupDeleteMarkerColIdx
+			hb.dedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList
+		} else {
+			hb.dedupDeleteMarkerColIdx = -1
+			hb.dedupDeleteKeepColIdxList = nil
+		}
 	} else {
 		hb.delColIdx = -1
 		hb.dedupDeleteMarkerColIdx = -1
@@ -419,9 +428,33 @@ func (hb *HashmapBuilder) hasNonReflexiveFloatKey() bool {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
+	return hb.buildHashmapWithRuntimeFilterLimit(
+		hashOnPK, needAllocateSels, needUniqueVec, -1, proc)
+}
+
+// buildHashmapWithRuntimeFilterLimit bounds optional exact-runtime-filter key
+// retention independently of the mandatory JoinMap. A negative limit keeps
+// the legacy unbounded collection contract for callers that do not have a
+// RuntimeFilterSpec (including membership-filter consumers, which apply their
+// own policy). Exceeding the bound fails only the optional filter open; the
+// complete JoinMap continues to build.
+func (hb *HashmapBuilder) buildHashmapWithRuntimeFilterLimit(
+	hashOnPK bool,
+	needAllocateSels bool,
+	needUniqueVec bool,
+	runtimeFilterLimit int32,
+	proc *process.Process,
+) (retErr error) {
 	hb.runtimeFilterCollectionFallback = false
 	hb.retainedBatchRecoverySafe = true
-	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+	return hb.buildHashmap(
+		hashOnPK,
+		needAllocateSels,
+		needUniqueVec,
+		runtimeFilterLimit,
+		hb.DedupBuildKeepLast,
+		proc,
+	)
 }
 
 func (hb *HashmapBuilder) runtimeFilterFallbackState() (bool, bool) {
@@ -433,6 +466,21 @@ func (hb *HashmapBuilder) collectUniqueKeySlot(slot int) bool {
 	return len(hb.uniqueKeySlots) == 0 ||
 		(slot >= 0 && slot < len(hb.uniqueKeySlots) &&
 			hb.uniqueKeySlots[slot])
+}
+
+func (hb *HashmapBuilder) optionalRuntimeFilterKeysExceedLimit(limit int32) bool {
+	if limit < 0 {
+		return false
+	}
+	if hb.GetGroupCount() > uint64(limit) {
+		return true
+	}
+	for i, keys := range hb.UniqueJoinKeys {
+		if hb.collectUniqueKeySlot(i) && keys != nil && keys.Length() > int(limit) {
+			return true
+		}
+	}
+	return false
 }
 
 // RetainedBatchRecoverySafe reports whether the batches retained by this
@@ -449,6 +497,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	hashOnPK bool,
 	needAllocateSels bool,
 	needUniqueVec bool,
+	runtimeFilterLimit int32,
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
@@ -811,6 +860,15 @@ buildUnits:
 			}
 		}
 
+		if needUniqueVec &&
+			hb.optionalRuntimeFilterKeysExceedLimit(runtimeFilterLimit) {
+			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
+			}
+			needUniqueVec = false
+			continue buildUnits
+		}
+
 		if needUniqueVec {
 			if len(hb.UniqueJoinKeys) == 0 {
 				if hb.uniqueKeyAllocation == nil {
@@ -895,6 +953,13 @@ buildUnits:
 					}
 				}
 			}
+			if needUniqueVec &&
+				hb.optionalRuntimeFilterKeysExceedLimit(runtimeFilterLimit) {
+				if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+					return err
+				}
+				needUniqueVec = false
+			}
 		}
 	}
 
@@ -925,7 +990,14 @@ buildUnits:
 		if err != nil {
 			return err
 		}
-		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
+		if err := hb.buildHashmap(
+			hashOnPK,
+			needAllocateSels,
+			needUniqueVec,
+			runtimeFilterLimit,
+			false,
+			proc,
+		); err != nil {
 			return err
 		}
 		hb.InputBatchRowCount = totalRowCount
@@ -955,7 +1027,14 @@ buildUnits:
 		if err != nil {
 			return err
 		}
-		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
+		return hb.buildHashmap(
+			hashOnPK,
+			needAllocateSels,
+			needUniqueVec,
+			runtimeFilterLimit,
+			false,
+			proc,
+		)
 	}
 
 	if hb.delColIdx != -1 {
@@ -1035,7 +1114,13 @@ buildUnits:
 				}
 				if hb.OnDuplicateAction == plan.Node_IGNORE {
 					row := uint64(i + k)
-					if hb.IgnoreRows.Contains(row) || buildGroups[k] != v {
+					releasedByPriorCandidate := false
+					if hb.dedupDeleteMarkerColIdx >= 0 {
+						markerVec := hb.Batches.Buf[vecIdx1].Vecs[hb.dedupDeleteMarkerColIdx]
+						releasedByPriorCandidate = !markerVec.IsNull(uint64(vecIdx2+k)) &&
+							vector.GetFixedAtNoTypeCheck[bool](markerVec, vecIdx2+k)
+					}
+					if hb.IgnoreRows.Contains(row) || (!releasedByPriorCandidate && buildGroups[k] != v) {
 						continue
 					}
 				}

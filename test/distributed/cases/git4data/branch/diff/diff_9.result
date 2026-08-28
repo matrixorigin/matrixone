@@ -305,4 +305,423 @@ t2  ¦  INSERT  ¦  4  ¦  4  𝄀
 t1  ¦  INSERT  ¦  4  ¦  5
 drop table t1;
 drop table t2;
+create table c4_root(id int primary key, v int, note varchar(20));
+insert into c4_root select result, result, concat('v-', result) from generate_series(1, 2000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c4_root select result, result, concat('v-', result) from generate_series(2001, 4000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c4_root select result, result, concat('v-', result) from generate_series(4001, 6000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c4_root select result, result, concat('v-', result) from generate_series(6001, 8000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c4_root select result, result, concat('v-', result) from generate_series(8001, 10000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c4_root select result, result, concat('v-', result) from generate_series(10001, 12000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch create table c4_leaf from c4_root;
+update c4_root set v = 100001, note = 'root-update' where id = 1;
+delete from c4_root where id = 2;
+update c4_leaf set v = 300003, note = 'leaf-update' where id = 3;
+insert into c4_leaf values (13001, 13001, 'leaf-insert');
+data branch diff c4_leaf against c4_root;
+➤ diff c4_leaf against c4_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,20,0]  𝄀
+c4_root  ¦  UPDATE  ¦  1  ¦  100001  ¦  root-update  𝄀
+c4_root  ¦  DELETE  ¦  2  ¦  2  ¦  v-2  𝄀
+c4_leaf  ¦  UPDATE  ¦  3  ¦  300003  ¦  leaf-update  𝄀
+c4_leaf  ¦  INSERT  ¦  13001  ¦  13001  ¦  leaf-insert
+data branch diff c4_leaf against c4_root output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+select count(*) as root_rows_before_gc from c4_root;
+➤ root_rows_before_gc[-5,64,0]  𝄀
+11999
+select count(*) as leaf_rows_before_gc from c4_leaf;
+➤ leaf_rows_before_gc[-5,64,0]  𝄀
+12001
+select count(*) as branch_protect_before_gc
+from mo_catalog.mo_snapshots
+where kind = 'branch' and database_name = 'test_gc_diff' and table_name = 'c4_root';
+➤ branch_protect_before_gc[-5,64,0]  𝄀
+1
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_leaf');
+➤ mo_ctl(dn, flush, test_gc_diff.c4_leaf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c4_leaf:overlap');
+➤ mo_ctl(cn, mergeobjects, t:test_gc_diff.c4_leaf:overlap)[12,65535,0]  𝄀
+
+nmerged success
+01a024f7-bc90-7bf6-b9ac-86a98dfacbc9_00000, rows 12001, blks 2, osize 393.2KiB, csize 171.4KiB
+
+
+data branch diff c4_leaf against c4_root;
+➤ diff c4_leaf against c4_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,20,0]  𝄀
+c4_root  ¦  UPDATE  ¦  1  ¦  100001  ¦  root-update  𝄀
+c4_root  ¦  DELETE  ¦  2  ¦  2  ¦  v-2  𝄀
+c4_leaf  ¦  UPDATE  ¦  3  ¦  300003  ¦  leaf-update  𝄀
+c4_leaf  ¦  INSERT  ¦  13001  ¦  13001  ¦  leaf-insert
+select mo_ctl('dn', 'globalcheckpoint', '');
+➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
+{
+  "method": "GlobalCheckpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+➤ mo_ctl(dn, diskcleaner, force_gc)[12,65535,0]  𝄀
+{
+  "method": "DiskCleaner",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch diff c4_leaf against c4_root;
+➤ diff c4_leaf against c4_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,20,0]  𝄀
+c4_root  ¦  UPDATE  ¦  1  ¦  100001  ¦  root-update  𝄀
+c4_root  ¦  DELETE  ¦  2  ¦  2  ¦  v-2  𝄀
+c4_leaf  ¦  UPDATE  ¦  3  ¦  300003  ¦  leaf-update  𝄀
+c4_leaf  ¦  INSERT  ¦  13001  ¦  13001  ¦  leaf-insert
+select mo_ctl('dn', 'globalcheckpoint', '');
+➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
+{
+  "method": "GlobalCheckpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+➤ mo_ctl(dn, diskcleaner, force_gc)[12,65535,0]  𝄀
+{
+  "method": "DiskCleaner",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch diff c4_leaf against c4_root;
+➤ diff c4_leaf against c4_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,20,0]  𝄀
+c4_root  ¦  UPDATE  ¦  1  ¦  100001  ¦  root-update  𝄀
+c4_root  ¦  DELETE  ¦  2  ¦  2  ¦  v-2  𝄀
+c4_leaf  ¦  UPDATE  ¦  3  ¦  300003  ¦  leaf-update  𝄀
+c4_leaf  ¦  INSERT  ¦  13001  ¦  13001  ¦  leaf-insert
+select mo_ctl('dn', 'globalcheckpoint', '');
+➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
+{
+  "method": "GlobalCheckpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+➤ mo_ctl(dn, diskcleaner, force_gc)[12,65535,0]  𝄀
+{
+  "method": "DiskCleaner",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch diff c4_leaf against c4_root;
+➤ diff c4_leaf against c4_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,20,0]  𝄀
+c4_root  ¦  UPDATE  ¦  1  ¦  100001  ¦  root-update  𝄀
+c4_root  ¦  DELETE  ¦  2  ¦  2  ¦  v-2  𝄀
+c4_leaf  ¦  UPDATE  ¦  3  ¦  300003  ¦  leaf-update  𝄀
+c4_leaf  ¦  INSERT  ¦  13001  ¦  13001  ¦  leaf-insert
+data branch diff c4_leaf against c4_root output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+select count(*) as root_rows_after_gc from c4_root;
+➤ root_rows_after_gc[-5,64,0]  𝄀
+11999
+select count(*) as leaf_rows_after_gc from c4_leaf;
+➤ leaf_rows_after_gc[-5,64,0]  𝄀
+12001
+select count(*) as branch_protect_after_gc
+from mo_catalog.mo_snapshots
+where kind = 'branch' and database_name = 'test_gc_diff' and table_name = 'c4_root';
+➤ branch_protect_after_gc[-5,64,0]  𝄀
+1
+drop table c4_leaf;
+drop table c4_root;
+create table c5_root(id int primary key, v int);
+insert into c5_root select result, result from generate_series(1, 2000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c5_root select result, result from generate_series(2001, 4000) g;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch create table c5_leaf from c5_root;
+alter table c5_leaf add column branch_only int default 7 after id;
+update c5_root set v = 100001 where id = 1;
+delete from c5_root where id = 2;
+update c5_leaf set v = 300003, branch_only = 33 where id = 3;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_leaf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+update c5_leaf set branch_only = 44 where id = 4;
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_leaf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into c5_leaf(id, branch_only, v) values (5001, 51, 5001);
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_leaf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch diff c5_leaf against c5_root;
+➤ diff c5_leaf against c5_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  branch_only[4,32,0]  ¦  v[4,32,0]  𝄀
+c5_root  ¦  UPDATE  ¦  1  ¦  null  ¦  100001  𝄀
+c5_root  ¦  DELETE  ¦  2  ¦  null  ¦  2  𝄀
+c5_leaf  ¦  UPDATE  ¦  3  ¦  33  ¦  300003  𝄀
+c5_leaf  ¦  INSERT  ¦  5001  ¦  51  ¦  5001
+data branch diff c5_leaf against c5_root output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_root)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+➤ mo_ctl(dn, flush, test_gc_diff.c5_leaf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c5_leaf:overlap');
+➤ mo_ctl(cn, mergeobjects, t:test_gc_diff.c5_leaf:overlap)[12,65535,0]  𝄀
+
+mmerged success
+01a02744-557e-7061-83d6-5eb796b1a1eb_00000, rows 4000, blks 1, osize 54.19KiB, csize 37.69KiB
+
+
+select mo_ctl('dn', 'globalcheckpoint', '');
+➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
+{
+  "method": "GlobalCheckpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+➤ mo_ctl(dn, diskcleaner, force_gc)[12,65535,0]  𝄀
+{
+  "method": "DiskCleaner",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'globalcheckpoint', '');
+➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
+{
+  "method": "GlobalCheckpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+➤ mo_ctl(dn, diskcleaner, force_gc)[12,65535,0]  𝄀
+{
+  "method": "DiskCleaner",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'globalcheckpoint', '');
+➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
+{
+  "method": "GlobalCheckpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+➤ mo_ctl(dn, diskcleaner, force_gc)[12,65535,0]  𝄀
+{
+  "method": "DiskCleaner",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch diff c5_leaf against c5_root;
+➤ diff c5_leaf against c5_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  branch_only[4,32,0]  ¦  v[4,32,0]  𝄀
+c5_root  ¦  UPDATE  ¦  1  ¦  null  ¦  100001  𝄀
+c5_root  ¦  DELETE  ¦  2  ¦  null  ¦  2  𝄀
+c5_leaf  ¦  UPDATE  ¦  3  ¦  33  ¦  300003  𝄀
+c5_leaf  ¦  INSERT  ¦  5001  ¦  51  ¦  5001
+data branch diff c5_leaf against c5_root output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+select count(*) as c5_root_rows_after_gc from c5_root;
+➤ c5_root_rows_after_gc[-5,64,0]  𝄀
+3999
+select count(*) as c5_leaf_rows_after_gc from c5_leaf;
+➤ c5_leaf_rows_after_gc[-5,64,0]  𝄀
+4001
+drop table c5_leaf;
+drop table c5_root;
 drop database test_gc_diff;

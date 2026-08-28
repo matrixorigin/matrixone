@@ -45,17 +45,6 @@ func TestVectorSearchAttrPos(t *testing.T) {
 	require.Equal(t, -1, vectorSearchAttrPos(nil, "pkid"))
 }
 
-// TestRequestedIvfIncludeColumns_PositionIndependent: INCLUDE columns were discovered at
-// attrs[2:], which silently drops them once pkid or score is pruned ahead of them.
-func TestRequestedIvfIncludeColumns_PositionIndependent(t *testing.T) {
-	p := catalog.SystemSI_IVFFLAT_IncludeColPrefix
-	require.Equal(t, []string{"a", "b"}, requestedIvfIncludeColumns([]string{"pkid", "score", p + "a", p + "b"}))
-	require.Equal(t, []string{"a"}, requestedIvfIncludeColumns([]string{"score", p + "a"}))
-	require.Equal(t, []string{"a"}, requestedIvfIncludeColumns([]string{p + "a"}))
-	require.Nil(t, requestedIvfIncludeColumns([]string{"pkid", "score"}))
-	require.Nil(t, requestedIvfIncludeColumns(nil))
-}
-
 // TestResolveVectorSearchSlots: the per-layout resolution the emit loops rely on. Positions
 // are looked up ONCE here rather than per emitted row -- with an 8192-row batch, and one
 // extra lookup per INCLUDE column per row for IVF-FLAT, the name scan was repeated tens of

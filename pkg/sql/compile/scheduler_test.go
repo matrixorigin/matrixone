@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -245,15 +244,7 @@ func TestScheduleQueryWorkersKeepsIvfCurrentParticipantAtOrdinalZero(t *testing.
 	c.ncpu = 6
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_FUNCTION_SCAN,
-			TableDef: &plan.TableDef{
-				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-			},
-			IndexReaderParam: &plan.IndexReaderParam{
-				OrigFuncName: "l2_distance",
-			},
-		}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
 	}}}
 	c.e = &schedulerTestEngine{
 		nodes: engine.Nodes{
@@ -275,13 +266,7 @@ func TestScheduleQueryWorkersDoesNotUseClusterWideMixedCommitProxyForIvf(t *test
 	c.ncpu = 6
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_FUNCTION_SCAN,
-			TableDef: &plan.TableDef{
-				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-			},
-			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
-		}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
 	}}}
 	c.e = &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},
@@ -308,13 +293,7 @@ func TestScheduleQueryWorkersKeepsCurrentCNFirstForIvfEntriesScan(t *testing.T) 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.proc.Base.QueryClient = fakeQueryClient{}
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_FUNCTION_SCAN,
-			TableDef: &plan.TableDef{
-				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-			},
-			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
-		}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
 	}}}
 	c.e = &schedulerTestEngine{nodes: engine.Nodes{
 		{Id: "remote", Addr: "a-remote:6001", Mcpu: 4},

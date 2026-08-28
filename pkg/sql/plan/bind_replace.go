@@ -39,6 +39,21 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	if err != nil {
 		return 0, err
 	}
+	targetDB := string(stmt.TargetDatabaseName)
+	targetTable := string(stmt.TargetTableName)
+	if targetTable == "" {
+		target := stmt.Table.(*tree.TableName)
+		targetDB = string(target.SchemaName)
+		targetTable = string(target.ObjectName)
+	}
+	if targetDB == "" {
+		targetDB = builder.compCtx.DefaultDatabase()
+	}
+	if err = validateInsertColumnQualifiers(
+		builder.GetContext(), stmt.ColumnNames, targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
+	); err != nil {
+		return 0, err
+	}
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForReplaceStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; REPLACE maintains them with
@@ -247,7 +262,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldScanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{oldScanTag},
 			ScanSnapshot: bindCtx.snapshot,
@@ -1108,7 +1123,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 	}
 
 	if len(replaceOldParentPos) > 0 {
@@ -1135,7 +1150,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			builder.preserveLockProjection = make(map[int32]struct{})
 		}
 		builder.preserveLockProjection[lockedSourceID] = struct{}{}
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 
 		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
 		builder.preserveSinkProjection[sharedSinkID] = struct{}{}

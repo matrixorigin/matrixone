@@ -702,6 +702,8 @@ func validateDataBranchDeleteDatabaseTarget(
 
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {
 	whereClause := buildTableInfoListWhereClause(dbName, "", accId)
+	// Sequences and views do not have data-branch metadata receipts.
+	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemViewRel))
 	return fmt.Sprintf(
 		"select rel_id, relname from %s.%s where %s",

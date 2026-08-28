@@ -28,6 +28,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type childProcessSession struct{}
+
+func (*childProcessSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*childProcessSession) AddTempTable(string, string, string)        {}
+func (*childProcessSession) RemoveTempTable(string, string)             {}
+func (*childProcessSession) RemoveTempTableByRealName(string)           {}
+func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+
+func TestChildProcessesInheritSession(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	parent.Session = &childProcessSession{}
+
+	child := parent.NewNoContextChildProc(0)
+	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	contextChild := parent.NewContextChildProc(0)
+
+	require.Same(t, parent.Session, child.Session)
+	require.Same(t, parent.Session, channelChild.Session)
+	require.Same(t, parent.Session, contextChild.Session)
+}
+
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
 	parentCtx := context.Background()
@@ -112,6 +133,85 @@ func TestAffectedRows(t *testing.T) {
 
 	proc.SetAffectedRows(0)
 	assert.Equal(t, int64(0), proc.GetAffectedRows())
+}
+
+func TestStatementLastInsertIDSemantics(t *testing.T) {
+	// Partially initialized processes are used by a few frontend unit tests;
+	// the setters must remain no-ops until a BaseProcess is attached.
+	nilBase := &Process{}
+	nilBase.SetLastInsertID(7)
+	nilBase.SetStatementLastInsertID(7)
+	require.Zero(t, nilBase.SetStatementLastInsertIDIfEarlier(0))
+	require.Equal(t, uint64(7), nilBase.SetStatementLastInsertIDIfEarlier(7))
+
+	last := uint64(3)
+	statement := uint64(0)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+	}}
+	proc.SetLastInsertID(11)
+	proc.SetStatementLastInsertID(5)
+	require.Equal(t, uint64(11), proc.GetLastInsertID())
+	require.Equal(t, uint64(5), proc.GetStatementLastInsertID())
+	empty := &Process{Base: &BaseProcess{}}
+	empty.SetLastInsertID(9)
+	empty.SetStatementLastInsertID(9)
+	require.Zero(t, empty.GetLastInsertID())
+	require.Zero(t, empty.GetStatementLastInsertID())
+	require.Equal(t, uint64(6), empty.SetStatementLastInsertIDIfEarlier(6))
+
+	// The statement coordinator keeps the smallest generated key seen by
+	// parallel materialization scopes and mirrors it to the session value.
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(4))
+	require.Equal(t, uint64(4), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(9))
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(2))
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(2), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(0))
+
+	// A process with only the legacy session field still publishes the first
+	// generated key without requiring the new statement field.
+	legacy := uint64(0)
+	legacyProc := &Process{Base: &BaseProcess{LastInsertID: &legacy}}
+	require.Equal(t, uint64(8), legacyProc.SetStatementLastInsertIDIfEarlier(8))
+	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
+}
+
+func TestFoundRows(t *testing.T) {
+	var nilProc *Process
+	nilProc.BeginFoundRowsStatement(true)
+	nilProc.AddResultRows(1)
+	nilProc.SetFoundRows(1)
+	assert.Zero(t, nilProc.GetFoundRows())
+	assert.Zero(t, nilProc.GetResultRows())
+	assert.False(t, nilProc.FoundRowsRecorded())
+	assert.False(t, nilProc.IsSqlCalcFoundRows())
+
+	proc := &Process{Base: &BaseProcess{}}
+	proc.SetFoundRows(7)
+	proc.BeginFoundRowsStatement(true)
+	assert.Equal(t, uint64(7), proc.GetFoundRows())
+	assert.True(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+	proc.AddResultRows(1)
+	proc.AddResultRows(2)
+	assert.Equal(t, uint64(3), proc.GetResultRows())
+
+	proc.SetFoundRows(3)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.True(t, proc.FoundRowsRecorded())
+
+	// Statement setup preserves the previous value while clearing only the
+	// statement-local publication flags.
+	proc.BeginFoundRowsStatement(false)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.Zero(t, proc.GetResultRows())
+	assert.False(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
 }
 
 func TestGetSpillFileService(t *testing.T) {
@@ -214,6 +314,22 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	require.False(t, proc.Base.prepareParamsOwned)
 	require.Equal(t, 1, borrowed.Length(), "Process must not release borrowed params")
 	borrowed.Free(proc.Mp())
+}
+
+func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+
+	metadata := proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger}, nil)
+	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
+	first := &metadata[0]
+	metadata = proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
+	require.Same(t, first, &metadata[0])
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
 }
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {

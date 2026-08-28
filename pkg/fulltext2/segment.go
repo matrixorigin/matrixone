@@ -112,18 +112,19 @@ func (p *termPostings) blockLen(b int) int {
 	return n
 }
 
-// decodeBlockDocs decodes block b's docIDs into outDocs (cap >= BlockSize) and
-// returns the number decoded, the loaded-side byte offset where the raw tfs
-// begin, and whether every expected docID was present. Build-side copies the flat
-// docID slice and is always complete.
-// Keeping the docID decoder here lets callers that only need membership/DF avoid
-// copying tfs while fillBlock continues to use the exact same varint walk.
-func (p *termPostings) decodeBlockDocs(b int, outDocs []int64) (int, int, bool) {
+// fillBlock decodes block b's docIDs and tfs into outDocs/outTfs (each cap >=
+// BlockSize) and returns the block length. Build-side copies the flat slices;
+// loaded-side varint-decodes the block from blockData (the mmap view): docID gaps
+// accumulate from the previous block's last ord (resident blockLastDoc[b-1]), then
+// the raw tf bytes follow. The WAND cursor calls this once per block it lands on;
+// materializeDocIDs/Tfs call it per block to rebuild the flat arrays.
+func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
 	blen := p.blockLen(b)
 	if p.docIDs != nil { // build-side: copy from the flat arrays
 		lo := b * BlockSize
 		copy(outDocs[:blen], p.docIDs[lo:lo+blen])
-		return blen, 0, true
+		copy(outTfs[:blen], p.tfs[lo:lo+blen])
+		return blen
 	}
 	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
 	var prev int64
@@ -137,42 +138,53 @@ func (p *termPostings) decodeBlockDocs(b int, outDocs []int64) (int, int, bool) 
 		// out of range and panic the query goroutine. Return the docs decoded so far —
 		// the sibling fillBlockPositions degrades the same way rather than crashing.
 		if off >= len(data) {
-			return i, off, false
+			return i
 		}
 		g, n := binary.Uvarint(data[off:])
 		if n <= 0 {
-			return i, off, false
+			return i
 		}
 		off += n
 		prev += int64(g)
 		outDocs[i] = prev
 	}
-	return blen, off, true
-}
-
-// fillBlock decodes block b's docIDs and tfs into outDocs/outTfs (each cap >=
-// BlockSize) and returns the block length. Build-side copies the flat slices;
-// loaded-side varint-decodes the block from blockData (the mmap view): docID gaps
-// accumulate from the previous block's last ord (resident blockLastDoc[b-1]), then
-// the raw tf bytes follow. The WAND cursor calls this once per block it lands on;
-// materializeDocIDs/Tfs call it per block to rebuild the flat arrays.
-func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
-	blen, off, complete := p.decodeBlockDocs(b, outDocs)
-	if p.docIDs != nil {
-		lo := b * BlockSize
-		copy(outTfs[:blen], p.tfs[lo:lo+blen])
-		return blen
-	}
-	if !complete {
-		return blen
-	}
-	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
 	// tfs are blen raw bytes after the docID gaps; on corruption they may not all be
 	// present. Copy only what the block actually holds (never past len(data)).
 	if off+blen > len(data) {
 		blen = len(data) - off
 	}
 	copy(outTfs[:blen], data[off:off+blen])
+	return blen
+}
+
+// fillBlockDocs decodes only block b's doc IDs. Phrase intersection never reads term
+// frequency, so using fillBlockDocs there avoids a redundant tf copy for every block the
+// doc cursor visits. WAND keeps using fillBlock because it scores with tf.
+func (p *termPostings) fillBlockDocs(b int, outDocs []int64) int {
+	blen := p.blockLen(b)
+	if p.docIDs != nil {
+		lo := b * BlockSize
+		copy(outDocs[:blen], p.docIDs[lo:lo+blen])
+		return blen
+	}
+	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
+	var prev int64
+	if b > 0 {
+		prev = p.blockLastDoc[b-1]
+	}
+	off := 0
+	for i := 0; i < blen; i++ {
+		if off >= len(data) {
+			return i
+		}
+		g, n := binary.Uvarint(data[off:])
+		if n <= 0 {
+			return i
+		}
+		off += n
+		prev += int64(g)
+		outDocs[i] = prev
+	}
 	return blen
 }
 
@@ -383,6 +395,11 @@ type Segment struct {
 	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
+	// ownedBytes is the unique serialized archive retained by a loaded segment.
+	// The tail pool counts this once because pkRaw, FST, ranking, blocks, and
+	// positions are views into the same archive.
+	ownedBytes int64
+	lease      *segmentLease // non-nil for a view into the immutable base pool
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -648,6 +665,20 @@ func cbAppendNull(k *vectorindex.ColumnBuffer, fixedW int, fixed bool) {
 // reading. The loaded posting blocks (blockData) are views into mmapData, so
 // munmap reclaims them — there is no off-heap buffer to deallocate.
 func (s *Segment) Free() {
+	if s.lease != nil {
+		lease := s.lease
+		s.lease = nil
+		// The view does not own the mmap. Clear its aliases as well so a
+		// defensive second Free cannot munmap the shared mapping directly.
+		s.mmapData, s.mmapPath = nil, ""
+		s.ranking, s.blocks, s.positions = nil, nil, nil
+		lease.release()
+		return
+	}
+	s.freeOwned()
+}
+
+func (s *Segment) freeOwned() {
 	if s.mmapData != nil {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
@@ -657,6 +688,7 @@ func (s *Segment) Free() {
 		s.mmapPath = ""
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
+	s.ownedBytes = 0
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

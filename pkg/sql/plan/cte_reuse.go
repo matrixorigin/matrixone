@@ -242,9 +242,18 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 
 func (builder *QueryBuilder) cteConsumersFullyDrain(rootID int32, occurrences []cteOccurrence) bool {
 	parents := make(map[int32][]int32)
-	builder.collectCTEParents(rootID, parents, make(map[int32]bool))
+	reachable := make(map[int32]bool)
+	builder.collectCTEParents(rootID, parents, reachable)
 
 	for _, occurrence := range occurrences {
+		// replaceCTEOccurrences rewrites only the tree below rootID. An
+		// occurrence owned by a separately appended step cannot participate in
+		// reuse: wrapping its subtree in a producer would leave the original
+		// consumer in place and make later mutating planner passes visit the
+		// shared subtree twice.
+		if !reachable[occurrence.rootID] {
+			return false
+		}
 		type consumerPath struct {
 			nodeID  int32
 			drained bool

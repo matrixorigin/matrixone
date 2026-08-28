@@ -95,6 +95,55 @@ func TestCachedTableMetadataLoaderFreshAndETagRevalidation(t *testing.T) {
 	}
 }
 
+func TestCachedTableMetadataLoaderRevalidatesFreshMutableRef(t *testing.T) {
+	ctx := context.Background()
+	cache := NewCache(time.Minute, 1<<20)
+	calls := 0
+	client := &catalog.MockClient{
+		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			calls++
+			switch calls {
+			case 1:
+				if req.IfNoneMatch != "" {
+					t.Fatalf("initial load must not send If-None-Match, got %q", req.IfNoneMatch)
+				}
+				return &api.LoadTableResponse{
+					MetadataLocation: "s3://warehouse/sales/orders/metadata/v2.metadata.json",
+					MetadataJSON:     []byte(sampleMetadataJSON),
+					ETag:             "etag-1",
+				}, nil
+			case 2:
+				if req.IfNoneMatch != "etag-1" {
+					t.Fatalf("mutable ref revalidation should use the fresh cached etag, got %q", req.IfNoneMatch)
+				}
+				return &api.LoadTableResponse{NotModified: true, ETag: "etag-1"}, nil
+			default:
+				t.Fatalf("unexpected catalog load call %d", calls)
+				return nil, nil
+			}
+		},
+	}
+	loader := CachedTableMetadataLoader{
+		Catalog:                    client,
+		Metadata:                   NativeFacade{},
+		Cache:                      cache,
+		ExternalRef:                "main",
+		RevalidateMetadataLocation: true,
+	}
+	req := cacheLoadTableRequest()
+	first, err := loader.Load(ctx, req)
+	if err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	second, err := loader.Load(ctx, req)
+	if err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	if first.CacheHit || !second.CacheHit || !second.Revalidated || calls != 2 {
+		t.Fatalf("mutable ref should be conditionally revalidated, first=%+v second=%+v calls=%d", first, second, calls)
+	}
+}
+
 func TestCachedTableMetadataLoaderReadsMetadataLocation(t *testing.T) {
 	ctx := context.Background()
 	reader := &fakeObjectReader{data: map[string][]byte{

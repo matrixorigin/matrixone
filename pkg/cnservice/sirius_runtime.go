@@ -55,7 +55,17 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 	if !config.Enabled {
 		return nil
 	}
-	if s.options.siriusLeases == nil || !s.options.siriusLeases.DurableReady() || s.options.siriusAuditor == nil {
+	if config.BenchmarkNoGC {
+		if !config.benchmarkGCDisabled {
+			return siriusInternalErrorf("substrait: Sirius benchmark-no-gc requires verified TN GC disablement")
+		}
+		if s.options.siriusLeases == nil && s.options.siriusAuditor == nil {
+			s.options.siriusLeases, s.options.siriusAuditor = newSiriusBenchmarkDependencies()
+		}
+		if s.options.siriusLeases == nil || !s.options.siriusLeases.BenchmarkReady() || s.options.siriusAuditor == nil {
+			return siriusInternalErrorf("substrait: Sirius benchmark-no-gc requires local lease dependencies")
+		}
+	} else if s.options.siriusLeases == nil || !s.options.siriusLeases.DurableReady() || s.options.siriusAuditor == nil {
 		return siriusInternalErrorf("substrait: enabled Sirius runtime requires replayed GC-protected lease dependencies")
 	}
 	flightTLS, err := loadSiriusClientTLS(config)
@@ -89,6 +99,7 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 		Flight: flight, Leases: s.options.siriusLeases, Resolver: resolver,
 		AuthorizedClientSPKIHash: authorizedSPKI, DataDir: config.DataDir,
 		LeaseTTL: config.LeaseTTL.Duration, CleanupTimeout: config.CleanupTimeout.Duration,
+		BenchmarkNoGC: config.BenchmarkNoGC,
 	}
 	if err = runtime.Validate(); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.CleanupTimeout.Duration)

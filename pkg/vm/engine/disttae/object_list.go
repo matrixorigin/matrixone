@@ -24,9 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
 )
 
@@ -191,35 +189,14 @@ func collectObjectListFromPartition(
 		)
 
 		ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
-		response, err := RequestSnapshotRead(ctxWithDeadline, tbl, &nextFrom)
+		checkpointEntries, minTS, maxTS, err := requestSnapshotCheckpointEntries(
+			ctxWithDeadline,
+			tbl,
+			&nextFrom,
+		)
 		cancel()
 		if err != nil {
 			return err
-		}
-
-		resp, ok := response.(*cmd_util.SnapshotReadResp)
-		var checkpointEntries []*checkpoint.CheckpointEntry
-		minTS := types.MaxTs()
-		maxTS := types.TS{}
-
-		if ok && resp.Succeed && len(resp.Entries) > 0 {
-			checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
-			entries := resp.Entries
-			for _, entry := range entries {
-				logutil.Infof("ObjectList-Split get checkpoint entry: %v", entry.String())
-				start := types.TimestampToTS(*entry.Start)
-				end := types.TimestampToTS(*entry.End)
-				if start.LT(&minTS) {
-					minTS = start
-				}
-				if end.GT(&maxTS) {
-					maxTS = end
-				}
-				entryType := entry.EntryType
-				checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
-				checkpointEntry.SetLocation(entry.Location1, entry.Location2)
-				checkpointEntries = append(checkpointEntries, checkpointEntry)
-			}
 		}
 
 		if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {

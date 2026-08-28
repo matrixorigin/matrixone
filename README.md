@@ -247,35 +247,35 @@ Ready to dive deeper? Explore our comprehensive collection of hands-on tutorials
 
 | Tutorial | Language/Framework | Description |
 |----------|-------------------|-------------|
-| [Java CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-java-crud-demo/) | Java | Java application development |
-| [SpringBoot and JPA CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/springboot-hibernate-crud-demo/) | Java | SpringBoot with Hibernate/JPA |
-| [PyMySQL CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-python-crud-demo/) | Python | Basic database operations with Python |
-| [SQLAlchemy CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/sqlalchemy-python-crud-demo/) | Python | Python with SQLAlchemy ORM |
-| [Django CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/django-python-crud-demo/) | Python | Django web framework |
-| [Golang CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-golang-crud-demo/) | Go | Go application development |
-| [Gorm CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/gorm-golang-crud-demo/) | Go | Go with Gorm ORM |
-| [C# CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/c-net-crud-demo/) | C# | .NET application development |
-| [TypeScript CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/typescript-crud-demo/) | TypeScript | TypeScript application development |
+| [Java CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-java-crud-demo.html) | Java | Java application development |
+| [SpringBoot and JPA CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/springboot-hibernate-crud-demo.html) | Java | SpringBoot with Hibernate/JPA |
+| [PyMySQL CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-python-crud-demo.html) | Python | Basic database operations with Python |
+| [SQLAlchemy CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/sqlalchemy-python-crud-demo.html) | Python | Python with SQLAlchemy ORM |
+| [Django CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/django-python-crud-demo.html) | Python | Django web framework |
+| [Golang CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-golang-crud-demo.html) | Go | Go application development |
+| [Gorm CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/gorm-golang-crud-demo.html) | Go | Go with Gorm ORM |
+| [C# CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/c-net-crud-demo.html) | C# | .NET application development |
+| [TypeScript CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/typescript-crud-demo.html) | TypeScript | TypeScript application development |
 
 ### 🚀 Advanced Features Tutorials
 
 | Tutorial | Use Case | Related MatrixOne Features |
 |----------|----------|---------------------------|
-| [Pinecone-Compatible Vector Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/pinecone-vector-demo/) | AI & Search | vector search, Pinecone-compatible API |
-| [IVF Index Health Monitoring](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/ivf-index-health-demo/) | AI & Search | vector search, IVF index |
-| [HNSW Vector Index](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hnsw-vector-demo/) | AI & Search | vector search, HNSW index |
-| [Fulltext Natural Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-natural-search-demo/) | AI & Search | fulltext search, natural language |
-| [Fulltext Boolean Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-boolean-search-demo/) | AI & Search | fulltext search, boolean operators |
-| [Fulltext JSON Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-json-search-demo/) | AI & Search | fulltext search, JSON data |
-| [Hybrid Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hybrid-search-demo/) | AI & Search | hybrid search, vector + fulltext + SQL |
-| [RAG Application Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/rag-demo/) | AI & Search | RAG, vector search, fulltext search |
-| [Picture(Text)-to-Picture Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/search-picture-demo/) | AI & Search | multimodal search, image similarity |
-| [Dify Integration Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/dify-mo-demo/) | AI & Search | AI platform integration |
-| [HTAP Application Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/htap-demo/) | Performance | HTAP, real-time analytics |
-| [Instant Clone for Multi-Team Development](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/efficient-clone-demo/) | Performance | instant clone, Git for Data |
-| [Safe Production Upgrade with Instant Rollback](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/) | Performance | snapshot, rollback, Git for Data |
+| [Pinecone-Compatible Vector Search](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/pinecone-vector-demo.html) | AI & Search | vector search, Pinecone-compatible API |
+| [IVF Index Health Monitoring](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/ivf-index-health-demo.html) | AI & Search | vector search, IVF index |
+| [HNSW Vector Index](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/hnsw-vector-demo.html) | AI & Search | vector search, HNSW index |
+| [Fulltext Natural Search](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/fulltext-natural-search-demo.html) | AI & Search | fulltext search, natural language |
+| [Fulltext Boolean Search](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/fulltext-boolean-search-demo.html) | AI & Search | fulltext search, boolean operators |
+| [Fulltext JSON Search](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/fulltext-json-search-demo.html) | AI & Search | fulltext search, JSON data |
+| [Hybrid Search](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/hybrid-search-demo.html) | AI & Search | hybrid search, vector + fulltext + SQL |
+| [RAG Application Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/rag-demo.html) | AI & Search | RAG, vector search, fulltext search |
+| [Picture(Text)-to-Picture Search](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/search-picture-demo.html) | AI & Search | multimodal search, image similarity |
+| [Dify Integration Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/dify-mo-demo.html) | AI & Search | AI platform integration |
+| [HTAP Application Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/htap-demo.html) | Performance | HTAP, real-time analytics |
+| [Instant Clone for Multi-Team Development](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/efficient-clone-demo.html) | Performance | instant clone, Git for Data |
+| [Safe Production Upgrade with Instant Rollback](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/snapshot-rollback-demo.html) | Performance | snapshot, rollback, Git for Data |
 
-📖 **[View All Tutorials →](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/)**
+📖 **[View All Tutorials →](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-java-crud-demo.html)**
 
 ## 🛠️ <a id="installation--deployment">Installation & Deployment</a>
 

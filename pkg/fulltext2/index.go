@@ -178,7 +178,7 @@ func (idx *Index) liveTermDF(si int, p *termPostings) int {
 
 	var docs [BlockSize]int64
 	for b := 0; b < p.nblk(); b++ {
-		n, _, _ := p.decodeBlockDocs(b, docs[:])
+		n := p.fillBlockDocs(b, docs[:])
 		for _, ord := range docs[:n] {
 			if ord >= 0 && ord < int64(len(live)) && live[ord] {
 				df++

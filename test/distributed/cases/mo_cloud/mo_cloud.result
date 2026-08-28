@@ -73,7 +73,7 @@ SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  null  ¦  null  𝄀
 PARAMETER_MODE  ¦  VARCHAR(5)  ¦  null  ¦  null  𝄀
 PARAMETER_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-DATA_TYPE  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+DATA_TYPE  ¦  LONGTEXT  ¦  null  ¦  null  𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
@@ -81,7 +81,7 @@ NUMERIC_SCALE  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 COLLATION_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-DTD_IDENTIFIER  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+DTD_IDENTIFIER  ¦  MEDIUMTEXT  ¦  null  ¦  null  𝄀
 ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='mo_columns' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 invalid input: mo_table_col_max has bad input table mo_columns
@@ -228,7 +228,7 @@ engines  ¦  CREATE TABLE `engines` (
 )
 SHOW CREATE TABLE information_schema.key_column_usage;
 ➤ View[12,16,0]  ¦  Create View[12,786,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
-key_column_usage  ¦  CREATE VIEW information_schema.KEY_COLUMN_USAGE AS SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_foreign_keys fk  ¦  utf8mb4  ¦  utf8mb4_general_ci
+key_column_usage  ¦  CREATE VIEW information_schema.KEY_COLUMN_USAGE AS SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(idx.name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(coalesce(tbl.reldatabase, '') AS varchar(64)) AS TABLE_SCHEMA, CAST(coalesce(tbl.relname, '') AS varchar(64)) AS TABLE_NAME, CAST(idx.column_name AS varchar(64)) AS COLUMN_NAME, CAST(idx.ordinal_position AS int unsigned) AS ORDINAL_POSITION, CAST(NULL AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(NULL AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(NULL AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(NULL AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_indexes idx JOIN mo_catalog.mo_tables tbl ON idx.table_id = tbl.rel_id WHERE tbl.account_id = current_account_id() AND idx.type IN ('PRIMARY', 'UNIQUE') AND NOT startswith(tbl.relname, '__mo_index_') AND not (tbl.relkind = 'temporary_table' or mo_is_legacy_temporary_table(coalesce(tbl.relkind, ''), coalesce(tbl.relname, ''), coalesce(tbl.reldatabase, ''), coalesce(tbl.rel_createsql, ''), coalesce(tbl.extra_info, '')) or (coalesce(tbl.relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(tbl.relname, '^__mo_tmp_[0-9a-f]{32}_'))) UNION ALL SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_foreign_keys fk  ¦  utf8mb4  ¦  utf8mb4_general_ci
 SHOW CREATE TABLE information_schema.keywords;
 ➤ Table[12,8,0]  ¦  Create Table[12,101,0]  𝄀
 keywords  ¦  CREATE TABLE `keywords` (
@@ -244,7 +244,7 @@ parameters  ¦  CREATE TABLE `parameters` (
   `ORDINAL_POSITION` bigint unsigned DEFAULT NULL,
   `PARAMETER_MODE` varchar(5) DEFAULT NULL,
   `PARAMETER_NAME` varchar(64) DEFAULT NULL,
-  `DATA_TYPE` text DEFAULT NULL,
+  `DATA_TYPE` longtext DEFAULT NULL,
   `CHARACTER_MAXIMUM_LENGTH` bigint DEFAULT NULL,
   `CHARACTER_OCTET_LENGTH` bigint DEFAULT NULL,
   `NUMERIC_PRECISION` int unsigned DEFAULT NULL,
@@ -252,7 +252,7 @@ parameters  ¦  CREATE TABLE `parameters` (
   `DATETIME_PRECISION` int unsigned DEFAULT NULL,
   `CHARACTER_SET_NAME` varchar(64) DEFAULT NULL,
   `COLLATION_NAME` varchar(64) DEFAULT NULL,
-  `DTD_IDENTIFIER` text DEFAULT NULL,
+  `DTD_IDENTIFIER` mediumtext DEFAULT NULL,
   `ROUTINE_TYPE` varchar(64) DEFAULT NULL
 )
 SHOW CREATE TABLE mo_catalog.mo_columns;
@@ -328,7 +328,7 @@ db  ¦  CREATE TABLE `db` (
   `Event_priv` varchar(10) NOT NULL DEFAULT 'N',
   `Trigger_priv` varchar(10) NOT NULL DEFAULT 'N',
   PRIMARY KEY (`Host`,`Db`,`User`),
-  KEY `user` (`User`)
+  KEY `User` (`User`)
 )
 SHOW CREATE TABLE mysql.procs_priv;
 ➤ Table[12,10,0]  ¦  Create Table[12,510,0]  𝄀
@@ -342,7 +342,7 @@ procs_priv  ¦  CREATE TABLE `procs_priv` (
   `Proc_priv` varchar(10) NOT NULL DEFAULT '',
   `Timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
   PRIMARY KEY (`Host`,`Db`,`User`,`Routine_name`,`Routine_type`),
-  KEY `grantor` (`Grantor`)
+  KEY `Grantor` (`Grantor`)
 )
 SHOW CREATE TABLE mysql.tables_priv;
 ➤ Table[12,11,0]  ¦  Create Table[12,503,0]  𝄀
@@ -356,7 +356,7 @@ tables_priv  ¦  CREATE TABLE `tables_priv` (
   `Table_priv` varchar(10) NOT NULL DEFAULT '',
   `Column_priv` varchar(10) NOT NULL DEFAULT '',
   PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`),
-  KEY `grantor` (`Grantor`)
+  KEY `Grantor` (`Grantor`)
 )
 SHOW CREATE TABLE mysql.user;
 ➤ Table[12,4,0]  ¦  Create Table[12,2645,0]  𝄀
@@ -507,10 +507,10 @@ table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦  
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`keywords` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 WORD  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -523,7 +523,7 @@ SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 PARAMETER_MODE  ¦  VARCHAR(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 PARAMETER_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATA_TYPE  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DATA_TYPE  ¦  LONGTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -531,7 +531,7 @@ NUMERIC_SCALE  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 COLLATION_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DTD_IDENTIFIER  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DTD_IDENTIFIER  ¦  MEDIUMTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `mo_catalog`.`mo_columns` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -781,6 +781,7 @@ SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo
 mo_mo  ¦  null  ¦  null  ¦  -  𝄀
 information_schema  ¦  character_sets  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  check_constraints  ¦  v  ¦  accountadmin  𝄀
+information_schema  ¦  collation_character_set_applicability  ¦  v  ¦  accountadmin  𝄀
 information_schema  ¦  collations  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  column_privileges  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  columns  ¦  v  ¦  accountadmin  𝄀
@@ -840,6 +841,8 @@ mo_catalog  ¦  mo_user  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_user_defined_function  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_user_grant  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_variables  ¦  v  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_view_dependencies  ¦  cluster  ¦  -  𝄀
+mo_catalog  ¦  mo_view_refresh  ¦  cluster  ¦  -  𝄀
 mysql  ¦  columns_priv  ¦  r  ¦  accountadmin  𝄀
 mysql  ¦  db  ¦  r  ¦  accountadmin  𝄀
 mysql  ¦  procs_priv  ¦  r  ¦  accountadmin  𝄀
@@ -861,6 +864,7 @@ system_metrics  ¦  sql_transaction_total  ¦  v  ¦  accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 ➤ name[12,5000,0]  ¦  owner[12,300,0]  𝄀
 check_constraints  ¦  accountadmin  𝄀
+collation_character_set_applicability  ¦  accountadmin  𝄀
 columns  ¦  accountadmin  𝄀
 key_column_usage  ¦  accountadmin  𝄀
 partitions  ¦  accountadmin  𝄀
@@ -892,7 +896,7 @@ set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 ➤ name[12,5000,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,300,0]  𝄀
 character_sets  ¦  3  ¦  96  ¦  accountadmin  𝄀
-collations  ¦  0  ¦  0  ¦  accountadmin  𝄀
+collations  ¦  6  ¦  192  ¦  accountadmin  𝄀
 column_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 engines  ¦  0  ¦  0  ¦  accountadmin  𝄀
 events  ¦  0  ¦  0  ¦  accountadmin  𝄀

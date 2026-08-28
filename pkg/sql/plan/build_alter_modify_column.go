@@ -104,11 +104,6 @@ func ModifyColumn(
 		return false, err
 	}
 
-	alterCtx.alterColMap[nColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oCol.Name,
-	}
-
 	return pkAffected, nil
 }
 

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -181,34 +182,28 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 func TestNewServiceRetry(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg0 := getServiceTestConfig()
-	genCfg0 := func() Config {
-		return cfg0
-	}
-	defer vfs.ReportLeakedFD(cfg0.FS, t)
-	service0, err := NewServiceWithRetry(genCfg0,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service0.Close())
-	}()
+	t.Cleanup(func() { _ = occupied.Close() })
+	cfg0.RaftAddress = occupied.Addr().String()
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
 
 	var cfg Config
+	attempts := 0
 	first := true
 	genCfg := func() Config {
+		attempts++
 		if first {
 			first = false
 			return cfg0
-		} else {
-			cfg = getServiceTestConfig()
-			return cfg
 		}
+		if attempts == 2 {
+			require.NoError(t, occupied.Close())
+		}
+		cfg = getServiceTestConfig()
+		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() { vfs.ReportLeakedFD(cfg.FS, t) }()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
@@ -217,6 +212,7 @@ func TestNewServiceRetry(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
+	require.GreaterOrEqual(t, attempts, 2)
 	assert.NoError(t, service.Close())
 }
 
@@ -690,6 +686,81 @@ func TestLogHeartbeatDoesNotDriveCommandDeliveryActivation(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, delivery.Preparing,
 			"the high-frequency heartbeat path must not propose activation")
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceViewMetadataAdmissionActivation(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		logHeartbeat := s.store.getHeartbeatMessage()
+		response := s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		cnHeartbeat := func(observed, catalog uint64) pb.Response {
+			return s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                            "cn-admission",
+					ViewMetadataAdmissionSupported:  true,
+					ViewMetadataAdmissionGeneration: 10,
+					ViewMetadataObservedEpoch:       observed,
+					ViewMetadataCatalogFencedEpoch:  catalog,
+					CommandDeliveryAckSupported:     true,
+				},
+			})
+		}
+		proxyHeartbeat := func(observed uint64) pb.Response {
+			return s.handleProxyHeartbeat(ctx, pb.Request{
+				Method: pb.PROXY_HEARTBEAT,
+				ProxyHeartbeat: &pb.ProxyHeartbeat{
+					UUID:                            "proxy-admission",
+					ViewMetadataAdmissionSupported:  true,
+					ViewMetadataAdmissionGeneration: 20,
+					ViewMetadataObservedEpoch:       observed,
+				},
+			})
+		}
+		require.Equal(t, uint32(moerr.Ok), cnHeartbeat(0, 0).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), proxyHeartbeat(0).ErrorCode)
+
+		state, err := s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err := s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.False(t, enabled)
+		admission, err := s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Preparing)
+
+		// Every pre-barrier observation is deliberately insufficient.
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.False(t, enabled)
+
+		logHeartbeat = s.store.getHeartbeatMessage()
+		response = s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), cnHeartbeat(1, 1).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), proxyHeartbeat(1).ErrorCode)
+
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.True(t, enabled)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Enabled)
 	}
 	runServiceTest(t, true, true, fn)
 }

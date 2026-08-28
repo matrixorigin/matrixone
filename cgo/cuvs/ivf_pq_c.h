@@ -85,6 +85,7 @@ void gpu_ivf_pq_quantize_query(gpu_ivf_pq_c index_c, const void* base_data, uint
 void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const void* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg);
+
 void gpu_ivf_pq_set_dynb_conservative_dispatch(gpu_ivf_pq_c index_c, bool enable, void* errmsg);
 
 void gpu_ivf_pq_set_quantizer(gpu_ivf_pq_c index_c, float min, float max, void* errmsg);
@@ -213,6 +214,25 @@ uint64_t gpu_ivf_pq_search_quantize_with_filter_async(gpu_ivf_pq_c index_c, cons
                                                     uint64_t num_queries, uint32_t query_dimension,
                                                     uint32_t limit, ivf_pq_search_params_t search_params,
                                                     const char* preds_json, void* errmsg);
+
+
+
+
+
+
+
+
+// gpu_ivf_pq_rows_fitting answers "how many rows of this index shape fit on these devices",
+// entirely in C++. The per-row cost model and the budget live on the cost class
+// (index_cost.hpp); the caller supplies the shape and consumes a row count.
+//
+// No index is needed: a cost object is a value type. ASK ONCE, before anything
+// has been allocated -- a later call sees the memory earlier sub-indexes took
+// and would shrink each successive capacity instead of sharing one.
+int gpu_ivf_pq_rows_fitting(uint64_t dim, uint64_t m, uint64_t bits_per_code, uint64_t elem_size,
+                            const int* device_ids, int num_devices, int dist_mode,
+                            int64_t* out_rows, int64_t* out_trainset_rows, uint64_t* out_per_row,
+                            int* out_min_device, uint64_t* out_min_free, void* errmsg);
 
 #ifdef __cplusplus
 }

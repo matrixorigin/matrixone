@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -78,7 +79,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -93,7 +97,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -186,6 +189,10 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
+		// Compile owns the immutable binding. Process only carries it while this
+		// execution is active; leaving it behind can contaminate a later lock
+		// caller that has no compiled plan.
+		c.proc.ClearPlanSnapshotTS()
 	}
 	doCompileRelease(c)
 }
@@ -217,6 +224,49 @@ func (c *Compile) GetPlan() *plan.Plan {
 	return c.pn
 }
 
+// PlanGenerationRebuilt reports whether a retry rebuilt this Compile's logical
+// plan. A frontend prepared statement must then discard both the old logical
+// plan and any physical topology derived from it.
+func (c *Compile) PlanGenerationRebuilt() bool {
+	return c != nil && c.planGenerationRebuilt
+}
+
+// PlanSnapshotTS returns the snapshot bound to the current logical-plan
+// generation. The binding is immutable until a definition-change retry
+// publishes a replacement plan generation.
+func (c *Compile) PlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if c == nil || !c.hasPlanSnapshotTS {
+		return timestamp.Timestamp{}, false
+	}
+	return c.planSnapshotTS, true
+}
+
+// SetPlanSnapshotTS binds Compile to the snapshot of an already-built logical
+// plan. It must be called before Compile when planning and physical compilation
+// are separated, as they are for prepared statements without a cached pipeline.
+func (c *Compile) SetPlanSnapshotTS(ts timestamp.Timestamp) {
+	c.planSnapshotTS = ts
+	c.hasPlanSnapshotTS = true
+	c.planGenerationReused = false
+	c.applyPlanSnapshot()
+}
+
+// SetPlanGenerationReused marks whether the current execution admitted this
+// logical-plan generation from a session or prepared cache.
+func (c *Compile) SetPlanGenerationReused(reused bool) {
+	c.planGenerationReused = reused
+	c.applyPlanSnapshot()
+}
+
+// FreezeResultMetadata prevents a definition retry from executing a rebuilt
+// plan whose result schema differs from metadata already materialized by the
+// frontend or another streaming consumer.
+func (c *Compile) FreezeResultMetadata() {
+	if c != nil {
+		c.resultMetadataFrozen = true
+	}
+}
+
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
@@ -228,13 +278,15 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
-	c.reusePlanSnapshot = false
-	c.capturePlanSnapshot()
+	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
+	c.applyPlanSnapshot()
+	c.captureStringShuffleHashAlgorithm()
 
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
 	c.executionGeneration = 0
+	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -287,26 +339,96 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	return nil
 }
 
-// capturePlanSnapshot starts a new plan-execution generation. Definition
-// fences must be compared with this immutable timestamp, not with a mutable RC
-// transaction snapshot that an earlier lock may have advanced.
+// capturePlanSnapshot starts a new compiled-plan generation. Compile owns the
+// binding; Process only transports it to local and remote pipeline operators.
 func (c *Compile) capturePlanSnapshot() {
+	c.planGenerationReused = false
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil {
+		c.hasPlanSnapshotTS = false
+		c.planSnapshotTS = timestamp.Timestamp{}
+		c.applyPlanSnapshot()
+		return
+	}
+	c.planSnapshotTS = txnOp.Txn().SnapshotTS
+	c.hasPlanSnapshotTS = true
+	c.applyPlanSnapshot()
+}
+
+// applyPlanSnapshot binds the Process transport to this Compile's immutable
+// plan generation. In particular, Reset must apply rather than recapture it.
+func (c *Compile) applyPlanSnapshot() {
+	if !c.hasPlanSnapshotTS {
 		c.proc.ClearPlanSnapshotTS()
 		return
 	}
-	c.proc.SetPlanSnapshotTS(txnOp.Txn().SnapshotTS)
+	c.proc.SetPlanSnapshotTS(c.planSnapshotTS)
+	c.proc.SetPlanGenerationReused(c.planGenerationReused)
+}
+
+func (c *Compile) inheritPlanSnapshot(from *Compile) {
+	c.planSnapshotTS = from.planSnapshotTS
+	c.hasPlanSnapshotTS = from.hasPlanSnapshotTS
+	c.planGenerationReused = from.planGenerationReused
+	c.applyPlanSnapshot()
 }
 
 func (c *Compile) bindPlanSnapshotForCompile() {
-	if !c.reusePlanSnapshot {
+	if !c.hasPlanSnapshotTS {
 		c.capturePlanSnapshot()
+		return
 	}
+	c.applyPlanSnapshot()
+}
+
+// captureStringShuffleHashAlgorithm starts a new execution owner-mapping
+// generation. MOProtocolVersion is consulted exactly once; operators consume
+// only the frozen Process value afterwards.
+func (c *Compile) captureStringShuffleHashAlgorithm() {
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	if supportsStableStringShuffleHash(c.proc.GetService()) {
+		c.stringShuffleHashAlgorithm = process.StringShuffleHashComplete
+	}
+	c.stringShuffleHashAlgorithmFrozen = true
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) applyStringShuffleHashAlgorithm() {
+	c.proc.SetStringShuffleHashAlgorithm(c.stringShuffleHashAlgorithm)
+}
+
+func (c *Compile) inheritStringShuffleHashAlgorithm(from *Compile) {
+	c.stringShuffleHashAlgorithm = from.stringShuffleHashAlgorithm
+	c.stringShuffleHashAlgorithmFrozen = from.stringShuffleHashAlgorithmFrozen
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func (c *Compile) bindStringShuffleHashAlgorithmForCompile() {
+	if !c.stringShuffleHashAlgorithmFrozen {
+		c.captureStringShuffleHashAlgorithm()
+		return
+	}
+	c.applyStringShuffleHashAlgorithm()
+}
+
+func supportsStableStringShuffleHash(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion33
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if applyOp, ok := op.(*apply.Apply); ok {
+			applyOp.TxnOffset = txnOffset
+		}
+		return nil
+	})
 	for i := range scope.PreScopes {
 		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)
 	}
@@ -353,7 +475,13 @@ func (c *Compile) clear() {
 
 	c.proc.Free()
 	c.proc = nil
-	c.reusePlanSnapshot = false
+	c.planSnapshotTS = timestamp.Timestamp{}
+	c.hasPlanSnapshotTS = false
+	c.planGenerationReused = false
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
+	c.stringShuffleHashAlgorithmFrozen = false
+	c.resultMetadataFrozen = false
+	c.planGenerationRebuilt = false
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
@@ -475,12 +603,7 @@ func (c *Compile) run(s *Scope) error {
 		c.addAffectedRows(s.affectedRows())
 		return err
 	case CreateDatabase:
-		err := s.CreateDatabase(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(1)
-		return nil
+		return s.CreateDatabase(c)
 	case DropDatabase:
 		err := s.DropDatabase(c)
 		if err != nil {
@@ -1222,6 +1345,7 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.compiledRightSingleNodes = nil
 	defer func() {
 		c.compiledRightSingleNodes = nil
@@ -1362,7 +1486,15 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
-			rs = ss[0]
+			// Output owns a callback created by this Compile and cannot be
+			// serialized for execution on another CN. Keep the result sink on
+			// its owner and return the remote child through the existing
+			// connector/merge path.
+			if ss[0].Magic == Remote && !ss[0].ipAddrMatch(c.addr) {
+				rs = c.newMergeScope(ss)
+			} else {
+				rs = ss[0]
+			}
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
 			rs = c.newMergeScope(ss)
@@ -1384,7 +1516,20 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 				return nil, err
 			}
 			if limitExpr != nil {
-				rs = c.compileLimit(&plan.Node{Limit: limitExpr}, []*Scope{rs})[0]
+				limitNode := &plan.Node{Limit: limitExpr}
+				drainForFoundRows := false
+				if statementHasSQLCalcFoundRows(c.stmt) {
+					if c.foundRowsOwnerNode == nil {
+						c.foundRowsOwnerNode = limitNode
+					} else {
+						// An explicit top-level OFFSET remains the owner of the
+						// pre-offset count. The dynamic prepared session limit is
+						// above it, so it must drain without publishing; otherwise
+						// it stops before the OFFSET observes EOF.
+						drainForFoundRows = true
+					}
+				}
+				rs = c.compileLimitWithFoundRowsDrain(limitNode, []*Scope{rs}, drainForFoundRows)[0]
 			}
 		}
 
@@ -1580,17 +1725,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	}()
 	node := nodes[curNodeIdx]
 
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				if cval.U64Val == 0 {
-					// optimize for limit 0
-					rs := c.newEmptyMergeScope()
-					rs.Proc = c.proc.NewNoContextChildProc(0)
-					return c.compileLimit(node, []*Scope{rs}), nil
-				}
-			}
-		}
+	if c.canUseLiteralLimitZeroFastPath(node) {
+		// optimize for limit 0
+		rs := c.newEmptyMergeScope()
+		rs.Proc = c.proc.NewNoContextChildProc(0)
+		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
 	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
@@ -1607,7 +1746,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, ss))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
@@ -1621,7 +1760,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(nodeCopy, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(nodeCopy, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(nodeCopy, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
@@ -1641,13 +1780,23 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
+	case plan.Node_VECTOR_INDEX_SCAN:
+		c.appendMetaTables(node.ObjRef)
+
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
+		ss, err = c.compileVectorIndexScan(node)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileTableScanFiltersAndProjection(node, ss)
+		return ss, nil
 	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
 		childDemand := streamingUnionAllDemand(node, outerUnionAllDemand)
 		ss, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, childDemand)
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileRestrict(node, ss)
@@ -1665,28 +1814,18 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
-		anyDistinctAgg := groupInfo.AnyDistinctAgg()
+		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		orderedGroupConcat := hasOrderedGroupConcat(node)
-		orderedSetPercentile := hasOrderedSetPercentile(node)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
-		if orderedGroupConcat || orderedSetPercentile {
-			ss = c.compileOrderedAggregateSingleStage(node, ss, nodes)
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-			return ss, nil
-		}
-		if c.IsSingleScope(ss) {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
-			return ss, nil
-		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
-			return ss, nil
-		}
+		ss = c.compileGroupWithoutShuffle(
+			node, ss, nodes, distinctRequiresSingleStage)
+		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+		return ss, nil
 	case plan.Node_SAMPLE:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1694,7 +1833,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
@@ -1704,7 +1843,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
@@ -1714,7 +1853,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileTimeWin(node, c.compileSort(node, ss))))
 		return ss, nil
 	case plan.Node_FILL:
@@ -1724,7 +1863,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
@@ -1739,10 +1878,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		if nodeHasUserLevelLockFunction(node) {
-			left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
-			right = c.ensureUserLevelLockSideEffectsOnCoordinator(node, right)
-		}
+		left = c.ensureCoordinatorOnlyFunctions(node, left)
+		right = c.ensureCoordinatorOnlyFunctions(node, right)
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -1757,7 +1894,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileSort(node, ss)))
 		return ss, nil
 	case plan.Node_PARTITION:
@@ -1767,7 +1904,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compilePartition(node, ss)))
 		return ss, nil
 	case plan.Node_UNION:
@@ -1783,7 +1920,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileUnion(node, left, right)
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
@@ -1799,7 +1936,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
@@ -1819,7 +1956,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileUnionAll(node, left, right, lazy)
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_DELETE:
@@ -1862,10 +1999,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		if nodeHasUserLevelLockFunction(node) {
-			left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
-			right = c.ensureUserLevelLockSideEffectsOnCoordinator(node, right)
-		}
+		left = c.ensureCoordinatorOnlyFunctions(node, left)
+		right = c.ensureCoordinatorOnlyFunctions(node, right)
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		return c.compileFuzzyFilter(node, nodes, left, right)
 	case plan.Node_PRE_INSERT_UK:
@@ -1930,7 +2065,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss, err = c.compileLock(node, ss)
 		if err != nil {
 			return nil, err
@@ -1950,7 +2085,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
@@ -1959,7 +2094,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if err != nil {
 			return nil, err
 		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
@@ -1988,7 +2123,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
+		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		ss = c.compileSort(node, c.compileApply(node, nodes[node.Children[1]], left))
 		return ss, nil
 	case plan.Node_POSTDML:
@@ -1998,13 +2133,82 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compilePostDml(node, ss)
 		return ss, nil
 
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", node))
 	}
+}
+
+func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
+	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
+	if !ok || cExpr.Lit == nil {
+		return false
+	}
+	cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val)
+	return ok && cval.U64Val == 0
+}
+
+func (c *Compile) ownsFoundRows(node *plan.Node) bool {
+	return statementHasSQLCalcFoundRows(c.stmt) && node != nil && node == c.foundRowsOwnerNode
+}
+
+// selectFoundRowsOwnerNode designates only pagination that belongs to the
+// statement's final result. An explicit top-level LIMIT/OFFSET is identified
+// from the AST before looking through projection wrappers. A finite ordinary
+// sql_select_limit is identified by the exact node materialized by Compile.
+// Prepared sql_select_limit remains dynamic and is assigned later by
+// compileSteps. Nested semantic pagination must never become the owner.
+func (c *Compile) selectFoundRowsOwnerNode(qry *plan.Query) *plan.Node {
+	if c == nil || qry == nil || !statementHasSQLCalcFoundRows(c.stmt) || len(qry.Steps) == 0 {
+		return nil
+	}
+
+	rootID := qry.Steps[len(qry.Steps)-1]
+	if rootID < 0 || int(rootID) >= len(qry.Nodes) {
+		return nil
+	}
+	if statementHasSQLCalcFoundRowsPagination(c.stmt) {
+		return findFoundRowsOwnerNode(qry, rootID)
+	}
+
+	root := qry.Nodes[rootID]
+	if root != nil && root == c.materializedSQLSelectLimitOwner {
+		return root
+	}
+	return nil
+}
+
+func findFoundRowsOwnerNode(qry *plan.Query, rootID int32) *plan.Node {
+	if qry == nil || rootID < 0 || int(rootID) >= len(qry.Nodes) {
+		return nil
+	}
+
+	queue := []int32{rootID}
+	visited := make(map[int32]struct{})
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		if _, ok := visited[nodeID]; ok || nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			continue
+		}
+		visited[nodeID] = struct{}{}
+
+		node := qry.Nodes[nodeID]
+		if node == nil {
+			continue
+		}
+		if node.Limit != nil || node.Offset != nil {
+			return node
+		}
+		queue = append(queue, node.Children...)
+	}
+	return nil
 }
 
 func isIdentityProjectionOfChild(projectList, childProjectList []*plan.Expr) bool {
@@ -2415,12 +2619,17 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	}()
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
-		if err := c.hydrateMongoScan(node); err != nil {
+		// Hydration resolves execution-time catalog state and prunes the source
+		// mapping to the physical projection.  Keep that mutation isolated even
+		// when this helper is called outside compilePlanScope, because a prepared
+		// execution may otherwise hand us its cached logical plan directly.
+		executionNode := plan2.DeepCopyNode(node)
+		if err := c.hydrateMongoScan(executionNode); err != nil {
 			return nil, err
 		}
-		scope := c.constructScopeForExternal(c.addr, false)
+		scope := c.constructMongoScanScope()
 		currentFirstFlag := c.anal.isFirst
-		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
+		op := mongoscan.NewArgument().WithScan(executionNode.ExternScan.MongodbScan)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		c.anal.isFirst = false
@@ -2430,6 +2639,17 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	err, strictSqlMode := StrictSqlMode(c.proc)
 	if err != nil {
 		return nil, err
+	}
+
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_DATASTREAM_TB) {
+		return c.compileDatastreamScan(node, strictSqlMode)
+	}
+
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_FOREIGN_TB) {
+		return c.compileForeignScan(node, strictSqlMode)
+	}
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_KAFKA_TB) {
+		return c.compileKafkaScan(node, strictSqlMode)
 	}
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
@@ -2505,6 +2725,205 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	} else {
 		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
+}
+
+// compileDatastreamScan builds the single-scope pipeline for a datastream
+// external table: deparse the pushable filter conjuncts into the pushdown
+// hint, optionally drop them from local rechecking (recheck=false), and run
+// the external operator with a DataStreamReader.  node is the compile-owned
+// deep copy, so trimming its FilterList only affects this pipeline's
+// downstream restrict.
+func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ds := node.ExternScan.GetDatastreamScan()
+	if ds == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "datastream external table is missing scan metadata")
+	}
+	// The pushed filter can only be sent to the server when the user has
+	// opted into trusting the server's predicate semantics (recheck=false).
+	//
+	// A pushed predicate is NOT provably superset-preserving across engines:
+	// the server may drop a row MO would keep under a different collation,
+	// time zone, or coercion (e.g. a case-insensitive source evaluating
+	// `s <> 'a'` drops both 'a' and 'A', but MO distinguishes them and wants
+	// the 'A' row). Local recheck can only *remove* over-returned rows, never
+	// restore ones the source already filtered out — so pushing in the
+	// recheck=true default would under-return. Therefore recheck=true (the
+	// safe default) sends no narrowing filter: the server returns the full
+	// datasource and MO applies every predicate locally, which is correct
+	// under any server semantics. recheck=false trusts the server for exactly
+	// the conjuncts that were pushed; conjuncts the deparser could not express
+	// always stay local.
+	if !ds.Recheck {
+		pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, node.TableDef.Cols, c.proc.GetSessionInfo().TimeZone)
+		ds.PushedFilter = pushedText
+		if pushedText != "" {
+			kept := make([]*plan.Expr, 0, len(node.FilterList))
+			for i, expr := range node.FilterList {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			node.FilterList = kept
+		}
+	}
+
+	param := external.DatastreamExternParam()
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// compileForeignScan compiles a scan of an ESQL/SQL foreign external table.
+// The query texts to run are derived from __mo_query predicates (falling back
+// to the table's 'query' option) and become the scan's FileList: one query is
+// one virtual file. The scope is pinned to the session's CN with Mcpu=1 --
+// the session-local connection cache must be reachable, and foreign queries
+// within one scan run sequentially. Separate scans in one MO query are
+// separate scopes and run concurrently.
+func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	fs := node.ExternScan.GetForeignScan()
+	if fs == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "foreign external table is missing scan metadata")
+	}
+
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return nil, err
+	}
+	if len(queryList) == 0 {
+		if fs.DefaultQuery == "" {
+			return nil, moerr.NewInvalidInputf(c.proc.Ctx,
+				"%s external table requires a __mo_query = '<text>' predicate or a 'query' table option", fs.Kind)
+		}
+		queryList = []string{fs.DefaultQuery}
+	}
+	// Apply ALL query-level conjuncts to the candidate list (the generating
+	// =/IN ones trivially pass; non-generating ones like LIKE may prune) and
+	// keep only row-level conjuncts in the compile-owned node's FilterList.
+	fileSize := make([]int64, len(queryList))
+	for i := range fileSize {
+		fileSize[i] = -1
+	}
+	queryList, fileSize, residual, err := external.FilterFileList(c.proc.Ctx, node, c.proc, queryList, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	// Predicate pushdown, SQL only and opt-in ('pushdown' = 'true'): wrap each
+	// query text as a derived table carrying the conjuncts MO can render, and
+	// stop evaluating those locally -- the source has them now.
+	//
+	// Opting in is a statement about the source: that its result columns are
+	// the DECLARED ones, by name, because a WHERE clause has to name what it
+	// filters and MO writes the names it knows. The reader checks that claim
+	// against the columns the source actually answers with, and errors when it
+	// does not hold. Predicates MO cannot render stay local, since there is
+	// nothing to send.
+	if fs.Pushdown && fs.Kind == foreignext.KindSQL && len(residual) > 0 {
+		// Bare identifiers: the quoting character is dialect-specific, and
+		// sql_tvf speaks to PostgreSQL as well as MySQL.
+		filter, pushed := sqldatastream.DeparseFiltersBareIdents(
+			residual, pushdownCols(node.TableDef.Cols), c.proc.GetSessionInfo().TimeZone)
+		if filter != "" {
+			for i := range queryList {
+				queryList[i] = foreignext.WrapPushdownQuery(queryList[i], filter)
+			}
+			kept := make([]*plan.Expr, 0, len(residual))
+			for i, expr := range residual {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			residual = kept
+		}
+	}
+	node.FilterList = residual
+
+	param := external.ForeignExternParam(fs.Kind)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// pushdownCols masks the synthetic external-scan columns out of a scan's
+// column list.  They exist only inside MO -- __mo_query selects which query
+// runs, the error-mode columns are synthesized by the reader -- so a conjunct
+// mentioning one must never be rendered into the source's WHERE clause.  The
+// deparser resolves column refs by position and already refuses a nil entry,
+// so blanking the slot is enough.
+//
+// The mask is by name, which is blunter than the (name, ColId) scoping used
+// elsewhere: a pre-existing schema may hold a REAL column called __mo_query,
+// and masking it merely costs that one conjunct its pushdown.
+func pushdownCols(cols []*plan.ColDef) []*plan.ColDef {
+	masked := make([]*plan.ColDef, len(cols))
+	for i, col := range cols {
+		if col == nil || catalog.IsReservedExternalColName(col.Name) {
+			continue
+		}
+		masked[i] = col
+	}
+	return masked
+}
+
+// compileKafkaScan compiles a scan of a Kafka external table. The read
+// position/limits come from the __mo_read_* control predicates (consumed
+// here); the scope is pinned to the session's CN with Mcpu=1 — the read is a
+// single ordered partition consume, and LAST_KAFKA_MESSAGE_ID() lives in the
+// session.
+func (c *Compile) compileKafkaScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ks := node.ExternScan.GetKafkaScan()
+	if ks == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "kafka external table is missing scan metadata")
+	}
+	if err := external.DeriveKafkaReadControl(c.proc.Ctx, node, c.proc); err != nil {
+		return nil, err
+	}
+
+	param := external.KafkaExternParam(ks)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// constructMongoScanScope keeps the single MongoDB reader in the scheduled
+// query-worker set. This matters when a downstream DEDUP join builds a
+// distributed shuffle: a coordinator-local source outside that set has no
+// receiver tree to start it, leaving every shuffle receiver waiting forever.
+func (c *Compile) constructMongoScanScope() *Scope {
+	current := c.materializeScheduledWorker(c.currentCNWorker())
+	node := current
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) > 0 {
+		node = stageNodes[0]
+		for _, candidate := range stageNodes {
+			if sameExecutionNode(candidate, current) {
+				node = candidate
+				break
+			}
+		}
+	}
+
+	scope := c.constructScopeForExternalNode(node, !sameExecutionNode(node, current))
+	scope.NodeInfo.Mcpu = 1
+	return scope
 }
 
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
@@ -3802,68 +4221,6 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 	return ss, nil
 }
 
-func shouldDispatchIvfSearchMultiCN(
-	node *plan.Node,
-	execType plan2.ExecType,
-	cnList engine.Nodes,
-	workspace client.Workspace,
-) bool {
-	// Runtime-filter messages are broadcast on the current CN's message board.
-	// Keep their consumer local; its entries reader can still fan out after the
-	// table function turns the message into a serializable membership payload.
-	return plan2.IsIvfSearchEntriesInternalScan(node) &&
-		len(node.GetRuntimeFilterProbeList()) == 0 &&
-		execType == plan2.ExecTypeAP_MULTICN &&
-		len(cnList) > 1 &&
-		(workspace == nil || workspace.Readonly()) &&
-		(node.GetStats() == nil || !node.GetStats().GetForceOneCN())
-}
-
-func partitionedIndexReaderParam(param *plan.IndexReaderParam, cncnt, cnidx int32) *plan.IndexReaderParam {
-	ret := plan2.DeepCopyIndexReaderParam(param)
-	if ret == nil {
-		ret = &plan.IndexReaderParam{}
-	}
-	ret.PartitionCnCnt = cncnt
-	ret.PartitionCnIdx = cnidx
-	return ret
-}
-
-func (c *Compile) compileIvfSearchParallel(node *plan.Node) ([]*Scope, error) {
-	var workspace client.Workspace
-	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
-		workspace = txnOp.GetWorkspace()
-	}
-	if !shouldDispatchIvfSearchMultiCN(node, c.execType, c.cnList, workspace) {
-		return c.compileSingleTableFunction(node)
-	}
-
-	currentFirstFlag := c.anal.isFirst
-	ss := make([]*Scope, 0, len(c.cnList))
-	cncnt := int32(len(c.cnList))
-	for i := range c.cnList {
-		ds := newScope(Remote)
-		ds.NodeInfo = engine.Node{
-			Id:    c.cnList[i].Id,
-			Addr:  c.cnList[i].Addr,
-			Mcpu:  1,
-			CNCNT: cncnt,
-			CNIDX: int32(i),
-		}
-		ds.DataSource = &Source{isConst: true, node: node}
-		ds.Proc = c.proc.NewNoContextChildProc(0)
-		ds.IsTbFunc = true
-
-		op := constructTableFunction(node, c.pn.GetQuery())
-		op.IndexReaderParam = partitionedIndexReaderParam(node.IndexReaderParam, ds.NodeInfo.CNCNT, ds.NodeInfo.CNIDX)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ds.setRootOperator(op)
-		ss = append(ss, ds)
-	}
-	c.anal.isFirst = false
-	return ss, nil
-}
-
 func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 
@@ -3883,8 +4240,6 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 				return c.compileSingleTableFunction(node)
 			}
 			return c.compileGenerateSeriesParallel(node, ss, parallelSize, canOpt, offset, step)
-		case ivfflatplan.IVFFLATSearchFuncName:
-			return c.compileIvfSearchParallel(node)
 		default:
 			return c.compileSingleTableFunction(node)
 		}
@@ -3966,6 +4321,57 @@ func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node,
 	return s, nil
 }
 
+func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
+	var nodes engine.Nodes
+	var workspace client.Workspace
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		workspace = txnOp.GetWorkspace()
+	}
+	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
+		(workspace == nil || workspace.Readonly()) &&
+		(node.Stats == nil || !node.Stats.ForceOneCN) {
+		nodes = make(engine.Nodes, len(c.cnList))
+		for i := range c.cnList {
+			nodes[i] = engine.Node{
+				Id:    c.cnList[i].Id,
+				Addr:  c.cnList[i].Addr,
+				Mcpu:  1,
+				CNCNT: int32(len(c.cnList)),
+				CNIDX: int32(i),
+			}
+		}
+	} else {
+		local := getEngineNode(c)
+		local.Mcpu = 1
+		local.CNCNT = 1
+		local.CNIDX = 0
+		nodes = engine.Nodes{local}
+	}
+	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, 0, len(nodes))
+	for i := range nodes {
+		// One adaptive reader owns one centroid cursor and one bounded top-k.
+		// Parallelism is expressed by independent CN partitions, not duplicate
+		// readers over the same partition.
+		nodes[i].Mcpu = 1
+		nodeCopy := plan2.DeepCopyNode(node)
+		s := newScope(Remote)
+		s.NodeInfo = nodes[i]
+		s.TxnOffset = c.TxnOffset
+		s.DataSource = &Source{
+			node:                    nodeCopy,
+			vectorIndexScanTemplate: plan2.DeepCopyVectorIndexScan(nodeCopy.VectorIndexScan),
+		}
+		op := constructTableScan(nodeCopy)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		s.setRootOperator(op)
+		s.Proc = c.proc.NewNoContextChildProc(0)
+		ss = append(ss, s)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
 	var err error
 	var txnOp client.TxnOperator
@@ -4010,6 +4416,43 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	return txnOp, ctx, nil
 }
 
+// normalizeVectorIndexScanSnapshot closes the two representations of a
+// vector scan's snapshot before the generic datasource transaction selection
+// runs.  The node-level snapshot is the compiler contract; the nested copy is
+// the self-contained identity consumed by the index reader.  Keep a fallback
+// from the nested field for plans produced before the node-level field was
+// populated, then make independent copies so later expression folding or
+// remote-scope cloning cannot mutate either representation.
+func normalizeVectorIndexScanSnapshot(node *plan.Node) {
+	if node == nil || node.VectorIndexScan == nil {
+		return
+	}
+	snapshot := node.ScanSnapshot
+	if snapshot == nil {
+		snapshot = node.VectorIndexScan.ScanSnapshot
+	}
+	if snapshot == nil {
+		return
+	}
+	node.ScanSnapshot = plan2.DeepCopySnapshot(snapshot)
+	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
+}
+
+func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (*plan.VectorIndexScan, error) {
+	if source == nil || source.node == nil || source.node.VectorIndexScan == nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
+	}
+	if source.vectorIndexScanTemplate == nil {
+		source.vectorIndexScanTemplate = plan2.DeepCopyVectorIndexScan(source.node.VectorIndexScan)
+	}
+	spec, err := vectorscan.PrepareScalar(source.vectorIndexScanTemplate, proc)
+	if err != nil {
+		return nil, err
+	}
+	source.node.VectorIndexScan = spec
+	return spec, nil
+}
+
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
 	var tblDef *plan.TableDef
@@ -4051,8 +4494,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
-	if len(node.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
+	storageFilters := filterScanStorageExprs(node.FilterList)
+	if len(storageFilters) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
 		for _, e := range s.DataSource.FilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -4092,8 +4536,57 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	return nil
 }
 
+// filterScanStorageExprs excludes row-dependent predicates from the engine
+// reader. The complete node.FilterList remains owned by TableScan or Restrict,
+// so these predicates are still evaluated once at the row-level boundary.
+func filterScanStorageExprs(exprs []*plan.Expr) []*plan.Expr {
+	for i, expr := range exprs {
+		if plan2.ContainsVolatileFunction(expr) {
+			filtered := make([]*plan.Expr, 0, len(exprs)-1)
+			filtered = append(filtered, exprs[:i]...)
+			for _, remaining := range exprs[i+1:] {
+				if !plan2.ContainsVolatileFunction(remaining) {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return exprs
+}
+
+func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
+	node := s.DataSource.node
+	if node == nil || node.VectorIndexScan == nil {
+		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
+	}
+
+	_, err := prepareVectorIndexScanForExecution(s.DataSource, c.proc)
+	if err != nil {
+		return err
+	}
+	normalizeVectorIndexScanSnapshot(node)
+	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
+	if err != nil {
+		return err
+	}
+
+	attrs := make([]string, len(node.TableDef.Cols))
+	for i, col := range node.TableDef.Cols {
+		attrs[i] = col.GetOriginCaseName()
+	}
+	s.DataSource.Attributes = attrs
+	s.DataSource.TableDef = node.TableDef
+	s.DataSource.RelationName = node.TableDef.Name
+	s.DataSource.SchemaName = node.ObjRef.SchemaName
+	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
+	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
+	s.DataSource.Timestamp = txnOp.Txn().SnapshotTS
+	return nil
+}
+
 func (c *Compile) compileTableScanFiltersAndProjection(node *plan.Node, ss []*Scope) []*Scope {
-	ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 
 	hasUserLevelLockFilter := hasUserLevelLockFunction(node.FilterList)
 
@@ -4127,9 +4620,7 @@ func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
 	if len(node.FilterList) == 0 && len(node.RuntimeFilterProbeList) == 0 {
 		return ss
 	}
-	if hasUserLevelLockFunction(node.FilterList) || runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) {
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-	}
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 	currentFirstFlag := c.anal.isFirst
 	var op *filter.Filter
 	for i := range ss {
@@ -4146,10 +4637,7 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 
-	if hasUserLevelLockFunction(node.ProjectList) {
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-	}
-
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
@@ -4209,14 +4697,14 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) ensureUserLevelLockSideEffectsOnCoordinator(node *plan.Node, ss []*Scope) []*Scope {
-	if !nodeHasUserLevelLockFunction(node) || c.userLevelLockSideEffectsRunOnCoordinator(ss) {
+func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
 }
 
-func (c *Compile) userLevelLockSideEffectsRunOnCoordinator(ss []*Scope) bool {
+func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
 	if len(ss) != 1 {
 		return false
 	}
@@ -4255,9 +4743,91 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 	return false
 }
 
+func nodeHasFoundRowsFunction(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if hasFoundRowsFunction(node.ProjectList) ||
+		hasFoundRowsFunction(node.OnList) ||
+		hasFoundRowsFunction(node.FilterList) ||
+		hasFoundRowsFunction(node.GroupBy) ||
+		hasFoundRowsFunction(node.AggList) ||
+		hasFoundRowsFunction(node.WinSpecList) ||
+		orderBySpecsHaveFoundRowsFunction(node.OrderBy) ||
+		exprHasFoundRowsFunction(node.Limit) ||
+		exprHasFoundRowsFunction(node.Offset) ||
+		hasFoundRowsFunction(node.TblFuncExprList) ||
+		hasFoundRowsFunction(node.BlockFilterList) ||
+		exprHasFoundRowsFunction(node.Interval) ||
+		exprHasFoundRowsFunction(node.Sliding) ||
+		exprHasFoundRowsFunction(node.Timestamp) ||
+		exprHasFoundRowsFunction(node.WEnd) ||
+		hasFoundRowsFunction(node.FillVal) ||
+		hasFoundRowsFunction(node.OnUpdateExprs) {
+		return true
+	}
+	if node.IndexReaderParam != nil {
+		return orderBySpecsHaveFoundRowsFunction(node.IndexReaderParam.OrderBy) ||
+			exprHasFoundRowsFunction(node.IndexReaderParam.Limit)
+	}
+	return false
+}
+
 func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if exprHasUserLevelLockFunction(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFoundRowsFunction(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprHasFoundRowsFunction(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasFoundRowsFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F == nil {
+			return false
+		}
+		if e.F.Func != nil {
+			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
+			if fid == function.FOUND_ROWS {
+				return true
+			}
+		}
+		return hasFoundRowsFunction(e.F.Args)
+	case *plan.Expr_List:
+		return e.List != nil && hasFoundRowsFunction(e.List.List)
+	case *plan.Expr_W:
+		if e.W == nil {
+			return false
+		}
+		if exprHasFoundRowsFunction(e.W.WindowFunc) || hasFoundRowsFunction(e.W.PartitionBy) {
+			return true
+		}
+		for _, orderBy := range e.W.OrderBy {
+			if orderBy != nil && exprHasFoundRowsFunction(orderBy.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func orderBySpecsHaveFoundRowsFunction(specs []*plan.OrderBySpec) bool {
+	for _, spec := range specs {
+		if spec != nil && exprHasFoundRowsFunction(spec.Expr) {
 			return true
 		}
 	}
@@ -4339,17 +4909,23 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
-	left = append(left, right...)
-	rs := c.newMergeScope(left)
+	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
+}
+
+// mergeDistinctSetScopes applies the global distinct phase required after a
+// parallel distinct set operation.  INTERSECT and MINUS may each produce one
+// copy of a set key per worker, so their local operator-level deduplication is
+// insufficient once those worker outputs are merged.
+func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
+	rs := c.newMergeScope(scopes)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
-	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
-	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{rs}
@@ -4434,6 +5010,9 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
 		}
+	}
+	if nodeType != plan.Node_INTERSECT_ALL {
+		return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
 	}
 	c.anal.isFirst = false
 	return rs
@@ -4538,7 +5117,83 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 	return branches
 }
 
+// shouldBuildLeftForAsof compares the conservative retained payload of the two
+// physical ASOF strategies. Build-left keeps the logical left and uses direct
+// candidate slots for small actual groups. A larger actual group switches to a
+// range-update tree with at most two full-right candidate slots per left
+// row, so stale cardinality estimates cannot reintroduce O(actual-L*R) work.
+// Build-right retains the right input for predecessor lookup. Unknown or
+// invalid estimates stay on the established build-right path.
+func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
+	if node == nil || left == nil || right == nil ||
+		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
+		left.Stats == nil {
+		return false
+	}
+	leftRows := left.Stats.Outcnt
+	leftRowSize := left.Stats.Rowsize
+	if leftRows <= 0 || leftRowSize <= 0 ||
+		math.IsNaN(leftRows) || math.IsNaN(leftRowSize) ||
+		math.IsInf(leftRows, 0) || math.IsInf(leftRowSize, 0) {
+		return false
+	}
+	if right.Stats == nil {
+		return false
+	}
+	rightRows := right.Stats.Outcnt
+	rightRowSize := right.Stats.Rowsize
+	if rightRows <= 0 || rightRowSize <= 0 ||
+		math.IsNaN(rightRows) || math.IsNaN(rightRowSize) ||
+		math.IsInf(rightRows, 0) || math.IsInf(rightRowSize, 0) {
+		return false
+	}
+	buildLeftBytes := leftRows * (leftRowSize + 2*rightRowSize)
+	buildRightBytes := rightRows * rightRowSize
+	return !math.IsInf(buildLeftBytes, 0) && !math.IsInf(buildRightBytes, 0) &&
+		buildLeftBytes < buildRightBytes
+}
+
+func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
+	visited := make(map[*Scope]struct{}, len(scopes))
+	stack := append([]*Scope(nil), scopes...)
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		scope := stack[last]
+		stack = stack[:last]
+		if scope == nil {
+			continue
+		}
+		if _, ok := visited[scope]; ok {
+			continue
+		}
+		visited[scope] = struct{}{}
+		found := false
+		if scope.RootOp != nil {
+			_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				if op.OpType() == target {
+					found = true
+				}
+				return nil
+			})
+		}
+		if found {
+			return true
+		}
+		stack = append(stack, scope.PreScopes...)
+	}
+	return false
+}
+
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if shouldBuildLeftForAsof(node, left, right) &&
+		!scopesContainOperator(probeScopes, vm.MergeRecursive) &&
+		!scopesContainOperator(buildScopes, vm.MergeRecursive) {
+		if node.Stats.HashmapStats.Shuffle {
+			return c.compileShuffleJoinWithBuildLeft(
+				node, left, right, probeScopes, buildScopes, true)
+		}
+		return c.compileBroadcastAsofBuildLeft(node, left, right, probeScopes, buildScopes)
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -4552,17 +5207,59 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
-func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+func (c *Compile) compileBroadcastAsofBuildLeft(
+	node, left, right *plan.Node,
+	leftScopes, rightScopes []*Scope,
+) []*Scope {
+	// Independent right scan scopes would each produce one local predecessor
+	// for every broadcast left row. Merge them into one stream so finalization
+	// happens exactly once. Shuffle ASOF keeps parallelism by key instead.
+	rightScopes = c.mergeShuffleScopesIfNeeded(rightScopes, false)
+	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
+		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
+	}
+
+	leftTypes := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTypes[i] = dupType(&expr.Typ)
+	}
+	rightTypes := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTypes[i] = dupType(&expr.Typ)
+	}
+	op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+	op.AsofBuildLeft = true
+	op.RuntimeFilterSpecs = nil
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rightScopes[0].setRootOperator(op)
+	c.anal.isFirst = false
+	return c.compileBuildSideForBroadcastJoin(node, rightScopes, leftScopes)
+}
+
+func (c *Compile) compileShuffleJoin(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+) []*Scope {
+	return c.compileShuffleJoinWithBuildLeft(
+		node, left, right, leftscopes, rightscopes, false)
+}
+
+func (c *Compile) compileShuffleJoinWithBuildLeft(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+	asofBuildLeft bool,
+) []*Scope {
 	stageNodes, hasLocalDependency := c.shuffleJoinStageNodes(leftscopes, rightscopes)
 	if !hasLocalDependency &&
 		len(stageNodes) == 1 && len(leftscopes) == 1 && len(rightscopes) == 1 &&
 		sameExecutionNode(leftscopes[0].NodeInfo, rightscopes[0].NodeInfo) &&
 		leftscopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) &&
 		rightscopes[0].NodeInfo.Mcpu == int(right.Stats.Dop) {
-		return c.compileLocalShuffleJoin(node, left, right, leftscopes, rightscopes)
+		return c.compileLocalShuffleJoinWithBuildLeft(
+			node, left, right, leftscopes, rightscopes, asofBuildLeft)
 	}
 	return c.compileDistributedShuffleJoin(
-		node, left, right, leftscopes, rightscopes, stageNodes, hasLocalDependency)
+		node, left, right, leftscopes, rightscopes, stageNodes, hasLocalDependency, asofBuildLeft)
 }
 
 // canReuseDistributedShuffleJoin reports whether probeScopes already use the
@@ -4603,7 +5300,19 @@ func (c *Compile) shuffleStageNodes(scopes []*Scope) engine.Nodes {
 	return stageNodes
 }
 
-func (c *Compile) compileLocalShuffleJoin(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+func (c *Compile) compileLocalShuffleJoin(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+) []*Scope {
+	return c.compileLocalShuffleJoinWithBuildLeft(
+		node, left, right, leftscopes, rightscopes, false)
+}
+
+func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+	asofBuildLeft bool,
+) []*Scope {
 	if node.Stats.Dop != left.Stats.Dop || node.Stats.Dop != right.Stats.Dop {
 		panic("wrong dop for shuffle join!")
 	}
@@ -4611,33 +5320,70 @@ func (c *Compile) compileLocalShuffleJoin(node, left, right *plan.Node, leftscop
 		panic("wrong scopes for shuffle join!")
 	}
 
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	probeScopes, buildScopes := leftscopes, rightscopes
+	probeIsLogicalLeft := true
+	if asofBuildLeft {
+		probeScopes, buildScopes = rightscopes, leftscopes
+		probeIsLogicalLeft = false
+	}
+	reuse := !asofBuildLeft &&
+		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.shuffleStageNodes(leftscopes)) * int(node.Stats.Dop)
-	for i := range leftscopes {
-		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
+	for i := range probeScopes {
+		probeScopes[i].PreScopes = append(probeScopes[i].PreScopes, buildScopes[i])
 		if !reuse {
-			shuffleOpForProbe := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleOpForProbe := constructShuffleOperatorForJoin(
+				int32(bucketNum), node, probeIsLogicalLeft)
+			if asofBuildLeft && len(node.RuntimeFilterProbeList) > 0 {
+				// Shuffle HashBuild publishes PASS as its build-completion signal.
+				// After swapping the physical sides, move that wait to the logical
+				// right (physical probe); waiting on the logical-left build stream
+				// would create a self-dependency.
+				shuffleOpForProbe.RuntimeFilterSpec =
+					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
 			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			leftscopes[i].setRootOperator(shuffleOpForProbe)
+			probeScopes[i].setRootOperator(shuffleOpForProbe)
 		}
 
-		shuffleOpForBuild := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleOpForBuild := constructShuffleOperatorForJoin(
+			int32(bucketNum), node, !probeIsLogicalLeft)
+		if asofBuildLeft {
+			shuffleOpForBuild.RuntimeFilterSpec = nil
+		}
 		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		rightscopes[i].setRootOperator(shuffleOpForBuild)
+		buildScopes[i].setRootOperator(shuffleOpForBuild)
 	}
 
-	constructShuffleJoinOP(c, leftscopes, node, left, right, true)
+	constructShuffleJoinOPWithBuildLeft(
+		c, probeScopes, node, left, right, true, asofBuildLeft)
 
-	for i := range leftscopes {
-		buildOp := constructShuffleHashBuild(node, leftscopes[i].RootOp, c.proc)
+	for i := range probeScopes {
+		buildOp := constructShuffleHashBuild(node, probeScopes[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		rightscopes[i].setRootOperator(buildOp)
+		buildScopes[i].setRootOperator(buildOp)
 	}
 
-	return leftscopes
+	return probeScopes
 }
 
-func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right *plan.Node, sharedPool bool) {
+func constructShuffleJoinOP(
+	c *Compile,
+	shuffleJoins []*Scope,
+	node, left, right *plan.Node,
+	sharedPool bool,
+) {
+	constructShuffleJoinOPWithBuildLeft(
+		c, shuffleJoins, node, left, right, sharedPool, false)
+}
+
+func constructShuffleJoinOPWithBuildLeft(
+	c *Compile,
+	shuffleJoins []*Scope,
+	node, left, right *plan.Node,
+	sharedPool bool,
+	asofBuildLeft bool,
+) {
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -4650,9 +5396,11 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK,
+		plan.Node_ASOF, plan.Node_ASOF_LEFT:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			op.AsofBuildLeft = asofBuildLeft
 			op.ShuffleIdx = int32(i)
 			if sharedPool {
 				op.ShuffleIdx = -1
@@ -4698,9 +5446,18 @@ func (c *Compile) compileDistributedShuffleJoin(
 	lefts, rights []*Scope,
 	stageNodes engine.Nodes,
 	attachRemoteSources bool,
+	asofBuildLeft bool,
 ) []*Scope {
-	shuffleJoins := c.newShuffleJoinScopeListAt(lefts, rights, node, stageNodes, attachRemoteSources)
-	constructShuffleJoinOP(c, shuffleJoins, node, left, right, false)
+	probeScopes, buildScopes := lefts, rights
+	probeIsLogicalLeft := true
+	if asofBuildLeft {
+		probeScopes, buildScopes = rights, lefts
+		probeIsLogicalLeft = false
+	}
+	shuffleJoins := c.newShuffleJoinScopeListAtSides(
+		probeScopes, buildScopes, node, stageNodes, attachRemoteSources, probeIsLogicalLeft)
+	constructShuffleJoinOPWithBuildLeft(
+		c, shuffleJoins, node, left, right, false, asofBuildLeft)
 
 	//construct shuffle build
 	currentFirstFlag := c.anal.isFirst
@@ -4927,6 +5684,15 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 		}
 		c.anal.isFirst = false
+	case plan.Node_ASOF, plan.Node_ASOF_LEFT:
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
+		for i := range rs {
+			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			rs[i].setRootOperator(op)
+		}
+		c.anal.isFirst = false
 	case plan.Node_OUTER:
 		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
 		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
@@ -5113,7 +5879,8 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
-			if op.TableFunction.IsSingle {
+			op.TxnOffset = c.TxnOffset
+			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
 			}
 			op.SetIdx(c.anal.curNodeIdx)
@@ -5122,6 +5889,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.TxnOffset = c.TxnOffset
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
@@ -5192,6 +5960,21 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// SQL_CALC_FOUND_ROWS must not use the Top-N shortcut: Top-N is
+		// intentionally allowed to stop upstream work. Build the complete
+		// ordered stream first, then apply OFFSET and LIMIT on the final scope.
+		if len(node.OrderBy) > 0 {
+			ss = c.compileOrder(node, ss)
+		}
+		if node.Offset != nil {
+			ss = c.compileOffset(node, ss)
+		}
+		if node.Limit != nil {
+			ss = c.compileLimit(node, ss)
+		}
+		return ss
+	}
 	switch {
 	case node.Limit != nil && node.Offset == nil && len(node.OrderBy) > 0: // top
 		return c.compileTop(node, node.Limit, ss)
@@ -5362,6 +6145,19 @@ func (c *Compile) compileFill(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// OFFSET owns the pre-offset count for SQL_CALC_FOUND_ROWS, so it must
+		// run on the coordinator as well. This keeps remote workers stateless and
+		// lets the following coordinator Limit preserve this complete count.
+		rs := c.newMergeScope(ss)
+		arg := constructOffset(node)
+		arg.WithFoundRows(true)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructOffset(node)
@@ -5383,6 +6179,30 @@ func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
+	return c.compileLimitWithFoundRowsDrain(node, ss, false)
+}
+
+func (c *Compile) compileLimitWithFoundRowsDrain(node *plan.Node, ss []*Scope, drainOnly bool) []*Scope {
+	if c.ownsFoundRows(node) || drainOnly {
+		// Keep FOUND_ROWS-aware Limits on the coordinator. Installing them on
+		// producer scopes would either publish partial counts from local workers
+		// or stop a producer before the downstream owner observes EOF. Merging the
+		// complete producer streams first gives draining and publication one
+		// deterministic coordinator path.
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		rs := c.newMergeScope(ss)
+		arg := constructLimit(node)
+		if c.ownsFoundRows(node) {
+			arg.WithFoundRows(true)
+		} else {
+			arg.WithFoundRowsDrain(true)
+		}
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(node)
@@ -5505,16 +6325,33 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
-func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
-	// for less memory usage while merge group,
-	// we do not run the group-operator in parallel once this has a distinct aggregation.
-	// because the parallel need to store all the source data in the memory for merging.
-	// we construct a pipeline like the following description for this case:
-	//
-	// all the operators from ss[0] to ss[last] send the data to only one group-operator.
-	// this group-operator sends its result to the merge-group-operator.
-	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
-	if hasDistinct {
+func (c *Compile) compileGroupWithoutShuffle(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
+		return c.compileOrderedAggregateSingleStage(node, ss, ns)
+	}
+	if c.IsSingleScope(ss) {
+		return c.compileTPGroup(node, ss, ns)
+	}
+	return c.compileMergeGroup(
+		node, ss, ns, distinctRequiresSingleStage)
+}
+
+func (c *Compile) compileMergeGroup(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	// DISTINCT aggregates without an exact state-merge contract run one Group
+	// operator before MergeGroup. Parallel-mergeable DISTINCT aggregates use the
+	// ordinary local Group + MergeGroup pipeline below.
+	if distinctRequiresSingleStage {
 		ss = c.mergeShuffleScopesIfNeeded(ss, false)
 		mergeToGroup := c.newMergeScope(ss)
 
@@ -5599,6 +6436,19 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 	return false
 }
 
+func hasVarianceAggregate(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch int64(uint64(fn.Func.Obj) & function.DistinctMask) {
+			case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+				aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
@@ -5630,6 +6480,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
+func (c *Compile) supportsRemoteVarianceAggregates() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion35
+}
+
 func (c *Compile) supportsRemotePartitionTopN() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -5648,6 +6508,16 @@ func supportsRemoteTextCollationAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion14
+}
+
+func supportsRemoteAsofJoin(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion27
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {
@@ -5676,11 +6546,77 @@ func supportsRemoteRightDedupInputKeysUnique(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion21
 }
 
+func supportsRemoteAffectedRowsSelectors(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion24
+}
+
+func supportsRemoteCrossDomainStringLiterals(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
+func supportsRemotePreparedNumericPrefix(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion30
+}
+
+func supportsRemoteStatementLastInsertID(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion26
+}
+
+func supportsRemoteUpdateChangedRows(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion25
+}
+
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
-		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates())
+		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
@@ -5709,6 +6645,18 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		}
 		c.anal.isFirst = false
 		return inputSS
+	}
+	// A normal shuffle is useful only when it creates more than one physical
+	// aggregate owner. In particular, max_dop=1 on one CN would otherwise hash
+	// every row into one bucket and add a dispatch/receiver pipeline with no
+	// reduction in retained aggregate state.
+	if node.Stats.Dop <= 1 && len(stageNodes) <= 1 {
+		return c.compileGroupWithoutShuffle(
+			node,
+			inputSS,
+			nodes,
+			plan2.RequiresSingleStageDistinctAgg(node),
+		)
 	}
 	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 && inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) {
 		return c.compileLocalShuffleGroup(node, inputSS, nodes)
@@ -6499,12 +7447,22 @@ func scopeTreeSinkScanNode(s *Scope, visitedScopes map[*Scope]bool, visitedOps m
 	return engine.Node{}, false
 }
 
+// operatorTreeContainsSinkScan reports whether the operator tree contains a
+// CN-pinned local source: a SINK_SCAN merge (consumes an in-process
+// PipelineEdge) or an ESQL/SQL foreign external scan (its connection cache
+// lives only on the interactive session's CN). Either one must keep its
+// owning CN inside the shuffle receiver stage set, or no receiver tree would
+// ever start the scope and every shuffle receiver would wait forever.
 func operatorTreeContainsSinkScan(op vm.Operator, visited map[vm.Operator]bool) bool {
 	if op == nil || visited[op] {
 		return false
 	}
 	visited[op] = true
 	if mergeOp, ok := op.(*merge.Merge); ok && mergeOp.SinkScan {
+		return true
+	}
+	if ext, ok := op.(*external.External); ok && ext.Es != nil &&
+		(ext.Es.ForeignScan != nil || ext.Es.KafkaScan != nil) {
 		return true
 	}
 	base := op.GetOperatorBase()
@@ -6807,6 +7765,17 @@ func (c *Compile) newShuffleJoinScopeListAt(
 	cnlist engine.Nodes,
 	attachRemoteSources bool,
 ) []*Scope {
+	return c.newShuffleJoinScopeListAtSides(
+		probeScopes, buildScopes, node, cnlist, attachRemoteSources, true)
+}
+
+func (c *Compile) newShuffleJoinScopeListAtSides(
+	probeScopes, buildScopes []*Scope,
+	node *plan.Node,
+	cnlist engine.Nodes,
+	attachRemoteSources bool,
+	probeIsLogicalLeft bool,
+) []*Scope {
 	if len(cnlist) == 0 {
 		cnlist = c.shuffleStageNodes(probeScopes)
 	}
@@ -6816,7 +7785,8 @@ func (c *Compile) newShuffleJoinScopeListAt(
 
 	dop := int(node.Stats.Dop)
 	bucketNum := len(cnlist) * dop
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
+	reuse := probeIsLogicalLeft &&
+		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
 		canReuseDistributedShuffleJoin(probeScopes, cnlist, dop)
 	// Multi-CN DEDUP normalizes the probe scopes below by merging them, so the
 	// per-bucket layout cannot be reused by the distributed join.
@@ -6886,7 +7856,12 @@ func (c *Compile) newShuffleJoinScopeListAt(
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleProbeOp := constructShuffleOperatorForJoin(
+				int32(bucketNum), node, probeIsLogicalLeft)
+			if !probeIsLogicalLeft && len(node.RuntimeFilterProbeList) > 0 {
+				shuffleProbeOp.RuntimeFilterSpec =
+					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
 			shuffleProbeOp.DrainAllBuckets = true
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -6907,7 +7882,11 @@ func (c *Compile) newShuffleJoinScopeListAt(
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(
+			int32(bucketNum), node, !probeIsLogicalLeft)
+		if !probeIsLogicalLeft {
+			shuffleBuildOp.RuntimeFilterSpec = nil
+		}
 		shuffleBuildOp.DrainAllBuckets = true
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -7161,7 +8140,11 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			}
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
-				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+				if lit, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(NULL) must count zero values, not all input rows.
+					if lit.Lit == nil || lit.Lit.Isnull {
+						return nil, nil, nil
+					}
 					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)

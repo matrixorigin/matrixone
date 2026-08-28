@@ -17,6 +17,10 @@ package multi_update
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +32,24 @@ func newAffectRowsTestOp(action actionType, countDelete bool) *MultiUpdate {
 	op.CountDeleteAffectRows = countDelete
 	op.addAffectedRowsFunc = op.doAddAffectedRows
 	return op
+}
+
+func TestInsertAffectedRowsUsesChangedRowsMarker(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	changed := vector.NewVec(types.T_bool.ToType())
+	defer changed.Free(proc.Mp())
+	for _, value := range []bool{false, true, false, true} {
+		require.NoError(t, vector.AppendFixed(changed, value, false, proc.Mp()))
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = changed
+	input.SetRowCount(4)
+
+	markerCol := 0
+	require.EqualValues(t, 2, insertAffectedRows(&MultiUpdateCtx{ChangedRowsCol: &markerCol}, input))
+	require.EqualValues(t, 4, insertAffectedRows(&MultiUpdateCtx{}, input))
 }
 
 // TestUpsertAffectRowsAccounting pins the MySQL-compatible affected-rows

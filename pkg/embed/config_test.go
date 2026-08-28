@@ -25,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,6 +108,62 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
+}
+
+func TestFileServiceFactoryScopesMemoryCacheMetrics(t *testing.T) {
+	ctx := context.Background()
+
+	newConfig := func(capacity toml.ByteSize) *ServiceConfig {
+		return &ServiceConfig{FileServices: []fileservice.Config{
+			{
+				Name:    defines.LocalFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.SharedFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.ETLFileServiceName,
+				Backend: "DISK-ETL",
+			},
+			{
+				Name:    defines.TmpFileServiceName,
+				Backend: "DISK-TMP",
+			},
+		}}
+	}
+
+	firstCapacity := toml.ByteSize(1 << 20)
+	first, err := newConfig(firstCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-a")
+	require.NoError(t, err)
+	t.Cleanup(func() { first.Close(ctx) })
+
+	secondCapacity := toml.ByteSize(2 << 20)
+	second, err := newConfig(secondCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-b")
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Close(ctx) })
+
+	_, firstGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-a"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	_, secondGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-b"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	require.Equal(t, float64(firstCapacity), testutil.ToFloat64(firstGauge))
+	require.Equal(t, float64(secondCapacity), testutil.ToFloat64(secondGauge))
 }
 
 func TestDefaultTmpFileServiceUsesServiceDataDir(t *testing.T) {
@@ -249,6 +308,53 @@ func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
 	cfg.SetDefaultValue()
 	cfg.Frontend.SetDefaultValues()
 	require.False(t, cfg.Frontend.MongoDB.Enable)
+}
+
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	validators := []struct {
+		name string
+		call func(*ServiceConfig) error
+	}{
+		{name: "validate loaded config", call: (*ServiceConfig).validate},
+		{name: "apply programmatic defaults", call: (*ServiceConfig).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(&cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
+
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "authentication freshness clock budget 2.000000001s")
+
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(&cfg))
+
+			// Catalog authentication is unreachable when user checks are skipped,
+			// so its connection-timeout budget must not reject startup.
+			cfg = newServiceConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+			cfg.CN.Frontend.SkipCheckUser = true
+			require.NoError(t, validator.call(&cfg))
+
+			// Skipping authentication does not bypass the general clock contract.
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(&cfg), "max-clock-offset must be positive")
+		})
+	}
 }
 
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {

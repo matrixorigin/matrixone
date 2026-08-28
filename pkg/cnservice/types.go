@@ -105,7 +105,14 @@ const (
 // Certificate files are deliberately separate for the two mTLS directions:
 // CN -> Flight and sidecar -> CN read resolver.
 type SiriusConfig struct {
-	Enabled                bool          `toml:"enabled"`
+	Enabled bool `toml:"enabled"`
+	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
+	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
+	// startup keeps requiring durable GC-protected lease dependencies.
+	BenchmarkNoGC bool `toml:"benchmark-no-gc"`
+	// benchmarkGCDisabled is set by the top-level launcher after it verifies
+	// the paired TN configuration. It is intentionally not user-configurable.
+	benchmarkGCDisabled    bool
 	FlightAddress          string        `toml:"flight-address"`
 	FlightServerName       string        `toml:"flight-server-name"`
 	FlightClientCertPath   string        `toml:"flight-client-cert-path"`
@@ -508,7 +515,13 @@ func (c *Config) Validate() error {
 }
 
 func (c *SiriusConfig) validate() error {
-	if c == nil || !c.Enabled {
+	if c == nil {
+		return nil
+	}
+	if c.BenchmarkNoGC && !c.Enabled {
+		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires Sirius enabled")
+	}
+	if !c.Enabled {
 		return nil
 	}
 	if c.MaxBatchBytes == 0 {
@@ -767,28 +780,44 @@ type service struct {
 	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
-	stopper             *stopper.Stopper
-	heartbeatInFlight   atomic.Bool
-	commandPollNeeded   atomic.Bool
-	commandPollWakeup   chan struct{}
-	commandMu           sync.Mutex
-	lastCommandBatchID  uint64
-	ackedCommandBatchID atomic.Uint64
-	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
-	lastCommandHash     [32]byte
-	legacyDedupeArmed   bool
+	stopper                         *stopper.Stopper
+	heartbeatInFlight               atomic.Bool
+	commandPollNeeded               atomic.Bool
+	commandPollWakeup               chan struct{}
+	heartbeatWakeup                 chan struct{}
+	commandMu                       sync.Mutex
+	lastCommandBatchID              uint64
+	ackedCommandBatchID             atomic.Uint64
+	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash                 [32]byte
+	legacyDedupeArmed               bool
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataCatalogFencedEpoch  atomic.Uint64
+	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataCatalogFenceMu      sync.Mutex
+	viewMetadataCatalogFenceReady   atomic.Bool
+	viewMetadataIngressReady        atomic.Bool
+	viewMetadataGenerationRevoked   atomic.Bool
+	viewMetadataRevocationOnce      sync.Once
+	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
+	// close request issued after synchronous ingress revocation.
+	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
 	lifecycleMu         sync.Mutex
+	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState
 	closeOnce           sync.Once
 	closeErr            error
 
 	task struct {
 		sync.RWMutex
-		holder         taskservice.TaskServiceHolder
-		runner         taskservice.TaskRunner
-		runnerReady    atomic.Bool
-		storageFactory taskservice.TaskStorageFactory
+		holder            taskservice.TaskServiceHolder
+		runner            taskservice.TaskRunner
+		runnerReady       atomic.Bool
+		generationRevoked bool
+		storageFactory    taskservice.TaskStorageFactory
 	}
 
 	addressMgr address.AddressManager

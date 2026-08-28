@@ -111,6 +111,16 @@ func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper
 	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
 }
 
+type resultMetadataFreezer interface {
+	FreezeResultMetadata()
+}
+
+func freezeResultMetadata(runner ComputationRunner) {
+	if freezer, ok := runner.(resultMetadataFreezer); ok {
+		freezer.FreezeResultMetadata()
+	}
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -120,6 +130,17 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW {
 		if execCtx.returning == nil || execCtx.returning.spool == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING spool is not initialized")
+		}
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			return err
+		}
+		// RETURNING rows are attempt-spooled and no metadata has reached the
+		// client yet. Sync a definition-retried generation first, then derive
+		// metadata from the plan that actually produced the committed spool.
+		if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			if runningCompile, ok := execCtx.runner.(Compile); ok {
+				txnCw.syncCompileExecution(runningCompile)
+			}
 		}
 		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 		if err != nil {
@@ -131,9 +152,6 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 		execCtx.returning.columns = columns
-		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
-			return err
-		}
 		execCtx.returning.affectedRows = execCtx.runResult.AffectRows
 		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows {
 			return moerr.NewInternalErrorf(execCtx.reqCtx,
@@ -168,9 +186,22 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
-		err = execCtx.resper.RespPreMeta(execCtx, columns)
-		if err != nil {
-			return
+		freezeResultMetadata(execCtx.runner)
+		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		if cursorExecute {
+			// A cursor must retain its metadata before the pipeline starts so
+			// captured batches can be decoded, but its execute terminator must
+			// not be sent until all batches have materialized successfully.
+			if resper, ok := execCtx.resper.(*MysqlResp); ok {
+				resper.setPreparedCursorColumns(execCtx, columns)
+			} else {
+				return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
+			}
+		} else {
+			err = execCtx.resper.RespPreMeta(execCtx, columns)
+			if err != nil {
+				return
+			}
 		}
 
 		ses.EnterFPrint(FPResultRowStmtSelect2)
@@ -184,6 +215,10 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
 		}
+		// Cursor metadata is retained above for decoding, but its wire response
+		// is emitted by respStreamResultRow after transaction finalization. This
+		// prevents a later autocommit commit error from following a successful
+		// cursor response on the same connection.
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
@@ -220,6 +255,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
+		freezeResultMetadata(execCtx.runner)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
@@ -253,6 +289,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtDefault1)
 		defer ses.ExitFPrint(FPResultRowStmtDefault1)
+		freezeResultMetadata(execCtx.runner)
 		err = execCtx.resper.RespPreMeta(execCtx, columns)
 		if err != nil {
 			return
@@ -292,8 +329,54 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	//!!!carefully to use
 	//execCtx.proto.DisableAutoFlush()
 	//defer execCtx.proto.EnableAutoFlush()
+	resper.setPreparedCursorColumns(execCtx, columns)
+	if err = resper.writeColumnDefs(ses, execCtx, columns); err != nil {
+		return err
+	}
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	return resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
+}
 
+// respCursorColumnDefs writes the complete COM_STMT_EXECUTE cursor response
+// after the pipeline has successfully materialized the result and transaction
+// finalization has succeeded. A server cursor response has one and only one
+// execute terminator: the EOF/OK packet following the column definitions,
+// carrying SERVER_STATUS_CURSOR_EXISTS. Delaying this packet prevents a failed
+// decode, limit check, pipeline, or commit operation from advertising a cursor
+// that cannot be fetched.
+func (resper *MysqlResp) respCursorColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) error {
+	if execCtx.inMigration {
+		return nil
+	}
+	resper.setPreparedCursorColumns(execCtx, columns)
+	if err := resper.writeColumnDefs(ses, execCtx, columns); err != nil {
+		return err
+	}
+	status := cursorExecuteStatus(checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+	return resper.mysqlRrWr.WriteEOFOrOK(0, status)
+}
+
+func (resper *MysqlResp) setPreparedCursorColumns(execCtx *ExecCtx, columns []any) {
+	if execCtx == nil || execCtx.input == nil || !execCtx.input.isCursorExecute ||
+		execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil {
+		return
+	}
+	if execCtx.prepareStmt.cursor.result == nil {
+		execCtx.prepareStmt.cursor.result = &MysqlResultSet{}
+	}
+	cursorColumns := make([]Column, 0, len(columns))
+	for _, column := range columns {
+		cursorColumns = append(cursorColumns, column.(Column))
+	}
+	execCtx.prepareStmt.cursor.result.Columns = cursorColumns
+}
+
+func (resper *MysqlResp) writeColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
 	mrs := ses.GetMysqlResultSet()
+
 	/*
 		Step 1 : send column count and column definition.
 	*/
@@ -329,14 +412,6 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 			}
 		}
 	}
-	/*
-		mysql COM_QUERY response: End after the column has been sent.
-		send EOF packet
-	*/
-	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
-	if err != nil {
-		return
-	}
 	return
 }
 
@@ -354,7 +429,28 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+		if execCtx.input != nil && execCtx.input.isCursorExecute {
+			// The execute pipeline has already materialized the retained rows. Emit
+			// the column definitions and the sole cursor terminator only now: this
+			// callback runs after executeStmtWithWorkspace has finalized the
+			// transaction. Fetch owns the next protocol packet, including
+			// LAST_ROW_SENT for an empty result.
+			if execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil ||
+				execCtx.prepareStmt.cursor.result == nil || len(execCtx.prepareStmt.cursor.result.Columns) == 0 {
+				err = moerr.NewInternalError(execCtx.reqCtx, "prepared cursor result metadata is missing")
+				return
+			}
+			columns := make([]any, len(execCtx.prepareStmt.cursor.result.Columns))
+			for i, column := range execCtx.prepareStmt.cursor.result.Columns {
+				columns[i] = column
+			}
+			if err = resper.respCursorColumnDefs(ses, execCtx, columns); err != nil {
+				return
+			}
+			return nil
+		}
+		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, status)
 		if err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -441,6 +537,11 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	}
 
 	return
+}
+
+func cursorExecuteStatus(status uint16) uint16 {
+	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+	return status | SERVER_STATUS_CURSOR_EXISTS
 }
 
 func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace {

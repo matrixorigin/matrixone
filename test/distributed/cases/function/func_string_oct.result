@@ -60,7 +60,9 @@ CREATE TABLE t1 (a int);
 INSERT INTO t1 VALUES (100), (12);
 SELECT a FROM t1
 HAVING oct(a) <>0;
-SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+a
+100
+12
 DROP TABLE t1;
 drop table if exists t1;
 create table t1(a INT,  b int);

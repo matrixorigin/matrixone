@@ -438,9 +438,10 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 
 func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		sql       string
-		finalName string
+		name               string
+		sql                string
+		finalName          string
+		wantSelectFragment string
 	}{
 		{
 			name:      "rename",
@@ -457,6 +458,24 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, CHANGE COLUMN tmp added_col BIGINT;`,
 			finalName: "added_col",
 		},
+		{
+			name:               "rename implicit non-null default",
+			sql:                `ALTER TABLE t1 ADD COLUMN tmp INT NOT NULL, RENAME COLUMN tmp TO added_col;`,
+			finalName:          "added_col",
+			wantSelectFragment: "0",
+		},
+		{
+			name:               "modify implicit non-null default",
+			sql:                `ALTER TABLE t1 ADD COLUMN tmp INT NOT NULL, MODIFY COLUMN tmp BIGINT NOT NULL;`,
+			finalName:          "tmp",
+			wantSelectFragment: "0",
+		},
+		{
+			name:               "change implicit non-null default",
+			sql:                `ALTER TABLE t1 ADD COLUMN tmp INT NOT NULL, CHANGE COLUMN tmp added_col BIGINT NOT NULL;`,
+			finalName:          "added_col",
+			wantSelectFragment: "0",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
@@ -465,6 +484,16 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 			alter := logicPlan.GetDdl().GetAlterTable()
 			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
 			require.NotNil(t, FindColumn(alter.CopyTableDef.Cols, tc.finalName))
+
+			selectParts := strings.SplitN(alter.InsertTmpDataSql, " SELECT ", 2)
+			require.Len(t, selectParts, 2)
+			selectList := strings.SplitN(selectParts[1], " FROM ", 2)
+			require.Len(t, selectList, 2)
+			require.NotContains(t, selectList[0], "`tmp`",
+				"a column added by the same ALTER cannot be read from the source table")
+			if tc.wantSelectFragment != "" {
+				require.Contains(t, selectList[0], tc.wantSelectFragment)
+			}
 		})
 	}
 
@@ -521,6 +550,129 @@ func TestAlterTableInplaceRejectsDuplicateIndexBeforeDrop(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+			IndexName:  "MixedCaseIdx",
+			Parts:      []string{"a"},
+			IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+			TableExist: true,
+		}}
+		return mock
+	}
+
+	t.Run("standalone create", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+			"CREATE INDEX MixedCaseIdx ON t1(b)")
+		require.NoError(t, err)
+		indexes := logicPlan.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
+		require.Len(t, indexes, 1)
+		require.Equal(t, "MixedCaseIdx", indexes[0].IndexName)
+	})
+
+	t.Run("alter visibility", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock(), t,
+			"ALTER TABLE t1 ALTER INDEX mixedcaseidx INVISIBLE")
+		require.NoError(t, err)
+		action := logicPlan.GetDdl().GetAlterTable().Actions[0].GetAlterIndex()
+		require.Equal(t, "MixedCaseIdx", action.IndexName)
+	})
+
+	t.Run("alter drop", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock(), t,
+			"ALTER TABLE t1 DROP INDEX MIXEDCASEIDX")
+		require.NoError(t, err)
+		action := logicPlan.GetDdl().GetAlterTable().Actions[0].GetDrop()
+		require.Equal(t, "MixedCaseIdx", action.Name)
+	})
+
+	t.Run("standalone drop", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock(), t,
+			"DROP INDEX mixedcaseidx ON t1")
+		require.NoError(t, err)
+		require.Equal(t, "MixedCaseIdx", logicPlan.GetDdl().GetDropIndex().IndexName)
+	})
+
+	t.Run("create rejects case-only duplicate", func(t *testing.T) {
+		_, err := buildSingleStmt(newMock(), t,
+			"CREATE INDEX mixedcaseidx ON t1(b)")
+		require.Error(t, err)
+	})
+}
+
+func TestUnicodeIndexNamesUseSameCreationAndLookupContract(t *testing.T) {
+	newMock := func(names ...string) *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		for i, name := range names {
+			part := "a"
+			if i > 0 {
+				part = "b"
+			}
+			mock.ctxt.tables["t1"].Indexes = append(mock.ctxt.tables["t1"].Indexes, &plan.IndexDef{
+				IndexName:  name,
+				Parts:      []string{part},
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+			})
+		}
+		return mock
+	}
+
+	t.Run("inline create preserves distinct final sigma", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+			"CREATE TABLE unicode_idx (a INT, b INT, KEY `Σ` (a), KEY `ς` (b))")
+		require.NoError(t, err)
+		indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
+		require.Len(t, indexes, 2)
+		require.Equal(t, "Σ", indexes[0].IndexName)
+		require.Equal(t, "ς", indexes[1].IndexName)
+	})
+
+	t.Run("standalone create follows inline duplicate rules", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ"), t,
+			"CREATE INDEX `ς` ON t1(b)")
+		require.NoError(t, err)
+		indexes := logicPlan.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
+		require.Len(t, indexes, 1)
+		require.Equal(t, "ς", indexes[0].IndexName)
+
+		_, err = buildSingleStmt(newMock("Σ"), t,
+			"CREATE INDEX `σ` ON t1(b)")
+		require.Error(t, err)
+	})
+
+	t.Run("standalone drop resolves unique catalog object", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ", "ς"), t,
+			"DROP INDEX `ς` ON t1")
+		require.NoError(t, err)
+		require.Equal(t, "ς", logicPlan.GetDdl().GetDropIndex().IndexName)
+
+		logicPlan, err = buildSingleStmt(newMock("Σ", "ς"), t,
+			"DROP INDEX `σ` ON t1")
+		require.NoError(t, err)
+		require.Equal(t, "Σ", logicPlan.GetDdl().GetDropIndex().IndexName)
+	})
+
+	t.Run("sequential alter keeps distinct state", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ", "ς"), t,
+			"ALTER TABLE t1 DROP INDEX `ς`, DROP INDEX `Σ`")
+		require.NoError(t, err)
+		actions := logicPlan.GetDdl().GetAlterTable().GetActions()
+		require.Len(t, actions, 2)
+		require.Equal(t, "ς", actions[0].GetDrop().GetName())
+		require.Equal(t, "Σ", actions[1].GetDrop().GetName())
+	})
+
+	t.Run("alter visibility resolves unique catalog object", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ", "ς"), t,
+			"ALTER TABLE t1 ALTER INDEX `ς` INVISIBLE")
+		require.NoError(t, err)
+		require.Equal(t, "ς",
+			logicPlan.GetDdl().GetAlterTable().GetActions()[0].GetAlterIndex().GetIndexName())
+	})
+}
+
 func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
 	newMock := func() *MockOptimizer {
 		mock := NewMockOptimizer(false)
@@ -573,6 +725,35 @@ func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	_, err := buildSingleStmt(newMock(), t,
 		`ALTER TABLE t1 DROP FOREIGN KEY fk_x, DROP FOREIGN KEY fk_x`)
 	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
+}
+
+func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Cols[1].Typ = mock.ctxt.tables["t1"].Cols[0].Typ
+		return mock
+	}
+
+	logicPlan, err := buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 ADD CONSTRAINT MixedFK FOREIGN KEY (b) REFERENCES t1(a), DROP FOREIGN KEY MixedFK`)
+	require.NoError(t, err)
+	require.Equal(t, "mixedfk",
+		logicPlan.GetDdl().GetAlterTable().GetActions()[0].GetAddFk().GetFkey().GetName())
+	require.Equal(t, "mixedfk",
+		logicPlan.GetDdl().GetAlterTable().GetActions()[1].GetDrop().GetName())
+
+	_, err = buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 ADD CONSTRAINT MixedFK FOREIGN KEY (b) REFERENCES t1(a), ADD CONSTRAINT mixedfk FOREIGN KEY (b) REFERENCES t1(a)`)
+	require.ErrorContains(t, err, "Duplicate foreign key constraint name 'mixedfk'")
+
+	_, err = buildSingleStmt(NewMockOptimizer(false), t,
+		`CREATE TABLE child_fk_case (
+			a BIGINT,
+			b BIGINT,
+			CONSTRAINT MixedFK FOREIGN KEY (a) REFERENCES t1(a),
+			CONSTRAINT mixedfk FOREIGN KEY (b) REFERENCES t1(a)
+		)`)
+	require.ErrorContains(t, err, "duplicate fk name mixedfk")
 }
 
 func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
@@ -667,9 +848,10 @@ func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testi
 	// Match the type metadata produced by ADD COLUMN so the only difference is
 	// the source-column identity. A name/type comparison alone must not prove
 	// that the replacement key is copied from the old key.
-	mock.ctxt.tables["t1"].Cols[0].Typ.NotNullable = false
-	mock.ctxt.tables["t1"].Cols[0].Typ.Width = 64
-	mock.ctxt.tables["t1"].Cols[0].Typ.Scale = -1
+	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+	tableDef.Cols[0].Typ.NotNullable = false
+	tableDef.Cols[0].Typ.Width = 64
+	tableDef.Cols[0].Typ.Scale = -1
 	logicPlan, err := buildSingleStmt(mock, t,
 		`ALTER TABLE constraint_test.t1 DROP COLUMN a, ADD COLUMN a BIGINT NOT NULL DEFAULT 0 PRIMARY KEY;`)
 	require.NoError(t, err)

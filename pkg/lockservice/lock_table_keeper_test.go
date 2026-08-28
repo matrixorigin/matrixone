@@ -100,6 +100,7 @@ func (c *bindCursorClient) Send(
 
 func runBlockedKeepRemoteLockRound(t *testing.T, keeper *lockTableKeeper, client *bindCursorClient) {
 	t.Helper()
+	activateAllKeeperBinds(keeper)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -126,6 +127,20 @@ func runBlockedKeepRemoteLockRound(t *testing.T, keeper *lockTableKeeper, client
 	}
 	cancel()
 	waitForDone("keeper did not finish after the slow round was cancelled")
+}
+
+func activateAllKeeperBinds(keeper *lockTableKeeper) {
+	var binds []pb.LockTable
+	keeper.groupTables.iter(func(_ uint64, table lockTable) bool {
+		bind := table.getBind()
+		if bind.ServiceID != keeper.serviceID {
+			binds = append(binds, bind)
+		}
+		return true
+	})
+	for _, bind := range binds {
+		keeper.service.acquireRemoteBindRef(bind)
+	}
 }
 
 func (c *refreshFairnessClient) AsyncSend(
@@ -283,13 +298,15 @@ func TestKeeper(t *testing.T) {
 					getLogger(""),
 				),
 			)
+			svc := &service{serviceID: "s1", logger: getLogger("")}
+			svc.acquireRemoteBindRef(m.get(0, 0).getBind())
 			k := NewLockTableKeeper(
 				"s1",
 				c,
 				time.Millisecond*10,
 				time.Millisecond*10,
 				m,
-				&service{logger: getLogger("")})
+				svc)
 			defer func() {
 				assert.NoError(t, k.Close())
 			}()
@@ -346,6 +363,7 @@ func TestKeepRemoteLockReusesBindScratch(t *testing.T) {
 		groupTables: tables,
 		service:     &service{serviceID: "local", logger: logger},
 	}
+	activateAllKeeperBinds(keeper)
 	scratch := make([]pb.LockTable, 0, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	_, grown := keeper.doKeepRemoteLock(ctx, nil, scratch)
@@ -362,20 +380,16 @@ func TestKeepRemoteLockReusesBindScratch(t *testing.T) {
 	collectScratch := make([]pb.LockTable, 0, bindCount)
 	var collected []pb.LockTable
 	allocs := testing.AllocsPerRun(100, func() {
-		collected = collectKeepRemoteLockBinds("local", tables, collectScratch)
+		collected = collectKeepRemoteLockBinds(keeper.service, collectScratch)
 		goruntime.KeepAlive(collected)
 	})
 	require.Zero(t, allocs)
 	require.Len(t, collected, bindCount)
 }
 
-func TestCollectKeepRemoteLockBindsClearsStaleScratch(t *testing.T) {
+func TestCollectKeepRemoteLockBindsUsesActiveRefsAndClearsStaleScratch(t *testing.T) {
 	logger := getLogger("")
-	tables := &lockTableHolders{
-		service: "local",
-		logger:  logger,
-		holders: make(map[uint32]*lockTableHolder),
-	}
+	svc := &service{serviceID: "local", logger: logger}
 	bind := pb.LockTable{
 		Table:       1,
 		OriginTable: 1,
@@ -383,18 +397,7 @@ func TestCollectKeepRemoteLockBindsClearsStaleScratch(t *testing.T) {
 		Version:     1,
 		Valid:       true,
 	}
-	tables.set(
-		bind.Group,
-		bind.Table,
-		newRemoteLockTable(
-			"local",
-			time.Second,
-			bind,
-			nil,
-			func(pb.LockTable) {},
-			logger,
-		),
-	)
+	svc.acquireRemoteBindRef(bind)
 	scratch := []pb.LockTable{
 		{ServiceID: "old-1", AllocatorID: "allocator-1"},
 		{
@@ -405,21 +408,61 @@ func TestCollectKeepRemoteLockBindsClearsStaleScratch(t *testing.T) {
 		{ServiceID: "old-3", AllocatorID: "allocator-3"},
 	}
 
-	binds := collectKeepRemoteLockBinds("local", tables, scratch)
+	binds := collectKeepRemoteLockBinds(svc, scratch)
 
 	require.Len(t, binds, 1)
 	for _, stale := range scratch[len(binds):] {
 		require.Equal(t, pb.LockTable{}, stale)
 	}
 
-	emptyTables := &lockTableHolders{
+	svc.mu.Lock()
+	svc.releaseRemoteBindRefLocked(bind)
+	svc.mu.Unlock()
+	binds = collectKeepRemoteLockBinds(svc, binds)
+	require.Empty(t, binds)
+	require.Equal(t, pb.LockTable{}, scratch[0])
+}
+
+func TestKeepRemoteLockIgnoresRouteCacheWithoutActiveRef(t *testing.T) {
+	logger := getLogger("")
+	client := &bindCursorClient{submitted: make(map[uint64]int)}
+	bind := pb.LockTable{
+		Table:       1,
+		OriginTable: 1,
+		ServiceID:   "peer",
+		Version:     1,
+		Valid:       true,
+	}
+	tables := &lockTableHolders{
 		service: "local",
 		logger:  logger,
 		holders: make(map[uint32]*lockTableHolder),
 	}
-	binds = collectKeepRemoteLockBinds("local", emptyTables, binds)
+	tables.set(
+		bind.Group,
+		bind.Table,
+		newRemoteLockTable(
+			"local",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			logger,
+		),
+	)
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+
+	_, binds := keeper.doKeepRemoteLock(context.Background(), nil, nil)
+
 	require.Empty(t, binds)
-	require.Equal(t, pb.LockTable{}, scratch[0])
+	client.mu.Lock()
+	require.Empty(t, client.submitted)
+	client.mu.Unlock()
 }
 
 func TestPrepareKeepRemoteLockPeersDoesNotAllocatePerBind(t *testing.T) {
@@ -576,6 +619,7 @@ func TestKeepRemoteLockHasBoundedInflight(t *testing.T) {
 				groupTables: tables,
 				service:     &service{serviceID: "s1", logger: logger},
 			}
+			activateAllKeeperBinds(keeper)
 			done := make(chan struct{})
 			go func() {
 				keeper.doKeepRemoteLock(context.Background(), nil, nil)
@@ -657,6 +701,7 @@ func TestKeepRemoteLockSlowPeerDoesNotBlockHealthyPeer(t *testing.T) {
 		groupTables: tables,
 		service:     &service{serviceID: "local", logger: logger},
 	}
+	activateAllKeeperBinds(keeper)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -729,6 +774,7 @@ func TestKeepRemoteLockHasGlobalInflightBoundAcrossPeers(t *testing.T) {
 		groupTables: tables,
 		service:     &service{serviceID: "local", logger: logger},
 	}
+	activateAllKeeperBinds(keeper)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -792,6 +838,7 @@ func TestKeepRemoteLockRefreshWindowIsFairAcrossRounds(t *testing.T) {
 		groupTables: tables,
 		service:     &service{serviceID: "local", logger: logger},
 	}
+	activateAllKeeperBinds(keeper)
 
 	keeper.doKeepRemoteLock(context.Background(), nil, nil)
 	keeper.doKeepRemoteLock(context.Background(), nil, nil)
@@ -1130,8 +1177,9 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, pb.LockOptions{}, logger))
 			txn.Unlock()
+			svc.acquireRemoteBindRef(oldBind)
 
 			keeper := &lockTableKeeper{
 				serviceID:   svc.serviceID,
@@ -1148,7 +1196,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
-			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			err := txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return nil, nil
 			}, logger)
 			txn.Unlock()
@@ -1254,8 +1302,9 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 					addTxn := func(txnID []byte, bind pb.LockTable) *activeTxn {
 						txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 						txn.Lock()
-						require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, logger))
+						require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, pb.LockOptions{}, logger))
 						txn.Unlock()
+						svc.acquireRemoteBindRef(bind)
 						return txn
 					}
 					oldTxnID := []byte("old-bind-txn")
@@ -1290,7 +1339,7 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						err := txn.close(
 							txnID,
 							timestamp.Timestamp{},
-							func(uint32, uint64) (lockTable, error) { return nil, nil },
+							func(pb.LockTable) (lockTable, error) { return nil, nil },
 							logger,
 						)
 						txn.Unlock()
@@ -1361,8 +1410,9 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, pb.LockOptions{}, logger))
 			txn.Unlock()
+			svc.acquireRemoteBindRef(oldBind)
 
 			keeper := &lockTableKeeper{
 				serviceID:   svc.serviceID,
@@ -1379,7 +1429,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
-			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			err := txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return nil, nil
 			}, logger)
 			txn.Unlock()
@@ -1526,6 +1576,7 @@ func TestKeepRemoteLockLateNewBindDoesNotRepublishSupersededAllocator(t *testing
 				groupTables: svc.tableGroups,
 				service:     svc,
 			}
+			svc.acquireRemoteBindRef(oldBind)
 
 			done := make(chan struct{})
 			go func() {
@@ -1619,8 +1670,9 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, pb.LockOptions{}, logger))
 			txn.Unlock()
+			svc.acquireRemoteBindRef(oldBind)
 
 			keeper := &lockTableKeeper{
 				serviceID:   svc.serviceID,
@@ -1639,7 +1691,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
-			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			err := txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return nil, nil
 			}, logger)
 			txn.Unlock()

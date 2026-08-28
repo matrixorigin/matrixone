@@ -139,9 +139,12 @@ type Source struct {
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
 	node            *plan.Node
-	TableDef        *plan.TableDef
-	Timestamp       timestamp.Timestamp
-	AccountId       *plan.PubInfo
+	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
+	// Each execution folds a fresh copy into node.VectorIndexScan.
+	vectorIndexScanTemplate *plan.VectorIndexScan
+	TableDef                *plan.TableDef
+	Timestamp               timestamp.Timestamp
+	AccountId               *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
@@ -304,10 +307,28 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
-	// reusePlanSnapshot is set only when a retry recompiles pipelines from the
-	// same logical plan. Such a retry must retain the plan's original binding
-	// snapshot even if RC lock handling advanced the transaction snapshot.
-	reusePlanSnapshot bool
+	// planSnapshotTS is owned by the compiled plan generation, not by proc.
+	// A prepared Compile may be reset onto a newer transaction process while
+	// retaining the physical plan built at this timestamp.
+	planSnapshotTS    timestamp.Timestamp
+	hasPlanSnapshotTS bool
+	// planGenerationReused is true only when this execution admitted an
+	// existing session/prepared generation. A definition rebuild clears it;
+	// data-only retries retain it with the same logical generation.
+	planGenerationReused bool
+	// stringShuffleHashAlgorithm is selected once per execution. Retries keep
+	// it, while a prepared pipeline's next Reset selects again from the rollout
+	// gate. This prevents equal keys from changing owners mid-query.
+	stringShuffleHashAlgorithm       process.StringShuffleHashAlgorithm
+	stringShuffleHashAlgorithmFrozen bool
+	// resultMetadataFrozen is set once a streaming consumer has materialized or
+	// sent the current result schema. A definition retry may continue only when
+	// the rebuilt logical plan exposes identical result metadata.
+	resultMetadataFrozen bool
+	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
+	// its logical plan, any frontend-owned prepared plan or physical topology
+	// from the previous generation must not be reused.
+	planGenerationRebuilt bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement
@@ -322,6 +343,14 @@ type Compile struct {
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
+	// foundRowsOwnerNode is the final result node allowed to publish the
+	// SQL_CALC_FOUND_ROWS count. Nested LIMIT/OFFSET nodes are not owners.
+	foundRowsOwnerNode *plan.Node
+	// materializedSQLSelectLimitOwner is the exact final-result node on which
+	// materializeSQLSelectLimit temporarily installed the session row cap.
+	// Keeping its identity avoids inferring top-level ownership from arbitrary
+	// LIMIT/OFFSET nodes introduced by nested queries or optimizer rewrites.
+	materializedSQLSelectLimitOwner *plan.Node
 
 	counterSet *perfcounter.CounterSet
 

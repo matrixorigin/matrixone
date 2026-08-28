@@ -151,13 +151,18 @@ func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
 
 func GroupConcatReturnType(args []types.Type) types.Type {
 	for _, p := range args {
-		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob ||
+			p.Oid == types.T_geometry || p.Oid == types.T_geometry32 {
 			return types.T_blob.ToType()
 		}
 	}
 	result := types.T_text.ToType()
 	result.Charset = types.MergeStringCharset(args, result.Charset)
 	return result
+}
+
+func groupConcatResultIsBinary(result types.Type) bool {
+	return result.Charset == types.CharsetBinary
 }
 
 func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) AggFuncExec {
@@ -878,7 +883,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 			if !first {
 				var truncated bool
 				buf, truncated = appendGroupConcatBytes(
-					buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+					buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 				)
 				if truncated {
 					break
@@ -967,7 +972,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
-				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 			)
 			if truncated {
 				break
@@ -1468,7 +1473,7 @@ func (exec *groupConcatExec) flushOrderedEntries(
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
-				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 			)
 			if truncated {
 				break
@@ -1600,7 +1605,7 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
 		if !first {
 			buf, truncated = appendGroupConcatBytes(
-				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				buf, exec.separator, exec.maxLen, groupConcatResultIsBinary(exec.retType),
 			)
 			if truncated {
 				return nil
@@ -1675,7 +1680,7 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 	writer := &accountedGroupConcatWriter{
 		buffer:       buffer,
 		maxLen:       exec.maxLen,
-		binaryResult: exec.retType.Oid == types.T_blob,
+		binaryResult: groupConcatResultIsBinary(exec.retType),
 	}
 	first := true
 	visit := st.iter
@@ -1811,7 +1816,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 	writer := &accountedGroupConcatWriter{
 		buffer:       buffer,
 		maxLen:       exec.maxLen,
-		binaryResult: exec.retType.Oid == types.T_blob,
+		binaryResult: groupConcatResultIsBinary(exec.retType),
 	}
 	first := true
 	for i, selector := range selectors {
@@ -1852,28 +1857,43 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 func (exec *groupConcatExec) appendConcatPayload(
 	buf, payload []byte,
 ) ([]byte, bool, error) {
-	truncated := false
+	writer := &boundedGroupConcatSliceWriter{
+		buffer:       buf,
+		maxLen:       exec.maxLen,
+		binaryResult: groupConcatResultIsBinary(exec.retType),
+	}
 	err := payloadFieldIterator(
 		payload,
 		exec.concatArgCnt,
 		func(i int, isNull bool, data []byte) error {
-			if isNull || truncated {
+			if isNull || writer.truncated {
 				return nil
 			}
-			var err error
-			buf, err = appendGroupConcatData(buf, exec.argTypes[i], data)
-			if uint64(len(buf)) > exec.maxLen {
-				truncated = true
-				buf = truncateGroupConcatBytes(
-					buf,
-					exec.maxLen,
-					exec.retType.Oid == types.T_blob,
-				)
-			}
-			return err
+			return writeGroupConcatData(writer, exec.argTypes[i], data)
 		},
 	)
-	return buf, truncated, err
+	return writer.buffer, writer.truncated, err
+}
+
+// boundedGroupConcatSliceWriter keeps legacy and spill finalization from
+// materializing a complete value when only a maxLen prefix can be published.
+// Report the complete input as consumed so fmt-based encoders preserve SQL
+// truncation semantics instead of returning io.ErrShortWrite.
+type boundedGroupConcatSliceWriter struct {
+	buffer       []byte
+	maxLen       uint64
+	binaryResult bool
+	truncated    bool
+}
+
+func (w *boundedGroupConcatSliceWriter) Write(value []byte) (int, error) {
+	written := len(value)
+	if written == 0 || w.truncated {
+		return written, nil
+	}
+	w.buffer, w.truncated = appendGroupConcatBytes(
+		w.buffer, value, w.maxLen, w.binaryResult)
+	return written, nil
 }
 
 func appendGroupConcatBytes(dst, src []byte, maxLen uint64, binaryResult bool) ([]byte, bool) {
@@ -2148,15 +2168,27 @@ func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 	return exec.selectOrderedDistinctCandidates(candidates)
 }
 
-var GroupConcatUnsupportedTypes = []types.T{
-	types.T_tuple,
-}
-
 func IsGroupConcatSupported(t types.Type) bool {
-	for _, unsupported := range GroupConcatUnsupportedTypes {
-		if t.Oid == unsupported {
-			return false
-		}
+	// Keep planner admission fail-closed. New or internal types must not reach
+	// writeGroupConcatData until their SQL serialization contract is defined.
+	switch t.Oid {
+	case types.T_bit, types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_interval, types.T_year,
+		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
+		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_geometry, types.T_geometry32,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8:
+		return true
+	default:
+		return false
 	}
-	return true
 }

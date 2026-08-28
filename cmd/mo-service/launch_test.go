@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 type testProxy struct {
@@ -107,11 +108,14 @@ func setLaunchTestHooks(t *testing.T) {
 
 func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 	setLaunchTestHooks(t)
-	config := writeLaunchTestFile(t, "service.toml", "")
-	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
+	cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
+	pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
+	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
 	launch := fmt.Sprintf(
 		"logservices=[%q]\ntnservices=[%q]\ncnservices=[%q,%q]\nproxy-services=[%q]\npython-udf-services=[%q]\n",
-		config, config, config, config, proxyConfig, config,
+		logConfig, tnConfig, cnConfig, cnConfig, proxyConfig, pythonConfig,
 	)
 	*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
 	*withProxy = true
@@ -144,12 +148,13 @@ func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 
 func TestStartClusterStartsBuiltinProxyWithoutProxyService(t *testing.T) {
 	setLaunchTestHooks(t)
-	cn1 := writeLaunchTestFile(t, "cn1.toml", "[cn.frontend]\nport=16001\n")
-	cn2 := writeLaunchTestFile(t, "cn2.toml", "[cn.frontend]\nport=16002\n")
-	config := writeLaunchTestFile(t, "service.toml", "")
+	cn1 := writeLaunchTestFile(t, "cn1.toml", "service-type=\"CN\"\n[cn.frontend]\nport=16001\n")
+	cn2 := writeLaunchTestFile(t, "cn2.toml", "service-type=\"CN\"\n[cn.frontend]\nport=16002\n")
+	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 	launch := fmt.Sprintf(
 		"logservices=[%q]\ntnservices=[%q]\ncnservices=[%q,%q]\n",
-		config, config, cn1, cn2,
+		logConfig, tnConfig, cn1, cn2,
 	)
 	*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
 	*withProxy = false
@@ -216,21 +221,22 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 	ctx := context.Background()
 	startError := errors.New("start failed")
 	invalid := filepath.Join(t.TempDir(), "missing.toml")
-	valid := writeLaunchTestFile(t, "service.toml", "")
 
 	tests := []struct {
-		name    string
-		start   func([]string) error
-		emptyOK bool
+		name        string
+		start       func([]string) error
+		emptyOK     bool
+		validConfig string
 	}{
-		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false},
-		{"tn", func(files []string) error { return startTNServiceCluster(ctx, files, nil, nil) }, false},
-		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil) }, false},
-		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false},
-		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true},
+		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"LOG\"\n"},
+		{"tn", func(files []string) error { _, err := startTNServiceCluster(ctx, files, nil, nil); return err }, false, "service-type=\"TN\"\n"},
+		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil, false) }, false, "service-type=\"CN\"\n"},
+		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false, "service-type=\"PROXY\"\n"},
+		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true, "service-type=\"PYTHON_UDF\"\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			valid := writeLaunchTestFile(t, "valid-"+test.name+".toml", test.validConfig)
 			err := test.start(nil)
 			if test.emptyOK && err != nil {
 				t.Fatalf("empty configs: %v", err)
@@ -251,14 +257,141 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 	}
 }
 
+func TestLaunchRejectsMisclassifiedServiceConfigs(t *testing.T) {
+	setLaunchTestHooks(t)
+	started := make([]metadata.ServiceType, 0, 2)
+	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
+		serviceType, err := cfg.getServiceType()
+		require.NoError(t, err)
+		started = append(started, serviceType)
+		return nil
+	}
+
+	cnInTNServices := writeLaunchTestFile(t, "cn-in-tnservices.toml", "service-type=\"CN\"\n[tn.GCCfg]\ndisable-gc=true\n")
+	_, err := startTNServiceCluster(context.Background(), []string{cnInTNServices}, nil, nil)
+	require.ErrorContains(t, err, "expected TN")
+	require.Empty(t, started)
+
+	tnInCNServices := writeLaunchTestFile(t, "tn-in-cnservices.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
+	benchmarkCN := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+	started = started[:0]
+	err = startCNServiceCluster(context.Background(), []string{tnInCNServices, benchmarkCN}, nil, nil, true)
+	require.ErrorContains(t, err, "expected CN")
+	require.Empty(t, started)
+}
+
+func TestStartClusterRejectsMisclassifiedManifestBeforeAnyService(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "log", field: "logservices"},
+		{name: "proxy", field: "proxy-services"},
+		{name: "python", field: "python-udf-services"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setLaunchTestHooks(t)
+			*withProxy = true
+			wrongTN := writeLaunchTestFile(t, "wrong-tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
+			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=true\n")
+			cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+			proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n")
+			pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
+			entries := map[string]string{
+				"logservices":         fmt.Sprintf("logservices=[%q]", logConfig),
+				"tnservices":          fmt.Sprintf("tnservices=[%q]", tnConfig),
+				"cnservices":          fmt.Sprintf("cnservices=[%q]", cnConfig),
+				"proxy-services":      fmt.Sprintf("proxy-services=[%q]", proxyConfig),
+				"python-udf-services": fmt.Sprintf("python-udf-services=[%q]", pythonConfig),
+			}
+			entries[test.field] = fmt.Sprintf("%s=[%q]", test.field, wrongTN)
+			launch := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n", entries["logservices"], entries["tnservices"], entries["cnservices"], entries["proxy-services"], entries["python-udf-services"])
+			*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
+
+			started := 0
+			launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+				started++
+				return nil
+			}
+			err := startCluster(context.Background(), nil, nil)
+			require.ErrorContains(t, err, "expected")
+			require.Zero(t, started)
+		})
+	}
+}
+
+func TestLaunchTNGCDisabledProof(t *testing.T) {
+	setLaunchTestHooks(t)
+	tn := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-1\"\n[tn.GCCfg]\ndisable-gc=true\n")
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	proof, err := startTNServiceCluster(context.Background(), []string{tn}, nil, nil)
+	require.NoError(t, err)
+	require.True(t, proof)
+
+	tnWithoutGC := writeLaunchTestFile(t, "tn-with-gc.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-2\"\n")
+	proof, err = startTNServiceCluster(context.Background(), []string{tnWithoutGC}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, proof)
+
+	proof, err = startTNServiceCluster(context.Background(), []string{tn, tnWithoutGC}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, proof)
+
+	cn := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
+		require.True(t, cfg.benchmarkTNNoGC)
+		require.NoError(t, cfg.verifySiriusBenchmarkNoGC())
+		return nil
+	}
+	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, true))
+}
+
+func TestStandaloneCNConfigCannotAssertTNGCDisabled(t *testing.T) {
+	cn := writeLaunchTestFile(t, "standalone-cn.toml", `service-type = "CN"
+[cn.sirius]
+enabled = true
+benchmark-no-gc = true
+[tn.GCCfg]
+disable-gc = true
+`)
+	cfg := NewConfig()
+	require.NoError(t, parseConfigFromFile(cn, cfg))
+	require.True(t, cfg.getTNServiceConfig().GCCfg.DisableGC)
+	require.False(t, cfg.benchmarkTNNoGC)
+	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "launcher-verified")
+}
+
+func TestOrdinaryCNClusterDoesNotReadLaunchTNProof(t *testing.T) {
+	setLaunchTestHooks(t)
+	*launchFile = filepath.Join(t.TempDir(), "missing-launch.toml")
+	cn := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, false))
+}
+
+func TestStartCNServiceRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.CN.Sirius.Enabled = true
+	cfg.CN.Sirius.BenchmarkNoGC = true
+	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "disable-gc=true")
+	require.ErrorContains(t, startCNService(cfg, nil, nil, nil), "disable-gc=true")
+}
+
 func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	setLaunchTestHooks(t)
-	valid := writeLaunchTestFile(t, "cn.toml", "")
+	valid := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
 	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
 		return nil
 	}
 	*withProxy = false
-	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil); err != nil {
+	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +399,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	launchNewProxy = func(string, *zap.Logger) goetty.Proxy {
 		return &testProxy{startErr: startError}
 	}
-	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil); !errors.Is(err, startError) {
+	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil, false); !errors.Is(err, startError) {
 		t.Fatalf("startCNServiceCluster() = %v, want %v", err, startError)
 	}
 }

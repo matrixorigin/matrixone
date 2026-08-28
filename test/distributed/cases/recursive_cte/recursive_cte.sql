@@ -63,3 +63,27 @@ create table t_empty_limits(lo int, hi int);
 with recursive empty_limit(lo, hi) as (select lo, hi from t_empty_limits), seq(n) as (select 1 union all select n + 1 from seq, empty_limit where n < hi) select count(*), sum(n), min(n), max(n) from seq;
 with recursive empty_limit(lo, hi) as (select lo, hi from t_empty_limits), seq(n) as (select 1 union all select n + 1 from seq join empty_limit on n = lo where n < hi) select count(*), sum(n), min(n), max(n) from seq;
 drop table t_empty_limits;
+
+-- issue #26812: a filtered preceding CTE joined by a recursive member must not
+-- be partially shared across recursive steps
+drop table if exists cte_26812_seed_src;
+create table cte_26812_seed_src(id int primary key, n int);
+insert into cte_26812_seed_src values (1, 1), (2, 2);
+with recursive base as (select n from cte_26812_seed_src where id = 2), r(n) as (select n from base union all select r.n + base.n from r cross join base where r.n < 8) select * from r order by n;
+with recursive base as (select n from cte_26812_seed_src where id = 2), r(n) as (select n from base union all select r.n + base.n from r cross join base where r.n < 8) select n from r order by n;
+with recursive base as (select n from cte_26812_seed_src where id = 2), r(n) as (select n from base union all select r.n + base.n from r cross join base where r.n < 8) select count(*), sum(n), min(n), max(n) from r;
+with recursive base as (select n from cte_26812_seed_src where id = 2), r(n) as (select n from base union all select r.n + base.n from r cross join base where r.n < 8) select sum(n) from r;
+
+-- filtered preceding CTE used only by the anchor remains a valid control
+with recursive base as (select n from cte_26812_seed_src where id = 2), r(n) as (select n from base union all select n + 2 from r where n < 8) select count(*), sum(n), min(n), max(n) from r;
+
+-- unfiltered preceding CTE joined by the recursive member remains valid
+drop table if exists cte_26812_unfiltered_step;
+create table cte_26812_unfiltered_step(n int);
+insert into cte_26812_unfiltered_step values (2);
+with recursive base as (select n from cte_26812_unfiltered_step), r(n) as (select n from base union all select r.n + base.n from r cross join base where r.n < 8) select count(*), sum(n), min(n), max(n) from r;
+
+-- placing the source predicate at the CTE consumers remains valid
+with recursive base as (select id, n from cte_26812_seed_src), r(n) as (select n from base where id = 2 union all select r.n + base.n from r join base on base.id = 2 where r.n < 8) select count(*), sum(n), min(n), max(n) from r;
+drop table cte_26812_unfiltered_step;
+drop table cte_26812_seed_src;

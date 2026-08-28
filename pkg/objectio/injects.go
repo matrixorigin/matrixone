@@ -31,6 +31,7 @@ const (
 	FJ_CommitSlowLog              = "fj/commit/slowlog"
 	FJ_CommitWait                 = "fj/commit/wait"
 	FJ_TransferSlow               = "fj/transfer/slow"
+	FJ_DataMergeAfterCollectTS    = "fj/merge/data/after-collect-ts"
 	FJ_TransferError              = "fj/transfer/error"
 	FJ_TransferErrorAfterTransfer = "fj/transfer/error-after-transfer"
 	FJ_FlushTimeout               = "fj/flush/timeout"
@@ -56,8 +57,9 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
-	FJ_CDCExecutor  = "fj/cdc/executor"
-	FJ_CDCScanTable = "fj/cdc/scantable"
+	FJ_CDCExecutor      = "fj/cdc/executor"
+	FJ_CDCScanTable     = "fj/cdc/scantable"
+	FJ_TableChangesRead = "fj/table-changes/read"
 
 	FJ_ISCPIndexSendError     = "fj/iscp/index/send/error"
 	FJ_ISCPIndexSendBlock     = "fj/iscp/index/send/block"
@@ -484,6 +486,11 @@ func CDCScanTableInjected() (string, bool) {
 	return sarg, injected
 }
 
+func TableChangesReadInjected() (string, bool) {
+	_, point, injected := fault.TriggerFault(FJ_TableChangesRead)
+	return point, injected
+}
+
 func ISCPIndexSendErrorInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_ISCPIndexSendError)
 	return injected
@@ -652,6 +659,24 @@ func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CDCScanTable)
+	}
+	return
+}
+
+func InjectTableChangesRead(point string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_TableChangesRead,
+		":::",
+		"echo",
+		0,
+		point,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_TableChangesRead)
 	}
 	return
 }

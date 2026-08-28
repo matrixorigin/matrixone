@@ -497,7 +497,7 @@ func TestDiskCacheDeletePathsRejectsInvalidListAtomically(t *testing.T) {
 	require.Equal(t, []byte("foo"), vector.Entries[0].Data)
 }
 
-func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
+func TestDiskCacheEvictDefersPathBeingUpdated(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
@@ -512,11 +512,14 @@ func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
 	diskPath := cache.pathForFile("foo")
 	doneUpdate := cache.startUpdate(diskPath)
 	cache.cache.Delete(ctx, diskPath)
-	doneUpdate()
 
 	_, err = os.Stat(diskPath)
 	require.NoError(t, err)
 	require.False(t, cache.cache.Contains(diskPath))
+
+	doneUpdate()
+	_, err = os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestDiskCacheUpdateCleanupRemovesUnindexedFile(t *testing.T) {
@@ -1008,6 +1011,7 @@ func TestDiskCacheBadWrite(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
+	defer cache.Close(ctx)
 
 	written, err := cache.writeFile(
 		ctx,
@@ -1017,7 +1021,7 @@ func TestDiskCacheBadWrite(t *testing.T) {
 			return nil, io.ErrUnexpectedEOF
 		},
 	)
-	assert.Nil(t, err)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	if written {
 		t.Fatal()
 	}
@@ -1170,8 +1174,8 @@ func (*countingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, 
 	return nil, false
 }
 
-func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
-	return nil
+func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) (bool, error) {
+	return true, nil
 }
 
 func (*countingDataCache) DeletePaths(context.Context, []string) {}

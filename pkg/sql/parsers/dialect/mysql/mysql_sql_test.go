@@ -60,6 +60,72 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	var names []string
+	for _, def := range createStmt.Defs {
+		switch index := def.(type) {
+		case *tree.Index:
+			names = append(names, index.Name)
+		case *tree.UniqueIndex:
+			names = append(names, index.GetIndexName())
+		}
+	}
+
+	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
+}
+
+func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (v varchar(20), key TypeOptionIdx type btree(v))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	index, ok := createStmt.Defs[1].(*tree.Index)
+	require.True(t, ok)
+	require.Equal(t, "TypeOptionIdx", index.Name)
+}
+
+func TestCreateIndexPreservesIndexIdentifierCase(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create index MixedCaseIdx on t(v)", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateIndex)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("MixedCaseIdx"), createStmt.Name)
+}
+
+func TestForeignKeyNameRemainsCaseInsensitive(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (id int, parent_id int, foreign key MixedFK(parent_id) references t(id))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	foreignKey, ok := createStmt.Defs[2].(*tree.ForeignKey)
+	require.True(t, ok)
+	require.Equal(t, "mixedfk", foreignKey.Name)
+
+	stmt, err = ParseOne(context.Background(),
+		"alter table t drop foreign key MixedFK", 1)
+	require.NoError(t, err)
+
+	alterStmt, ok := stmt.(*tree.AlterTable)
+	require.True(t, ok)
+	drop, ok := alterStmt.Options[0].(*tree.AlterOptionDrop)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("mixedfk"), drop.Name)
+}
+
 func TestSetNamesAssignmentKind(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -177,6 +243,105 @@ func TestGroupingAcceptsExpressions(t *testing.T) {
 	defer stmt.Free()
 
 	require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
+}
+
+func TestInsertColumnQualification(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		numParts int
+	}{
+		{
+			name:     "unqualified",
+			sql:      "insert into db1.t1 (id, value) values (1, 10)",
+			numParts: 1,
+		},
+		{
+			name:     "table qualified",
+			sql:      "insert into db1.t1 (t1.id, t1.value) values (1, 10)",
+			numParts: 2,
+		},
+		{
+			name:     "database and table qualified",
+			sql:      "insert into db1.t1 (db1.t1.id, db1.t1.value) values (1, 10)",
+			numParts: 3,
+		},
+		{
+			name:     "quoted database and table qualified",
+			sql:      "insert into `db1`.`t1` (`db1`.`t1`.`id`, `db1`.`t1`.`value`) values (1, 10)",
+			numParts: 3,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			insert, ok := stmt.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, tree.Identifier("db1"), insert.TargetDatabaseName)
+			require.Equal(t, tree.Identifier("t1"), insert.TargetTableName)
+			require.Equal(t, tree.IdentifierList{"id", "value"}, insert.Columns)
+			require.Len(t, insert.ColumnNames, 2)
+			for _, columnName := range insert.ColumnNames {
+				require.Equal(t, test.numParts, columnName.NumParts)
+			}
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer roundTripped.Free()
+
+			roundTripInsert, ok := roundTripped.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, insert.Columns, roundTripInsert.Columns)
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+		})
+	}
+
+	caseSensitive, err := ParseOne(context.Background(),
+		"insert into CaseMode.T (CaseMode.T.id) values (1)", 0)
+	require.NoError(t, err)
+	defer caseSensitive.Free()
+	caseSensitiveInsert := caseSensitive.(*tree.Insert)
+	require.Equal(t, tree.Identifier("CaseMode"), caseSensitiveInsert.TargetDatabaseName)
+	require.Equal(t, tree.Identifier("T"), caseSensitiveInsert.TargetTableName)
+	require.Equal(t, "CaseMode", caseSensitiveInsert.ColumnNames[0].DbName())
+	require.Equal(t, "T", caseSensitiveInsert.ColumnNames[0].TblName())
+
+	_, err = ParseOne(context.Background(),
+		"insert into db1.t1 (catalog.db1.t1.id) values (1)", 1)
+	require.Error(t, err)
+}
+
+func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"insert into t(id, v) values (1, 2) on duplicate key update v = values(other.wrong.v)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	insert := stmt.(*tree.Insert)
+	valuesCall := insert.OnDuplicateUpdate[0].Expr.(*tree.FuncExpr)
+	valuesColumn := valuesCall.Exprs[0].(*tree.UnresolvedName)
+	require.Equal(t, 3, valuesColumn.NumParts)
+	require.Equal(t, "other", valuesColumn.DbNameOrigin())
+	require.Equal(t, "wrong", valuesColumn.TblNameOrigin())
+	require.Equal(t, "v", valuesColumn.ColNameOrigin())
+
+	_, err = ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (id, v) values (s.id, s.v)", 1)
+	require.NoError(t, err)
+
+	merge, err := ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (t.id, t.v) values (s.id, s.v)", 1)
+	require.NoError(t, err)
+	require.Contains(t, tree.String(merge, dialect.MYSQL), "insert (id, v)")
+
+	_, err = ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (other.wrong.id, v) values (s.id, s.v)", 1)
+	require.Error(t, err)
 }
 
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
@@ -596,6 +761,30 @@ func TestVarianceWindowSpec(t *testing.T) {
 
 	window := extractFirstWindowSpec(t, stmt)
 	require.Len(t, window.PartitionBy, 1)
+}
+
+func TestBitXorWindowSpec(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select bit_xor(v) over (partition by grp order by id rows between unbounded preceding and current row) from t",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	fn, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "bit_xor", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+	require.NotNil(t, fn.WindowSpec)
+	require.Len(t, fn.WindowSpec.PartitionBy, 1)
+	require.Len(t, fn.WindowSpec.OrderBy, 1)
+	require.True(t, fn.WindowSpec.HasFrame)
+
+	identifierStmt, err := ParseOne(context.Background(), "select bit_xor from t", 1)
+	require.NoError(t, err)
+	defer identifierStmt.Free()
+
+	identifier, ok := firstSelectExpr(t, identifierStmt).(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "bit_xor", identifier.ColName())
 }
 
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
@@ -4217,6 +4406,12 @@ var (
 			input:  "drop table if exists ssb CASCADE",
 			output: "drop table if exists ssb",
 		}, {
+			input:  "drop view if exists ssb RESTRICT",
+			output: "drop view if exists ssb",
+		}, {
+			input:  "drop view if exists ssb CASCADE",
+			output: "drop view if exists ssb",
+		}, {
 			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
 		}, {
 			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
@@ -4890,6 +5085,7 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
+		"select median() within group (order by v desc) from t",
 	} {
 		ast, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

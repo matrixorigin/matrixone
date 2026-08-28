@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -114,8 +115,10 @@ type ClientConn interface {
 }
 
 type migration struct {
-	setVarStmtMap map[string]struct{}
-	setVarStmts   []string
+	setVarStmtMap       map[string]struct{}
+	setVarStmts         []string
+	systemSetVarStmtMap map[string]struct{}
+	systemSetVarStmts   []string
 }
 
 type clientConnOption func(*clientConn)
@@ -364,6 +367,7 @@ func newClientConn(
 		c.tlsConfig = tlsConfig
 	}
 	c.migration.setVarStmtMap = make(map[string]struct{})
+	c.migration.systemSetVarStmtMap = make(map[string]struct{})
 	owned = false
 	return c, nil
 }
@@ -696,9 +700,10 @@ func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
 	}
 
 	tempCN := &CNServer{
-		uuid: currentCN.uuid,
-		addr: currentCN.addr,
-		salt: currentCN.salt,
+		uuid:                currentCN.uuid,
+		addr:                currentCN.addr,
+		salt:                currentCN.salt,
+		admissionGeneration: currentCN.admissionGeneration,
 	}
 	if c.mysqlProto != nil {
 		tempCN.salt = c.mysqlProto.GetSalt()
@@ -765,19 +770,31 @@ func (c *clientConn) handleKill(
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
 	defer e.notify()
-	_, ok := c.migration.setVarStmtMap[e.stmt]
-	if ok {
-		for i := 0; i < len(c.migration.setVarStmts); i++ {
-			if c.migration.setVarStmts[i] == e.stmt {
-				c.migration.setVarStmts = append(c.migration.setVarStmts[:i], c.migration.setVarStmts[i+1:]...)
-				i--
+	if c.migration.setVarStmtMap == nil {
+		c.migration.setVarStmtMap = make(map[string]struct{})
+	}
+	if c.migration.systemSetVarStmtMap == nil {
+		c.migration.systemSetVarStmtMap = make(map[string]struct{})
+	}
+	recordSetVarStmt(&c.migration.setVarStmts, c.migration.setVarStmtMap, e.stmt)
+	if e.systemStmt != "" {
+		recordSetVarStmt(&c.migration.systemSetVarStmts, c.migration.systemSetVarStmtMap, e.systemStmt)
+	}
+	return nil
+}
+
+func recordSetVarStmt(stmts *[]string, stmtMap map[string]struct{}, stmt string) {
+	if _, ok := stmtMap[stmt]; ok {
+		for i := 0; i < len(*stmts); i++ {
+			if (*stmts)[i] == stmt {
+				*stmts = append((*stmts)[:i], (*stmts)[i+1:]...)
+				break
 			}
 		}
 	} else {
-		c.migration.setVarStmtMap[e.stmt] = struct{}{}
+		stmtMap[stmt] = struct{}{}
 	}
-	c.migration.setVarStmts = append(c.migration.setVarStmts, e.stmt)
-	return nil
+	*stmts = append(*stmts, stmt)
 }
 
 func (c *clientConn) handleQuitEvent(ctx context.Context) error {
@@ -841,7 +858,7 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 		// publishing that backend would leave the old response in the socket for
 		// the next generation's SET CONNECTION ID to consume. With c2s sealed and
 		// s2c stopped this state can no longer change, so discard conservatively.
-		if c.tun.hasInFlightClientRequest() {
+		if c.tun.hasUnsafeClientState() {
 			discardBackend()
 			return
 		}
@@ -1010,6 +1027,35 @@ func (c *clientConn) connectToBackendContext(
 				c.mysqlProto.GetAuthResponse(),
 				c.clientInfo,
 			)
+		}
+		if sc != nil {
+			// ResetSession clears the cached backend's database; restore the
+			// database requested by this login before publishing the cached response.
+			if db := c.mysqlProto.GetDatabaseName(); db != "" {
+				ok, err := execStmtWithContext(ctx, sc, internalStmt{
+					cmdType: cmdQuery,
+					s:       "use " + sqlquote.Ident(db),
+				}, nil)
+				if err != nil || !ok {
+					_ = sc.Close()
+					sc = nil
+					if cause := operationContextCause(ctx); cause != nil {
+						return nil, cause
+					}
+				}
+				if sc != nil {
+					// USE is the final control read before this cached backend is
+					// handed to the long-lived tunnel. Clear its phase deadline so
+					// normal tunnel traffic is not terminated by the restore timeout.
+					if err := clearServerConnReadDeadline(sc); err != nil {
+						_ = sc.Close()
+						sc = nil
+						if cause := operationContextCause(ctx); cause != nil {
+							return nil, cause
+						}
+					}
+				}
+			}
 		}
 		if sc != nil {
 			// Pop transfers the physical backend, but serverConn and connManager

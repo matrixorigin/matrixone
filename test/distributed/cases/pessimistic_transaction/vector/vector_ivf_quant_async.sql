@@ -6,12 +6,11 @@
 --   * bf16 / float16 — lossless narrowing cast on the entry projection.
 -- Every async index is built and maintained entirely by the CDC consumer (the
 -- first iteration runs ALTER ... REINDEX ... FORCE_SYNC, later inserts/updates
--- ride the delta path). Each index is waited independently through its first
--- deterministic search in every phase; readiness of one index says nothing
--- about the other three consumers.
+-- ride the delta path). Shared barriers assert every independent consumer
+-- together; readiness of one cannot hide another.
 --
 -- The queries are `ORDER BY l2_distance(v, q) LIMIT k` with NO secondary sort key,
--- so the ivfflat index pushdown fires (the ivf_search table function), actually
+-- so the ivfflat index pushdown fires (the VECTOR_INDEX_SCAN), actually
 -- exercising the quantized re-rank. Two well-separated clusters [1..5]/[50..54]
 -- and cluster-center query points keep every top-k distance distinct (no ties),
 -- so the result is deterministic without a tiebreaker.
@@ -94,14 +93,10 @@ update qi8 set v = '[55,55,55,55]' where a = 1;
 update qu8 set v = '[55,55,55,55]' where a = 1;
 update qbf set v = '[55,55,55,55]' where a = 1;
 update qf set v = '[55,55,55,55]' where a = 1;
+-- One retry observes all four independent consumers while retaining each
+-- quantizer's ordered top-3 oracle.
 -- @wait_expect(2, 30)
-select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @wait_expect(2, 30)
-select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @wait_expect(2, 30)
-select a from qbf order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @wait_expect(2, 30)
-select a from qf order by l2_distance(v,'[1,1,1,1]') limit 3;
+select case_name, a from (select 'int8' as case_name, a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'uint8', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'bf16', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qbf order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'float16', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qf order by l2_distance(v,'[1,1,1,1]') limit 3) q) readiness order by case_name, d;
 
 deallocate prepare wait_quant_entries;
 drop table qi8;

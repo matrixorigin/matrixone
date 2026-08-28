@@ -249,8 +249,8 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
 		}
-		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, updateCtx.TableDef, -1, false,
+		writer.insertSinkers[i] = colexec.NewCNS3DataWriterForService(
+			proc.GetService(), proc.Mp(), fs, updateCtx.TableDef, -1, false,
 			opts...)
 	}
 	return nil
@@ -376,6 +376,11 @@ func (writer *s3WriterDelegate) append(
 					}
 				}
 			}
+		}
+
+		if tableType == UpdateMainTable && updateCtx.ChangedRowsCol != nil &&
+			len(updateCtx.AffectedRowsCols) == 0 && !updateCtx.SuppressPhysicalAffectedRows {
+			writer.addAffectedRows(insertAffectedRows(updateCtx, contextBatch))
 		}
 
 		// Index tables with a sort key need null rows stripped — the sinker
@@ -657,11 +662,13 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
-		s3Writer = colexec.NewCNS3TombstoneWriter(
-			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
+		s3Writer = colexec.NewCNS3TombstoneWriterForService(
+			proc.GetService(), proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
 		)
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
+		s3Writer = colexec.NewCNS3DataWriterForService(
+			proc.GetService(), proc.Mp(), fs, tblDef, -1, false, opts...,
+		)
 	}
 
 	defer s3Writer.Close()
@@ -978,6 +985,9 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	bat *batch.Batch,
 ) (err error) {
 	output := writer.outputBat
+	if action == actionInsert {
+		rowCount = physicalInsertAffectedRows(writer.updateCtxs[idx], rowCount)
+	}
 
 	if err = vector.AppendFixed(output.Vecs[0], uint8(action), false, mp); err != nil {
 		return
