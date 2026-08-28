@@ -323,6 +323,7 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 	require.True(t, s.ddlVisibilityBarrierPrepared.Load())
 	require.True(t, s.ddlVisibilityActivationPrepared.Load())
 	require.True(t, s.ddlVisibilityActivationFenced.Load())
+	require.False(t, s.ddlVisibilityActivationComplete.Load())
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.Equal(t, 1, cluster.refreshCalls)
 	require.Equal(t, []string{"self:6001", "peer:6001"}, queryClient.requests)
@@ -378,6 +379,61 @@ func TestHandleSetProtocolVersionRejectsStaleRecoveryIdentity(t *testing.T) {
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	require.True(t, ok)
 	require.Equal(t, defines.MORPCVersion34, version)
+}
+
+func TestDefaultV36StillRunsCompleteTargetActivation(t *testing.T) {
+	const serviceID = "ddl-visibility-default-v36-activation-test"
+	const generation = uint64(7)
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	targetTS := timestamp.Timestamp{PhysicalTime: 300, LogicalTime: 4}
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{
+		{ServiceID: serviceID, QueryAddress: "self:6001",
+			ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+			ViewMetadataIngressReady: true},
+		{ServiceID: "legacy-peer", QueryAddress: "peer:6001",
+			ViewMetadataAdmissionGeneration: 8, DDLVisibilityBarrierReady: false,
+			ViewMetadataIngressReady: true},
+	}}
+	cluster.refreshHook = func() {
+		// The control plane dispatches activation concurrently. Model the legacy
+		// peer completing its local drain before this CN checks global phases.
+		cluster.cnServices[1].DDLVisibilityBarrierReady = true
+	}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID,
+		frontiers: map[string]timestamp.Timestamp{
+			"self:6001": {PhysicalTime: 100}, "peer:6001": targetTS,
+		},
+		protocols: map[string]query.GetProtocolVersionResponse{"peer:6001": {
+			Version:                         defines.MORPCVersion36,
+			DDLVisibilityActivationPrepared: true, DDLVisibilityActivationFenced: true,
+		}},
+	}
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS.Next(), nil)
+	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	s := &service{
+		cfg: cfg, _hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster},
+		moCluster: cluster, queryClient: queryClient, _txnClient: txnClient,
+		config: util.NewConfigData(nil), viewMetadataAdmissionGeneration: generation,
+		ddlCommitGate: frontend.NewDDLCommitGate(),
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.ddlVisibilityActivationPrepared.Store(true)
+	s.ddlVisibilityActivationFenced.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	require.False(t, s.ddlVisibilityActivationComplete.Load())
+	require.NoError(t, s.setProtocolVersion(
+		context.Background(), defines.MORPCVersion36, []string{serviceID, "legacy-peer"}))
+	require.True(t, s.ddlVisibilityActivationComplete.Load())
+	require.True(t, s.viewMetadataIngressReady.Load())
+	require.Contains(t, queryClient.requests, "peer:6001")
 }
 
 func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {

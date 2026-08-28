@@ -805,6 +805,7 @@ type service struct {
 	ddlVisibilityActivationPending  atomic.Bool
 	ddlVisibilityActivationPrepared atomic.Bool
 	ddlVisibilityActivationFenced   atomic.Bool
+	ddlVisibilityActivationComplete atomic.Bool
 	ddlVisibilityRestoreIngress     atomic.Bool
 	ddlVisibilityBarrierMu          sync.Mutex
 	ddlCommitGate                   *frontend.DDLCommitGate

@@ -191,13 +191,15 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		s.ddlVisibilityActivationPrepared.Store(false)
 		s.ddlVisibilityActivationFenced.Store(false)
+		s.ddlVisibilityActivationComplete.Store(false)
 		return nil
 	}
 	if !s.ddlVisibilityBarrierPrepared.Load() {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
-	if current >= defines.MORPCVersion36 && !pending {
+	if current >= defines.MORPCVersion36 && !pending &&
+		s.ddlVisibilityActivationComplete.Load() {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
@@ -259,6 +261,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return errors.Join(err, cleanupErr)
 	}
 
+	s.ddlVisibilityActivationComplete.Store(true)
 	s.ddlVisibilityActivationPending.Store(false)
 	s.ddlCommitGate.Unblock()
 	return nil
