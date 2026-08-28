@@ -1280,12 +1280,14 @@ func initExecuteStmtParamWithResolverInSession(
 			prepareStmt.compileNeedsRebuild = false
 		}
 	}
-	// Decide from the plan shape once per prepared-plan generation. This keeps
-	// ordinary write-only statements on their cached compile while allowing
-	// domain-sensitive predicates/expressions to be rebound for each binary
-	// execution.
+	dmlWritePlan := preparedPlanHasDMLWritePath(executionPlan)
+	// Decide from the plan shape once per prepared-plan generation. Prepared
+	// DML must stay on its cached parameterized plan: its write projections are
+	// positional, and scanning/copying the plan on every execute also puts this
+	// logic directly on the TPCC hot path.
 	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
-		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
+		prepareStmt.runtimeSpecializationNeeded = !dmlWritePlan &&
+			plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
 		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
 	}
 	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
@@ -1313,10 +1315,12 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
-		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
-		if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
-			runtimeTextComparisonSpecialization = true
-			needsRuntimeSpecialization = true
+		if !dmlWritePlan {
+			runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
+			if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
+				runtimeTextComparisonSpecialization = true
+				needsRuntimeSpecialization = true
+			}
 		}
 		if cap(prepareStmt.paramKinds) < paramCount {
 			prepareStmt.paramKinds = make([]vector.PrepareParamKind, paramCount)
@@ -1347,12 +1351,19 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
 		}
-		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
+		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate && !dmlWritePlan {
 			// Older/rebuilt plan shapes can hide the candidate behind generated
 			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
 			// ordinary integer TPCC executions never enter it.
 			runtimeNumericPrefixCandidate = preparedPlanHasStaticExactNumericPeer(executionPlan) &&
 				preparedPlanAdmitsPotentialDecimal(executionPlan, paramCount)
+		}
+		if dmlWritePlan {
+			// DML writers consume positional assignment projections from the cached
+			// prepared plan. Runtime parameter values are supplied by the process;
+			// the generic plan rewriter must not copy or rebind the write plan.
+			runtimeNumericPrefixCandidate = false
+			runtimeDirectResultCandidate = false
 		}
 		if hasParamKind {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
@@ -1406,7 +1417,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
-	if !binaryExecute && executionPlan.GetQuery() != nil {
+	if !binaryExecute && executionPlan.GetQuery() != nil && !dmlWritePlan {
 		runtimeNumericPrefixCandidate = plan2.PreparedPlanNeedsNumericPrefixSpecialization(
 			executionPlan, cwft.paramVals)
 		if runtimeNumericPrefixCandidate {
@@ -1702,6 +1713,18 @@ func preparedPlanHasStaticExactNumericPeer(preparePlan *plan2.Plan) bool {
 	return found
 }
 
+func preparedPlanHasDMLWritePath(executionPlan *plan2.Plan) bool {
+	if executionPlan == nil || executionPlan.GetQuery() == nil {
+		return false
+	}
+	switch executionPlan.GetQuery().StmtType {
+	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
+		return true
+	default:
+		return false
+	}
+}
+
 func specializePreparedExecutionPlan(
 	ctx context.Context,
 	executionPlan *plan2.Plan,
@@ -1712,6 +1735,9 @@ func specializePreparedExecutionPlan(
 	if len(paramVals) == 0 || executionPlan == nil ||
 		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
 			executionPlan.GetDcl().GetSetVariables() == nil) {
+		return executionPlan, false, false, nil
+	}
+	if preparedPlanHasDMLWritePath(executionPlan) {
 		return executionPlan, false, false, nil
 	}
 	binaryLiteralPlan := binaryExecute &&

@@ -1192,6 +1192,50 @@ func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *
 		"an approximate FLOAT peer must remain outside numeric-prefix specialization")
 }
 
+func TestBinaryDMLSkipsRuntimeSpecialization(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 216, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+	})
+	require.NoError(t, err)
+	dmlPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_UPDATE,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = dmlPlan
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = true
+	prepareStmt.numericPrefixConsumer = true
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+	cachedCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = cachedCompile
+
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, cachedCompile, retComp)
+	require.Same(t, dmlPlan, runtimePlan)
+	require.False(t, prepareStmt.runtimeSpecializationNeeded)
+	require.Nil(t, cw.paramVals,
+		"ordinary binary DML must not materialize values for a runtime plan rewrite")
+	require.Nil(t, cw.runtimeCachePlan)
+}
+
 func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 206, "select ?")
 	defer func() {
