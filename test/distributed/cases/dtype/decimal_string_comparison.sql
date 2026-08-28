@@ -38,6 +38,10 @@ WHERE '9007199254740992.0001' = d ORDER BY id;
 SELECT id FROM boundary_values
 WHERE d = CAST('9007199254740992.0001' AS VARCHAR) ORDER BY id;
 SELECT id FROM boundary_values
+WHERE d = CAST('9007199254740992.0001x' AS CHAR(21)) ORDER BY id;
+SELECT id FROM boundary_values
+WHERE d = CAST('9007199254740992.0001x' AS VARCHAR(21)) ORDER BY id;
+SELECT id FROM boundary_values
 WHERE d = CONCAT('9007199254740992.', '0001') ORDER BY id;
 
 -- Binary string domains retain their generic approximate comparison domain.

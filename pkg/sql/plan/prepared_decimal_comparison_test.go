@@ -420,18 +420,93 @@ func TestDecimalBinaryStringDomainsKeepRealCoercion(t *testing.T) {
 	})
 }
 
+func TestDecimalStringComparisonUsesFinalTextCastValue(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	const finalValue = "9007199254740992.0001"
+	const sourceValue = finalValue + "x"
+
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			target := types.New(oid, int32(len(finalValue)), 0)
+			stringCast, err := appendExplicitCastBeforeExpr(
+				ctx.GetContext(), makePlan2StringConstExprWithType(sourceValue), makePlan2Type(&target))
+			require.NoError(t, err)
+
+			unfolded, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<=>", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType),
+				DeepCopyExpr(stringCast),
+			})
+			require.NoError(t, err)
+			for _, arg := range unfolded.GetF().Args {
+				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+			}
+
+			folded, err := ConstantFold(
+				batch.EmptyForConstFoldBatch, DeepCopyExpr(stringCast), ctx.GetProcess(), false, true)
+			require.NoError(t, err)
+			require.NotNil(t, folded.GetLit())
+			require.Equal(t, finalValue, folded.GetLit().GetSval())
+			require.Equal(t, types.StringDomainText, decimalStringEffectiveDomain(folded))
+
+			expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "<=>", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType),
+				stringCast,
+			})
+			require.NoError(t, err)
+			for _, arg := range expr.GetF().Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type: %+v", arg.Typ)
+			}
+			require.True(t, containsExplicitDecimalComparisonStringCast(expr))
+		})
+	}
+
+	t.Run("remaining suffix", func(t *testing.T) {
+		target := types.New(types.T_varchar, int32(len(finalValue)+1), 0)
+		stringCast, err := appendExplicitCastBeforeExpr(
+			ctx.GetContext(), makePlan2StringConstExprWithType(finalValue+"xy"), makePlan2Type(&target))
+		require.NoError(t, err)
+		expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "<=>", []*planpb.Expr{
+			makePreparedDecimalComparisonColumn(decimalType),
+			stringCast,
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().Args {
+			require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		}
+		value, ok := decimalComparisonStringLiteral(expr)
+		require.True(t, ok)
+		require.Equal(t, finalValue+"x", value)
+	})
+}
+
+func containsExplicitDecimalComparisonStringCast(expr *planpb.Expr) bool {
+	if expr == nil || expr.GetF() == nil {
+		return false
+	}
+	if isExplicitPreparedCast(expr) && types.T(expr.Typ.Id).IsMySQLString() {
+		return true
+	}
+	for _, arg := range expr.GetF().Args {
+		if containsExplicitDecimalComparisonStringCast(arg) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDecimalStringLiteralCastUsesExactCoercion(t *testing.T) {
-	ctx := context.Background()
+	ctx := NewMockCompilerContext(true)
 	target := types.T_varchar.ToType()
 	target.Width = 21
 	stringCast, err := appendExplicitCastBeforeExpr(
-		ctx,
+		ctx.GetContext(),
 		makePlan2StringConstExprWithType("9007199254740992.0001"),
 		makePlan2Type(&target),
 	)
 	require.NoError(t, err)
 
-	expr, err := BindFuncExprImplByPlanExpr(ctx, "<=>", []*planpb.Expr{
+	expr, err := bindFuncExprAndConstFold(ctx.GetContext(), ctx.GetProcess(), "<=>", []*planpb.Expr{
 		makePreparedDecimalComparisonColumn(types.New(types.T_decimal128, 20, 4)),
 		stringCast,
 	})
@@ -440,6 +515,7 @@ func TestDecimalStringLiteralCastUsesExactCoercion(t *testing.T) {
 		require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type: %+v", arg.Typ)
 	}
 	require.True(t, containsDecimalComparisonStringCast(expr))
+	require.True(t, containsExplicitDecimalComparisonStringCast(expr))
 }
 
 func containsDecimalComparisonStringCast(expr *planpb.Expr) bool {

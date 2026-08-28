@@ -3813,7 +3813,9 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	foldDecimalStringComparisonConstants(proc, name, args)
+	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
+		return nil, err
+	}
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -5650,12 +5652,17 @@ func integerMetadataWidth(oid types.T) int32 {
 // foldDecimalStringComparisonConstants materializes only deterministic string
 // constants before the generic numeric overload resolver can erase their exact
 // value. Runtime expressions retain the existing REAL comparison domain.
-func foldDecimalStringComparisonConstants(proc *process.Process, name string, args []*Expr) {
+func foldDecimalStringComparisonConstants(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+) error {
 	if proc == nil || len(args) != 2 {
-		return
+		return nil
 	}
 
-	foldPair := func(pair []*Expr) {
+	foldPair := func(pair []*Expr) error {
 		for stringPos, decimalPos := range []int{1, 0} {
 			candidate, peer := pair[stringPos], pair[decimalPos]
 			if candidate == nil || peer == nil ||
@@ -5664,37 +5671,44 @@ func foldDecimalStringComparisonConstants(proc *process.Process, name string, ar
 				candidate.GetLit() != nil || !rule.IsConstant(candidate, false) {
 				continue
 			}
-			if _, ok := decimalStringLiteralValue(candidate); ok {
-				continue
-			}
 			folded, err := ConstantFold(
 				batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate), proc, false, true)
 			if err != nil || folded == nil || folded.GetLit() == nil ||
 				!types.T(folded.Typ.Id).IsMySQLString() {
 				continue
 			}
-			if _, ok := decimalStringLiteralValue(folded); !ok {
+			value, ok := decimalStringLiteralValue(folded)
+			if !ok {
 				continue
 			}
+			normalized, err := normalizeExactDecimalStringComparisonPair(
+				ctx, pair, stringPos, decimalPos, value)
+			if err != nil {
+				return err
+			}
+			if normalized {
+				return nil
+			}
 			pair[stringPos] = folded
-			return
+			return nil
 		}
+		return nil
 	}
 
 	if isDecimalComparisonOperator(name) {
-		foldPair(args)
-		return
+		return foldPair(args)
 	}
 	if name != "in" && name != "not_in" {
-		return
+		return nil
 	}
 	list := args[1].GetList()
 	if list == nil || len(list.List) != 1 {
-		return
+		return nil
 	}
 	pair := []*Expr{args[0], list.List[0]}
-	foldPair(pair)
+	err := foldPair(pair)
 	args[0], list.List[0] = pair[0], pair[1]
+	return err
 }
 
 func isDecimalComparisonOperator(name string) bool {
@@ -5724,57 +5738,71 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 		if !ok {
 			continue
 		}
-		// Only a complete decimal lexeme with mode-independent outer whitespace
-		// can enter the exact path. Prefixes, extension tokens, and Unicode-only
-		// whitespace must retain their original spelling for runtime SQL
-		// compatibility-mode parsing, invalid-token errors, and warning 1292.
-		trimmedValue := strings.Trim(value, " \t\n\v\f\r")
-		if strings.TrimSpace(value) != trimmedValue {
-			continue
-		}
-		decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, trimmedValue)
+		normalized, err := normalizeExactDecimalStringComparisonPair(
+			ctx, args, stringPos, decimalPos, value)
 		if err != nil {
 			return err
 		}
-		if !exact {
-			continue
-		}
-		target, ok := mergeExactDecimalComparisonType(args[decimalPos].Typ, decimalExpr.Typ)
-		if !ok {
-			floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
-			for pos := range args {
-				argTarget := floatType
-				argTarget.NotNullable = args[pos].Typ.NotNullable
-				args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
-				if err != nil {
-					return err
-				}
-			}
+		if normalized {
 			return nil
 		}
+	}
+	return nil
+}
 
-		normalizedString := decimalExpr
-		if args[stringPos].GetLit() == nil {
-			normalizedString, err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
-			if err != nil {
-				return err
-			}
-		}
-		args[stringPos] = normalizedString
-		for _, pos := range []int{decimalPos, stringPos} {
-			if sameDecimalComparisonType(args[pos].Typ, target) {
-				continue
-			}
-			argTarget := target
+func normalizeExactDecimalStringComparisonPair(
+	ctx context.Context,
+	args []*Expr,
+	stringPos int,
+	decimalPos int,
+	value string,
+) (bool, error) {
+	// Only a complete decimal lexeme with mode-independent outer whitespace
+	// can enter the exact path. Prefixes, extension tokens, and Unicode-only
+	// whitespace must retain their final spelling for runtime SQL compatibility
+	// parsing, invalid-token errors, and warning 1292.
+	trimmedValue := strings.Trim(value, " \t\n\v\f\r")
+	if strings.TrimSpace(value) != trimmedValue {
+		return false, nil
+	}
+	decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, trimmedValue)
+	if err != nil || !exact {
+		return false, err
+	}
+	target, ok := mergeExactDecimalComparisonType(args[decimalPos].Typ, decimalExpr.Typ)
+	if !ok {
+		floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
+		for pos := range args {
+			argTarget := floatType
 			argTarget.NotNullable = args[pos].Typ.NotNullable
 			args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
 			if err != nil {
-				return err
+				return false, err
 			}
 		}
-		return nil
+		return true, nil
 	}
-	return nil
+
+	normalizedString := decimalExpr
+	if args[stringPos].GetLit() == nil {
+		normalizedString, err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
+		if err != nil {
+			return false, err
+		}
+	}
+	args[stringPos] = normalizedString
+	for _, pos := range []int{decimalPos, stringPos} {
+		if sameDecimalComparisonType(args[pos].Typ, target) {
+			continue
+		}
+		argTarget := target
+		argTarget.NotNullable = args[pos].Typ.NotNullable
+		args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func mergeExactDecimalComparisonType(left, right plan.Type) (plan.Type, bool) {
@@ -5830,10 +5858,10 @@ func decimalStringEffectiveDomain(expr *Expr) types.StringDomain {
 	}
 }
 
-// decimalStringLiteralValue recognizes effective-text literals and text-only
-// cast chains rooted in one. Static binary targets are semantic boundaries even
-// when their source is an ordinary text literal. Raw hex/bit forms remain on
-// their existing runtime numeric interpretation.
+// decimalStringLiteralValue recognizes effective-text literals and transparent
+// binder-inserted text cast chains rooted in one. Explicit casts and static
+// binary targets are value/domain boundaries; raw hex/bit forms remain on their
+// existing runtime numeric interpretation.
 func decimalStringLiteralValue(expr *Expr) (string, bool) {
 	if expr == nil || decimalStringEffectiveDomain(expr) != types.StringDomainText {
 		return "", false
@@ -5844,6 +5872,9 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 			return "", false
 		}
 		return value.Sval, true
+	}
+	if isExplicitPreparedCast(expr) {
+		return "", false
 	}
 
 	fn := expr.GetF()
