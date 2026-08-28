@@ -40,11 +40,11 @@ func TestBuildCurrentRolesProtocolGate(t *testing.T) {
 	})
 
 	tf := &tree.TableFunction{Func: &tree.FuncExpr{}}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
-	_, err := builder.buildCurrentRoles(tf, ctx, nil, nil)
-	require.ErrorContains(t, err, "protocol version 35")
-
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+	_, err := builder.buildCurrentRoles(tf, ctx, nil, nil)
+	require.ErrorContains(t, err, "protocol version 36")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
 	nodeID, err := builder.buildCurrentRoles(tf, ctx, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, planpb.Node_FUNCTION_SCAN, builder.qry.Nodes[nodeID].NodeType)

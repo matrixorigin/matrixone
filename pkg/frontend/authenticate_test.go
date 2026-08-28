@@ -542,8 +542,14 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 			wantCompatibilityRoles: true,
 		},
 		{
-			name:               "protocol 35 installs canonical full role closure views",
-			protocol:           defines.MORPCVersion35,
+			name:                   "protocol 35 does not alias the current-role capability",
+			protocol:               defines.MORPCVersion35,
+			wantCheckFunction:      true,
+			wantCompatibilityRoles: true,
+		},
+		{
+			name:               "protocol 36 installs canonical full role closure views",
+			protocol:           defines.MORPCVersion36,
 			wantCheckFunction:  true,
 			wantCurrentRoles:   true,
 			wantCanonicalViews: true,
