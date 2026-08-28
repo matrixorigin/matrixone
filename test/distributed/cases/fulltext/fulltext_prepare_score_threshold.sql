@@ -184,4 +184,31 @@ set @zero=0;
 execute ft2_ge using @term,@zero;
 deallocate prepare ft2_ge;
 
+-- A NULL search term must not let an unsafe threshold through. The guard restates
+-- a plan-time refusal that depends on the threshold alone, so binding the term to
+-- NULL has to raise the same 20105 as the identical literal, not answer with an
+-- empty result. Regression for the guard running after the NULL-pattern bail.
+prepare ft2_null from 'select id from docs2 where match(body) against(? in bm25 mode) > ? order by id';
+set @nullterm=NULL;
+set @neg=-1;
+execute ft2_null using @nullterm,@neg;
+set @zero=0;
+-- A safe threshold with a NULL term still just returns nothing.
+execute ft2_null using @nullterm,@zero;
+-- Reuse: the safe execute above must not let the unsafe one through afterwards.
+execute ft2_null using @nullterm,@neg;
+-- A real term still works on the reused statement.
+set @term='fox';
+execute ft2_null using @term,@zero;
+deallocate prepare ft2_null;
+
+set experimental_fulltext2_index = 0;
+prepare ft1_null from 'select id from docs where match(body) against(? in natural language mode) > ? order by id';
+set @nullterm=NULL;
+set @neg=-1;
+execute ft1_null using @nullterm,@neg;
+set @zero=0;
+execute ft1_null using @nullterm,@zero;
+deallocate prepare ft1_null;
+
 drop database ft_score_param;

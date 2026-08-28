@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -89,5 +90,92 @@ func TestCheckFulltextZeroRelevanceGuard(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, isRefusal(checkFulltextZeroRelevanceGuard(proc, []*vector.Vector{cv}, 0, 5)),
 			"a const guard applies to every row, not only row 0")
+	})
+}
+
+// The guard restates a refusal the planner makes from the threshold alone, so it
+// must decide the outcome before any path that can return -- including the ones
+// that answer without consulting the threshold at all. A NULL search term is the
+// case that exposes ordering: fulltext2 bails out early on it, and fulltext_index_scan
+// rejects it, so a guard evaluated after either one never runs.
+func TestZeroRelevanceGuardPrecedesNullPatternPaths(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+
+	nullPattern := func() *vector.Vector {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(vec, nil, true, m))
+		return vec
+	}
+	guardVec := func(unsafe bool) *vector.Vector {
+		vec := vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixed(vec, unsafe, false, m))
+		return vec
+	}
+	int64Vec := func(v int64) *vector.Vector {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, v, false, m))
+		return vec
+	}
+	isRefusal := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "cannot be replaced by FULLTEXT INDEX")
+	}
+
+	newFt2State := func() *fulltext2SearchState {
+		st := &fulltext2SearchState{inited: true}
+		st.batch = batch.NewWithSize(1)
+		st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		return st
+	}
+	// fulltext2_search(cfg, pattern, mode, includePreds, scoreRange, guard)
+	ft2Args := func(unsafe bool) []*vector.Vector {
+		return []*vector.Vector{nil, nullPattern(), int64Vec(0), nil, nil, guardVec(unsafe)}
+	}
+
+	t.Run("fulltext2 refuses an unsafe threshold even when the pattern is NULL", func(t *testing.T) {
+		st := newFt2State()
+		tf := &TableFunction{}
+		tf.ctr.argVecs = ft2Args(true)
+		// Without the guard ordering this returns nil and the query yields an empty
+		// result, while the identical literal threshold is refused at plan time.
+		require.True(t, isRefusal(st.start(tf, proc, 0, nil)))
+	})
+
+	t.Run("fulltext2 keeps the NULL-pattern bail when the threshold is safe", func(t *testing.T) {
+		st := newFt2State()
+		tf := &TableFunction{}
+		tf.ctr.argVecs = ft2Args(false)
+		require.NoError(t, st.start(tf, proc, 0, nil))
+	})
+
+	// Operators are reused across queries. A safe threshold answering first must not
+	// let a later unsafe one through on the same reused state.
+	t.Run("fulltext2 still refuses after a safe threshold reused the operator", func(t *testing.T) {
+		st := newFt2State()
+		tf := &TableFunction{}
+
+		tf.ctr.argVecs = ft2Args(false)
+		require.NoError(t, st.start(tf, proc, 0, nil))
+
+		tf.ctr.argVecs = ft2Args(true)
+		require.True(t, isRefusal(st.start(tf, proc, 0, nil)))
+	})
+
+	// fulltext_index_scan rejects a NULL pattern with its own error. The refusal the
+	// guard carries is the plan-time one, so it has to win.
+	t.Run("fulltext_index_scan refuses an unsafe threshold before the pattern error", func(t *testing.T) {
+		st := &fulltextState{inited: true}
+		tf := &TableFunction{}
+		// fulltext_index_scan(src, index, pattern, mode, guard)
+		tf.ctr.argVecs = []*vector.Vector{
+			vector.NewVec(types.T_varchar.ToType()),
+			vector.NewVec(types.T_varchar.ToType()),
+			nullPattern(),
+			int64Vec(0),
+			guardVec(true),
+		}
+		require.NoError(t, vector.AppendBytes(tf.ctr.argVecs[0], []byte("src"), false, m))
+		require.NoError(t, vector.AppendBytes(tf.ctr.argVecs[1], []byte("idx"), false, m))
+		require.True(t, isRefusal(st.start(tf, proc, 0, nil)))
 	})
 }

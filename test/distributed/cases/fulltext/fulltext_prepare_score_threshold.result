@@ -198,4 +198,31 @@ set @zero=0;
 execute ft2_ge using @term,@zero;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 deallocate prepare ft2_ge;
+prepare ft2_null from 'select id from docs2 where match(body) against(? in bm25 mode) > ? order by id';
+set @nullterm=NULL;
+set @neg=-1;
+execute ft2_null using @nullterm,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @zero=0;
+execute ft2_null using @nullterm,@zero;
+➤ id[-5,64,0]
+execute ft2_null using @nullterm,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @term='fox';
+execute ft2_null using @term,@zero;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+deallocate prepare ft2_null;
+set experimental_fulltext2_index = 0;
+prepare ft1_null from 'select id from docs where match(body) against(? in natural language mode) > ? order by id';
+set @nullterm=NULL;
+set @neg=-1;
+execute ft1_null using @nullterm,@neg;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set @zero=0;
+execute ft1_null using @nullterm,@zero;
+invalid input: fulltext search pattern must not be NULL
+deallocate prepare ft1_null;
 drop database ft_score_param;

@@ -393,6 +393,18 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		return err
 	}
 
+	// Optional 5th argument: the zero-relevance guard for a MATCH score threshold that
+	// was only known at EXECUTE (a prepared '?'). See QueryBuilder.fulltextRuntimeScoreGuard.
+	//
+	// This runs before the pattern is validated, so the guard decides the outcome
+	// whatever the search term binds to. The refusal it restates is a plan-time
+	// property of the threshold alone; letting a NULL or empty pattern report its own
+	// error first would answer `AGAINST(NULL) > ?` differently from the identical
+	// literal, which the planner refuses outright.
+	if err := checkFulltextZeroRelevanceGuard(proc, tf.ctr.argVecs, 4, nthRow); err != nil {
+		return err
+	}
+
 	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
@@ -410,12 +422,6 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Fourth argument (mode) must be int64, but got %s", v.GetType().String()))
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, nthRow)
-
-	// Optional 5th argument: the zero-relevance guard for a MATCH score threshold that
-	// was only known at EXECUTE (a prepared '?'). See QueryBuilder.fulltextRuntimeScoreGuard.
-	if err := checkFulltextZeroRelevanceGuard(proc, tf.ctr.argVecs, 4, nthRow); err != nil {
-		return err
-	}
 
 	scoreAlgo, err := fulltext.GetScoreAlgo(proc)
 	if err != nil {
