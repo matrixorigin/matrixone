@@ -33,7 +33,6 @@ require (
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
 	github.com/detailyang/go-fallocate v0.0.0-20180908115635-432fa640bd2e
-	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
@@ -97,6 +96,10 @@ require (
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
+	github.com/twmb/franz-go v1.21.6
+	github.com/twmb/franz-go/pkg/kadm v1.18.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260820024614-9b174ed31afe
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	github.com/uber/h3-go/v4 v4.5.0
 	github.com/unum-cloud/usearch/golang v0.0.0-20260524141737-9fd6b0115dcd
 	github.com/xeipuuv/gojsonschema v1.2.0
@@ -143,7 +146,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
 	github.com/blevesearch/mmap-go v1.2.0 // indirect
-	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
@@ -159,6 +161,7 @@ require (
 	github.com/cockroachdb/redact v1.1.3 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/dylibso/observe-sdk/go v0.0.0-20240819160327-2d926c5d788a // indirect
@@ -249,10 +252,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/twmb/franz-go v1.21.6 // indirect
-	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260820024614-9b174ed31afe // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
