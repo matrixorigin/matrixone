@@ -330,6 +330,13 @@ func ivfCentroidPrefixFilter(
 			return nil, err
 		}
 	}
+	// prefix_in values must be sorted before they leave this function. Block
+	// pruning takes its seek point and its early-stop bound from the first and
+	// last element positionally (readutil/expr_filter.go), so an unsorted list
+	// makes the reader seek past whole centroids and stop the scan early.
+	// centroidIDs arrives ranked by distance to the query, never by value.
+	prefixVec.InplaceSortAndCompact()
+	prefixVec.SetSorted(true)
 	data, err := prefixVec.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -349,7 +356,7 @@ func ivfCentroidPrefixFilter(
 	right := &plan.Expr{
 		Typ: cpkeyPlanType,
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(len(centroidIDs)),
+			Len:  int32(prefixVec.Length()),
 			Data: data,
 		}},
 	}
