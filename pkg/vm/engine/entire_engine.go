@@ -65,8 +65,9 @@ func (e *EntireEngine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData RelData,
-	num int) ([]Reader, error) {
-	return e.Engine.BuildBlockReaders(ctx, proc, ts, expr, def, relData, num)
+	num int,
+	filterHint ...FilterHint) ([]Reader, error) {
+	return e.Engine.BuildBlockReaders(ctx, proc, ts, expr, def, relData, num, filterHint...)
 }
 
 func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {

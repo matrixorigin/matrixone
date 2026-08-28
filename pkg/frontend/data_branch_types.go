@@ -227,6 +227,7 @@ type tableStuff struct {
 		writableIdxes []int
 		pkColIdx      int
 		pkSeqnum      int   // physical column seqnum for PK (for ZoneMap lookup)
+		pkIsSortKey   bool  // object-level sort-key ZoneMap has PK semantics
 		pkColIdxes    []int // expanded pk columns
 		pkKind        int
 

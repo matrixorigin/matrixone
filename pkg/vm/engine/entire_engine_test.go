@@ -157,7 +157,8 @@ func (e *testEngine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData RelData,
-	num int) ([]Reader, error) {
+	num int,
+	filterHint ...FilterHint) ([]Reader, error) {
 	panic("unimplemented")
 }
 

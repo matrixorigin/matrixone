@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -1141,7 +1142,8 @@ func (e *Engine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData engine.RelData,
-	num int) ([]engine.Reader, error) {
+	num int,
+	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
@@ -1160,27 +1162,46 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
-	shards := relData.Split(newNum)
-	for i := 0; i < newNum; i++ {
-		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
-		rd, err := readutil.NewReader(
-			ctx,
-			proc.Mp(),
-			e.packerPool,
-			e.fs,
-			def,
-			ts,
-			expr,
-			ds,
-			readutil.GetThresholdForReader(newNum),
-			engine.FilterHint{},
-		)
-		if err != nil {
-			return nil, err
-		}
-		rds = append(rds, rd)
+	hint := engine.FilterHint{}
+	if len(filterHint) > 0 {
+		hint = filterHint[0]
 	}
-	return rds, nil
+
+	hint, mainFilter, owned, err := prepareMembershipFilter(
+		hint,
+		docfilter.AdmissionForService(e.service),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		defer mainFilter.Free()
+	}
+
+	shards := relData.Split(newNum)
+	return buildReadersWithMembershipFilter(
+		rds,
+		newNum,
+		hint,
+		mainFilter,
+		func(i int) (engine.DataSource, error) {
+			return readutil.NewRemoteDataSource(ctx, fs, ts, shards[i]), nil
+		},
+		func(ds engine.DataSource, readerHint engine.FilterHint) (engine.Reader, error) {
+			return readutil.NewReader(
+				ctx,
+				proc.Mp(),
+				e.packerPool,
+				e.fs,
+				def,
+				ts,
+				expr,
+				ds,
+				readutil.GetThresholdForReader(newNum),
+				readerHint,
+			)
+		},
+	)
 }
 
 func (e *Engine) GetTNServices() []DNStore {

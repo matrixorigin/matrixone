@@ -61,10 +61,10 @@ func (srv *Server) RecordDispatchPipeline(
 	}
 
 	value := runningPipelineInfo{
-		alreadyDone: false,
-		isDispatch:  true,
-		queryCancel: nil,
-		receiver:    dispatchReceiver,
+		alreadyDone:    false,
+		isDispatch:     true,
+		pipelineCancel: nil,
+		receiver:       dispatchReceiver,
 	}
 
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value
@@ -79,22 +79,27 @@ func (srv *Server) RecordBuiltPipeline(
 
 	key := generateRecordKey(session, streamID)
 
-	_, cancel := process.GetQueryCtxFromProc(proc)
+	// The compile process context is the parent of every scope in this remote
+	// pipeline tree. Cancel that tree on StopSending without canceling the query
+	// context, whose lifetime is owned by the query/client cancellation path.
+	pipelineCancel := proc.Cancel
 
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
-		cancel()
+		if pipelineCancel != nil {
+			pipelineCancel(nil)
+		}
 		return
 	}
 
 	value := runningPipelineInfo{
-		alreadyDone: false,
-		isDispatch:  false,
-		queryCancel: cancel,
-		receiver:    nil,
+		alreadyDone:    false,
+		isDispatch:     false,
+		pipelineCancel: pipelineCancel,
+		receiver:       nil,
 	}
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value
 	srv.ensureSessionCleanupLocked(session)
@@ -131,6 +136,20 @@ func (srv *Server) CancelPipelineSending(
 		alreadyDone: true,
 	}
 	srv.ensureSessionCleanupLocked(session)
+}
+
+// HasPendingPipelineCancellation reports whether StopSending arrived before
+// the pipeline record was published. The tombstone remains owned by the
+// colexec registry so RecordBuiltPipeline and RecordDispatchPipeline preserve
+// their existing, distinct cancellation semantics.
+func (srv *Server) HasPendingPipelineCancellation(
+	session morpc.ClientSession, streamID uint64,
+) bool {
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+	info, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	return ok && info.alreadyDone && info.receiver == nil && info.pipelineCancel == nil
 }
 
 func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID uint64) {

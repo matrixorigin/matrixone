@@ -20,6 +20,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1002,6 +1003,67 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 			assert.IsType(t, new(readutil.EmptyReader), reader)
 		}
 	})
+}
+
+func TestCombinedTxnTableBuildReadersPreparesMembershipFilterOnce(t *testing.T) {
+	payload := append([]byte{docfilter.TagSorted64}, make([]byte, 8)...)
+	var (
+		builder docfilter.MembershipFilter
+		shares  []docfilter.MembershipFilter
+	)
+
+	build := func(
+		_ context.Context,
+		_ any,
+		_ *plan.Expr,
+		_ engine.RelData,
+		_ int,
+		_ int,
+		_ bool,
+		_ engine.TombstoneApplyPolicy,
+		hint engine.FilterHint,
+	) ([]engine.Reader, error) {
+		require.Empty(t, hint.MembershipFilterBytes)
+		filter, ok := hint.BF.(docfilter.MembershipFilter)
+		require.True(t, ok)
+		if builder == nil {
+			builder = filter
+		} else {
+			require.Same(t, builder, filter)
+		}
+		share := filter.Share()
+		shares = append(shares, share)
+		return []engine.Reader{&mockReader{filter: share}}, nil
+	}
+
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{buildReadersFunc: build},
+			&mockRelation{buildReadersFunc: build},
+		}, nil
+	}}
+
+	readers, err := table.BuildReaders(
+		context.Background(),
+		nil,
+		nil,
+		nil,
+		1,
+		0,
+		false,
+		engine.Policy_CheckAll,
+		engine.FilterHint{MembershipFilterBytes: payload},
+	)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	require.Len(t, shares, 2)
+	require.True(t, shares[0].Valid())
+	require.True(t, shares[1].Valid())
+
+	require.NoError(t, readers[0].Close())
+	require.True(t, shares[1].Valid())
+	require.NoError(t, readers[1].Close())
+	require.False(t, builder.Valid())
 }
 
 func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
@@ -2155,9 +2217,15 @@ func (m *mockTombstoner) Merge(other engine.Tombstoner) error {
 func (m *mockTombstoner) SortInMemory() {
 }
 
-type mockReader struct{}
+type mockReader struct {
+	filter docfilter.MembershipFilter
+}
 
 func (m *mockReader) Close() error {
+	if m.filter != nil {
+		m.filter.Free()
+		m.filter = nil
+	}
 	return nil
 }
 

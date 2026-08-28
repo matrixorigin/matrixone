@@ -115,6 +115,9 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineStreamFinish {
 		return handlePipelineStreamFinish(ctx, msg, cs, messageAcquirer)
 	}
+	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
+		return handlePipelineBatchAck(msg, cs)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
@@ -128,11 +131,18 @@ func CnServerMessageHandler(
 
 	finishNegotiated := false
 	if receiver.supportsFinishAck() {
-		lifecycle, err = registerPipelineStreamLifecycle(receiver.clientSession, receiver.messageId)
+		lifecycle, err = registerPipelineStreamLifecycle(
+			receiver.clientSession,
+			receiver.messageId,
+			newPipelineBatchFlow(
+				msg.GetRequestedBatchCreditCount(),
+				msg.GetRequestedBatchCreditBytes()))
 		finishNegotiated = err == nil
 		if err != nil {
 			return err
 		}
+		receiver.streamLifecycle = lifecycle
+		receiver.abortBatchFlowForPendingStop()
 		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
 	}
 
@@ -140,6 +150,20 @@ func CnServerMessageHandler(
 	// requested StopSending may make execution return an error, but its terminal
 	// response and FIN still need the same cleanup barrier.
 	handlerErr := handlePipelineMessage(&receiver)
+	if handlerErr == nil && lifecycle != nil && lifecycle.batchFlow != nil {
+		handlerErr = lifecycle.batchFlow.waitUntilDrained(
+			receiver.messageCtx,
+			receiver.connectionCtx,
+			func(count int, bytes uint64) {
+				logutil.Warn("pipeline batch drain delayed before terminal response",
+					zap.Uint64("stream-id", receiver.messageId),
+					zap.String("remote-address", receiver.clientSession.RemoteAddress()),
+					zap.String("query-id", receiver.procBuildHelper.id),
+					zap.String("statement-id", receiver.procBuildHelper.StmtId.String()),
+					zap.Int("outstanding-batches", count),
+					zap.Uint64("outstanding-bytes", bytes))
+			})
+	}
 	responseSent := false
 	if receiver.messageTyp != pipeline.Method_StopSending {
 		// stop message only close a running pipeline, there is no need to reply the finished-message.
@@ -190,6 +214,23 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	}
 }
 
+// abortBatchFlowForPendingStop closes the registration race with StopSending.
+// StopSending first publishes a colexec cancellation tombstone and then looks
+// up the lifecycle; registration publishes the lifecycle and then checks that
+// tombstone. Whichever message wins, one side observes the other side's state.
+func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
+	if receiver.streamLifecycle == nil || receiver.colexecServer == nil {
+		return
+	}
+	if receiver.colexecServer.HasPendingPipelineCancellation(
+		receiver.clientSession, receiver.messageId,
+	) {
+		receiver.streamLifecycle.batchFlow.abort(
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
+	}
+}
+
 func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
@@ -213,6 +254,14 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			Uid:          receiver.messageUuid,
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
+		}
+		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
+			flow := receiver.streamLifecycle.batchFlow
+			infoToDispatchOperator.BatchCredits, infoToDispatchOperator.ByteCredits = flow.accepted()
+			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, error) {
+				return flow.reserve(ctx, receiver.connectionCtx, size)
+			}
+			infoToDispatchOperator.RollbackBatch = flow.rollback
 		}
 		receiver.colexecServer.RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
@@ -483,6 +532,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		abortPipelineBatchFlow(
+			receiver.clientSession,
+			receiver.messageId,
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
@@ -710,6 +764,7 @@ type messageReceiverOnServer struct {
 
 	requestedTeardownMode pipeline.StreamTeardownMode
 	acceptedTeardownMode  pipeline.StreamTeardownMode
+	streamLifecycle       *pipelineStreamLifecycle
 
 	colexecServer *colexec.Server
 
@@ -806,6 +861,11 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 		return nil, moerr.NewInternalError(receiver.messageCtx, "get a message with wrong type.")
 	}
 	message.SetID(receiver.messageId)
+	if receiver.streamLifecycle != nil {
+		count, bytes := receiver.streamLifecycle.batchFlow.accepted()
+		message.AcceptedBatchCreditCount = count
+		message.AcceptedBatchCreditBytes = bytes
+	}
 	return message, nil
 }
 
@@ -974,6 +1034,29 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return err
 	}
 
+	var batchSequence uint64
+	batchSent := false
+	flow := (*pipelineBatchFlow)(nil)
+	if receiver.streamLifecycle != nil {
+		flow = receiver.streamLifecycle.batchFlow
+	}
+	if flow != nil {
+		flow.sendMu.Lock()
+		defer flow.sendMu.Unlock()
+		batchSequence, err = flow.reserve(
+			receiver.messageCtx,
+			receiver.connectionCtx,
+			uint64(len(data)))
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if !batchSent {
+				flow.rollback(batchSequence)
+			}
+		}()
+	}
+
 	dataLen := len(data)
 	if dataLen <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
@@ -983,7 +1066,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data)
 		m.SetSid(pipeline.Status_Last)
-		return receiver.clientSession.Write(receiver.messageCtx, m)
+		m.BatchSequence = batchSequence
+		err = receiver.clientSession.Write(receiver.messageCtx, m)
+		batchSent = err == nil
+		return err
 	}
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
@@ -1000,11 +1086,13 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		}
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data[start:end])
+		m.BatchSequence = batchSequence
 
-		if errW := receiver.clientSession.Write(receiver.messageCtx, m); errW != nil {
-			return errW
+		if err = receiver.clientSession.Write(receiver.messageCtx, m); err != nil {
+			return err
 		}
 	}
+	batchSent = true
 	return nil
 }
 

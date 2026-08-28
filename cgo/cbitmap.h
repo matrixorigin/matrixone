@@ -20,7 +20,7 @@
 //
 // A dense bitset is sized to (max id + 1) bits, so it is only viable when the
 // max id is bounded (see max_bits below); for sparse/large id ranges the caller
-// falls back to the compact CRoaring filter.
+// selects its sparse exact representation.
 #ifndef MO_CBITMAP_H
 #define MO_CBITMAP_H
 
@@ -30,7 +30,7 @@
 
 // Build status codes for mo_cbitmap_build_fixed. They disambiguate the reasons
 // a build produces no filter so the Go caller reacts correctly: RANGE_TOO_LARGE
-// -> fall back to the compact CRoaring filter; OOM / INVALID_INPUT -> surface an
+// -> select the sparse exact representation; OOM / INVALID_INPUT -> surface an
 // error (never silently disable filtering, which would drop matching rows).
 #define MO_CBITMAP_OK              0  // *out set to a valid filter (may be empty)
 #define MO_CBITMAP_RANGE_TOO_LARGE 1  // value span >= max_bits
@@ -76,6 +76,8 @@ void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
 // nodes (same as the build/probe data path).
 uint8_t *mo_cbitmap_serialize(void *f, size_t *len);
 void mo_cbitmap_free_buf(uint8_t *buf);
+size_t mo_cbitmap_serialized_size(void *f);
+bool mo_cbitmap_serialize_into(void *f, uint8_t *buf, size_t len);
 
 // Deserialize a buffer produced by mo_cbitmap_serialize; returns NULL on error.
 void *mo_cbitmap_deserialize(const uint8_t *buf, size_t len);

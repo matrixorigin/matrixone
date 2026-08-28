@@ -160,6 +160,23 @@ func TestRoutineStateHelpers(t *testing.T) {
 	require.Nil(t, (*Routine)(nil).getSession())
 }
 
+func TestRoutineShouldCloseConnectionIgnoresRequestDeadline(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 46)
+	routineCtx := rt.getCancelRoutineCtx()
+
+	requestCtx, cancelRequest := context.WithCancelCause(routineCtx)
+	cancelRequest(moerr.CauseNewMOHungSpan)
+	require.Error(t, context.Cause(requestCtx))
+	require.False(t, rt.shouldCloseConnection())
+
+	rt.setCancelled(true)
+	require.True(t, rt.shouldCloseConnection())
+	rt.setCancelled(false)
+
+	rt.releaseRoutineCtx()
+	require.True(t, rt.shouldCloseConnection())
+}
+
 func TestRoutineRequestCallbacksAndCancelContexts(t *testing.T) {
 	rt, _ := newUnitTestRoutine(t, 43)
 

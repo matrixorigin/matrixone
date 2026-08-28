@@ -85,6 +85,7 @@ type queuedChangeBatch struct {
 	data      *batch.Batch
 	tombstone *batch.Batch
 	hint      engine.ChangesHandle_Hint
+	mp        *mpool.MPool
 }
 
 type PartitionChangesHandle struct {
@@ -100,8 +101,10 @@ type PartitionChangesHandle struct {
 
 	skipDeletes        bool
 	primarySeqnum      int
+	changeSchema       *engine.CollectChangesSchema
 	snapshotReadPolicy engine.SnapshotReadPolicy
 	mp                 *mpool.MPool
+	outputMP           *mpool.MPool
 	fs                 fileservice.FileService
 
 	bufferedBatches     []queuedChangeBatch
@@ -116,8 +119,17 @@ func NewPartitionChangesHandle(
 	snapshotReadPolicy engine.SnapshotReadPolicy,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
+	if ctx == nil || tbl == nil || mp == nil {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"partition changes require context, table, and mpool",
+		)
+	}
 	if to.IsEmpty() || from.GT(&to) {
 		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
+	}
+	changeSchema, err := collectChangesSchema(tbl.GetTableDef(ctx))
+	if err != nil {
+		return nil, err
 	}
 	handle := &PartitionChangesHandle{
 		tbl:                tbl,
@@ -125,21 +137,79 @@ func NewPartitionChangesHandle(
 		toTs:               to,
 		skipDeletes:        skipDeletes,
 		primarySeqnum:      tbl.primarySeqnum,
+		changeSchema:       changeSchema,
 		snapshotReadPolicy: snapshotReadPolicy,
 		mp:                 mp,
 		fs:                 tbl.getTxn().engine.fs,
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
+		_ = handle.Close()
 		return nil, err
 	}
 	if end {
+		_ = handle.Close()
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("logic error:from %s to %s", from.ToString(), to.ToString()))
 	}
-	return handle, err
+	return handle, nil
+}
+
+func collectChangesSchema(tableDef *plan2.TableDef) (*engine.CollectChangesSchema, error) {
+	if tableDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("collect changes table definition is nil")
+	}
+	schema := &engine.CollectChangesSchema{
+		Attrs:   make([]string, 0, len(tableDef.Cols)),
+		Types:   make([]types.Type, 0, len(tableDef.Cols)),
+		Seqnums: make([]uint16, 0, len(tableDef.Cols)),
+	}
+	seenSeqnums := make(map[uint16]struct{}, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		if column == nil {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"collect changes table contains a nil column definition",
+			)
+		}
+		if column.Name == catalog.Row_ID {
+			continue
+		}
+		if column.Name == "" || column.Seqnum >= uint32(objectio.SEQNUM_UPPER) {
+			return nil, moerr.NewInternalErrorNoCtx("collect changes table has an invalid data column")
+		}
+		seqnum := uint16(column.Seqnum)
+		if _, exists := seenSeqnums[seqnum]; exists {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"collect changes table has duplicate sequence number %d", seqnum,
+			)
+		}
+		seenSeqnums[seqnum] = struct{}{}
+		schema.Attrs = append(schema.Attrs, column.Name)
+		schema.Types = append(schema.Types, plan2.ExprType2Type(&column.Typ))
+		schema.Seqnums = append(schema.Seqnums, seqnum)
+	}
+	if !schema.Valid() {
+		return nil, moerr.NewInternalErrorNoCtx("collect changes table has no data columns")
+	}
+	return schema, nil
+}
+
+func (h *PartitionChangesHandle) withChangeSchema(ctx context.Context) context.Context {
+	return engine.WithCollectChangesSchema(ctx, h.changeSchema)
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	if h == nil || ctx == nil || mp == nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, moerr.NewInvalidInputNoCtx(
+			"partition changes require handle, context, and mpool",
+		)
+	}
+	if h.outputMP == nil {
+		h.outputMP = mp
+	} else if h.outputMP != mp {
+		return nil, nil, engine.ChangesHandle_Tail_done, moerr.NewInvalidInputNoCtx(
+			"partition changes cannot switch output mpool",
+		)
+	}
 	// The normal path keeps the existing replay behavior. The VisibleState
 	// policy enables snapshot-recovery on FileNotFound (via SnapshotStateRange).
 	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
@@ -150,6 +220,10 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 
 func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	for {
+		if h.currentChangeHandle == nil {
+			return nil, nil, engine.ChangesHandle_Tail_done,
+				moerr.NewInternalErrorNoCtx("partition changes handle is not initialized")
+		}
 		data, tombstone, hint, err = h.currentChangeHandle.Next(ctx, mp)
 		if err != nil {
 			return
@@ -203,21 +277,37 @@ func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, m
 // that a mid-iteration FileNotFound can discard partial output and rebuild
 // the same range via SnapshotStateRange recovery.
 func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
+	if h.currentChangeHandle == nil {
+		return moerr.NewInternalErrorNoCtx("partition changes handle is not initialized")
+	}
 	var queued []queuedChangeBatch
 	snapshotStateRangeTried := false
 	cleanQueued := func() {
 		for i := range queued {
+			allocator := queued[i].mp
+			if allocator == nil {
+				allocator = mp
+			}
 			if queued[i].data != nil {
-				queued[i].data.Clean(mp)
+				queued[i].data.Clean(allocator)
 			}
 			if queued[i].tombstone != nil {
-				queued[i].tombstone.Clean(mp)
+				queued[i].tombstone.Clean(allocator)
 			}
 		}
 	}
 	for {
 		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
 		if nextErr != nil {
+			// A ChangesHandle may return ownership of partially produced batches
+			// together with an error. They are not exposed to our caller, so this
+			// layer must release them before retrying or returning.
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
 			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
 				// A late FileNotFound means the replay handle for this sub-range is
 				// no longer trustworthy. Drop buffered output for the whole range,
@@ -253,6 +343,7 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 			data:      data,
 			tombstone: tombstone,
 			hint:      hint,
+			mp:        mp,
 		})
 	}
 }
@@ -266,6 +357,11 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 	maxTS types.TS,
 	err error,
 ) {
+	if ctx == nil || h == nil || h.tbl == nil {
+		return nil, types.MaxTs(), types.TS{}, moerr.NewInvalidInputNoCtx(
+			"checkpoint loading requires handle, table, and context",
+		)
+	}
 	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	response, err := RequestSnapshotRead(ctxWithDeadline, h.tbl, &from)
@@ -280,9 +376,25 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 	}
 	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 	for _, entry := range resp.Entries {
+		if entry == nil || entry.Start == nil || entry.End == nil {
+			return nil, types.MaxTs(), types.TS{},
+				moerr.NewInternalErrorNoCtx("snapshot read returned an incomplete checkpoint entry")
+		}
+		if entry.EntryType < int32(checkpoint.ET_Global) ||
+			entry.EntryType > int32(checkpoint.ET_Compacted) {
+			return nil, types.MaxTs(), types.TS{}, moerr.NewInternalErrorNoCtxf(
+				"snapshot read returned invalid checkpoint type %d", entry.EntryType,
+			)
+		}
 		logutil.Debug("ChangesHandle-Split-CheckpointEntry", zap.String("entry", entry.String()))
 		start := types.TimestampToTS(*entry.Start)
 		end := types.TimestampToTS(*entry.End)
+		if start.GT(&end) {
+			return nil, types.MaxTs(), types.TS{}, moerr.NewInternalErrorNoCtxf(
+				"snapshot read returned reversed checkpoint range %s-%s",
+				start.ToString(), end.ToString(),
+			)
+		}
 		if start.LT(&minTS) {
 			minTS = start
 		}
@@ -297,6 +409,7 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
+	ctx = h.withChangeSchema(ctx)
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
@@ -454,6 +567,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 }
 
 func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {
+	ctx = h.withChangeSchema(ctx)
 	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
 		return nil
 	}
@@ -510,11 +624,15 @@ func (h *PartitionChangesHandle) Close() error {
 		return nil
 	}
 	for i := range h.bufferedBatches {
+		allocator := h.bufferedBatches[i].mp
+		if allocator == nil {
+			allocator = h.mp
+		}
 		if h.bufferedBatches[i].data != nil {
-			h.bufferedBatches[i].data.Clean(h.mp)
+			h.bufferedBatches[i].data.Clean(allocator)
 		}
 		if h.bufferedBatches[i].tombstone != nil {
-			h.bufferedBatches[i].tombstone.Clean(h.mp)
+			h.bufferedBatches[i].tombstone.Clean(allocator)
 		}
 	}
 	h.bufferedBatches = nil

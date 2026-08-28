@@ -999,10 +999,13 @@ func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFi
 	// this zero-copy path, and tying its release to a specific mpool would be a
 	// cross-pool free hazard if the deserialization ever became owning.
 
-	// docfilter picks and tags the doc_id filter structure (exact bitset for
-	// integer PKs, CBloomFilter otherwise); the reader's docfilter.New
-	// reconstructs it. The caller need not know which structure is used.
-	payload, err := docfilter.Build(keyvec)
+	// docfilter picks and tags the doc_id filter structure (exact set for integer
+	// PKs, CBloomFilter otherwise); the reader reconstructs it at the allocation
+	// site. The caller need not know which structure is used.
+	payload, err := docfilter.BuildWithMemoryAdmission(
+		keyvec,
+		docfilter.AdmissionForService(proc.GetService()),
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -588,6 +588,12 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	}
 
 	var rds []engine.Reader
+	completed := false
+	defer func() {
+		if !completed {
+			closeReaders(rds)
+		}
+	}()
 	proc := p.(*process.Process)
 
 	if plan2.IsFalseExpr(expr) {
@@ -701,6 +707,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		rds = append(rds, srd)
 	}
 
+	completed = true
 	return rds, nil
 }
 
