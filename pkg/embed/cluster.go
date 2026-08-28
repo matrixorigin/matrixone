@@ -108,9 +108,14 @@ func (c *cluster) Start() error {
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
+	if err := c.retryPendingCleanupLocked(); err != nil {
+		return err
+	}
 
 	if err := c.doStartLocked(0); err != nil {
-		return errors.Join(err, c.closeServicesFromLocked(0))
+		cleanupErr := c.closeServicesFromLocked(0)
+		c.recordPendingCleanupLocked(0)
+		return errors.Join(err, cleanupErr)
 	}
 	c.state = started
 	return nil
@@ -175,9 +180,30 @@ func (c *cluster) closeServicesFromLocked(from int) error {
 		if i < from {
 			break
 		}
+		if c.pendingCleanupContainsLocked(c.services[i]) {
+			continue
+		}
 		err = errors.Join(err, c.services[i].Close())
 	}
 	return err
+}
+
+func (c *cluster) recordPendingCleanupLocked(from int) {
+	for i := len(c.services) - 1; i >= from; i-- {
+		op := c.services[i]
+		if op.needsCleanup() && !c.pendingCleanupContainsLocked(op) {
+			c.pendingCleanup = append(c.pendingCleanup, op)
+		}
+	}
+}
+
+func (c *cluster) pendingCleanupContainsLocked(target *operator) bool {
+	for _, op := range c.pendingCleanup {
+		if op == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *cluster) GetService(
@@ -293,7 +319,7 @@ func (c *cluster) retryPendingCleanupLocked() error {
 	for _, op := range pending {
 		closeErr := op.Close()
 		err = errors.Join(err, closeErr)
-		if closeErr != nil && op.needsCleanup() {
+		if op.needsCleanup() {
 			c.pendingCleanup = append(c.pendingCleanup, op)
 		}
 	}

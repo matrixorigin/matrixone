@@ -155,12 +155,17 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 						continue
 					}
 					if cacheData.Hit {
-						if int64(len(cacheData.Data)) != vector.Entries[idx].Size {
+						entry := &vector.Entries[idx]
+						expectedSize := entry.Size
+						if entry.CachedDataSize > 0 {
+							expectedSize = entry.CachedDataSize
+						}
+						if int64(len(cacheData.Data)) != expectedSize {
 							continue
 						}
-						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = r.allocator.CopyToCacheData(ctx, cacheData.Data)
-						vector.Entries[idx].fromCache = r
+						entry.done = true
+						entry.CachedData = r.allocator.CopyToCacheData(ctx, cacheData.Data)
+						entry.fromCache = r
 						numHit++
 					}
 					seen[idx] = struct{}{}

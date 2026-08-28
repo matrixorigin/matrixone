@@ -67,6 +67,27 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.NoError(t, op.Close())
 }
 
+func TestOperatorCloseRetainsDependenciesAfterServiceCloseFailure(t *testing.T) {
+	closeErr := errors.New("service close failed")
+	svc := &closeTrackingService{closeErr: closeErr}
+	fs := &closeTrackingFileService{}
+	op := &operator{state: stopped}
+	op.reset.svc = svc
+	op.reset.fs = fs
+
+	require.ErrorIs(t, op.Close(), closeErr)
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.Zero(t, fs.closeCount.Load())
+	require.Same(t, svc, op.reset.svc)
+	require.Same(t, fs, op.reset.fs)
+
+	svc.closeErr = nil
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(2), svc.closeCount.Load())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.False(t, op.needsCleanup())
+}
+
 func TestClusterStartRollbackClosesPartiallyConstructedServices(t *testing.T) {
 	startErr := errors.New("service startup failed")
 	logService := &closeTrackingService{}
@@ -109,6 +130,52 @@ func TestClusterStartRollbackClosesPartiallyConstructedServices(t *testing.T) {
 	require.Equal(t, int32(1), logService.closeCount.Load())
 	require.Equal(t, int32(1), logFS.closeCount.Load())
 	require.Equal(t, int32(1), tnFS.closeCount.Load())
+}
+
+func TestClusterStartRetriesFailedInitialCleanupBeforeRestart(t *testing.T) {
+	startErr := errors.New("service startup failed")
+	closeErr := errors.New("service close failed")
+	firstService := &closeTrackingService{closeErr: closeErr}
+	secondService := &closeTrackingService{}
+	op := &operator{serviceType: metadata.ServiceType_LOG}
+	c := &cluster{
+		services: []*operator{op},
+		startFn: func(op *operator) error {
+			op.state = started
+			op.reset.svc = firstService
+			return startErr
+		},
+	}
+
+	err := c.Start()
+	require.ErrorIs(t, err, startErr)
+	require.ErrorIs(t, err, closeErr)
+	require.Len(t, c.pendingCleanup, 1)
+	require.Equal(t, int32(1), firstService.closeCount.Load())
+
+	startCalled := false
+	c.startFn = func(op *operator) error {
+		startCalled = true
+		op.state = started
+		op.reset.svc = secondService
+		return nil
+	}
+	require.ErrorIs(t, c.Start(), closeErr)
+	require.False(t, startCalled)
+	require.Equal(t, int32(2), firstService.closeCount.Load())
+
+	firstService.closeErr = nil
+	c.startFn = func(op *operator) error {
+		require.Equal(t, int32(3), firstService.closeCount.Load())
+		op.state = started
+		op.reset.svc = secondService
+		return nil
+	}
+	require.NoError(t, c.Start())
+	require.Empty(t, c.pendingCleanup)
+	require.Equal(t, started, c.state)
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), secondService.closeCount.Load())
 }
 
 func TestRollbackNewServicesRetriesCleanupBeforeRestart(t *testing.T) {

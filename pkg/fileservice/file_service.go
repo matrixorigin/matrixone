@@ -129,6 +129,10 @@ type IOEntry struct {
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
 	CachedData fscache.Data
+	// CachedDataSize is the expected size of the final cache representation.
+	// Zero means Size. It may differ from Size when ToCacheData decompresses the
+	// storage extent before cache admission.
+	CachedDataSize int64
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns

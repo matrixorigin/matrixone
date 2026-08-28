@@ -195,6 +195,36 @@ func TestRemoteCacheReadIgnoresInvalidResponses(t *testing.T) {
 	}
 }
 
+func TestRemoteCacheReadAcceptsFinalCacheRepresentationSize(t *testing.T) {
+	qt := &remoteCacheTestQueryClient{
+		responses: map[string]*query.Response{
+			"target": {
+				GetCacheDataResponse: &query.GetCacheDataResponse{
+					ResponseCacheData: []*query.ResponseCacheData{{
+						Index: 0,
+						Hit:   true,
+						Data:  []byte{1, 2, 3, 4},
+					}},
+				},
+			},
+		},
+	}
+	rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] {
+		return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+	})
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 2, CachedDataSize: 4}},
+	}
+
+	require.NoError(t, rc.Read(context.Background(), vector))
+	require.True(t, vector.Entries[0].done)
+	require.Equal(t, []byte{1, 2, 3, 4}, vector.Entries[0].CachedData.Bytes())
+	require.Same(t, rc, vector.Entries[0].fromCache)
+	vector.Release()
+	require.Equal(t, 1, qt.releaseCount)
+}
+
 func TestRemoteCacheReadIgnoresNilResponse(t *testing.T) {
 	qt := &remoteCacheTestQueryClient{
 		responses: map[string]*query.Response{"target": nil},

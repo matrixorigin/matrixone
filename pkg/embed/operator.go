@@ -133,12 +133,13 @@ func (op *operator) Close() error {
 		return nil
 	}
 
-	var err error
 	if op.reset.svc != nil {
-		err = op.reset.svc.Close()
-		if err == nil {
-			op.reset.svc = nil
+		if err := op.reset.svc.Close(); err != nil {
+			// Keep the service and its dependencies owned together so a retry
+			// cannot use resources that were already closed here.
+			return err
 		}
+		op.reset.svc = nil
 	}
 	if op.reset.stopper != nil {
 		op.reset.stopper.Stop()
@@ -149,10 +150,8 @@ func (op *operator) Close() error {
 		op.reset.fs = nil
 	}
 	op.reset.shutdownC = nil
-	if err == nil {
-		op.state = stopped
-	}
-	return err
+	op.state = stopped
+	return nil
 }
 
 func (op *operator) needsCleanup() bool {
@@ -169,6 +168,9 @@ func (op *operator) Start() error {
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
+	}
+	if op.reset.svc != nil || op.reset.stopper != nil || op.reset.fs != nil {
+		return moerr.NewInvalidStateNoCtx("service cleanup incomplete")
 	}
 
 	if err := op.init(); err != nil {
