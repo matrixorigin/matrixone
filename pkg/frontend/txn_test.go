@@ -1250,6 +1250,33 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 		require.Nil(t, ses.GetTxnHandler().GetTxn())
 	})
 
+	t.Run("live client-owned background DDL participates in barrier", func(t *testing.T) {
+		ses, op, qc, execCtx := newState(t)
+		defer ses.Close()
+		defer execCtx.Close()
+		ses.SetFromRealUser(false)
+		gate := NewDDLCommitGate()
+		gate.EnablePublicDDL()
+		rt := moruntime.ServiceRuntime(ses.GetService())
+		previousGate, hadPreviousGate := rt.GetGlobalVariables(DDLCommitGateRuntimeKey)
+		rt.SetGlobalVariables(DDLCommitGateRuntimeKey, gate)
+		t.Cleanup(func() {
+			if hadPreviousGate {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, previousGate)
+			} else {
+				rt.SetGlobalVariables(DDLCommitGateRuntimeKey, nil)
+			}
+		})
+
+		require.NoError(t, ses.GetTxnHandler().Commit(execCtx))
+		require.Equal(t, []ddlSyncRequest{
+			{address: "cn-1:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+			{address: "cn-2:6001", method: querypb.CmdMethod_SyncCommitV2, commitTS: commitTS},
+		}, qc.requests)
+		require.Equal(t, 2, qc.releases)
+		require.Equal(t, txn.TxnStatus_Committed, op.meta.Status)
+	})
+
 	tests := []struct {
 		name      string
 		configure func(*Session, *testTxnOp)
@@ -1261,7 +1288,7 @@ func TestCommitSyncsDDLCommitToBarrierReadyCNs(t *testing.T) {
 			},
 		},
 		{
-			name: "internal session",
+			name: "pre-ingress internal session",
 			configure: func(ses *Session, _ *testTxnOp) {
 				ses.SetFromRealUser(false)
 			},

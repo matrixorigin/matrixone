@@ -110,6 +110,9 @@ func (s *service) publishDDLVisibilityIngressAfterStart() error {
 	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
+	if s.ddlCommitGate != nil {
+		s.ddlCommitGate.EnablePublicDDL()
+	}
 	s.viewMetadataIngressReady.Store(true)
 	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
@@ -227,10 +230,13 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	s.ddlVisibilityActivationPending.Store(true)
 	s.ddlVisibilityActivationPrepared.Store(false)
 	s.ddlVisibilityActivationFenced.Store(false)
-	if err := s.ddlCommitGate.Block(barrierCtx); err != nil {
+	// Withdraw routing before waiting for already-admitted old-protocol DDL.
+	// Block deliberately remains engaged on timeout; ingress must be equally
+	// fail-closed throughout that retry window.
+	if err := s.setDDLVisibilityIngressLocked(barrierCtx, false); err != nil {
 		return err
 	}
-	if err := s.setDDLVisibilityIngressLocked(barrierCtx, false); err != nil {
+	if err := s.ddlCommitGate.Block(barrierCtx); err != nil {
 		return err
 	}
 

@@ -381,6 +381,46 @@ func TestHandleSetProtocolVersionRejectsStaleRecoveryIdentity(t *testing.T) {
 	require.Equal(t, defines.MORPCVersion34, version)
 }
 
+func TestActivationDrainTimeoutKeepsIngressWithdrawn(t *testing.T) {
+	const serviceID = "ddl-visibility-drain-timeout-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, QueryAddress: "self:6001",
+		ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		ViewMetadataIngressReady: true,
+	}}}
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = 10 * time.Millisecond
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	gate := frontend.NewDDLCommitGate()
+	releaseActive, err := gate.Enter(context.Background())
+	require.NoError(t, err)
+	defer releaseActive()
+	s := &service{
+		cfg: cfg, _hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster},
+		moCluster: cluster, queryClient: &ddlVisibilityTestQueryClient{serviceID: serviceID},
+		_txnClient: mock_frontend.NewMockTxnClient(gomock.NewController(t)),
+		config:     util.NewConfigData(nil), viewMetadataAdmissionGeneration: generation,
+		ddlCommitGate: gate,
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	err = s.setProtocolVersion(context.Background(), defines.MORPCVersion36, []string{serviceID})
+	require.Error(t, err)
+	require.True(t, s.ddlVisibilityActivationPending.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, cluster.cnServices[0].ViewMetadataIngressReady)
+	blockedCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = gate.Enter(blockedCtx)
+	require.Error(t, err)
+}
+
 func TestDefaultV36StillRunsCompleteTargetActivation(t *testing.T) {
 	const serviceID = "ddl-visibility-default-v36-activation-test"
 	const generation = uint64(7)

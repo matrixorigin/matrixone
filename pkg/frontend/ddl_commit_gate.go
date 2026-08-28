@@ -30,11 +30,12 @@ const DDLCommitGateRuntimeKey = "frontend.ddl-commit-gate"
 // the gate blocked across RPC attempts; Close wakes blocked sessions during CN
 // shutdown.
 type DDLCommitGate struct {
-	mu      sync.Mutex
-	changed chan struct{}
-	blocked bool
-	closed  bool
-	active  int
+	mu        sync.Mutex
+	changed   chan struct{}
+	blocked   bool
+	closed    bool
+	publicDDL bool
+	active    int
 	// enterBlockedHook is a deterministic test hook invoked after Enter observes
 	// a blocked gate and before it waits. Production leaves it nil.
 	enterBlockedHook func()
@@ -42,6 +43,15 @@ type DDLCommitGate struct {
 
 func NewDDLCommitGate() *DDLCommitGate {
 	return &DDLCommitGate{changed: make(chan struct{})}
+}
+
+func publicBackgroundDDLBarrierEnabled(serviceID string) bool {
+	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(DDLCommitGateRuntimeKey)
+	if !ok || value == nil {
+		return false
+	}
+	gate, ok := value.(*DDLCommitGate)
+	return ok && gate.PublicDDLEnabled()
 }
 
 func enterDDLCommitGate(ctx context.Context, serviceID string) (func(), error) {
@@ -54,6 +64,21 @@ func enterDDLCommitGate(ctx context.Context, serviceID string) (func(), error) {
 		return nil, moerr.NewInternalError(ctx, "invalid DDL commit gate")
 	}
 	return gate.Enter(ctx)
+}
+
+// EnablePublicDDL marks that public listeners are live. Background sessions
+// created on behalf of a client must participate in the cross-CN barrier after
+// this point; bootstrap background DDL remains local before it.
+func (g *DDLCommitGate) EnablePublicDDL() {
+	g.mu.Lock()
+	g.publicDDL = true
+	g.mu.Unlock()
+}
+
+func (g *DDLCommitGate) PublicDDLEnabled() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.publicDDL && !g.closed
 }
 
 func (g *DDLCommitGate) Enter(ctx context.Context) (func(), error) {

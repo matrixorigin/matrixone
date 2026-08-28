@@ -936,7 +936,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.SetTxnId(dumpUUID[:])
 			return err
 		}
-		if err == nil && haveDDL && execCtx.ses.GetFromRealUser() && !visibilityTS.IsEmpty() {
+		if err == nil && haveDDL && !visibilityTS.IsEmpty() &&
+			(execCtx.ses.GetFromRealUser() ||
+				publicBackgroundDDLBarrierEnabled(execCtx.ses.GetService())) {
 			// A fresh proxy connection has no session commit timestamp to carry
 			// across CNs. Do not acknowledge a client DDL until every working CN
 			// has reached the commit, or the observed catalog frontier for a no-op.
