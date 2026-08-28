@@ -1730,11 +1730,11 @@ func TestSeedViewMetadataRevalidationPageIsBounded(t *testing.T) {
 	require.NoError(t, executor.AppendStringRows(marker, 1,
 		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
 	require.NoError(t, executor.AppendFixedRows(marker, 2, []uint64{9}))
-	accounts := executor.NewMemResult([]types.Type{types.T_uint32.ToType()}, proc.Mp())
+	accounts := executor.NewMemResult([]types.Type{types.T_int32.ToType()}, proc.Mp())
 	accounts.NewBatchWithRowCount(viewMetadataRecoveryPageSize)
-	ids := make([]uint32, viewMetadataRecoveryPageSize)
+	ids := make([]int32, viewMetadataRecoveryPageSize)
 	for i := range ids {
-		ids[i] = uint32(i + 1)
+		ids[i] = int32(i + 1)
 	}
 	require.NoError(t, executor.AppendFixedRows(accounts, 0, ids))
 	results := []executor.Result{marker.GetResult(), accounts.GetResult()}
@@ -1755,6 +1755,80 @@ func TestSeedViewMetadataRevalidationPageIsBounded(t *testing.T) {
 	require.Contains(t, exec.sqls[1], fmt.Sprintf("limit %d", viewMetadataRecoveryPageSize))
 	require.Contains(t, exec.sqls[len(exec.sqls)-1],
 		fmt.Sprintf("set source_account_id=%d", viewMetadataRecoveryPageSize))
+}
+
+func TestSeedViewMetadataRevalidationPageRejectsInvalidAccountPage(t *testing.T) {
+	tests := []struct {
+		name          string
+		accountType   types.T
+		rowCount      int
+		accountIDs    []int32
+		unsignedIDs   []uint32
+		expectedError string
+	}{
+		{
+			name:          "unexpected account vector type",
+			accountType:   types.T_uint32,
+			rowCount:      1,
+			unsignedIDs:   []uint32{1},
+			expectedError: "expected INT",
+		},
+		{
+			name:          "negative account id",
+			accountType:   types.T_int32,
+			rowCount:      1,
+			accountIDs:    []int32{-1},
+			expectedError: "account_id is negative",
+		},
+		{
+			name:          "batch row count exceeds vector length",
+			accountType:   types.T_int32,
+			rowCount:      2,
+			accountIDs:    []int32{1},
+			expectedError: "rows, length",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			marker := executor.NewMemResult([]types.Type{
+				types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+			}, proc.Mp())
+			marker.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendFixedRows(marker, 0, []uint32{0}))
+			require.NoError(t, executor.AppendStringRows(marker, 1,
+				[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+			require.NoError(t, executor.AppendFixedRows(marker, 2, []uint64{9}))
+
+			accounts := executor.NewMemResult([]types.Type{tc.accountType.ToType()}, proc.Mp())
+			accounts.NewBatchWithRowCount(tc.rowCount)
+			if tc.accountType == types.T_int32 {
+				require.NoError(t, executor.AppendFixedRows(accounts, 0, tc.accountIDs))
+			} else {
+				require.NoError(t, executor.AppendFixedRows(accounts, 0, tc.unsignedIDs))
+			}
+			exec := &viewMetadataCleanupRecordingExecutor{
+				results: []executor.Result{marker.GetResult(), accounts.GetResult()},
+			}
+
+			var complete bool
+			var active bool
+			var seedErr error
+			require.NotPanics(t, func() {
+				seedErr = exec.ExecTxn(context.Background(), func(txn executor.TxnExecutor) error {
+					var err error
+					complete, active, err = seedViewMetadataRevalidationPage(txn)
+					return err
+				}, executor.Options{})
+			})
+			require.ErrorContains(t, seedErr, tc.expectedError)
+			require.False(t, complete)
+			require.True(t, active)
+			// The page is decoded before any metadata rows are written.
+			require.Len(t, exec.sqls, 2)
+		})
+	}
 }
 
 func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
