@@ -29,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/fencepublisher"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -136,6 +138,7 @@ func (s *service) initQueryService() error {
 	if err != nil {
 		return err
 	}
+	s.fulltext2FencePublisher = fencepublisher.New(s.cfg.UUID, s.queryClient)
 	return nil
 }
 
@@ -175,6 +178,38 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer)
 	s.addQueryCommandHandler(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate)
 	s.addQueryCommandHandler(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire)
+	s.addQueryCommandHandler(query.CmdMethod_Fulltext2CacheFence, s.handleFulltext2CacheFence)
+}
+
+func (s *service) handleFulltext2CacheFence(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
+	if req == nil {
+		return moerr.NewInvalidInput(ctx, "missing FULLTEXT2 cache fence request")
+	}
+	r := req.Fulltext2CacheFenceRequest
+	if r.Database == "" || r.StorageTable == "" || r.MetadataTable == "" {
+		return moerr.NewInvalidInput(ctx, "incomplete FULLTEXT2 cache identity")
+	}
+	identity := fulltext2.CacheIdentity{
+		AccountID:     r.AccountID,
+		Database:      r.Database,
+		StorageTable:  r.StorageTable,
+		MetadataTable: r.MetadataTable,
+	}
+	required, claimed, overflow := fulltext2.InstallGenerationFence(identity, fulltext2.Generation{
+		BaseTimestamp: r.BaseTimestamp,
+		TailChunk:     r.TailChunk,
+	})
+	resp.Fulltext2CacheFenceResponse = query.Fulltext2CacheFenceResponse{
+		RequiredBaseTimestamp: required.BaseTimestamp,
+		RequiredTailChunk:     required.TailChunk,
+		EvictionClaimed:       claimed && !overflow,
+	}
+	return nil
 }
 
 func (s *service) addQueryCommandHandler(

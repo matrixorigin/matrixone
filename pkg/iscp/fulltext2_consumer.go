@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -86,6 +85,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- ferr
 					return
 				}
+				var durableGeneration fulltext2.Generation
 				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						startChunk, err := fulltext2.NextTailChunkId(sqlproc, w.cfg)
@@ -112,7 +112,16 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 							w.cfg.DbName, w.cfg.IndexTable, datatype, nevents, len(segs), startChunk, chunkID)
 						if datatype == ISCPDataType_Tail {
 							sqlctx := sqlproc.SqlCtx
-							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+							if err := r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn()); err != nil {
+								return err
+							}
+						}
+						if len(segs) > 0 {
+							ts, tail, err := fulltext2.LoadGeneration(sqlproc, w.cfg)
+							if err == nil {
+								durableGeneration = fulltext2.Generation{BaseTimestamp: ts, TailChunk: tail}
+							}
+							return err
 						}
 						return nil
 					})
@@ -120,16 +129,16 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
-				// Evict the cached search index so the next query reloads tag=0 + the
-				// freshly-appended tag=1 frames, instead of serving the warm (stale)
-				// cache until its idle TTL. Only when frames were actually written.
-				// NOTE: this eviction is LOCAL to this CN — cross-CN cache coherence is
-				// a known cache-layer gap deferred to a follow-up PR (see the Decision
-				// block on veccache.VectorIndexCache.Remove).
+				// The tail transaction is already durable. Install the local generation
+				// fence first, then enqueue best-effort cross-CN delivery. Neither action
+				// can make this consumer retry and persist the tail a second time.
 				if len(segs) > 0 {
-					fulltext2.NewFulltext2Search(w.cfg).OnCacheInvalidated(string(fulltext2.LoadMissCDCFlush))
-					veccache.Cache.Remove(w.cfg.IndexTable)
-					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
+					identity := w.cfg.CacheIdentity(r.GetAccountID())
+					fulltext2.InstallGenerationFence(identity, durableGeneration)
+					if exec, ok := GetExecutorRuntime(c.cnUUID); ok && exec.fulltext2FencePublisher != nil {
+						exec.fulltext2FencePublisher.Enqueue(identity, durableGeneration)
+					}
+					logutil.Debugf("[ftv2-sink] installed cache generation fence for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
 				}
 				return
 			}

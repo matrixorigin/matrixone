@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/signal"
@@ -30,10 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// stalenessCheckEveryNTicks runs the IsStale freshness sweep every Nth HouseKeeping tick.
-// The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
-// cadence — the bound on how long a remote CN can serve a stale index before it ages out.
-const stalenessCheckEveryNTicks = 4
+const (
+	defaultStalenessCheckInterval = 30 * time.Second
+	stalenessCheckEveryNTicks     = 4
+)
 
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
@@ -159,6 +160,42 @@ type loadObservationFinisher interface {
 	FinishLoadObservation()
 }
 
+// coherenceRetryPolicy is optional. FULLTEXT2 uses it to bound retryable
+// generation supersession; algorithms that do not implement it retain the
+// historical destroyed-entry retry behavior.
+type coherenceRetryPolicy interface {
+	CoherenceRetryPolicy() (maxAttempts int, backoff []time.Duration)
+}
+
+func coherenceRetry(sqlproc *sqlexec.SqlProcess, algo VectorIndexSearchIf, attempts int) error {
+	policy, ok := algo.(coherenceRetryPolicy)
+	if !ok {
+		return nil
+	}
+	ctx := context.Background()
+	if sqlproc != nil {
+		if candidate := sqlproc.GetContext(); candidate != nil {
+			ctx = candidate
+		}
+	}
+	maxAttempts, backoff := policy.CoherenceRetryPolicy()
+	if maxAttempts <= 0 || attempts >= maxAttempts {
+		return moerr.NewServiceUnavailableNoCtx("FULLTEXT2 cache coherence retry exhausted")
+	}
+	delayIndex := attempts - 1
+	if delayIndex < 0 || delayIndex >= len(backoff) || backoff[delayIndex] <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(backoff[delayIndex])
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // StaleChecker is an OPTIONAL capability an algo's search impl may implement (currently
 // fulltext2). It reports whether the loaded index has fallen behind the persisted index —
 // e.g. a CDC append / REBUILD applied on ANOTHER CN, which the local process-scoped Remove
@@ -169,18 +206,16 @@ type loadObservationFinisher interface {
 // error rather than "stale" on a transient failure, so a meta-read blip can't trigger a
 // reload storm. An impl that cannot determine freshness returns (false, nil).
 //
-// DESIGN DECISION — EVENTUAL consistency, not immediate (won't-fix, by design): Search serves a
-// warmed entry directly and does NOT validate freshness on the query path (that would put a meta
-// read on every search — the perf floor this cache exists to avoid). Coherence is the periodic
-// PULL sweep only: it runs every stalenessCheckEveryNTicks ticks of the TTL/2 ticker and evicts a
-// stale entry on the NEXT housekeeping pass, so after a writer commits on another CN a warm remote
-// entry can keep answering the pre-CDC/MERGE/REBUILD snapshot for up to ~10–12.5 minutes before it
-// is reloaded. This is intentional: the contract is that a stale entry is EVENTUALLY removed, not
-// that reads are correct the instant the writer commits. Do NOT "fix" it by validating on the
-// search path or by broadcasting invalidations; if a caller ever needs read-your-writes across CNs,
-// that is a separate, opt-in requirement (or disable this cache for that index in multi-CN).
+// Search serves a warmed entry without catalog I/O. A context-aware checker
+// opts into FULLTEXT2's 30-second bounded pull fallback and same-sweep eviction.
+// Existing context-free checkers keep their historical cadence and delayed
+// housekeeping eviction.
 type StaleChecker interface {
 	IsStale() (bool, error)
+}
+
+type contextStaleChecker interface {
+	IsStaleWithContext(context.Context) (bool, error)
 }
 
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
@@ -196,6 +231,7 @@ type VectorIndexSearch struct {
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting         atomic.Bool
+	deferredDestroy  atomic.Bool
 	invalidationOnce sync.Once
 }
 
@@ -225,6 +261,23 @@ func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
 		}
 	}
 	return s.evicting.CompareAndSwap(false, true)
+}
+
+// finishDeferredDestroy lets the first caller that observes no remaining
+// reader/load lease become the unique destruction owner. It never waits: a
+// failed TryLock means an existing lease will retry this method on release.
+func (s *VectorIndexSearch) finishDeferredDestroy() {
+	if !s.deferredDestroy.Load() || !s.Mutex.TryLock() {
+		return
+	}
+	if !s.deferredDestroy.CompareAndSwap(true, false) {
+		s.Mutex.Unlock()
+		return
+	}
+	s.Algo.Destroy()
+	s.Status.Store(STATUS_DESTROYED)
+	s.Mutex.Unlock()
+	s.Cond.Broadcast()
 }
 
 func (s *VectorIndexSearch) DestroyWithReason(reason string) {
@@ -259,6 +312,7 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	defer func() {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
+		s.finishDeferredDestroy()
 	}()
 	if s.evicting.Load() {
 		return moerr.NewInvalidStateNoCtx("Index destroyed")
@@ -339,7 +393,10 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 		s.loadWaiters.Add(1)
 	}
 	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
+	defer func() {
+		s.Cond.L.Unlock()
+		s.finishDeferredDestroy()
+	}()
 	if preloadWaiter {
 		s.loadWaiters.Add(-1)
 	}
@@ -380,7 +437,10 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 		s.loadWaiters.Add(1)
 	}
 	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
+	defer func() {
+		s.Cond.L.Unlock()
+		s.finishDeferredDestroy()
+	}()
 	if preloadWaiter {
 		s.loadWaiters.Add(-1)
 	}
@@ -407,21 +467,26 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 
 // implementation of VectorIndexCache
 type VectorIndexCache struct {
-	IndexMap       sync.Map
-	TickerInterval time.Duration
-	ticker         *time.Ticker
-	done           chan bool
-	sigc           chan os.Signal
-	started        atomic.Bool
-	exited         atomic.Bool
-	once           sync.Once
-	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
-	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
+	IndexMap           sync.Map
+	TickerInterval     time.Duration
+	StaleCheckInterval time.Duration
+	ticker             *time.Ticker
+	staleTicker        *time.Ticker
+	done               chan bool
+	sigc               chan os.Signal
+	started            atomic.Bool
+	exited             atomic.Bool
+	once               sync.Once
+	hkTicks            int
+	staleChecking      atomic.Bool // single-flight guard for the historical vector-index sweep
+	fastStaleChecking  atomic.Bool // independent FULLTEXT2 30-second sweep
+	staleCancel        context.CancelFunc
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
 	c := &VectorIndexCache{}
 	c.TickerInterval = VectorIndexCacheTTL / 2
+	c.StaleCheckInterval = defaultStalenessCheckInterval
 	return c
 }
 
@@ -432,6 +497,9 @@ func (c *VectorIndexCache) serve() {
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
 	c.ticker = time.NewTicker(c.TickerInterval)
+	c.staleTicker = time.NewTicker(c.StaleCheckInterval)
+	staleCtx, staleCancel := context.WithCancel(context.Background())
+	c.staleCancel = staleCancel
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
@@ -441,12 +509,15 @@ func (c *VectorIndexCache) serve() {
 
 	go func() {
 		defer c.ticker.Stop()
+		defer c.staleTicker.Stop()
 		for {
 			select {
 			case <-c.done:
+				staleCancel()
 				c.exited.Store(true)
 				return
 			case <-c.sigc:
+				staleCancel()
 				// sig can be syscall.SIGTERM or syscall.SIGINT
 				c.exited.Store(true)
 				c.Destroy()
@@ -456,12 +527,11 @@ func (c *VectorIndexCache) serve() {
 				// reclamation and shutdown never wait on a freshness read.
 				c.HouseKeeping()
 				c.hkTicks++
-				if c.hkTicks%stalenessCheckEveryNTicks == 0 && c.staleChecking.CompareAndSwap(false, true) {
-					go func() {
-						defer c.staleChecking.Store(false)
-						c.checkStale()
-					}()
+				if c.hkTicks%stalenessCheckEveryNTicks == 0 {
+					c.startStaleCheck(staleCtx, false)
 				}
+			case <-c.staleTicker.C:
+				c.startStaleCheck(staleCtx, true)
 			}
 		}
 	}()
@@ -534,13 +604,26 @@ func (c *VectorIndexCache) HouseKeeping() {
 	runLifecycleHooks(false)
 }
 
-// checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
-// (the next HouseKeeping sweep reclaims them; Search stays pure-read). Runs on its own
-// goroutine off the ticker (see serve), single-flighted, because each IsStale opens a short
-// background txn — so a slow/stalled executor delays only the next freshness sweep, never TTL
-// eviction or shutdown. The IsStale calls are collected out of the IndexMap.Range callback so a
-// slow meta read never holds up the map iteration, and the loop bails on shutdown.
-func (c *VectorIndexCache) checkStale() {
+// checkStale asks loaded StaleChecker entries whether they are stale. The fast
+// context-aware cohort is FULLTEXT2-only and is evicted in the same sweep; the
+// historical cohort is only marked for the next HouseKeeping pass. Both modes
+// are independently single-flighted.
+func (c *VectorIndexCache) startStaleCheck(ctx context.Context, fast bool) bool {
+	guard := &c.staleChecking
+	if fast {
+		guard = &c.fastStaleChecking
+	}
+	if !guard.CompareAndSwap(false, true) {
+		return false
+	}
+	go func() {
+		defer guard.Store(false)
+		c.checkStale(ctx, fast)
+	}()
+	return true
+}
+
+func (c *VectorIndexCache) checkStale(ctx context.Context, fast bool) {
 	type staleEntry struct {
 		s   *VectorIndexSearch
 		sc  StaleChecker
@@ -552,32 +635,72 @@ func (c *VectorIndexCache) checkStale() {
 		if algo.Status.Load() != STATUS_LOADED {
 			return true // skip loading/errored/destroyed entries
 		}
-		if sc, ok := algo.Algo.(StaleChecker); ok {
+		sc, ok := algo.Algo.(StaleChecker)
+		if !ok {
+			return true
+		}
+		_, contextAware := sc.(contextStaleChecker)
+		if contextAware == fast {
 			entries = append(entries, staleEntry{algo, sc, key})
 		}
 		return true
 	})
-	for _, e := range entries {
-		// Bail promptly on shutdown so a K-entry sweep of ≤1-min SQL reads can't keep this
-		// goroutine (and any resources it pins) alive long after Destroy.
-		if c.exited.Load() {
-			return
+	if !fast {
+		for _, e := range entries {
+			if c.exited.Load() || ctx.Err() != nil {
+				return
+			}
+			stale, err := e.sc.IsStale()
+			if err != nil {
+				logutil.Warnf("[veccache] IsStale for index %v errored (treating as stale): %v", e.key, err)
+			}
+			if stale {
+				e.s.markStale()
+			}
 		}
-		stale, err := e.sc.IsStale()
-		if err != nil {
-			// A query error usually means the index was dropped/rebuilt out from under us —
-			// IsStale returns stale=true so the dead entry is reclaimed; log the cause.
-			logutil.Warnf("[veccache] IsStale for index %v errored (treating as stale): %v", e.key, err)
-		}
-		if stale {
-			logutil.Infof("[veccache] index %v is stale — marking for eviction on next sweep", e.key)
-			e.s.markStale()
-		}
+		return
 	}
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		case sem <- struct{}{}:
+		}
+		wg.Add(1)
+		go func(e staleEntry) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			var stale bool
+			var err error
+			if checker, ok := e.sc.(contextStaleChecker); ok {
+				stale, err = checker.IsStaleWithContext(checkCtx)
+			} else {
+				stale, err = e.sc.IsStale()
+			}
+			if err != nil {
+				// A query error usually means the index was dropped/rebuilt out from under us —
+				// IsStale returns stale=true so the dead entry is reclaimed; log the cause.
+				logutil.Warnf("[veccache] IsStale for index %v errored (treating as stale): %v", e.key, err)
+			}
+			if stale {
+				logutil.Infof("[veccache] index %v is stale — claiming eviction in freshness sweep", e.key)
+				c.ClaimRemoveWithReason(e.key.(string), "generation_changed")
+			}
+		}(e)
+	}
+	wg.Wait()
 }
 
 // destroy the cache
 func (c *VectorIndexCache) Destroy() {
+	if c.staleCancel != nil {
+		c.staleCancel()
+	}
 	if c.started.Load() {
 		//c.ticker.Stop()
 		if !c.exited.Load() {
@@ -597,7 +720,9 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	attempts := 0
 	for {
+		attempts++
 		s := &VectorIndexSearch{Algo: newalgo}
 		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
 		s.Cond = sync.NewCond(s.Mutex.RLocker())
@@ -609,10 +734,16 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			err := algo.Load(sqlproc)
 			if err != nil {
 				if algo.evicting.Load() {
+					if retryErr := coherenceRetry(sqlproc, newalgo, attempts); retryErr != nil {
+						return nil, nil, retryErr
+					}
 					continue
 				}
 				if IsRetryableLoadError(err) {
 					c.discardFailedLoad(key, algo)
+					if retryErr := coherenceRetry(sqlproc, newalgo, attempts); retryErr != nil {
+						return nil, nil, retryErr
+					}
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -625,6 +756,9 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 				// index destroyed by Remove() or HouseKeeping.  Retry!
+				if retryErr := coherenceRetry(sqlproc, newalgo, attempts); retryErr != nil {
+					return nil, nil, retryErr
+				}
 				continue
 			}
 			return nil, nil, err
@@ -639,7 +773,9 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 // Same LoadOrStore / retryable-load discipline as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	attempts := 0
 	for {
+		attempts++
 		s := &VectorIndexSearch{Algo: newalgo}
 		s.Cond = sync.NewCond(s.Mutex.RLocker())
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
@@ -647,10 +783,16 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		if !loaded {
 			if err := algo.Load(sqlproc); err != nil {
 				if algo.evicting.Load() {
+					if retryErr := coherenceRetry(sqlproc, newalgo, attempts); retryErr != nil {
+						return retryErr
+					}
 					continue
 				}
 				if IsRetryableLoadError(err) {
 					c.discardFailedLoad(key, algo)
+					if retryErr := coherenceRetry(sqlproc, newalgo, attempts); retryErr != nil {
+						return retryErr
+					}
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -662,6 +804,9 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				if retryErr := coherenceRetry(sqlproc, newalgo, attempts); retryErr != nil {
+					return retryErr
+				}
 				continue // index destroyed by Remove()/HouseKeeping — retry
 			}
 			return err
@@ -684,6 +829,44 @@ func (c *VectorIndexCache) Remove(key string) {
 // The empty reason preserves the historical behavior for all other algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
+}
+
+// ClaimRemoveWithReason publishes an eviction claim without waiting for
+// searches that already hold the entry's read lease. Once beginEviction and
+// CompareAndDelete succeed, new searches cannot acquire the old object; the
+// object records deferred destruction; the last reader/load lease becomes its
+// unique cleanup owner. FULLTEXT2 generation fences use this path so an RPC ACK means the
+// admission barrier is installed, not that pre-claim queries were canceled.
+func (c *VectorIndexCache) ClaimRemoveWithReason(key, reason string) {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok || !algo.beginEviction(false) {
+		return
+	}
+	algo.notifyCacheInvalidated(reason)
+	if !c.IndexMap.CompareAndDelete(key, algo) {
+		return
+	}
+	algo.deferredDestroy.Store(true)
+	algo.finishDeferredDestroy()
+}
+
+// ClaimRemovePrefixWithReason publishes non-blocking eviction claims for all
+// currently visible entries below one algorithm-owned prefix.
+func (c *VectorIndexCache) ClaimRemovePrefixWithReason(prefix, reason string) {
+	keys := make([]string, 0, 4)
+	c.IndexMap.Range(func(key, value any) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+		return true
+	})
+	for _, key := range keys {
+		c.ClaimRemoveWithReason(key, reason)
+	}
 }
 
 // RemovePrefix removes every cached index whose key starts with prefix.

@@ -24,7 +24,7 @@ import (
 func TestLoadReasonRegistryDisabledObserverIsNoOp(t *testing.T) {
 	cleanup := setLoadObserver(nil)
 	defer cleanup()
-	key := loadReasonKey("db", "store")
+	key := (TableConfig{DbName: "db", IndexTable: "store"}).cacheIdentity().Key()
 	rememberLoadReason(key, LoadMissCDCFlush)
 	reason, generation := peekLoadReason(key)
 	require.Empty(t, reason)
@@ -34,7 +34,7 @@ func TestLoadReasonRegistryDisabledObserverIsNoOp(t *testing.T) {
 func TestLoadReasonRegistryStoresOnlyWhenEnabled(t *testing.T) {
 	cleanup := setLoadObserver(func(LoadEvent) {})
 	defer cleanup()
-	key := loadReasonKey("db", "store")
+	key := (TableConfig{DbName: "db", IndexTable: "store"}).cacheIdentity().Key()
 	rememberLoadReason(key, LoadMissCDCFlush)
 	reason, generation := peekLoadReason(key)
 	require.Equal(t, LoadMissCDCFlush, reason)
@@ -59,7 +59,7 @@ func TestLoadReasonRegistryBoundsExpiryAndInvalidation(t *testing.T) {
 		pendingLoadReasons.Unlock()
 	})
 
-	require.Equal(t, "index", loadReasonKey("", "index"))
+	require.NotEmpty(t, (TableConfig{IndexTable: "index"}).cacheIdentity().Key())
 	pendingLoadReasons.Lock()
 	pendingLoadReasons.m["expired"] = pendingLoadReason{reason: LoadMissTTLExpired, at: time.Now().Add(-loadReasonTTL - time.Second)}
 	pendingLoadReasons.m["oldest"] = pendingLoadReason{reason: LoadMissCDCFlush, at: time.Now().Add(-time.Second)}
@@ -84,11 +84,11 @@ func TestLoadReasonRegistryBoundsExpiryAndInvalidation(t *testing.T) {
 
 	cfg := TableConfig{DbName: "db", IndexTable: "store"}
 	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
-	reason, generation = peekLoadReason("db.store")
+	reason, generation = peekLoadReason(cfg.cacheIdentity().Key())
 	require.Equal(t, LoadMissCDCFlush, reason)
-	consumeLoadReason("db.store", generation)
+	consumeLoadReason(cfg.cacheIdentity().Key(), generation)
 	invalidateLoadGeneration(cfg, LoadMissReason("process_shutdown"))
-	reason, generation = peekLoadReason("db.store")
+	reason, generation = peekLoadReason(cfg.cacheIdentity().Key())
 	require.Empty(t, reason)
 	require.Zero(t, generation)
 }
@@ -107,7 +107,7 @@ func TestLoadReasonRegistryDoesNotConsumeNewerInvalidationAfterReasonReplacement
 		pendingLoadReasons.Unlock()
 	})
 
-	key := loadReasonKey("db", "store")
+	key := (TableConfig{DbName: "db", IndexTable: "store"}).cacheIdentity().Key()
 	rememberLoadReason(key, LoadMissCDCFlush)
 	firstReason, firstGeneration := peekLoadReason(key)
 	require.Equal(t, LoadMissCDCFlush, firstReason)

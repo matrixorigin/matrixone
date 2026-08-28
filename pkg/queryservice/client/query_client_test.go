@@ -15,10 +15,12 @@
 package client
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
@@ -30,8 +32,20 @@ func testCreateQueryClient(t *testing.T) QueryClient {
 	return ct
 }
 
-func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
+func TestMethodProtocolVersions(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
+	assert.Equal(t, defines.MORPCVersion36, methodVersions[query.CmdMethod_Fulltext2CacheFence])
+}
+
+func TestFulltext2CacheFenceRejectsV35AndAcceptsV36(t *testing.T) {
+	const service = "fulltext2-fence-version-test"
+	moruntime.RunTest(service, func(rt moruntime.Runtime) {
+		req := &query.Request{CmdMethod: query.CmdMethod_Fulltext2CacheFence}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
+		assert.ErrorContains(t, checkMethodVersion(context.Background(), service, req), "unsupported protocol version 36")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		assert.NoError(t, checkMethodVersion(context.Background(), service, req))
+	})
 }
 
 func TestNewCacheClient(t *testing.T) {

@@ -523,6 +523,7 @@ func (s *service) closeService() error {
 			// stopped may the MongoDB pool disconnect clients still leased by a
 			// MongoScan operator.
 			s.stopTask,
+			s.closeFulltext2FencePublisher,
 			s.closeMongoDBRuntime,
 			s.closePipelineAdmission,
 			s.server.Close,
@@ -749,6 +750,13 @@ func (s *service) stopRPCs() error {
 		s.timestampWaiter.Close()
 	}
 	return err
+}
+
+func (s *service) closeFulltext2FencePublisher() error {
+	if s.fulltext2FencePublisher != nil {
+		s.fulltext2FencePublisher.Close()
+	}
+	return nil
 }
 
 func (s *service) acquireMessage() morpc.Message {

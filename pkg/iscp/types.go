@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -143,7 +144,8 @@ type ISCPTaskExecutor struct {
 	// consumers that spill to disk (e.g. fulltext2's tail) read it via
 	// GetExecutorRuntime(cnUUID) to route scratch onto the fast LOCAL mount
 	// instead of the OS temp dir. May be nil (tests / no LOCAL attached).
-	rootFS fileservice.FileService
+	rootFS                  fileservice.FileService
+	fulltext2FencePublisher fulltext2.FencePublisher
 
 	iscpLogWm       types.TS
 	prevISCPTableID uint64

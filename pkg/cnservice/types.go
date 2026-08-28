@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -768,8 +769,9 @@ type service struct {
 	// queryService is used to handle query request from other CN service.
 	queryService queryservice.QueryService
 	// queryClient is used to send query request to other CN services.
-	queryClient qclient.QueryClient
-	queryWork   queryWorkLifecycle
+	queryClient             qclient.QueryClient
+	fulltext2FencePublisher fulltext2.FencePublisher
+	queryWork               queryWorkLifecycle
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex

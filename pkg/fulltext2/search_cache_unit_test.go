@@ -109,6 +109,7 @@ func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T)
 			sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
 			mp := mpool.MustNewZero()
 			cfg := testStorageCfg()
+			cfg.AccountID = 7
 			var events []LoadEvent
 			restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
 			defer restore()
@@ -134,10 +135,8 @@ func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T)
 				switch {
 				case strings.Contains(sql, "CAST(COALESCE"):
 					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
-				case strings.Contains(sql, "MAX(timestamp)"):
-					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
-				case strings.Contains(sql, "MAX(chunk_id)"):
-					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+				case strings.Contains(sql, "MAX(timestamp)") && strings.Contains(sql, "MAX(chunk_id)"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{generationBatch(mp, 11, 22)}}, nil
 				case strings.Contains(sql, "LENGTH("):
 					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
 				default:
@@ -154,7 +153,7 @@ func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T)
 			require.Equal(t, int64(11), events[0].BaseGeneration)
 			require.Equal(t, int64(22), events[0].TailGeneration)
 			require.True(t, events[0].LoadSuccess)
-			gotReason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+			gotReason, generation := peekLoadReason(cfg.cacheIdentity().Key())
 			require.Empty(t, gotReason)
 			require.Zero(t, generation)
 			s.Destroy()
@@ -184,6 +183,7 @@ func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) 
 		t.Run(string(reason), func(t *testing.T) {
 			sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
 			cfg := testStorageCfg()
+			cfg.AccountID = 7
 			var events []LoadEvent
 			restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
 			defer restore()
@@ -274,17 +274,17 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
 
-	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	reason, generation := peekLoadReason(cfg.cacheIdentity().Key())
 	require.Equal(t, LoadMissCDCFlush, reason)
 	require.NotZero(t, generation)
-	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), generation)
+	consumeLoadReason(cfg.cacheIdentity().Key(), generation)
 	oldEntry.Mutex.Unlock()
 	select {
 	case <-removed:
 	case <-time.After(time.Second):
 		t.Fatal("old cache eviction did not finish")
 	}
-	reason, generation = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	reason, generation = peekLoadReason(cfg.cacheIdentity().Key())
 	require.Empty(t, reason)
 	require.Zero(t, generation)
 	veccache.Cache.Remove(cfg.IndexTable)
@@ -327,10 +327,10 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
 		return !loaded
 	}, time.Second, time.Millisecond)
-	reason, observedGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	reason, observedGeneration := peekLoadReason(cfg.cacheIdentity().Key())
 	require.Equal(t, LoadMissTTLExpired, reason)
 	require.NotZero(t, observedGeneration)
-	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), observedGeneration)
+	consumeLoadReason(cfg.cacheIdentity().Key(), observedGeneration)
 
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
@@ -339,7 +339,7 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
 
-	loadGen := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	loadGen := beginLoadGeneration(cfg.cacheIdentity().Key())
 	require.True(t, loadGenerationCurrent(loadGen))
 	endLoadGeneration(loadGen)
 
@@ -356,6 +356,52 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 func TestFulltext2SupersededLoadIsRetryable(t *testing.T) {
 	require.True(t, veccache.IsRetryableLoadError(errLoadGenerationSuperseded))
 	require.Contains(t, errLoadGenerationSuperseded.Error(), "fulltext2 load superseded by a newer generation")
+}
+
+func TestFulltext2LoadCannotPublishBelowRequiredGeneration(t *testing.T) {
+	previousCache := veccache.Cache
+	previousFences := localFences
+	veccache.Cache = veccache.NewVectorIndexCache()
+	localFences = newFenceRegistry(8)
+	t.Cleanup(func() {
+		veccache.Cache = previousCache
+		localFences = previousFences
+	})
+
+	cfg := testStorageCfg()
+	const accountID = uint32(17)
+	id := cfg.CacheIdentity(accountID)
+	proc, mp := mockSqlProc(t)
+	var generationReads atomic.Int32
+	var fenceInstalled atomic.Bool
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "SELECT (SELECT") {
+			read := generationReads.Add(1)
+			if read == 1 {
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{generationBatch(mp, 1, 1)}}, nil
+			}
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{generationBatch(mp, 1, 2)}}, nil
+		}
+		if generationReads.Load() == 1 && fenceInstalled.CompareAndSwap(false, true) {
+			claim, _, overflow := localFences.install(id, Generation{BaseTimestamp: 1, TailChunk: 2})
+			require.True(t, claim)
+			require.False(t, overflow)
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+
+	loader := NewFulltext2SearchForAccount(cfg, accountID)
+	_, _, err := veccache.Cache.Search(proc, id.Key(), loader,
+		Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
+	require.NoError(t, err)
+	require.True(t, fenceInstalled.Load())
+	// One read for the superseded attempt, then the successful attempt's
+	// pre-load snapshot plus its background-pull handle capture.
+	require.Equal(t, int32(3), generationReads.Load())
+	value, ok := veccache.Cache.IndexMap.Load(id.Key())
+	require.True(t, ok)
+	loaded := value.(*veccache.VectorIndexSearch).Algo.(*Fulltext2Search)
+	require.Equal(t, int64(2), loaded.loadedTail)
 }
 
 func TestVectorIndexCacheRetriesSupersededFulltext2Load(t *testing.T) {
@@ -430,18 +476,18 @@ func TestVectorIndexCacheRetriesSupersededFulltext2Load(t *testing.T) {
 	}
 }
 
-// TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the
+// TestGenerationSQL pins the single-snapshot cache-freshness generation query: MAX(timestamp) over the
 // metadata table (REBUILD/MERGE signal) and MAX(chunk_id) over the tag=1 CdcTail (CDC-append
 // signal), scoped to (CdcTailId, tag=1) so a base sub-index cannot mask a fresh append.
-func TestStaleGenSqls(t *testing.T) {
+func TestGenerationSQL(t *testing.T) {
 	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta"}
-	tsSQL, tailSQL := StaleGenSqls(cfg)
-	require.Contains(t, tsSQL, "MAX(timestamp)")
-	require.Contains(t, tsSQL, "`db`.`__meta`")
-	require.Contains(t, tailSQL, "MAX(chunk_id)")
-	require.Contains(t, tailSQL, "`db`.`__store`")
-	require.Contains(t, tailSQL, "tag = 1")             // tag=Tag_CdcEvents
-	require.Contains(t, tailSQL, vectorindex.CdcTailId) // scoped to the single CDC tail
+	sql := GenerationSQL(cfg)
+	require.Contains(t, sql, "MAX(timestamp)")
+	require.Contains(t, sql, "`db`.`__meta`")
+	require.Contains(t, sql, "MAX(chunk_id)")
+	require.Contains(t, sql, "`db`.`__store`")
+	require.Contains(t, sql, "tag = 1")             // tag=Tag_CdcEvents
+	require.Contains(t, sql, vectorindex.CdcTailId) // scoped to the single CDC tail
 }
 
 // TestIsStaleUncheckableEvicts: the index loaded fine (loadedSearch assembles segments in memory)
@@ -549,21 +595,18 @@ func TestFulltext2SearchDestroy(t *testing.T) {
 }
 
 // TestLoadGenerationHappy stubs the package runSql to cover the fulltext2 generation reader
-// (StaleGenSqls + resultScalarInt64 + the two-read LoadGeneration body).
+// (GenerationSQL + resultGeneration + the one-read LoadGeneration body).
 func TestLoadGenerationHappy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	old := runSql
 	defer func() { runSql = old }()
-	n := 0
-	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		n++
-		bat := batch.NewWithSize(1)
+	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		require.Equal(t, GenerationSQL(TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}), sql)
+		bat := batch.NewWithSize(2)
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		v := int64(11)
-		if n == 2 {
-			v = 22
-		}
-		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], v, false, mp))
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 11, false, mp))
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[1], 22, false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
@@ -586,6 +629,16 @@ func TestLoadGenerationRecover(t *testing.T) {
 	_, _, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "LoadGeneration recovered")
+}
+
+func TestLoadGenerationRejectsMissingResultRow(t *testing.T) {
+	old := runSql
+	defer func() { runSql = old }()
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}
+	_, _, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
+	require.ErrorContains(t, err, "generation query returned no row")
 }
 
 // TestFulltext2IsStaleQueryError: with a captured generation but an unresolvable CN service, the

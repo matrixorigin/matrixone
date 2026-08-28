@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
@@ -105,7 +106,11 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 // tail is discarded first — the fresh base already reflects every committed row.
 func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
 	if clearTail {
-		cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+		accountID, err := compileAccountID(ctx)
+		if err != nil {
+			return err
+		}
+		cfg := fulltext2.TableConfig{AccountID: accountID, DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 		// REBUILD: clear the tail AND the prior tag=0 base(s) here. The create TVF also
 		// clears the bases, but it SKIPS that when the rebuild sees zero source rows
 		// (empty/all-deleted table) — so without this a REBUILD over an emptied table
@@ -118,7 +123,7 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 			}
 		}
 		fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
-		cache.Cache.Remove(storeDef.IndexTableName)
+		cache.Cache.Remove(cfg.CacheIdentity(accountID).Key())
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
@@ -417,10 +422,28 @@ func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[str
 	if !ok || storeDef == nil || storeDef.IndexTableName == "" {
 		return nil
 	}
-	cfg := fulltext2.TableConfig{DbName: ctx.QryDatabase(), IndexTable: storeDef.IndexTableName}
-	fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated("")
-	cache.Cache.Remove(storeDef.IndexTableName)
+	metaDef, ok := indexDefs[catalog.FullText2Index_TblType_Metadata]
+	if !ok || metaDef == nil || metaDef.IndexTableName == "" {
+		return moerr.NewInternalErrorNoCtx("fulltext2 metadata identity missing during DROP")
+	}
+	accountID, err := compileAccountID(ctx)
+	if err != nil {
+		return err
+	}
+	identity := fulltext2.CacheIdentity{AccountID: accountID, Database: ctx.QryDatabase(), StorageTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+	fulltext2.DropCacheIdentity(identity)
 	return nil
+}
+
+func compileAccountID(ctx compileplugin.CompileContext) (uint32, error) {
+	if ctx == nil || ctx.Ctx() == nil {
+		return 0, moerr.NewInternalErrorNoCtx("fulltext2 compile tenant context missing")
+	}
+	accountID, ok := ctx.Ctx().Value(defines.TenantIDKey{}).(uint32)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtx("fulltext2 compile tenant identity missing")
+	}
+	return accountID, nil
 }
 
 // HiddenTableDropPriority: fulltext2's storage and metadata hidden tables have no

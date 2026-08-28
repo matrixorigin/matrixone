@@ -108,7 +108,7 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 		pendingLoadReasons.Unlock()
 	})
 
-	require.Equal(t, "store", loadReasonKey("", "store"))
+	require.NotEmpty(t, (TableConfig{IndexTable: "store"}).cacheIdentity().Key())
 	rememberLoadReason("", LoadMissCDCFlush)
 	rememberLoadReason("store", "")
 	reason, generation := peekLoadReason("store")
@@ -138,9 +138,9 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 
 	cfg := TableConfig{DbName: "db", IndexTable: "store"}
 	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
-	reason, generation = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	reason, generation = peekLoadReason(cfg.cacheIdentity().Key())
 	require.Equal(t, LoadMissCDCFlush, reason)
-	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), generation)
+	consumeLoadReason(cfg.cacheIdentity().Key(), generation)
 	invalidateLoadGeneration(cfg, LoadMissTTLExpired)
 	invalidateLoadGeneration(cfg, LoadMissGenerationChange)
 	invalidateLoadGeneration(cfg, LoadMissMerge)
@@ -172,13 +172,13 @@ func TestInvalidateLoadGenerationPreservesReplacementReasonAndGeneration(t *test
 	cfg := TableConfig{DbName: "db", IndexTable: "store"}
 	for generation, reason := range []LoadMissReason{LoadMissMerge, LoadMissRebuild} {
 		invalidateLoadGeneration(cfg, reason)
-		gotReason, gotGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+		gotReason, gotGeneration := peekLoadReason(cfg.cacheIdentity().Key())
 		require.Equal(t, reason, gotReason)
 		require.Equal(t, uint64(generation+1), gotGeneration)
-		consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), gotGeneration)
+		consumeLoadReason(cfg.cacheIdentity().Key(), gotGeneration)
 	}
 	NewFulltext2Search(cfg).OnCacheInvalidated("")
-	gotReason, gotGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	gotReason, gotGeneration := peekLoadReason(cfg.cacheIdentity().Key())
 	require.Empty(t, gotReason)
 	require.Zero(t, gotGeneration)
 }
@@ -197,7 +197,7 @@ func TestLoadReasonRegistryDoesNotConsumeNewerInvalidation(t *testing.T) {
 		pendingLoadReasons.Unlock()
 	})
 
-	key := loadReasonKey("db", "store")
+	key := (TableConfig{DbName: "db", IndexTable: "store"}).cacheIdentity().Key()
 	rememberLoadReason(key, LoadMissCDCFlush)
 	firstReason, firstGeneration := peekLoadReason(key)
 	require.Equal(t, LoadMissCDCFlush, firstReason)
@@ -252,7 +252,7 @@ func TestReasonlessDropInvalidatesGenerationBeforeClearingReusablePools(t *testi
 	loadedTailPool.clearAll()
 
 	cfg := TableConfig{DbName: "db", IndexTable: "drop-race"}
-	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	index := cfg.cacheIdentity().Key()
 	generation := beginLoadGeneration(index)
 	t.Cleanup(func() { endLoadGeneration(generation) })
 	t.Cleanup(func() {
@@ -355,14 +355,15 @@ func TestReasonlessDropInvalidatesGenerationBeforeClearingReusablePools(t *testi
 }
 
 func TestLoadTailWithReuseReusesUnchangedState(t *testing.T) {
-	index := "db.store"
+	cfg := TableConfig{DbName: "db", IndexTable: "store"}
+	index := cfg.cacheIdentity().Key()
 	loadedTailPool.clear(index)
 	t.Cleanup(func() { loadedTailPool.clear(index) })
 	state := newTailState(7, 11, []*Segment{NewSegment("tail", 11)}, nil)
 	views, _ := loadedTailPool.installAndAcquire(index, state)
 	freeSegs(views)
 
-	segs, deletes, maxChunk, err := loadTailWithReuse(nil, TableConfig{DbName: "db", IndexTable: "store"}, 7, 11, nil)
+	segs, deletes, maxChunk, err := loadTailWithReuse(nil, cfg, 7, 11, nil)
 	require.NoError(t, err)
 	require.Len(t, segs, 1)
 	require.Nil(t, deletes)

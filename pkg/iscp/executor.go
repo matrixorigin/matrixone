@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
@@ -87,6 +88,7 @@ func ISCPTaskExecutorFactory(
 	cdUUID string,
 	mp *mpool.MPool,
 	rootFS fileservice.FileService,
+	fulltext2FencePublisher fulltext2.FencePublisher,
 ) func(ctx context.Context, task task.Task) (err error) {
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
@@ -114,6 +116,7 @@ func ISCPTaskExecutorFactory(
 		// before RegisterExecutorRuntime and any worker iteration), so index CDC
 		// consumers can resolve the LOCAL SSD spill dir via GetExecutorRuntime.
 		exec.rootFS = rootFS
+		exec.fulltext2FencePublisher = fulltext2FencePublisher
 		defer exec.terminateLifetime()
 		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
 			return

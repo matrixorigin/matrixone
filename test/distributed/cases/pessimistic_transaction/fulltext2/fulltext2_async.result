@@ -37,6 +37,21 @@ deallocate prepare wait_initial_ft2;
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
+select id from src where match(body, title) against('red') order by id;
+id
+0
+3
+begin;
+update src set body = 'rollback green' where id = 0;
+delete from src where id = 3;
+insert into src values (11, 'rollback phantom', 'rollback only');
+rollback;
+select id from src where match(body, title) against('red') order by id;
+id
+0
+3
+select id from src where match(body, title) against('rollback') order by id;
+id
 select id1, id2 from src2 where match(body, title) against('red') order by id1;
 id1    id2
 id0    0
@@ -62,6 +77,12 @@ execute wait_src_mutation;
 ➤ src_update_ready[-7,1,0]  𝄀
 1
 deallocate prepare wait_src_mutation;
+select id from src where match(body, title) against('red') order by id;
+id
+3
+select id from src where match(body, title) against('green') order by id;
+id
+0
 set @capture_src_tail_sql = concat(
 'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
 '` where index_id = ''cdc_tail'' and tag = 1'
@@ -85,6 +106,27 @@ id
 select id from src where match(body, title) against('green') order by id;
 id
 0
+set @capture_src_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_tail from @capture_src_tail_sql;
+execute capture_src_tail;
+deallocate prepare capture_src_tail;
+insert into src values (11, 'orange after warm', 'inserted');
+set @wait_src_mutation_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @src_tail_before_mutation,
+' as src_insert_ready from `', database(), '`.`', @src_ft2_index,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_mutation from @wait_src_mutation_sql;
+execute wait_src_mutation;
+➤ src_insert_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_src_mutation;
+select id from src where match(body, title) against('orange') order by id;
+id
+11
 alter table src rename to src1;
 select id from src1 where match(body, title) against('green') order by id;
 id

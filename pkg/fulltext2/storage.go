@@ -42,6 +42,8 @@ import (
 // table; it is the JSON const arg passed to the fulltext2_create / fulltext2_search
 // TVFs. Mirrors bm25.wand.TableConfig.
 type TableConfig struct {
+	// AccountID is runtime-only cache identity. It is never accepted from TVF JSON.
+	AccountID     uint32 `json:"-"`
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
 	IndexTable    string `json:"index"`    // chunk store (FullText2Index_TblType_Storage)
@@ -70,6 +72,17 @@ type TableConfig struct {
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
 }
+
+func (c TableConfig) CacheIdentity(accountID uint32) CacheIdentity {
+	return CacheIdentity{
+		AccountID:     accountID,
+		Database:      c.DbName,
+		StorageTable:  c.IndexTable,
+		MetadataTable: c.MetadataTable,
+	}
+}
+
+func (c TableConfig) cacheIdentity() CacheIdentity { return c.CacheIdentity(c.AccountID) }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
 // mock the DB round-trips (metadata reads, base/tail chunk loads, budget gates,
@@ -359,7 +372,7 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 }
 
 func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace, generation loadGeneration) ([]*Segment, error) {
-	indexKey := cfg.DbName + "." + cfg.IndexTable
+	indexKey := cfg.cacheIdentity().Key()
 	committed := false
 	defer func() {
 		if !committed {
@@ -943,23 +956,17 @@ func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 	return 0, nil
 }
 
-// StaleGenSqls returns the two queries whose results form the cache-freshness generation
-// used by Fulltext2Search.IsStale: MAX(metadata.timestamp) (bumped by a REBUILD/MERGE that
-// writes a new base model row) and MAX(storage.chunk_id) of the tag=1 CdcTail (bumped by a
-// CDC append). A change in EITHER means the loaded index is stale. Two reads because
-// timestamp and tag live in different tables (metadata has no tag; storage has no
-// timestamp). The tail read is scoped to (CdcTailId, tag=1) — the exact CDC delta — so an
-// unrelated base sub-index's higher chunk_id can't mask a fresh append.
-func StaleGenSqls(cfg TableConfig) (tsSQL, tailSQL string) {
-	tsSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+// GenerationSQL returns one statement whose row forms the cache-freshness
+// generation. One statement is required so an auto-commit pull cannot combine
+// a metadata value from one snapshot with a tail value from another.
+func GenerationSQL(cfg TableConfig) string {
+	return fmt.Sprintf("SELECT (SELECT COALESCE(MAX(%s), 0) FROM %s), (SELECT COALESCE(MAX(%s), -1) FROM %s WHERE %s = %s AND %s = %d)",
 		catalog.FullText2Index_TblCol_Metadata_Timestamp,
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
-	tailSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), -1) FROM %s WHERE %s = %s AND %s = %d",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	return
 }
 
 func resultScalarInt64(res executor.Result) int64 {
@@ -972,6 +979,19 @@ func resultScalarInt64(res executor.Result) int64 {
 	return 0
 }
 
+func resultGeneration(res executor.Result) (Generation, bool) {
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) < 2 {
+			continue
+		}
+		return Generation{
+			BaseTimestamp: vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0),
+			TailChunk:     vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0),
+		}, true
+	}
+	return Generation{}, false
+}
+
 // LoadGeneration reads the current (timestamp, tailChunk) generation using the caller's
 // LIVE sqlproc/txn — called at load time so the captured generation reflects exactly the
 // txn snapshot the cached index was built from.
@@ -981,20 +1001,15 @@ func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tai
 			ts, tail, err = 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("LoadGeneration recovered: %v", r))
 		}
 	}()
-	tsSQL, tailSQL := StaleGenSqls(cfg)
-	res, err := runSql(sqlproc, tsSQL)
+	res, err := runSql(sqlproc, GenerationSQL(cfg))
 	if err != nil {
 		return 0, 0, err
 	}
-	ts = resultScalarInt64(res)
-	res.Close()
-	res, err = runSql(sqlproc, tailSQL)
-	if err != nil {
-		return 0, 0, err
+	defer res.Close()
+	if generation, ok := resultGeneration(res); ok {
+		return generation.BaseTimestamp, generation.TailChunk, nil
 	}
-	tail = resultScalarInt64(res)
-	res.Close()
-	return ts, tail, nil
+	return 0, -1, moerr.NewInternalErrorNoCtx("FULLTEXT2 generation query returned no row")
 }
 
 // QueryGeneration reads the current (timestamp, tailChunk) generation in the BACKGROUND
@@ -1006,20 +1021,15 @@ func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg T
 			ts, tail, err = 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("QueryGeneration recovered: %v", r))
 		}
 	}()
-	tsSQL, tailSQL := StaleGenSqls(cfg)
-	res, err := sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tsSQL)
+	res, err := sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, GenerationSQL(cfg))
 	if err != nil {
 		return 0, 0, err
 	}
-	ts = resultScalarInt64(res)
-	res.Close()
-	res, err = sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tailSQL)
-	if err != nil {
-		return 0, 0, err
+	defer res.Close()
+	if generation, ok := resultGeneration(res); ok {
+		return generation.BaseTimestamp, generation.TailChunk, nil
 	}
-	tail = resultScalarInt64(res)
-	res.Close()
-	return ts, tail, nil
+	return 0, -1, moerr.NewInternalErrorNoCtx("FULLTEXT2 generation query returned no row")
 }
 
 // CountTailChunks returns the number of tag=1 CdcTail chunk rows — the idxcron

@@ -51,13 +51,22 @@ prepare wait_initial_ft2 from @wait_initial_ft2_sql;
 execute wait_initial_ft2;
 deallocate prepare wait_initial_ft2;
 
--- src's initial-sync state is verified via src2 below (a never-re-mutated table).
--- src itself is deliberately NOT searched here: fulltext2's per-CN index cache is
--- not cross-invalidated by the CDC consumer (which evicts only its own CN), so a
--- pre-update search on the mo-tester CN would pin the pre-update snapshot and the
--- post-update queries below would then read it stale on multi-CN. src is first
--- searched only after its final mutation has settled, so its cache loads fresh.
 show create table src;
+
+-- Prewarm MATCH before every mutation. This is SQL-path coverage for #27788;
+-- mo-tester cannot bind this session to every CN, so deterministic per-CN proof
+-- remains in the independent multi-process integration suite.
+select id from src where match(body, title) against('red') order by id;
+
+-- Rolled-back changes never enter the durable CDC generation and must not
+-- disturb the already warm result.
+begin;
+update src set body = 'rollback green' where id = 0;
+delete from src where id = 3;
+insert into src values (11, 'rollback phantom', 'rollback only');
+rollback;
+select id from src where match(body, title) against('red') order by id;
+select id from src where match(body, title) against('rollback') order by id;
 
 -- select src2 (composite pk): id0 (red), id3 (blue red)
 select id1, id2 from src2 where match(body, title) against('red') order by id1;
@@ -81,6 +90,10 @@ prepare wait_src_mutation from @wait_src_mutation_sql;
 -- @wait_expect(2, 120)
 execute wait_src_mutation;
 deallocate prepare wait_src_mutation;
+-- The warm generation must be replaced after UPDATE: id 0 moved from red to green,
+-- while id 3 still contains red until the following DELETE.
+select id from src where match(body, title) against('red') order by id;
+select id from src where match(body, title) against('green') order by id;
 set @capture_src_tail_sql = concat(
     'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
     '` where index_id = ''cdc_tail'' and tag = 1'
@@ -104,6 +117,26 @@ deallocate prepare wait_src_mutation;
 select id from src where match(body, title) against('red') order by id;
 -- doc 0's new text
 select id from src where match(body, title) against('green') order by id;
+
+-- Post-warm INSERT is visible after its durable tail generation advances.
+set @capture_src_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_tail from @capture_src_tail_sql;
+execute capture_src_tail;
+deallocate prepare capture_src_tail;
+insert into src values (11, 'orange after warm', 'inserted');
+set @wait_src_mutation_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @src_tail_before_mutation,
+    ' as src_insert_ready from `', database(), '`.`', @src_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_mutation from @wait_src_mutation_sql;
+-- @wait_expect(2, 120)
+execute wait_src_mutation;
+deallocate prepare wait_src_mutation;
+select id from src where match(body, title) against('orange') order by id;
 
 -- rename keeps the index + CDC
 alter table src rename to src1;

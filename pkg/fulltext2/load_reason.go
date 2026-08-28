@@ -88,16 +88,6 @@ func ensureReusableLoadLifecycle() {
 	})
 }
 
-// loadReasonKey is the bounded registry key used by cache invalidation hooks.
-// The database qualifier avoids conflating identically named hidden stores in
-// different databases while keeping the key free of query or primary-key data.
-func loadReasonKey(db, index string) string {
-	if db == "" {
-		return index
-	}
-	return db + "." + index
-}
-
 func rememberLoadReason(index string, reason LoadMissReason) {
 	now := time.Now()
 	pendingLoadReasons.Lock()
@@ -297,13 +287,13 @@ func clearLoadGenerationRegistry() {
 }
 
 func clearReusableLoadGeneration(cfg TableConfig) {
-	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	index := cfg.cacheIdentity().Key()
 	clearLoadGeneration(index)
 	clearReusableLoadPools(cfg)
 }
 
 func clearReusableLoadPools(cfg TableConfig) {
-	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	index := cfg.cacheIdentity().Key()
 	loadedBasePool.clearIndex(index)
 	loadedTailPool.clear(index)
 }
@@ -313,7 +303,7 @@ func clearReusableLoadPools(cfg TableConfig) {
 // It runs from the generic cache's invalidation hook, so the existing cache
 // lifecycle remains the only integration surface for other index algorithms.
 func invalidateLoadGeneration(cfg TableConfig, reason LoadMissReason) {
-	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	index := cfg.cacheIdentity().Key()
 	rememberLoadReason(index, reason)
 	switch reason {
 	case LoadMissMerge, LoadMissRebuild, LoadMissReason("process_shutdown"):

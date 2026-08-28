@@ -393,6 +393,7 @@ func (s *service) registerExecutorsLocked() {
 			s.cfg.UUID,
 			common.ISCPAllocator,
 			s.fileService,
+			s.fulltext2FencePublisher,
 		),
 	)
 

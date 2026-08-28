@@ -14,9 +14,11 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,6 +102,268 @@ func (m *MockSearchLoadError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query a
 type MockSearchSearchError struct {
 	Idxcfg vectorindex.IndexConfig
 	Tblcfg vectorindex.IndexTableConfig
+}
+
+type boundedRetrySearch struct {
+	loads atomic.Int32
+}
+
+type staleSweepTracker struct {
+	active  atomic.Int32
+	maximum atomic.Int32
+	started atomic.Int32
+	release chan struct{}
+}
+
+type fastStaleSearch struct {
+	MockSearch
+	tracker *staleSweepTracker
+}
+
+type historicalStaleSearch struct {
+	MockSearch
+	checks atomic.Int32
+}
+
+type blockingLoadSearch struct {
+	entered   chan struct{}
+	release   chan struct{}
+	destroyed chan struct{}
+	once      sync.Once
+}
+
+type blockingFastStaleSearch struct {
+	entered   chan struct{}
+	release   chan struct{}
+	destroyed chan struct{}
+	once      sync.Once
+}
+
+func (*blockingFastStaleSearch) Load(*sqlexec.SqlProcess) error { return nil }
+func (s *blockingFastStaleSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return nil, nil, nil
+}
+func (s *blockingFastStaleSearch) SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	_, _, err := s.Search(proc, query, rt)
+	return err
+}
+func (*blockingFastStaleSearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, []int64, []float32) error {
+	return nil
+}
+func (s *blockingFastStaleSearch) Destroy()                                       { close(s.destroyed) }
+func (*blockingFastStaleSearch) IsStale() (bool, error)                           { return true, nil }
+func (*blockingFastStaleSearch) IsStaleWithContext(context.Context) (bool, error) { return true, nil }
+
+func (s *blockingLoadSearch) Load(*sqlexec.SqlProcess) error {
+	close(s.entered)
+	<-s.release
+	return nil
+}
+func (*blockingLoadSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return nil, nil, nil
+}
+func (*blockingLoadSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
+	return nil
+}
+func (*blockingLoadSearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, []int64, []float32) error {
+	return nil
+}
+func (s *blockingLoadSearch) Destroy()                                   { s.once.Do(func() { close(s.destroyed) }) }
+func (*blockingLoadSearch) CoherenceRetryPolicy() (int, []time.Duration) { return 1, nil }
+
+func (m *historicalStaleSearch) IsStale() (bool, error) {
+	m.checks.Add(1)
+	return true, nil
+}
+
+func (m *fastStaleSearch) IsStale() (bool, error) {
+	return m.IsStaleWithContext(context.Background())
+}
+
+func (m *fastStaleSearch) IsStaleWithContext(ctx context.Context) (bool, error) {
+	active := m.tracker.active.Add(1)
+	defer m.tracker.active.Add(-1)
+	m.tracker.started.Add(1)
+	for {
+		maximum := m.tracker.maximum.Load()
+		if active <= maximum || m.tracker.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return true, ctx.Err()
+	case <-m.tracker.release:
+		return true, nil
+	}
+}
+
+func (m *boundedRetrySearch) Load(*sqlexec.SqlProcess) error {
+	m.loads.Add(1)
+	return NewRetryableLoadError(moerr.NewInvalidStateNoCtx("superseded"))
+}
+func (*boundedRetrySearch) Destroy() {}
+func (*boundedRetrySearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return nil, nil, nil
+}
+func (*boundedRetrySearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
+	return nil
+}
+func (*boundedRetrySearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, []int64, []float32) error {
+	return nil
+}
+func (*boundedRetrySearch) CoherenceRetryPolicy() (int, []time.Duration) {
+	return 4, []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+}
+
+func TestCacheBoundsOptInCoherenceRetry(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	for _, searchInto := range []bool{false, true} {
+		c := NewVectorIndexCache()
+		algo := &boundedRetrySearch{}
+		if searchInto {
+			err := c.SearchInto(proc, "bounded", algo, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{})
+			require.ErrorContains(t, err, "coherence retry exhausted")
+		} else {
+			_, _, err := c.Search(proc, "bounded", algo, nil, vectorindex.RuntimeConfig{})
+			require.ErrorContains(t, err, "coherence retry exhausted")
+		}
+		require.Equal(t, int32(4), algo.loads.Load())
+	}
+}
+
+func TestCacheCoherenceRetryHonorsCancellation(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	ctx, cancel := context.WithCancel(context.Background())
+	proc.Proc.Ctx = ctx
+	cancel()
+	c := NewVectorIndexCache()
+	algo := &boundedRetrySearch{}
+	_, _, err := c.Search(proc, "canceled", algo, nil, vectorindex.RuntimeConfig{})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int32(1), algo.loads.Load())
+}
+
+func TestClaimRemoveDefersInFlightLoadDestructionWithoutBlocking(t *testing.T) {
+	c := NewVectorIndexCache()
+	algo := &blockingLoadSearch{entered: make(chan struct{}), release: make(chan struct{}), destroyed: make(chan struct{})}
+	searchDone := make(chan error, 1)
+	go func() {
+		_, _, err := c.Search(nil, "loading", algo, nil, vectorindex.RuntimeConfig{})
+		searchDone <- err
+	}()
+	select {
+	case <-algo.entered:
+	case <-time.After(time.Second):
+		t.Fatal("load did not start")
+	}
+	claimDone := make(chan struct{})
+	go func() {
+		c.ClaimRemoveWithReason("loading", "generation_changed")
+		close(claimDone)
+	}()
+	select {
+	case <-claimDone:
+	case <-time.After(time.Second):
+		t.Fatal("claim waited for the in-flight load")
+	}
+	_, present := c.IndexMap.Load("loading")
+	require.False(t, present)
+	close(algo.release)
+	require.ErrorContains(t, <-searchDone, "coherence retry exhausted")
+	select {
+	case <-algo.destroyed:
+	case <-time.After(time.Second):
+		t.Fatal("superseded load object was not destroyed")
+	}
+}
+
+func TestFastStaleSweepIsSingleFlightBoundedAndEvictsImmediately(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	tracker := &staleSweepTracker{release: make(chan struct{})}
+	for i := 0; i < 17; i++ {
+		key := fmt.Sprintf("fulltext2:%d", i)
+		_, _, err := c.Search(proc, key, &fastStaleSearch{tracker: tracker}, nil, vectorindex.RuntimeConfig{})
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.True(t, c.startStaleCheck(ctx, true))
+	require.False(t, c.startStaleCheck(ctx, true))
+	require.Eventually(t, func() bool { return tracker.started.Load() == 16 }, time.Second, time.Millisecond)
+	require.Equal(t, int32(16), tracker.maximum.Load())
+	close(tracker.release)
+	require.Eventually(t, func() bool { return !c.fastStaleChecking.Load() }, time.Second, time.Millisecond)
+	require.Equal(t, int32(17), tracker.started.Load())
+	for i := 0; i < 17; i++ {
+		_, ok := c.IndexMap.Load(fmt.Sprintf("fulltext2:%d", i))
+		require.False(t, ok)
+	}
+}
+
+func TestFastStaleSweepDoesNotChangeHistoricalVectorCheckerSemantics(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	algo := &historicalStaleSearch{}
+	_, _, err := c.Search(proc, "historical-vector", algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+
+	c.checkStale(context.Background(), true)
+	require.Zero(t, algo.checks.Load())
+	_, ok := c.IndexMap.Load("historical-vector")
+	require.True(t, ok)
+
+	c.checkStale(context.Background(), false)
+	require.Equal(t, int32(1), algo.checks.Load())
+	_, ok = c.IndexMap.Load("historical-vector")
+	require.True(t, ok, "historical sweep only marks for the next housekeeping pass")
+	c.HouseKeeping()
+	_, ok = c.IndexMap.Load("historical-vector")
+	require.False(t, ok)
+}
+
+func TestFastStaleSweepClaimsWithoutWaitingForOldReader(t *testing.T) {
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()))
+	c := NewVectorIndexCache()
+	algo := &blockingFastStaleSearch{
+		entered: make(chan struct{}), release: make(chan struct{}), destroyed: make(chan struct{}),
+	}
+	searchDone := make(chan error, 1)
+	go func() {
+		_, _, err := c.Search(proc, "fulltext2:blocking", algo, nil, vectorindex.RuntimeConfig{})
+		searchDone <- err
+	}()
+	<-algo.entered
+
+	sweepDone := make(chan struct{})
+	go func() {
+		c.checkStale(context.Background(), true)
+		close(sweepDone)
+	}()
+	select {
+	case <-sweepDone:
+	case <-time.After(time.Second):
+		t.Fatal("fast stale sweep waited for an old reader lease")
+	}
+	_, ok := c.IndexMap.Load("fulltext2:blocking")
+	require.False(t, ok)
+	select {
+	case <-algo.destroyed:
+		t.Fatal("old object destroyed before its reader released")
+	default:
+	}
+
+	close(algo.release)
+	require.NoError(t, <-searchDone)
+	select {
+	case <-algo.destroyed:
+	case <-time.After(time.Second):
+		t.Fatal("last reader did not destroy the claimed object")
+	}
 }
 
 func (m *MockSearchSearchError) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {

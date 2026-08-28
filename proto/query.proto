@@ -108,6 +108,8 @@ enum CmdMethod {
   IcebergCacheInvalidate = 38;
   // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
   MongoDBClientRetire = 39;
+  // Fulltext2CacheFence installs a monotonic cross-CN cache generation fence.
+  Fulltext2CacheFence = 40;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -251,6 +253,7 @@ message Request {
   ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
   IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
   MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
+  Fulltext2CacheFenceRequest Fulltext2CacheFenceRequest = 42 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -319,6 +322,7 @@ message Response {
   ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
   IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
   MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
+  Fulltext2CacheFenceResponse Fulltext2CacheFenceResponse = 43 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -375,6 +379,21 @@ message ISCPDrainConsumerRequest {
 
 message ISCPDrainConsumerResponse {
   bool Success = 1;
+}
+
+message Fulltext2CacheFenceRequest {
+  uint32 AccountID = 1;
+  string Database = 2;
+  string StorageTable = 3;
+  string MetadataTable = 4;
+  int64 BaseTimestamp = 5;
+  int64 TailChunk = 6;
+}
+
+message Fulltext2CacheFenceResponse {
+  int64 RequiredBaseTimestamp = 1;
+  int64 RequiredTailChunk = 2;
+  bool EvictionClaimed = 3;
 }
 
 message TraceSpanRequest {

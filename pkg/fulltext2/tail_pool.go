@@ -372,7 +372,7 @@ func loadTailWithReuse(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGenerat
 }
 
 func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMax int64, trace *loadTrace, generation loadGeneration) ([]*Segment, map[any]int64, int64, error) {
-	index := cfg.DbName + "." + cfg.IndexTable
+	index := cfg.cacheIdentity().Key()
 	current := func() bool {
 		return generation.attempt == 0 || loadGenerationCurrent(generation)
 	}

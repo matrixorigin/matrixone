@@ -440,8 +440,8 @@ func TestImmutableBasePoolRollbackOwnerIsGlobalAcrossIndexes(t *testing.T) {
 func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	cleanup := setLoadObserver(func(LoadEvent) {})
 	defer cleanup()
-	key1 := loadReasonKey("db1", "store")
-	key2 := loadReasonKey("db2", "store")
+	key1 := (TableConfig{DbName: "db1", IndexTable: "store"}).cacheIdentity().Key()
+	key2 := (TableConfig{DbName: "db2", IndexTable: "store"}).cacheIdentity().Key()
 	rememberLoadReason(key1, LoadMissCDCFlush)
 	rememberLoadReason(key2, LoadMissMerge)
 	reason, generation := peekLoadReason(key1)
@@ -458,7 +458,7 @@ func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 func TestLoadReasonRegistryIsDisabledWithObserverOff(t *testing.T) {
 	cleanup := setLoadObserver(nil)
 	defer cleanup()
-	key := loadReasonKey("db", "store")
+	key := (TableConfig{DbName: "db", IndexTable: "store"}).cacheIdentity().Key()
 	rememberLoadReason(key, LoadMissCDCFlush)
 	reason, generation := peekLoadReason(key)
 	require.Empty(t, reason)

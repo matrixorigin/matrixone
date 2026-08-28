@@ -118,14 +118,19 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 		return nil
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	accountID, err := sqlproc.GetAccountID()
+	if err != nil {
+		return err
+	}
+	u.tblcfg.AccountID = accountID
 	if _, err := fulltext2.CompactSegments(sqlproc, u.tblcfg, u.capacity, u.postingCap); err != nil {
 		return err
 	}
 	// The tag=0 base changed (tail folded into a fresh merged base) — evict any cached
 	// search index so the next query reloads the merged base instead of the stale one
 	// held until the TTL.
-	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissMerge))
-	veccache.Cache.Remove(u.tblcfg.IndexTable)
+	fulltext2.NewFulltext2SearchForAccount(u.tblcfg, accountID).OnCacheInvalidated(string(fulltext2.LoadMissMerge))
+	veccache.Cache.Remove(u.tblcfg.CacheIdentity(accountID).Key())
 	return nil
 }
 

@@ -55,6 +55,20 @@ func int64Batch(mp *mpool.MPool, v int64) *batch.Batch {
 	return b
 }
 
+func generationBatch(mp *mpool.MPool, base, tail int64) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	if err := vector.AppendFixed[int64](bat.Vecs[0], base, false, mp); err != nil {
+		panic(err)
+	}
+	if err := vector.AppendFixed[int64](bat.Vecs[1], tail, false, mp); err != nil {
+		panic(err)
+	}
+	bat.SetRowCount(1)
+	return bat
+}
+
 func metaBatch(mp *mpool.MPool, checksum string, filesize, recency int64) *batch.Batch {
 	b := batch.NewWithSize(3)
 	b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())

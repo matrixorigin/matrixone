@@ -399,7 +399,12 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 
-	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
+	accountID, err := sp.GetAccountID()
+	if err != nil {
+		return err
+	}
+	identity := u.tblcfg.CacheIdentity(accountID)
+	newsearch := fulltext2.NewFulltext2SearchForAccount(u.tblcfg, accountID)
 	q := fulltext2.Fulltext2Query{
 		ScoreRange:       scoreRange,
 		Pattern:          []byte(pattern),
@@ -436,7 +441,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 			rt.RequestedIncludeColumns = u.includeNames
 		}
 		go func() {
-			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
+			_, _, serr := veccache.Cache.Search(sp, identity.Key(), newsearch, q, rt)
 			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
 			close(u.streamCh)
 		}()
@@ -456,7 +461,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if u.out == nil {
 		u.out = &vectorindex.SearchOutput{}
 	}
-	return veccache.Cache.SearchInto(sp, u.tblcfg.IndexTable, newsearch, q, rt, u.out)
+	return veccache.Cache.SearchInto(sp, identity.Key(), newsearch, q, rt, u.out)
 }
 
 // fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session
