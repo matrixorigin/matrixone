@@ -998,6 +998,23 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 // false for a non-literal bound (including the first one) so the caller keeps
 // the predicate as a residual filter.
 func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	if _, isLit := plan.GetLiteralFloat64(bound); !isLit {
+		// A bound that is not a literal is pushable only when it is constant for the
+		// whole execution -- a prepared '?' -- and only into an empty slot, where there
+		// is no tightness to compare. vectorscan constant-folds it before the scan and
+		// fails loudly if it does not reduce to a number.
+		//
+		// A per-ROW expression (a column reference) must never be peeled: it has no
+		// single value to fold, so it stays a residual filter. That is the #25639
+		// "first bound accepted without validation" case, and the reason this tests the
+		// expression kind rather than just "not a literal".
+		if dr.UpperBoundType != plan.BoundType_UNBOUNDED || !isExecutionConstantExpr(bound) {
+			return false
+		}
+		dr.UpperBoundType = boundType
+		dr.UpperBound = bound
+		return true
+	}
 	newVal, ok := plan.GetLiteralFloat64(bound)
 	if !ok {
 		return false
@@ -1021,6 +1038,23 @@ func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundT
 // mergeLowerBound folds a new lower bound into dr, keeping the tighter (larger,
 // or exclusive on an equal value) bound. See mergeUpperBound.
 func mergeLowerBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	if _, isLit := plan.GetLiteralFloat64(bound); !isLit {
+		// A bound that is not a literal is pushable only when it is constant for the
+		// whole execution -- a prepared '?' -- and only into an empty slot, where there
+		// is no tightness to compare. vectorscan constant-folds it before the scan and
+		// fails loudly if it does not reduce to a number.
+		//
+		// A per-ROW expression (a column reference) must never be peeled: it has no
+		// single value to fold, so it stays a residual filter. That is the #25639
+		// "first bound accepted without validation" case, and the reason this tests the
+		// expression kind rather than just "not a literal".
+		if dr.LowerBoundType != plan.BoundType_UNBOUNDED || !isExecutionConstantExpr(bound) {
+			return false
+		}
+		dr.LowerBoundType = boundType
+		dr.LowerBound = bound
+		return true
+	}
 	newVal, ok := plan.GetLiteralFloat64(bound)
 	if !ok {
 		return false
