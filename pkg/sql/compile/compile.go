@@ -6747,7 +6747,7 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion35
+	return ok && protocolVersion >= defines.MORPCVersion36
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

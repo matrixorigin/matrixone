@@ -554,13 +554,13 @@ func TestPadSpaceRemoteProtocolValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			for unsupportedVersion := defines.MORPCVersion20; unsupportedVersion < defines.MORPCVersion35; unsupportedVersion++ {
+			for unsupportedVersion := defines.MORPCVersion20; unsupportedVersion < defines.MORPCVersion36; unsupportedVersion++ {
 				rt.SetGlobalVariables(runtime.MOProtocolVersion, unsupportedVersion)
 				require.ErrorContains(t, validateRemotePadSpacePipelineProtocol(proc, test.pipeline),
-					"requires MORPC protocol version 35")
+					"requires MORPC protocol version 36")
 			}
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
 			require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, test.pipeline))
 		})
 	}
@@ -579,13 +579,13 @@ func TestPadCharModeRemoteProtocolValidation(t *testing.T) {
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 	p := &pipeline.Pipeline{}
 
-	for unsupportedVersion := defines.MORPCVersion20; unsupportedVersion < defines.MORPCVersion35; unsupportedVersion++ {
+	for unsupportedVersion := defines.MORPCVersion20; unsupportedVersion < defines.MORPCVersion36; unsupportedVersion++ {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, unsupportedVersion)
 		require.ErrorContains(t, validateRemotePadSpacePipelineProtocol(proc, p),
-			"requires MORPC protocol version 35")
+			"requires MORPC protocol version 36")
 	}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
 	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, p))
 }
 
