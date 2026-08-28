@@ -117,6 +117,21 @@ func TestConstantFoldPreservesSerializedLiteralProvenance(t *testing.T) {
 	}
 }
 
+func TestOptimizerConstantFoldsNegativeSecToTime(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "select sec_to_time(-2378)", 1)
+	require.NoError(t, err)
+
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.NotEmpty(t, root.ProjectList)
+
+	literal := root.ProjectList[0].GetLit()
+	require.NotNil(t, literal)
+	require.Equal(t, int64(-2378*types.MicroSecsPerSec), literal.GetTimeval())
+}
+
 func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	registered, err := function.GetFunctionByName(

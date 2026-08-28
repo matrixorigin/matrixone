@@ -436,9 +436,12 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	timeType := types.T_time.ToTypeWithScale(6)
 	max := types.MySQLTimeMax
 
-	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn) (*vector.Vector, error) {
+	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn, sessions ...*numericWarningSession) (*vector.Vector, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
+		if len(sessions) > 0 {
+			proc.Session = sessions[0]
+		}
 		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 			require.Equal(t, "sql_mode", name)
 			return sqlMode, nil
@@ -471,18 +474,55 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	})
 
 	t.Run("nonstrict string assignment clamps", func(t *testing.T) {
-		result, err := run(t, stringInput, "", NewAssignCast)
+		session := &numericWarningSession{}
+		result, err := run(t, stringInput, "", NewAssignCast, session)
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
+		require.Len(t, session.warnings, 4)
+		for _, warning := range session.warnings {
+			require.Equal(t, moerr.ER_DATA_OUT_OF_RANGE, warning.code)
+		}
 	})
 
 	t.Run("insert ignore string assignment clamps", func(t *testing.T) {
-		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast)
+		session := &numericWarningSession{}
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
+		require.Len(t, session.warnings, 4)
+		for _, warning := range session.warnings {
+			require.Equal(t, moerr.ER_DATA_OUT_OF_RANGE, warning.code)
+		}
 	})
+
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{math.MaxInt64}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
+	} {
+		t.Run(input.typ.String()+"/strict assignment rejects out of range integer", func(t *testing.T) {
+			_, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		})
+
+		t.Run(input.typ.String()+"/nonstrict assignment clamps and warns", func(t *testing.T) {
+			session := &numericWarningSession{}
+			result, err := run(t, input, "", NewAssignCast, session)
+			require.NoError(t, err)
+			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
+			require.Equal(t, []numericWarning{{code: moerr.ER_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+		})
+
+		t.Run(input.typ.String()+"/insert ignore clamps and warns", func(t *testing.T) {
+			session := &numericWarningSession{}
+			result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+			require.NoError(t, err)
+			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
+			require.Equal(t, []numericWarning{{code: moerr.ER_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+		})
+	}
 
 	timeInput := NewFunctionTestInput(timeType,
 		[]types.Time{types.TimeFromClock(false, 838, 59, 59, 1)}, nil)

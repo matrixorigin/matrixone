@@ -37,9 +37,9 @@ large_value
 SELECT SEC_TO_TIME(302399) AS very_large;  # 83:59:59
 very_large
 83:59:59
-SELECT SEC_TO_TIME(-2378) AS negative_test;  # -00:39:38
+SELECT CAST(SEC_TO_TIME(-2378) AS CHAR) AS negative_test;  # -00:39:38; CHAR preserves a sub-hour negative TIME through Connector/J.
 negative_test
-00:39:38
+-00:39:38
 SELECT SEC_TO_TIME(-3661) AS negative_large; # -01:01:01
 negative_large
 -1:01:01
