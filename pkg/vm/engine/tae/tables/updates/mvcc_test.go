@@ -180,6 +180,43 @@ func TestPrepareRollbackKeepsAppendRangeAsHole(t *testing.T) {
 	require.Equal(t, uint32(5), handle.GetTotalRow())
 }
 
+func TestFillInCommitTSVecPreservesPhysicalRowGaps(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	h := NewAppendMVCCHandle(obj)
+
+	ts1, ts2 := types.BuildTS(10, 0), types.BuildTS(20, 0)
+	n1, _ := h.AddAppendNodeLocked(nil, 2, 4)
+	n1.End = ts1
+	n2, _ := h.AddAppendNodeLocked(nil, 7, 8)
+	n2.End = ts2
+
+	mp := mpool.MustNewZero()
+	commitTS := containers.MakeVector(types.T_TS.ToType(), mp)
+	defer commitTS.Close()
+	h.RLock()
+	h.FillInCommitTSVecLocked(commitTS, 10, mp)
+	h.RUnlock()
+
+	require.Equal(t, 10, commitTS.Length())
+	expected := []types.TS{
+		txnif.UncommitTS, txnif.UncommitTS,
+		ts1, ts1,
+		txnif.UncommitTS, txnif.UncommitTS, txnif.UncommitTS,
+		ts2,
+		txnif.UncommitTS, txnif.UncommitTS,
+	}
+	for row, ts := range expected {
+		require.Equal(t, ts, commitTS.Get(row), "row %d", row)
+	}
+}
+
 func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
