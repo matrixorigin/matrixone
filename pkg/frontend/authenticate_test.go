@@ -53,6 +53,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -6953,6 +6955,127 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 		ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+// namedWindowAuthorizationCompilerContext adds the MongoDB catalog entry used
+// by TestNamedWindowValidationSpecialScansRequireSelectPrivilege while keeping
+// the normal mock catalog (including tpch.nation) intact.  The test must bind
+// the source through BuildPlan instead of manufacturing a scan node: that is
+// what proves validation-only named-window definitions retain the same node
+// shape the frontend authorization walk consumes.
+type namedWindowAuthorizationCompilerContext struct {
+	*plan2.MockCompilerContext
+	mongoObject *plan.ObjectRef
+	mongoTable  *plan.TableDef
+}
+
+func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
+	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
+}
+
+func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if dbName == "mongo_window_auth" && tableName == "events" {
+		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+	}
+	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+}
+
+func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
+	const (
+		userID = 1
+		roleID = 2
+		nation = "nation"
+		region = "region"
+	)
+
+	mongoMapping := sqlmongodb.TableMapping{
+		Connection: "mongo_window_auth",
+		Database:   "telemetry",
+		Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit,
+		Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "event_id", Path: "event_id", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	newCompilerContext := func() *namedWindowAuthorizationCompilerContext {
+		return &namedWindowAuthorizationCompilerContext{
+			MockCompilerContext: plan2.NewMockCompilerContext(true),
+			mongoObject: &plan.ObjectRef{
+				Db: 1, Obj: 2, SchemaName: "mongo_window_auth", ObjName: "events",
+			},
+			mongoTable: &plan.TableDef{
+				Name: "events", DbName: "mongo_window_auth", DbId: 1, TblId: 2,
+				TableType: catalog.SystemExternalRel, FeatureFlag: features.MongoDBExternal,
+				Createsql: sqlmongodb.BuildCreateSQLEnvelope(mongoMapping),
+				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		sql       string
+		database  string
+		table     string
+		grantScan bool
+	}{
+		{
+			name:     "unused MongoDB definition is rejected without select",
+			database: "mongo_window_auth", table: "events",
+			sql: "select 1 from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused MongoDB definition succeeds with select",
+			database: "mongo_window_auth", table: "events", grantScan: true,
+			sql: "select 1 from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "used MongoDB window control succeeds with select",
+			database: "mongo_window_auth", table: "events", grantScan: true,
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused table_changes definition is rejected without select",
+			database: "tpch", table: region,
+			sql: "select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+		{
+			name:     "unused table_changes definition succeeds with select",
+			database: "tpch", table: region, grantScan: true,
+			sql: "select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+		{
+			name:     "used table_changes window control succeeds with select",
+			database: "tpch", table: region, grantScan: true,
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false)
+			require.NoError(t, err)
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{Tenant: "test_account", User: "named_window_reader", DefaultRole: "named_window_reader_role", TenantID: 1, UserID: userID, DefaultRoleID: roleID})
+			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, "tpch", nation, map[PrivilegeType]bool{PrivilegeTypeSelect: true})
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, tc.database, tc.table, map[PrivilegeType]bool{PrivilegeTypeSelect: tc.grantScan})
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, newBh(ctrl, sql2result))
+			defer bhStub.Reset()
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
+			require.NoError(t, err)
+			require.Equal(t, tc.grantScan, ok)
+		})
+	}
 }
 
 func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
