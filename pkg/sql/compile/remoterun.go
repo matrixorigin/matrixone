@@ -102,7 +102,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -169,7 +169,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
-		if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
@@ -1794,20 +1794,37 @@ func validateRemoteStringProvenancePipelineProtocol(
 	return nil
 }
 
-func validateRemoteNumericPrefixPipelineProtocol(
+func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	requiresVersion30, err := plan.RequiresMORPCVersion30NumericPrefix(p)
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
-	if !requiresVersion30 {
+	if !features.Any() {
 		return nil
 	}
-	if proc == nil || !supportsRemotePreparedNumericPrefix(proc.GetService()) {
+	protocolVersion, hasProtocolVersion := int64(0), false
+	if proc != nil {
+		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.NumericPrefix &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
 		return moerr.NewNotSupportedNoCtx(
 			"prepared numeric-prefix casts require MORPC protocol version 30",
+		)
+	}
+	if features.JSONComparisonParam &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared JSON comparison parameters require MORPC protocol version 36",
+		)
+	}
+	if features.MixedJSONBooleanEquality &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
 	}
 	return nil

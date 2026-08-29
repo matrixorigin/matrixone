@@ -63,7 +63,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_ISCPDrainConsumer:        defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:   defines.MORPCVersion4,
 	pb.CmdMethod_MongoDBClientRetire:      defines.MORPCVersion5,
-	pb.CmdMethod_SyncCommitV2:             defines.MORPCVersion36,
+	pb.CmdMethod_SyncCommitV2:             defines.MORPCVersion37,
 }
 
 type queryClient struct {

@@ -961,7 +961,7 @@ type ddlVisibilityTarget struct {
 // DDL sender refreshes membership again after fan-out and repeats if any ready
 // generation changed. A failed target is retried only after authoritative
 // revalidation proves that exact generation/address tuple has departed.
-// Protocol v36 is a deployment gate: mixed-version
+// Protocol v37 is a deployment gate: mixed-version
 // clusters retain legacy behavior without invoking an old receiver's fatal
 // SyncCommit path.
 func syncDDLCommitToBarrierReadyCNs(
@@ -977,7 +977,7 @@ func syncDDLCommitToBarrierReadyCNs(
 	qc := pu.QueryClient
 	protocol, ok := moruntime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	protocolVersion, valid := protocol.(int64)
-	if !ok || !valid || protocolVersion < defines.MORPCVersion36 {
+	if !ok || !valid || protocolVersion < defines.MORPCVersion37 {
 		return nil
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())

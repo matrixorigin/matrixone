@@ -217,9 +217,9 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 	proc := &process.Process{Base: &process.BaseProcess{QueryClient: qcli}}
 
 	result, err := handleSetProtocolVersion(
-		proc, cn, strings.Join(targets, ",")+":36", nil)
+		proc, cn, strings.Join(targets, ",")+":37", nil)
 	require.NoError(t, err)
-	require.Equal(t, "activation-cn-1:36, activation-cn-2:36", result.Data)
+	require.Equal(t, "activation-cn-1:37, activation-cn-2:37", result.Data)
 	require.Equal(t, int32(2), qcli.started.Load())
 	require.Equal(t, int32(2), qcli.releases.Load())
 	qcli.mu.Lock()
@@ -229,7 +229,7 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 		require.Equal(t, targets, requestTargets)
 	}
 
-	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:36", nil)
+	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:37", nil)
 	require.ErrorContains(t, err, "duplicated")
 }
 
@@ -255,7 +255,7 @@ func TestTransferToCNAllowsActivationFence(t *testing.T) {
 
 	qcli := &addressRecordingQueryClient{}
 	started := time.Now()
-	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion36, []string{serviceID})
+	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion37, []string{serviceID})
 	require.Error(t, err)
 	require.Equal(t, "activation-cn:6001", qcli.address)
 	require.Equal(t, []string{serviceID},

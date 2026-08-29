@@ -36,8 +36,8 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
 }
 
-func TestSyncCommitV2RequiresProtocolVersion36(t *testing.T) {
-	assert.Equal(t, defines.MORPCVersion36, methodVersions[query.CmdMethod_SyncCommitV2])
+func TestSyncCommitV2RequiresProtocolVersion37(t *testing.T) {
+	assert.Equal(t, defines.MORPCVersion37, methodVersions[query.CmdMethod_SyncCommitV2])
 
 	const serviceID = "sync-commit-v2-version-test"
 	rt := moruntime.DefaultRuntime()
@@ -45,7 +45,7 @@ func TestSyncCommitV2RequiresProtocolVersion36(t *testing.T) {
 	req := &query.Request{CmdMethod: query.CmdMethod_SyncCommitV2}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
 	assert.Error(t, checkMethodVersion(context.Background(), serviceID, req))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
 	assert.NoError(t, checkMethodVersion(context.Background(), serviceID, req))
 }
 

@@ -289,6 +289,97 @@ func isByteJsonNumeric(tp TpCode) bool {
 	}
 }
 
+// ParsedNumeric is an immutable, validated ByteJSON numeric scalar. Its fields
+// are deliberately private so callers can only obtain a usable value through
+// ParseNumeric. It lets a constant operand pay exact normalization once per
+// batch instead of once per compared row.
+type ParsedNumeric struct {
+	key         numericKey
+	nonFinite   float64
+	isNonFinite bool
+	valid       bool
+}
+
+// ParseNumeric validates and normalizes one ByteJSON numeric scalar without
+// passing exact INT64, UINT64, or DECIMAL values through float64.
+func ParseNumeric(value ByteJson) (ParsedNumeric, bool) {
+	if !isValidNumericEncoding(value) {
+		return ParsedNumeric{}, false
+	}
+	if value.Type == TpCodeFloat64 {
+		floating := value.GetFloat64()
+		if math.IsNaN(floating) || math.IsInf(floating, 0) {
+			return ParsedNumeric{
+				nonFinite: floating, isNonFinite: true, valid: true,
+			}, true
+		}
+	}
+	key, ok := numericKeyFromByteJSON(value)
+	if !ok {
+		return ParsedNumeric{}, false
+	}
+	return ParsedNumeric{key: key, valid: true}, true
+}
+
+// CompareParsedNumeric compares two values returned by ParseNumeric. ok=false
+// rejects zero-value or otherwise invalid ParsedNumeric inputs instead of
+// treating them as numeric zero.
+func CompareParsedNumeric(left, right ParsedNumeric) (comparison int, ok bool) {
+	if !left.valid || !right.valid {
+		return 0, false
+	}
+	if left.isNonFinite && right.isNonFinite {
+		return compareFloat64(left.nonFinite, right.nonFinite), true
+	}
+	if left.isNonFinite {
+		if math.IsInf(left.nonFinite, -1) {
+			return -1, true
+		}
+		return 1, true
+	}
+	if right.isNonFinite {
+		if math.IsInf(right.nonFinite, -1) {
+			return 1, true
+		}
+		return -1, true
+	}
+	return compareNumericKeys(&left.key, &right.key), true
+}
+
+// CompareNumeric compares two well-formed ByteJSON numeric scalars. ok=false
+// distinguishes a non-numeric or malformed internal value from an ordinary
+// non-equal result, which lets cast/comparison boundaries fail closed while
+// sharing the same exact numeric model as CompareByteJson.
+func CompareNumeric(left, right ByteJson) (comparison int, ok bool) {
+	if left.Type != TpCodeDecimal && right.Type != TpCodeDecimal {
+		if !isValidNumericEncoding(left) || !isValidNumericEncoding(right) {
+			return 0, false
+		}
+		return compareByteJsonNumeric(left, right), true
+	}
+	parsedLeft, leftOK := ParseNumeric(left)
+	parsedRight, rightOK := ParseNumeric(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	return CompareParsedNumeric(parsedLeft, parsedRight)
+}
+
+func isValidNumericEncoding(value ByteJson) bool {
+	switch value.Type {
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
+		return len(value.Data) == 8
+	case TpCodeDecimal:
+		if len(value.Data) == 0 {
+			return false
+		}
+		payloadLength, prefixLength := binary.Uvarint(value.Data)
+		return prefixLength > 0 && payloadLength == uint64(len(value.Data)-prefixLength)
+	default:
+		return false
+	}
+}
+
 func compareByteJsonNumeric(left, right ByteJson) int {
 	if left.Type == TpCodeDecimal || right.Type == TpCodeDecimal {
 		return compareByteJsonNumericExact(left, right)
