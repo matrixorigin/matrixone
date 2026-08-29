@@ -104,7 +104,7 @@ func TestGetDataBranchMutationExecutorAdmitsBeforeMutation(t *testing.T) {
 			ses := newTestSession(t, ctrl)
 			t.Cleanup(ses.Close)
 			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-			txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+			txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
 			ses.proc.Base.TxnOperator = txnOp
 
 			bh := &backgroundExecTestWithHistory{}
@@ -132,7 +132,7 @@ func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) 
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
 	ses.proc.Base.TxnOperator = txnOp
 
 	bh := &backgroundExecTestWithHistory{}
@@ -148,4 +148,19 @@ func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) 
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
 	require.Equal(t, []string{"begin", gateSQL, "rollback;"}, bh.executedSqls)
+}
+
+func TestGetDataBranchMutationExecutorRejectsExplicitTransactionBeforeAdmission(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true})
+	ses.proc.Base.TxnOperator = txnOp
+
+	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "DATA BRANCH create/delete is not supported inside an explicit transaction")
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
 }

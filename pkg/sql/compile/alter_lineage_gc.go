@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,9 +34,9 @@ const (
 	// validates its discovery by writing the shared gate, then commits at most
 	// one bounded batch. Repeated transactions make durable progress without
 	// retaining the foreground gate through a full-catalog scan.
-	dataBranchLineageGCBatchSize        = 128
-	dataBranchLineageGCMaxBatchesPerRun = 16
-	dataBranchLineageGCLockWaitTimeout  = time.Second
+	dataBranchLineageGCBatchSize       = 128
+	dataBranchLineageGCLockWaitTimeout = time.Second
+	dataBranchLineageGCTimeBudget      = time.Minute
 )
 
 func DataBranchLineageGCExecutor(
@@ -44,40 +45,50 @@ func DataBranchLineageGCExecutor(
 	return dataBranchLineageGCExecutor(
 		sqlExecutor,
 		dataBranchLineageGCBatchSize,
-		dataBranchLineageGCMaxBatchesPerRun,
 	)
 }
 
 func dataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
 	batchSize int,
-	maxBatches int,
+) taskservice.TaskExecutor {
+	return dataBranchLineageGCExecutorWithBudget(
+		sqlExecutor, batchSize, dataBranchLineageGCTimeBudget,
+	)
+}
+
+func dataBranchLineageGCExecutorWithBudget(
+	sqlExecutor executor.SQLExecutor,
+	batchSize int,
+	timeBudget time.Duration,
 ) taskservice.TaskExecutor {
 	return func(ctx context.Context, _ task.Task) error {
-		for range maxBatches {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		// One invocation performs one fixed-SI discovery and at most one bounded
+		// mutation batch. This removes the former 16x full-catalog rescan while
+		// retaining durable progress across scheduled invocations. The local
+		// budget bounds discovery CPU/I/O and task-worker occupancy; its expiry
+		// rolls back and defers, while a parent cancellation remains visible.
+		gcCtx, cancel := context.WithTimeout(ctx, timeBudget)
+		defer cancel()
+		_, err := compactExpiredAlterDataBranchLineageBatchWithExecutor(
+			gcCtx, sqlExecutor, time.Now().UTC(), batchSize,
+		)
+		if err != nil {
+			// Parent control always wins over local contention classification.
+			// In particular, a lock error racing cancellation must not turn a
+			// canceled task into a successful maintenance attempt.
 			if cause := context.Cause(ctx); cause != nil {
 				return cause
 			}
-			compacted, err := compactExpiredAlterDataBranchLineageBatchWithExecutor(
-				ctx, sqlExecutor, time.Now().UTC(), batchSize,
-			)
-			if err != nil {
-				// Parent control always wins over local contention classification.
-				// In particular, a lock error racing cancellation must not turn a
-				// canceled task into a successful maintenance attempt.
-				if cause := context.Cause(ctx); cause != nil {
-					return cause
-				}
-				if isDataBranchLineageGCContention(err) {
-					// ExecTxn rolled back this batch. A foreground owner writer or
-					// restore crossed the validation gate; recompute next run.
-					return nil
-				}
-				return moerr.AttachCause(ctx, err)
-			}
-			if !compacted {
+			if errors.Is(context.Cause(gcCtx), context.DeadlineExceeded) || isDataBranchLineageGCContention(err) {
+				// ExecTxn rolled back this batch. Local budget exhaustion or a
+				// foreground owner writer defers work to the next invocation.
 				return nil
 			}
+			return moerr.AttachCause(gcCtx, err)
 		}
 		return nil
 	}

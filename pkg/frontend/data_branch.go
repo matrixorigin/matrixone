@@ -488,6 +488,15 @@ func getDataBranchMutationExecutor(
 	featureLimited bool,
 	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
+	// The lifecycle row is a cluster-wide boundary. Never attach its write to an
+	// explicit user transaction: after this statement returned, the client could
+	// otherwise retain the row lock indefinitely before COMMIT or ROLLBACK and
+	// convoy unrelated restore and catalog-owner operations across tenants.
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return nil, nil, moerr.NewNotSupportedNoCtx(
+			"DATA BRANCH create/delete is not supported inside an explicit transaction",
+		)
+	}
 	bh, deferred, err := getBackExecutor(ctx, ses, opts...)
 	if err != nil {
 		return nil, nil, err

@@ -2395,6 +2395,8 @@ type lineageGCTestExecutor struct {
 	statementOpts       [][]executor.StatementOption
 	committedBatchSizes []int
 	rolledBack          int
+	execCtxs            []context.Context
+	waitForContextEnd   bool
 }
 
 type lineageGCTestTxnExecutor struct {
@@ -2462,10 +2464,16 @@ func (e *lineageGCTestExecutor) Exec(
 }
 
 func (e *lineageGCTestExecutor) ExecTxn(
-	_ context.Context,
+	ctx context.Context,
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
+	e.execCtxs = append(e.execCtxs, ctx)
+	if e.waitForContextEnd {
+		<-ctx.Done()
+		e.rolledBack++
+		return ctx.Err()
+	}
 	txnIndex := len(e.transactions)
 	e.opts = append(e.opts, opts)
 	e.transactions = append(e.transactions, nil)
@@ -2501,8 +2509,11 @@ func newLineageGCTestExecutor(
 func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T) {
 	const batchSize = 2
 	spyExec := newLineageGCTestExecutor(t, []uint64{1, 2, 3, 4, 5}, batchSize)
-	run := dataBranchLineageGCExecutor(spyExec, batchSize, 2)
+	run := dataBranchLineageGCExecutor(spyExec, batchSize)
 
+	require.NoError(t, run(context.Background(), nil))
+	require.Equal(t, []uint64{3, 4, 5}, spyExec.remaining)
+	require.Equal(t, []int{2}, spyExec.committedBatchSizes)
 	require.NoError(t, run(context.Background(), nil))
 	require.Equal(t, []uint64{5}, spyExec.remaining)
 	require.Equal(t, []int{2, 2}, spyExec.committedBatchSizes)
@@ -2514,6 +2525,9 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
 	metadataDeletes := make([]string, 0, len(spyExec.committedBatchSizes))
 	for txnIndex, sqls := range spyExec.transactions {
+		deadline, ok := spyExec.execCtxs[txnIndex].Deadline()
+		require.True(t, ok, "each invocation must have a hard task-work budget")
+		require.WithinDuration(t, time.Now().Add(dataBranchLineageGCTimeBudget), deadline, 5*time.Second)
 		require.True(t, spyExec.opts[txnIndex].HasLockWaitTimeout())
 		require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts[txnIndex].LockWaitTimeout())
 		require.True(t, spyExec.opts[txnIndex].HasTxnIsolation())
@@ -2536,6 +2550,34 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 	}, metadataDeletes)
 }
 
+func TestDataBranchLineageGCExecutorScansOnceAndBoundsMutationAtScale(t *testing.T) {
+	const candidateCount = 2049
+	remaining := make([]uint64, candidateCount)
+	for i := range remaining {
+		remaining[i] = uint64(i + 1)
+	}
+	spyExec := newLineageGCTestExecutor(t, remaining, dataBranchLineageGCBatchSize)
+
+	require.NoError(t, dataBranchLineageGCExecutor(spyExec, dataBranchLineageGCBatchSize)(context.Background(), nil))
+	require.Len(t, spyExec.transactions, 1,
+		"one invocation must not amplify full-catalog discovery across batches")
+	require.Len(t, spyExec.transactions[0], 7,
+		"one fixed-SI discovery, one gate write, and one delete pair are the complete work unit")
+	require.Len(t, spyExec.committedBatchSizes, 1)
+	require.Equal(t, dataBranchLineageGCBatchSize, spyExec.committedBatchSizes[0])
+	require.Len(t, spyExec.remaining, candidateCount-dataBranchLineageGCBatchSize)
+}
+
+func TestDataBranchLineageGCExecutorDefersOnLocalTimeBudget(t *testing.T) {
+	spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+	spyExec.waitForContextEnd = true
+
+	require.NoError(t,
+		dataBranchLineageGCExecutorWithBudget(spyExec, 1, time.Millisecond)(context.Background(), nil))
+	require.Equal(t, 1, spyExec.rolledBack)
+	require.Equal(t, []uint64{1}, spyExec.remaining)
+}
+
 func TestDataBranchLineageGCExecutorDefersAfterContentionRollback(t *testing.T) {
 	for _, contentionErr := range []error{
 		moerr.NewLockConflictNoCtx(),
@@ -2545,7 +2587,7 @@ func TestDataBranchLineageGCExecutorDefersAfterContentionRollback(t *testing.T) 
 	} {
 		spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
 		spyExec.gateErr = contentionErr
-		require.NoError(t, dataBranchLineageGCExecutor(spyExec, 1, 1)(context.Background(), nil))
+		require.NoError(t, dataBranchLineageGCExecutor(spyExec, 1)(context.Background(), nil))
 		require.Equal(t, 1, spyExec.rolledBack)
 		require.Equal(t, []uint64{1}, spyExec.remaining)
 		require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), spyExec.transactions[0][4])
@@ -2576,7 +2618,7 @@ func TestDataBranchLineageGCExecutorParentContextPrecedesContention(t *testing.T
 			spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
 			spyExec.gateErr = tc.contentionErr
 			spyExec.onGate = func() { cancel(tc.cause) }
-			err := dataBranchLineageGCExecutor(spyExec, 1, 1)(ctx, nil)
+			err := dataBranchLineageGCExecutor(spyExec, 1)(ctx, nil)
 			require.ErrorIs(t, err, tc.cause)
 			require.Equal(t, 1, spyExec.rolledBack)
 			require.Equal(t, []uint64{1}, spyExec.remaining)
@@ -2586,7 +2628,7 @@ func TestDataBranchLineageGCExecutorParentContextPrecedesContention(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
-	require.ErrorIs(t, dataBranchLineageGCExecutor(spyExec, 1, 1)(ctx, nil), context.Canceled)
+	require.ErrorIs(t, dataBranchLineageGCExecutor(spyExec, 1)(ctx, nil), context.Canceled)
 	require.Empty(t, spyExec.transactions, "an ended parent must stop before transaction admission")
 }
 
@@ -2603,7 +2645,7 @@ func TestDataBranchLineageGCExecutorDoesNotSuppressOtherErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
 			spyExec.gateErr = tc.err
-			err := dataBranchLineageGCExecutor(spyExec, 1, 1)(context.Background(), nil)
+			err := dataBranchLineageGCExecutor(spyExec, 1)(context.Background(), nil)
 			require.Error(t, err)
 			if moerr.IsMoErrCode(tc.err, moerr.ErrRemoteLockWaitTimeout) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout))

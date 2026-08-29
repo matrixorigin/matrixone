@@ -26,9 +26,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -157,18 +154,11 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, err)
 
 			execCtx, cancelExec := context.WithCancel(ctx)
-			var pendingCreate chan error
 			defer func() {
 				cancelExec()
 				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cleanupCancel()
 				_, _ = conn1.ExecContext(cleanupCtx, "rollback")
-				if pendingCreate != nil {
-					select {
-					case <-pendingCreate:
-					case <-cleanupCtx.Done():
-					}
-				}
 				_, _ = conn2.ExecContext(cleanupCtx, "rollback")
 				_ = conn1.Close()
 				_ = conn2.Close()
@@ -178,57 +168,70 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				_, execErr := conn.ExecContext(execCtx, statement)
 				return execErr
 			}
-			var lockServices []lockservice.LockService
-			c.ForeachServices(func(service embed.ServiceOperator) bool {
-				if service.ServiceType() == metadata.ServiceType_CN {
-					lockServices = append(lockServices, lockservice.GetLockServiceByServiceID(service.ServiceID()))
+			runConcurrent := func(statements ...struct {
+				conn *sql.Conn
+				sql  string
+			}) []error {
+				start := make(chan struct{})
+				done := make(chan error, len(statements))
+				for _, statement := range statements {
+					go func(statement struct {
+						conn *sql.Conn
+						sql  string
+					}) {
+						<-start
+						done <- execConn(statement.conn, statement.sql)
+					}(statement)
 				}
-				return true
-			})
-			hasLockWaiter := func() bool {
-				found := false
-				for _, service := range lockServices {
-					service.IterLocks(func(_ uint64, _ [][]byte, lock lockservice.Lock) bool {
-						lock.IterWaiters(func(_ pblock.WaitTxn) bool {
-							found = true
-							return false
-						})
-						return !found
-					})
-					if found {
-						break
+				close(start)
+				errs := make([]error, 0, len(statements))
+				for range statements {
+					select {
+					case err := <-done:
+						errs = append(errs, err)
+					case <-time.After(30 * time.Second):
+						t.Fatal("concurrent data-branch mutation did not return")
 					}
 				}
-				return found
-			}
-			waitForConcurrentCreatorWaiter := func() {
-				require.Eventually(t, func() bool {
-					return hasLockWaiter()
-				}, 30*time.Second, 10*time.Millisecond, "second branch creator did not enter lock wait")
+				return errs
 			}
 
 			require.NoError(t, execConn(conn1, "begin"))
-			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
-			require.False(t, hasLockWaiter(), "unexpected waiter before concurrent table branch creation")
+			explicitMutationErr := execConn(conn1,
+				"data branch create table branch_quota_race.explicit_holder from branch_quota_race.src")
+			require.Error(t, explicitMutationErr)
+			require.Contains(t, explicitMutationErr.Error(),
+				"DATA BRANCH create/delete is not supported inside an explicit transaction")
+			// Keep the rejected tenant transaction open while a system-account
+			// owner-catalog writer crosses the same global lifecycle boundary. It
+			// must not wait for the tenant's later rollback.
+			execSQLRequire(t, ctx, sysDB,
+				"create snapshot issue_26087_holder_probe for account "+accountName)
+			execSQLRequire(t, ctx, sysDB, "drop snapshot issue_26087_holder_probe")
+			require.NoError(t, execConn(conn1, "rollback"))
 
-			createDone := make(chan error, 1)
-			pendingCreate = createDone
-			go func(done chan<- error) {
-				done <- execConn(conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}")
-			}(createDone)
-
-			waitForConcurrentCreatorWaiter()
-
-			require.NoError(t, execConn(conn1, "commit"))
-			select {
-			case createErr := <-createDone:
-				pendingCreate = nil
-				require.Error(t, createErr)
+			createErrs := runConcurrent(
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"},
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}"},
+			)
+			var createSuccesses, quotaFailures int
+			for _, createErr := range createErrs {
+				if createErr == nil {
+					createSuccesses++
+					continue
+				}
+				quotaFailures++
 				require.Contains(t, createErr.Error(), "feature BRANCH with scope  has reached the limit of 1")
 				require.NotContains(t, strings.ToLower(createErr.Error()), "txn need retry")
-			case <-time.After(30 * time.Second):
-				t.Fatal("second branch creator did not return after the quota-row lock was released")
 			}
+			require.Equal(t, 1, createSuccesses)
+			require.Equal(t, 1, quotaFailures)
 
 			var branchCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,
@@ -236,32 +239,30 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			).Scan(&branchCount))
 			require.Equal(t, 1, branchCount)
 
-			require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race.b1"))
+			var createdBranchName string
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select relname from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname in ('b1', 'b2')",
+			).Scan(&createdBranchName))
+			require.NoError(t, execConn(conn1,
+				"data branch delete table branch_quota_race."+createdBranchName))
 			require.NoError(t, execConn(conn1, "create database branch_quota_source"))
 			require.NoError(t, execConn(conn1, "create table branch_quota_source.t1 (a int primary key)"))
 			require.NoError(t, execConn(conn1, "create table branch_quota_source.t2 (a int primary key)"))
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 3)", accountID))
 
-			require.NoError(t, execConn(conn1, "begin"))
-			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
-			require.NoError(t, execConn(conn2, "begin"))
-			require.False(t, hasLockWaiter(), "unexpected waiter before concurrent database branch creation")
-			createDone = make(chan error, 1)
-			pendingCreate = createDone
-			go func(done chan<- error) {
-				done <- execConn(conn2, "data branch create database branch_quota_destination from branch_quota_source")
-			}(createDone)
-
-			waitForConcurrentCreatorWaiter()
-			require.NoError(t, execConn(conn1, "commit"))
-			select {
-			case createErr := <-createDone:
-				pendingCreate = nil
+			createErrs = runConcurrent(
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"},
+				struct {
+					conn *sql.Conn
+					sql  string
+				}{conn2, "data branch create database branch_quota_destination from branch_quota_source"},
+			)
+			for _, createErr := range createErrs {
 				require.NoError(t, createErr)
-			case <-time.After(30 * time.Second):
-				t.Fatal("database branch creator did not return after the quota-row lock was released")
 			}
-			require.NoError(t, execConn(conn2, "commit"))
 
 			var databaseBranchCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,
@@ -307,7 +308,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			require.Error(t, explicitErr)
 			require.Contains(t, explicitErr.Error(),
-				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+				"DATA BRANCH create/delete is not supported inside an explicit transaction")
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe where a = 2",
 			).Scan(&fixedSnapshotProbe))
