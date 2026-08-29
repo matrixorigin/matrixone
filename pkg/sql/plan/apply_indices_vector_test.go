@@ -744,3 +744,79 @@ func TestReplaceDistFnExprsWithScoreCol(t *testing.T) {
 	require.NotNil(t, col)
 	require.Equal(t, tfTag, col.RelPos)
 }
+
+// A prepared distance bound must be PUSHED, not left behind: it is one value for the
+// whole execution, which vectorscan constant-folds before the scan. Losing the pushdown
+// is invisible in the results -- the plan just degrades to a base-table scan joined to
+// the index stream -- so it has to be asserted on the range itself.
+//
+// The line this draws is execution-constant vs per-row, not literal vs non-literal.
+// TestGetDistRangeFromFiltersKeepsTightestBound covers the per-row (column) side.
+func TestGetDistRangeFromFiltersPushesPreparedBound(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	const vecVal = "[1,2,3]"
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+	var b *QueryBuilder
+	param := func(pos int32) *plan.Expr {
+		tt := types.T_float64.ToType()
+		return &plan.Expr{Typ: makePlan2Type(&tt), Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
+	}
+
+	// Upper and lower, inclusive and exclusive: each becomes the bound and the
+	// predicate is peeled off the filter list.
+	for _, tc := range []struct {
+		op        string
+		wantUpper bool
+		wantType  plan.BoundType
+	}{
+		{"<", true, plan.BoundType_EXCLUSIVE},
+		{"<=", true, plan.BoundType_INCLUSIVE},
+		{">", false, plan.BoundType_EXCLUSIVE},
+		{">=", false, plan.BoundType_INCLUSIVE},
+	} {
+		f := makeDistFnFilter(tc.op, "l2_distance", scanTag, partPos, vecVal, param(0))
+		rem, dr := b.getDistRangeFromFilters([]*plan.Expr{f}, partPos, "l2_distance", vecLitArg)
+		require.Emptyf(t, rem, "op %s: the predicate must be peeled, not left residual", tc.op)
+		require.NotNilf(t, dr, "op %s", tc.op)
+		if tc.wantUpper {
+			require.Equalf(t, tc.wantType, dr.UpperBoundType, "op %s", tc.op)
+			require.NotNilf(t, dr.UpperBound.GetP(), "op %s: the bound must be the parameter", tc.op)
+			require.Equal(t, plan.BoundType_UNBOUNDED, dr.LowerBoundType)
+		} else {
+			require.Equalf(t, tc.wantType, dr.LowerBoundType, "op %s", tc.op)
+			require.NotNilf(t, dr.LowerBound.GetP(), "op %s: the bound must be the parameter", tc.op)
+			require.Equal(t, plan.BoundType_UNBOUNDED, dr.UpperBoundType)
+		}
+	}
+
+	// One bound per side: a prepared upper and a prepared lower both push.
+	lo := makeDistFnFilter(">", "l2_distance", scanTag, partPos, vecVal, param(0))
+	hi := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, param(1))
+	rem, dr := b.getDistRangeFromFilters([]*plan.Expr{lo, hi}, partPos, "l2_distance", vecLitArg)
+	require.Empty(t, rem)
+	require.NotNil(t, dr)
+	require.Equal(t, plan.BoundType_EXCLUSIVE, dr.LowerBoundType)
+	require.Equal(t, plan.BoundType_EXCLUSIVE, dr.UpperBoundType)
+
+	// Two bounds on the SAME side cannot be compared for tightness once either is a
+	// parameter, so the first pushes and the second stays a residual filter. Both
+	// orders, because dropping either bound would silently widen the query.
+	for _, paramFirst := range []bool{true, false} {
+		p := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, param(0))
+		l := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(1.5))
+		input := []*plan.Expr{p, l}
+		second := l
+		if !paramFirst {
+			input = []*plan.Expr{l, p}
+			second = p
+		}
+		rem, dr := b.getDistRangeFromFilters(input, partPos, "l2_distance", vecLitArg)
+		require.Equalf(t, []*plan.Expr{second}, rem,
+			"paramFirst=%v: the second same-side bound must stay residual", paramFirst)
+		require.NotNil(t, dr)
+		require.Equal(t, plan.BoundType_EXCLUSIVE, dr.UpperBoundType)
+	}
+}

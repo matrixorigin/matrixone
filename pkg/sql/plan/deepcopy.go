@@ -1074,14 +1074,15 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:         expr.Typ,
-		Ndv:         expr.Ndv,
-		Selectivity: expr.Selectivity,
+		Typ:             expr.Typ,
+		Ndv:             expr.Ndv,
+		Selectivity:     expr.Selectivity,
+		PreparedNumeric: copyPreparedNumericMetadata(expr.PreparedNumeric),
 	}
-	// Negative AuxId values are planner-local memo identities for volatile
-	// expressions that an equivalent predicate expansion must evaluate once.
 	// Positive AuxId values belong to later execution/zonemap numbering and
-	// intentionally remain reset across a semantic deep copy.
+	// intentionally remain reset across a semantic deep copy.  Prepared numeric
+	// fallback provenance is copied through its sparse plan metadata above; it
+	// must not be encoded in AuxId because negative ids are executor memo keys.
 	if expr.AuxId < 0 {
 		newExpr.AuxId = expr.AuxId
 	}
@@ -1094,6 +1095,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Src:          DeepCopyExpr(item.Lit.Src),
 			IsSerialized: item.Lit.GetIsSerialized(),
 			LiteralForm:  item.Lit.GetLiteralForm(),
+			StringSource: item.Lit.GetStringSource(),
 		}
 
 		switch c := item.Lit.Value.(type) {
@@ -1181,10 +1183,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 		newExpr.Expr = &plan.Expr_F{
 			F: &plan.Function{
-				Func:          DeepCopyObjectRef(item.F.Func),
-				Args:          newArgs,
-				AggConfig:     bytes.Clone(item.F.AggConfig),
-				AggConfigType: item.F.AggConfigType,
+				Func:               DeepCopyObjectRef(item.F.Func),
+				Args:               newArgs,
+				AggConfig:          bytes.Clone(item.F.AggConfig),
+				AggConfigType:      item.F.AggConfigType,
+				SyntaxExplicitCast: item.F.SyntaxExplicitCast,
 			},
 		}
 
@@ -1257,6 +1260,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				Len:          item.Vec.Len,
 				Data:         bytes.Clone(item.Vec.Data),
 				IsSerialized: item.Vec.IsSerialized,
+				StringSource: item.Vec.StringSource,
 			},
 		}
 

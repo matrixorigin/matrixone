@@ -412,13 +412,24 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	if distRange == nil || res == nil {
 		return nil
 	}
-	lower, hasLower, err := vectorDistanceBound(distRange.LowerBoundType, distRange.LowerBound)
+	lower, hasLower, lowerNull, err := vectorDistanceBound(distRange.LowerBoundType, distRange.LowerBound)
 	if err != nil {
 		return err
 	}
-	upper, hasUpper, err := vectorDistanceBound(distRange.UpperBoundType, distRange.UpperBound)
+	upper, hasUpper, upperNull, err := vectorDistanceBound(distRange.UpperBoundType, distRange.UpperBound)
 	if err != nil {
 		return err
+	}
+	if lowerNull || upperNull {
+		// `distance < NULL` is UNKNOWN for every row, so the predicate selects nothing.
+		// The range is the sole consumer of the peeled predicate, so the empty set has
+		// to be produced here; before the bound was pushed, the residual filter did it.
+		for _, bat := range res.Batches {
+			if bat != nil {
+				bat.CleanOnlyData()
+			}
+		}
+		return nil
 	}
 	if !hasLower && !hasUpper {
 		return nil
@@ -451,18 +462,26 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	return nil
 }
 
-func vectorDistanceBound(boundType plan.BoundType, expr *plan.Expr) (float64, bool, error) {
+// vectorDistanceBound reads one folded bound. isNull separates "the bound evaluated to
+// NULL" from "the bound is not a number at all": a prepared parameter may legally bind
+// NULL, which makes the comparison UNKNOWN for every row and selects nothing -- an
+// empty result, not an error. It mirrors how a NULL query vector is handled one layer
+// up, where vectorscan's RequestAt returns no request rather than failing.
+func vectorDistanceBound(boundType plan.BoundType, expr *plan.Expr) (value float64, has bool, isNull bool, err error) {
 	switch boundType {
 	case plan.BoundType_UNBOUNDED:
-		return 0, false, nil
+		return 0, false, false, nil
 	case plan.BoundType_INCLUSIVE, plan.BoundType_EXCLUSIVE:
-		value, ok := plan.GetLiteralFloat64(expr)
-		if !ok {
-			return 0, false, moerr.NewInvalidInputNoCtx("IVF distance bound did not fold to a numeric literal")
+		if lit := expr.GetLit(); lit != nil && lit.Isnull {
+			return 0, false, true, nil
 		}
-		return value, true, nil
+		v, ok := plan.GetLiteralFloat64(expr)
+		if !ok {
+			return 0, false, false, moerr.NewInvalidInputNoCtx("IVF distance bound did not fold to a numeric literal")
+		}
+		return v, true, false, nil
 	default:
-		return 0, false, moerr.NewInvalidInputNoCtxf("invalid IVF distance bound type %d", boundType)
+		return 0, false, false, moerr.NewInvalidInputNoCtxf("invalid IVF distance bound type %d", boundType)
 	}
 }
 

@@ -608,6 +608,71 @@ func TestValueWindowExec_FreeWithResultVec(t *testing.T) {
 	exec.Free()
 }
 
+func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
+	for _, window := range []struct {
+		name string
+		id   int64
+		want []types.StringSource
+	}{
+		{
+			name: "lag",
+			id:   WinIdOfLag,
+			want: []types.StringSource{
+				types.StringSourceExpression,
+				types.StringSourceExpression,
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceSQLPrepare,
+			},
+		},
+		{
+			name: "lead",
+			id:   WinIdOfLead,
+			want: []types.StringSource{
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceSQLPrepare,
+				types.StringSourceCOMStmt,
+				types.StringSourceExpression,
+			},
+		},
+	} {
+		t.Run(window.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(types.T_text.ToType())
+			sources := []types.StringSource{
+				types.StringSourceExpression,
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceSQLPrepare,
+				types.StringSourceCOMStmt,
+			}
+			for i := range sources {
+				require.NoError(t, vector.AppendBytes(input, []byte{byte('a' + i)}, false, mp))
+			}
+			require.NoError(t, input.SetStringSourcesWithMP(sources, mp))
+			exec, err := makeValueWindowExec(mp, window.id, false, []types.Type{types.T_text.ToType()})
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(len(sources)))
+			for group := range sources {
+				for row := range sources {
+					require.NoError(t, exec.Fill(group, row, []*vector.Vector{input}))
+				}
+			}
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			for row, source := range window.want {
+				require.Equal(t, source, results[0].GetStringSourceAt(row))
+			}
+			results[0].Free(mp)
+			exec.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 // TestValueWindowExec_VariousTypes tests different data types for appendValueToVector
 func TestValueWindowExec_VariousTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
