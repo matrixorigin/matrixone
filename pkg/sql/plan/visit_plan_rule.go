@@ -524,20 +524,23 @@ func preparedExprNeedsNumericPrefixSpecialization(
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) &&
-			preparedExprHasRuntimeDecimalParam(expr, positions) {
-			// Secondary-index planning exposes only its serialized prefix predicate
-			// to this owner scan. Admit the plan so the runtime DECIMAL parameter can
-			// be materialized in the prefix key's prepared target type.
-			return true
-		}
-		// SQL EXECUTE admits either a static DECIMAL peer or a runtime DECIMAL
-		// parameter paired with an exact numeric operand. Keep approximate FLOAT
-		// operands outside this path. COM_STMT bypasses this eligibility scan and
-		// still uses runtime kinds while performing the actual rewrite.
-		if preparedNumericPrefixPositionContext(
-			exprImpl.F.Func.GetObjName(), exprImpl.F.Args, positions) {
-			return true
+		explicitCast := isExplicitPreparedCast(expr)
+		if !explicitCast {
+			if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) &&
+				preparedExprHasRuntimeDecimalParam(expr, positions) {
+				// Secondary-index planning exposes only its serialized prefix predicate
+				// to this owner scan. Admit the plan so the runtime DECIMAL parameter can
+				// be materialized in the prefix key's prepared target type.
+				return true
+			}
+			// SQL EXECUTE admits either a static DECIMAL peer or a runtime DECIMAL
+			// parameter paired with an exact numeric operand. Keep approximate FLOAT
+			// operands outside this path. COM_STMT bypasses this eligibility scan and
+			// still uses runtime kinds while performing the actual rewrite.
+			if preparedNumericPrefixPositionContext(
+				exprImpl.F.Func.GetObjName(), exprImpl.F.Args, positions) {
+				return true
+			}
 		}
 		for _, arg := range exprImpl.F.Args {
 			if preparedExprNeedsNumericPrefixSpecialization(arg, positions) {
@@ -1941,8 +1944,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		position := int(exprImpl.P.Pos)
 		param := rule.params[position]
+		if param == nil {
+			return e, nil
+		}
 		if rule.numericComparisonTextParamPositions[position] &&
-			param != nil && param.Typ.Id == int32(types.T_text) && param.GetLit() != nil {
+			param.Typ.Id == int32(types.T_text) && param.GetLit() != nil {
 			runtimeType := preparedNumericComparisonTextType()
 			return makePlan2CastExpr(rule.ctx, param, makePlan2Type(&runtimeType))
 		}
@@ -1952,7 +1958,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		// carry an explicit numeric domain, represented by a non-text type on the
 		// replacement expression; preserve that domain for direct projections and
 		// for the function rebinding performed by the parent expression.
-		if param != nil && param.Typ.Id != int32(types.T_text) {
+		if param.Typ.Id != int32(types.T_text) {
 			typ = param.Typ
 		}
 		rewritten := &plan.Expr{
@@ -2707,7 +2713,7 @@ func unwrapPreparedImplicitCast(expr *plan.Expr, eligible bool) *plan.Expr {
 			return expr
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-		if overload != 0 {
+		if overload != 0 || fn.GetSyntaxExplicitCast() {
 			return expr
 		}
 		if !eligible {
@@ -2769,7 +2775,7 @@ func isExplicitPreparedCast(expr *plan.Expr) bool {
 		return false
 	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-	return overload != 0
+	return overload != 0 || fn.GetSyntaxExplicitCast()
 }
 
 func windowHasNumericPrefixDependency(
@@ -2909,6 +2915,9 @@ func implicitPreparedParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 		}
 		fn := current.GetF()
 		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return nil, false
+		}
+		if fn.GetSyntaxExplicitCast() {
 			return nil, false
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())

@@ -161,6 +161,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				return expr
 			}
 			defer vec.Free(proc.Mp())
+			if vec.GetStringSources() != nil {
+				// LiteralVec has only a uniform source field. Keep mixed-owner
+				// lists structured so each scalar literal retains its identity.
+				return expr
+			}
 
 			// Nullable IN-lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -179,6 +184,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 						Len:          int32(vec.Length()),
 						Data:         data,
 						IsSerialized: isSerialized,
+						StringSource: uint32(vec.GetStringSource()),
 					},
 				},
 			}
@@ -233,6 +239,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr
@@ -242,8 +251,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}
@@ -354,7 +364,7 @@ func IsImplicitFloatCastOfExplicitDecimalConstant(expr *plan.Expr) bool {
 
 // PreserveFoldedLiteralStringDomain keeps a binder-inserted cast transparent to
 // selected-value provenance when the cast itself is materialized as a literal.
-// Explicit CAST uses overload 1 and remains a semantic boundary.
+// Explicit CAST uses a nonzero overload and remains a semantic boundary.
 func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	if expr == nil || literal == nil || literal.Isnull {
 		return
@@ -399,7 +409,18 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	}
 }
 
-func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Literal {
+func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {
+	defer func() {
+		if literal == nil {
+			return
+		}
+		// Zero is the canonical spelling of an ordinary source literal. Encode
+		// every other executable owner as StringSource + 1 so every vector to
+		// scalar materialization path, including NULL, preserves provenance.
+		if source := vec.GetStringSourceAt(int(row)); source != types.StringSourceLiteral {
+			literal.StringSource = uint32(source) + 1
+		}
+	}()
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return &plan.Literal{Isnull: true}
 	}
@@ -560,6 +581,18 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 
 func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vector) (get bool, err error) {
 	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		source, sourceErr := colexec.DecodeLiteralStringSource(cExpr.Lit)
+		if sourceErr != nil {
+			return false, sourceErr
+		}
+		// Existing type-specific branches publish exactly one physical row on a
+		// successful constant match. Apply metadata after that append so NULL and
+		// every physical family share one owner without duplicating switch arms.
+		defer func() {
+			if get && err == nil {
+				err = vec.SetStringSourceAtWithMP(vec.Length()-1, source, proc.Mp())
+			}
+		}()
 		if cExpr.Lit.Isnull {
 			err = vector.AppendBytes(vec, nil, true, proc.Mp())
 			return true, err
