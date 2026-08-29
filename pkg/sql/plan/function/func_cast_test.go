@@ -3778,6 +3778,15 @@ func TestCastJsonToNumeric(t *testing.T) {
 			[]int64{1, 2, -3}, []bool{false, false, false}, false)
 	})
 
+	t.Run("json_integer_cast_preserves_values_above_float_precision", func(t *testing.T) {
+		run(t, "int64_precision", []string{"9007199254740993", "9223372036854775807"}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "uint64_precision", []string{"9007199254740993", "18446744073709551615"}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
 	t.Run("json_number_to_int8", func(t *testing.T) {
 		run(t, "int8", []string{"10", "20"}, nil,
 			types.T_int8.ToType(),
@@ -3788,6 +3797,40 @@ func TestCastJsonToNumeric(t *testing.T) {
 		run(t, "string_to_int64", []string{`"42"`, `"100"`}, nil,
 			types.T_int64.ToType(),
 			[]int64{42, 100}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_integer_cast_preserves_boundaries", func(t *testing.T) {
+		run(t, "string_int64_precision", []string{`"9007199254740993"`, `"9223372036854775807"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_precision", []string{`"9007199254740993"`, `"18446744073709551615"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_fractional_integer_cast_is_exact", func(t *testing.T) {
+		run(t, "string_int64_fraction", []string{`"9007199254740993.9"`, `"-9223372036854775808.9"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MinInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_fraction", []string{`"18446744073709551615.9"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{math.MaxUint64}, []bool{false}, false)
+	})
+
+	t.Run("json_decimal_integer_cast_is_exact", func(t *testing.T) {
+		encoded := []string{
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.9")),
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9223372036854775807.99")),
+		}
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{9007199254740993, math.MaxInt64}, nil)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		require.True(t, succeed, info)
 	})
 
 	t.Run("json_null_to_int64", func(t *testing.T) {
@@ -3993,12 +4036,14 @@ func TestCastJsonToBool(t *testing.T) {
 		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
 	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
 		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
-	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
+	run(t, "quoted_string_error", []string{`"\"true\""`}, nil,
+		nil, nil, true)
 	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
 		[]bool{false, false}, []bool{true, true}, false)
 	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
 	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
-	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+	run(t, "other_string_error", []string{`"not-a-bool"`}, nil,
+		nil, nil, true)
 
 	decimalEncoded := []string{
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),
