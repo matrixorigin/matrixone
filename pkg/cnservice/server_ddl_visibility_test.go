@@ -44,6 +44,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
+type failReplaceMetadataFS struct {
+	fileservice.ReplaceableFileService
+	failAt int
+	calls  int
+}
+
+func (f *failReplaceMetadataFS) Replace(ctx context.Context, vector fileservice.IOVector) error {
+	f.calls++
+	if f.calls == f.failAt {
+		return errors.New("injected metadata replace failure")
+	}
+	return f.ReplaceableFileService.Replace(ctx, vector)
+}
+
 func newDDLVisibilityMetadataFS(t *testing.T) fileservice.ReplaceableFileService {
 	t.Helper()
 	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
@@ -321,16 +335,24 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 
 	cfg := &Config{UUID: serviceID}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	metadataFS := newDDLVisibilityMetadataFS(t)
+	writer := &service{
+		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: metadataFS,
+	}
+	// Persist with the old process, then construct a distinct service and load
+	// through the production metadata initialization path.
+	require.NoError(t, writer.persistDDLVisibilityDeployedProtocol(defines.MORPCVersion38))
 	s := &service{
-		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: newDDLVisibilityMetadataFS(t),
+		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: metadataFS,
+		logger:    zap.NewNop(),
 		moCluster: cluster, queryClient: queryClient, _txnClient: txnClient,
 		_hakeeperClient:                 &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster},
 		config:                          util.NewConfigData(nil),
 		viewMetadataAdmissionGeneration: 7,
 		ddlCommitGate:                   frontend.NewDDLCommitGate(),
 	}
-	// Model an ordinary process restart after this CN durably joined the v38 cut.
-	require.NoError(t, s.persistDDLVisibilityDeployedProtocol(defines.MORPCVersion38))
+	require.NoError(t, s.initMetadata())
+	require.Equal(t, defines.MORPCVersion38, s.metadata.DDLVisibilityDeployedProtocol)
 	require.False(t, s.ddlVisibilityActivationComplete.Load())
 	require.NoError(t, s.prepareDDLVisibilityBarrier())
 	require.True(t, s.ddlVisibilityBarrierPrepared.Load())
@@ -366,6 +388,30 @@ func TestDefaultV38StartupUsesLastDeployedProtocolUntilActivation(t *testing.T) 
 	require.True(t, gate.PublicDDLEnabled())
 	require.False(t, s.ddlVisibilityActivationPrepared.Load())
 	require.False(t, s.ddlVisibilityActivationFenced.Load())
+}
+
+func TestProvisionalV38RestartRemainsFailClosed(t *testing.T) {
+	const serviceID = "ddl-visibility-provisional-v38-restart-test"
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	metadataFS := newDDLVisibilityMetadataFS(t)
+	cfg := &Config{UUID: serviceID}
+	writer := &service{cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: metadataFS}
+	require.NoError(t, writer.persistDDLVisibilityDeployedProtocol(-defines.MORPCVersion38))
+
+	gate := frontend.NewDDLCommitGate()
+	restarted := &service{
+		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: metadataFS,
+		logger: zap.NewNop(), ddlCommitGate: gate,
+	}
+	require.NoError(t, restarted.initMetadata())
+	require.NoError(t, restarted.prepareDDLVisibilityBarrier())
+	require.NoError(t, restarted.publishDDLVisibilityIngressAfterStart())
+	version, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion38, version)
+	require.False(t, restarted.ddlVisibilityActivationComplete.Load())
+	require.False(t, restarted.viewMetadataIngressReady.Load())
+	require.False(t, gate.PublicDDLEnabled())
 }
 
 func TestPrepareDDLVisibilityBarrierRejectsMissingProductionDependencies(t *testing.T) {
@@ -417,6 +463,109 @@ func TestHandleSetProtocolVersionRejectsStaleRecoveryIdentity(t *testing.T) {
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	require.True(t, ok)
 	require.Equal(t, defines.MORPCVersion34, version)
+}
+
+func TestActivationDoesNotPublishFencedBeforeProvisionalPersistence(t *testing.T) {
+	const serviceID = "ddl-visibility-provisional-persist-failure-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, QueryAddress: "self:6001",
+		ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		ViewMetadataIngressReady: true,
+	}}}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID,
+		frontiers: map[string]timestamp.Timestamp{"self:6001": {PhysicalTime: 100}},
+	}
+	txnClient := mock_frontend.NewMockTxnClient(gomock.NewController(t))
+	targetTS := timestamp.Timestamp{PhysicalTime: 100}
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS, nil)
+	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
+	baseFS := newDDLVisibilityMetadataFS(t)
+	metadataFS := &failReplaceMetadataFS{ReplaceableFileService: baseFS, failAt: 1}
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	s := &service{
+		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: metadataFS,
+		_hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster},
+		moCluster:       cluster, queryClient: queryClient, _txnClient: txnClient,
+		config: util.NewConfigData(nil), viewMetadataAdmissionGeneration: generation,
+		ddlCommitGate: frontend.NewDDLCommitGate(),
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	err := s.setProtocolVersion(context.Background(), defines.MORPCVersion38, []string{serviceID})
+	require.ErrorContains(t, err, "injected metadata replace failure")
+	require.True(t, s.ddlVisibilityActivationPrepared.Load())
+	require.False(t, s.ddlVisibilityActivationFenced.Load())
+	require.False(t, s.ddlVisibilityActivationComplete.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, int64(0), s.loadDDLVisibilityDeployedProtocol())
+}
+
+func TestCommittedPersistenceFailureRestartsFromProvisionalFailClosed(t *testing.T) {
+	const serviceID = "ddl-visibility-committed-persist-failure-test"
+	const generation = uint64(7)
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
+		ServiceID: serviceID, QueryAddress: "self:6001",
+		ViewMetadataAdmissionGeneration: generation, DDLVisibilityBarrierReady: true,
+		ViewMetadataIngressReady: true,
+	}}}
+	targetTS := timestamp.Timestamp{PhysicalTime: 100}
+	queryClient := &ddlVisibilityTestQueryClient{
+		serviceID: serviceID,
+		frontiers: map[string]timestamp.Timestamp{"self:6001": targetTS},
+	}
+	txnClient := mock_frontend.NewMockTxnClient(gomock.NewController(t))
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS, nil)
+	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
+	baseFS := newDDLVisibilityMetadataFS(t)
+	metadataFS := &failReplaceMetadataFS{ReplaceableFileService: baseFS, failAt: 2}
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
+	s := &service{
+		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: metadataFS,
+		_hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster},
+		moCluster:       cluster, queryClient: queryClient, _txnClient: txnClient,
+		config: util.NewConfigData(nil), viewMetadataAdmissionGeneration: generation,
+		ddlCommitGate: frontend.NewDDLCommitGate(),
+	}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+	s.viewMetadataIngressReady.Store(true)
+
+	err := s.setProtocolVersion(context.Background(), defines.MORPCVersion38, []string{serviceID})
+	require.ErrorContains(t, err, "injected metadata replace failure")
+	require.True(t, s.ddlVisibilityActivationFenced.Load())
+	require.False(t, s.ddlVisibilityActivationComplete.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, -defines.MORPCVersion38, s.loadDDLVisibilityDeployedProtocol())
+
+	// A distinct process reloads the provisional marker through initMetadata and
+	// must remain a v38, non-routable producer until activation is retried.
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	restarted := &service{
+		cfg: cfg, metadata: metadata.CNStore{UUID: serviceID}, metadataFS: baseFS,
+		logger: zap.NewNop(), ddlCommitGate: frontend.NewDDLCommitGate(),
+	}
+	require.NoError(t, restarted.initMetadata())
+	require.NoError(t, restarted.prepareDDLVisibilityBarrier())
+	require.NoError(t, restarted.publishDDLVisibilityIngressAfterStart())
+	version, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion38, version)
+	require.False(t, restarted.viewMetadataIngressReady.Load())
+	require.False(t, restarted.ddlCommitGate.PublicDDLEnabled())
 }
 
 func TestActivationWithdrawalFailureStillBlocksNewDDL(t *testing.T) {

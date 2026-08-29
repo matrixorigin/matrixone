@@ -50,6 +50,11 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 	if deployedVersion >= defines.MORPCVersion38 {
 		s.ddlVisibilityActivationComplete.Store(true)
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, deployedVersion)
+	} else if deployedVersion <= -defines.MORPCVersion38 {
+		// A provisional marker proves this CN durably fenced its local producers,
+		// but not that every target committed the same cut. Keep v38 capability so
+		// retries can converge while startup/public ingress remains fail-closed.
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, -deployedVersion)
 	} else if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
 		if version, valid := value.(int64); valid && version >= defines.MORPCVersion38 {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
@@ -278,6 +283,11 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	if err := s.syncStartupDDLVisibilityFrontier(barrierCtx); err != nil {
 		return err
 	}
+	// Fenced is a distributed proof. Publish it only after the local provisional
+	// state is durable, so a persistence failure can never be observed as Fence.
+	if err := s.persistDDLVisibilityDeployedProtocol(-version); err != nil {
+		return err
+	}
 	s.ddlVisibilityActivationFenced.Store(true)
 	if err := s.waitForDDLVisibilityActivationPhase(
 		barrierCtx, activationTargets, true); err != nil {
@@ -286,8 +296,9 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
 		return moerr.NewServiceUnavailableNoCtx("CN is closing")
 	}
-	// Persist the deployed cut before reopening ingress. A restart after this
-	// point restores v38 and fences its startup frontier before admitting DDL.
+	// Commit the deployed cut before reopening ingress. A failure leaves the
+	// durable provisional marker in place; restart therefore remains on v38 but
+	// fail-closed until a complete-target retry commits the cut.
 	if err := s.persistDDLVisibilityDeployedProtocol(version); err != nil {
 		return err
 	}
