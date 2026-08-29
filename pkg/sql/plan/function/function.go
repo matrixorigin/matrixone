@@ -306,6 +306,15 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		return false
 	case GREATEST, LEAST:
 		return false
+	case EQUAL, NOT_EQUAL:
+		// Direct JSON/BOOL equality preserves the JSON scalar category. A
+		// physically non-NULL JSON value can still contain JSON null, which the
+		// comparison maps to SQL UNKNOWN. Do not infer a non-NULL result merely
+		// from the two vector-level argument declarations.
+		if len(args) == 2 && isJSONBooleanComparison(
+			types.T(args[0].Typ.Id).ToType(), types.T(args[1].Typ.Id).ToType()) {
+			return false
+		}
 	// Value window functions can synthesize NULLs even when every input is
 	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
 	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty

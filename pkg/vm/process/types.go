@@ -663,6 +663,19 @@ func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
 	return kind
 }
 
+// GetPrepareParamType returns the concrete SQL type retained for a direct
+// prepared parameter. T_any means that the sender did not provide exact type
+// metadata, as is expected for legacy peers and parameters that do not need it.
+func (proc *Process) GetPrepareParamType(i int) types.T {
+	var typ types.T
+	for bit := 0; bit < 8; bit++ {
+		if proc.getPrepareParamMeta(i, 4+bit) {
+			typ |= types.T(1 << bit)
+		}
+	}
+	return typ
+}
+
 func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	paramCount := 0
 	if proc.Base.prepareParams != nil {

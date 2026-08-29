@@ -313,6 +313,19 @@ func newExpressionExecutorWithAllocation(
 			vec.Free(proc.Mp())
 			return nil, err
 		}
+		// The stable Vector payload does not carry runtime provenance. LiteralVec
+		// explicitly records its uniform owner because the same container is used
+		// for SQL constants and runtime-filter payloads.
+		rawSource := t.Vec.GetStringSource()
+		if rawSource > uint32(types.StringSourceCOMStmt) {
+			vec.Free(proc.Mp())
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid literal vector string source %d", rawSource)
+		}
+		source := types.StringSource(rawSource)
+		if err := vec.SetStringSource(source); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
 
 	case *plan.Expr_List:
@@ -508,6 +521,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
+	flowControlStringSources []types.StringSource
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -586,6 +600,11 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.folded = true
 		expr.foldedNull = true
+		if params := proc.GetPrepareParams(); params != nil {
+			if err = expr.null.SetStringSource(params.GetStringSourceAt(expr.pos)); err != nil {
+				return nil, err
+			}
+		}
 		expr.null.SetLength(rowCount)
 		return expr.null, nil
 	}
@@ -601,6 +620,13 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
 		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		if params := proc.GetPrepareParams(); params != nil {
+			err = expr.vec.SetStringSource(params.GetStringSourceAt(expr.pos))
+		}
+		if err != nil {
+			return nil, err
+		}
+		expr.vec.SetPrepareParamType(proc.GetPrepareParamType(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
 		expr.vec.SetLength(rowCount)
@@ -709,6 +735,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		if err == nil {
 			expr.null.SetIsBin(isBin)
 			expr.null.SetPrepareParamKind(prepareParamKind)
+			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
 		}
 		return expr.null, err
@@ -742,6 +769,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
 		expr.vec.SetPrepareParamKind(prepareParamKind)
+		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
@@ -1004,6 +1032,9 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringDomains != nil {
 		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
+	if expr.flowControlStringSources != nil {
+		expr.flowControlStringSources = expr.flowControlStringSources[:0]
+	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -1032,6 +1063,20 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows i
 	expr.flowControlStringDomains = append(expr.flowControlStringDomains, make([]types.RuntimeStringDomain, rows-old)...)
 }
 
+func (expr *FunctionExpressionExecutor) ensureFlowControlStringSourceRows(rows int) {
+	if rows <= len(expr.flowControlStringSources) {
+		return
+	}
+	old := len(expr.flowControlStringSources)
+	if rows <= cap(expr.flowControlStringSources) {
+		expr.flowControlStringSources = expr.flowControlStringSources[:rows]
+		clear(expr.flowControlStringSources[old:])
+		return
+	}
+	expr.flowControlStringSources = append(
+		expr.flowControlStringSources, make([]types.StringSource, rows-old)...)
+}
+
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
 // IF/CASE/COALESCE arm. Column executors intentionally return their full input
 // vector even under a row mask, so checking value.AllNull() would incorrectly
@@ -1048,6 +1093,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	resultDomain := types.StaticStringDomain(expr.resultType)
 	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
 		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
+		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
 		len(expr.flowControlKinds) == 0 &&
 		(!expr.flowControlKindSeen || expr.flowControlKind == vector.PrepareParamNone) {
@@ -1056,8 +1102,20 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		return
 	}
 	for row, selected := range selection {
-		if selected && (value.IsConst() || row < value.Length()) &&
-			!value.IsNull(uint64(row)) {
+		if selected && (value.IsConst() || row < value.Length()) {
+			// Source follows selected-value only for COALESCE. IF/CASE (including
+			// IFNULL rewritten to CASE) are common-domain expressions and own it.
+			// Runtime domain and conversion kind remain independent axes.
+			if expr.fid == function.COALESCE {
+				source := value.GetStringSourceAt(row)
+				if source != types.StringSourceExpression || len(expr.flowControlStringSources) != 0 {
+					expr.ensureFlowControlStringSourceRows(len(selection))
+					expr.flowControlStringSources[row] = source
+				}
+			}
+			if value.IsNull(uint64(row)) {
+				continue
+			}
 			domain := value.GetRuntimeStringDomainAt(row)
 			if domain == types.RuntimeStringInherit {
 				switch staticDomain := types.StaticStringDomain(*value.GetType()); {
@@ -1125,6 +1183,12 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 			return err
 		}
 	}
+	if len(expr.flowControlStringSources) != 0 {
+		expr.ensureFlowControlStringSourceRows(rows)
+		if err := result.SetStringSourcesWithMP(expr.flowControlStringSources[:rows], mp); err != nil {
+			return err
+		}
+	}
 	if len(expr.flowControlKinds) == 0 {
 		if expr.flowControlKindSeen {
 			result.SetPrepareParamKind(expr.flowControlKind)
@@ -1136,6 +1200,33 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 		return err
 	}
 	return nil
+}
+
+func (expr *FunctionExpressionExecutor) isImplicitCast() bool {
+	if expr.fid != function.CAST {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(expr.overloadID)
+	return overload == 0
+}
+
+func applyTransparentStringSource(
+	result *vector.Vector,
+	source *vector.Vector,
+	rows int,
+	mp *mpool.MPool,
+) error {
+	if result == nil || source == nil || rows <= 0 {
+		return nil
+	}
+	if source.GetStringSources() == nil {
+		return result.SetStringSource(source.GetStringSource())
+	}
+	sources := make([]types.StringSource, rows)
+	for row := range sources {
+		sources[row] = source.GetStringSourceAt(row)
+	}
+	return result.SetStringSourcesWithMP(sources, mp)
 }
 
 func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
@@ -1344,11 +1435,19 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
+	if expr.isImplicitCast() && len(expr.selectedParameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.selectedResult.GetResultVector(), expr.selectedParameterResults[0], selectedCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
 	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
+	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
+	runtimePrepareParamType := selectedResult.GetPrepareParamType()
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
 	}
@@ -1391,6 +1490,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// summary is only the compatibility fallback for uniform results.
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
+		}
+		if runtimePreparedJSONComparisonParam {
+			result.SetPrepareParamType(runtimePrepareParamType)
+			result.SetPreparedJSONComparisonParam()
 		}
 	}
 	return result, nil
@@ -1483,6 +1586,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
+	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		if err := expr.applyFlowControlPrepareParamKinds(
 			expr.resultVector.GetResultVector(), rowCount, proc.Mp()); err != nil {
@@ -1565,7 +1674,7 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
 		var err error
-		vec, err = expr.getConstNullVec(expr.typ, vec.Length())
+		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {
 			return nil, err
 		}
@@ -1573,7 +1682,11 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	return vec, nil
 }
 
-func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) getConstNullVec(
+	typ types.Type,
+	length int,
+	source types.StringSource,
+) (*vector.Vector, error) {
 	if expr.nullVecCache != nil {
 		expr.nullVecCache.SetType(typ)
 		expr.nullVecCache.SetLength(length)
@@ -1583,6 +1696,9 @@ func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := expr.nullVecCache.SetStringSource(source); err != nil {
+		return nil, err
 	}
 	return expr.nullVecCache, nil
 }
@@ -1761,6 +1877,15 @@ func generateConstExpressionExecutor(
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		if err == nil {
+			source, sourceErr := DecodeLiteralStringSource(con)
+			if sourceErr != nil {
+				vec.Free(proc.Mp())
+				return nil, sourceErr
+			}
+			if err = vec.SetStringSource(source); err != nil {
+				vec.Free(proc.Mp())
+				return nil, err
+			}
 			vec.SetIsBin(con.IsBin)
 			if typ.Oid.IsMySQLString() {
 				domain := types.RuntimeStringInherit
@@ -1787,7 +1912,34 @@ func generateConstExpressionExecutor(
 			}
 		}
 	}
+	if err == nil && con.GetIsnull() {
+		var source types.StringSource
+		source, err = DecodeLiteralStringSource(con)
+		if err == nil {
+			err = vec.SetStringSource(source)
+		}
+	}
 	return vec, err
+}
+
+// DecodeLiteralStringSource validates the protobuf-width encoding before
+// narrowing it to the runtime enum. Scalar literal consumers must share this
+// boundary so malformed plans cannot depend on the chosen execution path.
+func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error) {
+	if literal == nil || literal.GetStringSource() == 0 {
+		return types.StringSourceLiteral, nil
+	}
+	rawSource := literal.GetStringSource()
+	if rawSource > uint32(types.StringSourceCOMStmt)+1 {
+		return types.StringSourceExpression,
+			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", rawSource)
+	}
+	source := types.StringSource(rawSource - 1)
+	if !source.Valid() {
+		return types.StringSourceExpression,
+			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", literal.GetStringSource())
+	}
+	return source, nil
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -1798,11 +1950,17 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	if err != nil {
 		return nil, err
 	}
+	sources := make([]types.StringSource, lenList)
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
 		t := expr.GetLit()
 		if t == nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "args in list must be constant")
+		}
+		sources[i], err = DecodeLiteralStringSource(t)
+		if err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
 		}
 		if t.GetIsnull() {
 			vec.GetNulls().Set(uint64(i))
@@ -1895,6 +2053,10 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			}
 			vec.SetIsBin(t.IsBin)
 		}
+	}
+	if err := vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
 	}
 	return vec, nil
 }

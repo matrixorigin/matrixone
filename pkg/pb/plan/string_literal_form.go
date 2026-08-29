@@ -147,74 +147,95 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 }
 
 // RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
-// planner-injected CAST that uses the numeric-prefix sentinel. Charset=255 was
-// deliberately unused before this contract, so older workers must not execute
-// any plan that carries it.
+// planner-injected CAST that uses the numeric-prefix sentinel.
 func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
-	required := false
-	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
-		if !required {
-			required = expr.requiresMORPCVersion30NumericPrefix()
-		}
-		return nil
-	})
-	return required, err
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.NumericPrefix, err
 }
 
-func (m *Expr) requiresMORPCVersion30NumericPrefix() bool {
-	if m == nil {
+// RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
+// the internal prepared-JSON comparison function.  The function is deliberately
+// identified by its numeric ID: unlike ordinary SQL functions, its name is an
+// implementation detail and the receiver dispatches it by ID after decoding.
+func RequiresMORPCVersion36JSONComparisonParam(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONComparisonParam, err
+}
+
+// RequiresMORPCVersion36MixedJSONBooleanEquality reports whether an owner
+// contains an equality operation whose physical operands are JSON and BOOL.
+// Pre-v36 workers dispatch such plans through varlena comparison overloads and
+// cannot safely execute the BOOL vector.
+func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.MixedJSONBooleanEquality, err
+}
+
+const (
+	equalFunctionID                  int32 = 0
+	notEqualFunctionID               int32 = 1
+	nullSafeEqualFunctionID          int32 = 406
+	internalJSONComparisonFunctionID int32 = 577
+	planBooleanTypeID                int32 = 10
+	planJSONTypeID                   int32 = 62
+)
+
+// RemoteExpressionFeatures is the complete set of versioned expression
+// capabilities that can make a pipeline unsafe on an older remote worker.
+// NumericPrefix requires MORPC v30. JSONComparisonParam and
+// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
+// call sites name every capability instead of relying on positional booleans.
+type RemoteExpressionFeatures struct {
+	NumericPrefix            bool
+	JSONComparisonParam      bool
+	MixedJSONBooleanEquality bool
+}
+
+func (features RemoteExpressionFeatures) Any() bool {
+	return features.NumericPrefix ||
+		features.JSONComparisonParam ||
+		features.MixedJSONBooleanEquality
+}
+
+// RequiredRemoteExpressionFeatures reports the independent versioned
+// expression features present in owner. Keep the features separate so callers
+// can retain precise diagnostics, while sharing one owner walk so adding one
+// feature cannot accidentally replace another feature's compatibility gate.
+func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
+	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
+		return VisitExprTree(expr, func(current *Expr) error {
+			fn := current.GetF()
+			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+				strings.EqualFold(fn.Func.GetObjName(), "cast") {
+				features.NumericPrefix = true
+			}
+			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
+				features.JSONComparisonParam = true
+			}
+			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
+				features.MixedJSONBooleanEquality = true
+			}
+			return nil
+		})
+	})
+	return
+}
+
+func isMixedJSONBooleanEquality(function *Function) bool {
+	if function == nil || function.Func == nil || len(function.Args) != 2 {
 		return false
 	}
-	if m.Typ.Charset == 255 {
-		fn := m.GetF()
-		if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") {
-			return true
-		}
+	functionID := int32(function.Func.Obj >> 32)
+	switch functionID {
+	case equalFunctionID, notEqualFunctionID, nullSafeEqualFunctionID:
+	default:
+		return false
 	}
-	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion30NumericPrefix() {
-		return true
-	}
-	if fn := m.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if arg.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-	}
-	if list := m.GetList(); list != nil {
-		for _, item := range list.List {
-			if item.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-	}
-	if subquery := m.GetSub(); subquery != nil && subquery.Child.requiresMORPCVersion30NumericPrefix() {
-		return true
-	}
-	if window := m.GetW(); window != nil {
-		if window.WindowFunc.requiresMORPCVersion30NumericPrefix() {
-			return true
-		}
-		for _, item := range window.PartitionBy {
-			if item.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil && order.Expr.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion30NumericPrefix() {
-				return true
-			}
-		}
-	}
-	return false
+	leftType := function.Args[0].Typ.Id
+	rightType := function.Args[1].Typ.Id
+	return leftType == planJSONTypeID && rightType == planBooleanTypeID ||
+		leftType == planBooleanTypeID && rightType == planJSONTypeID
 }
 
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {
@@ -410,9 +431,7 @@ func ValidateStringLiteralFormsInOwner(owner any) error {
 	return validateStringLiteralFormsInOwner(owner)
 }
 
-// VisitExprTree visits expr and every nested expression exactly once in
-// deterministic pre-order. It is the canonical traversal for Expr variants;
-// callers should not maintain partial per-variant recursion.
+// VisitExprTree visits expr and every nested expression in deterministic order.
 func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	if expr == nil {
 		return nil
@@ -421,7 +440,9 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 		return err
 	}
 	if lit := expr.GetLit(); lit != nil {
-		return VisitExprTree(lit.Src, visitor)
+		if err := VisitExprTree(lit.Src, visitor); err != nil {
+			return err
+		}
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
@@ -437,8 +458,8 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 			}
 		}
 	}
-	if subquery := expr.GetSub(); subquery != nil {
-		if err := VisitExprTree(subquery.Child, visitor); err != nil {
+	if sub := expr.GetSub(); sub != nil {
+		if err := VisitExprTree(sub.Child, visitor); err != nil {
 			return err
 		}
 	}
@@ -474,9 +495,7 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	return nil
 }
 
-// VisitExpressionsInOwner calls visitor once for every expression root nested
-// in owner. The visitor owns traversal inside each Expr; the reflective walk
-// deliberately stops at *Expr so expression subtrees are not visited twice.
+// VisitExpressionsInOwner visits each expression root contained in an owner.
 func VisitExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 	return walkExpressionsInOwner(owner, visitor)
 }

@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -987,6 +988,77 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 	return
 }
 
+// PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
+// an ABS argument whose overload was deferred until execution.  This is kept
+// as a plan-introspection helper for tests and diagnostics; execute-time
+// eligibility is cached on PrepareStmt and must not call this walker for every
+// execution.
+func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
+	return len(PreparedPlanNumericFallbackParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanNumericFallbackParamPositions returns the parameter positions
+// whose value supplies a deferred numeric ABS argument.  The result is plan
+// metadata, not an execute-time decision: callers can compute it once when a
+// prepared plan is built and use it to decide whether runtime values must be
+// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// on every ordinary execution.
+func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+			return nil
+		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
+	return expr != nil && expr.GetPreparedNumeric().GetFallback()
+}
+
+func ensurePreparedNumericMetadata(expr *plan.Expr) *plan.PreparedNumericMetadata {
+	if expr == nil {
+		return nil
+	}
+	if expr.PreparedNumeric == nil {
+		expr.PreparedNumeric = &plan.PreparedNumericMetadata{}
+	}
+	return expr.PreparedNumeric
+}
+
+func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.PreparedNumericMetadata {
+	if metadata == nil {
+		return nil
+	}
+	return &plan.PreparedNumericMetadata{
+		Fallback:             metadata.Fallback,
+		ParamPos:             metadata.ParamPos,
+		FallbackSource:       metadata.FallbackSource,
+		FallbackSourceNodeId: metadata.FallbackSourceNodeId,
+		FallbackSourceColPos: metadata.FallbackSourceColPos,
+	}
+}
+
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	if filter.GetF() != nil && filter.GetF().Func.ObjName == "in" && filter.GetF().Args[0].GetCol() != nil {
 		return true // in is always null rejecting
@@ -1581,6 +1653,9 @@ func constantFoldWithPreparedExactSource(
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -1598,6 +1673,7 @@ func constantFoldWithPreparedExactSource(
 					Len:          int32(vec.Length()),
 					Data:         data,
 					IsSerialized: isSerialized,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1655,6 +1731,9 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1669,8 +1748,9 @@ func constantFoldWithPreparedExactSource(
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1680,6 +1760,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
+		c.StringSource = uint32(source) + 1
+	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -2886,7 +2969,10 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
-	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
+	rule := &decrementParamOrdinalRule{
+		seen:         make(map[*plan.ParamRef]struct{}),
+		seenFallback: make(map[*plan.Expr]struct{}),
+	}
 	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
 	if err := visit.Visit(ctx); err != nil {
 		return err
@@ -3778,6 +3864,15 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "cast" && isExplicitPreparedCast(expr) {
+			// The user-selected cast owns the parameter domain. Its direct marker
+			// does not require runtime specialization, but a nested expression can
+			// still contain a genuinely deferred overload of its own.
+			for _, arg := range exprImpl.F.Args {
+				rule.scanExpr(arg, false)
+			}
+			return
+		}
 		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
 			for argIndex, arg := range exprImpl.F.Args {
 				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
@@ -3821,6 +3916,9 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 
 func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {
 	if !preparedExprContainsParam(expr) {
+		return false
+	}
+	if isExplicitPreparedCast(expr) {
 		return false
 	}
 	// A comparison against a table column already has a prepare-time cast to
@@ -4019,6 +4117,40 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
 }
 
+// FillValuesOfParamsInPlanWithSpecializationAtPositions limits execute-time
+// rebinding to the supplied parameter positions. This is used when a binary
+// protocol type only owns a direct result column: unrelated markers must
+// remain ParamRefs so their expression-specific overloads and metadata are
+// not changed while refreshing the visible result domain.
+func FillValuesOfParamsInPlanWithSpecializationAtPositions(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	positions []int32,
+) (*Plan, bool, error) {
+	selected := make([]bool, len(paramVals))
+	for _, position := range positions {
+		if position >= 0 && int(position) < len(selected) {
+			selected[position] = true
+		}
+	}
+	return fillValuesOfParamsInPlanWithSpecializationSelected(
+		ctx, preparePlan, paramVals, false, selected)
+}
+
+// FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time
+// path for a prepared plan whose deferred numeric overload positions were
+// computed when the plan was built. The caller has already made the
+// eligibility decision, so this uses the normal specialization walk without
+// changing the cached plan in place.
+func FillValuesOfParamsInPlanWithPreparedNumericOverload(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
+}
+
 // FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites performs the
 // same execute-time overload/result-type specialization as
 // FillValuesOfParamsInPlanWithSpecialization, while preserving the outer
@@ -4039,6 +4171,17 @@ func fillValuesOfParamsInPlanWithSpecialization(
 	paramVals []any,
 	preserveDMLWrites bool,
 ) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecializationSelected(
+		ctx, preparePlan, paramVals, preserveDMLWrites, nil)
+}
+
+func fillValuesOfParamsInPlanWithSpecializationSelected(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	preserveDMLWrites bool,
+	selected []bool,
+) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
 		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
@@ -4053,15 +4196,26 @@ func fillValuesOfParamsInPlanWithSpecialization(
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
-	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
+	effectiveParamVals := paramVals
+	if selected != nil {
+		effectiveParamVals = append([]any(nil), paramVals...)
+		for i := range effectiveParamVals {
+			if i >= len(selected) || !selected[i] {
+				effectiveParamVals[i] = ParamValue{}
+			}
+		}
+	}
+	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(
+		preparePlan, effectiveParamVals)
 	copied := DeepCopyPlan(preparePlan)
-	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
+	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, effectiveParamVals)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
-			specialized, err := replaceParamVals(ctx, queryPlan, paramVals)
+			specialized, err := replaceParamValsWithSelection(
+				ctx, queryPlan, effectiveParamVals, false, selected)
 			if err != nil {
 				return nil, false, err
 			}
@@ -4069,7 +4223,8 @@ func fillValuesOfParamsInPlanWithSpecialization(
 		}
 
 	case *plan.Plan_Query, *plan.Plan_Dcl:
-		specialized, err := replaceParamVals(ctx, copied, paramVals, preserveDMLWrites)
+		specialized, err := replaceParamValsWithSelection(
+			ctx, copied, effectiveParamVals, preserveDMLWrites, selected)
 		if err != nil {
 			return nil, false, err
 		}
@@ -4265,6 +4420,78 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	}
 	slices.Sort(result)
 	return result
+}
+
+// PreparedJSONComparisonParamPositions returns the direct parameter markers
+// whose runtime SQL type controls a JSON equality comparison. The hidden
+// adapter remains in a cacheable generic plan; execution metadata supplies the
+// concrete type for only these positions.
+func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	seen := make(map[*plan.Expr]struct{})
+	// The protobuf owner walker covers every present and future plan field. The
+	// expression collector below owns tree recursion because owner walking stops
+	// at each expression root.
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedJSONComparisonParamPositions(expr, positions, seen)
+		return nil
+	})
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func collectPreparedJSONComparisonParamPositions(
+	expr *plan.Expr,
+	positions map[int32]struct{},
+	seen map[*plan.Expr]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if _, ok := seen[expr]; ok {
+		return
+	}
+	seen[expr] = struct{}{}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
+			len(impl.F.Args) == 1 {
+			if param := impl.F.Args[0].GetP(); param != nil {
+				positions[param.Pos] = struct{}{}
+			}
+		}
+		for _, arg := range impl.F.Args {
+			collectPreparedJSONComparisonParamPositions(arg, positions, seen)
+		}
+	case *plan.Expr_W:
+		window := impl.W
+		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen)
+		for _, item := range window.GetPartitionBy() {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+		for _, order := range window.GetOrderBy() {
+			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen)
+		}
+		if frame := window.GetFrame(); frame != nil {
+			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen)
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+	case *plan.Expr_Sub:
+		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen)
+	}
 }
 
 func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {
@@ -5331,10 +5558,23 @@ func replaceParamVals(
 	preserveDMLWriteArgs ...bool,
 ) (bool, error) {
 	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
+	return replaceParamValsWithSelection(ctx, plan0, paramVals, preserveDMLWrites, nil)
+}
+
+func replaceParamValsWithSelection(
+	ctx context.Context,
+	plan0 *Plan,
+	paramVals []any,
+	preserveDMLWrites bool,
+	selected []bool,
+) (bool, error) {
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
@@ -5397,11 +5637,20 @@ func replaceParamVals(
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.setPreparedPlan(plan0)
+	// Keep the original execute-time values and protocol categories on the
+	// rebinding rule.  The plan parameters above intentionally use their
+	// prepare-time transport literals; overloaded functions such as ABS need
+	// the runtime category to select an exact integer/decimal overload.
+	paramRule.SetParamValues(paramVals)
 	if preserveDMLWrites {
 		paramRule.preserveRoots = preparedDMLWriteExpressions(plan0.GetQuery())
 	}
 	runtimeParamTypes := make([]types.Type, len(paramVals))
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		param, ok := val.(ParamValue)
 		if !ok || !param.IsBinaryProtocol {
 			continue
@@ -5424,6 +5673,9 @@ func replaceParamVals(
 	paramRule.numericPrefixParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamKinds = make(map[int]types.StringConversionKind)
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		if param, ok := val.(ParamValue); ok {
 			if param.IsBinaryProtocol {
 				paramRule.inferTextParamPositions[i] = true
@@ -6174,4 +6426,67 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 	}
 	pk := tableDef.GetPkey()
 	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
+}
+
+// isExecutionConstantExpr reports whether an expression is a value that is unknown at
+// plan time but CONSTANT for the whole execution: a prepared parameter marker,
+// optionally wrapped in monotone casts (`CAST(? AS DOUBLE)`).
+//
+// The distinction that matters is against a per-ROW expression such as a column
+// reference. Both are "not a literal", but only this kind can be constant-folded once
+// before a scan and used as a fixed bound; a column reference varies per row and must
+// stay a residual filter. Optimizer rules that want to admit `?` where they previously
+// demanded a literal should test this, never merely `GetLit() == nil`.
+//
+// EVERY argument of a wrapper is checked, not only the first. Some wrappers have a
+// value-affecting second argument -- `round(?, digits)` -- so `round(?, per_row_col)`
+// is a different value on every row even though argument 0 is a parameter. Following
+// argument 0 alone reports that as constant, and the bound is then peeled into one
+// scan-wide range that cannot be folded, failing the read.
+//
+// The expression must also actually CONTAIN a parameter: an all-literal expression is
+// handled by the literal path, and reporting it here would route it down the runtime
+// branch instead.
+func isExecutionConstantExpr(expr *plan.Expr) bool {
+	constant, hasParam := execConstantExpr(expr, 0)
+	return constant && hasParam
+}
+
+// execConstantExpr returns whether expr is constant for the execution, and whether it
+// contains a parameter marker at all.
+func execConstantExpr(expr *plan.Expr, depth int) (constant, hasParam bool) {
+	if expr == nil || depth > 8 {
+		return false, false
+	}
+	if expr.GetP() != nil {
+		return true, true
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return true, false // fixed for the execution, but not a parameter
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return false, false
+	}
+	switch fn.Func.ObjName {
+	case "cast":
+		// Argument 1 is the TARGET TYPE, not a value, so only argument 0 carries data.
+		return execConstantExpr(fn.Args[0], depth+1)
+	case "round", "floor", "ceil":
+		// Every argument here is a value, and every one of them affects the result:
+		// round(x, digits) moves with digits. Checking argument 0 alone would accept
+		// round(?, per_row_col).
+		for _, arg := range fn.Args {
+			argConst, argParam := execConstantExpr(arg, depth+1)
+			if !argConst {
+				return false, false
+			}
+			hasParam = hasParam || argParam
+		}
+		return true, hasParam
+	default:
+		// An unlisted function may have any arity or any per-row argument; refuse
+		// rather than guess which of its arguments are value-affecting.
+		return false, false
+	}
 }

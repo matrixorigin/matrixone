@@ -16,6 +16,10 @@ package function
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
+	"math"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -25,6 +29,643 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
+
+// comparePreparedJSON applies the SQL category carried by a binary-protocol
+// parameter. The adapter represents that parameter as ByteJSON only so the
+// prepared plan has a stable physical type; comparison still follows the same
+// cast contract as the equivalent typed SQL literal.
+func comparePreparedJSON(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	nullSafe bool,
+	cmp func(int) bool,
+	selectList *FunctionSelectList,
+) error {
+	leftIsParam := parameters[0].IsPreparedJSONComparisonParam()
+	rightIsParam := parameters[1].IsPreparedJSONComparisonParam()
+	if leftIsParam == rightIsParam {
+		return moerr.NewInternalError(proc.Ctx, "prepared JSON comparison requires exactly one typed parameter")
+	}
+
+	jsonPos, paramPos := 0, 1
+	if leftIsParam {
+		jsonPos, paramPos = 1, 0
+	}
+	jsonVector := parameters[jsonPos]
+	paramVector := parameters[paramPos]
+	paramType := paramVector.GetPrepareParamType()
+	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+	resultNulls := result.GetResultVector().GetNulls()
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+	if paramType != types.T_any {
+		expectedKind, ok := vector.PrepareParamKindForType(paramType)
+		if !ok || expectedKind != paramVector.GetPrepareParamKind() {
+			return moerr.NewInternalErrorf(
+				proc.Ctx,
+				"prepared parameter type %s does not match conversion kind %d",
+				paramType.String(), paramVector.GetPrepareParamKind(),
+			)
+		}
+	}
+
+	var (
+		cachedJSON              bytejson.ByteJson
+		cachedJSONNull          bool
+		cachedJSONReady         bool
+		cachedParam             bytejson.ByteJson
+		cachedParamNull         bool
+		cachedParamReady        bool
+		cachedDecimalParam      bytejson.ParsedNumeric
+		cachedDecimalParamReady bool
+	)
+	if jsonVector.IsConst() {
+		var err error
+		cachedJSON, cachedJSONNull, err = comparisonJSONAt(proc, jsonVector, 0)
+		if err != nil {
+			return err
+		}
+		cachedJSONReady = true
+	}
+	if paramVector.IsConst() {
+		var err error
+		cachedParam, cachedParamNull, err = comparisonJSONAt(proc, paramVector, 0)
+		if err != nil {
+			return err
+		}
+		cachedParamReady = true
+	}
+	if cachedParamReady && !cachedParamNull && paramType == types.T_any &&
+		paramVector.GetPrepareParamKind() == vector.PrepareParamDecimal &&
+		!isJSONLiteralNull(cachedParam) {
+		numericParam, paramIsNull, ok := preparedJSONDecimal(cachedParam)
+		if !ok || paramIsNull {
+			return jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		cachedDecimalParam, ok = bytejson.ParseNumeric(numericParam)
+		if !ok {
+			return jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		cachedDecimalParamReady = true
+	}
+
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+
+		jsonValue, jsonNull := cachedJSON, cachedJSONNull
+		if !cachedJSONReady {
+			var err error
+			jsonValue, jsonNull, err = comparisonJSONAt(proc, jsonVector, row)
+			if err != nil {
+				return err
+			}
+		}
+		paramValue, paramNull := cachedParam, cachedParamNull
+		if !cachedParamReady {
+			var err error
+			paramValue, paramNull, err = comparisonJSONAt(proc, paramVector, row)
+			if err != nil {
+				return err
+			}
+		}
+
+		// JSON null participates in the same SQL-null comparison contract as a
+		// JSON-to-scalar cast. Account for it before short-circuiting on a NULL
+		// parameter so <=> observes two null values, not one.
+		jsonNull = jsonNull || isJSONLiteralNull(jsonValue)
+		if jsonNull || paramNull {
+			if nullSafe {
+				rss[row] = jsonNull && paramNull
+			} else {
+				resultNulls.Add(uint64(row))
+			}
+			continue
+		}
+
+		var comparison int
+		var coercedJSONNull, coercedParamNull bool
+		var err error
+		if paramType == types.T_any {
+			kind := paramVector.GetPrepareParamKindAt(row)
+			if kind == vector.PrepareParamDecimal && cachedDecimalParamReady {
+				comparison, coercedJSONNull, err = comparePreparedJSONDecimalWithParsedParam(
+					proc, jsonValue, cachedDecimalParam)
+			} else {
+				comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalars(
+					proc, jsonValue, paramValue, kind)
+			}
+		} else {
+			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalarsAsType(
+				proc, jsonValue, paramValue, paramType)
+		}
+		if err != nil {
+			return err
+		}
+		if coercedJSONNull || coercedParamNull {
+			if nullSafe {
+				rss[row] = coercedJSONNull && coercedParamNull
+			} else {
+				resultNulls.Add(uint64(row))
+			}
+			continue
+		}
+		rss[row] = cmp(comparison)
+	}
+	return nil
+}
+
+func comparisonJSONAt(
+	proc *process.Process,
+	value *vector.Vector,
+	row int,
+) (bytejson.ByteJson, bool, error) {
+	if value.IsNull(uint64(row)) {
+		return bytejson.ByteJson{}, true, nil
+	}
+	data := value.GetBytesAt(row)
+	if len(data) == 0 {
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "empty encoded JSON comparison value")
+	}
+	bj := types.DecodeJson(data)
+	switch bj.Type {
+	case bytejson.TpCodeObject, bytejson.TpCodeArray:
+		if len(bj.Data) == 0 {
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "truncated encoded JSON container")
+		}
+	case bytejson.TpCodeString, bytejson.TpCodeDecimal,
+		bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime,
+		bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
+		if !validComparisonJSONVarlena(bj.Data) {
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "truncated encoded JSON comparison value")
+		}
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) != 1 || bj.Data[0] > bytejson.LiteralFalse {
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "invalid encoded JSON literal")
+		}
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64:
+		if len(bj.Data) != 8 {
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "truncated encoded JSON number")
+		}
+	default:
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "invalid encoded JSON comparison type")
+	}
+	return bj, false, nil
+}
+
+func validComparisonJSONVarlena(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	payloadLength, prefixLength := uint64(data[0]), 1
+	if data[0] >= utf8.RuneSelf {
+		var decodedBytes int
+		payloadLength, decodedBytes = binary.Uvarint(data)
+		if decodedBytes <= 0 {
+			return false
+		}
+		prefixLength = decodedBytes
+	}
+	return payloadLength == uint64(len(data)-prefixLength)
+}
+
+// compareJSONScalarWithBoolean applies the established numeric-to-boolean
+// comparison coercion without erasing the JSON scalar category. JSON strings
+// are valid values of a different category, so they compare unequal instead
+// of becoming SQL NULL or being parsed as boolean text.
+func compareJSONScalarWithBoolean(
+	ctx context.Context,
+	jsonValue bytejson.ByteJson,
+	booleanValue bool,
+) (comparison int, jsonNull bool, err error) {
+	if jsonValue.Type == bytejson.TpCodeString {
+		return 1, false, nil
+	}
+	value, isNull, err := jsonScalarToBool(ctx, jsonValue)
+	if err != nil || isNull {
+		return 0, isNull, err
+	}
+	if value == booleanValue {
+		return 0, false, nil
+	}
+	if !value {
+		return -1, false, nil
+	}
+	return 1, false, nil
+}
+
+func isJSONLiteralNull(value bytejson.ByteJson) bool {
+	return value.Type == bytejson.TpCodeLiteral &&
+		len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull
+}
+
+func preparedJSONBoolean(ctx context.Context, value bytejson.ByteJson) (bool, error) {
+	if value.Type != bytejson.TpCodeLiteral || len(value.Data) == 0 {
+		return false, moerr.NewInternalError(ctx, "prepared boolean parameter is not encoded as a JSON boolean")
+	}
+	switch value.Data[0] {
+	case bytejson.LiteralTrue:
+		return true, nil
+	case bytejson.LiteralFalse:
+		return false, nil
+	default:
+		return false, moerr.NewInternalError(ctx, "prepared boolean parameter has an invalid JSON literal")
+	}
+}
+
+func compareJSONBoolean(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	nullSafe bool,
+	cmp func(int) bool,
+	selectList *FunctionSelectList,
+) error {
+	jsonPos, boolPos := 0, 1
+	if parameters[0].GetType().Oid == types.T_bool {
+		jsonPos, boolPos = 1, 0
+	}
+	if parameters[jsonPos].GetType().Oid != types.T_json ||
+		parameters[boolPos].GetType().Oid != types.T_bool {
+		return moerr.NewInternalError(proc.Ctx, "JSON/BOOL comparison requires one operand of each type")
+	}
+
+	jsonVector := parameters[jsonPos]
+	booleanVector := parameters[boolPos]
+	var booleanValues []bool
+	if !booleanVector.IsConstNull() {
+		booleanValues = vector.MustFixedColNoTypeCheck[bool](booleanVector)
+	}
+	booleanIsConst := booleanVector.IsConst()
+	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+	resultNulls := result.GetResultVector().GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+
+	var cachedJSON bytejson.ByteJson
+	var cachedJSONNull bool
+	jsonIsConst := jsonVector.IsConst()
+	if jsonIsConst {
+		var err error
+		cachedJSON, cachedJSONNull, err = comparisonJSONAt(proc, jsonVector, 0)
+		if err != nil {
+			return err
+		}
+	}
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+
+		jsonValue, jsonVectorNull := cachedJSON, cachedJSONNull
+		if !jsonIsConst {
+			var err error
+			jsonValue, jsonVectorNull, err = comparisonJSONAt(proc, jsonVector, row)
+			if err != nil {
+				return err
+			}
+		}
+		booleanRow := row
+		if booleanIsConst {
+			booleanRow = 0
+		}
+		booleanNull := booleanVector.IsNull(uint64(row))
+		var booleanValue bool
+		if !booleanNull {
+			booleanValue = booleanValues[booleanRow]
+		}
+		jsonVectorNull = jsonVectorNull || isJSONLiteralNull(jsonValue)
+		if jsonVectorNull || booleanNull {
+			if nullSafe {
+				rss[row] = jsonVectorNull && booleanNull
+			} else {
+				resultNulls.Add(uint64(row))
+			}
+			continue
+		}
+
+		comparison, jsonScalarNull, err := compareJSONScalarWithBoolean(proc.Ctx, jsonValue, booleanValue)
+		if err != nil {
+			return err
+		}
+		if jsonScalarNull {
+			if !nullSafe {
+				resultNulls.Add(uint64(row))
+			}
+			continue
+		}
+		rss[row] = cmp(comparison)
+	}
+	return nil
+}
+
+func comparePreparedJSONScalars(
+	proc *process.Process,
+	jsonValue bytejson.ByteJson,
+	paramValue bytejson.ByteJson,
+	kind vector.PrepareParamKind,
+) (comparison int, jsonNull bool, paramNull bool, err error) {
+	switch kind {
+	case vector.PrepareParamBoolean:
+		right, rightErr := preparedJSONBoolean(proc.Ctx, paramValue)
+		if rightErr != nil {
+			return 0, false, false, rightErr
+		}
+		comparison, leftNull, leftErr := compareJSONScalarWithBoolean(proc.Ctx, jsonValue, right)
+		return comparison, leftNull, false, leftErr
+
+	case vector.PrepareParamInteger:
+		left, leftNull, leftOK := preparedJSONInteger(jsonValue)
+		right, rightNull, rightOK := preparedJSONInteger(paramValue)
+		if !leftOK || !rightOK {
+			return 0, false, false, jsonCastErr(proc.Ctx, types.T_int64)
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		return comparePreparedJSONIntegers(left, right), false, false, nil
+
+	case vector.PrepareParamFloat:
+		left, leftNull, leftOK := jsonToScalar(jsonValue)
+		right, rightNull, rightOK := jsonToScalar(paramValue)
+		if !leftOK || !rightOK {
+			return 0, false, false, jsonCastErr(proc.Ctx, types.T_float64)
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		return compareFloat64Total(left, right), false, false, nil
+
+	case vector.PrepareParamDecimal:
+		left, leftNull, leftOK := preparedJSONDecimal(jsonValue)
+		right, rightNull, rightOK := preparedJSONDecimal(paramValue)
+		if !leftOK || !rightOK {
+			return 0, false, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		comparison, ok := bytejson.CompareNumeric(left, right)
+		if !ok {
+			return 0, false, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		return comparison, false, false, nil
+
+	case vector.PrepareParamNone:
+		left, leftErr := preparedJSONString(jsonValue)
+		if leftErr != nil {
+			return 0, false, false, leftErr
+		}
+		right, rightErr := preparedJSONString(paramValue)
+		if rightErr != nil {
+			return 0, false, false, rightErr
+		}
+		return bytes.Compare(left, right), false, false, nil
+
+	default:
+		return 0, false, false, moerr.NewInternalErrorf(proc.Ctx, "unsupported prepared parameter kind %d", kind)
+	}
+}
+
+func comparePreparedJSONDecimalWithParsedParam(
+	proc *process.Process,
+	jsonValue bytejson.ByteJson,
+	paramValue bytejson.ParsedNumeric,
+) (comparison int, jsonNull bool, err error) {
+	left, leftNull, leftOK := preparedJSONDecimal(jsonValue)
+	if !leftOK {
+		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+	}
+	if leftNull {
+		return 0, true, nil
+	}
+	parsedLeft, ok := bytejson.ParseNumeric(left)
+	if !ok {
+		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+	}
+	comparison, ok = bytejson.CompareParsedNumeric(parsedLeft, paramValue)
+	if !ok {
+		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+	}
+	return comparison, false, nil
+}
+
+func comparePreparedJSONScalarsAsType(
+	proc *process.Process,
+	jsonValue bytejson.ByteJson,
+	paramValue bytejson.ByteJson,
+	paramType types.T,
+) (comparison int, jsonNull bool, paramNull bool, err error) {
+	switch paramType {
+	case types.T_int8:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt8, math.MaxInt8, paramType)
+	case types.T_int16:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt16, math.MaxInt16, paramType)
+	case types.T_int32:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt32, math.MaxInt32, paramType)
+	case types.T_int64:
+		return comparePreparedJSONSignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MinInt64, math.MaxInt64, paramType)
+
+	case types.T_uint8:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint8, paramType)
+	case types.T_uint16:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint16, paramType)
+	case types.T_uint32:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint32, paramType)
+	case types.T_uint64:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint64, paramType)
+
+	case types.T_float32:
+		left, leftNull, leftErr := preparedJSONFloatScalar(proc.Ctx, jsonValue, paramType)
+		if leftErr != nil {
+			return 0, false, false, leftErr
+		}
+		right, rightNull, rightErr := preparedJSONFloatScalar(proc.Ctx, paramValue, paramType)
+		if rightErr != nil {
+			return 0, false, false, rightErr
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		return compareFloat64Total(left, right), false, false, nil
+
+	}
+
+	return 0, false, false, moerr.NewInternalErrorf(
+		proc.Ctx, "unsupported prepared parameter type %s", paramType.String())
+}
+
+func comparePreparedJSONSignedScalars(
+	ctx context.Context,
+	leftValue bytejson.ByteJson,
+	rightValue bytejson.ByteJson,
+	minValue int64,
+	maxValue int64,
+	paramType types.T,
+) (comparison int, leftNull bool, rightNull bool, err error) {
+	left, leftNull, leftOK := jsonToInt64Scalar(leftValue)
+	if !leftOK || (!leftNull && (left < minValue || left > maxValue)) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	right, rightNull, rightOK := jsonToInt64Scalar(rightValue)
+	if !rightOK || (!rightNull && (right < minValue || right > maxValue)) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	if leftNull || rightNull {
+		return 0, leftNull, rightNull, nil
+	}
+	return compareInt64(left, right), false, false, nil
+}
+
+func comparePreparedJSONUnsignedScalars(
+	ctx context.Context,
+	leftValue bytejson.ByteJson,
+	rightValue bytejson.ByteJson,
+	maxValue uint64,
+	paramType types.T,
+) (comparison int, leftNull bool, rightNull bool, err error) {
+	left, leftNull, leftOK := jsonToUint64Scalar(leftValue)
+	if !leftOK || (!leftNull && left > maxValue) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	right, rightNull, rightOK := jsonToUint64Scalar(rightValue)
+	if !rightOK || (!rightNull && right > maxValue) {
+		return 0, false, false, jsonCastErr(ctx, paramType)
+	}
+	if leftNull || rightNull {
+		return 0, leftNull, rightNull, nil
+	}
+	return compareUint64(left, right), false, false, nil
+}
+
+func preparedJSONFloatScalar(
+	ctx context.Context,
+	value bytejson.ByteJson,
+	paramType types.T,
+) (float64, bool, error) {
+	result, isNull, ok := jsonToScalar(value)
+	if !ok {
+		return 0, false, jsonCastErr(ctx, paramType)
+	}
+	if isNull {
+		return 0, true, nil
+	}
+	if result < -math.MaxFloat32 || result > math.MaxFloat32 {
+		return 0, false, jsonCastErr(ctx, paramType)
+	}
+	return float64(float32(result)), false, nil
+}
+
+type preparedJSONIntegerValue struct {
+	signed   int64
+	unsigned uint64
+	isSigned bool
+}
+
+func preparedJSONInteger(value bytejson.ByteJson) (preparedJSONIntegerValue, bool, bool) {
+	if value.Type == bytejson.TpCodeLiteral {
+		if len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull {
+			return preparedJSONIntegerValue{}, true, true
+		}
+		return preparedJSONIntegerValue{}, false, false
+	}
+	if value.Type == bytejson.TpCodeString {
+		text := string(value.GetString())
+		if signed, ok := bytejson.NumericTextToInt64(text); ok {
+			return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
+		}
+		if unsigned, ok := bytejson.NumericTextToUint64(text); ok {
+			return preparedJSONIntegerValue{unsigned: unsigned}, false, true
+		}
+		return preparedJSONIntegerValue{}, false, false
+	}
+	if signed, ok := bytejson.NumericToInt64(value); ok {
+		return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
+	}
+	if unsigned, ok := bytejson.NumericToUint64(value); ok {
+		return preparedJSONIntegerValue{unsigned: unsigned}, false, true
+	}
+	return preparedJSONIntegerValue{}, false, false
+}
+
+// preparedJSONDecimal maps numeric JSON scalars and numeric JSON strings into
+// the exact ByteJSON numeric domain. CompareNumeric then shares one equality
+// model with JSON containment and overlap instead of independently lowering
+// DECIMAL values to float64.
+func preparedJSONDecimal(value bytejson.ByteJson) (bytejson.ByteJson, bool, bool) {
+	switch value.Type {
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64:
+		return value, false, true
+	case bytejson.TpCodeDecimal:
+		return value, false, true
+	case bytejson.TpCodeString:
+		// STRING and DECIMAL share the same length-prefixed payload layout.
+		// Reclassify the local descriptor so a per-row numeric string does not
+		// allocate a duplicate payload solely for exact comparison.
+		value.Type = bytejson.TpCodeDecimal
+		return value, false, true
+	case bytejson.TpCodeLiteral:
+		if len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull {
+			return bytejson.ByteJson{}, true, true
+		}
+	}
+	return bytejson.ByteJson{}, false, false
+}
+
+func comparePreparedJSONIntegers(left, right preparedJSONIntegerValue) int {
+	if left.isSigned && right.isSigned {
+		return compareInt64(left.signed, right.signed)
+	}
+	if !left.isSigned && !right.isSigned {
+		return compareUint64(left.unsigned, right.unsigned)
+	}
+	if left.isSigned {
+		if left.signed < 0 {
+			return -1
+		}
+		return compareUint64(uint64(left.signed), right.unsigned)
+	}
+	if right.signed < 0 {
+		return 1
+	}
+	return compareUint64(left.unsigned, uint64(right.signed))
+}
+
+func preparedJSONString(value bytejson.ByteJson) ([]byte, error) {
+	switch value.Type {
+	case bytejson.TpCodeString:
+		return value.GetString(), nil
+	case bytejson.TpCodeLiteral:
+		switch value.Data[0] {
+		case bytejson.LiteralNull:
+			return []byte("null"), nil
+		case bytejson.LiteralTrue:
+			return []byte("true"), nil
+		case bytejson.LiteralFalse:
+			return []byte("false"), nil
+		}
+	}
+	return value.MarshalJSON()
+}
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	if isDatetimeTimestampComparison(typ1, typ2) {
@@ -236,6 +877,9 @@ func float32ComparisonNormalizers(leftScale, rightScale int32) (
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+	}
 
 	switch paramType.Oid {
 	case types.T_bool:
@@ -302,6 +946,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 			return a == b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+			return comparePreparedJSON(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
@@ -394,6 +1041,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left == right
@@ -465,6 +1115,9 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return a == b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
@@ -1132,6 +1785,9 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left != right
@@ -1202,6 +1858,9 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a != b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) != 0
 		}, selectList)
