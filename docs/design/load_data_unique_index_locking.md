@@ -1,8 +1,8 @@
 # LOAD DATA Unique-Index Lock Ownership
 
-- Status: causal validation and mandatory design review pending
-- Design revision: v6
-- Supersedes: v1-v5 in this PR
+- Status: draft implementation complete; causal/performance validation and mandatory owner review pending
+- Design revision: v7 implementation conformance update
+- Supersedes: v1-v6 in this PR
 - Tracking issue: [matrixorigin/matrixone#27775](https://github.com/matrixorigin/matrixone/issues/27775)
 - Design and implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
 - Reused prerequisite: TN-ordered logtail read barrier from
@@ -12,11 +12,12 @@
 - Authors: XuPeng-SH
 - Last updated: 2026-08-30
 
-> Production implementation is intentionally absent from the current PR head.
-> The #26706 causal boundary must first be demonstrated. The exact v6 revision
-> must then be approved by both required owner perspectives before production
-> implementation starts. Green docs-only CI is delivery hygiene, not causal,
-> implementation, or performance evidence.
+> The author explicitly requested implementation before the previously defined
+> causal gate. The bounded candidate is now present, but the PR remains Draft.
+> The #26706 boundary A/B, exact-current-main versus final-head endpoint runs,
+> and SQL/compile plus lockservice owner reviews are still merge gates. Green CI
+> and local microbenchmarks are implementation hygiene, not causal or endpoint
+> performance evidence.
 
 ## 1. Decision
 
@@ -88,9 +89,9 @@ experiment changed the indexed/no-index ratio by only about 2.5% after
 normalization. It is mechanism evidence and cannot establish causality or close
 #27775.
 
-### 2.1 Causal gate before implementation
+### 2.1 Causal gate before merge readiness
 
-Before production code is added to this PR:
+Before this Draft can become ready for merge:
 
 1. deploy those two exact boundary commits on the same 3-CN/1-TN TKE topology;
 2. alternate them for at least three successful 100M composite-PK/index runs
@@ -102,9 +103,9 @@ Before production code is added to this PR:
 If the boundary does not reproduce, this implementation is abandoned and the
 `37c75ed2..32053f54` range is bisected. If the boundary reproduces but lock
 request/coarsening and mutex evidence do not move with it, the mechanism is
-rejected and profiling continues. A design approval may record that v6 is
-correct conditional on the hypothesis, but it does not authorize production
-implementation until this gate passes.
+rejected and profiling continues. A design approval may record that v7 is
+correct conditional on the hypothesis, but it does not establish that the
+candidate fixes #27775 until this gate and the endpoint gate pass.
 
 After implementation, a separate exact-current-main versus exact-final-head
 100M/1B endpoint gate is still mandatory. The first gate establishes causality;
@@ -222,9 +223,11 @@ AND txn lock-wait timeout is positive
 AND one ordinary, non-temporary, non-partitioned user base table
 AND no incoming or outgoing foreign keys
 AND no unsupported index family or asynchronous index maintenance
-AND real base PK physically encoded as T_int64 or canonical composite T_varchar
+AND real base PK uses a physical type with a total lockop table range
 AND at least one existing synchronous default/BTREE UNIQUE hidden row target
-AND every promoted hidden table has authoritative physical PK type T_int64
+AND every promoted hidden table has an authoritative physical PK type with a
+    total lockop table range (including binary varchar composite keys, but
+    excluding FLOAT/DOUBLE until their ranges cover infinities and NaN payloads)
 ```
 
 All conditions are positive. Missing, nil, contradictory, stale, duplicate, or
@@ -286,7 +289,7 @@ reconstructing or mutating the plan. It never reaches pipeline execution after a
 successful promotion because the barrier path returns the retry first.
 
 The retried physical generation filters only value-equal promoted row targets
-from a deep local copy after validating the completed proof. The canonical plan,
+from a compiler-local node/target view after validating the completed proof. The canonical plan,
 prepared/session state, remote payload source, and unrelated targets are never
 modified.
 
@@ -314,10 +317,12 @@ consume the proof.
 
 Promoted hidden tables are then acquired in ascending physical table ID using
 the existing Exclusive full-domain table-lock mechanism and the one promotion
-context created before target 1. The existing context-aware helper is exported
-without changing its lock semantics; no per-target deadline is restarted. Base
-remains before hidden. No planner-global owner/group field or generic lock
-ordering is added.
+context created before target 1. A narrowly named context-aware helper preserves
+lock and definition-change semantics but lets this caller consume an ordinary
+data-refresh timestamp through the stronger final barrier instead of emitting a
+half-completed retry. No per-target promotion deadline is restarted. Base remains
+before hidden. No planner-global owner/group field or generic lock ordering is
+added.
 
 The promoted targets are copied from row targets into coordinator-owned
 metadata; they are not inserted into the canonical plan. Thus the first
@@ -326,11 +331,14 @@ the pre-pipeline promotion path returns the retry after fencing and before
 `runOnce`. The later physical compile removes them only after validating the
 root proof.
 
-If a hidden acquisition waits, times out, deadlocks, is canceled, detects a
-definition change, or fails after a partial prefix, the substantive error is
-returned. The compiler does not attempt compensating unlock. The existing
-autocommit terminal path rolls back the transaction and releases base plus every
-hidden lock already acquired.
+If a hidden acquisition waits for an ordinary committed writer and succeeds,
+promotion continues to the common barrier; it does not publish an incomplete
+retry. Timeout, deadlock, cancellation, or backend failure returns the substantive
+terminal error, and the autocommit rollback releases the acquired prefix. A
+definition change retains the existing definition-retry contract: promotion is
+disabled before logical rebuild, exact row targets return, and any old lock stays
+transaction-owned until that statement terminates. Compiler never attempts an
+unsafe compensating unlock.
 
 ### 6.3 Reused TN-ordered freshness barrier
 
@@ -401,10 +409,10 @@ promotion barrier. The old full locks may remain until this one autocommit
 statement terminates, reducing availability but not changing correctness or
 cross-statement behavior.
 
-Proof state is coordinator-local. It is not serialized into remote pipelines,
-stored in planner/session caches, or copied into borrower compiles. Borrowers
-read the root object; only the root clears it during release. Pool reset nils the
-target slice and all generation fields.
+Proof state is coordinator-local. It is not serialized into remote pipelines or
+stored in planner/session caches. Borrower compiles share the root-owned pointer
+without taking cleanup ownership; only the root clears it during release. Pool
+reset nils the target slice and all generation fields.
 
 ### 6.5 Observability
 
@@ -505,6 +513,11 @@ the old snapshot. No runtime source initializes before that recompile succeeds.
 No transition from `eligible`, `acquiring`, `owned`, `fencing`, or `installing`
 can enter the data pipeline.
 
+`owned`, `fencing`, `installing`, and `retry-marked` are reasoning states. The
+implementation stores them as one non-consumable `acquiring` phase and atomically
+publishes only `fenced`, reducing partially visible state without changing the
+transition contract.
+
 ## 9. Unhappy-path audit
 
 ### 9.1 Q1: ownership and cleanup
@@ -563,6 +576,23 @@ O(promoted UNIQUE targets log targets)
 + one real TN publication/apply barrier
 + one physical recompile
 ```
+
+The implementation keeps ordinary SQL outside this cost model. An O(1)
+top-level plan check runs before reading transaction options, protocol state, or
+engine capabilities; non-LOAD statements return there. On Apple M4 this gate
+measures about 1.76 ns/op with 0 B/op and 0 allocs/op. The detailed classifier
+runs once for a fresh candidate LOAD and measures about 1.69 us/op, 1120 B/op,
+and 14 allocs/op across three benchmark runs. Retried
+target proof lookup uses the table-ID-sorted vector with binary search. Outside
+a positively admitted candidate LOAD, compile preserves exact-main target
+mutation and allocation behavior. Inside that candidate only, a table target
+whose physical disposition can be annotated receives one shallow value copy;
+row targets are never deep-copied during physical compile.
+
+These are compile-overhead bounds, not endpoint evidence. The optimization is
+acceptable only if section 13.6 shows that replacing input-scaled hidden-index
+row-lock work with the schema-scaled locks/barrier materially improves the
+100M/1B normalized result.
 
 Unlike v3-v5's future HLC fence, the reused barrier has no fixed clock-skew wait;
 healthy idle latency reflects only real queue/network/apply progress. Unlike a
@@ -654,7 +684,8 @@ correlation, reconnect, upgrade, shutdown, and test obligations.
 
 ### 13.1 Focused compiler and planner tests
 
-- actual modern indexed-LOAD fixture is admitted;
+- actual modern indexed-LOAD fixture with its real `uint32` base PK and binary
+  `varchar` composite UNIQUE hidden PK is admitted;
 - `BEGIN`, `START TRANSACTION`, `autocommit=0`, internal/derived execution,
   SI/optimistic, retry-disabled, protocol <=38, missing capability, missing
   timeout, prepared/reused generation, FK/partition/temp/system/fake-PK,
@@ -670,7 +701,7 @@ correlation, reconnect, upgrade, shutdown, and test obligations.
 
 ### 13.2 Causal boundary evidence
 
-Run section 2.1 before implementation. Archive exact commit/config identities,
+Run section 2.1 before merge readiness. Archive exact commit/config identities,
 raw per-case timings, metrics, and equal-window profiles. A visually plausible
 profile or one faster indexed run does not pass; the normalized boundary and
 lock-mechanism signals must move together. This evidence belongs on #27775 and
@@ -769,7 +800,7 @@ lock request counts or a microbenchmark improved.
 | ineligible shape promoted | correctness/availability change | atomic positive classifier and negative matrix |
 | first generation drops rows early | stale execution on failure/fallback | retain exact rows until completed proof and retry |
 | writer commit absent from snapshot | missed duplicate/conflict | existing TN-ordered barrier plus snapshot > frontier |
-| #26706 is not causal | wrong subsystem and wasted complexity | mandatory parent/merge A/B before implementation |
+| #26706 is not causal | wrong subsystem and wasted complexity | mandatory parent/merge A/B before merge readiness |
 | protocol/capability missing | invalid wire call | v39/capability gates before promotion |
 | promoted lock/barrier stalls | table-level blocking | one min configured/120s aggregate deadline, non-retryable rollback |
 | timeout retries automatically | request/log amplification | ordinary lock-timeout class, no optimization retry |
@@ -785,11 +816,11 @@ lock request counts or a microbenchmark improved.
 
 The earlier review loop failed because it skipped causal proof, repaired the
 most recent counterexample while retaining its mechanism, and repeatedly
-declared “no new blocker” without freezing the complete decision surface. V6
+declared “no new blocker” without freezing the complete decision surface. V7
 changes the process:
 
-1. Section 2.1 proves or rejects the suspected causal boundary before code is
-   added; issue status cannot promote correlation to root cause.
+1. Section 2.1 proves or rejects the suspected causal boundary before merge
+   readiness; issue status cannot promote correlation to root cause.
 2. This document is the single change map for safety, freshness, generation,
    timeout, ownership, performance, compatibility, observability, and tests.
 3. Required owners review the same exact commit and return their complete
@@ -799,8 +830,8 @@ changes the process:
    only by materially new evidence that invalidates those assumptions.
 5. Correctness, hang, leak, compatibility, and mandatory evidence failures
    cannot be self-waived by the author.
-6. Implementation starts only after the causal gate and both owner approvals.
-   Implementation review checks conformance to this approved revision; a
+6. The early implementation remains Draft until the causal gate and both owner
+   approvals. Implementation review checks conformance to this revision; a
    material deviation updates the design and reopens only the affected decision,
    not the entire history.
 7. The PR body, issue status, and decision log must describe the same state. No
@@ -825,6 +856,7 @@ Reviewer closure table:
 | v4 | client-owned future wait/install | admitted explicit transactions, duplicated planner cache policy, and lacked safe metric ownership |
 | v5 | narrowed autocommit future-HLC design | still duplicated the existing v39 TN-ordered read barrier, paid fixed clock-skew latency, and let outage retention follow the 24-hour session timeout |
 | v6 | causal gate, then reuse existing bounded TN-ordered read barrier | pending causal evidence and dual-owner approval |
+| v7 | bounded implementation of the v6 mechanism under Draft | code/test closure complete locally; causal, endpoint, and dual-owner gates still pending |
 
-Record reviewer handles, links, decisions, and the exact approved v6 commit here
-before production implementation is pushed.
+Record reviewer handles, links, decisions, and the exact approved v7 commit here
+before the PR leaves Draft.

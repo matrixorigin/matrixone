@@ -293,6 +293,18 @@ func TestLockOpHelpers(t *testing.T) {
 	require.True(t, opts.changeDef)
 }
 
+func TestLockTableRefreshPolicy(t *testing.T) {
+	refreshTS := timestamp.Timestamp{PhysicalTime: 1}
+	require.NoError(t, lockTableRefreshError(false, timestamp.Timestamp{}, true))
+	require.ErrorIs(t, lockTableRefreshError(false, refreshTS, true), retryError)
+	require.NoError(t, lockTableRefreshError(false, refreshTS, false),
+		"a stronger caller-owned barrier will install the refreshed snapshot")
+	require.ErrorIs(t,
+		lockTableRefreshError(true, refreshTS, false),
+		retryWithDefChangedError,
+		"a freshness barrier cannot validate a stale logical definition")
+}
+
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
 	options := lock.LockOptions{
 		LockWaitDeadline: time.Now().Add(1500 * time.Millisecond).UnixNano(),

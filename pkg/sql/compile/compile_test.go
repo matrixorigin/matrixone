@@ -892,7 +892,7 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
-func TestCompileLockLoadRemovesPrePipelineTableTarget(t *testing.T) {
+func TestCompileLockCandidateLoadKeepsCanonicalTableTarget(t *testing.T) {
 	c := NewMockCompile(t)
 	c.pn = &plan.Plan{
 		Plan: &plan.Plan_Query{
@@ -900,6 +900,9 @@ func TestCompileLockLoadRemovesPrePipelineTableTarget(t *testing.T) {
 		},
 	}
 	c.lockTables = make(map[uint64]*plan.LockTarget)
+	c.loadUniqueIndexPromotion = &loadUniqueIndexPromotionState{
+		phase: loadUniqueIndexPromotionEligible,
+	}
 	target := &plan.LockTarget{
 		TableId:   42,
 		LockTable: true,
@@ -910,10 +913,29 @@ func TestCompileLockLoadRemovesPrePipelineTableTarget(t *testing.T) {
 	got, err := c.compileLock(node, scopes)
 	require.NoError(t, err)
 	require.Equal(t, scopes, got)
-	require.Empty(t, node.LockTargets,
-		"LOAD must not retain a batch-driven LockOp after registering its table lock")
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets,
+		"physical compilation must not mutate the canonical plan")
+	require.NotSame(t, target, c.lockTables[target.TableId])
+	require.False(t, c.lockTables[target.TableId].LockTableAtTheEnd)
+	require.False(t, target.LockTableAtTheEnd,
+		"physical annotations must stay on the compiler-local copy")
+}
+
+func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
+	c := NewMockCompile(t)
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_INSERT,
+		LoadTag:  true,
+	}}}
+	c.lockTables = make(map[uint64]*plan.LockTarget)
+	target := &plan.LockTarget{TableId: 42, LockTable: true}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+
+	got, err := c.compileLock(node, []*Scope{{}})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Empty(t, node.LockTargets)
 	require.Same(t, target, c.lockTables[target.TableId])
-	require.False(t, target.LockTableAtTheEnd)
 }
 
 func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {

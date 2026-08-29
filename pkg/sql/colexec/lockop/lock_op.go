@@ -437,7 +437,7 @@ func LockTableWithContext(
 	pkType types.Type,
 	changeDef bool) error {
 	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef)
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true)
 }
 
 // LockTableWithMode locks all rows in a table with the specified lock mode.
@@ -448,7 +448,23 @@ func LockTableWithMode(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef)
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true)
+}
+
+// LockTableForSnapshotRefreshWithContext acquires a table lock without turning
+// a successful wait into the ordinary snapshot-retry signal. The caller must
+// install a snapshot after its own stronger freshness barrier before reading or
+// writing the table. Definition changes remain retryable because a newer
+// snapshot cannot validate a stale logical plan.
+func LockTableForSnapshotRefreshWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
+	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, mode, changeDef, false)
 }
 
 func lockTableWithModeAndContext(
@@ -458,7 +474,8 @@ func lockTableWithModeAndContext(
 	tableID uint64,
 	pkType types.Type,
 	mode lock.LockMode,
-	changeDef bool) error {
+	changeDef bool,
+	retryOnRefresh bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -501,12 +518,22 @@ func lockTableWithModeAndContext(
 		return err
 	}
 
-	// If the returned timestamp is not empty, we should return a retry error,
-	if !refreshTS.IsEmpty() {
-		if !defChanged {
-			return retryError
-		}
+	return lockTableRefreshError(defChanged, refreshTS, retryOnRefresh)
+}
+
+func lockTableRefreshError(
+	defChanged bool,
+	refreshTS timestamp.Timestamp,
+	retryOnRefresh bool,
+) error {
+	if refreshTS.IsEmpty() {
+		return nil
+	}
+	if defChanged {
 		return retryWithDefChangedError
+	}
+	if retryOnRefresh {
+		return retryError
 	}
 	return nil
 }
