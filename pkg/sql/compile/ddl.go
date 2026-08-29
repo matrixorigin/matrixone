@@ -2596,7 +2596,8 @@ func (s *Scope) CreateView(c *Compile) error {
 
 		if qry.GetReplace() {
 			if err = c.runSqlWithOptions(
-				fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName), executor.StatementOption{}.WithDisableLog(),
+				fmt.Sprintf("DROP VIEW IF EXISTS %s", quoteAlterCopyTableName(dbName, viewName)),
+				executor.StatementOption{}.WithDisableLog(),
 			); err != nil {
 				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
@@ -2997,7 +2998,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	//2. drop index table
 	for _, indexTableName := range dropIndexTableNames {
 		if err = c.dropIndexChildRelation(
-			d, qry.Database, indexTableName, oldTableDef.GetIsTemporary(),
+			d, indexTableName, oldTableDef.GetIsTemporary(),
 		); err != nil {
 			return err
 		}
@@ -3647,19 +3648,15 @@ func (c *Compile) deleteRolePrivilegesForDroppedRelation(objectID uint64) error 
 
 func (c *Compile) dropIndexChildRelation(
 	database engine.Database,
-	databaseName string,
 	relationName string,
 	isTemporary bool,
 ) error {
 	var logicalID uint64
-	if !isTemporary {
-		// User GRANT now rejects hidden relations, but rolling upgrades and legacy
-		// catalogs can still contain grants. Join the same database->relation lock
-		// protocol before resolving and deleting the child identity.
-		if err := lockMoTable(c, databaseName, relationName, lock.LockMode_Exclusive); err != nil {
-			return err
-		}
-	}
+	// Hidden relations are owned by the parent table lifecycle and cannot be a
+	// GRANT target. Do not add a second child metadata lock here: DML acquires
+	// shared locks for all index write targets, and upgrading one child while
+	// retaining another creates a cross-index wait cycle. We only need the child
+	// identity to remove legacy privilege rows after its parent-owned deletion.
 	relation, err := database.Relation(c.proc.Ctx, relationName, nil)
 	if err != nil {
 		return err
@@ -3986,7 +3983,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	}
 
 	for _, name := range qry.IndexTableNames {
-		if err = c.dropIndexChildRelation(dbSource, dbName, name, isTemp); err != nil {
+		if err = c.dropIndexChildRelation(dbSource, name, isTemp); err != nil {
 			return err
 		}
 	}
@@ -4229,7 +4226,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
 		if err = c.runSqlWithOptions(
-			fmt.Sprintf("DROP SEQUENCE %s", tblName),
+			fmt.Sprintf("DROP SEQUENCE %s", quoteAlterCopyTableName(dbName, tblName)),
 			executor.StatementOption{}.WithDisableLog().WithIgnoreForeignKey(),
 		); err != nil {
 			return err

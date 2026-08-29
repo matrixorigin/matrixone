@@ -5678,6 +5678,21 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 	return checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, false)
 }
 
+var grantPrivilegeObjectLockedHook atomic.Pointer[func()]
+
+// SetGrantPrivilegeObjectLockedHookForTest installs a process-local barrier
+// after GRANT has acquired its object lifecycle locks and before publication.
+// It is intended only for deterministic cross-session protocol tests.
+func SetGrantPrivilegeObjectLockedHookForTest(hook func()) func() {
+	previous := grantPrivilegeObjectLockedHook.Load()
+	if hook == nil {
+		grantPrivilegeObjectLockedHook.Store(nil)
+	} else {
+		grantPrivilegeObjectLockedHook.Store(&hook)
+	}
+	return func() { grantPrivilegeObjectLockedHook.Store(previous) }
+}
+
 func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
 	if ot == tree.OBJECT_TYPE_TABLE &&
@@ -5894,6 +5909,9 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx, ses, bh, gp.ObjType, *gp.Level)
 	if err != nil {
 		return err
+	}
+	if hook := grantPrivilegeObjectLockedHook.Load(); hook != nil {
+		(*hook)()
 	}
 
 	// step 4: get privilege_id

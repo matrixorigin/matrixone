@@ -1405,20 +1405,8 @@ func TestDropIndexChildRelationCleansLegacyPrivileges(t *testing.T) {
 		name: "__mo_index_legacy", tableDef: &plan2.TableDef{LogicalId: 88},
 	}
 	c := &Compile{proc: proc, pn: &plan2.Plan{}}
-	lockCalls := 0
-	lockStub := gostub.Stub(&lockMoTable, func(
-		_ *Compile, databaseName, relationName string, mode lock.LockMode,
-	) error {
-		lockCalls++
-		require.Equal(t, "db", databaseName)
-		require.Equal(t, "__mo_index_legacy", relationName)
-		require.Equal(t, lock.LockMode_Exclusive, mode)
-		return nil
-	})
-	defer lockStub.Reset()
 
-	require.NoError(t, c.dropIndexChildRelation(db, "db", "__mo_index_legacy", false))
-	require.Equal(t, 1, lockCalls)
+	require.NoError(t, c.dropIndexChildRelation(db, "__mo_index_legacy", false))
 	require.NotContains(t, db.rels, "__mo_index_legacy")
 	require.Equal(t, []string{
 		"delete from mo_catalog.mo_role_privs where obj_id = 88;",

@@ -133,6 +133,28 @@ from (
 
 drop role drop_object_privileges_role;
 
+-- Replacement DDL must qualify its internal DROP with the statement target,
+-- not the session's current database, and must quote special identifiers.
+drop database if exists replace_current_db;
+drop database if exists replace_target_db;
+create database replace_current_db;
+create database replace_target_db;
+create view replace_current_db.`select` as select 1 as id;
+create view replace_target_db.`select` as select 2 as id;
+create sequence replace_current_db.`order`;
+create sequence replace_target_db.`order`;
+use replace_current_db;
+create or replace view replace_target_db.`select` as select 3 as id;
+alter sequence replace_target_db.`order` increment by 2;
+select id from replace_current_db.`select`;
+select id from replace_target_db.`select`;
+select count(*) as current_sequence_preserved from mo_catalog.mo_tables
+where reldatabase = 'replace_current_db' and relname = 'order';
+select count(*) as target_sequence_preserved from mo_catalog.mo_tables
+where reldatabase = 'replace_target_db' and relname = 'order';
+drop database replace_current_db;
+drop database replace_target_db;
+
 -- Prepared execution keeps its PREPARE-time database for authorization and
 -- implicit ownership cleanup, even after USE changes the session database.
 drop user if exists prepared_binding_user;
