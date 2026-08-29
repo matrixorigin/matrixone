@@ -2977,6 +2977,13 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if err := visit.Visit(ctx); err != nil {
 		return err
 	}
+	for i := range preparePlan.GetQuery().Params {
+		var err error
+		preparePlan.GetQuery().Params[i], err = rule.ApplyExpr(preparePlan.GetQuery().Params[i])
+		if err != nil {
+			return err
+		}
+	}
 	return visitMissingNodeExprs(
 		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
 }
@@ -3011,6 +3018,13 @@ func resetPreparePlan(
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
 		}
+		for i := range query.Params {
+			var err error
+			query.Params[i], err = getParamRule.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
@@ -3024,6 +3038,13 @@ func resetPreparePlan(
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
+		}
+		for i := range query.Params {
+			var err error
+			query.Params[i], err = resetParamRule.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		return querySchemas, getParamRule.paramTypes, nil
 	}
