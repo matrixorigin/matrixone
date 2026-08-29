@@ -14,6 +14,9 @@ create view hash_comment_v # migration-generated view
 as select a from t;
 create view slash_comment_v // migration-generated view
 as select a from t;
+create view block_comment_v /* migration-generated view */ as select a from t;
+create view adjacent_block_comment_v/* migration-generated view */as select a from t;
+create /* migration view fake as */ view block_before_view_v as select a from t;
 
 select table_name, view_definition, is_updatable
 from information_schema.views
