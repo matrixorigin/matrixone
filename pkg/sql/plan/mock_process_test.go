@@ -15,9 +15,13 @@
 package plan
 
 import (
+	"context"
 	"sync"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +46,35 @@ func TestCopiedMockCompilerContextReusesProcess(t *testing.T) {
 	copied := *original
 
 	require.Same(t, original.GetProcess(), copied.GetProcess())
+}
+
+func TestMockCompilerContextDoesNotLeakInternalSQLExecutor(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+
+	require.True(t, t.Run("producer", func(t *testing.T) {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+			"select row_number() over (order by n_name) from nation", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		// This is the same plan-building producer shape used by the frontend
+		// named-window regression, using syntax supported by this branch.
+		ctx := NewMockCompilerContext(true)
+		queryPlan, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		require.NotNil(t, queryPlan.GetQuery())
+
+		result, err := runSqlWithSnapshot(ctx, "select 1", nil)
+		require.NoError(t, err)
+		result.Close()
+	}))
+
+	newExecutor, stillHasExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	require.Equal(t, hadOldExecutor, stillHasExecutor)
+	if hadOldExecutor {
+		require.Same(t, oldExecutor, newExecutor)
+	}
 }
 
 func assertMockCompilerContextReusesProcess(t *testing.T, ctx *MockCompilerContext) {

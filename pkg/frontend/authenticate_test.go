@@ -17008,9 +17008,9 @@ func TestDoDropSnapshot(t *testing.T) {
 }
 
 func TestDoCreateSnapshot(t *testing.T) {
-	// The fixtures below replace NewBackgroundExec with backgroundExecTest. A
-	// mock compiler context may leave an InternalSQLExecutor on service "", so
-	// keep runSql on the fixture and restore the runtime state after the test.
+	// The fixtures below replace NewBackgroundExec with backgroundExecTest. Keep
+	// the test independent of any service-global InternalSQLExecutor installed
+	// by another fixture, and restore the runtime state after the test.
 	rt := moruntime.ServiceRuntime("")
 	oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if hadOldExecutor {
