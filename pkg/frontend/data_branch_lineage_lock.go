@@ -33,16 +33,20 @@ func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec)
 }
 
 // admitFeatureLimitedLineageOwnerMutation installs the TN-ordered catalog
-// frontier before crossing the lifecycle write barrier. Advancing an RC
-// snapshot after the gate write can expose both workspace versions of the
-// feature-registry row to later quota reads.
+// frontier before crossing the lifecycle write barrier. An explicit-SI data
+// branch transaction keeps its fixed snapshot; its quota check uses a separate
+// RC transaction for freshness. Advancing an RC snapshot after the gate write
+// can expose both workspace versions of the feature-registry row to later
+// quota reads.
 func admitFeatureLimitedLineageOwnerMutation(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
 ) error {
-	if err := advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
-		return err
+	if !featureLimitTxnUsesFixedSnapshot(bh) {
+		if err := advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
+			return err
+		}
 	}
 	return lockDataBranchLineageOwnerLifecycle(ctx, bh)
 }
