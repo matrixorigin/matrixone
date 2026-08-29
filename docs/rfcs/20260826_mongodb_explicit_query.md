@@ -212,10 +212,10 @@ Older readers ignore unknown fields and consequently cannot execute the new
 operation semantics. `MORPCVersion38` is therefore the capability gate: a
 nonzero `user_query_kind` is rejected while the service-local oldest-live
 deployment version is below 38, rather than silently falling back to an
-unfiltered find. Version 37 is reserved by the independently reviewed
-`mo_current_roles` capability in PR #27695, which must merge before this
-feature; if that allocation changes before delivery, this PR must rebase and
-take the next unreserved version. The gate is checked while compiling, immediately before a
+unfiltered find. Version 37 is implemented by the independently reviewed
+string-source-provenance capability merged in PR #27467; this branch rebases on
+that implementation and reserves only the next version, 38, for MongoDB. The
+gate is checked while compiling, immediately before a
 remote scope is serialized, while it is decoded, and in `MongoScan.Prepare`.
 Deployment raises that version only after all receivers understand the payload
 and lowers it before rollback. This follows the
