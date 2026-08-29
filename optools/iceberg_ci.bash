@@ -87,7 +87,8 @@ go_test_embedded() {
 }
 
 go_test_adapter() {
-  (cd "${ROOT_DIR}/pkg/iceberg/adapter/iceberggo" && run go test -tags iceberggo -count=1 ./...)
+  local goflags="${MO_ICEBERG_ADAPTER_GOFLAGS:-${GOFLAGS:-}}"
+  (cd "${ROOT_DIR}/pkg/iceberg/adapter/iceberggo" && run env GOFLAGS="${goflags}" go test -tags iceberggo -count=1 ./...)
 }
 
 go_test_golden() {
@@ -124,6 +125,23 @@ PY
 
 ICEBERG_E2E_TMP_DIR=""
 ICEBERG_E2E_MO_PID=""
+ICEBERG_E2E_MAPPING_BARRIER_DIR=""
+ICEBERG_E2E_LAUNCH_CONFIG=""
+ICEBERG_E2E_BINARY=""
+
+iceberg_e2e_prepare_launch_config() {
+  local config_dir="${ICEBERG_E2E_TMP_DIR}/mo-config"
+  mkdir -p "$config_dir"
+  for name in log tn cn; do
+    sed -e "s#\./etc/launch-minio-local/mo-data#${ICEBERG_E2E_TMP_DIR}/mo-data#g" \
+      -e "s#\"etc/launch-minio-local/mo-data/#\"${ICEBERG_E2E_TMP_DIR}/mo-data/#g" \
+      "${ROOT_DIR}/etc/launch-minio-local/${name}.toml" >"${config_dir}/${name}.toml"
+  done
+  ICEBERG_E2E_LAUNCH_CONFIG="${config_dir}/launch.toml"
+  printf 'logservices = [\n    "%s/log.toml",\n]\n\n' "$config_dir" >"$ICEBERG_E2E_LAUNCH_CONFIG"
+  printf 'tnservices = [\n    "%s/tn.toml",\n]\n\n' "$config_dir" >>"$ICEBERG_E2E_LAUNCH_CONFIG"
+  printf 'cnservices = [\n    "%s/cn.toml",\n]\n' "$config_dir" >>"$ICEBERG_E2E_LAUNCH_CONFIG"
+}
 
 iceberg_e2e_collect_logs() {
   [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
@@ -144,6 +162,10 @@ iceberg_e2e_cleanup() {
     wait "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
   fi
   iceberg_e2e_collect_logs
+  if [[ -n "$ICEBERG_E2E_MAPPING_BARRIER_DIR" ]]; then
+    rm -f "$ICEBERG_E2E_MAPPING_BARRIER_DIR/create-arm" "$ICEBERG_E2E_MAPPING_BARRIER_DIR/create-ready" "$ICEBERG_E2E_MAPPING_BARRIER_DIR/create-release"
+    rmdir "$ICEBERG_E2E_MAPPING_BARRIER_DIR" >/dev/null 2>&1 || true
+  fi
   (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || true
   return "$status"
 }
@@ -153,17 +175,28 @@ iceberg_e2e_local() {
   require_cmd curl
   require_cmd python3
 
-  mkdir -p "$REPORT_DIR"
-  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-iceberg-e2e-local.XXXXXX")"
-  trap iceberg_e2e_cleanup EXIT
+  local build_target="${MO_ICEBERG_E2E_BUILD_TARGET:-build}"
+  case "$build_target" in
+    build|build-with-prebuilt-native) ;;
+    *) die "MO_ICEBERG_E2E_BUILD_TARGET must be build or build-with-prebuilt-native" ;;
+  esac
 
-  run make build
+  mkdir -p "$REPORT_DIR"
+  ICEBERG_E2E_TMP_DIR="$(mktemp -d "/private/tmp/mo-iceberg-e2e-local.XXXXXX")"
+  ICEBERG_E2E_BINARY="${ICEBERG_E2E_TMP_DIR}/mo-service"
+  ICEBERG_E2E_MAPPING_BARRIER_DIR="${ICEBERG_E2E_TMP_DIR}/create-mapping-barrier"
+  mkdir "$ICEBERG_E2E_MAPPING_BARRIER_DIR"
+  export MO_ICEBERG_E2E_MAPPING_BARRIER_DIR="$ICEBERG_E2E_MAPPING_BARRIER_DIR"
+  trap iceberg_e2e_cleanup EXIT
+  iceberg_e2e_prepare_launch_config
+
+  run make "$build_target" "BIN_NAME=${ICEBERG_E2E_BINARY}"
   go_test_adapter
   go_test_golden
 
   run make dev-up-iceberg-tier-a
   log "starting mo-service for Iceberg E2E local"
-  MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "${ROOT_DIR}/mo-service" -launch "${ROOT_DIR}/etc/launch-minio-local/launch.toml" \
+  MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "$ICEBERG_E2E_BINARY" -launch "$ICEBERG_E2E_LAUNCH_CONFIG" \
     >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
   ICEBERG_E2E_MO_PID="$!"
 

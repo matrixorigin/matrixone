@@ -271,6 +271,11 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 			})
 		}
 	}
+	allocatorIndex := tenantUpgEntries[32]
+	require.Equal(t, versions.ADD_INDEX, allocatorIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, allocatorIndex.Schema)
+	require.Equal(t, "mo_iceberg_catalogs", allocatorIndex.TableName)
+	require.Contains(t, strings.ToLower(allocatorIndex.UpgSql), "create index catalog_id_allocator")
 }
 
 func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {

@@ -323,6 +323,7 @@ func TestInsertCatalogSQLUsesStorageAllocatorWhenIDIsUnset(t *testing.T) {
 	require.Contains(t, sql, "insert into mo_catalog.mo_iceberg_catalogs(account_id,name")
 	require.Contains(t, CatalogsDDL, "catalog_id bigint unsigned not null auto_increment")
 	require.Contains(t, CatalogsDDL, "primary key(account_id, catalog_id)")
+	require.Contains(t, CatalogsDDL, "key catalog_id_allocator(catalog_id)")
 }
 
 func TestQuoteSQLStringEscapesBackslashAndQuote(t *testing.T) {

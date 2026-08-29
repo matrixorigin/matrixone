@@ -633,14 +633,11 @@ func TestLocalE2EConcurrentCreateMappingAndDropCase(t *testing.T) {
 			defer db.Close()
 			mock.MatchExpectationsInOrder(false)
 			cfg := localE2ETestConfig()
+			armLocalE2EMappingBarrier(t, &cfg)
 
 			mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
 				WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
-			mock.ExpectBegin()
-			mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs where account_id = 0 and catalog_id = 42 for update").
-				WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
-			mock.ExpectCommit()
 			createExpectation := mock.ExpectExec("CREATE EXTERNAL TABLE")
 			if tt.createErr != nil {
 				createExpectation.WillReturnError(tt.createErr)
@@ -670,6 +667,26 @@ func TestLocalE2EConcurrentCreateMappingAndDropCase(t *testing.T) {
 			}
 		})
 	}
+}
+
+func armLocalE2EMappingBarrier(t *testing.T, cfg *localE2EConfig) {
+	t.Helper()
+	cfg.MappingBarrierDir = t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() {
+		if err := waitForMappingBarrier(ctx, filepath.Join(cfg.MappingBarrierDir, "create-arm")); err != nil {
+			done <- err
+			return
+		}
+		done <- os.WriteFile(filepath.Join(cfg.MappingBarrierDir, "create-ready"), []byte("locked\n"), 0o600)
+	}()
+	t.Cleanup(func() {
+		if err := <-done; err != nil && ctx.Err() == nil {
+			t.Errorf("signal local E2E mapping barrier: %v", err)
+		}
+	})
 }
 
 func TestLocalE2EConcurrentCreateMappingAndDropCaseReportsCleanupFailure(t *testing.T) {

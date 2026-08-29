@@ -42,13 +42,14 @@ import (
 )
 
 type localE2EConfig struct {
-	CatalogURI string
-	Warehouse  string
-	DSN        string
-	ReportDir  string
-	Namespace  string
-	Catalog    string
-	Database   string
+	CatalogURI        string
+	Warehouse         string
+	DSN               string
+	ReportDir         string
+	MappingBarrierDir string
+	Namespace         string
+	Catalog           string
+	Database          string
 }
 
 type caseResult struct {
@@ -78,6 +79,7 @@ func main() {
 	flag.StringVar(&cfg.Warehouse, "warehouse", envOr("MO_ICEBERG_E2E_WAREHOUSE", "s3://mo-iceberg/warehouse"), "Iceberg warehouse location")
 	flag.StringVar(&cfg.DSN, "dsn", envOr("MO_ICEBERG_E2E_DSN", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false"), "MatrixOne MySQL DSN")
 	flag.StringVar(&cfg.ReportDir, "report-dir", envOr("MO_ICEBERG_REPORT_DIR", "test/iceberg/reports/e2e-local"), "report output directory")
+	flag.StringVar(&cfg.MappingBarrierDir, "mapping-barrier-dir", envOr("MO_ICEBERG_E2E_MAPPING_BARRIER_DIR", ""), "test-only CREATE mapping phase barrier directory")
 	flag.StringVar(&cfg.Namespace, "namespace", envOr("MO_ICEBERG_E2E_NAMESPACE", ""), "Iceberg namespace to create")
 	flag.StringVar(&cfg.Catalog, "mo-catalog", envOr("MO_ICEBERG_E2E_MO_CATALOG", ""), "MatrixOne Iceberg catalog name")
 	flag.StringVar(&cfg.Database, "mo-db", envOr("MO_ICEBERG_E2E_MO_DB", ""), "MatrixOne database name")
@@ -420,10 +422,9 @@ func (r *caseRunner) cleanupAccessLifecycle(_ context.Context, mapping, catalogN
 	return fmt.Errorf("%s", strings.Join(failures, "; "))
 }
 
-// concurrentCreateMappingAndDropCase holds the catalog row before admitting a
-// CREATE EXTERNAL TABLE and DROP ICEBERG CATALOG from independent sessions.
-// Releasing that gate makes their shared catalog-row lock the only winner
-// selection mechanism: exactly one DDL may commit, and the durable catalog and
+// concurrentCreateMappingAndDropCase pauses CREATE after its FOR UPDATE catalog
+// lookup and before mapping publication.  DROP must stay behind that row lock;
+// after CREATE is released, exactly one DDL commits and the durable catalog and
 // mapping counts prove that no orphan mapping was published.
 func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (result caseResult) {
 	catalogName := r.cfg.Catalog + "_concurrent"
@@ -469,30 +470,15 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	if err != nil || catalogID == 0 {
 		return fail([]string{"non-zero catalog id"}, catalogIDs, "concurrent catalog id was invalid")
 	}
-
-	gateConn, err := r.db.Conn(ctx)
-	if err != nil {
-		return fail(nil, nil, fmt.Sprintf("open catalog lock session: %v", err))
+	if r.cfg.MappingBarrierDir == "" {
+		return fail([]string{"MO_ICEBERG_E2E_MAPPING_BARRIER_DIR"}, nil, "CREATE mapping phase barrier is not configured")
 	}
-	defer gateConn.Close()
-	gateTx, err := gateConn.BeginTx(ctx, nil)
-	if err != nil {
-		return fail(nil, nil, fmt.Sprintf("begin catalog lock transaction: %v", err))
+	if err := resetMappingBarrier(r.cfg.MappingBarrierDir); err != nil {
+		return fail(nil, nil, fmt.Sprintf("reset CREATE mapping phase barrier: %v", err))
 	}
-	gateHeld := true
-	defer func() {
-		if gateHeld {
-			_ = gateTx.Rollback()
-		}
-	}()
-	lockCatalogSQL := fmt.Sprintf("select catalog_id from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d for update", catalogID)
-	sqls = append(sqls, lockCatalogSQL)
-	var lockedCatalogID uint64
-	if err = gateTx.QueryRowContext(ctx, lockCatalogSQL).Scan(&lockedCatalogID); err != nil {
-		return fail(nil, nil, fmt.Sprintf("lock concurrent catalog: %v", err))
-	}
-	if lockedCatalogID != catalogID {
-		return fail([]string{strconv.FormatUint(catalogID, 10)}, []string{strconv.FormatUint(lockedCatalogID, 10)}, "catalog lock selected an unexpected row")
+	defer func() { _ = resetMappingBarrier(r.cfg.MappingBarrierDir) }()
+	if err := os.WriteFile(filepath.Join(r.cfg.MappingBarrierDir, "create-arm"), []byte("armed\n"), 0o600); err != nil {
+		return fail(nil, nil, fmt.Sprintf("arm CREATE mapping phase barrier: %v", err))
 	}
 
 	createSQL := fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
@@ -508,36 +494,39 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		name string
 		err  error
 	}
-	ready := make(chan struct{}, 2)
-	start := make(chan struct{})
 	results := make(chan ddlResult, 2)
 	var workers sync.WaitGroup
-	for _, ddl := range []struct {
-		name string
-		sql  string
-	}{{name: "create", sql: createSQL}, {name: "drop", sql: dropSQL}} {
-		workers.Add(1)
-		go func(name, stmt string) {
-			defer workers.Done()
-			ready <- struct{}{}
-			<-start
-			_, err := r.db.ExecContext(ctx, stmt)
-			results <- ddlResult{name: name, err: err}
-		}(ddl.name, ddl.sql)
+	caseCtx, cancelCase := context.WithCancel(ctx)
+	defer cancelCase()
+	releaseCreate := func() error {
+		return os.WriteFile(filepath.Join(r.cfg.MappingBarrierDir, "create-release"), []byte("release\n"), 0o600)
 	}
-	<-ready
-	<-ready
-	close(start)
-	if err := gateTx.Commit(); err != nil {
-		// A failed commit may leave either terminal state; release the gate and
-		// join both workers before returning so a failed diagnostic case cannot
-		// leak concurrent DDL into the following case.
-		_ = gateTx.Rollback()
-		gateHeld = false
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := r.db.ExecContext(caseCtx, createSQL)
+		results <- ddlResult{name: "create", err: err}
+	}()
+	barrierCtx, cancelBarrier := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelBarrier()
+	if err := waitForMappingBarrier(barrierCtx, filepath.Join(r.cfg.MappingBarrierDir, "create-ready")); err != nil {
+		if releaseErr := releaseCreate(); releaseErr != nil {
+			cancelCase()
+		}
 		workers.Wait()
-		return fail(nil, nil, fmt.Sprintf("release concurrent catalog lock: %v", err))
+		return fail(nil, nil, fmt.Sprintf("CREATE did not reach the locked mapping phase: %v", err))
 	}
-	gateHeld = false
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := r.db.ExecContext(caseCtx, dropSQL)
+		results <- ddlResult{name: "drop", err: err}
+	}()
+	if err := releaseCreate(); err != nil {
+		cancelCase()
+		workers.Wait()
+		return fail(nil, nil, fmt.Sprintf("release CREATE mapping phase barrier: %v", err))
+	}
 	workers.Wait()
 	close(results)
 	resultByName := make(map[string]error, 2)
@@ -571,8 +560,41 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		sqls,
 		[]string{"exactly one DDL commits", "1\t1 or 0\t0"},
 		state,
-		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr)},
+		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr), "phase_barrier": "CREATE paused after FOR UPDATE catalog lookup"},
 	)
+}
+
+func resetMappingBarrier(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	for _, name := range []string{"create-arm", "create-ready", "create-release"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func waitForMappingBarrier(ctx context.Context, path string) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult {

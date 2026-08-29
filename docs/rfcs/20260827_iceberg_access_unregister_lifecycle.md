@@ -78,9 +78,15 @@ introduced.
 
 ## Compatibility, Security, and Operations
 
-The change adds a new optional SQL procedure and does not alter catalog table
-schemas, stored records, existing registration semantics, or ordinary drop
-semantics. Older clients continue to receive the previous dependency error until
+The change adds a new optional SQL procedure and preserves existing catalog
+records, registration semantics, and ordinary drop semantics. It also adds the
+`catalog_id_allocator(catalog_id)` index to `mo_iceberg_catalogs`: MatrixOne's
+storage-owned auto-increment allocator requires a catalog-ID-leading index even
+though account-local lookup remains keyed by `(account_id, catalog_id)`. The
+fresh-table DDL contains the index and the v4.0.6 tenant upgrade adds it with an
+index-definition check, so installed tenants receive the same allocator
+contract. This additive index neither changes catalog IDs nor remaps dependent
+metadata. Older clients continue to receive the previous dependency error until
 they issue the new procedure. Mixed-version routing is safe because the call is
 parsed and executed by the selected CN; deployment must not route this new call
 to a CN without the implementation.
