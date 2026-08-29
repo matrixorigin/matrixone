@@ -4670,6 +4670,34 @@ func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
 	require.False(t, unsupported.GetSorted())
 }
 
+func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	fixed := NewVec(types.T_int64.ToType())
+	for _, value := range []int64{3, 1, 1, 2} {
+		require.NoError(t, AppendFixed(fixed, value, false, mp))
+	}
+	fixed.InplaceSort()
+	require.Equal(t, []int64{1, 1, 2, 3}, MustFixedColNoTypeCheck[int64](fixed))
+	require.True(t, fixed.GetSorted())
+	fixed.Free(mp)
+
+	varlen := NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"c", "a", "a", "b"} {
+		require.NoError(t, AppendBytes(varlen, []byte(value), false, mp))
+	}
+	varlen.InplaceSort()
+	require.Equal(t,
+		[][]byte{[]byte("a"), []byte("a"), []byte("b"), []byte("c")},
+		InefficientMustBytesCol(varlen))
+	require.True(t, varlen.GetSorted())
+	varlen.Free(mp)
+
+	unsupported := NewVec(types.T_any.ToType())
+	unsupported.InplaceSort()
+	require.False(t, unsupported.GetSorted())
+}
+
 func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
