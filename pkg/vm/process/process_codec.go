@@ -71,6 +71,14 @@ func (proc *Process) BuildProcessInfo(
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
+		procInfo.PlanGenerationReused = proc.PlanGenerationReused()
+		stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+			uint32(proc.StringShuffleHashAlgorithm()),
+		)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.StringShuffleHashAlgorithm = uint32(stringShuffleHashAlgorithm)
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -224,6 +232,12 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+		value.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return nil, err
+	}
 	service := ""
 	if c.lockService != nil {
 		service = c.lockService.GetConfig().ServiceID
@@ -274,8 +288,10 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	proc.SetStringShuffleHashAlgorithm(stringShuffleHashAlgorithm)
 	if value.PlanSnapshotTs != nil {
 		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+		proc.SetPlanGenerationReused(value.PlanGenerationReused)
 	}
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)

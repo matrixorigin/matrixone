@@ -39,11 +39,9 @@
 # make proto-vendor
 #
 # To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 12.0, 13.0, or above)
+# 1. install CUDA toolkit (version 13.3 or above)
 # 2. install cuVS Go bindings with conda
-#  % git clone git@github.com:rapidsai/cuvs.git
-#  % cd cuvs
-#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
 #  % conda activate go
 # 3. compile matrixone
 #  % cd matrixone
@@ -408,9 +406,10 @@ ut: $(UT_PREREQUISITES)
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	# The race suite is split into light, exclusive, heavy, and plan shards.
-	# Keep the outer budget above the per-package timeout so an expanded main
-	# branch cannot be killed while later shards are still making progress.
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress.
 	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
@@ -418,6 +417,8 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+UT_SHARD ?= all
+export UT_SHARD
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1317,11 +1318,13 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
 static-check: config err-check
 	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

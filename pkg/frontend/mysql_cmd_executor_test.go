@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -2711,6 +2712,70 @@ func TestRebuildStaleCachedStatementsRemapsModeTwoQualifiedColumns(t *testing.T)
 	require.Equal(t, "dstmix", insert.ColumnNames[0].DbName())
 }
 
+func TestGetComputationWrapperRestoresCachedPlanGenerationSnapshot(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.planCache = newPlanCache(1)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	stmt := &trackedStatement{}
+	cachedPlan := &plan0.Plan{}
+	planTS := timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}
+	ses.cachePlanWithSnapshots(
+		input.getHash(),
+		[]tree.Statement{stmt},
+		[]*plan0.Plan{cachedPlan},
+		[]timestamp.Timestamp{planTS},
+	)
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = input
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	tcw := cws[0].(*TxnComputationWrapper)
+	require.Same(t, cachedPlan, tcw.Plan())
+	require.True(t, tcw.stmtBorrowed)
+	require.Equal(t, input.getHash(), tcw.cachedPlanSQL)
+	require.Same(t, cachedPlan, tcw.cachedPlanGeneration)
+	require.True(t, tcw.planGenerationReused)
+	gotTS, ok := tcw.PlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, planTS, gotTS)
+
+	tcw.Free()
+	require.Zero(t, stmt.freed)
+	ses.cleanCache()
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestCachedPlanReuseWaitsForPlanSnapshotProtocol(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	ses := &Session{planCache: newPlanCache(1)}
+	input := &UserInput{sql: "select 1"}
+	input.genHash()
+	ses.cachePlanWithSnapshots(
+		input.getHash(),
+		[]tree.Statement{&trackedStatement{}},
+		[]*plan0.Plan{{}},
+		[]timestamp.Timestamp{{PhysicalTime: 10}},
+		defines.MORPCVersion31,
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	// The cache entry was built under the previous protocol and is evicted
+	// rather than becoming reusable when the cluster gate advances.
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -4777,6 +4842,456 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	err := handleAnalyzeStmt(ses, outerExecCtx, &tree.AnalyzeStmt{})
 	require.Error(t, err)
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
+}
+
+type analyzeStatsRefresherFunc func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error)
+
+func (f analyzeStatsRefresherFunc) RefreshTableStats(
+	ctx context.Context, key pbstats.StatsInfoKey,
+) (*pbstats.StatsInfo, error) {
+	return f(ctx, key)
+}
+
+func TestAnalyzeTableOwnsPersistentStats(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		tableDef *plan0.TableDef
+		want     bool
+	}{
+		{name: "missing definition"},
+		{name: "ordinary", tableDef: &plan0.TableDef{TableType: catalog.SystemOrdinaryRel}, want: true},
+		{name: "legacy physical kind", tableDef: &plan0.TableDef{}, want: true},
+		{name: "index", tableDef: &plan0.TableDef{TableType: catalog.SystemIndexRel}, want: true},
+		{name: "materialized", tableDef: &plan0.TableDef{TableType: catalog.SystemMaterializedRel}, want: true},
+		{name: "cluster", tableDef: &plan0.TableDef{TableType: catalog.SystemClusterRel}, want: true},
+		{name: "partition", tableDef: &plan0.TableDef{TableType: catalog.SystemPartitionRel}, want: true},
+		{name: "view kind", tableDef: &plan0.TableDef{TableType: catalog.SystemViewRel}},
+		{name: "view definition", tableDef: &plan0.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			ViewSql:   &plan0.ViewDef{View: "select 1"},
+		}},
+		{name: "external", tableDef: &plan0.TableDef{TableType: catalog.SystemExternalRel}},
+		{name: "sequence", tableDef: &plan0.TableDef{TableType: catalog.SystemSequenceRel}},
+		{name: "removed source", tableDef: &plan0.TableDef{TableType: catalog.SystemSourceRel}},
+		{name: "temporary session table", tableDef: &plan0.TableDef{
+			TableType:   catalog.SystemOrdinaryRel,
+			IsTemporary: true,
+		}},
+		{name: "legacy temporary kind", tableDef: &plan0.TableDef{TableType: catalog.SystemTemporaryTable}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, analyzeTableOwnsPersistentStats(test.tableDef))
+		})
+	}
+}
+
+func TestAnalyzeStatsPublicationRequiresStatementOwnedTransaction(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		execCtx *ExecCtx
+		want    bool
+	}{
+		{name: "missing execution context"},
+		{name: "unknown transaction owner", execCtx: &ExecCtx{}},
+		{name: "statement-owned transaction", execCtx: &ExecCtx{txnOpt: FeTxnOption{
+			activeTxnAtStartKnown: true,
+		}}, want: true},
+		{name: "pre-existing user transaction", execCtx: &ExecCtx{txnOpt: FeTxnOption{
+			activeTxnAtStartKnown: true,
+			activeTxnAtStart:      true,
+		}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, analyzeStatsPublicationAllowed(test.execCtx))
+		})
+	}
+}
+
+func isolateOptimizerStatsTest(t *testing.T, sessions ...*Session) {
+	t.Helper()
+	service := "optimizer-stats-" + t.Name()
+	InitServerLevelVars(service)
+	previous := make([]string, len(sessions))
+	for i, ses := range sessions {
+		previous[i] = ses.GetService()
+		ses.feSessionImpl.service = service
+	}
+	t.Cleanup(func() {
+		for i, ses := range sessions {
+			ses.feSessionImpl.service = previous[i]
+		}
+		serverVarsMap.Delete(service)
+	})
+}
+
+func optimizerStatsTestPlan(tableIDs ...uint64) *plan0.Plan {
+	nodes := make([]*plan0.Node, 0, len(tableIDs))
+	for _, tableID := range tableIDs {
+		nodes = append(nodes, &plan0.Node{TableDef: &plan0.TableDef{TblId: tableID}})
+	}
+	return &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{Nodes: nodes}}}
+}
+
+func optimizerStatsVersionsForTest(
+	ses *Session,
+	tableIDs ...uint64,
+) map[optimizerStatsTableKey]uint64 {
+	keys := make([]optimizerStatsTableKey, 0, len(tableIDs))
+	for _, tableID := range tableIDs {
+		keys = append(keys, ses.optimizerStatsKey(tableID))
+	}
+	return optimizerStatsVersionsForKeysTest(ses, keys...)
+
+}
+
+func optimizerStatsVersionsForKeysTest(
+	ses *Session,
+	keys ...optimizerStatsTableKey,
+) map[optimizerStatsTableKey]uint64 {
+	versions := make(map[optimizerStatsTableKey]uint64, len(keys))
+	for _, key := range keys {
+		versions[key] = currentOptimizerStatsVersion(ses.GetService(), key)
+	}
+	return versions
+}
+
+func cacheOptimizerPlanForTest(ses *Session, sql string, tableIDs ...uint64) {
+	keys := make([]optimizerStatsTableKey, 0, len(tableIDs))
+	for _, tableID := range tableIDs {
+		keys = append(keys, ses.optimizerStatsKey(tableID))
+	}
+	cacheOptimizerPlanForKeysTest(ses, sql, keys...)
+}
+
+func cacheOptimizerPlanForKeysTest(ses *Session, sql string, keys ...optimizerStatsTableKey) {
+	tableIDs := make([]uint64, 0, len(keys))
+	for _, key := range keys {
+		tableIDs = append(tableIDs, key.tableID)
+	}
+	ses.cachePlanWithStatsVersions(
+		sql,
+		[]tree.Statement{&tree.Select{}},
+		[]*plan0.Plan{optimizerStatsTestPlan(tableIDs...)},
+		optimizerStatsVersionsForKeysTest(ses, keys...),
+	)
+}
+
+func cacheOptimizerStatsForTest(t *testing.T, ses *Session, tableID uint64, stats *pbstats.StatsInfo) uint64 {
+	return cacheOptimizerStatsForKeyTest(t, ses, ses.optimizerStatsKey(tableID), stats)
+}
+
+func cacheOptimizerStatsForKeyTest(
+	t *testing.T,
+	ses *Session,
+	key optimizerStatsTableKey,
+	stats *pbstats.StatsInfo,
+) uint64 {
+	t.Helper()
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	require.True(t, ses.cacheStatsIfCurrent(key, version, stats))
+	return version
+}
+
+func TestCompilerContextRecordsTheStatsVersionActuallyRead(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+	ses.SetAccountId(7)
+
+	const tableID = uint64(42)
+	wrapper := InitTxnComputationWrapper(ses, &tree.Select{}, execCtx.proc)
+	tcc := ses.GetTxnCompileCtx()
+	tcc.SetExecCtx(execCtx)
+	tcc.tcw = wrapper
+
+	key := tcc.optimizerStatsKey(&plan0.ObjectRef{
+		Obj:        int64(tableID),
+		SchemaName: catalog.MO_SYSTEM,
+		ObjName:    catalog.MO_STATEMENT,
+	}, nil)
+	require.Equal(t, optimizerStatsTableKey{
+		accountID: catalog.System_Account,
+		tableID:   tableID,
+	}, key)
+	_, firstVersion := ses.getStatsCacheWithVersion(key)
+	require.NotContains(t, ses.statsCacheVersions, tableID,
+		"a failed or uncached stats read must not grow session version metadata")
+	_, _, recordedVersion := tcc.getStatsCacheVersion(key)
+	require.Equal(t, firstVersion, recordedVersion)
+	require.Equal(t, firstVersion, wrapper.optimizerStatsVersions[key])
+
+	advanceOptimizerStatsVersion(ses.GetService(), key)
+	_, _, currentVersion := tcc.getStatsCacheVersion(key)
+	require.NotEqual(t, firstVersion, currentVersion)
+	require.Equal(t, firstVersion, wrapper.optimizerStatsVersions[key],
+		"a plan that read both sides of publication must retain its stale dependency and be rejected")
+}
+
+func TestSessionStatsCacheDoesNotAliasSameTableIDAcrossAccounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+
+	const tableID = uint64(42)
+	tenantKey := optimizerStatsTableKey{accountID: 7, tableID: tableID}
+	systemKey := optimizerStatsTableKey{accountID: catalog.System_Account, tableID: tableID}
+	tenantStats := plan.NewStatsInfo()
+	tenantStats.TableCnt = 7
+	systemStats := plan.NewStatsInfo()
+	systemStats.TableCnt = 70
+
+	tenantVersion := currentOptimizerStatsVersion(ses.GetService(), tenantKey)
+	require.True(t, ses.cacheStatsIfCurrent(tenantKey, tenantVersion, tenantStats))
+	cache, _ := ses.getStatsCacheWithVersion(tenantKey)
+	wrapper := cache.Get(tableID)
+	require.Same(t, tenantStats, wrapper.GetStats())
+
+	cache, systemVersion := ses.getStatsCacheWithVersion(systemKey)
+	wrapper = cache.Get(tableID)
+	require.False(t, wrapper.Exists(),
+		"the physical owner is part of the cache identity")
+	require.True(t, ses.cacheStatsIfCurrent(systemKey, systemVersion, systemStats))
+	wrapper = cache.Get(tableID)
+	require.Same(t, systemStats, wrapper.GetStats())
+
+	cache, _ = ses.getStatsCacheWithVersion(tenantKey)
+	wrapper = cache.Get(tableID)
+	require.False(t, wrapper.Exists(),
+		"switching back must not expose statistics from the system account")
+}
+
+func TestOptimizerStatsVersionsCompactWithoutRevalidatingOldEntries(t *testing.T) {
+	vars := &ServerLevelVariables{
+		optimizerStatsVersions: make(map[optimizerStatsTableKey]uint64),
+	}
+	first := optimizerStatsTableKey{accountID: 1, tableID: 10}
+	second := optimizerStatsTableKey{accountID: 1, tableID: 20}
+	third := optimizerStatsTableKey{accountID: 1, tableID: 30}
+
+	firstVersion := advanceOptimizerStatsVersionLocked(vars, first, 2)
+	secondVersion := advanceOptimizerStatsVersionLocked(vars, second, 2)
+	require.Equal(t, uint64(1), firstVersion)
+	require.Equal(t, uint64(2), secondVersion)
+
+	thirdVersion := advanceOptimizerStatsVersionLocked(vars, third, 2)
+	require.Equal(t, uint64(4), thirdVersion)
+	require.Len(t, vars.optimizerStatsVersions, 1)
+	require.Equal(t, uint64(3), currentOptimizerStatsVersionLocked(vars, first))
+	require.Equal(t, uint64(3), currentOptimizerStatsVersionLocked(vars, second))
+	require.NotEqual(t, firstVersion, currentOptimizerStatsVersionLocked(vars, first))
+	require.NotEqual(t, secondVersion, currentOptimizerStatsVersionLocked(vars, second))
+}
+
+func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	otherSes, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	otherTenantSes, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	crossAccountSes, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses, otherSes, otherTenantSes, crossAccountSes)
+	otherTenantSes.SetAccountId(7)
+	crossAccountSes.SetAccountId(7)
+
+	const (
+		tableID      = uint64(42)
+		otherTableID = uint64(84)
+	)
+	key := pbstats.StatsInfoKey{
+		AccId:      catalog.System_Account,
+		DatabaseID: 7,
+		TableID:    tableID,
+		DbName:     "db",
+		TableName:  "events",
+	}
+	oldStats := plan.NewStatsInfo()
+	oldStats.NdvMap["url"] = 1
+	otherStats := plan.NewStatsInfo()
+	otherStats.NdvMap["id"] = 84
+	oldVersion := cacheOptimizerStatsForTest(t, otherSes, tableID, oldStats)
+	cacheOptimizerStatsForTest(t, otherSes, otherTableID, otherStats)
+	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
+	cacheOptimizerStatsForTest(t, otherTenantSes, tableID, oldStats)
+	physicalKey := optimizerStatsTableKey{accountID: catalog.System_Account, tableID: tableID}
+	crossAccountOldVersion := cacheOptimizerStatsForKeyTest(t, crossAccountSes, physicalKey, oldStats)
+
+	dependentPlan := optimizerStatsTestPlan(tableID)
+	compileVersions := optimizerStatsVersionsForTest(otherSes, tableID)
+	cacheOptimizerPlanForTest(otherSes, "select url from events", tableID)
+	cacheOptimizerPlanForTest(otherSes, "select id from other_table", otherTableID)
+	cacheOptimizerPlanForTest(otherTenantSes, "select url from tenant_events", tableID)
+	cacheOptimizerPlanForKeysTest(crossAccountSes, "select url from system.statement_info", physicalKey)
+
+	freshStats := plan.NewStatsInfo()
+	freshStats.AccurateObjectNumber = 8
+	freshStats.NdvMap["url"] = 1_000_000
+	var gotKey pbstats.StatsInfoKey
+	refresher := analyzeStatsRefresherFunc(func(_ context.Context, key pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+		gotKey = key
+		return freshStats, nil
+	})
+
+	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher))
+	require.Equal(t, key, gotKey)
+	cache, _ := ses.getStatsCacheWithVersion(physicalKey)
+	wrapper := cache.Get(tableID)
+	require.Same(t, freshStats, wrapper.GetStats())
+	otherSes.cachePlanWithStatsVersions("compiled before analyze completed",
+		[]tree.Statement{&tree.Select{}}, []*plan0.Plan{dependentPlan}, compileVersions)
+	require.Nil(t, otherSes.getCachedPlan("compiled before analyze completed"),
+		"a plan compiled across the publication boundary must not enter the cache")
+	require.Nil(t, otherSes.getCachedPlan("select url from events"))
+	require.NotNil(t, otherSes.getCachedPlan("select id from other_table"),
+		"an unrelated table publication must not flush the session plan cache")
+	require.NotNil(t, otherTenantSes.getCachedPlan("select url from tenant_events"),
+		"the same table ID in another account must keep its plan")
+	require.Nil(t, crossAccountSes.getCachedPlan("select url from system.statement_info"),
+		"a tenant plan must validate the system account generation that owns its statistics")
+	require.False(t, otherSes.cacheStatsIfCurrent(otherSes.optimizerStatsKey(tableID), oldVersion, oldStats),
+		"a stats read started before publication must not repopulate the table entry")
+	require.False(t, crossAccountSes.cacheStatsIfCurrent(physicalKey, crossAccountOldVersion, oldStats),
+		"a cross-account stats read must not repopulate the old physical generation")
+	otherCache, currentVersion := otherSes.getStatsCacheWithVersion(otherSes.optimizerStatsKey(tableID))
+	otherWrapper := otherCache.Get(tableID)
+	require.False(t, otherWrapper.Exists())
+	otherTableWrapper := otherCache.Get(otherTableID)
+	require.Same(t, otherStats, otherTableWrapper.GetStats(),
+		"invalidating one table must retain unrelated statistics")
+	require.True(t, otherSes.cacheStatsIfCurrent(
+		otherSes.optimizerStatsKey(tableID), currentVersion, freshStats))
+	currentWrapper := otherCache.Get(tableID)
+	require.Same(t, freshStats, currentWrapper.GetStats())
+}
+
+func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+
+	const tableID = uint64(42)
+	key := pbstats.StatsInfoKey{TableID: tableID, DbName: "db", TableName: "events"}
+	oldStats := plan.NewStatsInfo()
+	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
+	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
+	wantErr := moerr.NewInternalError(execCtx.reqCtx, "refresh failed")
+	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+		return nil, wantErr
+	})
+
+	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
+	require.ErrorIs(t, err, wantErr)
+	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
+	wrapper := cache.Get(tableID)
+	require.Same(t, oldStats, wrapper.GetStats())
+	require.NotNil(t, ses.getCachedPlan("select url from events"))
+
+	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
+	admission := getOptimizerStatsVars(ses.GetService()).
+		optimizerStatsPublish[optimizerStatsPublisherStripe(tableKey)]
+	select {
+	case admission <- struct{}{}:
+		<-admission
+	default:
+		t.Fatal("a failed refresh leaked same-table publication admission")
+	}
+	freshStats := plan.NewStatsInfo()
+	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key,
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+			return freshStats, nil
+		})), "a failed refresh must release same-table publication admission")
+}
+
+func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, ses)
+
+	const tableID = uint64(42)
+	key := pbstats.StatsInfoKey{TableID: tableID, DbName: "db", TableName: "events"}
+	oldStats := plan.NewStatsInfo()
+	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
+	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
+	version := currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
+	clock := currentOptimizerStatsClock(ses.GetService())
+	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+		return nil, nil
+	})
+
+	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
+	require.Error(t, err)
+	require.Equal(t, version,
+		currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID)))
+	require.Equal(t, clock, currentOptimizerStatsClock(ses.GetService()))
+	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
+	wrapper := cache.Get(tableID)
+	require.Same(t, oldStats, wrapper.GetStats())
+	require.NotNil(t, ses.getCachedPlan("select url from events"))
+}
+
+func TestPublishAnalyzeTableStatsSerializesAndCancelsAdmission(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	firstSes, firstExecCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	secondSes, secondExecCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	isolateOptimizerStatsTest(t, firstSes, secondSes)
+
+	key := pbstats.StatsInfoKey{
+		AccId: catalog.System_Account, TableID: 42, DbName: "db", TableName: "events",
+	}
+	entered := make(chan struct{})
+	unblock := make(chan struct{}, 1)
+	releaseFirst := func() {
+		select {
+		case unblock <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(releaseFirst)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- publishAnalyzeTableStats(firstSes, firstExecCtx.reqCtx, key,
+			analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+				close(entered)
+				<-unblock
+				return plan.NewStatsInfo(), nil
+			}))
+	}()
+	<-entered
+
+	// A publication for a different table must not queue behind this table.
+	otherKey := key
+	otherKey.TableID = 43
+	otherKey.TableName = "other_events"
+	var otherCalled atomic.Bool
+	require.NoError(t, publishAnalyzeTableStats(secondSes, secondExecCtx.reqCtx, otherKey,
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+			otherCalled.Store(true)
+			return plan.NewStatsInfo(), nil
+		})))
+	require.True(t, otherCalled.Load())
+
+	secondCtx, cancel := context.WithCancel(secondExecCtx.reqCtx)
+	cancel()
+	var secondCalled atomic.Bool
+	err := publishAnalyzeTableStats(secondSes, secondCtx, key,
+		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+			secondCalled.Store(true)
+			return plan.NewStatsInfo(), nil
+		}))
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, secondCalled.Load())
+
+	releaseFirst()
+	select {
+	case err = <-firstDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("first statistics publication did not finish")
+	}
 }
 
 func TestSetExecCtxClearsPreviousStatementViews(t *testing.T) {

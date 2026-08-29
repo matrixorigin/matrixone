@@ -302,12 +302,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
+		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		VectorIndexScan:        DeepCopyVectorIndexScan(node.VectorIndexScan),
 		OriginViews:            slices.Clone(node.OriginViews),
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		WindowIdx:              node.WindowIdx,
-		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		RecursiveCte:           node.RecursiveCte,
 		ApplyType:              node.ApplyType,
 		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
@@ -324,9 +324,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterBuildList),
 		IfInsertFromUnique: node.IfInsertFromUnique,
-		// Join compilation relies on these message headers to recover the
-		// JoinMap tag; dropping them makes the copied plan panic with
-		// "wrong joinmap tag".
+		// Runtime execution plans are deep-copied before prepared parameters
+		// are specialized.  Join compilation relies on these message headers
+		// to recover the JoinMap tag; dropping them makes the copied plan panic
+		// with "wrong joinmap tag".
 		SendMsgList: slices.Clone(node.SendMsgList),
 		RecvMsgList: slices.Clone(node.RecvMsgList),
 	}
@@ -1073,14 +1074,15 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:         expr.Typ,
-		Ndv:         expr.Ndv,
-		Selectivity: expr.Selectivity,
+		Typ:             expr.Typ,
+		Ndv:             expr.Ndv,
+		Selectivity:     expr.Selectivity,
+		PreparedNumeric: copyPreparedNumericMetadata(expr.PreparedNumeric),
 	}
-	// Negative AuxId values are planner-local memo identities for volatile
-	// expressions that an equivalent predicate expansion must evaluate once.
 	// Positive AuxId values belong to later execution/zonemap numbering and
-	// intentionally remain reset across a semantic deep copy.
+	// intentionally remain reset across a semantic deep copy.  Prepared numeric
+	// fallback provenance is copied through its sparse plan metadata above; it
+	// must not be encoded in AuxId because negative ids are executor memo keys.
 	if expr.AuxId < 0 {
 		newExpr.AuxId = expr.AuxId
 	}

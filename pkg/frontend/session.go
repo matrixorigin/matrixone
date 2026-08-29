@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -44,7 +45,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -76,6 +79,15 @@ func currentProtocolVersion(proc *process.Process) int64 {
 		return defines.MORPCVersion4
 	}
 	return version
+}
+
+// reusablePlanGenerationSupported reports whether every live service in the
+// rollout understands the logical-plan generation snapshot carried by remote
+// pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest
+// live service, so cross-transaction plan reuse must remain disabled until the
+// version 32 wire contract is active cluster-wide.
+func reusablePlanGenerationSupported(proc *process.Process) bool {
+	return currentProtocolVersion(proc) >= defines.MORPCVersion32
 }
 
 func init() {
@@ -284,8 +296,10 @@ type Session struct {
 
 	planCache *planCache
 
-	statsCache   *plan2.StatsCache
-	seqCurValues map[uint64]string
+	statsCacheMu       sync.Mutex
+	statsCache         *plan2.StatsCache
+	statsCacheVersions map[uint64]optimizerStatsCacheTag
+	seqCurValues       map[uint64]string
 
 	/*
 		CORNER CASE:
@@ -797,7 +811,83 @@ func (ses *Session) GetProc() *process.Process {
 }
 
 func (ses *Session) GetStatsCache() *plan2.StatsCache {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
 	return ses.statsCache
+}
+
+func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
+	return optimizerStatsTableKey{
+		accountID: ses.GetAccountId(),
+		tableID:   tableID,
+	}
+}
+
+type optimizerStatsCacheTag struct {
+	key     optimizerStatsTableKey
+	version uint64
+}
+
+func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	wrapper := ses.statsCache.Get(key.tableID)
+	tag, tagged := ses.statsCacheVersions[key.tableID]
+	if !wrapper.Exists() {
+		delete(ses.statsCacheVersions, key.tableID)
+	} else if !tagged && version == 0 {
+		// Accept caches created before version tracking only in the initial
+		// generation. Once any publication has happened, an untagged entry is
+		// conservatively stale.
+		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	} else if tag.key != key || tag.version != version {
+		ses.statsCache.Delete(key.tableID)
+		delete(ses.statsCacheVersions, key.tableID)
+	}
+	return ses.statsCache, version
+}
+
+func (ses *Session) cacheStatsIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) bool {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
+		return false
+	}
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	return true
+}
+
+func (ses *Session) cachePublishedStats(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+}
+
+func (ses *Session) initStatsCacheLocked() {
+	if ses.statsCache == nil {
+		ses.statsCache = plan2.NewStatsCache()
+	}
+	if ses.statsCacheVersions == nil {
+		ses.statsCacheVersions = make(map[uint64]optimizerStatsCacheTag)
+	}
 }
 
 func (ses *Session) GetSessionStart() time.Time {
@@ -1161,7 +1251,6 @@ func NewSession(
 	var txnOp TxnOperator
 	var err error
 	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
-
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
@@ -1184,8 +1273,9 @@ func NewSession(
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
 
-		timestampMap: map[TS]time.Time{},
-		statsCache:   plan2.NewStatsCache(),
+		timestampMap:       map[TS]time.Time{},
+		statsCache:         plan2.NewStatsCache(),
+		statsCacheVersions: make(map[uint64]optimizerStatsCacheTag),
 	}
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
@@ -1428,7 +1518,51 @@ func (ses *Session) IsBackgroundSession() bool {
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	statsVersions map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		planStatsVersionsFromAggregate(len(plans), statsVersions), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS,
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
+		return
+	}
+	statsVersions, versionsConsistent := aggregatePlanStatsVersions(planStatsVersions)
+	if !versionsConsistent || !optimizerStatsVersionsCurrent(ses.GetService(), statsVersions) {
+		// The plan crossed a statistics publication boundary while compiling.
+		// It may execute, but must not enter the cache with stale dependencies.
+		freeStmts(stmts)
 		return
 	}
 	ses.mu.Lock()
@@ -1441,7 +1575,8 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cache(sql, stmts, plans, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -1454,7 +1589,8 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 		return nil
 	}
 	cached := ses.planCache.get(sql)
-	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+	if cached != nil && (cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions)) {
 		ses.planCache.remove(sql)
 		return nil
 	}
@@ -1470,7 +1606,18 @@ func (ses *Session) isCached(sql string) bool {
 	if ses.planCache == nil {
 		return false
 	}
-	return ses.planCache.isCached(sql)
+	if !ses.planCache.isCached(sql) {
+		return false
+	}
+	cached := ses.planCache.cachePool[sql].Value.(*cachedPlan)
+	if cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions) {
+		// isCached is also queried while wrappers still borrow the cached AST at
+		// the end of execution. Report staleness without releasing that owner;
+		// the next getCachedPlan lookup removes it after all borrowers are gone.
+		return false
+	}
+	return true
 }
 
 func (ses *Session) removeCachedPlan(sql string) {
@@ -1481,6 +1628,41 @@ func (ses *Session) removeCachedPlan(sql string) {
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.remove(sql)
+	}
+}
+
+func (ses *Session) updateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+	statsVersions map[optimizerStatsTableKey]uint64,
+) bool {
+	if len(sql) == 0 {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
+	return ses.planCache.updatePlanGeneration(
+		sql, index, expectedPlan, newPlan, planSnapshotTS, statsVersions)
+}
+
+func (ses *Session) invalidateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidatePlanGeneration(sql, index, expectedPlan)
 	}
 }
 
@@ -1594,6 +1776,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 	}
 	return be
 }
@@ -1974,6 +2157,64 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
+// advanceAuthenticationSnapshot installs a session minimum timestamp that is
+// strictly beyond the clock uncertainty window captured for this login. The
+// authentication background transaction inherits this timestamp and waits for
+// the local logtail before reading security catalog state.
+func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return moerr.NewInternalError(ctx, "missing service runtime for authentication snapshot")
+	}
+	txnClock := rt.Clock()
+	if txnClock == nil {
+		return moerr.NewInternalError(ctx, "missing transaction clock for authentication snapshot")
+	}
+	if txnClock.MaxOffset() < 0 {
+		return moerr.NewInternalError(ctx, "negative transaction clock offset for authentication snapshot")
+	}
+
+	_, upperBound := txnClock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return moerr.NewInternalError(ctx, "authentication snapshot timestamp overflow")
+	}
+
+	// HLC ordering compares the logical component when physical times are equal.
+	// Moving to the next physical tick dominates every logical timestamp at the
+	// uncertainty upper bound, including a remote commit at that exact tick.
+	ses.updateLastCommitTS(timestamp.Timestamp{
+		PhysicalTime: upperBound.PhysicalTime + 1,
+	})
+	return nil
+}
+
+// prepareAuthenticationSnapshot installs the authentication fence and waits
+// for the local logtail before creating the user transaction. Waiting outside
+// TxnClient.New keeps the uncertainty interval from consuming a user-transaction
+// admission slot. The transaction still inherits the same session minimum, so
+// the default sacrificing-freshness path confirms it immediately and preserves
+// the snapshot contract. Freshness-preserving mode retains its existing wait for
+// the later of the current clock and this minimum.
+func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
+	if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
+	}
+	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+	if err != nil {
+		return err
+	}
+	if applied.Less(minimum) {
+		return moerr.NewInternalError(ctx, "authentication snapshot did not reach the required timestamp")
+	}
+	return nil
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2020,8 +2261,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
+	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+		return nil, err
+	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
+		fromRealUser:               true,
+		cancelTxnCreateWithRequest: true,
+	})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
@@ -2118,21 +2365,21 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//the default_role in the mo_user table.
-	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
+	// The catalog value may be NULL or stale after a prior REVOKE. Do not use
+	// it as an active role until the implicit-login path validates the grant.
+	defaultRoleID, defaultRoleIDValid, err := readStoredDefaultRoleID(tenantCtx, userRsset[0])
 	if err != nil {
 		return nil, err
 	}
 
 	tenant.SetUserID(uint32(userID))
-	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	ses.timestampMap[TSCheckUserEnd] = time.Now()
 	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
 		1.get the default_role of the user in mo_user
+		2.validate that the role is still granted, otherwise use the public grant
 
 		login case 2: tenant:user:role
 		1.check the role has been granted to the user
@@ -2182,21 +2429,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
-		//the get name of default_role from mo_role
-		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
+		ses.Debugf(tenantCtx, "validate implicit default role of user %s.", tenant)
+		defaultRoleID, defaultRole, err = resolveImplicitDefaultRole(
+			tenantCtx, bh, userID, defaultRoleID, defaultRoleIDValid)
 		if err != nil {
 			return nil, err
 		}
-		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
-		}
-
-		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 		tenant.SetDefaultRole(defaultRole)
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
@@ -2358,6 +2597,72 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
+}
+
+func readStoredDefaultRoleID(ctx context.Context, userResult ExecResult) (int64, bool, error) {
+	isNull, err := userResult.ColumnIsNull(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if isNull {
+		return 0, false, nil
+	}
+
+	roleID, err := userResult.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if roleID < 0 || roleID > int64(^uint32(0)) {
+		return 0, false, nil
+	}
+	return roleID, true, nil
+}
+
+// resolveImplicitDefaultRole returns a role that is currently granted to the
+// user. A stale, NULL, invalid, or missing catalog default falls back to the
+// user's public grant; it is never activated directly from mo_user metadata.
+func resolveImplicitDefaultRole(
+	ctx context.Context,
+	bh BackgroundExec,
+	userID int64,
+	storedRoleID int64,
+	storedRoleIDValid bool,
+) (int64, string, error) {
+	roleID := storedRoleID
+	if !storedRoleIDValid {
+		roleID = publicRoleID
+	}
+
+	for {
+		sql := getSqlForRoleNameOfUserRole(userID, roleID)
+		rsset, err := executeSQLInBackgroundSession(ctx, bh, sql)
+		if err != nil {
+			return 0, "", err
+		}
+		if execResultArrayHasData(rsset) {
+			roleNameIsNull, err := rsset[0].ColumnIsNull(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleName, err := rsset[0].GetString(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleNameValid := !roleNameIsNull && roleName != ""
+			if roleID == publicRoleID {
+				roleNameValid = roleNameValid && isPublicRole(roleName)
+			}
+			if roleNameValid {
+				return roleID, roleName, nil
+			}
+		}
+
+		if roleID == publicRoleID {
+			return 0, "", moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID)
+		}
+		roleID = publicRoleID
+	}
 }
 
 func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {

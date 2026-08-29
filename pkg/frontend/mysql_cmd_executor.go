@@ -55,6 +55,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -1580,6 +1582,14 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
+					// Clearing the cache is also the explicit synchronization point
+					// for externally changed role membership. Refresh it now, outside
+					// the caller's transaction snapshot, instead of allowing the next
+					// authorization check to repopulate the cache from stale state.
+					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
+					if err != nil {
+						return err
+					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -1587,13 +1597,16 @@ func doSetVar(
 				}
 			}
 		} else if assign.System && name == "enable_privilege_cache" {
-			ok, err = valueIsBoolTrue(value)
+			_, err = valueIsBoolTrue(value)
 			if err != nil {
 				return err
 			}
 
-			//disable privilege cache. clean the cache.
-			if !ok {
+			// Every session cache-mode assignment is a synchronization boundary.
+			// In particular, enabling must discard decisions that may have been
+			// produced while caching was disabled before a concurrent REVOKE.
+			// SET GLOBAL does not change this session's cache mode.
+			if !assign.Global {
 				cache := ses.GetPrivilegeCache()
 				if cache != nil {
 					cache.invalidate()
@@ -2073,9 +2086,122 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		if err != nil {
 			return err
 		}
+		if err := refreshAnalyzeTableStats(ses, execCtx, entry); err != nil {
+			return err
+		}
 		results = append(results, result)
 	}
 	execCtx.results = results
+	return nil
+}
+
+func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.AnalyzeTableEntry) error {
+	// The derived ANALYZE query observes the transaction workspace. The engine
+	// statistics cache is process-global and observes only committed catalog and
+	// object state, so publishing while a user transaction was already active
+	// would mix two visibility domains. Preserve the legacy derived result and
+	// leave global publication to an ANALYZE statement outside that transaction.
+	if !analyzeStatsPublicationAllowed(execCtx) {
+		return nil
+	}
+	ctx := execCtx.reqCtx
+	if entry == nil || entry.Table == nil || entry.Table.AtTsExpr != nil {
+		return nil
+	}
+
+	refresher, ok := getPu(ses.GetService()).StorageEngine.(engine.StatsRefresher)
+	if !ok {
+		// Engines without persistent optimizer statistics retain the legacy
+		// ANALYZE result behavior.
+		return nil
+	}
+
+	tcc := ses.GetTxnCompileCtx()
+	dbName := resolveAnalyzeDatabase(tcc, entry.Table)
+	if dbName == "" {
+		return moerr.NewNoDB(ctx)
+	}
+	obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
+	if err != nil {
+		return err
+	}
+	if obj == nil || tableDef == nil {
+		return moerr.NewNoSuchTable(ctx, dbName, string(entry.Table.Name()))
+	}
+	// Historical snapshots and publication-backed tables do not own the current
+	// local engine statistics generation. Non-physical relations keep the
+	// legacy derived-query result without asking disttae to subscribe to them.
+	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
+		return nil
+	}
+
+	accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
+	databaseID := tableDef.DbId
+	if databaseID == 0 {
+		databaseID, err = tcc.GetDatabaseId(obj.SchemaName, nil)
+		if err != nil {
+			return err
+		}
+	}
+	key := pbstats.StatsInfoKey{
+		AccId:      accountID,
+		DatabaseID: databaseID,
+		TableID:    uint64(obj.Obj),
+		DbName:     obj.SchemaName,
+		TableName:  obj.ObjName,
+	}
+	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+}
+
+func analyzeStatsPublicationAllowed(execCtx *ExecCtx) bool {
+	return execCtx != nil &&
+		execCtx.txnOpt.activeTxnAtStartKnown &&
+		!execCtx.txnOpt.activeTxnAtStart
+}
+
+func analyzeTableOwnsPersistentStats(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.IsTemporary || tableDef.ViewSql != nil {
+		return false
+	}
+	switch tableDef.TableType {
+	case "",
+		catalog.SystemOrdinaryRel,
+		catalog.SystemIndexRel,
+		catalog.SystemMaterializedRel,
+		catalog.SystemClusterRel,
+		catalog.SystemPartitionRel:
+		return true
+	default:
+		return false
+	}
+}
+
+func publishAnalyzeTableStats(
+	ses *Session,
+	ctx context.Context,
+	key pbstats.StatsInfoKey,
+	refresher engine.StatsRefresher,
+) error {
+	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
+	release, err := acquireOptimizerStatsPublisher(ctx, ses.GetService(), tableKey)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	stats, err := refresher.RefreshTableStats(ctx, key)
+	if err != nil {
+		return err
+	}
+	if stats == nil {
+		return moerr.NewInternalErrorf(ctx, "ANALYZE TABLE did not publish statistics for %s.%s", key.DbName, key.TableName)
+	}
+
+	// The engine cache swap above is the data publication boundary. Advancing
+	// this table's version invalidates only dependent session entries; unrelated
+	// table statistics and plans remain reusable.
+	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
+	ses.cachePublishedStats(tableKey, version, stats)
 	return nil
 }
 
@@ -2738,7 +2864,7 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, &prepareTs, false, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2769,10 +2895,15 @@ func createPrepareStmtInSession(
 		protocolVersion:    protocolVersion,
 		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
-		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
-		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
+			prepareControl.Plan),
+		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
+			prepareControl.Plan),
+		directResultParamPositionsSet: true,
+		hasPaginationParams:           plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:              len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
+		getFromSendLongData:           make(map[int]struct{}),
+		schedulingSQLMode:             schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
@@ -3951,6 +4082,13 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
+	if !reusablePlanGenerationSupported(ses.proc) {
+		// Evict eagerly while the rollout gate is closed. Besides releasing the
+		// owned AST, this prevents an entry from surviving an observed protocol
+		// rollback and becoming eligible again after a later upgrade.
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
 	cached := ses.getCachedPlan(input.getHash())
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
@@ -4024,6 +4162,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// to the parser pool while the cache still owns or already freed it.
 			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
+			tcw.cachedPlanSQL = execCtx.input.getHash()
+			tcw.cachedPlanIndex = i
+			tcw.cachedPlanGeneration = cached.plans[i]
+			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
+			tcw.planGenerationReused = true
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -5244,9 +5387,8 @@ func executeStmt(ses *Session,
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
 
-			// Sync the latest plan after Run (it may have changed due to retry)
 			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				txnCw.plan = c.GetPlan()
+				txnCw.completeCompileExecution(c, err)
 			}
 
 			// Serialize the execution plan as json
@@ -5314,6 +5456,35 @@ func countUpdateChangedRows(ses *Session) bool {
 	}
 	resper, ok := ses.GetResponser().(*MysqlResp)
 	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
+}
+
+// rollbackWholeTxnOnPreExecutionError applies mo_rollback_txn_on_error to a
+// failure that never reached the executor.
+//
+// A parse error or a privilege rejection returns from doComQuery long before
+// finishTxnFunc, which is where the setting is otherwise honoured. Without this
+// the setting would quietly mean "any error the executor produced", exempting
+// the ones that never got that far: with it on,
+// `BEGIN; INSERT ...; selec 1; COMMIT;` would still COMMIT the row.
+//
+// It is called from the defer every COM_QUERY error path converges on. A
+// statement that already rolled back has left no active transaction, so the
+// guard below makes this a no-op for the errors finishTxnFunc handled, rather
+// than rolling back twice.
+func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
+	if !sessionRollsBackTxnOnError(ses, retErr) {
+		return
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
+		return
+	}
+	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
+		// The statement's own error is what the client asked about; a failure
+		// to roll back is logged, not substituted for it.
+		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
+			zap.Error(rbErr), zap.Error(retErr))
+	}
 }
 
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
@@ -5410,9 +5581,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// is reseeded from the session on the next query, so the session value drives
 	// the next statement; the proc is updated too for completeness.
 	defer func() {
-		if retErr != nil {
-			markRowCountFailed(ses, proc)
+		if retErr == nil {
+			return
 		}
+		markRowCountFailed(ses, proc)
+
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
 	}()
 
 	if ses.GetTenantInfo() != nil {
@@ -5517,7 +5691,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := !stagedSQLMode && input.canUsePlanCache()
+	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -5707,31 +5882,53 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	if !canCache {
+		return nil
+	}
+	cacheKey := input.getHash()
+	if ses.isCached(cacheKey) {
+		return nil
+	}
+	for _, cw := range cws {
+		if tcw, ok := cw.(*TxnComputationWrapper); ok && tcw.cachedPlanSQL == cacheKey {
+			// A publication or failed generation replacement made the entry stale
+			// while these wrappers still borrowed its AST. Do not republish the
+			// just-executed old plan without rebuilding its statistics dependencies.
+			// Wrapper cleanup runs first; the next lookup then evicts the stale owner.
+			return nil
+		}
+	}
+
 	cacheProtocolVersion := currentProtocolVersion(proc)
-	if canCache && !ses.isCached(input.getHash()) {
-		for _, cw := range cws {
-			tcw, ok := cw.(*TxnComputationWrapper)
-			if !ok || tcw.protocolVersion != cacheProtocolVersion {
-				canCache = false
-				break
-			}
+	planStatsVersions := make([]map[optimizerStatsTableKey]uint64, len(cws))
+	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
+	for i, cw := range cws {
+		tcw, ok := cw.(*TxnComputationWrapper)
+		if !ok || tcw.protocolVersion != cacheProtocolVersion {
+			return nil
 		}
-	}
-	if canCache && !ses.isCached(input.getHash()) {
-		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]tree.Statement, len(cws))
-		for i, cw := range cws {
-			if checkNodeCanCache(cw.Plan()) {
-				plans[i] = cw.Plan()
-				stmts[i] = cw.GetAst()
-			} else {
-				return nil
-			}
-			cw.Clear()
+		var hasPlanSnapshotTS bool
+		planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()
+		if !hasPlanSnapshotTS {
+			return nil
 		}
-		Cached = true
-		ses.cachePlan(input.getHash(), stmts, plans, cacheProtocolVersion)
+		planStatsVersions[i] = tcw.optimizerStatsVersions
 	}
+
+	plans := make([]*plan.Plan, len(cws))
+	stmts := make([]tree.Statement, len(cws))
+	for i, cw := range cws {
+		if checkNodeCanCache(cw.Plan()) {
+			plans[i] = cw.Plan()
+			stmts[i] = cw.GetAst()
+		} else {
+			return nil
+		}
+		cw.Clear()
+	}
+	Cached = true
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
 }

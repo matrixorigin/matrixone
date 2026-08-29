@@ -10,7 +10,7 @@ SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' orde
 ➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_DEFAULT[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  DATA_TYPE[12,65535,0]  ¦  CHARACTER_MAXIMUM_LENGTH[-5,64,0]  ¦  CHARACTER_OCTET_LENGTH[-5,64,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  ¦  DATETIME_PRECISION[-5,64,0]  ¦  CHARACTER_SET_NAME[12,4,0]  ¦  COLLATION_NAME[12,8,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  COLUMN_KEY[12,3,0]  ¦  EXTRA[12,24,0]  ¦  PRIVILEGES[12,31,0]  ¦  COLUMN_COMMENT[12,2048,0]  ¦  GENERATION_EXPRESSION[12,500,0]  ¦  SRS_ID[-5,64,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_tables  ¦  rel_id  ¦  1  ¦  null  ¦  YES  ¦  bigint  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  BIGINT UNSIGNED(0)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null  𝄀
 def  ¦  mo_catalog  ¦  mo_tables  ¦  relname  ¦  2  ¦  null  ¦  YES  ¦  varchar  ¦  5000  ¦  20000  ¦  null  ¦  null  ¦  null  ¦  utf8  ¦  utf8_bin  ¦  VARCHAR(5000)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null
-SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
+SELECT * FROM `information_schema`.`key_column_usage` WHERE TABLE_SCHEMA = '__nonexistent_schema__' LIMIT 0,1000;
 ➤ CONSTRAINT_CATALOG[12,64,0]  ¦  CONSTRAINT_SCHEMA[12,64,0]  ¦  CONSTRAINT_NAME[12,64,0]  ¦  TABLE_CATALOG[12,64,0]  ¦  TABLE_SCHEMA[12,64,0]  ¦  TABLE_NAME[12,64,0]  ¦  COLUMN_NAME[12,64,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  POSITION_IN_UNIQUE_CONSTRAINT[4,32,0]  ¦  REFERENCED_TABLE_SCHEMA[12,64,0]  ¦  REFERENCED_TABLE_NAME[12,64,0]  ¦  REFERENCED_COLUMN_NAME[12,64,0]
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 ➤ query_id[4,32,0]  ¦  seq[4,32,0]  ¦  state[12,30,0]  ¦  duration[3,9,6]  ¦  cpu_user[3,9,6]  ¦  cpu_system[3,9,6]  ¦  context_voluntary[4,32,0]  ¦  context_involuntary[4,32,0]  ¦  block_ops_in[4,32,0]  ¦  block_ops_out[4,32,0]  ¦  messages_sent[4,32,0]  ¦  messages_received[4,32,0]  ¦  page_faults_major[4,32,0]  ¦  page_faults_minor[4,32,0]  ¦  swaps[4,32,0]  ¦  source_function[12,30,0]  ¦  source_file[12,20,0]  ¦  source_line[4,32,0]
@@ -135,10 +135,10 @@ table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦  
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `COLUMNS`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀

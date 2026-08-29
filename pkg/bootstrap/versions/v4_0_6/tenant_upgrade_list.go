@@ -47,6 +47,28 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
+	backfillMoColumnsAttIsUnsigned(),
+	upgradeInformationSchemaStatistics(),
+}
+
+const moColumnsUnsignedMismatchPredicate = "account_id = current_account_id() " +
+	"AND (att_is_unsigned IS NULL OR att_is_unsigned = 0) " +
+	"AND mo_show_visible_bin(atttyp, 2) IN ('TINYINT UNSIGNED', 'SMALLINT UNSIGNED', 'INT UNSIGNED', 'BIGINT UNSIGNED')"
+
+func backfillMoColumnsAttIsUnsigned() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  catalog.MO_CATALOG,
+		TableName:               catalog.MO_COLUMNS,
+		UpgType:                 versions.MODIFY_METADATA,
+		UpgSql:                  "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE " + moColumnsUnsignedMismatchPredicate,
+		RequiredProtocolVersion: defines.MORPCVersion34,
+		AllowMoColumnsUpdate:    true,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			mismatch, err := versions.CheckTableDataExist(txn, accountID,
+				"SELECT 1 FROM mo_catalog.mo_columns WHERE "+moColumnsUnsignedMismatchPredicate+" LIMIT 1")
+			return !mismatch, err
+		},
+	}
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -333,6 +355,22 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 			sysview.InformationSchemaTableConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
 			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
+	}
+}
+
+// Keep this entry last so increasing the v4.0.6 version offset refreshes all
+// metadata views for tenants that completed an earlier v4.0.6 offset. The
+// existing KEY_COLUMN_USAGE, COLUMNS, and TABLE_CONSTRAINTS entries are
+// definition-checked and rerun by the same upgrade pass.
+func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "STATISTICS",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaStatisticsDDL,
+		CheckFunc: checkViewDefinition("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "STATISTICS"),
 	}
 }
 

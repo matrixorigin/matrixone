@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -985,6 +986,77 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 	}
 
 	return
+}
+
+// PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
+// an ABS argument whose overload was deferred until execution.  This is kept
+// as a plan-introspection helper for tests and diagnostics; execute-time
+// eligibility is cached on PrepareStmt and must not call this walker for every
+// execution.
+func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
+	return len(PreparedPlanNumericFallbackParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanNumericFallbackParamPositions returns the parameter positions
+// whose value supplies a deferred numeric ABS argument.  The result is plan
+// metadata, not an execute-time decision: callers can compute it once when a
+// prepared plan is built and use it to decide whether runtime values must be
+// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// on every ordinary execution.
+func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+			return nil
+		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
+	return expr != nil && expr.GetPreparedNumeric().GetFallback()
+}
+
+func ensurePreparedNumericMetadata(expr *plan.Expr) *plan.PreparedNumericMetadata {
+	if expr == nil {
+		return nil
+	}
+	if expr.PreparedNumeric == nil {
+		expr.PreparedNumeric = &plan.PreparedNumericMetadata{}
+	}
+	return expr.PreparedNumeric
+}
+
+func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.PreparedNumericMetadata {
+	if metadata == nil {
+		return nil
+	}
+	return &plan.PreparedNumericMetadata{
+		Fallback:             metadata.Fallback,
+		ParamPos:             metadata.ParamPos,
+		FallbackSource:       metadata.FallbackSource,
+		FallbackSourceNodeId: metadata.FallbackSourceNodeId,
+		FallbackSourceColPos: metadata.FallbackSourceColPos,
+	}
 }
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
@@ -2886,7 +2958,10 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
-	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
+	rule := &decrementParamOrdinalRule{
+		seen:         make(map[*plan.ParamRef]struct{}),
+		seenFallback: make(map[*plan.Expr]struct{}),
+	}
 	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
 	if err := visit.Visit(ctx); err != nil {
 		return err
@@ -3271,59 +3346,9 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return filled, err
 }
 
-// FillValuesOfParamsInPlanWithSpecialization replaces parameters in an
-// isolated plan copy and reports whether the replacement changed an overload
-// or a result-column domain. Callers that already have a cached compile must
-// only invalidate that compile when this flag is true; replacing a parameter
-// with a same-domain literal is otherwise handled by the cached parameter
-// executor.
-func FillValuesOfParamsInPlanWithSpecialization(
-	ctx context.Context,
-	preparePlan *Plan,
-	paramVals []any,
-) (*Plan, bool, error) {
-	switch preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl:
-		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
-	case *plan.Plan_Dcl:
-		if preparePlan.GetDcl().GetSetVariables() == nil {
-			return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
-		}
-	}
-	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
-		return nil, false, err
-	}
-	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
-		return nil, false, err
-	}
-	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
-	copied := DeepCopyPlan(preparePlan)
-	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
-	switch pp := copied.Plan.(type) {
-
-	case *plan.Plan_Ddl:
-		if pp.Ddl.Query != nil {
-			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
-			specialized, err := replaceParamVals(ctx, queryPlan, paramVals)
-			if err != nil {
-				return nil, false, err
-			}
-			return copied, specialized || numericPrefixSpecialization, nil
-		}
-
-	case *plan.Plan_Query, *plan.Plan_Dcl:
-		specialized, err := replaceParamVals(ctx, copied, paramVals)
-		if err != nil {
-			return nil, false, err
-		}
-		return copied, specialized || runtimeDecimalPrefix, nil
-	}
-	return copied, false, nil
-}
-
 // ValidatePreparedLagLeadParams validates LAG/LEAD offset markers before the
-// generic expression cast path can discard their protocol source type. This is
-// also called by the cached prepared-execution path, which does not replace
+// generic expression cast path can discard their protocol source type. This
+// is also called by the cached prepared-execution path, which does not replace
 // ParamRefs in the plan for each execution.
 func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
 	if preparePlan == nil || len(paramVals) == 0 {
@@ -3413,6 +3438,746 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedPlanNeedsRuntimeSpecialization reports whether a binary prepared
+// execution can change a result-column domain or an overloaded expression.
+// Most prepared DML only needs the current parameter values.  Avoid copying
+// and walking those plans on every execute, but retain the correctness path
+// for predicates and expressions whose overload depends on the parameter
+// domain (for example, `? = ?` in an UPDATE filter).
+func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+
+	scanPlan := DeepCopyPlan(preparePlan)
+	if scanPlan == nil {
+		return true
+	}
+	query := scanPlan.GetQuery()
+	if query == nil && scanPlan.GetDdl() != nil {
+		query = scanPlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return false
+	}
+	if scanPlan.GetQuery() == nil {
+		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+
+	rule := &preparedRuntimeSpecializationScanRule{
+		// A bare SELECT parameter keeps the cached result domain unless the
+		// binary protocol path explicitly identifies it as a direct result
+		// column.  Direct-result metadata is handled by
+		// PreparedPlanDirectResultParamPositions; treating every root marker as
+		// runtime-specialized here would put ordinary COM_STMT queries on the
+		// per-execute deep-copy path.
+		directResult: false,
+		skipExprs:    preparedDMLWriteExpressions(query),
+		seen:         make(map[*plan.Expr]struct{}),
+	}
+	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
+		// The scan is an optimization only. Preserve correctness if a newly
+		// added plan field cannot be visited here.
+		return true
+	}
+	return rule.needs
+}
+
+// PreparedPlanNeedsRuntimeTextComparisonSpecialization reports whether the
+// current binary-protocol parameter domains expose a text operand inside a
+// numeric comparison. Prepare-time overload resolution may have wrapped that
+// marker in a provisional integer cast; only text executions need to replace
+// it with the engine's DOUBLE cast and its MySQL-compatible prefix, range, and
+// warning semantics. Numeric executions can keep the cached compile.
+func PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	preparePlan *Plan,
+	runtimeParamTypes []types.Type,
+) bool {
+	return len(preparedNumericComparisonTextParamPositions(preparePlan, runtimeParamTypes)) > 0
+}
+
+func preparedNumericComparisonTextParamPositions(
+	preparePlan *Plan,
+	runtimeParamTypes []types.Type,
+) map[int]bool {
+	positions := make(map[int]bool)
+	if preparePlan == nil || len(runtimeParamTypes) == 0 {
+		return positions
+	}
+
+	scanPlan := preparePlan
+	query := scanPlan.GetQuery()
+	if query == nil && scanPlan.GetDdl() != nil {
+		query = scanPlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return positions
+	}
+	if scanPlan.GetQuery() == nil {
+		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+
+	rule := &preparedRuntimeTextComparisonScanRule{
+		runtimeParamTypes: runtimeParamTypes,
+		positions:         positions,
+		seen:              make(map[*plan.Expr]struct{}),
+	}
+	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
+		// This scan only selects an additional specialization path. A visit
+		// failure must not reinterpret parameters globally; the normal cached
+		// execution remains the conservative fallback.
+		return make(map[int]bool)
+	}
+	return positions
+}
+
+func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
+	switch stmtType {
+	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
+	writeExprs := make(map[*plan.Expr]struct{})
+	if query == nil || !isPreparedDMLStmt(query.StmtType) {
+		return writeExprs
+	}
+	add := func(expr *plan.Expr) {
+		if preparedExprContainsParam(expr) {
+			writeExprs[expr] = struct{}{}
+		}
+	}
+
+	// Follow only the writer's primary input path. ProjectList is used for
+	// every relational projection, including private projects that implement
+	// derived tables and scalar subqueries. Those secondary branches must stay
+	// outside the preservation set so their marker comparisons can be rebound.
+	// The final row-image projection and any unary projections below it are the
+	// positional roots consumed by the writer.
+	visited := make(map[int32]struct{})
+	var visitWritePath func(int32)
+	visitWritePath = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == plan.Node_PROJECT {
+			for _, expr := range node.ProjectList {
+				add(expr)
+			}
+		}
+		if len(node.Children) > 0 {
+			// A DML input can fan out through joins/applies. The final
+			// positional projection is above that fan-out; once below it,
+			// follow only the primary (left) path and leave secondary
+			// subquery/derived-table projections to normal specialization.
+			visitWritePath(node.Children[0])
+		}
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		// INSERT/MULTI_UPDATE may carry a writer projection directly on the
+		// sink node.  DELETE has no value projection; its parameters belong to
+		// filter expressions and must remain eligible for specialization.
+		if node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
+			for _, expr := range node.ProjectList {
+				add(expr)
+			}
+			for _, childID := range node.Children {
+				visitWritePath(childID)
+			}
+		}
+		for _, expr := range node.OnUpdateExprs {
+			add(expr)
+		}
+		if node.DedupJoinCtx != nil {
+			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+				add(expr)
+			}
+		}
+		if node.RowsetData != nil {
+			for _, col := range node.RowsetData.Cols {
+				for _, row := range col.Data {
+					if row != nil {
+						add(row.Expr)
+					}
+				}
+			}
+		}
+	}
+	return writeExprs
+}
+
+type preparedRuntimeSpecializationScanRule struct {
+	directResult bool
+	needs        bool
+	skipExprs    map[*plan.Expr]struct{}
+	seen         map[*plan.Expr]struct{}
+}
+
+type preparedRuntimeTextComparisonScanRule struct {
+	runtimeParamTypes []types.Type
+	positions         map[int]bool
+	seen              map[*plan.Expr]struct{}
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	rule.scanExpr(expr)
+	return expr, nil
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) scanExpr(expr *plan.Expr) {
+	if expr == nil {
+		return
+	}
+	if _, ok := rule.seen[expr]; ok {
+		return
+	}
+	rule.seen[expr] = struct{}{}
+
+	if function := expr.GetF(); function != nil {
+		name := ""
+		if function.Func != nil {
+			name = strings.ToLower(function.Func.GetObjName())
+		}
+		if isPreparedNumericComparisonContext(name) && rule.argsHaveNumericDomain(function.Args) {
+			for _, arg := range function.Args {
+				rule.collectTextParams(arg)
+			}
+		}
+		for _, arg := range function.Args {
+			rule.scanExpr(arg)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			rule.scanExpr(item)
+		}
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		rule.scanExpr(window.WindowFunc)
+		for _, arg := range window.PartitionBy {
+			rule.scanExpr(arg)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				rule.scanExpr(order.Expr)
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				rule.scanExpr(window.Frame.Start.Val)
+			}
+			if window.Frame.End != nil {
+				rule.scanExpr(window.Frame.End.Val)
+			}
+		}
+	}
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) argsHaveNumericDomain(args []*plan.Expr) bool {
+	for _, arg := range args {
+		if rule.exprHasNumericDomain(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		return rule.paramTypeIsNumeric(int(param.Pos))
+	}
+	if isImplicitPreparedParamCast(expr) {
+		position, ok := implicitPreparedParamPosition(expr)
+		return ok && rule.paramTypeIsNumeric(position)
+	}
+	if expr.GetCol() != nil {
+		// A numeric column is a numeric comparison domain too. Keep the column
+		// expression itself unchanged; the text marker is rebound to the
+		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
+		// preserved without relying on the stale prepare-time integer cast.
+		return (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric()
+	}
+	if (types.Type{Oid: types.T(expr.Typ.Id)}).IsNumeric() {
+		return true
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if rule.exprHasNumericDomain(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) collectTextParams(expr *plan.Expr) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		position := int(param.Pos)
+		if rule.paramTypeIsText(position) {
+			rule.positions[position] = true
+		}
+		return
+	}
+	if function := expr.GetF(); function != nil {
+		name := ""
+		if function.Func != nil {
+			name = strings.ToLower(function.Func.GetObjName())
+			if name == "cast" && !isImplicitPreparedParamCast(expr) {
+				// An explicit CAST owns a direct marker's conversion contract.
+				// If its child is a domain-sensitive expression (for example
+				// CAST(ABS(?) AS INT)), keep walking so the nested overload can
+				// still receive the COM_STMT text-to-DOUBLE conversion.
+				if len(function.Args) > 0 && preparedExprContainsParam(function.Args[0]) &&
+					function.Args[0].GetP() == nil {
+					for _, arg := range function.Args {
+						rule.collectTextParams(arg)
+					}
+				}
+				return
+			}
+		}
+		if !isImplicitPreparedParamCast(expr) &&
+			!isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name) {
+			// Convert the result of a string-producing/consuming expression at
+			// the outer comparison, not its parameter leaves. For example,
+			// LENGTH(?) and CONCAT(?) must see the original string.
+			return
+		}
+		for _, arg := range function.Args {
+			rule.collectTextParams(arg)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			rule.collectTextParams(item)
+		}
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		rule.collectTextParams(window.WindowFunc)
+	}
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsNumeric(position int) bool {
+	return position >= 0 && position < len(rule.runtimeParamTypes) && rule.runtimeParamTypes[position].IsNumeric()
+}
+
+func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
+	if position < 0 || position >= len(rule.runtimeParamTypes) {
+		return false
+	}
+	switch rule.runtimeParamTypes[position].Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if _, ok := rule.skipExprs[expr]; ok {
+		// The outer expression is a positional write value and must not make
+		// the write layout look like a different plan.  Its children are still
+		// ordinary expressions, however: a comparison or CASE below the
+		// assignment can have an execute-time parameter domain of its own.
+		rule.scanExpr(expr, false)
+		return expr, nil
+	}
+	rule.scanExpr(expr, true)
+	return expr, nil
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, root bool) {
+	if expr == nil || rule.needs {
+		return
+	}
+	if _, ok := rule.seen[expr]; ok {
+		return
+	}
+	rule.seen[expr] = struct{}{}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		if root && rule.directResult {
+			rule.needs = true
+		}
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return
+		}
+		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "cast" && isExplicitPreparedCast(expr) {
+			// The user-selected cast owns the parameter domain. Its direct marker
+			// does not require runtime specialization, but a nested expression can
+			// still contain a genuinely deferred overload of its own.
+			for _, arg := range exprImpl.F.Args {
+				rule.scanExpr(arg, false)
+			}
+			return
+		}
+		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
+			for argIndex, arg := range exprImpl.F.Args {
+				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {
+					rule.needs = true
+					return
+				}
+			}
+		}
+		for _, arg := range exprImpl.F.Args {
+			rule.scanExpr(arg, false)
+		}
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return
+		}
+		rule.scanExpr(exprImpl.W.WindowFunc, false)
+		for _, arg := range exprImpl.W.PartitionBy {
+			rule.scanExpr(arg, false)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order != nil {
+				rule.scanExpr(order.Expr, false)
+			}
+		}
+		if exprImpl.W.Frame != nil {
+			if exprImpl.W.Frame.Start != nil {
+				rule.scanExpr(exprImpl.W.Frame.Start.Val, false)
+			}
+			if exprImpl.W.Frame.End != nil {
+				rule.scanExpr(exprImpl.W.Frame.End.Val, false)
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List != nil {
+			for _, item := range exprImpl.List.List {
+				rule.scanExpr(item, false)
+			}
+		}
+	}
+}
+
+func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {
+	if !preparedExprContainsParam(expr) {
+		return false
+	}
+	if isExplicitPreparedCast(expr) {
+		return false
+	}
+	// A comparison against a table column already has a prepare-time cast to
+	// the column's domain. Rebinding that cast on every execute is unnecessary
+	// and would force otherwise cacheable DML writes down the fresh-compile
+	// path. Marker-to-marker comparisons have no such domain owner and must
+	// still be specialized.
+	if isPreparedNumericComparison(functionName) {
+		return preparedExprHasUnboundParam(expr)
+	}
+	return true
+}
+
+func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// LAG/LEAD/NTH_VALUE offset markers affect row selection, not the result
+	// value's type. Their value argument remains domain-sensitive, while the
+	// cached compile can safely retain an offset parameter after validation.
+	if (functionName == "lag" || functionName == "lead" || functionName == "nth_value") && argIndex == 1 {
+		return false
+	}
+	return preparedExprRequiresRuntimeSpecialization(functionName, expr)
+}
+
+// preparedExprHasUnboundParam distinguishes a marker whose domain is still
+// owned by the comparison from one already constrained by a prepare-time
+// cast. Composite-key predicates may wrap several such casts in a serial()
+// helper, so inspect the complete expression rather than only its root.
+func preparedExprHasUnboundParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return true
+	}
+	if isImplicitPreparedParamCast(expr) {
+		return false
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if preparedExprHasUnboundParam(arg) {
+				return true
+			}
+		}
+		return false
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedExprHasUnboundParam(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedExprContainsParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return false
+		}
+		for _, arg := range exprImpl.F.Args {
+			if preparedExprContainsParam(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return false
+		}
+		if preparedExprContainsParam(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if preparedExprContainsParam(arg) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order != nil && preparedExprContainsParam(order.Expr) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return false
+		}
+		for _, item := range exprImpl.List.List {
+			if preparedExprContainsParam(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedRuntimeSpecializationFunction(name string) bool {
+	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) {
+		return true
+	}
+	// Result-domain-polymorphic functions must stay on the specialization path
+	// even when their overload itself is stable. For example, max_by returns
+	// the type of its first argument, so a binary parameter can change the
+	// result-column type from the prepare-time placeholder domain.
+	switch name {
+	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value", "max_by", "max_by_non_null",
+		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
+		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
+		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
+		"in", "not_in", "partition_in":
+		return true
+	default:
+		return false
+	}
+}
+
+// preparedFunctionResultDependsOnRuntimeParam uses the function registry as a
+// forward-compatible fallback for polymorphic functions.  The explicit list
+// above covers functions whose executor semantics are known to depend on the
+// parameter domain even when their return type is fixed.  For other functions,
+// compare the selected overload and return type against the legal binary
+// protocol parameter domains.  This keeps new first-argument-returning
+// aggregates (for example max_by variants) from silently inheriting the
+// prepare-time TEXT overload.
+func preparedFunctionResultDependsOnRuntimeParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return false
+	}
+	paramArgs := make([]int, 0, len(fn.Args))
+	argTypes := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		if arg == nil {
+			return false
+		}
+		argTypes[i] = makeTypeByPlan2Expr(arg)
+		if preparedExprContainsParam(arg) {
+			paramArgs = append(paramArgs, i)
+		}
+	}
+	if len(paramArgs) == 0 {
+		return false
+	}
+
+	for _, paramArg := range paramArgs {
+		for _, candidate := range preparedRuntimeParamTypeCandidates() {
+			candidateArgs := append([]types.Type(nil), argTypes...)
+			candidateArgs[paramArg] = candidate
+			resolved, err := function.GetFunctionByName(context.Background(), fn.Func.GetObjName(), candidateArgs)
+			if err != nil {
+				continue
+			}
+			if resolved.GetEncodedOverloadID() != fn.Func.GetObj() || !resolved.GetReturnType().Eq(makeTypeByPlan2Expr(expr)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var preparedRuntimeParamTypes = []types.Type{
+	types.T_bool.ToType(),
+	types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+	types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+	types.T_float32.ToType(), types.T_float64.ToType(),
+	types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal128, 38, 18),
+	types.New(types.T_varchar, 64, 0), types.T_text.ToType(),
+	types.T_date.ToType(), types.T_datetime.ToType(), types.T_timestamp.ToType(), types.T_time.ToType(),
+	types.New(types.T_varbinary, 64, 0), types.T_json.ToType(), types.T_uuid.ToType(),
+}
+
+func preparedRuntimeParamTypeCandidates() []types.Type {
+	return preparedRuntimeParamTypes
+}
+
+// FillValuesOfParamsInPlanWithSpecialization replaces parameters in an
+// isolated plan copy and reports whether the replacement changed an overload
+// or a result-column domain. Callers that already have a cached compile must
+// only invalidate that compile when this flag is true; replacing a parameter
+// with a same-domain literal is otherwise handled by the cached parameter
+// executor.
+func FillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
+}
+
+// FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time
+// path for a prepared plan whose deferred numeric overload positions were
+// computed when the plan was built. The caller has already made the
+// eligibility decision, so this uses the normal specialization walk without
+// changing the cached plan in place.
+func FillValuesOfParamsInPlanWithPreparedNumericOverload(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
+}
+
+// FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites performs the
+// same execute-time overload/result-type specialization as
+// FillValuesOfParamsInPlanWithSpecialization, while preserving the outer
+// expressions consumed positionally by INSERT/UPDATE/DELETE/MERGE writers.
+// Parameters in predicates and other non-write expressions are still
+// replaced and rebound normally.
+func FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, true)
+}
+
+func fillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	preserveDMLWrites bool,
+) (*Plan, bool, error) {
+	switch preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl:
+		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
+	case *plan.Plan_Dcl:
+		if preparePlan.GetDcl().GetSetVariables() == nil {
+			return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
+		}
+	}
+	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, false, err
+	}
+	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, false, err
+	}
+	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
+	copied := DeepCopyPlan(preparePlan)
+	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
+	switch pp := copied.Plan.(type) {
+
+	case *plan.Plan_Ddl:
+		if pp.Ddl.Query != nil {
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
+			specialized, err := replaceParamVals(ctx, queryPlan, paramVals)
+			if err != nil {
+				return nil, false, err
+			}
+			return copied, specialized || numericPrefixSpecialization, nil
+		}
+
+	case *plan.Plan_Query, *plan.Plan_Dcl:
+		specialized, err := replaceParamVals(ctx, copied, paramVals, preserveDMLWrites)
+		if err != nil {
+			return nil, false, err
+		}
+		return copied, specialized || runtimeDecimalPrefix, nil
+	}
+	return copied, false, nil
+}
+
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
 // and OFFSET before the values are converted through the generic expression
 // cast path. MySQL accepts NULL and Boolean user variables here, but rejects
@@ -3441,6 +4206,153 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 // compile from an earlier execution.
 func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanHasDirectResultParams reports whether a visible SELECT result
+// column is ultimately sourced from a parameter marker.
+func PreparedPlanHasDirectResultParams(preparePlan *Plan) bool {
+	return len(PreparedPlanDirectResultParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanDirectResultParamPositions returns the zero-based parameter
+// positions that flow directly into visible SELECT result columns. Optimizer
+// passes can insert projection and pass-through nodes above the original
+// marker, so this traces output ordinals and ColRefs back to the marker while
+// deliberately excluding parameters nested in ordinary result functions.
+//
+// Callers must compute this once per prepared-plan generation. It is not an
+// execute-time predicate: walking the plan on every COM_STMT_EXECUTE previously
+// caused a material prepared-statement hot-path regression.
+func PreparedPlanDirectResultParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) == 0 {
+		return nil
+	}
+	rootStep := len(query.Steps) - 1
+	if query.HasReturning {
+		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+			return nil
+		}
+		rootStep = int(query.ReturningStep)
+	}
+	rootID := query.Steps[rootStep]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
+		return nil
+	}
+
+	positions := make(map[int32]struct{})
+	seen := make(map[directResultTraceKey]struct{})
+	for colPos := range query.Nodes[rootID].ProjectList {
+		collectDirectResultParamPositions(query, rootID, int32(colPos), positions, seen)
+	}
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+type directResultTraceKey struct {
+	nodeID int32
+	colPos int32
+}
+
+func collectDirectResultParamPositions(
+	query *plan.Query,
+	nodeID, colPos int32,
+	positions map[int32]struct{},
+	seen map[directResultTraceKey]struct{},
+) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return
+	}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return
+	}
+	key := directResultTraceKey{nodeID: nodeID, colPos: colPos}
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+
+	if int(colPos) < len(node.ProjectList) {
+		expr := node.ProjectList[colPos]
+		if expr == nil {
+			return
+		}
+		if collectDirectResultParamFromExpr(expr, positions) {
+			return
+		}
+		col := expr.GetCol()
+		if col == nil {
+			return
+		}
+		childColPos := col.ColPos
+		switch node.NodeType {
+		case plan.Node_UNION, plan.Node_UNION_ALL,
+			plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL:
+			// A set operation owns a common-type result rather than transparently
+			// forwarding one branch. PREPARE-time coercion can materialize the
+			// other branches, so direct-result specialization must not guess a new
+			// common domain from the surviving plan.
+			return
+		case plan.Node_AGG:
+			// DISTINCT over a real row source is represented by PROJECT -> AGG.
+			// The AGG projection references its grouping output with rel_pos=-1;
+			// following child 0 at the same ordinal skips the owned group expression.
+			if col.RelPos < 0 && col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+				groupExpr := node.GroupBy[col.ColPos]
+				if collectDirectResultParamFromExpr(groupExpr, positions) {
+					return
+				}
+				if groupCol := groupExpr.GetCol(); groupCol != nil && len(node.Children) == 1 {
+					collectDirectResultParamPositions(
+						query, node.Children[0], groupCol.ColPos, positions, seen)
+				}
+				return
+			}
+		}
+		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			collectDirectResultParamPositions(query, node.Children[col.RelPos], childColPos, positions, seen)
+			return
+		}
+		if len(node.Children) == 1 {
+			collectDirectResultParamPositions(query, node.Children[0], childColPos, positions, seen)
+		}
+		return
+	}
+
+	// Some physical pass-through nodes have no projection. Preserve the output
+	// ordinal through their sole child.
+	if len(node.Children) == 1 {
+		collectDirectResultParamPositions(query, node.Children[0], colPos, positions, seen)
+	}
+}
+
+func collectDirectResultParamFromExpr(expr *Expr, positions map[int32]struct{}) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return true
+	}
+	// Implicit overload casts preserve marker provenance. Explicit CAST owns a
+	// fixed result domain and must remain outside direct-result specialization.
+	if isImplicitPreparedParamCast(expr) {
+		fn := expr.GetF()
+		return len(fn.Args) > 0 && collectDirectResultParamFromExpr(fn.Args[0], positions)
+	}
+	return false
 }
 
 // PreparedPaginationParamPositions returns the zero-based parameter positions
@@ -3568,6 +4480,16 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
+	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
+	// numeric-prefix domain used by common-type consumers; a direct result uses
+	// this scale-preserving domain without parsing the packet again.
+	DirectResultType    types.Type
+	HasDirectResultType bool
+	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
+	// protocol scanner. Typed literal construction uses it instead of reparsing
+	// the potentially max-packet-sized raw Value.
+	MaterializedValue string
 	// RetainParamRef records that a specialized query plan will be cached and
 	// therefore must retain this parameter as runtime provenance even when the
 	// parameter itself is unrelated to numeric-prefix specialization.
@@ -3725,6 +4647,255 @@ func absInt64Within(value, limit int64) bool {
 	return value >= -limit && value <= limit
 }
 
+// PreparedDecimalRuntimeTypes parses one complete binary-protocol DECIMAL
+// lexeme and returns both domains needed by prepared execution. normalized is
+// the trailing-zero-free domain used by numeric-prefix/common-type consumers;
+// visible preserves the lexeme's effective scale for a direct result. The scan
+// performs no input-length allocation, even for a max_allowed_packet-sized
+// value.
+func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, ok bool) {
+	normalized, visible, _, ok = preparedDecimalRuntimeDomains(value, false)
+	return normalized, visible, ok
+}
+
+// PreparedDecimalRuntimeDomains additionally returns a bounded canonical
+// lexeme suitable for typed literal materialization.
+func PreparedDecimalRuntimeDomains(value string) (normalized, visible types.Type, canonical string, ok bool) {
+	return preparedDecimalRuntimeDomains(value, true)
+}
+
+func preparedDecimalRuntimeDomains(
+	value string,
+	materialize bool,
+) (normalized, visible types.Type, canonical string, ok bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	pos := 0
+	negative := value[pos] == '-'
+	if value[pos] == '+' || value[pos] == '-' {
+		pos++
+	}
+	if pos == len(value) {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	var digitCount, leadingZeros, fractionalDigits, trailingZeros int64
+	var coefficient [76]byte
+	coefficientLen := 0
+	seenDigit, seenPoint, seenNonZero := false, false, false
+	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
+		ch := value[pos]
+		switch {
+		case ch >= '0' && ch <= '9':
+			seenDigit = true
+			digitCount++
+			if seenPoint {
+				fractionalDigits++
+			}
+			if !seenNonZero {
+				if ch == '0' {
+					leadingZeros++
+				} else {
+					seenNonZero = true
+				}
+			} else if ch == '0' {
+				trailingZeros++
+			} else {
+				trailingZeros = 0
+			}
+			if seenNonZero {
+				if coefficientLen < len(coefficient) {
+					coefficient[coefficientLen] = ch
+				}
+				coefficientLen++
+			}
+		case ch == '.' && !seenPoint:
+			seenPoint = true
+		default:
+			return types.Type{}, types.Type{}, "", false
+		}
+		pos++
+	}
+	if !seenDigit {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	exponent, exponentState, valid := scanPreparedDecimalExponent(value[pos:])
+	if !valid {
+		return types.Type{}, types.Type{}, "", false
+	}
+	coefficientDigits := digitCount - leadingZeros
+	if coefficientDigits == 0 {
+		// Zero is representable independently of a positive exponent. Only the
+		// effective negative scale can exceed Decimal256.
+		var scale int64
+		switch exponentState {
+		case preparedExponentHugePositive:
+			scale = 0
+		case preparedExponentHugeNegative:
+			return types.Type{}, types.Type{}, "", false
+		default:
+			netExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
+			if !bounded || netExponent < -int64(types.T_decimal256.ToType().Width) {
+				return types.Type{}, types.Type{}, "", false
+			}
+			if netExponent < 0 {
+				scale = -netExponent
+			}
+		}
+		visible, ok = preparedDecimalTypeForWidth(max(int64(1), scale), scale)
+		if !ok {
+			return types.Type{}, types.Type{}, "", false
+		}
+		canonical := ""
+		if materialize {
+			canonical = "0"
+		}
+		return types.New(types.T_decimal64, 1, 0), visible, canonical, true
+	}
+	if exponentState != preparedExponentFinite {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	visibleExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
+	if !bounded {
+		return types.Type{}, types.Type{}, "", false
+	}
+	visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
+	if !ok {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	normalizedExponent, bounded := addPreparedDecimalExponent(
+		exponent, -fractionalDigits+trailingZeros)
+	if !bounded {
+		return types.Type{}, types.Type{}, "", false
+	}
+	normalized, ok = preparedDecimalTypeFromCoefficient(
+		coefficientDigits-trailingZeros, normalizedExponent)
+	if !ok || coefficientLen != int(coefficientDigits) || coefficientLen > len(coefficient) {
+		return types.Type{}, types.Type{}, "", false
+	}
+	if !materialize {
+		return normalized, visible, "", true
+	}
+	var canonicalBuilder strings.Builder
+	canonicalBuilder.Grow(coefficientLen + 5)
+	if negative {
+		canonicalBuilder.WriteByte('-')
+	}
+	canonicalBuilder.Write(coefficient[:coefficientLen])
+	if visibleExponent != 0 {
+		canonicalBuilder.WriteByte('e')
+		canonicalBuilder.WriteString(strconv.FormatInt(visibleExponent, 10))
+	}
+	return normalized, visible, canonicalBuilder.String(), true
+}
+
+type preparedExponentState uint8
+
+const (
+	preparedExponentFinite preparedExponentState = iota
+	preparedExponentHugePositive
+	preparedExponentHugeNegative
+)
+
+func scanPreparedDecimalExponent(value string) (int64, preparedExponentState, bool) {
+	if value == "" {
+		return 0, preparedExponentFinite, true
+	}
+	if value[0] != 'e' && value[0] != 'E' {
+		return 0, preparedExponentFinite, false
+	}
+	value = value[1:]
+	if value == "" {
+		return 0, preparedExponentFinite, false
+	}
+	negative := false
+	if value[0] == '+' || value[0] == '-' {
+		negative = value[0] == '-'
+		value = value[1:]
+	}
+	if value == "" {
+		return 0, preparedExponentFinite, false
+	}
+	for len(value) > 0 && value[0] == '0' {
+		value = value[1:]
+	}
+	if value == "" {
+		return 0, preparedExponentFinite, true
+	}
+	for i := range len(value) {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, preparedExponentFinite, false
+		}
+	}
+	if len(value) > 19 {
+		if negative {
+			return 0, preparedExponentHugeNegative, true
+		}
+		return 0, preparedExponentHugePositive, true
+	}
+	magnitude, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || magnitude > math.MaxInt64 {
+		if negative {
+			return 0, preparedExponentHugeNegative, true
+		}
+		return 0, preparedExponentHugePositive, true
+	}
+	exponent := int64(magnitude)
+	if negative {
+		exponent = -exponent
+	}
+	return exponent, preparedExponentFinite, true
+}
+
+func addPreparedDecimalExponent(exponent, compensation int64) (int64, bool) {
+	if compensation > 0 && exponent > math.MaxInt64-compensation ||
+		compensation < 0 && exponent < math.MinInt64-compensation {
+		return 0, false
+	}
+	return exponent + compensation, true
+}
+
+func preparedDecimalTypeFromCoefficient(coefficientDigits, exponent int64) (types.Type, bool) {
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if coefficientDigits < 1 || exponent < -maxWidth || exponent > maxWidth {
+		return types.Type{}, false
+	}
+	if exponent >= 0 {
+		return preparedDecimalTypeForWidth(coefficientDigits+exponent, 0)
+	}
+	scale := -exponent
+	return preparedDecimalTypeForWidth(max(coefficientDigits, scale), scale)
+}
+
+func preparedDecimalTypeForWidth(width, scale int64) (types.Type, bool) {
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if width < 1 || width > maxWidth || scale < 0 || scale > maxWidth || scale > width {
+		return types.Type{}, false
+	}
+	w, s := int32(width), int32(scale)
+	switch {
+	case w <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, w, s), true
+	case w <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, w, s), true
+	default:
+		return types.New(types.T_decimal256, w, s), true
+	}
+}
+
+// PreparedDecimalRuntimeType derives the scale-preserving visible domain of a
+// complete binary-protocol DECIMAL lexeme.
+func PreparedDecimalRuntimeType(value string) (types.Type, bool) {
+	_, visible, ok := PreparedDecimalRuntimeTypes(value)
+	return visible, ok
+}
+
 func preparedDecimalType(value string) (types.Type, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -3753,6 +4924,204 @@ func preparedDecimalType(value string) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	return typ, true
+}
+
+// preparedNumericPrefixParamPositions returns the parameter positions that
+// independently satisfy the decimal-aware common-type eligibility check. The
+// frontend normally computes this one-position-at-a-time before calling the
+// replacement path; doing the same here keeps direct callers (and tests) from
+// combining the numeric-prefix and COM_STMT text-comparison conversions for an
+// unrelated marker in the same plan.
+func preparedNumericPrefixParamPositions(preparePlan *Plan, paramVals []any) map[int]bool {
+	positions := make(map[int]bool)
+	candidates := make([]any, len(paramVals))
+	for i, value := range paramVals {
+		param, ok := value.(ParamValue)
+		if !ok {
+			candidates[i] = value
+			continue
+		}
+		// A text COM_STMT value must use the common DOUBLE comparison domain
+		// whenever its numeric prefix is absent, out of range, or loses DOUBLE
+		// precision for the target column. Numeric-prefix casts are intended for
+		// index keys and would otherwise narrow the value to DECIMAL64(1,0) (for
+		// example, `foo`) or round a >2^53 integer before the filter sees it.
+		// This guard is specific to COM_STMT text packets. SQL EXECUTE and direct
+		// unit-test callers use EnableNumericPrefix for the decimal-aware
+		// common-type path, where an implicit DECIMAL cast is the intended domain
+		// rather than a text-comparison fallback. Keep all remaining eligible
+		// markers together: a common-value expression such as COALESCE can need
+		// more than one marker to establish its numeric context.
+		if param.IsBinaryProtocol &&
+			preparedTextParamNeedsDoubleComparison(preparePlan, i, param.Value) {
+			param.EnableNumericPrefix = false
+		}
+		candidates[i] = param
+	}
+	if !PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, candidates) {
+		return positions
+	}
+	for i, value := range candidates {
+		param, ok := value.(ParamValue)
+		if ok && param.EnableNumericPrefix {
+			positions[i] = true
+		}
+	}
+	return positions
+}
+
+func preparedTextParamNeedsDoubleComparison(preparePlan *Plan, position int, value any) bool {
+	if preparePlan == nil || value == nil {
+		return false
+	}
+	text, ok := value.(string)
+	if !ok {
+		text = fmt.Sprint(value)
+	}
+	foundTarget := false
+	needsFallback := false
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		if needsFallback {
+			return nil
+		}
+		if expr.GetF() == nil || expr.GetF().Func == nil ||
+			strings.ToLower(expr.GetF().Func.GetObjName()) != "cast" ||
+			!isImplicitPreparedParamCast(expr) {
+			return nil
+		}
+		paramPosition, ok := implicitPreparedParamPosition(expr)
+		if !ok || paramPosition != position {
+			return nil
+		}
+		foundTarget = true
+		needsFallback = preparedComparisonTextNeedsDoubleFallback(text, expr.Typ)
+		return nil
+	})
+	if needsFallback {
+		return true
+	}
+	// A marker without an implicit target cast can only be admitted by a
+	// decimal-aware context after its string has been parsed.  Keep nonnumeric
+	// strings in the generic DOUBLE path rather than synthesizing a decimal
+	// prefix cast.
+	return !foundTarget && func() bool {
+		_, ok := function.GetNumericStringPrefix(text)
+		return !ok
+	}()
+}
+
+func exprContainsPreparedPosition(expr *plan.Expr, position int) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil && param.Pos == int32(position) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprContainsPreparedPosition(arg, position) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsPreparedPosition(item, position) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// preparedPlanHasStaticDecimalPeer reports whether a marker participates in a
+// function whose other operand contains a real DECIMAL expression. An integer
+// column may cause the frontend to tentatively classify a text packet as a
+// possible DECIMAL candidate, but that must not suppress the COM_STMT
+// text-to-DOUBLE comparison path (for example, an indexed `id = ?` filter).
+func preparedPlanHasStaticDecimalPeer(preparePlan *Plan, position int) bool {
+	found := false
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		if found {
+			return nil
+		}
+		fn := expr.GetF()
+		if fn == nil {
+			return nil
+		}
+		for _, arg := range fn.Args {
+			if !exprContainsPreparedPosition(arg, position) {
+				continue
+			}
+			for _, peer := range fn.Args {
+				if peer != arg && exprHasStaticDecimalOperand(peer, position) {
+					found = true
+					return nil
+				}
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+func exprHasStaticDecimalOperand(expr *plan.Expr, position int) bool {
+	if expr == nil || exprContainsPreparedPosition(expr, position) {
+		return false
+	}
+	if types.T(expr.Typ.Id).IsDecimal() {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprHasStaticDecimalOperand(arg, position) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprHasStaticDecimalOperand(item, position) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PreparedRuntimeDecimalTypeFromString infers metadata for a parameter whose
+// binary protocol type is explicitly DECIMAL/NEWDECIMAL.
+func PreparedRuntimeDecimalTypeFromString(value string) (types.Type, bool) {
+	return preparedDecimalType(value)
+}
+
+// preparedExponentType validates a finite floating-point exponent form. It is
+// retained for callers that need the approximate domain.
+func preparedExponentType(value string) (types.Type, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || !strings.ContainsAny(value, "eE") {
+		return types.Type{}, false
+	}
+	unsigned := value
+	if unsigned[0] == '+' || unsigned[0] == '-' {
+		unsigned = unsigned[1:]
+	}
+	exponentAt := strings.IndexAny(unsigned, "eE")
+	if exponentAt <= 0 || strings.ContainsAny(unsigned[exponentAt+1:], "eE") ||
+		!isDecimalMantissa(unsigned[:exponentAt]) || !isDecimalExponent(unsigned[exponentAt+1:]) {
+		return types.Type{}, false
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsInf(parsed, 0) {
+		return types.Type{}, false
+	}
+	return types.T_float64.ToType(), true
+}
+
+// preparedNumericComparisonTextType selects the DOUBLE comparison domain for
+// textual operands in numeric comparisons.
+func preparedNumericComparisonTextType() types.Type {
+	return types.T_float64.ToType()
 }
 
 func isDecimalMantissa(value string) bool {
@@ -4055,7 +5424,14 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
+func replaceParamVals(
+	ctx context.Context,
+	plan0 *Plan,
+	paramVals []any,
+	preserveDMLWriteArgs ...bool,
+) (bool, error) {
+	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
+	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -4066,6 +5442,9 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		retainParamRef := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
+			if param.MaterializedValue != "" {
+				val = param.MaterializedValue
+			}
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
@@ -4076,6 +5455,8 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
 		}
+		_, directRuntimeResult := slices.BinarySearch(directResultPositions, int32(i))
+		directRuntimeResult = directRuntimeResult && hasRuntimeType
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -4093,10 +5474,10 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 				if err != nil {
 					return false, err
 				}
-				if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
-					params[i].GetLit().Src = &plan.Expr{
+				if numericPrefixSource || retainParamRef || directRuntimeResult {
+					attachPreparedRuntimeParamSource(params[i], &plan.Expr{
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
-					}
+					})
 				}
 				continue
 			}
@@ -4109,13 +5490,42 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 				},
 			}
 		}
-		if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
+		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 			}
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.setPreparedPlan(plan0)
+	// Keep the original execute-time values and protocol categories on the
+	// rebinding rule.  The plan parameters above intentionally use their
+	// prepare-time transport literals; overloaded functions such as ABS need
+	// the runtime category to select an exact integer/decimal overload.
+	paramRule.SetParamValues(paramVals)
+	if preserveDMLWrites {
+		paramRule.preserveRoots = preparedDMLWriteExpressions(plan0.GetQuery())
+	}
+	runtimeParamTypes := make([]types.Type, len(paramVals))
+	for i, val := range paramVals {
+		param, ok := val.(ParamValue)
+		if !ok || !param.IsBinaryProtocol {
+			continue
+		}
+		if param.PrepareParamKind == vector.PrepareParamBoolean {
+			// database/sql encodes bool as MYSQL_TYPE_TINY. Keep the Boolean
+			// literal for functions such as JSON_SET, but retain its numeric
+			// protocol domain while selecting comparison coercion.
+			runtimeParamTypes[i] = types.T_int8.ToType()
+		} else if param.HasRuntimeType {
+			runtimeParamTypes[i] = param.RuntimeType
+		} else if param.IsBinaryProtocol && param.Value != nil {
+			runtimeParamTypes[i] = types.T_text.ToType()
+		}
+	}
+	paramRule.numericComparisonTextParamPositions =
+		preparedNumericComparisonTextParamPositions(plan0, runtimeParamTypes)
+	numericPrefixPositions := preparedNumericPrefixParamPositions(plan0, paramVals)
 	paramRule.inferTextParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamKinds = make(map[int]types.StringConversionKind)
@@ -4127,23 +5537,18 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
 				paramRule.inferTextParamTypes = true
 			}
-			if param.EnableNumericPrefix {
+			if param.EnableNumericPrefix && numericPrefixPositions[i] {
 				paramRule.numericPrefixParamPositions[i] = true
 				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
-			}
-		}
-	}
-	directSelectRuntimeParam := make(map[int]bool)
-	if query := plan0.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
-		for _, node := range query.Nodes {
-			if node == nil {
-				continue
-			}
-			for _, expr := range node.ProjectList {
-				param := expr.GetP()
-				if param != nil && int(param.Pos) >= 0 && int(param.Pos) < len(paramVals) &&
-					runtimeParamHasExplicitType(paramVals[param.Pos]) {
-					directSelectRuntimeParam[int(param.Pos)] = true
+				// The numeric-prefix capability is the stronger execute-time
+				// contract only when this position is selected by the
+				// decimal-aware common-type path. Do not also route that marker
+				// through the generic COM_STMT text-vs-numeric DOUBLE fallback;
+				// the two conversions have different result domains (notably for
+				// nested COALESCE). Marker-to-marker comparisons keep the DOUBLE
+				// path because they have no exact numeric peer.
+				if numericPrefixPositions[i] && preparedPlanHasStaticDecimalPeer(plan0, i) {
+					delete(paramRule.numericComparisonTextParamPositions, i)
 				}
 			}
 		}
@@ -4186,18 +5591,278 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 			return false, err
 		}
 	}
+	refreshPreparedPlanProjectionTypes(plan0)
 
-	// A direct SELECT parameter is part of the result-column contract. Its
-	// execute-time numeric domain must therefore be reflected in the copied
-	// plan even when it is not wrapped by a function overload.
-	specialized := paramRule.specialized
-	for pos := range directSelectRuntimeParam {
-		if runtimeParamHasExplicitType(paramVals[pos]) {
-			specialized = true
-			break
+	// A direct SELECT parameter is part of the result-column contract. Propagate
+	// its execute-time type through transparent projection/sort/distinct nodes
+	// so the final visible ColDef agrees with the rewritten source expression.
+	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
+	return paramRule.specialized || directResultSpecialized, nil
+}
+
+func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {
+	query := plan0.GetQuery()
+	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) == 0 {
+		return false
+	}
+	rootID := query.Steps[len(query.Steps)-1]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
+		return false
+	}
+	memo := make(map[directResultTraceKey]plan.Type)
+	found := make(map[directResultTraceKey]bool)
+	specialized := false
+	for colPos := range query.Nodes[rootID].ProjectList {
+		_, direct := propagatePreparedDirectResultTypeAt(
+			query, rootID, int32(colPos), paramVals, memo, found)
+		specialized = specialized || direct
+	}
+	return specialized
+}
+
+func propagatePreparedDirectResultTypeAt(
+	query *plan.Query,
+	nodeID, colPos int32,
+	paramVals []any,
+	memo map[directResultTraceKey]plan.Type,
+	found map[directResultTraceKey]bool,
+) (plan.Type, bool) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return plan.Type{}, false
+	}
+	key := directResultTraceKey{nodeID: nodeID, colPos: colPos}
+	if direct, ok := found[key]; ok {
+		return memo[key], direct
+	}
+	// Publish a negative entry before recursion so malformed cyclic plans stay
+	// total instead of recursing indefinitely.
+	found[key] = false
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return plan.Type{}, false
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		return plan.Type{}, false
+	}
+
+	if int(colPos) >= len(node.ProjectList) {
+		if len(node.Children) != 1 {
+			return plan.Type{}, false
+		}
+		typ, direct := propagatePreparedDirectResultTypeAt(
+			query, node.Children[0], colPos, paramVals, memo, found)
+		if direct {
+			memo[key], found[key] = typ, true
+		}
+		return typ, direct
+	}
+	expr := node.ProjectList[colPos]
+	if expr == nil {
+		return plan.Type{}, false
+	}
+	if position, ok := preparedRuntimeSourceParamPosition(expr); ok &&
+		position >= 0 && position < len(paramVals) && runtimeParamHasExplicitType(paramVals[position]) {
+		memo[key], found[key] = expr.Typ, true
+		return expr.Typ, true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return plan.Type{}, false
+	}
+	if node.NodeType == plan.Node_AGG && col.RelPos < 0 &&
+		col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+		groupExpr := node.GroupBy[col.ColPos]
+		if position, ok := preparedRuntimeSourceParamPosition(groupExpr); ok &&
+			position >= 0 && position < len(paramVals) && runtimeParamHasExplicitType(paramVals[position]) {
+			expr.Typ = groupExpr.Typ
+			memo[key], found[key] = groupExpr.Typ, true
+			return groupExpr.Typ, true
+		}
+		groupCol := groupExpr.GetCol()
+		if groupCol == nil || len(node.Children) != 1 {
+			return plan.Type{}, false
+		}
+		typ, direct := propagatePreparedDirectResultTypeAt(
+			query, node.Children[0], groupCol.ColPos, paramVals, memo, found)
+		if !direct {
+			return plan.Type{}, false
+		}
+		groupExpr.Typ = typ
+		expr.Typ = typ
+		memo[key], found[key] = typ, true
+		return typ, true
+	}
+	childID := int32(-1)
+	if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+		childID = node.Children[col.RelPos]
+	} else if len(node.Children) == 1 {
+		childID = node.Children[0]
+	}
+	if childID < 0 {
+		return plan.Type{}, false
+	}
+	typ, direct := propagatePreparedDirectResultTypeAt(
+		query, childID, col.ColPos, paramVals, memo, found)
+	if !direct {
+		return plan.Type{}, false
+	}
+	expr.Typ = typ
+	memo[key], found[key] = typ, true
+	return typ, true
+}
+
+func preparedRuntimeSourceParamPosition(expr *Expr) (int, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return int(param.Pos), true
+	}
+	literal := expr.GetLit()
+	if literal != nil && literal.Src != nil && literal.Src.GetP() != nil {
+		return int(literal.Src.GetP().Pos), true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 {
+		return 0, false
+	}
+	return preparedRuntimeSourceParamPosition(fn.Args[0])
+}
+
+func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
+	if expr == nil || source == nil {
+		return false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		literal.Src = source
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 {
+		return false
+	}
+	literal := fn.Args[0].GetLit()
+	if literal == nil {
+		return false
+	}
+	literal.Src = source
+	return true
+}
+
+// refreshPreparedPlanProjectionTypes repairs synthetic column expressions
+// whose source expression changed type while a prepared plan was rebound.
+// Aggregate and window nodes expose their computed values through positional
+// column references; the expression visitor updates the source expression but
+// cannot infer the cached type on those references. Downstream PROJECT nodes
+// must be refreshed as well so result metadata and vector decoding agree.
+func refreshPreparedPlanProjectionTypes(plan0 *Plan) {
+	query := plan0.GetQuery()
+	if query == nil {
+		return
+	}
+
+	visited := make(map[int32]bool)
+	var refreshNode func(int32)
+	refreshNode = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		for _, childID := range node.Children {
+			refreshNode(childID)
+		}
+
+		switch node.NodeType {
+		case plan.Node_AGG:
+			groupSize := int32(len(node.GroupBy))
+			for _, expr := range node.ProjectList {
+				if expr == nil {
+					continue
+				}
+				col := expr.GetCol()
+				if col == nil {
+					continue
+				}
+				switch col.RelPos {
+				case -1:
+					if col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+						expr.Typ = node.GroupBy[col.ColPos].Typ
+					}
+				case -2:
+					aggPos := col.ColPos - groupSize
+					if aggPos >= 0 && int(aggPos) < len(node.AggList) {
+						expr.Typ = node.AggList[aggPos].Typ
+					}
+				}
+			}
+		case plan.Node_WINDOW:
+			// The outer W expression retains the type used by the original
+			// window function unless it is explicitly synchronized here.
+			for _, expr := range node.WinSpecList {
+				if expr == nil || expr.GetW() == nil || expr.GetW().WindowFunc == nil {
+					continue
+				}
+				expr.Typ = expr.GetW().WindowFunc.Typ
+			}
+			var child *plan.Node
+			if len(node.Children) == 1 {
+				childID := node.Children[0]
+				if childID >= 0 && int(childID) < len(query.Nodes) {
+					child = query.Nodes[childID]
+				}
+			}
+			childProjectSize := int32(0)
+			if child != nil {
+				childProjectSize = int32(len(child.ProjectList))
+			}
+			for _, expr := range node.ProjectList {
+				if expr == nil {
+					continue
+				}
+				col := expr.GetCol()
+				if col == nil || col.RelPos != -1 {
+					continue
+				}
+				winPos := col.ColPos - childProjectSize
+				if winPos >= 0 && int(winPos) < len(node.WinSpecList) {
+					expr.Typ = node.WinSpecList[winPos].Typ
+				}
+			}
+		}
+
+		// A projection node exposes its child columns through RelPos == 0.
+		// Propagate the child's refreshed type so final result metadata and the
+		// vector decoder agree with the runtime expression domain.
+		if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) {
+				child := query.Nodes[childID]
+				if child != nil {
+					for _, expr := range node.ProjectList {
+						if expr == nil {
+							continue
+						}
+						col := expr.GetCol()
+						if col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+							continue
+						}
+						expr.Typ = child.ProjectList[col.ColPos].Typ
+					}
+				}
+			}
 		}
 	}
-	return specialized, nil
+
+	for _, step := range query.Steps {
+		refreshNode(step)
+	}
 }
 
 func runtimeParamHasExplicitType(value any) bool {
@@ -4615,4 +6280,67 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 	}
 	pk := tableDef.GetPkey()
 	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
+}
+
+// isExecutionConstantExpr reports whether an expression is a value that is unknown at
+// plan time but CONSTANT for the whole execution: a prepared parameter marker,
+// optionally wrapped in monotone casts (`CAST(? AS DOUBLE)`).
+//
+// The distinction that matters is against a per-ROW expression such as a column
+// reference. Both are "not a literal", but only this kind can be constant-folded once
+// before a scan and used as a fixed bound; a column reference varies per row and must
+// stay a residual filter. Optimizer rules that want to admit `?` where they previously
+// demanded a literal should test this, never merely `GetLit() == nil`.
+//
+// EVERY argument of a wrapper is checked, not only the first. Some wrappers have a
+// value-affecting second argument -- `round(?, digits)` -- so `round(?, per_row_col)`
+// is a different value on every row even though argument 0 is a parameter. Following
+// argument 0 alone reports that as constant, and the bound is then peeled into one
+// scan-wide range that cannot be folded, failing the read.
+//
+// The expression must also actually CONTAIN a parameter: an all-literal expression is
+// handled by the literal path, and reporting it here would route it down the runtime
+// branch instead.
+func isExecutionConstantExpr(expr *plan.Expr) bool {
+	constant, hasParam := execConstantExpr(expr, 0)
+	return constant && hasParam
+}
+
+// execConstantExpr returns whether expr is constant for the execution, and whether it
+// contains a parameter marker at all.
+func execConstantExpr(expr *plan.Expr, depth int) (constant, hasParam bool) {
+	if expr == nil || depth > 8 {
+		return false, false
+	}
+	if expr.GetP() != nil {
+		return true, true
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return true, false // fixed for the execution, but not a parameter
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return false, false
+	}
+	switch fn.Func.ObjName {
+	case "cast":
+		// Argument 1 is the TARGET TYPE, not a value, so only argument 0 carries data.
+		return execConstantExpr(fn.Args[0], depth+1)
+	case "round", "floor", "ceil":
+		// Every argument here is a value, and every one of them affects the result:
+		// round(x, digits) moves with digits. Checking argument 0 alone would accept
+		// round(?, per_row_col).
+		for _, arg := range fn.Args {
+			argConst, argParam := execConstantExpr(arg, depth+1)
+			if !argConst {
+				return false, false
+			}
+			hasParam = hasParam || argParam
+		}
+		return true, hasParam
+	default:
+		// An unlisted function may have any arity or any per-row argument; refuse
+		// rather than guess which of its arguments are value-affecting.
+		return false, false
+	}
 }

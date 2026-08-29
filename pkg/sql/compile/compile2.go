@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -105,6 +106,20 @@ func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
 	}
 }
 
+func markInsertTableScansNotLockMeta(query *plan.Query) {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
+			continue
+		}
+
+		// INSERT plans can share an ObjectRef between a target-table scan and
+		// the write context. NotLockMeta is local to the scan: the write target
+		// must still contribute its shared metadata lock so concurrent DDL waits.
+		node.ObjRef = plan2.DeepCopyObjectRef(node.ObjRef)
+		node.ObjRef.NotLockMeta = true
+	}
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -131,6 +146,9 @@ func (c *Compile) Compile(
 	// pre-pipeline lock can advance an RC transaction's mutable snapshot. A
 	// normal data retry reuses the same plan and therefore keeps its binding.
 	c.bindPlanSnapshotForCompile()
+	// Freeze the owner mapping before any Shuffle is constructed. A retry
+	// inherits this execution value even if the deployment gate changes.
+	c.bindStringShuffleHashAlgorithmForCompile()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -177,11 +195,7 @@ func (c *Compile) Compile(
 					}
 				}
 			case plan.Query_INSERT:
-				for _, n := range qry.Query.Nodes {
-					if n.NodeType == plan.Node_TABLE_SCAN {
-						n.ObjRef.NotLockMeta = true
-					}
-				}
+				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
 			default:
 				c.needLockMeta = true
@@ -949,7 +963,7 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
-func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
+func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
@@ -957,7 +971,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
-	runC.reusePlanSnapshot = !defChanged
+	c.bindRetryPlanGeneration(runC, rebuildPlan)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	c.copyAllocationAccountLifecycleTo(runC)
@@ -973,23 +987,80 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 			runC.Release()
 		}
 	}()
-	if defChanged {
-		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc(topContext)
+	planForRetry := c.pn
+	if rebuildPlan {
+		planForRetry, e = c.buildPlanFunc(topContext)
 		if e != nil {
 			return nil, e
 		}
-		c.pn = pn
-		// Update c.anal.qry to point to the new plan's Query
-		// This ensures fillPlanNodeAnalyzeInfo uses the correct nodes
-		if qry, ok := pn.Plan.(*plan.Plan_Query); ok && c.anal != nil {
+		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
+			return nil, e
+		}
+	}
+	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
+		return nil, e
+	}
+	if rebuildPlan {
+		// Publish the rebuilt logical plan and its immutable binding together,
+		// after physical compilation succeeds. A subsequent ordinary retry must
+		// inherit this generation rather than the one that first hit the fence.
+		c.pn = planForRetry
+		c.inheritPlanSnapshot(runC)
+		// Update c.anal.qry to point to the new plan's Query. This ensures
+		// fillPlanNodeAnalyzeInfo uses the correct nodes.
+		if qry, ok := planForRetry.Plan.(*plan.Plan_Query); ok && c.anal != nil {
 			c.anal.qry = qry.Query
 		}
 	}
-	if e = runC.Compile(topContext, c.pn, c.fill); e != nil {
-		return nil, e
-	}
 	return runC, nil
+}
+
+func (c *Compile) validateRetryResultMetadata(
+	ctx context.Context,
+	rebuilt *plan.Plan,
+) error {
+	if selectStmt, ok := c.stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 &&
+		len(plan2.GetResultColumnsFromPlan(rebuilt)) != len(selectStmt.IntoVars) {
+		// SELECT INTO validates arity before the first attempt. Repeat that
+		// validation at the definition-retry boundary because an empty rebuilt
+		// result never reaches the row callback that also checks arity.
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	if !c.resultMetadataFrozen || sameResultMetadata(c.pn, rebuilt) {
+		return nil
+	}
+	// Returning the definition-change error from buildRetryCompile is terminal
+	// for this Run invocation (it is not fed back through canRetry). This avoids
+	// executing rows with a schema different from metadata already sent while
+	// preserving the client-visible request to retry/reprepare.
+	return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+}
+
+func sameResultMetadata(left, right *plan.Plan) bool {
+	leftColumns := plan2.GetResultColumnsFromPlan(left)
+	rightColumns := plan2.GetResultColumnsFromPlan(right)
+	if len(leftColumns) != len(rightColumns) {
+		return false
+	}
+	for i := range leftColumns {
+		if !proto.Equal(leftColumns[i], rightColumns[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) bindRetryPlanGeneration(runC *Compile, rebuildPlan bool) {
+	runC.inheritStringShuffleHashAlgorithm(c)
+	if !rebuildPlan {
+		runC.inheritPlanSnapshot(c)
+		return
+	}
+	// The retry's rebuilt plan and physical topology form a new generation.
+	// Frontend prepared state from the old generation is now ineligible even if
+	// rebuilding or running the retry later fails. This applies equally to a
+	// cached prepared Compile and to an uncached prepared logical plan.
+	c.planGenerationRebuilt = true
 }
 
 // InitPipelineContextToExecuteQuery initializes the context for each pipeline tree.

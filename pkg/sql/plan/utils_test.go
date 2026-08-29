@@ -549,6 +549,282 @@ func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		wantOID   types.T
+		wantWidth int32
+		wantScale int32
+		wantOK    bool
+	}{
+		{name: "integer", value: "123", wantOID: types.T_decimal64, wantWidth: 3, wantOK: true},
+		{name: "leading zeros", value: "001.20", wantOID: types.T_decimal64, wantWidth: 3, wantScale: 2, wantOK: true},
+		{name: "fixed scale zero", value: "0.00", wantOID: types.T_decimal64, wantWidth: 2, wantScale: 2, wantOK: true},
+		{name: "exponent zero", value: "0e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
+		{name: "zero positive exponent boundary", value: "0e+77", wantOID: types.T_decimal64, wantWidth: 1, wantOK: true},
+		{name: "zero huge positive exponent", value: "000.000e+999999999999999999999", wantOID: types.T_decimal64, wantWidth: 1, wantOK: true},
+		{name: "zero negative scale overflow", value: "0e-77"},
+		{name: "small exponent", value: "1e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
+		{name: "positive exponent", value: "1.2500e+2", wantOID: types.T_decimal64, wantWidth: 5, wantScale: 2, wantOK: true},
+		{name: "decimal256", value: strings.Repeat("9", 75) + ".1", wantOID: types.T_decimal256, wantWidth: 76, wantScale: 1, wantOK: true},
+		{name: "width overflow", value: strings.Repeat("9", 77)},
+		{name: "scale overflow", value: "1e-77"},
+		{name: "invalid", value: "1.2.3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedDecimalRuntimeType(test.value)
+			require.Equal(t, test.wantOK, ok)
+			if !ok {
+				return
+			}
+			require.Equal(t, test.wantOID, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		canonical string
+		visible   types.Type
+	}{
+		{
+			name: "decimal64 leading zeroes", value: strings.Repeat("0", 100) + "1.0",
+			canonical: "10e-1", visible: types.New(types.T_decimal64, 2, 1),
+		},
+		{
+			name: "signed exponent", value: "-00012.3400e+2",
+			canonical: "-123400e-2", visible: types.New(types.T_decimal64, 6, 2),
+		},
+		{
+			name: "decimal256 leading zeroes", value: strings.Repeat("0", 100) + strings.Repeat("9", 65),
+			canonical: strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
+		},
+		{
+			name: "huge exponent zero", value: "-000.000e+999999999999999999999",
+			canonical: "0", visible: types.New(types.T_decimal64, 1, 0),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
+			require.True(t, ok)
+			require.Equal(t, test.visible, visible)
+			require.Equal(t, test.canonical, canonical)
+		})
+	}
+
+	raw := strings.Repeat("0", 100) + "1.0"
+	_, visible, canonical, ok := PreparedDecimalRuntimeDomains(raw)
+	require.True(t, ok)
+	planUnderTest := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), planUnderTest, []any{ParamValue{
+			Value: raw, MaterializedValue: canonical,
+			RuntimeType: visible, HasRuntimeType: true,
+			IsBinaryProtocol: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	expr := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), expr.Typ.Id)
+	require.Equal(t, int32(2), expr.Typ.Width)
+	require.Equal(t, int32(1), expr.Typ.Scale)
+	require.Equal(t, int64(10), expr.GetLit().GetDecimal64Val().A)
+	require.Equal(t, int32(0), expr.GetLit().GetSrc().GetP().Pos)
+}
+
+func TestPreparedDecimalRuntimeTypesLargeLexemeHasBoundedAllocations(t *testing.T) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	assertDomains := func() {
+		normalized, visible, ok := PreparedDecimalRuntimeTypes(value)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal64, 1, 0), normalized)
+		require.Equal(t, types.New(types.T_decimal64, 2, 1), visible)
+	}
+	assertDomains()
+	require.Zero(t, testing.AllocsPerRun(10, func() {
+		_, _, ok := PreparedDecimalRuntimeTypes(value)
+		if !ok {
+			panic("large valid DECIMAL lexeme rejected")
+		}
+	}))
+}
+
+func BenchmarkPreparedDecimalRuntimeTypesLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		_, _, ok := PreparedDecimalRuntimeTypes(value)
+		if !ok {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+	}
+}
+
+func BenchmarkPreparedDecimalDomainsAndMaterializationLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	ctx := context.Background()
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		_, visible, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		if !ok {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+		candidate := DeepCopyPlan(template)
+		if _, err := replaceParamVals(ctx, candidate, []any{ParamValue{
+			Value: value, MaterializedValue: canonical,
+			RuntimeType: visible, HasRuntimeType: true,
+			IsBinaryProtocol: true, RetainParamRef: true,
+		}}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "direct", sql: "prepare direct_result from 'select ? as result'", want: []int32{0}},
+		{name: "order by", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
+		{name: "distinct", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
+		{name: "distinct row source", sql: "prepare direct_distinct_rows from 'select distinct ? as result from nation'", want: []int32{0}},
+		{name: "union common type control", sql: "prepare direct_union from 'select ? as result union all select 1'"},
+		{name: "nested control", sql: "prepare nested_only from 'select abs(?)'"},
+		{name: "explicit cast control", sql: "prepare explicit_cast from 'select cast(? as decimal(20, 4))'"},
+		{name: "union explicit cast control", sql: "prepare union_explicit_cast from 'select cast(? as decimal(20, 4)) union all select cast(1 as decimal(20, 4))'"},
+		{name: "mixed control", sql: "prepare direct_mixed from 'select ? as direct_value, abs(?) as nested_value'", want: []int32{0}},
+		{name: "predicate control", sql: "prepare predicate_only from 'select 1 where ? = 1'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			got := PreparedPlanDirectResultParamPositions(planUnderTest)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	require.Nil(t, PreparedPlanDirectResultParamPositions(nil))
+	require.Nil(t, PreparedPlanDirectResultParamPositions(&plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
+	}))
+}
+
+func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "direct", sql: "prepare runtime_direct from 'select ? as result'"},
+		{name: "order by", sql: "prepare runtime_order from 'select ? as result order by result'"},
+		{name: "distinct", sql: "prepare runtime_distinct from 'select distinct ? as result'"},
+		{name: "distinct row source", sql: "prepare runtime_distinct_rows from 'select distinct ? as result from nation'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.GetDcl().GetPrepare().GetPlan(), []any{ParamValue{
+					Value: "42", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+					IsBinaryProtocol: true, RetainParamRef: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+			columns := GetResultColumnsFromPlan(filled)
+			require.NotEmpty(t, columns)
+			require.Equal(t, int32(types.T_int64), columns[0].Typ.Id, columns[0].String())
+		})
+	}
+}
+
+func TestPreparedDirectDecimal256RestoresRuntimeParamRef(t *testing.T) {
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	runtimeType := types.New(types.T_decimal256, 76, 1)
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), original, []any{ParamValue{
+			Value: strings.Repeat("9", 75) + ".1", RuntimeType: runtimeType,
+			HasRuntimeType: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	project := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.NotNil(t, project.GetF(), "Decimal256 must materialize through an explicit cast")
+	require.NotNil(t, project.GetF().Args[0].GetLit().GetSrc())
+
+	require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+	project = filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal256), project.Typ.Id)
+	require.NotNil(t, project.GetF())
+	var restoredParam *plan.ParamRef
+	require.NoError(t, plan.VisitExprTree(project, func(candidate *plan.Expr) error {
+		if restoredParam == nil {
+			restoredParam = candidate.GetP()
+		}
+		return nil
+	}))
+	require.NotNil(t, restoredParam)
+	require.Equal(t, int32(0), restoredParam.Pos)
+
+	prepared, err := runOneStmt(
+		NewMockOptimizer(false), t,
+		"prepare decimal256_order from 'select ? as result order by result'")
+	require.NoError(t, err)
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepared.GetDcl().GetPrepare().GetPlan(), []any{ParamValue{
+			Value: strings.Repeat("9", 75) + ".1", RuntimeType: runtimeType,
+			HasRuntimeType: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+	columns := GetResultColumnsFromPlan(filled)
+	require.NotEmpty(t, columns)
+	require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
+	require.Equal(t, int32(76), columns[0].Typ.Width)
+	require.Equal(t, int32(1), columns[0].Typ.Scale)
+}
+
 func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 	ctx := context.Background()
 	target := types.T_int64.ToType()
@@ -625,6 +901,11 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		{value: "1.", want: true},
 		{value: "1e+2", want: true},
 		{value: ".1e-2", want: true},
+		// This finite value is valid FLOAT64 syntax, but its exponent is
+		// outside the Decimal256 domain.  preparedDecimalType must therefore
+		// reject it; preparedExponentType below covers the approximate domain.
+		{value: "1.7976931348623157e308", want: false},
+		{value: "1e309", want: false},
 		{value: "1e", want: false},
 		{value: "1e+", want: false},
 		{value: "1.2.3", want: false},
@@ -632,6 +913,23 @@ func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 		_, ok := preparedDecimalType(test.value)
 		require.Equal(t, test.want, ok, test.value)
 	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "1e+2", want: true},
+		{value: ".1e-2", want: true},
+		{value: "1.7976931348623157e308", want: true},
+		{value: "1e309", want: false},
+		{value: "1e", want: false},
+		{value: "e1", want: false},
+		{value: "1ee2", want: false},
+		{value: "1eE2", want: false},
+	} {
+		_, ok := preparedExponentType(test.value)
+		require.Equal(t, test.want, ok, test.value)
+	}
+	require.Equal(t, types.T_float64, preparedNumericComparisonTextType().Oid)
 }
 
 func TestPreparedRuntimeParamExprMaterializesRuntimeTypes(t *testing.T) {
