@@ -504,6 +504,7 @@ func TestDiskCacheCurrentReaderReindexesUntrackedPath(t *testing.T) {
 		FilePath: "foo",
 		Entries:  []IOEntry{{Offset: 1, Size: 1}},
 	}
+	defer vector.Release()
 	require.NoError(t, cache.Read(ctx, vector))
 	require.True(t, vector.Entries[0].done)
 	require.Equal(t, []byte("b"), vector.Entries[0].Data)
