@@ -3179,22 +3179,29 @@ func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, uni
 	year, month, _, _ := start.ToDate().Calendar(true)
 	boundaryYear := int64(year)
 	boundaryMonth := int64(month)
+	var yearDelta, monthDelta int64
 	switch unit {
 	case types.Month, types.Year_Month:
-		boundaryYear += diff / 12
-		boundaryMonth += diff % 12
+		yearDelta = diff / 12
+		monthDelta = diff % 12
 	case types.Quarter:
 		if diff > math.MaxInt64/3 || diff < math.MinInt64/3 {
 			return false
 		}
 		months := diff * 3
-		boundaryYear += months / 12
-		boundaryMonth += months % 12
+		yearDelta = months / 12
+		monthDelta = months % 12
 	case types.Year:
-		boundaryYear += diff
+		yearDelta = diff
 	default:
 		return true
 	}
+	if (yearDelta > 0 && boundaryYear > math.MaxInt64-yearDelta) ||
+		(yearDelta < 0 && boundaryYear < math.MinInt64-yearDelta) {
+		return false
+	}
+	boundaryYear += yearDelta
+	boundaryMonth += monthDelta
 
 	if boundaryMonth <= 0 {
 		boundaryYear--

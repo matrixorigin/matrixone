@@ -4791,24 +4791,41 @@ func TestTemporalRangeCalendarIntervalOverflow(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(tc.add(interval.diff, int64(interval.unit)), moerr.ErrOutOfRange))
 				require.True(t, moerr.IsMoErrCode(tc.sub(interval.diff, int64(interval.unit)), moerr.ErrOutOfRange))
 
-				asc := tc.newVector(tc.ascending)
-				defer asc.Free(mp)
 				expr := intervalExpr(interval.diff, interval.unit)
-				left, err := searchLeft(0, asc.Length(), 0, asc, expr, true, false)
-				require.NoError(t, err)
-				require.Equal(t, asc.Length(), left)
-				right, err := searchRight(0, asc.Length(), 0, asc, expr, true, false)
-				require.NoError(t, err)
-				require.Equal(t, 0, right)
+				for _, order := range []struct {
+					name   string
+					values []string
+					desc   bool
+				}{
+					{name: "asc", values: tc.ascending},
+					{name: "desc", values: tc.descending, desc: true},
+				} {
+					t.Run(order.name, func(t *testing.T) {
+						vec := tc.newVector(order.values)
+						defer vec.Free(mp)
 
-				desc := tc.newVector(tc.descending)
-				defer desc.Free(mp)
-				left, err = searchLeft(0, desc.Length(), 0, desc, expr, false, true)
-				require.NoError(t, err)
-				require.Equal(t, 0, left)
-				right, err = searchRight(0, desc.Length(), 0, desc, expr, false, true)
-				require.NoError(t, err)
-				require.Equal(t, desc.Length(), right)
+						for _, operation := range []struct {
+							name         string
+							add          bool
+							wantBoundary int
+						}{
+							{name: "add", add: true, wantBoundary: temporalRangeOverflowBoundary(0, vec.Length(), true, order.desc)},
+							{name: "sub", wantBoundary: temporalRangeOverflowBoundary(0, vec.Length(), false, order.desc)},
+						} {
+							t.Run(operation.name, func(t *testing.T) {
+								// RANGE bounds are expressed in sort order, while the
+								// search helpers flip their arithmetic flag for DESC.
+								left, err := searchLeft(0, vec.Length(), 0, vec, expr, operation.add != order.desc, order.desc)
+								require.NoError(t, err)
+								require.Equal(t, operation.wantBoundary, left)
+
+								right, err := searchRight(0, vec.Length(), 0, vec, expr, !operation.add != order.desc, order.desc)
+								require.NoError(t, err)
+								require.Equal(t, operation.wantBoundary, right)
+							})
+						}
+					})
+				}
 			})
 		}
 	}
