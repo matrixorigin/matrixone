@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -722,24 +723,79 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 	return nil
 }
 
-// appendWindowValidationPrivilegeScans makes validation-only relations visible
-// to the existing frontend authorization walk without connecting them to a
-// query step. They are ownership metadata, never executable plan roots.
+// appendWindowValidationPrivilegeScans makes every validation-only relation
+// recognized by the frontend authorization walk visible without connecting it
+// to a query step. They are compact ownership metadata, never executable plan
+// roots: keeping a complete TableDef here would make a legal 127-window query
+// retain a copy of each wide schema it happens to validate.
 func appendWindowValidationPrivilegeScans(builder, validationBuilder *QueryBuilder) {
+	seen := make(map[string]struct{})
 	for _, node := range validationBuilder.qry.Nodes {
-		if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil || node.TableDef == nil {
+		carrier := windowValidationPrivilegeCarrier(node)
+		if carrier == nil {
 			continue
 		}
-		builder.windowValidationScans = append(builder.windowValidationScans, &plan.Node{
-			NodeType:     plan.Node_TABLE_SCAN,
-			ObjRef:       DeepCopyObjectRef(node.ObjRef),
-			TableDef:     DeepCopyTableDef(node.TableDef, true),
-			ParentObjRef: DeepCopyObjectRef(node.ParentObjRef),
-			ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
-			OriginViews:  append([]string(nil), node.OriginViews...),
-			DirectView:   node.DirectView,
-		})
+		key := windowValidationPrivilegeCarrierKey(carrier)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		builder.windowValidationScans = append(builder.windowValidationScans, carrier)
 	}
+}
+
+// windowValidationPrivilegeCarrier mirrors the node classes inspected by
+// extractPrivilegeTipsFromPlan. Keep this closure in sync with that frontend
+// contract rather than treating TABLE_SCAN as a proxy for every relation that
+// semantic binding can resolve.
+func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
+	if node == nil || node.ObjRef == nil {
+		return nil
+	}
+
+	carrier := &plan.Node{
+		NodeType:     node.NodeType,
+		ObjRef:       DeepCopyObjectRef(node.ObjRef),
+		ParentObjRef: DeepCopyObjectRef(node.ParentObjRef),
+		ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
+		OriginViews:  append([]string(nil), node.OriginViews...),
+		DirectView:   node.DirectView,
+	}
+	if node.TableDef != nil {
+		// Authorization only needs the table type to identify cluster tables.
+		carrier.TableDef = &plan.TableDef{TableType: node.TableDef.TableType}
+	}
+
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return carrier
+	case plan.Node_EXTERNAL_SCAN:
+		if node.ExternScan == nil || node.ExternScan.Type != int32(plan.ExternType_MONGODB_TB) {
+			return nil
+		}
+		// The frontend recognizes MongoDB scans from this discriminator alone.
+		carrier.ExternScan = &plan.ExternScan{Type: node.ExternScan.Type}
+		return carrier
+	case plan.Node_FUNCTION_SCAN:
+		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
+			return nil
+		}
+		// isPrivilegeBearingTableScan identifies this function by name.
+		carrier.TableDef = &plan.TableDef{
+			TableType: node.TableDef.TableType,
+			TblFunc:   &plan.TableFunction{Name: "table_changes"},
+		}
+		return carrier
+	default:
+		return nil
+	}
+}
+
+// windowValidationPrivilegeCarrierKey preserves distinct view and snapshot
+// authorization contexts while coalescing repeated references to one relation.
+func windowValidationPrivilegeCarrierKey(node *plan.Node) string {
+	return fmt.Sprintf("%d/%v/%v/%v/%s/%s", node.NodeType, node.ObjRef,
+		node.ParentObjRef, node.ScanSnapshot, strings.Join(node.OriginViews, "\x00"), node.DirectView)
 }
 
 // mergeWindowValidationDependencies retains the catalog closure discovered

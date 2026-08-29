@@ -794,6 +794,70 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 	})
 }
 
+func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T) {
+	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	wideTable := &planpb.TableDef{
+		TableType: "ordinary",
+		Cols:      make([]*planpb.ColDef, 1024),
+	}
+	ordinary := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef:   &planpb.ObjectRef{SchemaName: "tpch", ObjName: "region", Obj: 1},
+		TableDef: wideTable,
+	}
+	validation.qry.Nodes = append(validation.qry.Nodes, ordinary)
+	for i := 0; i < maxWindowsPerQueryBlock-1; i++ {
+		validation.qry.Nodes = append(validation.qry.Nodes, ordinary)
+	}
+	validation.qry.Nodes = append(validation.qry.Nodes,
+		&planpb.Node{
+			NodeType: planpb.Node_EXTERNAL_SCAN,
+			ObjRef:   &planpb.ObjectRef{SchemaName: "mongodb", ObjName: "events", Obj: 2},
+			TableDef: wideTable,
+			ExternScan: &planpb.ExternScan{
+				Type: int32(planpb.ExternType_MONGODB_TB),
+			},
+		},
+		&planpb.Node{
+			NodeType: planpb.Node_FUNCTION_SCAN,
+			ObjRef:   &planpb.ObjectRef{SchemaName: "tpch", ObjName: "nation", Obj: 3},
+			TableDef: &planpb.TableDef{TableType: "func_table", TblFunc: &planpb.TableFunction{Name: "table_changes"}, Cols: wideTable.Cols},
+		},
+		&planpb.Node{
+			NodeType: planpb.Node_EXTERNAL_SCAN,
+			ObjRef:   &planpb.ObjectRef{SchemaName: "external", ObjName: "ignored", Obj: 4},
+			ExternScan: &planpb.ExternScan{
+				Type: int32(planpb.ExternType_EXTERNAL_TB),
+			},
+		},
+	)
+
+	appendWindowValidationPrivilegeScans(owner, validation)
+	require.Len(t, owner.windowValidationScans, 3)
+
+	carriers := make(map[planpb.Node_NodeType]*planpb.Node)
+	for _, carrier := range owner.windowValidationScans {
+		carriers[carrier.NodeType] = carrier
+		require.Empty(t, carrier.GetTableDef().GetCols())
+	}
+	require.Equal(t, "region", carriers[planpb.Node_TABLE_SCAN].GetObjRef().GetObjName())
+	require.Equal(t, int32(planpb.ExternType_MONGODB_TB), carriers[planpb.Node_EXTERNAL_SCAN].GetExternScan().GetType())
+	require.Equal(t, "table_changes", carriers[planpb.Node_FUNCTION_SCAN].GetTableDef().GetTblFunc().GetName())
+
+	// A different view path is a distinct authorization context, even for the
+	// same relation and snapshot.
+	validation.qry.Nodes = []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      ordinary.ObjRef,
+		TableDef:    wideTable,
+		OriginViews: []string{"tpch.region_view"},
+		DirectView:  "tpch.region_view",
+	}}
+	appendWindowValidationPrivilegeScans(owner, validation)
+	require.Len(t, owner.windowValidationScans, 4)
+}
+
 func namedWindowsSQL(prefix string, count int) string {
 	var sql strings.Builder
 	for i := 0; i < count; i++ {
