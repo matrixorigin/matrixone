@@ -10206,6 +10206,30 @@ func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {
 	})
 }
 
+func TestSecToTimeOutOfRangeWarning(t *testing.T) {
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{3020400}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3020400}, nil),
+		NewFunctionTestInput(types.T_float64.ToTypeWithScale(6), []float64{3020400}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e999999999"}, nil),
+	} {
+		t.Run(input.typ.String(), func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc := testutil.NewProcess(t)
+			proc.Session = session
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input},
+				NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{types.MySQLTimeFunctionMaxForScale(0)}, nil),
+				SecToTime)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
+			require.Contains(t, session.warnings[0].msg, "Truncated incorrect time value")
+		})
+	}
+}
+
 func TestMakeTimeFractionAndSign(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)

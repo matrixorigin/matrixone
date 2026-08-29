@@ -4126,7 +4126,7 @@ func integerToTime[T constraints.Integer](
 			if outOfInputRange || vI64 < types.MinInputIntTime || vI64 > types.MaxInputIntTime {
 				if mode.isAssignment() {
 					negative := !outOfInputRange && vI64 < 0
-					result, err := mysqlTimeOutOfRangeForCast(ctx, proc, mode, fmt.Sprintf("%d", v), negative)
+					result, err := mysqlTimeOutOfRangeForCast(ctx, proc, mode, fmt.Sprintf("%d", v), negative, i)
 					if err != nil {
 						return err
 					}
@@ -4141,7 +4141,7 @@ func integerToTime[T constraints.Integer](
 			if err != nil {
 				return err
 			}
-			result, err = mysqlTimeForCast(ctx, proc, result, mode, toType.Scale)
+			result, err = mysqlTimeForCast(ctx, proc, result, mode, toType.Scale, i)
 			if err != nil {
 				return err
 			}
@@ -4586,7 +4586,7 @@ func timeToTime(
 			if targetScale < 6 {
 				result = result.TruncateToScale(targetScale)
 			}
-			result, err := mysqlTimeForCast(ctx, proc, result, mode, targetScale)
+			result, err := mysqlTimeForCast(ctx, proc, result, mode, targetScale, i)
 			if err != nil {
 				return err
 			}
@@ -4598,24 +4598,24 @@ func timeToTime(
 	return nil
 }
 
-func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Time, mode castMode, scale int32) (types.Time, error) {
+func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Time, mode castMode, scale int32, row uint64) (types.Time, error) {
 	maxValue := types.MySQLTimeMaxForScale(scale)
 	if !mode.isAssignment() || (value >= -maxValue && value <= maxValue) {
 		return value, nil
 	}
-	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0)
+	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0, row)
 }
 
 func mysqlTimeOutOfRangeForCast(
-	ctx context.Context, proc *process.Process, mode castMode, value string, negative bool,
+	ctx context.Context, proc *process.Process, mode castMode, value string, negative bool, row uint64,
 ) (types.Time, error) {
 	if mode.strictStringWidth() {
 		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value)
 	}
 	if proc != nil {
 		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
-			appender.AppendWarningDiagnostic(moerr.ER_DATA_OUT_OF_RANGE,
-				"Out of range value for column 'time' at row 1")
+			appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
+				fmt.Sprintf("Out of range value for column 'time' at row %d", row+1))
 		}
 	}
 	if negative {
@@ -5504,7 +5504,7 @@ func decimal64ToTime(
 			if err != nil {
 				return err
 			}
-			result, err = mysqlTimeForCast(ctx, proc, result, mode, totype.Scale)
+			result, err = mysqlTimeForCast(ctx, proc, result, mode, totype.Scale, i)
 			if err != nil {
 				return err
 			}
@@ -5535,7 +5535,7 @@ func decimal128ToTime(
 			if err != nil {
 				return err
 			}
-			result, err = mysqlTimeForCast(ctx, proc, result, mode, totype.Scale)
+			result, err = mysqlTimeForCast(ctx, proc, result, mode, totype.Scale, i)
 			if err != nil {
 				return err
 			}
@@ -8050,7 +8050,7 @@ func strToTime(
 			if err != nil {
 				return err
 			}
-			val, err = mysqlTimeForCast(ctx, proc, val, mode, totype.Scale)
+			val, err = mysqlTimeForCast(ctx, proc, val, mode, totype.Scale, i)
 			if err != nil {
 				return err
 			}

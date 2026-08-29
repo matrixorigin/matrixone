@@ -480,8 +480,9 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
 		require.Len(t, session.warnings, 4)
-		for _, warning := range session.warnings {
-			require.Equal(t, moerr.ER_DATA_OUT_OF_RANGE, warning.code)
+		for i, warning := range session.warnings {
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+			require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
 		}
 	})
 
@@ -492,8 +493,9 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
 		require.Equal(t, []types.Time{max, max, -max, -max}, values)
 		require.Len(t, session.warnings, 4)
-		for _, warning := range session.warnings {
-			require.Equal(t, moerr.ER_DATA_OUT_OF_RANGE, warning.code)
+		for i, warning := range session.warnings {
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+			require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
 		}
 	})
 
@@ -512,7 +514,7 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 			result, err := run(t, input, "", NewAssignCast, session)
 			require.NoError(t, err)
 			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
-			require.Equal(t, []numericWarning{{code: moerr.ER_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
 		})
 
 		t.Run(input.typ.String()+"/insert ignore clamps and warns", func(t *testing.T) {
@@ -520,7 +522,7 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 			result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
 			require.NoError(t, err)
 			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
-			require.Equal(t, []numericWarning{{code: moerr.ER_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
 		})
 	}
 
