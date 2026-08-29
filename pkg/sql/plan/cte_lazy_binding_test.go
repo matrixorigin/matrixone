@@ -753,16 +753,41 @@ func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
 	require.Equal(t, 1, countReachableNodeType(purePlan.GetQuery(), planpb.Node_SINK))
 	require.Equal(t, 1, countReachableTableFunction(purePlan.GetQuery(), "mo_current_roles"))
 
-	amplifiedPlan, err := runOneStmt(NewMockOptimizer(false), t, `
-		WITH c AS (
-			SELECT l.l_comment, r.role_id
-			FROM lineitem l CROSS JOIN mo_current_roles() r
-		)
-		SELECT a.role_id FROM c a JOIN c b ON a.role_id = b.role_id LIMIT 1`)
-	require.NoError(t, err)
-	require.Zero(t, countReachableNodeType(amplifiedPlan.GetQuery(), planpb.Node_SINK),
-		"an early-terminating amplifying subtree must retain the guarded inline plan")
-	require.Equal(t, 2, countReachableTableFunction(amplifiedPlan.GetQuery(), "mo_current_roles"))
+	earlyStopQueries := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "limit union",
+			sql: `
+				WITH c AS (
+					SELECT l.l_comment, r.role_id
+					FROM lineitem l CROSS JOIN mo_current_roles() r
+				)
+				(SELECT role_id FROM c LIMIT 1)
+				UNION ALL
+				(SELECT role_id FROM c LIMIT 1)`,
+		},
+		{
+			name: "semi join",
+			sql: `
+				WITH c AS (
+					SELECT l.l_comment, r.role_id
+					FROM lineitem l CROSS JOIN mo_current_roles() r
+				)
+				SELECT role_id FROM c a
+				WHERE EXISTS (SELECT 1 FROM c b WHERE a.role_id = b.role_id)`,
+		},
+	}
+	for _, test := range earlyStopQueries {
+		t.Run(test.name, func(t *testing.T) {
+			amplifiedPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			require.Zero(t, countReachableNodeType(amplifiedPlan.GetQuery(), planpb.Node_SINK),
+				"an early-terminating amplifying subtree must retain the guarded inline plan")
+			require.Equal(t, 2, countReachableTableFunction(amplifiedPlan.GetQuery(), "mo_current_roles"))
+		})
+	}
 
 	variableWidthPlan, err := runOneStmt(NewMockOptimizer(false), t, `
 		WITH c AS (
