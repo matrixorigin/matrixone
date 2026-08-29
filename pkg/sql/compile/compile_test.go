@@ -36,6 +36,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -2445,6 +2446,130 @@ func TestCompileMergeGroupDistinctTopology(t *testing.T) {
 		require.True(t, containsGroup(result[0].PreScopes[0].RootOp),
 			"non-mergeable DISTINCT states must share one Group operator")
 	})
+}
+
+func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	local, nodes := newShuffleGroupTestNodes(4)
+	local.Stats.HashmapStats.Shuffle = false
+	local.ProjectList = []*plan.Expr{{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: -1, ColPos: 0}},
+	}}
+	final := &plan.Node{
+		NodeType: plan.Node_AGG,
+		Stats: &plan.Stats{Dop: 4, HashmapStats: &plan.HashMapStats{
+			Shuffle:       true,
+			ShuffleColIdx: 0,
+			ShuffleType:   plan.ShuffleType_Hash,
+		}},
+		Children: []int32{1},
+		GroupBy: []*plan.Expr{{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		}},
+	}
+	require.True(t, isLocalPreAggregationGroup(final, local))
+	final.Stats.HashmapStats.Shuffle = false
+	require.False(t, isLocalPreAggregationGroup(final, local),
+		"a downstream complete Group is required before localizing its child")
+	final.Stats.HashmapStats.Shuffle = true
+	final.GroupBy[0].GetCol().ColPos = 1
+	require.False(t, isLocalPreAggregationGroup(final, local),
+		"the downstream Group must reproduce every child key position exactly")
+	final.GroupBy[0].GetCol().ColPos = 0
+	inputs := []*Scope{
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+		newShuffleGroupInputScope(t, 1),
+	}
+	inputRoots := make([]vm.Operator, len(inputs))
+	for i := range inputs {
+		inputRoots[i] = inputs[i].RootOp
+	}
+
+	result := c.compileLocalGroupBy(local, inputs, nodes)
+
+	require.Len(t, result, 4,
+		"local pre-dedup output must remain parallel for the parent exchange")
+	for i := range result {
+		require.Same(t, inputs[i], result[i])
+		groupOp, ok := result[i].RootOp.(*group.Group)
+		require.True(t, ok)
+		require.False(t, groupOp.NeedEval)
+		require.Same(t, inputRoots[i], groupOp.GetOperatorBase().GetChildren(0))
+		require.Empty(t, result[i].PreScopes,
+			"a local-only Group must not introduce a MergeGroup scope")
+	}
+
+	nodes = append(nodes, local)
+	owners := c.compileShuffleGroup(final, result, nodes)
+	require.Len(t, owners, 4)
+	for _, owner := range owners {
+		require.IsType(t, &group.Group{}, owner.RootOp,
+			"the parent exchange must retain four final pair owners")
+	}
+}
+
+type distinctPreAggregationCompilerContext struct {
+	*plan2.MockCompilerContext
+	stats *statspb.StatsInfo
+	cache *plan2.StatsCache
+}
+
+func (c *distinctPreAggregationCompilerContext) Stats(
+	_ *plan.ObjectRef,
+	_ *plan.Snapshot,
+) (*statspb.StatsInfo, error) {
+	return c.stats, nil
+}
+
+func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCache {
+	return c.cache
+}
+
+func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
+	base := plan2.NewMockCompilerContext(false)
+	base.SetContext(context.Background())
+	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
+	require.NoError(t, err)
+	require.NotNil(t, tableDef)
+
+	stats := plan2.NewStatsInfo()
+	stats.TableCnt = 6_000_000
+	stats.BlockNumber = 1_000
+	stats.NdvMap["l_returnflag"] = 3
+	stats.NdvMap["l_orderkey"] = 1_500_000
+	cache := plan2.NewStatsCache()
+	cache.Set(tableDef.TblId, stats)
+	compilerCtx := &distinctPreAggregationCompilerContext{
+		MockCompilerContext: base,
+		stats:               stats,
+		cache:               cache,
+	}
+
+	const sql = "select l_returnflag, count(distinct l_orderkey) " +
+		"from lineitem group by l_returnflag"
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
+	require.NoError(t, err)
+
+	found := false
+	for _, parent := range query.Nodes {
+		if parent == nil || len(parent.Children) != 1 {
+			continue
+		}
+		childID := parent.Children[0]
+		if childID < 0 || int(childID) >= len(query.Nodes) {
+			continue
+		}
+		if isLocalPreAggregationGroup(parent, query.Nodes[childID]) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"the finalized and column-remapped SQL plan must retain the local-pair compile contract")
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {

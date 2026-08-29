@@ -3798,6 +3798,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	for _, scan := range builder.windowValidationScans {
+		if scan == nil {
+			continue
+		}
+		scan.NodeId = int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	}
 	return builder.qry, nil
 }
 
@@ -5140,6 +5147,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		expandedSelectClause = selectClause
+		if err = validateQueryBlockWindowCount(builder.GetContext(), selectClause, astOrderBy); err != nil {
+			return 0, err
+		}
+		selectClause, astOrderBy, err = expandNamedWindowReferences(builder.GetContext(), selectClause, astOrderBy)
+		if err != nil {
+			return 0, err
+		}
 		// Keep the query-block aggregate state active while HAVING, SELECT
 		// projection, and ORDER BY are bound. bindSelectClause initializes the
 		// state after the pre-aggregation WHERE has been bound, so correlated
@@ -5236,8 +5250,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having: selectClause.Having,
-							Option: selectClause.Option,
+							Having:  selectClause.Having,
+							Windows: selectClause.Windows,
+							Option:  selectClause.Option,
 						}
 					}
 				}
@@ -6649,9 +6664,10 @@ func rewriteRollupWindowSelect(
 		innerExprs = append(innerExprs, rewriteState.innerExprs...)
 		innerExprs = append(innerExprs, rewriteState.orderExprs...)
 		selectStmts[i] = &tree.SelectClause{
-			Exprs: innerExprs,
-			From:  selectClause.From,
-			Where: selectClause.Where,
+			Exprs:   innerExprs,
+			From:    selectClause.From,
+			Where:   selectClause.Where,
+			Windows: selectClause.Windows,
 			GroupBy: &tree.GroupByClause{
 				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
 				GroupingSet:                  list,
@@ -7871,6 +7887,9 @@ func (builder *QueryBuilder) bindSelectClause(
 		if err != nil {
 			return
 		}
+	}
+	if err = validateNamedWindowDefinitions(builder, ctx, clause.Windows); err != nil {
+		return
 	}
 
 	// distinct

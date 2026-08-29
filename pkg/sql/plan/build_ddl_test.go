@@ -1806,6 +1806,33 @@ func TestStableViewStarHelpersCoverASTShapes(t *testing.T) {
 	require.False(t, selectStatementHasStar(nil))
 	require.False(t, selectStatementHasStar(columnClause))
 
+	nestedStarClause := &tree.SelectClause{
+		Exprs: tree.SelectExprs{starExpr},
+		From:  &tree.From{},
+	}
+	nestedWindowClause := &tree.SelectClause{
+		Exprs: tree.SelectExprs{columnExpr},
+		From:  &tree.From{},
+		Windows: tree.WindowDefinitions{
+			&tree.WindowDefinition{
+				Name: tree.NewCStr("w", 1),
+				Spec: &tree.WindowSpec{PartitionBy: tree.Exprs{
+					&tree.Subquery{Select: &tree.Select{Select: nestedStarClause}},
+				}},
+			},
+		},
+	}
+	require.True(t, selectClauseHasStar(nestedWindowClause))
+	stableWindowStmt, rewritten := viewSelectStatementWithExpandedStars(
+		nestedWindowClause,
+		map[*tree.SelectClause]tree.SelectExprs{
+			nestedStarClause: {{Expr: tree.NewUnresolvedColName("stable_col")}},
+		},
+	)
+	require.True(t, rewritten)
+	require.NotContains(t, tree.String(stableWindowStmt, dialect.MYSQL), "select *")
+	require.Contains(t, tree.String(stableWindowStmt, dialect.MYSQL), "stable_col")
+
 }
 
 func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
