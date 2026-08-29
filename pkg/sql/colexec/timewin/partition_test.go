@@ -1582,6 +1582,50 @@ func TestTimeWinAnyNullPartitionKey(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestAnyNullPartitionKeyPreservesSelectedStringSource(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_any.ToType()
+	for _, tc := range []struct {
+		name   string
+		source *vector.Vector
+		sel    int64
+		want   types.StringSource
+	}{
+		{
+			name: "constant SQL prepare NULL",
+			source: func() *vector.Vector {
+				vec := vector.NewConstNull(typ, 2, mp)
+				require.NoError(t, vec.SetStringSource(types.StringSourceSQLPrepare))
+				return vec
+			}(),
+			want: types.StringSourceSQLPrepare,
+		},
+		{
+			name: "selected COM_STMT NULL",
+			source: func() *vector.Vector {
+				vec := vector.NewVec(typ)
+				vec.SetLength(2)
+				vec.SetNull(1)
+				require.NoError(t, vec.SetStringSourcesWithMP([]types.StringSource{
+					types.StringSourceLiteral, types.StringSourceCOMStmt,
+				}, mp))
+				return vec
+			}(),
+			sel: 1, want: types.StringSourceCOMStmt,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := vector.NewVec(typ)
+			require.NoError(t, getPartitionSetFunction(typ, mp)(dst, tc.source, tc.sel, 1))
+			require.True(t, dst.IsConstNull())
+			require.Equal(t, tc.want, dst.GetStringSourceAt(0))
+			dst.Free(mp)
+			tc.source.Free(mp)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAnyPartitionKeyRejectsNonNullValue(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.T_any.ToType()
