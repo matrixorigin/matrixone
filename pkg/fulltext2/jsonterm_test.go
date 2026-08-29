@@ -15,12 +15,17 @@
 package fulltext2
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -320,8 +325,9 @@ func TestSegmentTermRange(t *testing.T) {
 
 // The range must select exactly the terms a numeric comparison implies.
 func TestTermRangeSelectsNumericTerms(t *testing.T) {
-	var terms []string
-	for _, v := range []float64{-10, -1, 0, 1, 3.14, 100} {
+	vals := []float64{-10, -1, 0, 1, 3.14, 100}
+	terms := make([]string, 0, len(vals))
+	for _, v := range vals {
 		terms = append(terms, JSONFloatTerm("n", v, "", false))
 	}
 	sort.Strings(terms)
@@ -337,4 +343,209 @@ func TestTermRangeSelectsNumericTerms(t *testing.T) {
 	lo, _ := JSONNumericTermBounds("n")
 	got = seg.TermRange(lo, JSONFloatTerm("n", 0, "", false))
 	require.Equal(t, 3, len(got), "-10, -1 and the boundary 0")
+}
+
+// --- probe search over a real index -----------------------------------------
+
+// jsonProbeIndex builds a one-segment index whose terms are the tuple terms of
+// the given documents, so a probe can be resolved end to end in-process.
+func jsonProbeIndex(t *testing.T, docs map[int64]string) *Index {
+	t.Helper()
+	opt := JSONTermOptions{IncludeKeys: true}
+	pks := make([]int64, 0, len(docs))
+	for pk := range docs {
+		pks = append(pks, pk)
+	}
+	sort.Slice(pks, func(i, j int) bool { return pks[i] < pks[j] })
+
+	tdocs := make([]TokenizedDoc, 0, len(docs))
+	for _, pk := range pks {
+		bj, err := bytejson.ParseFromString(docs[pk])
+		require.NoError(t, err)
+		terms := JSONTupleTerms(bj, opt)
+		pos := make([]int32, len(terms))
+		for i := range terms {
+			pos[i] = int32(i)
+		}
+		tdocs = append(tdocs, TokenizedDoc{Pk: pk, Terms: terms, Positions: pos})
+	}
+	seg, err := BuildSegmentFromTokenized("jp", int32(types.T_int64), tdocs)
+	require.NoError(t, err)
+	return NewIndex([]*Segment{seg}, nil)
+}
+
+func probeHits(t *testing.T, idx *Index, terms []string, ranges [][2]string) []int64 {
+	t.Helper()
+	res, err := idx.SearchJSONProbe([]byte(EncodeJSONProbePayload(terms, ranges)), TfIdf, 100, nil)
+	require.NoError(t, err)
+	out := make([]int64, 0, len(res))
+	for _, r := range res {
+		out = append(out, r.Pk.(int64))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func TestSearchJSONProbeExactTerms(t *testing.T) {
+	idx := jsonProbeIndex(t, map[int64]string{
+		1: `{"foo":"bar","n":10}`,
+		2: `{"foo":"baz","n":20}`,
+		3: `{"other":"bar","n":30}`,
+	})
+	// the key is part of the term: doc 3 has "bar" under a DIFFERENT key
+	require.Equal(t, []int64{1},
+		probeHits(t, idx, []string{JSONStringTerm("foo", "bar", "", false)}, nil))
+	// a term no document holds
+	require.Empty(t, probeHits(t, idx, []string{JSONStringTerm("foo", "nope", "", false)}, nil))
+	// two terms are ORed
+	require.Equal(t, []int64{1, 2}, probeHits(t, idx, []string{
+		JSONStringTerm("foo", "bar", "", false),
+		JSONStringTerm("foo", "baz", "", false),
+	}, nil))
+}
+
+// The range path: this is what silently returned nothing until TermRange learned
+// to read the loaded FST as well as the build-side key list.
+func TestSearchJSONProbeRanges(t *testing.T) {
+	idx := jsonProbeIndex(t, map[int64]string{
+		1: `{"n":10}`, 2: `{"n":20}`, 3: `{"n":30}`, 4: `{"n":-5}`,
+	})
+	_, hi := JSONNumericTermBounds("n")
+	lo, _ := JSONNumericTermBounds("n")
+
+	// n >= 20
+	require.Equal(t, []int64{2, 3},
+		probeHits(t, idx, nil, [][2]string{{JSONFloatTerm("n", 20, "", false), hi}}))
+	// n <= 10  (includes the negative doc)
+	require.Equal(t, []int64{1, 4},
+		probeHits(t, idx, nil, [][2]string{{lo, JSONFloatTerm("n", 10, "", false)}}))
+	// full numeric sweep reaches every doc
+	require.Equal(t, []int64{1, 2, 3, 4}, probeHits(t, idx, nil, [][2]string{{lo, hi}}))
+	// an empty range selects nothing
+	require.Empty(t, probeHits(t, idx, nil, [][2]string{
+		{JSONFloatTerm("n", 100, "", false), JSONFloatTerm("n", 200, "", false)}}))
+}
+
+// terms and ranges are a UNION, and duplicates across them collapse.
+func TestSearchJSONProbeUnionsTermsAndRanges(t *testing.T) {
+	idx := jsonProbeIndex(t, map[int64]string{
+		1: `{"foo":"bar","n":10}`, 2: `{"n":99}`,
+	})
+	_, hi := JSONNumericTermBounds("n")
+	require.Equal(t, []int64{1, 2}, probeHits(t,
+		idx,
+		[]string{JSONStringTerm("foo", "bar", "", false)},
+		[][2]string{{JSONFloatTerm("n", 50, "", false), hi}}))
+}
+
+func TestSearchJSONProbeRejectsMalformedPayload(t *testing.T) {
+	idx := jsonProbeIndex(t, map[int64]string{1: `{"foo":"bar"}`})
+	_, err := idx.SearchJSONProbe([]byte("garbage"), TfIdf, 10, nil)
+	require.Error(t, err, "a malformed payload must fail loudly, not match nothing")
+}
+
+// jsonProbeLoadedIndex is jsonProbeIndex round-tripped through Serialize /
+// Deserialize, i.e. the LOADED representation a persisted index actually has.
+// This is the path that matters: sortedTerms is build-side only, so a range
+// resolved against a loaded segment must go through the FST term dictionary.
+func jsonProbeLoadedIndex(t *testing.T, docs map[int64]string) *Index {
+	t.Helper()
+	built := jsonProbeIndex(t, docs)
+	blob, err := built.segments[0].Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("jp", bytes.NewReader(blob))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+	return NewIndex([]*Segment{loaded}, nil)
+}
+
+// A range over a LOADED segment must find the same terms as over a build-side
+// one. It did not: TermRange consulted only the build-side key list, so every
+// range silently returned zero rows against a persisted index.
+func TestSearchJSONProbeRangesOnLoadedSegment(t *testing.T) {
+	docs := map[int64]string{1: `{"n":10}`, 2: `{"n":20}`, 3: `{"n":30}`, 4: `{"n":-5}`}
+	lo, hi := JSONNumericTermBounds("n")
+	ge20 := [][2]string{{JSONFloatTerm("n", 20, "", false), hi}}
+
+	require.Equal(t, []int64{2, 3}, probeHits(t, jsonProbeLoadedIndex(t, docs), nil, ge20),
+		"a loaded segment must resolve ranges through its FST")
+	// identical to the build-side answer
+	require.Equal(t, probeHits(t, jsonProbeIndex(t, docs), nil, ge20),
+		probeHits(t, jsonProbeLoadedIndex(t, docs), nil, ge20))
+
+	// exact terms work on the loaded path too, and the full sweep reaches all
+	require.Equal(t, []int64{1, 2, 3, 4},
+		probeHits(t, jsonProbeLoadedIndex(t, docs), nil, [][2]string{{lo, hi}}))
+	require.Equal(t, []int64{3}, probeHits(t, jsonProbeLoadedIndex(t, docs),
+		[]string{JSONFloatTerm("n", 30, "", false)}, nil))
+}
+
+// The streaming path (no pushed LIMIT) must return the same docs as the top-k
+// one — it is a different walk over the same term disjunction.
+func TestStreamJSONProbeMatchesSearch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	idx := jsonProbeIndex(t, map[int64]string{
+		1: `{"foo":"bar","n":10}`, 2: `{"foo":"baz","n":20}`, 3: `{"foo":"bar","n":30}`,
+	})
+	term := JSONStringTerm("foo", "bar", "", false)
+	payload := []byte(EncodeJSONProbePayload([]string{term}, nil))
+
+	out := vector.NewVec(types.T_int64.ToType())
+	err := idx.StreamJSONProbe(payload, TfIdf, nil, false,
+		func(o *vectorindex.SearchOutput) error {
+			e := vectorindex.AppendColumnBuffer(o.Keys, out, mp)
+			PutColumnBuffer(o.Keys)
+			return e
+		})
+	require.NoError(t, err)
+	streamed := vector.MustFixedColWithTypeCheck[int64](out)
+	require.ElementsMatch(t, []int64{1, 3}, streamed)
+	require.ElementsMatch(t, probeHits(t, idx, []string{term}, nil), streamed)
+
+	// a malformed payload fails here too, rather than streaming nothing
+	require.Error(t, idx.StreamJSONProbe([]byte("garbage"), TfIdf, nil, false, nil))
+}
+
+// The string bounds must bracket every string leaf under the tag and exclude
+// the numeric encoding, so a string range never leaks into numeric terms.
+func TestJSONStringTermBounds(t *testing.T) {
+	lo, hi := JSONStringTermBounds("k")
+	require.Less(t, lo, hi)
+	for _, v := range []string{"", "a", "zzz", "\xff"} {
+		term := JSONStringTerm("k", v, "", false)
+		require.GreaterOrEqual(t, term, lo, "%q below the low bound", v)
+		require.LessOrEqual(t, term, hi, "%q above the high bound", v)
+	}
+	// a numeric term for the same tag sits outside the string range
+	num := JSONFloatTerm("k", 1, "", false)
+	require.True(t, num < lo || num > hi, "numeric term must not fall inside the string range")
+}
+
+// JSONTupleColumn accepts the three shapes an indexed column arrives in.
+func TestJSONTupleColumnAcceptsEveryShape(t *testing.T) {
+	opt := JSONTermOptions{IncludeKeys: true}
+	want := []string{JSONStringTerm("b", "x", "", false)}
+
+	fromStr, err := JSONTupleColumn(`{"b":"x"}`, opt)
+	require.NoError(t, err)
+	require.Equal(t, want, fromStr)
+
+	fromBytes, err := JSONTupleColumn([]byte(`{"b":"x"}`), opt)
+	require.NoError(t, err)
+	require.Equal(t, want, fromBytes)
+
+	bj, err := bytejson.ParseFromString(`{"b":"x"}`)
+	require.NoError(t, err)
+	fromBJ, err := JSONTupleColumn(bj, opt)
+	require.NoError(t, err)
+	require.Equal(t, want, fromBJ)
+
+	// an unknown shape yields nothing rather than an error
+	none, err := JSONTupleColumn(42, opt)
+	require.NoError(t, err)
+	require.Nil(t, none)
+
+	// malformed json is reported
+	_, err = JSONTupleColumn(`{not json`, opt)
+	require.Error(t, err)
 }

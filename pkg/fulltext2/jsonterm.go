@@ -188,17 +188,6 @@ func JSONEqualProbeTerms(tag, value, path string, withPath bool) []string {
 	return []string{JSONStringTerm(tag, value, path, withPath)}
 }
 
-// JSONFloatRangeTerms returns the inclusive term bounds for a numeric
-// comparison at key tag, covering >, >=, < and <= via the inclusivity flags.
-//
-// The bounds pin the tag and sweep the value element, so the scan is
-// "every numeric leaf under this key within [lo,hi]". On a full-path index the
-// path sorts AFTER the value, so the sweep spans every path — extra rows the
-// retained predicate removes.
-func JSONFloatRangeTerms(tag string, lo, hi float64) (loTerm, hiTerm string) {
-	return JSONFloatTerm(tag, lo, "", false), JSONFloatTerm(tag, hi, "", false)
-}
-
 // JSONNumericTermBounds returns the term range covering EVERY numeric leaf
 // under tag: ±Inf are the extreme float64 values, so the packed bounds bracket
 // every finite value the encoder can produce. An open-ended comparison
@@ -344,18 +333,6 @@ func DecodeJSONTermCarrier(s string) []WordPos {
 		}
 		out = append(out, WordPos{Word: s[i : i+n], Pos: pos})
 		i += n
-	}
-	return out
-}
-
-// JSONTupleWordPos is the CREATE-side counterpart: the same terms, numbered the
-// same way, so a document indexed at CREATE and the same document indexed via
-// ISCP land on identical (word, pos) pairs.
-func JSONTupleWordPos(bj bytejson.ByteJson, opt JSONTermOptions) []WordPos {
-	terms := JSONTupleTerms(bj, opt)
-	out := make([]WordPos, len(terms))
-	for i, t := range terms {
-		out[i] = WordPos{Word: t, Pos: int32(i)}
 	}
 	return out
 }

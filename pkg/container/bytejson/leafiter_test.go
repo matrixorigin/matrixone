@@ -27,7 +27,7 @@ func collect(t *testing.T, doc string, withPath bool) []string {
 	t.Helper()
 	bj, err := ParseFromString(doc)
 	require.NoError(t, err)
-	var out []string
+	out := make([]string, 0, 8)
 	for l := range bj.TokenizeLeaves(withPath) {
 		var v string
 		switch l.Kind {
@@ -143,7 +143,7 @@ func TestTokenizeLeavesEarlyStop(t *testing.T) {
 func TestTokenizeLeavesPathIsCorrectDuringIteration(t *testing.T) {
 	bj, err := ParseFromString(`{"a":{"x":1},"bb":{"y":2}}`)
 	require.NoError(t, err)
-	var seen []string
+	seen := make([]string, 0, 2)
 	for l := range bj.TokenizeLeaves(true) {
 		seen = append(seen, string(l.AncestorPath)+"/"+string(l.Tag))
 	}
