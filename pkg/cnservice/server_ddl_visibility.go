@@ -45,12 +45,6 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 		return err
 	}
 	s.ddlVisibilityBarrierPrepared.Store(true)
-	if ddlVisibilityBarrierSupported(s.cfg.UUID) {
-		// A v36 startup has no admitted DDL producers and has already applied the
-		// startup frontier, so it satisfies both live-activation phases.
-		s.ddlVisibilityActivationPrepared.Store(true)
-		s.ddlVisibilityActivationFenced.Store(true)
-	}
 	return nil
 }
 
@@ -103,12 +97,21 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 // overwrite this final withdrawal.
 func (s *service) publishDDLVisibilityIngressAfterStart() error {
 	// Serialize listener-ready publication with startup/activation/shutdown.
-	// Activation may have sampled ingress=false before listeners became live;
-	// acquiring the owner lock makes the later publication win that ordering.
+	// Compiled v36 capability is not evidence that the deployment-wide producer
+	// cut completed: a default-v36 CN stays fail-closed until its complete-target
+	// activation succeeds. If activation raced ahead of listener startup, this
+	// method remains the sole owner that opens ingress after listeners are live.
 	s.ddlVisibilityBarrierMu.Lock()
 	defer s.ddlVisibilityBarrierMu.Unlock()
 	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
+	}
+	s.ddlVisibilityListenersReady.Store(true)
+	if ddlVisibilityBarrierSupported(s.cfg.UUID) &&
+		!s.ddlVisibilityActivationComplete.Load() {
+		s.viewMetadataIngressReady.Store(false)
+		s.notifyHeartbeat()
+		return nil
 	}
 	if s.ddlCommitGate != nil {
 		s.ddlCommitGate.EnablePublicDDL()
@@ -222,10 +225,11 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	barrierCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
 	defer cancel()
 	if !pending {
-		// A command can arrive after startup fencing but before public listeners
-		// are started. Restore only the ingress state observed by the first
-		// activation attempt; retries after a fail-closed withdrawal retain it.
-		s.ddlVisibilityRestoreIngress.Store(s.viewMetadataIngressReady.Load())
+		// A default-v36 process deliberately keeps ingress closed until the
+		// complete-target cut. Restore ingress when listeners are already live;
+		// if activation races before listener startup, Start opens it afterward.
+		s.ddlVisibilityRestoreIngress.Store(
+			s.viewMetadataIngressReady.Load() || s.ddlVisibilityListenersReady.Load())
 	}
 	s.ddlVisibilityActivationPending.Store(true)
 	s.ddlVisibilityActivationPrepared.Store(false)
@@ -272,6 +276,9 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 
 	s.ddlVisibilityActivationComplete.Store(true)
 	s.ddlVisibilityActivationPending.Store(false)
+	if s.ddlVisibilityRestoreIngress.Load() {
+		s.ddlCommitGate.EnablePublicDDL()
+	}
 	s.ddlCommitGate.Unblock()
 	return nil
 }

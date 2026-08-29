@@ -321,14 +321,30 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 	}
 	require.NoError(t, s.prepareDDLVisibilityBarrier())
 	require.True(t, s.ddlVisibilityBarrierPrepared.Load())
-	require.True(t, s.ddlVisibilityActivationPrepared.Load())
-	require.True(t, s.ddlVisibilityActivationFenced.Load())
+	require.False(t, s.ddlVisibilityActivationPrepared.Load())
+	require.False(t, s.ddlVisibilityActivationFenced.Load())
 	require.False(t, s.ddlVisibilityActivationComplete.Load())
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.Equal(t, 1, cluster.refreshCalls)
 	require.Equal(t, []string{"self:6001", "peer:6001"}, queryClient.requests)
 	require.Equal(t, []query.CmdMethod{query.CmdMethod_GetCommit, query.CmdMethod_GetCommit}, queryClient.methods)
 	require.Equal(t, 2, queryClient.releases)
+}
+
+func TestDefaultV36StartupKeepsPublicIngressClosedUntilActivation(t *testing.T) {
+	const serviceID = "ddl-visibility-default-v36-startup-closed-test"
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	gate := frontend.NewDDLCommitGate()
+	s := &service{cfg: &Config{UUID: serviceID}, ddlCommitGate: gate}
+	s.ddlVisibilityBarrierPrepared.Store(true)
+	s.ddlVisibilityBarrierReady.Store(true)
+
+	require.NoError(t, s.publishDDLVisibilityIngressAfterStart())
+	require.True(t, s.ddlVisibilityListenersReady.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, gate.PublicDDLEnabled())
+	require.False(t, s.ddlVisibilityActivationPrepared.Load())
+	require.False(t, s.ddlVisibilityActivationFenced.Load())
 }
 
 func TestPrepareDDLVisibilityBarrierRejectsMissingProductionDependencies(t *testing.T) {
@@ -512,6 +528,7 @@ func TestDefaultV36StillRunsCompleteTargetActivation(t *testing.T) {
 		context.Background(), defines.MORPCVersion36, []string{serviceID, "legacy-peer"}))
 	require.True(t, s.ddlVisibilityActivationComplete.Load())
 	require.True(t, s.viewMetadataIngressReady.Load())
+	require.True(t, s.ddlCommitGate.PublicDDLEnabled())
 	require.Contains(t, queryClient.requests, "peer:6001")
 }
 
