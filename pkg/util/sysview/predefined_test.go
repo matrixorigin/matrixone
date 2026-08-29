@@ -438,15 +438,15 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
 		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
-	assert.Contains(t, InformationSchemaViewsDDL, "2 * sign(char_length(coalesce(regexp_substr(")
-	// System-view definitions are replayed by database clone. The natural string
-	// type of trim/substr preserves the metadata contract without a wrapper that
-	// the persisted-view execution path rejects.
+	assert.Contains(t, InformationSchemaViewsDDL, "2 * if(left(trim(regexp_replace(")
+	// System-view definitions are replayed by database clone. Use the same IF
+	// form as other persisted information_schema views for the wrapper-only
+	// suffix adjustment, without type wrappers or unsupported SIGN/LEAST calls.
 	assert.Contains(t, InformationSchemaViewsDDL, "trim(substr(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "cast(trim(substr(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
-	assert.NotContains(t, InformationSchemaViewsDDL, "trim(if(")
+	assert.NotContains(t, InformationSchemaViewsDDL, "sign(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "least(")
 	assert.Contains(t, InformationSchemaViewsDDL, "'NO' AS `IS_UPDATABLE`")
 	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
@@ -529,14 +529,14 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "select 1",
 		},
 	}
-	suffix := regexp.MustCompile(informationSchemaViewDefinitionCommentSuffixPattern)
+	terminator := regexp.MustCompile("[;][[:space:]]*$")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			definition := strings.TrimSpace(prefix.ReplaceAllString(test.createSQL, ""))
-			if strings.HasPrefix(strings.TrimSpace(test.createSQL), "/*!") {
-				definition = strings.TrimSpace(suffix.ReplaceAllString(definition, ""))
+			statement := strings.TrimSpace(terminator.ReplaceAllString(strings.TrimSpace(test.createSQL), ""))
+			definition := strings.TrimSpace(prefix.ReplaceAllString(statement, ""))
+			if strings.HasPrefix(statement, "/*!") {
+				definition = strings.TrimSpace(strings.TrimSuffix(definition, "*/"))
 			}
-			definition = strings.TrimSuffix(definition, ";")
 			assert.Equal(t, test.definition, definition)
 		})
 	}
