@@ -61,9 +61,11 @@ key, avoiding changes to ordinary VARCHAR/TEXT behavior.
 ### Remote protocol compatibility
 
 The PAD SPACE casts and set-operation key expressions are serialized in a
-pipeline. They require `MORPCVersion37`. A sender rejects a remote pipeline
-that needs these semantics when its service protocol version is below 37;
-ordinary pipelines and sessions with the mode disabled remain compatible with
+pipeline. They require `MORPCVersion40`. The actual remote sender path
+(`prepareRemoteRunSendingData` through `encodeRemoteScope`) rejects a remote
+pipeline that needs these semantics when its service protocol version is below
+40, before marshal or dispatch. Ordinary pipelines and sessions with the mode
+disabled remain compatible with
 older peers. This is fail-closed: a mixed-version deployment never executes the
 new plan with an old peer that could interpret its physical bytes differently.
 

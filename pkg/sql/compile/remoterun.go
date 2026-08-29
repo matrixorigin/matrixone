@@ -108,6 +108,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -1985,7 +1988,7 @@ func validateRemotePadSpacePipelineProtocol(
 	}
 	if proc == nil || !supportsRemotePadSpaceSemantics(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"PAD SPACE remote execution requires MORPC protocol version 37",
+			"PAD SPACE remote execution requires MORPC protocol version 40",
 		)
 	}
 	return nil
