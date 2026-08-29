@@ -15,6 +15,7 @@
 package sm
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,55 @@ func TestSafeQueueWithoutHandlerStops(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("queue with nil handler did not stop")
 	}
+}
+
+func TestSafeQueueEnqueueWithContextWithdrawsPendingItem(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	queue := NewSafeQueue(1, 1, func(...any) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	})
+	queue.Start()
+
+	_, err := queue.Enqueue("being handled")
+	require.NoError(t, err)
+	<-entered
+	_, err = queue.Enqueue("fills buffer")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, enqueueErr := queue.EnqueueWithContext(ctx, "must withdraw")
+		done <- enqueueErr
+	}()
+	require.Eventually(t, func() bool {
+		return queue.pending.Load() == 3
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.Equal(t, int64(2), queue.pending.Load())
+
+	close(release)
+	queue.Stop()
+	require.Zero(t, queue.pending.Load())
+}
+
+func TestSafeQueueRejectsAlreadyCanceledContext(t *testing.T) {
+	queue := NewSafeQueue(1, 1, func(...any) {})
+	queue.Start()
+	defer queue.Stop()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := queue.EnqueueWithContext(ctx, "not admitted")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, queue.pending.Load())
 }
 
 func TestNewNonBlockingQueue(t *testing.T) {

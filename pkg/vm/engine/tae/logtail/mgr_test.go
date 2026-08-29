@@ -24,7 +24,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
@@ -68,6 +70,42 @@ func TestManagerTruncateTSConcurrentAccess(t *testing.T) {
 	close(start)
 	wg.Wait()
 	require.Equal(t, types.BuildTS(iterations, 0), mgr.GetTruncateTS())
+}
+
+func TestManagerReadBarrierReturnsPublishedFrontier(t *testing.T) {
+	want := types.BuildTS(42, 7)
+	mgr := &Manager{previousSaveTS: want}
+	mgr.logtailQueue = sm.NewSafeQueue(4, 4, mgr.onTxnLogTails)
+	require.NoError(t, mgr.RegisterCallback(func(
+		timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail,
+	) error {
+		return nil
+	}))
+	mgr.logtailQueue.Start()
+	defer mgr.logtailQueue.Stop()
+
+	got, err := mgr.ReadBarrier(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, want.ToTimestamp(), got)
+}
+
+func TestManagerReadBarrierRequiresPublisher(t *testing.T) {
+	mgr := &Manager{}
+	_, err := mgr.ReadBarrier(t.Context())
+	require.ErrorContains(t, err, "publisher is not registered")
+}
+
+func TestManagerReadBarrierHonorsCanceledContext(t *testing.T) {
+	mgr := &Manager{}
+	require.NoError(t, mgr.RegisterCallback(func(
+		timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail,
+	) error {
+		return nil
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := mgr.ReadBarrier(ctx)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestOrderedCollectAndPublish_Empty(t *testing.T) {

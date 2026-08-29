@@ -99,6 +99,13 @@ type subscription struct {
 	session    *Session
 }
 
+type readBarrierEvent struct {
+	timeout   time.Duration
+	barrierID uint64
+	timestamp timestamp.Timestamp
+	session   *Session
+}
+
 // LogtailServer handles logtail push logic.
 type LogtailServer struct {
 	pool struct {
@@ -300,7 +307,33 @@ func (s *LogtailServer) onMessage(
 		return s.onUnsubscription(ctx, stream, req)
 	}
 
+	if req := msg.GetReadBarrier(); req != nil {
+		logger.Debug("on read barrier", zap.Uint64("barrier-id", req.BarrierId))
+		return s.onReadBarrier(ctx, stream, req)
+	}
+
 	return moerr.NewInvalidArg(ctx, "request", msg)
+}
+
+func (s *LogtailServer) onReadBarrier(
+	sendCtx context.Context,
+	stream morpcStream,
+	req *logtail.ReadBarrierRequest,
+) error {
+	session, err := s.getSession(stream)
+	if err != nil {
+		return err
+	}
+	target, err := s.logtailer.ReadBarrier(sendCtx)
+	if err != nil {
+		return err
+	}
+	return s.event.NotifyReadBarrier(sendCtx, readBarrierEvent{
+		timeout:   ContextTimeout(sendCtx, s.cfg.ResponseSendTimeout),
+		barrierID: req.BarrierId,
+		timestamp: target,
+		session:   session,
+	})
 }
 
 // onSubscription handls subscription.
@@ -577,24 +610,32 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 	// every later subscription snapshot and incremental event is ordered after
 	// this timestamp. Advancing from Logtailer.Now would skip accepted events
 	// that have not reached the publisher yet.
-	select {
-	case <-ctx.Done():
-		s.logger.Info("context done", zap.Error(ctx.Err()))
-		return
-	case e, ok := <-s.event.C:
-		if !ok {
-			s.logger.Info("publishment channel closed")
+bootstrap:
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Info("context done", zap.Error(ctx.Err()))
 			return
-		}
-		s.waterline.Advance(e.to)
-		s.logger.Info(
-			"logtail.service.init.waterline",
-			zap.String("ts", e.to.String()),
-		)
-		if e.closeCB != nil {
-			// The bootstrap event is expected to be metadata-only. Preserve
-			// ownership safety if a custom producer violates that contract.
-			e.closeCB()
+		case e, ok := <-s.event.C:
+			if !ok {
+				s.logger.Info("publishment channel closed")
+				return
+			}
+			if e.barrier != nil {
+				s.sendReadBarrier(ctx, *e.barrier)
+				continue
+			}
+			s.waterline.Advance(e.to)
+			s.logger.Info(
+				"logtail.service.init.waterline",
+				zap.String("ts", e.to.String()),
+			)
+			if e.closeCB != nil {
+				// The bootstrap event is expected to be metadata-only. Preserve
+				// ownership safety if a custom producer violates that contract.
+				e.closeCB()
+			}
+			break bootstrap
 		}
 	}
 
@@ -632,8 +673,40 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				s.logger.Info("publishment channel closed")
 				return
 			}
-			s.publishEvent(ctx, e)
+			if e.barrier != nil {
+				s.sendReadBarrier(ctx, *e.barrier)
+			} else {
+				s.publishEvent(ctx, e)
+			}
 		}
+	}
+}
+
+func (s *LogtailServer) sendReadBarrier(ctx context.Context, barrier readBarrierEvent) {
+	sendCtx, cancel := context.WithTimeout(ctx, barrier.timeout)
+	defer cancel()
+	// A normal publish may omit an update when none of its table tails are
+	// subscribed by this session. Force the exact TN frontier through the
+	// ordinary CN apply queues before acknowledging the barrier, otherwise a
+	// correct read could still wait for the periodic transport heartbeat.
+	if err := barrier.session.TrySendProgressResponse(sendCtx, barrier.timestamp); err != nil {
+		s.logger.Error(
+			"fail to send read barrier progress",
+			zap.Uint64("barrier-id", barrier.barrierID),
+			zap.Error(err),
+		)
+		s.NotifySessionError(barrier.session, err)
+		return
+	}
+	if err := barrier.session.TrySendReadBarrierResponse(
+		sendCtx, barrier.barrierID, barrier.timestamp,
+	); err != nil {
+		s.logger.Error(
+			"fail to send read barrier response",
+			zap.Uint64("barrier-id", barrier.barrierID),
+			zap.Error(err),
+		)
+		s.NotifySessionError(barrier.session, err)
 	}
 }
 

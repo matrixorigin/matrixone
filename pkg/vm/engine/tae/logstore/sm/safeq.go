@@ -141,6 +141,20 @@ func (q *safeQueue) waitStop() {
 }
 
 func (q *safeQueue) Enqueue(item any) (any, error) {
+	return q.enqueue(context.Background(), item)
+}
+
+func (q *safeQueue) EnqueueWithContext(ctx context.Context, item any) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return q.enqueue(ctx, item)
+}
+
+func (q *safeQueue) enqueue(ctx context.Context, item any) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return item, context.Cause(ctx)
+	}
 	if q.state.Load() != Running {
 		return item, ErrClose
 	}
@@ -154,12 +168,16 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 			q.pending.Add(-1)
 			return item, ErrClose
 		}
-		// A blocking send intentionally has no cancellation branch: Stop waits for
-		// pending to reach zero before canceling q.ctx, and this producer contributes
-		// to pending until its item has been handled. Adding q.ctx.Done() here would
-		// therefore not unblock a sender and would obscure that shutdown contract.
-		q.queue <- item
-		return item, nil
+		// Stop waits for pending to reach zero before canceling q.ctx. Caller
+		// cancellation is different: this producer can withdraw its own pending
+		// item before it has transferred ownership to the receiver.
+		select {
+		case q.queue <- item:
+			return item, nil
+		case <-ctx.Done():
+			q.pending.Add(-1)
+			return item, context.Cause(ctx)
+		}
 	} else {
 		q.pending.Add(1)
 		if q.state.Load() != Running {
@@ -169,6 +187,9 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 		select {
 		case q.queue <- item:
 			return item, nil
+		case <-ctx.Done():
+			q.pending.Add(-1)
+			return item, context.Cause(ctx)
 		default:
 			q.pending.Add(-1)
 			return item, ErrFull

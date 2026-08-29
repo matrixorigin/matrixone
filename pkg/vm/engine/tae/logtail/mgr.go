@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -89,7 +90,7 @@ type Manager struct {
 
 	previousSaveTS  types.TS
 	logtailCallback atomic.Pointer[callback]
-	logtailQueue    sm.Queue
+	logtailQueue    sm.ContextQueue
 	eventOnce       sync.Once
 	nextCompactTS   types.TS
 
@@ -132,6 +133,23 @@ type txnWithLogtails struct {
 	txn     txnif.AsyncTxn
 	tails   *[]logtail.TableLogtail
 	closeCB func()
+}
+
+// readBarrier is a marker in the same FIFO as committed transactions. Once
+// the manager reaches it, every transaction queued before the marker has been
+// collected and handed to the logtail publisher in PrepareTS order.
+type readBarrier struct {
+	done chan timestamp.Timestamp
+}
+
+func newReadBarrier() *readBarrier {
+	return &readBarrier{done: make(chan timestamp.Timestamp, 1)}
+}
+
+func (b *readBarrier) complete(ts timestamp.Timestamp) {
+	// The channel is buffered because the request may be canceled after the
+	// marker was admitted. Queue progress must never depend on that caller.
+	b.done <- ts
 }
 
 // orderedCollectAndPublish collects logtails for n items in parallel via submit,
@@ -266,25 +284,78 @@ func collectOneTxn(
 }
 
 func (mgr *Manager) onTxnLogTails(items ...any) {
-	// Collect logtails for all txns in parallel via collectPool.
-	// A slow txn only blocks the publisher up to its slot, not the
-	// collection of later slots nor the publishing of earlier already-ready
-	// slots. generateLogtailWithTxn is still called in PrepareTS order.
 	collect := func(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
 		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		return builder.CollectLogtail(txn)
 	}
-	orderedCollectAndPublish(
-		len(items),
-		func(i int) bool {
-			return items[i].(txnif.AsyncTxn).IsReplay()
-		},
-		func(fn func()) { _ = mgr.collectPool.Submit(fn) },
-		func(i int) *txnWithLogtails {
-			return collectOneTxn(items[i].(txnif.AsyncTxn), collect)
-		},
-		mgr.generateLogtailWithTxn,
-	)
+
+	// A barrier splits a queue batch into ordered transaction segments. Work
+	// after the barrier is deliberately not scheduled before the marker: it
+	// cannot contribute to the frontier and must not compete with the work the
+	// caller is waiting for. Each segment retains parallel collection and
+	// PrepareTS-ordered publication through orderedCollectAndPublish.
+	segmentStart := 0
+	flush := func(segmentEnd int) {
+		segment := items[segmentStart:segmentEnd]
+		orderedCollectAndPublish(
+			len(segment),
+			func(i int) bool {
+				txn, ok := segment[i].(txnif.AsyncTxn)
+				if !ok {
+					panic(fmt.Sprintf("unknown logtail queue item %T", segment[i]))
+				}
+				return txn.IsReplay()
+			},
+			func(fn func()) {
+				if err := mgr.collectPool.Submit(fn); err != nil {
+					panic(err)
+				}
+			},
+			func(i int) *txnWithLogtails {
+				return collectOneTxn(segment[i].(txnif.AsyncTxn), collect)
+			},
+			mgr.generateLogtailWithTxn,
+		)
+	}
+
+	for i, item := range items {
+		barrier, ok := item.(*readBarrier)
+		if !ok {
+			if _, ok := item.(txnif.AsyncTxn); !ok {
+				panic(fmt.Sprintf("unknown logtail queue item %T", item))
+			}
+			continue
+		}
+		flush(i)
+		barrier.complete(mgr.previousSaveTS.ToTimestamp())
+		segmentStart = i + 1
+	}
+	flush(len(items))
+}
+
+// ReadBarrier returns the latest logtail frontier after all transactions that
+// entered the manager before this call have been published. The returned
+// timestamp is an exact committed frontier, not a wall-clock estimate.
+func (mgr *Manager) ReadBarrier(ctx context.Context) (timestamp.Timestamp, error) {
+	if mgr.logtailCallback.Load() == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "logtail publisher is not registered")
+	}
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, context.Cause(ctx)
+	}
+
+	barrier := newReadBarrier()
+	if _, err := mgr.logtailQueue.EnqueueWithContext(ctx, barrier); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+
+	select {
+	case ts := <-barrier.done:
+		return ts, nil
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, context.Cause(ctx)
+	}
 }
 
 func (mgr *Manager) Stop() {
