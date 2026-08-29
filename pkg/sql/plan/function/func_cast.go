@@ -3092,9 +3092,9 @@ func jsonAppendUint64(ctx context.Context, result vector.FunctionResultWrapper, 
 	}
 }
 
-// jsonToBool implements JSON -> BOOL while preserving the JSON scalar type.
-// JSON strings are not boolean values, so coercive boolean comparisons must
-// see them as SQL NULL instead of parsing their contents as booleans.
+// jsonToBool implements the public JSON -> BOOL cast. Comparison operators
+// that must preserve the JSON scalar category do so in func_compare.go rather
+// than changing this conversion contract.
 func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper, length int) error {
 	to := vector.MustFunctionResult[bool](result)
@@ -3147,7 +3147,11 @@ func jsonScalarToBool(ctx context.Context, bj bytejson.ByteJson) (bool, bool, er
 		}
 		return false, false, jsonCastErr(ctx, types.T_bool)
 	case bytejson.TpCodeString:
-		return false, true, nil
+		value, err := types.ParseBool(string(bj.GetString()))
+		if err != nil {
+			return false, false, jsonCastErr(ctx, types.T_bool)
+		}
+		return value, false, nil
 	default:
 		return false, false, jsonCastErr(ctx, types.T_bool)
 	}

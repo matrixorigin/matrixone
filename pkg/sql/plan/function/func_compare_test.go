@@ -175,6 +175,144 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		return result
 	}
 
+	t.Run("mixed JSON boolean operators preserve scalar category", func(t *testing.T) {
+		jsonValues := makeJSON([]any{true, false, float64(1), float64(0), "true", "false", nil, nil, true}, 7)
+		booleanValues := vector.NewVec(types.T_bool.ToType())
+		for i, value := range []bool{true, true, true, false, true, false, true, false, false} {
+			require.NoError(t, vector.AppendFixed(booleanValues, value, i == 7 || i == 8, proc.Mp()))
+		}
+
+		for _, orientation := range []struct {
+			name       string
+			parameters []*vector.Vector
+		}{
+			{name: "JSON left", parameters: []*vector.Vector{jsonValues, booleanValues}},
+			{name: "JSON right", parameters: []*vector.Vector{booleanValues, jsonValues}},
+		} {
+			t.Run(orientation.name, func(t *testing.T) {
+				for _, operator := range []struct {
+					name          string
+					fn            fEvalFn
+					expected      []bool
+					expectedNulls []bool
+				}{
+					{
+						name:          "equal",
+						fn:            equalFn,
+						expected:      []bool{true, false, true, true, false, false, false, false, false},
+						expectedNulls: []bool{false, false, false, false, false, false, true, true, true},
+					},
+					{
+						name:          "not equal",
+						fn:            notEqualFn,
+						expected:      []bool{false, true, false, false, true, true, false, false, false},
+						expectedNulls: []bool{false, false, false, false, false, false, true, true, true},
+					},
+					{
+						name:          "null safe equal",
+						fn:            nullSafeEqualFn,
+						expected:      []bool{true, false, true, true, false, false, false, true, false},
+						expectedNulls: []bool{false, false, false, false, false, false, false, false, false},
+					},
+				} {
+					t.Run(operator.name, func(t *testing.T) {
+						result := makeResult(len(operator.expected))
+						require.NoError(t, operator.fn(
+							orientation.parameters, result, proc, len(operator.expected), nil))
+						got := result.GetResultVector()
+						require.Equal(t, operator.expected, vector.MustFixedColNoTypeCheck[bool](got))
+						for row, expectedNull := range operator.expectedNulls {
+							require.Equal(t, expectedNull, got.IsNull(uint64(row)), "row %d", row)
+						}
+					})
+				}
+			})
+		}
+	})
+
+	t.Run("mixed JSON boolean overloads do not insert a cast", func(t *testing.T) {
+		for _, operator := range []string{"=", "!=", "<>", "<=>"} {
+			for _, inputTypes := range [][]types.Type{
+				{types.T_json.ToType(), types.T_bool.ToType()},
+				{types.T_bool.ToType(), types.T_json.ToType()},
+			} {
+				resolved, err := GetFunctionByName(proc.Ctx, operator, inputTypes)
+				require.NoError(t, err)
+				_, needsCast := resolved.ShouldDoImplicitTypeCast()
+				require.False(t, needsCast, "%s %v", operator, inputTypes)
+			}
+		}
+	})
+
+	t.Run("mixed JSON boolean comparison rejects containers", func(t *testing.T) {
+		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+		require.NoError(t, err)
+		for _, value := range []any{map[string]any{"v": true}, []any{true}} {
+			jsonValue := makeJSON([]any{value})
+			require.Error(t, equalFn(
+				[]*vector.Vector{jsonValue, booleanValue}, makeResult(1), proc, 1, nil))
+		}
+	})
+
+	t.Run("mixed JSON boolean comparison masks rows before conversion", func(t *testing.T) {
+		jsonValues := makeJSON([]any{true, map[string]any{"unsupported": true}})
+		booleanValues, err := vector.NewConstFixed(types.T_bool.ToType(), true, 2, proc.Mp())
+		require.NoError(t, err)
+		result := makeResult(2)
+		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+		require.NoError(t, equalFn(
+			[]*vector.Vector{jsonValues, booleanValues}, result, proc, 2, selectList))
+		got := result.GetResultVector()
+		require.True(t, vector.MustFixedColNoTypeCheck[bool](got)[0])
+		require.True(t, got.IsNull(1))
+	})
+
+	t.Run("mixed JSON boolean comparison skips an all-masked batch", func(t *testing.T) {
+		malformedJSON := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(malformedJSON, []byte("invalid"), false, proc.Mp()))
+		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+		require.NoError(t, err)
+		result := makeResult(1)
+		require.NoError(t, equalFn(
+			[]*vector.Vector{malformedJSON, booleanValue}, result, proc, 1,
+			&FunctionSelectList{AnyNull: true, AllNull: true}))
+		require.True(t, result.GetResultVector().IsNull(0))
+	})
+
+	t.Run("mixed JSON boolean comparison rejects truncated scalar encodings", func(t *testing.T) {
+		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+		require.NoError(t, err)
+		for _, encoded := range [][]byte{
+			{byte(bytejson.TpCodeString), 4, 't'},
+			{byte(bytejson.TpCodeString), 0x80},
+			{byte(bytejson.TpCodeLiteral)},
+			{byte(bytejson.TpCodeInt64), 0, 0, 0, 0, 0, 0, 0},
+		} {
+			malformedJSON := vector.NewVec(types.T_json.ToType())
+			require.NoError(t, vector.AppendBytes(malformedJSON, encoded, false, proc.Mp()))
+			require.Error(t, equalFn(
+				[]*vector.Vector{malformedJSON, booleanValue}, makeResult(1), proc, 1, nil))
+		}
+	})
+
+	t.Run("mixed JSON boolean comparison accepts constant SQL null", func(t *testing.T) {
+		jsonValues := makeJSON([]any{nil, true, "true"})
+		booleanNull := vector.NewConstNull(types.T_bool.ToType(), 3, proc.Mp())
+
+		ordinaryResult := makeResult(3)
+		require.NoError(t, equalFn(
+			[]*vector.Vector{jsonValues, booleanNull}, ordinaryResult, proc, 3, nil))
+		for row := 0; row < 3; row++ {
+			require.True(t, ordinaryResult.GetResultVector().IsNull(uint64(row)))
+		}
+
+		result := makeResult(3)
+		require.NoError(t, nullSafeEqualFn(
+			[]*vector.Vector{jsonValues, booleanNull}, result, proc, 3, nil))
+		require.Equal(t, []bool{true, false, false},
+			vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+	})
+
 	t.Run("ordinary JSON provenance stays on ordinary comparison path", func(t *testing.T) {
 		left := makeJSON([]any{true})
 		right := makeJSON([]any{true})
@@ -195,6 +333,15 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, nil))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{true, false, true}, vector.MustFixedColNoTypeCheck[bool](got))
+	})
+
+	t.Run("boolean metadata requires boolean adapter payload", func(t *testing.T) {
+		jsonValues := makeJSON([]any{true})
+		params := makePreparedJSON([]any{float64(1)})
+		params.SetPrepareParamKind(vector.PrepareParamBoolean)
+		require.Error(t, comparePreparedJSON(
+			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1, false,
+			func(c int) bool { return c == 0 }, nil))
 	})
 
 	t.Run("reversed numeric and null safe nulls", func(t *testing.T) {
@@ -412,6 +559,46 @@ func BenchmarkPreparedJSONIntegerComparison(b *testing.B) {
 		}
 		if err := comparePreparedJSON(
 			[]*vector.Vector{jsonValues, param}, result, proc, length,
+			false, func(c int) bool { return c == 0 }, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkJSONBooleanComparison(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	defer proc.Free()
+	const length = 1024
+
+	jsonValues := vector.NewVec(types.T_json.ToType())
+	defer jsonValues.Free(proc.Mp())
+	for row := 0; row < length; row++ {
+		value := any(row&1 == 0)
+		if row%4 == 3 {
+			value = "true"
+		}
+		bj, err := bytejson.CreateByteJSON(value)
+		require.NoError(b, err)
+		data, err := types.EncodeJson(bj)
+		require.NoError(b, err)
+		require.NoError(b, vector.AppendBytes(jsonValues, data, false, proc.Mp()))
+	}
+	booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, length, proc.Mp())
+	require.NoError(b, err)
+	defer booleanValue.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp()).(*vector.FunctionResult[bool])
+	defer result.Free()
+	require.NoError(b, result.PreExtendAndReset(length))
+
+	b.ReportAllocs()
+	b.ReportMetric(length, "rows/op")
+	b.ResetTimer()
+	for b.Loop() {
+		if err := result.PreExtendAndReset(length); err != nil {
+			b.Fatal(err)
+		}
+		if err := compareJSONBoolean(
+			[]*vector.Vector{jsonValues, booleanValue}, result, proc, length,
 			false, func(c int) bool { return c == 0 }, nil); err != nil {
 			b.Fatal(err)
 		}

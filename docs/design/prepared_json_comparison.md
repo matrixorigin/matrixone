@@ -28,6 +28,13 @@ The equivalent typed literal is the semantic oracle. This must hold for `=`,
    closed. It must not silently change comparison semantics.
 6. Reset, retry, selected-row evaluation, remote dispatch, and plan rebuild
    cannot leak metadata from an earlier execution generation.
+7. Comparison category and explicit cast behavior are independent. A JSON
+   string compared with a SQL BOOL is a definite category mismatch, not SQL
+   NULL; an explicit `CAST(JSON AS BOOL)` continues to parse supported string
+   spellings according to the public cast contract.
+8. Ordinary `=`/`!=` JSON/BOOL results remain planner-nullable even when both
+   vector operands are declared NOT NULL, because a non-NULL JSON container can
+   hold the JSON null scalar. `<=>` remains non-NULL by contract.
 
 ## Design
 
@@ -85,6 +92,14 @@ Concrete integer and FLOAT32 metadata applies the same range checks, errors,
 and rounding as the equivalent typed cast. The category fallback retains the
 established BOOL/integer/FLOAT64/DECIMAL/string behavior.
 
+Direct JSON/BOOL equality also preserves the JSON scalar category instead of
+inserting the generic JSON-to-BOOL cast. JSON booleans and numbers retain the
+established boolean comparison coercion, JSON strings compare unequal to BOOL,
+JSON null produces SQL UNKNOWN, and object/array inputs retain the established
+cast error. Prepared BOOL comparison uses the same evaluator, so `=`, `!=`,
+`<>`, `<=>`, `IN`, and `NOT IN` have one truth table across both execution
+protocols and operand orientations.
+
 ## Compatibility and unhappy paths
 
 The hidden function and exact metadata require MORPC v30. A new coordinator
@@ -119,7 +134,9 @@ Required gates:
 
 - direct/prepared parity for BOOL, string, signed/unsigned integer boundaries,
   values around 2^53, FLOAT32 rounding, DOUBLE, DECIMAL, NULL, object, and array;
-- both orientations across `=`, `<=>`, `IN`, and `NOT IN`;
+- both orientations across `=`, `!=`, `<>`, `<=>`, `IN`, and `NOT IN`, including
+  the distinction between JSON-string/BOOL mismatch and actual SQL UNKNOWN;
+- explicit JSON-to-BOOL string casts as an independent non-regression control;
 - ordinary JSON joins and unrelated feature-registry calls;
 - `COUNT(NULL)` and `COUNT(CAST(NULL AS SIGNED))` remain zero;
 - all-selected, partially selected, and all-masked execution;

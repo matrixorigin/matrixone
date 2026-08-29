@@ -123,6 +123,7 @@ func TestIssue27187JSONExtractBooleanComparison(t *testing.T) {
 		var quotedString sql.NullBool
 		require.NoError(t, db.QueryRowContext(ctx,
 			`select json_extract(json_object('v', '"true"'), '$.v') = true`).Scan(&quotedString))
-		require.False(t, quotedString.Valid)
+		require.True(t, quotedString.Valid)
+		require.False(t, quotedString.Bool)
 	})
 }

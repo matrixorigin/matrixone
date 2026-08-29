@@ -68,8 +68,8 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		}{
 			{id: 1, equalTrue: sql.NullBool{Bool: true, Valid: true}, equalFalse: sql.NullBool{Valid: true}},
 			{id: 2, equalTrue: sql.NullBool{Valid: true}, equalFalse: sql.NullBool{Bool: true, Valid: true}},
-			{id: 3},
-			{id: 4},
+			{id: 3, equalTrue: sql.NullBool{Valid: true}, equalFalse: sql.NullBool{Valid: true}},
+			{id: 4, equalTrue: sql.NullBool{Valid: true}, equalFalse: sql.NullBool{Valid: true}},
 			{id: 5},
 			{id: 6},
 		}
@@ -84,6 +84,42 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		}
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
+
+		var equal, reversedEqual, notEqual, nullSafeEqual, in, notIn bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_object('v', 'true'), '$.v') = true,
+			true = json_extract(json_object('v', 'true'), '$.v'),
+			json_extract(json_object('v', 'true'), '$.v') != true,
+			json_extract(json_object('v', 'true'), '$.v') <=> true,
+			json_extract(json_object('v', 'true'), '$.v') in (true),
+			json_extract(json_object('v', 'true'), '$.v') not in (true)`).Scan(
+			&equal, &reversedEqual, &notEqual, &nullSafeEqual, &in, &notIn))
+		require.Equal(t, []bool{false, false, true, false, false, true},
+			[]bool{equal, reversedEqual, notEqual, nullSafeEqual, in, notIn})
+
+		var numericIn, numericNotIn bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_array(1), '$[0]') in (true),
+			json_extract(json_array(1), '$[0]') not in (true)`).Scan(
+			&numericIn, &numericNotIn))
+		require.True(t, numericIn)
+		require.False(t, numericNotIn)
+
+		var inWithNull, notInWithNull sql.NullBool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_object('v', 'true'), '$.v') in (true, null),
+			json_extract(json_object('v', 'true'), '$.v') not in (true, null)`).Scan(
+			&inWithNull, &notInWithNull))
+		require.False(t, inWithNull.Valid)
+		require.False(t, notInWithNull.Valid)
+
+		var castTrue, castFalse bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			cast(json_extract(json_object('v', 'true'), '$.v') as boolean),
+			cast(json_extract(json_object('v', 'false'), '$.v') as boolean)`).Scan(
+			&castTrue, &castFalse))
+		require.True(t, castTrue)
+		require.False(t, castFalse)
 
 		assertIDs := func(query string, expected ...int) {
 			t.Helper()
@@ -140,10 +176,10 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			{name: "null-safe equality SQL NULL left and missing JSON", query: `select ? <=> json_extract(json_object('v', true), '$.missing')`, arg: nil, expected: true},
 			{name: "IN matches JSON boolean", query: `select json_extract(json_object('v', true), '$.v') in (?)`, arg: true, expected: true},
 			{name: "IN matches JSON string", query: `select json_extract(json_object('v', 'true'), '$.v') in (?)`, arg: "true", expected: true},
-			{name: "IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') in (?)`, arg: true, expectNull: true},
+			{name: "IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') in (?)`, arg: true, expected: false},
 			{name: "NOT IN rejects matching JSON boolean", query: `select json_extract(json_object('v', true), '$.v') not in (?)`, arg: true, expected: false},
 			{name: "NOT IN rejects matching JSON string", query: `select json_extract(json_object('v', 'true'), '$.v') not in (?)`, arg: "true", expected: false},
-			{name: "NOT IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') not in (?)`, arg: true, expectNull: true},
+			{name: "NOT IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') not in (?)`, arg: true, expected: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				actual, valid := queryPreparedBool(tc.query, tc.arg)
@@ -194,6 +230,21 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		assertIDs("execute issue_27529_p using @issue_27529_b", 1)
 		execSQLRequire(t, ctx, db, "set @issue_27529_b = false")
 		assertIDs("execute issue_27529_p using @issue_27529_b", 2)
+
+		execSQLRequire(t, ctx, db, `prepare issue_27529_bool_category from "select
+			json_extract(json_object('v', 'true'), '$.v') = ?,
+			json_extract(json_object('v', 'true'), '$.v') != ?,
+			json_extract(json_object('v', 'true'), '$.v') <=> ?,
+			json_extract(json_object('v', 'true'), '$.v') in (?),
+			json_extract(json_object('v', 'true'), '$.v') not in (?)"`)
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_bool_category")
+		execSQLRequire(t, ctx, db, "set @issue_27529_b = true")
+		var preparedEqual, preparedNotEqual, preparedNullSafe, preparedIn, preparedNotIn bool
+		require.NoError(t, db.QueryRowContext(ctx, `execute issue_27529_bool_category using
+			@issue_27529_b, @issue_27529_b, @issue_27529_b, @issue_27529_b, @issue_27529_b`).Scan(
+			&preparedEqual, &preparedNotEqual, &preparedNullSafe, &preparedIn, &preparedNotIn))
+		require.Equal(t, []bool{false, true, false, false, true},
+			[]bool{preparedEqual, preparedNotEqual, preparedNullSafe, preparedIn, preparedNotIn})
 
 		var directRounded bool
 		require.NoError(t, db.QueryRowContext(ctx,

@@ -17,8 +17,10 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"math"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -83,7 +85,7 @@ func comparePreparedJSON(
 	)
 	if jsonVector.IsConst() {
 		var err error
-		cachedJSON, cachedJSONNull, err = preparedComparisonJSONAt(proc, jsonVector, 0)
+		cachedJSON, cachedJSONNull, err = comparisonJSONAt(proc, jsonVector, 0)
 		if err != nil {
 			return err
 		}
@@ -91,7 +93,7 @@ func comparePreparedJSON(
 	}
 	if paramVector.IsConst() {
 		var err error
-		cachedParam, cachedParamNull, err = preparedComparisonJSONAt(proc, paramVector, 0)
+		cachedParam, cachedParamNull, err = comparisonJSONAt(proc, paramVector, 0)
 		if err != nil {
 			return err
 		}
@@ -107,7 +109,7 @@ func comparePreparedJSON(
 		jsonValue, jsonNull := cachedJSON, cachedJSONNull
 		if !cachedJSONReady {
 			var err error
-			jsonValue, jsonNull, err = preparedComparisonJSONAt(proc, jsonVector, row)
+			jsonValue, jsonNull, err = comparisonJSONAt(proc, jsonVector, row)
 			if err != nil {
 				return err
 			}
@@ -115,12 +117,16 @@ func comparePreparedJSON(
 		paramValue, paramNull := cachedParam, cachedParamNull
 		if !cachedParamReady {
 			var err error
-			paramValue, paramNull, err = preparedComparisonJSONAt(proc, paramVector, row)
+			paramValue, paramNull, err = comparisonJSONAt(proc, paramVector, row)
 			if err != nil {
 				return err
 			}
 		}
 
+		// JSON null participates in the same SQL-null comparison contract as a
+		// JSON-to-scalar cast. Account for it before short-circuiting on a NULL
+		// parameter so <=> observes two null values, not one.
+		jsonNull = jsonNull || isJSONLiteralNull(jsonValue)
 		if jsonNull || paramNull {
 			if nullSafe {
 				rss[row] = jsonNull && paramNull
@@ -156,7 +162,7 @@ func comparePreparedJSON(
 	return nil
 }
 
-func preparedComparisonJSONAt(
+func comparisonJSONAt(
 	proc *process.Process,
 	value *vector.Vector,
 	row int,
@@ -170,25 +176,178 @@ func preparedComparisonJSONAt(
 	}
 	bj := types.DecodeJson(data)
 	switch bj.Type {
-	case bytejson.TpCodeObject, bytejson.TpCodeArray,
-		bytejson.TpCodeString, bytejson.TpCodeDecimal,
+	case bytejson.TpCodeObject, bytejson.TpCodeArray:
+		if len(bj.Data) == 0 {
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "truncated encoded JSON container")
+		}
+	case bytejson.TpCodeString, bytejson.TpCodeDecimal,
 		bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime,
 		bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
-		if len(bj.Data) == 0 {
+		if !validComparisonJSONVarlena(bj.Data) {
 			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "truncated encoded JSON comparison value")
 		}
 	case bytejson.TpCodeLiteral:
-		if len(bj.Data) == 0 || bj.Data[0] > bytejson.LiteralFalse {
+		if len(bj.Data) != 1 || bj.Data[0] > bytejson.LiteralFalse {
 			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "invalid encoded JSON literal")
 		}
 	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64:
-		if len(bj.Data) < 8 {
+		if len(bj.Data) != 8 {
 			return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "truncated encoded JSON number")
 		}
 	default:
 		return bytejson.ByteJson{}, false, moerr.NewInvalidInput(proc.Ctx, "invalid encoded JSON comparison type")
 	}
 	return bj, false, nil
+}
+
+func validComparisonJSONVarlena(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	payloadLength, prefixLength := uint64(data[0]), 1
+	if data[0] >= utf8.RuneSelf {
+		var decodedBytes int
+		payloadLength, decodedBytes = binary.Uvarint(data)
+		if decodedBytes <= 0 {
+			return false
+		}
+		prefixLength = decodedBytes
+	}
+	return payloadLength == uint64(len(data)-prefixLength)
+}
+
+// compareJSONScalarWithBoolean applies the established numeric-to-boolean
+// comparison coercion without erasing the JSON scalar category. JSON strings
+// are valid values of a different category, so they compare unequal instead
+// of becoming SQL NULL or being parsed as boolean text.
+func compareJSONScalarWithBoolean(
+	ctx context.Context,
+	jsonValue bytejson.ByteJson,
+	booleanValue bool,
+) (comparison int, jsonNull bool, err error) {
+	if jsonValue.Type == bytejson.TpCodeString {
+		return 1, false, nil
+	}
+	value, isNull, err := jsonScalarToBool(ctx, jsonValue)
+	if err != nil || isNull {
+		return 0, isNull, err
+	}
+	if value == booleanValue {
+		return 0, false, nil
+	}
+	if !value {
+		return -1, false, nil
+	}
+	return 1, false, nil
+}
+
+func isJSONLiteralNull(value bytejson.ByteJson) bool {
+	return value.Type == bytejson.TpCodeLiteral &&
+		len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull
+}
+
+func preparedJSONBoolean(ctx context.Context, value bytejson.ByteJson) (bool, error) {
+	if value.Type != bytejson.TpCodeLiteral || len(value.Data) == 0 {
+		return false, moerr.NewInternalError(ctx, "prepared boolean parameter is not encoded as a JSON boolean")
+	}
+	switch value.Data[0] {
+	case bytejson.LiteralTrue:
+		return true, nil
+	case bytejson.LiteralFalse:
+		return false, nil
+	default:
+		return false, moerr.NewInternalError(ctx, "prepared boolean parameter has an invalid JSON literal")
+	}
+}
+
+func compareJSONBoolean(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	nullSafe bool,
+	cmp func(int) bool,
+	selectList *FunctionSelectList,
+) error {
+	jsonPos, boolPos := 0, 1
+	if parameters[0].GetType().Oid == types.T_bool {
+		jsonPos, boolPos = 1, 0
+	}
+	if parameters[jsonPos].GetType().Oid != types.T_json ||
+		parameters[boolPos].GetType().Oid != types.T_bool {
+		return moerr.NewInternalError(proc.Ctx, "JSON/BOOL comparison requires one operand of each type")
+	}
+
+	jsonVector := parameters[jsonPos]
+	booleanVector := parameters[boolPos]
+	var booleanValues []bool
+	if !booleanVector.IsConstNull() {
+		booleanValues = vector.MustFixedColNoTypeCheck[bool](booleanVector)
+	}
+	booleanIsConst := booleanVector.IsConst()
+	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+	resultNulls := result.GetResultVector().GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+
+	var cachedJSON bytejson.ByteJson
+	var cachedJSONNull bool
+	jsonIsConst := jsonVector.IsConst()
+	if jsonIsConst {
+		var err error
+		cachedJSON, cachedJSONNull, err = comparisonJSONAt(proc, jsonVector, 0)
+		if err != nil {
+			return err
+		}
+	}
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+
+		jsonValue, jsonVectorNull := cachedJSON, cachedJSONNull
+		if !jsonIsConst {
+			var err error
+			jsonValue, jsonVectorNull, err = comparisonJSONAt(proc, jsonVector, row)
+			if err != nil {
+				return err
+			}
+		}
+		booleanRow := row
+		if booleanIsConst {
+			booleanRow = 0
+		}
+		booleanNull := booleanVector.IsNull(uint64(row))
+		var booleanValue bool
+		if !booleanNull {
+			booleanValue = booleanValues[booleanRow]
+		}
+		jsonVectorNull = jsonVectorNull || isJSONLiteralNull(jsonValue)
+		if jsonVectorNull || booleanNull {
+			if nullSafe {
+				rss[row] = jsonVectorNull && booleanNull
+			} else {
+				resultNulls.Add(uint64(row))
+			}
+			continue
+		}
+
+		comparison, jsonScalarNull, err := compareJSONScalarWithBoolean(proc.Ctx, jsonValue, booleanValue)
+		if err != nil {
+			return err
+		}
+		if jsonScalarNull {
+			if !nullSafe {
+				resultNulls.Add(uint64(row))
+			}
+			continue
+		}
+		rss[row] = cmp(comparison)
+	}
+	return nil
 }
 
 func comparePreparedJSONScalars(
@@ -199,24 +358,12 @@ func comparePreparedJSONScalars(
 ) (comparison int, jsonNull bool, paramNull bool, err error) {
 	switch kind {
 	case vector.PrepareParamBoolean:
-		left, leftNull, leftErr := jsonScalarToBool(proc.Ctx, jsonValue)
-		if leftErr != nil {
-			return 0, false, false, leftErr
-		}
-		right, rightNull, rightErr := jsonScalarToBool(proc.Ctx, paramValue)
+		right, rightErr := preparedJSONBoolean(proc.Ctx, paramValue)
 		if rightErr != nil {
 			return 0, false, false, rightErr
 		}
-		if leftNull || rightNull {
-			return 0, leftNull, rightNull, nil
-		}
-		if left == right {
-			return 0, false, false, nil
-		}
-		if !left {
-			return -1, false, false, nil
-		}
-		return 1, false, false, nil
+		comparison, leftNull, leftErr := compareJSONScalarWithBoolean(proc.Ctx, jsonValue, right)
+		return comparison, leftNull, false, leftErr
 
 	case vector.PrepareParamInteger:
 		left, leftNull, leftOK := preparedJSONInteger(jsonValue)
@@ -668,6 +815,9 @@ func float32ComparisonNormalizers(leftScale, rightScale int32) (
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+	}
 
 	switch paramType.Oid {
 	case types.T_bool:
@@ -829,6 +979,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left == right
@@ -1570,6 +1723,9 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left != right

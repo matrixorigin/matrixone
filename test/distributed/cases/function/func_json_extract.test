@@ -421,5 +421,22 @@ execute json_utinyint_compare_stmt using @json_unsigned_compare_param;
 deallocate prepare json_utinyint_compare_stmt;
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
+select json_extract(json_object('enabled', 'true'), '$.enabled') = true as string_eq_bool,
+       true = json_extract(json_object('enabled', 'true'), '$.enabled') as bool_eq_string,
+       json_extract(json_object('enabled', 'true'), '$.enabled') != true as string_ne_bool,
+       json_extract(json_object('enabled', 'true'), '$.enabled') <=> true as string_null_safe_bool,
+       json_extract(json_object('enabled', 'true'), '$.enabled') in (true) as string_in_bool,
+       json_extract(json_object('enabled', 'true'), '$.enabled') not in (true) as string_not_in_bool,
+       cast(json_extract(json_object('enabled', 'true'), '$.enabled') as boolean) as explicit_cast_true,
+       cast(json_extract(json_object('enabled', 'false'), '$.enabled') as boolean) as explicit_cast_false;
+prepare json_bool_category_stmt from 'select
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') = ? as prepared_eq,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') != ? as prepared_ne,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') <=> ? as prepared_null_safe,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') in (?) as prepared_in,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') not in (?) as prepared_not_in';
+set @json_bool_category_param = true;
+execute json_bool_category_stmt using @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param;
+deallocate prepare json_bool_category_stmt;
 select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
 drop database test;
