@@ -965,7 +965,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.Equal(t, "stable-value", value.Value)
 	})
 
-	t.Run("temporary tables require protocol v36", func(t *testing.T) {
+	t.Run("temporary tables require protocol v37", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -976,7 +976,7 @@ func TestSession_Migrate(t *testing.T) {
 		target := genSession(ctrl, "d1", nil)
 		targetRuntime := runtime.ServiceRuntime(target.proc.GetService())
 		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
-		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
 		defer func() {
 			if hadVersion {
 				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
@@ -991,7 +991,7 @@ func TestSession_Migrate(t *testing.T) {
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
 		})
-		require.ErrorContains(t, err, "temporary-table migration requires protocol version 36")
+		require.ErrorContains(t, err, "temporary-table migration requires protocol version 37")
 		_, ok := target.GetTempTable("d1", "tmp")
 		require.False(t, ok)
 	})

@@ -352,12 +352,12 @@ func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
 	})
 }
 
-func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV36Target(t *testing.T) {
+func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV37Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
 		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
 		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
-		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
 		defer func() {
 			if hadVersion {
 				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
@@ -376,7 +376,7 @@ func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV36Target(t *testing.T
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
 		})
-		assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v36 target")
+		assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v37 target")
 		assert.Empty(t, sc.statements)
 	})
 }
