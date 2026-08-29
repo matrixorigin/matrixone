@@ -132,23 +132,32 @@ func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
 	defer executor.Free()
 
 	input := batch.NewWithSize(1)
-	values := testutil.MakeVarlenaVector(
-		[][]byte{[]byte("foo"), []byte("3020400x"), []byte(strings.Repeat("x", 65535))},
-		nil, sourceType, proc.Mp())
+	const longWarningRows = 64
+	longInvalid := []byte(strings.Repeat("x", 65535))
+	inputValues := make([][]byte, 0, longWarningRows+2)
+	inputValues = append(inputValues, longInvalid, []byte("foo"), []byte("3020400x"))
+	for range longWarningRows - 1 {
+		inputValues = append(inputValues, longInvalid)
+	}
+	values := testutil.MakeVarlenaVector(inputValues, nil, sourceType, proc.Mp())
 	defer values.Free(proc.Mp())
 	input.Vecs[0] = values
-	input.SetRowCount(3)
+	input.SetRowCount(len(inputValues))
 	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
-	require.Equal(t, 3, result.Length())
+	require.Equal(t, len(inputValues), result.Length())
 
 	total, retained := collector.SnapshotWarnings()
-	require.Equal(t, uint64(4), total)
+	// The collector observes every bad row while retaining only its fixed-size
+	// SHOW WARNINGS payload. The first retained record is the long value, so the
+	// message-size assertion below also covers source-side rendering.
+	require.Equal(t, uint64(longWarningRows+3), total)
 	require.Len(t, retained, 3)
 	for _, warning := range retained {
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.Code)
 		require.LessOrEqual(t, len(warning.Message), len("Truncated incorrect DECIMAL value: ''")+128)
 	}
+	require.Len(t, retained[0].Message, len("Truncated incorrect DECIMAL value: ''")+128)
 
 	// The terminal envelope preserves the complete count and the bounded SHOW
 	// WARNINGS payload for the initiating session.
@@ -156,7 +165,7 @@ func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
 	require.NoError(t, err)
 	initiatingSession := &remoteWarningSession{}
 	require.NoError(t, (&messageSenderOnClient{warningSink: initiatingSession}).dealRemoteTerminal(data))
-	require.Equal(t, uint64(4), initiatingSession.totalWarnings)
+	require.Equal(t, uint64(longWarningRows+3), initiatingSession.totalWarnings)
 	require.Len(t, initiatingSession.warnings, 3)
 }
 
