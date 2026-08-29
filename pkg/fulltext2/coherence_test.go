@@ -80,7 +80,7 @@ func TestFenceRegistryMonotonicClaimAndOutOfOrder(t *testing.T) {
 	require.True(t, r.required(id).AtLeast(g2))
 }
 
-func TestFenceRegistryOverflowKeepsPendingAndRecovers(t *testing.T) {
+func TestFenceRegistryOverflowNeverForgetsClaimedLowerBound(t *testing.T) {
 	r := newFenceRegistry(1)
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
 	b := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "b", MetadataTable: "mb"}
@@ -97,20 +97,25 @@ func TestFenceRegistryOverflowKeepsPendingAndRecovers(t *testing.T) {
 
 	require.True(t, r.finishClaim(a, g))
 	claim, _, overflow = r.install(b, g)
-	require.True(t, claim)
-	require.False(t, overflow)
+	require.False(t, claim)
+	require.True(t, overflow)
+	require.Equal(t, g, r.required(a))
+	require.Zero(t, r.required(b))
 }
 
-func TestInstallGenerationFenceOverflowBumpsEpochAndRetryRecovers(t *testing.T) {
+func TestInstallGenerationFenceOverflowStaysFailClosed(t *testing.T) {
 	oldRegistry := localFences
 	oldCache := veccache.Cache
 	oldEpoch := coherenceEpoch.Load()
+	oldBlocked := coherenceBlocked.Load()
 	localFences = newFenceRegistry(1)
+	coherenceBlocked.Store(false)
 	veccache.Cache = veccache.NewVectorIndexCache()
 	t.Cleanup(func() {
 		localFences = oldRegistry
 		veccache.Cache = oldCache
 		coherenceEpoch.Store(oldEpoch)
+		coherenceBlocked.Store(oldBlocked)
 	})
 
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
@@ -125,12 +130,14 @@ func TestInstallGenerationFenceOverflowBumpsEpochAndRetryRecovers(t *testing.T) 
 	require.False(t, claimed)
 	require.True(t, overflow)
 	require.Equal(t, before+1, coherenceEpoch.Load())
+	require.True(t, coherenceLoadsBlocked())
 
 	require.True(t, localFences.finishClaim(a, g))
 	current, claimed, overflow := InstallGenerationFence(b, g)
-	require.Equal(t, g, current)
-	require.True(t, claimed)
-	require.False(t, overflow)
+	require.Zero(t, current)
+	require.False(t, claimed)
+	require.True(t, overflow)
+	require.Equal(t, g, localFences.required(a))
 }
 
 func TestWarmSearchRejectsOlderCoherenceEpoch(t *testing.T) {

@@ -308,7 +308,7 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	require.NoError(t, err)
 	chunks := splitFrameChunks(1, framed)
 
-	var deleteAllRan, insertRan bool
+	var writes []string
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "GREATEST"): // NextTailChunkId
@@ -319,13 +319,8 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil
-		default: // DELETE / INSERT writes succeed
-			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, "TRUE") {
-				deleteAllRan = true
-			}
-			if strings.HasPrefix(sql, "INSERT") {
-				insertRan = true
-			}
+		default: // DELETE / INSERT / UPDATE writes succeed
+			writes = append(writes, sql)
 			return executor.Result{Mp: mp}, nil
 		}
 	})
@@ -342,8 +337,17 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, nlive) // both docs are live → folded into the fresh base
-	require.True(t, deleteAllRan, "MERGE must clear prior bases first")
-	require.True(t, insertRan, "MERGE must persist the rebuilt base")
+	require.GreaterOrEqual(t, len(writes), 5)
+	require.Contains(t, writes[0], "INSERT INTO")
+	require.Contains(t, writes[0], Fulltext2GenerationMarkerID)
+	require.Contains(t, writes[1], "UPDATE")
+	require.Contains(t, writes[1], Fulltext2GenerationMarkerID)
+	require.Contains(t, writes[2], "DELETE FROM")
+	require.Contains(t, writes[2], "tag = 0")
+	require.Contains(t, writes[3], "DELETE FROM")
+	require.Contains(t, writes[3], Fulltext2GenerationMarkerID)
+	require.Contains(t, writes[len(writes)-2], "INSERT INTO")
+	require.Contains(t, writes[len(writes)-2], "VALUES")
 }
 
 // twoIdBatch renders a 2-row index_id enumerate result.

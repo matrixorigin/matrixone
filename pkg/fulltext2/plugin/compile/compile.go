@@ -105,12 +105,20 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 // not replay history over the fresh base. On REBUILD (clearTail) the prior tag=1
 // tail is discarded first — the fresh base already reflects every committed row.
 func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
+	cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+	// Advance the durable lifecycle generation before any rewrite. This also
+	// creates a marker for an empty CREATE/REBUILD, whose TVF receives no rows.
+	for _, s := range fulltext2.AdvanceBaseGenerationSqls(cfg) {
+		if err := ctx.RunSql(s); err != nil {
+			return err
+		}
+	}
 	if clearTail {
 		accountID, err := compileAccountID(ctx)
 		if err != nil {
 			return err
 		}
-		cfg := fulltext2.TableConfig{AccountID: accountID, DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+		cfg.AccountID = accountID
 		// REBUILD: clear the tail AND the prior tag=0 base(s) here. The create TVF also
 		// clears the bases, but it SKIPS that when the rebuild sees zero source rows
 		// (empty/all-deleted table) — so without this a REBUILD over an emptied table

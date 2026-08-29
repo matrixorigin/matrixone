@@ -109,6 +109,10 @@ func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) 
 // tail delta), which the per-iteration work bound (not batch size) is what actually caps.
 const maxInsertTuples = 500
 
+// Fulltext2GenerationMarkerID is a reserved metadata row that stores the
+// lifecycle generation. Base loaders must never interpret it as a segment.
+const Fulltext2GenerationMarkerID = "__mo_fulltext2_generation__"
+
 // ToInsertSqls serializes the segment, spills it to a temp file under the LOCAL
 // fileservice's __fulltext2 dir (load_file reads it back by path), and emits the
 // SQL to persist it: one metadata row + the bytes split into <= MaxChunkSize
@@ -233,13 +237,37 @@ func DeleteSqls(cfg TableConfig, id string) []string {
 	}
 }
 
+// AdvanceBaseGenerationSqls installs the reserved generation row for an old
+// index and then increments it under the row's primary-key lock. The two
+// statements must run in the lifecycle transaction before base/tail deletion.
+// The initial value seeds from every legacy segment timestamp; subsequent
+// rewrites serialize on the marker row and never depend on a CN wall clock.
+func AdvanceBaseGenerationSqls(cfg TableConfig) []string {
+	meta := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
+	id := sqlquote.String(Fulltext2GenerationMarkerID)
+	return []string{
+		fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) SELECT %s, COALESCE(MAX(%s), 0), '', 0, 0, 0 FROM %s ON DUPLICATE KEY UPDATE %s = VALUES(%s)",
+			meta,
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
+			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
+			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
+			id, catalog.FullText2Index_TblCol_Metadata_Timestamp, meta,
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Index_Id),
+		fmt.Sprintf("UPDATE %s SET %s = %s + 1 WHERE %s = %s",
+			meta, catalog.FullText2Index_TblCol_Metadata_Timestamp, catalog.FullText2Index_TblCol_Metadata_Timestamp,
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, id),
+	}
+}
+
 // DeleteAllBasesSqls removes every tag=0 base (all sub-index chunk rows + all
-// metadata rows); the tag=1 CdcTail is untouched. Makes CREATE idempotent.
+// segment metadata rows) while retaining the lifecycle-generation marker; the
+// tag=1 CdcTail is untouched. Makes CREATE idempotent.
 func DeleteAllBasesSqls(cfg TableConfig) []string {
 	return []string{
 		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 			catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_ModelChunk)),
-		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)),
+		fmt.Sprintf("DELETE FROM %s WHERE %s <> %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+			catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(Fulltext2GenerationMarkerID)),
 	}
 }
 
@@ -336,8 +364,9 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 }
 
 func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
-	idSQL := fmt.Sprintf("SELECT %s FROM %s",
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	idSQL := fmt.Sprintf("SELECT %s FROM %s WHERE %s <> %s",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(Fulltext2GenerationMarkerID))
 	var sqlStart time.Time
 	if trace != nil {
 		sqlStart = time.Now()
@@ -382,8 +411,9 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 			loadedBasePool.rollback(generation.owner)
 		}
 	}()
-	idSQL := fmt.Sprintf("SELECT %s FROM %s",
-		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	idSQL := fmt.Sprintf("SELECT %s FROM %s WHERE %s <> %s",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(Fulltext2GenerationMarkerID))
 	var sqlStart time.Time
 	if trace != nil {
 		sqlStart = time.Now()

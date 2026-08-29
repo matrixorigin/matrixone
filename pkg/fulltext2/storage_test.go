@@ -48,6 +48,16 @@ func TestDeleteSqls(t *testing.T) {
 	require.Len(t, all, 2)
 	require.Contains(t, all[0], "__store")
 	require.Contains(t, all[1], "__meta")
+	require.Contains(t, all[1], Fulltext2GenerationMarkerID)
+	require.Contains(t, all[1], "<>")
+
+	advance := AdvanceBaseGenerationSqls(cfg)
+	require.Len(t, advance, 2)
+	require.Contains(t, advance[0], Fulltext2GenerationMarkerID)
+	require.Contains(t, advance[0], "MAX(timestamp)")
+	require.Contains(t, advance[0], "ON DUPLICATE KEY UPDATE")
+	require.Contains(t, advance[1], "timestamp + 1")
+	require.Contains(t, advance[1], Fulltext2GenerationMarkerID)
 
 	tail := DeleteTailSqls(cfg)
 	require.Len(t, tail, 1)

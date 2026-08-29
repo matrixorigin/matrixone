@@ -202,7 +202,9 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	}
 	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
 	u.segIdx++
-	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */)
+	// The compile lifecycle transaction has already advanced the reserved durable
+	// generation marker. Keep the wall-clock build id out of generation ordering.
+	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, 0, 0 /* tag=0 base */)
 	if err != nil {
 		return err
 	}

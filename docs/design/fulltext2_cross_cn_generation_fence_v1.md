@@ -33,10 +33,16 @@ The account ID is supplied by the runtime boundary: MATCH uses
 the transaction context.  JSON table-function configuration is not trusted for
 tenant identity.
 
-`Generation{BaseTimestamp, TailChunk}` is ordered lexicographically.  A higher
-base timestamp dominates a tail reset after MERGE/REBUILD.  Both fields are
-read by one SELECT statement so one transaction snapshot cannot combine values
-from two statements.
+`Generation{BaseTimestamp, TailChunk}` is ordered lexicographically.  The base
+component is a reserved row in the metadata hidden table.  CREATE, REBUILD, and
+MERGE first seed that row from the maximum legacy segment timestamp and then
+increment it under the marker primary-key lock in the same transaction as the
+rewrite.  Base deletion retains the marker, even when an empty REBUILD writes no
+segments.  New segment metadata no longer contributes a CN wall-clock value to
+generation ordering.  A higher durable base component therefore dominates a
+tail reset after MERGE/REBUILD across clock skew or rollback.  Both generation
+fields are read by one SELECT statement so one transaction snapshot cannot
+combine values from two statements.
 
 ## Local fence state machine
 
@@ -54,16 +60,17 @@ required generation claimed.  Equal, duplicate, old, and no-cache deliveries
 are idempotent.  If a newer generation arrives during a claim, the old claim
 does not mark the newer generation complete.
 
-The registry keeps at most 1024 entries and evicts only claimed least recently
-used entries.  If all slots are pending, installation remains fail-closed: it
-bumps a process-wide FULLTEXT2 epoch, non-blockingly claims every visible
-`fulltext2:` cache entry, and returns no ACK.  Existing pending fences stay in
-their slots.  A load begun before the bump fails its pre-publish epoch check;
-an entry missed by the concurrent prefix scan fails the same atomic check on
-its next hot search and claims its exact eviction.  Once a claimed slot is
-reclaimable, the sender's retry installs the omitted identity normally.  Thus
-active pending fences are never discarded, capacity stays fixed, and transient
-overflow does not require a process restart.
+The registry keeps at most 1024 entries and never discards a lower bound,
+including a claimed one.  A transaction may have fixed an older snapshot before
+the claim and start its first MATCH only later, so eviction completion alone is
+not proof that the bound is reclaimable.  On capacity exhaustion the process
+enters a fail-closed FULLTEXT2 state until restart: it bumps a process-wide
+epoch, non-blockingly claims every visible `fulltext2:` cache entry, rejects new
+FULLTEXT2 loads, and returns no ACK.  Existing fences stay in their slots.  A
+load begun before the bump fails its pre-publish epoch check; an entry missed by
+the concurrent prefix scan cannot be republished because the load gate remains
+closed.  This rare availability failure preserves fixed memory and the rule
+that an old transaction can never recreate a stale process-global cache entry.
 
 A load reads its durable generation before data and checks the registry both
 after the generation read and immediately before publishing its `Index`.  A

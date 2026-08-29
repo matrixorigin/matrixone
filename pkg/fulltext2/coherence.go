@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
@@ -79,7 +78,6 @@ type fenceEntry struct {
 	required Generation
 	claiming bool
 	claimed  bool
-	lastUsed time.Time
 }
 
 type fenceRegistry struct {
@@ -95,34 +93,13 @@ func newFenceRegistry(max int) *fenceRegistry {
 	return &fenceRegistry{entries: make(map[string]*fenceEntry), max: max}
 }
 
-// reclaimClaimedLocked makes one slot without ever dropping an unfinished fence.
-func (r *fenceRegistry) reclaimClaimedLocked() bool {
-	var oldestKey string
-	var oldest time.Time
-	for key, entry := range r.entries {
-		if !entry.claimed || entry.claiming {
-			continue
-		}
-		if oldestKey == "" || entry.lastUsed.Before(oldest) {
-			oldestKey, oldest = key, entry.lastUsed
-		}
-	}
-	if oldestKey == "" {
-		return false
-	}
-	delete(r.entries, oldestKey)
-	return true
-}
-
 // install returns whether the caller owns the eviction claim, the monotonic
 // current requirement, and whether capacity forced the global fail-closed path.
 func (r *fenceRegistry) install(id CacheIdentity, generation Generation) (bool, Generation, bool) {
-	now := time.Now()
 	key := id.Key()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if entry, ok := r.entries[key]; ok {
-		entry.lastUsed = now
 		if !generation.AtLeast(entry.required) {
 			return false, entry.required, false
 		}
@@ -138,10 +115,15 @@ func (r *fenceRegistry) install(id CacheIdentity, generation Generation) (bool, 
 		entry.claiming = true
 		return true, entry.required, false
 	}
-	if len(r.entries) >= r.max && !r.reclaimClaimedLocked() {
+	// A claimed fence is still a lower bound for transactions whose snapshot was
+	// fixed before the fence was installed. Forgetting it would let such a
+	// transaction publish an older object after eviction completed. Capacity
+	// exhaustion therefore fails closed at the process level instead of reclaiming
+	// any identity lower bound.
+	if len(r.entries) >= r.max {
 		return false, Generation{}, true
 	}
-	r.entries[key] = &fenceEntry{required: generation, claiming: true, lastUsed: now}
+	r.entries[key] = &fenceEntry{required: generation, claiming: true}
 	return true, generation, false
 }
 
@@ -154,7 +136,6 @@ func (r *fenceRegistry) finishClaim(id CacheIdentity, generation Generation) boo
 	}
 	entry.claiming = false
 	entry.claimed = true
-	entry.lastUsed = time.Now()
 	return true
 }
 
@@ -167,7 +148,6 @@ func (r *fenceRegistry) lookupRequired(id CacheIdentity) (Generation, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if entry := r.entries[id.Key()]; entry != nil {
-		entry.lastUsed = time.Now()
 		return entry.required, true
 	}
 	return Generation{}, false
@@ -188,6 +168,7 @@ func (r *fenceRegistry) drop(id CacheIdentity) {
 
 var localFences = newFenceRegistry(defaultFenceRegistryCap)
 var coherenceEpoch atomic.Uint64
+var coherenceBlocked atomic.Bool
 
 type FencePublisher interface {
 	Enqueue(CacheIdentity, Generation)
@@ -197,6 +178,9 @@ type FencePublisher interface {
 // InstallGenerationFence installs the requirement and claims exact eviction.
 // overflow is fail-closed and intentionally not acknowledged by the RPC layer.
 func InstallGenerationFence(id CacheIdentity, generation Generation) (current Generation, claimed, overflow bool) {
+	if coherenceBlocked.Load() {
+		return localFences.required(id), false, true
+	}
 	claim, current, overflow := localFences.install(id, generation)
 	if overflow {
 		// A bump before the prefix claim covers entries concurrently loading but
@@ -204,6 +188,7 @@ func InstallGenerationFence(id CacheIdentity, generation Generation) (current Ge
 		// epoch and abandons the old object. The prefix claim prevents new readers
 		// from acquiring every already-visible FULLTEXT2 object without waiting on
 		// reader leases. The sender receives no ACK and retries the exact identity.
+		coherenceBlocked.Store(true)
 		coherenceEpoch.Add(1)
 		veccache.Cache.ClaimRemovePrefixWithReason(cacheKeyPrefix, string(LoadMissGenerationChange))
 		return current, false, true
@@ -230,3 +215,5 @@ func requiredGeneration(id CacheIdentity) (Generation, bool) {
 }
 
 func currentCoherenceEpoch() uint64 { return coherenceEpoch.Load() }
+
+func coherenceLoadsBlocked() bool { return coherenceBlocked.Load() }

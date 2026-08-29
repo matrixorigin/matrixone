@@ -45,6 +45,11 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 	if len(tails) == 0 && len(deletes) == 0 {
 		return 0, nil // no CDC delta since the last build/compaction
 	}
+	for _, s := range AdvanceBaseGenerationSqls(cfg) {
+		if e := runCompactSql(sqlproc, s); e != nil {
+			return 0, e
+		}
+	}
 
 	// Recency for the fresh base: above every existing base + tail chunk_id, so a
 	// later tail append (NextTailChunkId = base+1) stays monotonic and newer.
@@ -121,7 +126,10 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 		seg.Id = SubIndexId(uid, segIdx)
 		seg.Recency = recency
 		segIdx++
-		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, ts, 0 /* tag=0 base */)
+		// Segment timestamps are payload metadata only. The durable lifecycle
+		// generation lives in the reserved marker and must not depend on this CN's
+		// wall clock.
+		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, 0, 0 /* tag=0 base */)
 		if e != nil {
 			return e
 		}

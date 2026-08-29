@@ -117,6 +117,9 @@ func NewFulltext2SearchForAccount(cfg TableConfig, accountID uint32) *Fulltext2S
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	ensureReusableLoadLifecycle()
+	if coherenceLoadsBlocked() {
+		return errLoadGenerationSuperseded
+	}
 	loadEpoch := currentCoherenceEpoch()
 	if !s.identitySet {
 		accountID, accountErr := sqlproc.GetAccountID()
@@ -208,7 +211,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	}
 	segs := append(bases, tails...)
 	idx := NewIndex(segs, deletes)
-	if required, exists := requiredGeneration(s.identity); loadEpoch != currentCoherenceEpoch() ||
+	if required, exists := requiredGeneration(s.identity); coherenceLoadsBlocked() || loadEpoch != currentCoherenceEpoch() ||
 		exists && !(Generation{BaseTimestamp: baseGeneration, TailChunk: appliedTail}).AtLeast(required) {
 		idx.Free()
 		return errLoadGenerationSuperseded
