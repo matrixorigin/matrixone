@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -65,11 +66,6 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			execSQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('snapshot', 'Snapshot feature', '{\"allowed_scope\":[\"account\",\"database\",\"table\"]}', true)")
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'snapshot', 'table', -1)", accountID))
-
-			var featureLimitTableID uint64
-			require.NoError(t, sysDB.QueryRowContext(ctx,
-				"select rel_id from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname = 'mo_feature_limit'",
-			).Scan(&featureLimitTableID))
 
 			tenantDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 			require.NoError(t, err)
@@ -182,26 +178,38 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				_, execErr := conn.ExecContext(execCtx, statement)
 				return execErr
 			}
-			ls := lockservice.GetLockServiceByServiceID(cn.ServiceID())
-			waitForQuotaWaiter := func() {
-				require.Eventually(t, func() bool {
-					found := false
-					ls.IterLocks(func(tableID uint64, _ [][]byte, lock lockservice.Lock) bool {
-						if tableID != featureLimitTableID {
-							return true
-						}
+			var lockServices []lockservice.LockService
+			c.ForeachServices(func(service embed.ServiceOperator) bool {
+				if service.ServiceType() == metadata.ServiceType_CN {
+					lockServices = append(lockServices, lockservice.GetLockServiceByServiceID(service.ServiceID()))
+				}
+				return true
+			})
+			hasLockWaiter := func() bool {
+				found := false
+				for _, service := range lockServices {
+					service.IterLocks(func(_ uint64, _ [][]byte, lock lockservice.Lock) bool {
 						lock.IterWaiters(func(_ pblock.WaitTxn) bool {
 							found = true
 							return false
 						})
 						return !found
 					})
-					return found
-				}, 30*time.Second, 10*time.Millisecond, "second branch creator did not wait for the quota-row lock")
+					if found {
+						break
+					}
+				}
+				return found
+			}
+			waitForConcurrentCreatorWaiter := func() {
+				require.Eventually(t, func() bool {
+					return hasLockWaiter()
+				}, 30*time.Second, 10*time.Millisecond, "second branch creator did not enter lock wait")
 			}
 
 			require.NoError(t, execConn(conn1, "begin"))
 			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
+			require.False(t, hasLockWaiter(), "unexpected waiter before concurrent table branch creation")
 
 			createDone := make(chan error, 1)
 			pendingCreate = createDone
@@ -209,7 +217,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				done <- execConn(conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			}(createDone)
 
-			waitForQuotaWaiter()
+			waitForConcurrentCreatorWaiter()
 
 			require.NoError(t, execConn(conn1, "commit"))
 			select {
@@ -237,13 +245,14 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, execConn(conn1, "begin"))
 			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
 			require.NoError(t, execConn(conn2, "begin"))
+			require.False(t, hasLockWaiter(), "unexpected waiter before concurrent database branch creation")
 			createDone = make(chan error, 1)
 			pendingCreate = createDone
 			go func(done chan<- error) {
 				done <- execConn(conn2, "data branch create database branch_quota_destination from branch_quota_source")
 			}(createDone)
 
-			waitForQuotaWaiter()
+			waitForConcurrentCreatorWaiter()
 			require.NoError(t, execConn(conn1, "commit"))
 			select {
 			case createErr := <-createDone:
