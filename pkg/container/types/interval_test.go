@@ -15,10 +15,17 @@
 package types
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestJudgeIntervalNumOverflow(t *testing.T) {
+	require.NoError(t, JudgeIntervalNumOverflow(-int64(IntervalNumMAX), Year))
+	require.Error(t, JudgeIntervalNumOverflow(math.MinInt64, Year))
+	require.NoError(t, JudgeIntervalNumOverflow(math.MinInt64, MicroSecond))
+}
 
 func TestIntervalType(t *testing.T) {
 	var it IntervalType
