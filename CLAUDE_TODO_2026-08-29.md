@@ -72,3 +72,17 @@
 - v4_0_6 tenant upgrade list 末尾追加 COLUMNS binary charset refresh entry，offset/entry UT 通过。
 - 修复 CONVERT USING formatter/reparse，CTAS from BLOB 成功保留 70,000 bytes并物化为 BLOB。
 - 更新后的 BVT 在 clean-ready instance normal mode 连续两次 21/21 passed；owning packages 全量通过。
+
+## 第二轮 review findings 修复计划
+
+1. 为 QUOTE 增加 binary-aware overload matching 与逐 byte quoting，实现无效 UTF-8 不替换，并补真实 BINARY/VARBINARY/BLOB 探针及 width 边界。
+2. 为 REPEAT、REPLACE、INSERT、REGEXP_REPLACE/REGEXP_SUBSTR 及 LPAD/RPAD 建立 allocation-free checked result-size admission；删除结果长度相关的 Go-heap 中间 string/[]rune，直接写入已由 MPool admission 的 result area，覆盖大输入与扩张拒绝。
+3. 在 binder 读取已证明的 count/target literal，按批准设计细化 REPEAT、LPAD、RPAD 的 binary 返回宽度；动态值维持 Unknown/BLOB，并更正 BVT metadata 期望。
+4. 跑 typed probes、allocation/accounting UT、owning packages、BVT 与最终 self-review；按 review-fix 例外直接 commit/push 并更新 PR。
+
+## 第二轮完成记录
+
+- QUOTE 真实 VARBINARY/BLOB 不再 cast，并按 byte 保留无效 UTF-8；静态上界为 `2*n+2`。
+- REPEAT/REPLACE/INSERT/REGEXP 与 PAD 在构造扩张结果前执行 checked MPool admission；PAD preflight 改为 allocation-free UTF-8 scan；补 low-cap rejection UT。
+- binder 对 REPEAT count literal 与 LPAD/RPAD target literal 细化 VARBINARY width；动态表达式维持 BLOB。
+- BVT 更新为 23/23 passed；`repeat(X'61',2)` 和 `lpad(...)` 均报告 VARBINARY(2)，动态 count 报告 BLOB。

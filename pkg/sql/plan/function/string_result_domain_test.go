@@ -201,6 +201,7 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 	binaryCharset := types.NewWithCharset(types.T_varchar, 6, 0, types.CharsetBinary)
 	for _, test := range []struct {
 		name    string
+		fn      string
 		inputs  []types.Type
 		wantOID types.T
 	}{
@@ -209,9 +210,15 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 		{name: "replace", inputs: []types.Type{
 			types.New(types.T_varbinary, 8, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0),
 		}, wantOID: types.T_blob},
+		{name: "quote varbinary", fn: "quote", inputs: []types.Type{types.New(types.T_varbinary, 1, 0)}, wantOID: types.T_varbinary},
+		{name: "quote blob", fn: "quote", inputs: []types.Type{types.T_blob.ToType()}, wantOID: types.T_blob},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			resolved, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
+			fn := test.fn
+			if fn == "" {
+				fn = test.name
+			}
+			resolved, err := GetFunctionByName(proc.Ctx, fn, test.inputs)
 			require.NoError(t, err)
 			require.Equal(t, test.wantOID, resolved.GetReturnType().Oid)
 			casts, needCast := resolved.ShouldDoImplicitTypeCast()
@@ -219,6 +226,11 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 			require.Empty(t, casts)
 		})
 	}
+}
+
+func TestQuotePreservesInvalidUTF8Bytes(t *testing.T) {
+	input := string([]byte{0xff, '\'', '\\', 0})
+	require.Equal(t, []byte{'\'', 0xff, '\'', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
 }
 
 func TestExpandingReturnTypeBounds(t *testing.T) {

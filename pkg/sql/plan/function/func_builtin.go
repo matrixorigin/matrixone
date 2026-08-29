@@ -1605,35 +1605,41 @@ func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (
 	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) {
 		return 0, true
 	}
-	srcRunes, padRunes := []rune(src), []rune(pad)
+	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
 	target := int(tgtLen)
 	var bytes int64
 	switch {
-	case target <= len(srcRunes):
-		for _, r := range srcRunes[:target] {
-			bytes += int64(utf8.RuneLen(r))
-		}
-	case len(padRunes) == 0:
+	case target <= srcRunes:
+		bytes = encodedRunePrefixBytes(src, target)
+	case padRunes == 0:
 		bytes = 0
 	default:
-		if int64(len(src)) > maxBytes {
+		srcBytes := encodedRunePrefixBytes(src, srcRunes)
+		padBytes := encodedRunePrefixBytes(pad, padRunes)
+		if srcBytes > maxBytes {
 			return 0, true
 		}
-		missing := target - len(srcRunes)
-		full, partial := missing/len(padRunes), missing%len(padRunes)
-		padBytes := int64(len(pad))
-		if padBytes != 0 && int64(full) > (maxBytes-int64(len(src)))/padBytes {
+		missing := target - srcRunes
+		full, partial := missing/padRunes, missing%padRunes
+		if padBytes != 0 && int64(full) > (maxBytes-srcBytes)/padBytes {
 			return 0, true
 		}
-		bytes = int64(len(src)) + int64(full)*padBytes
-		for _, r := range padRunes[:partial] {
-			bytes += int64(utf8.RuneLen(r))
-		}
+		bytes = srcBytes + int64(full)*padBytes + encodedRunePrefixBytes(pad, partial)
 	}
 	if bytes > maxBytes {
 		return 0, true
 	}
 	return int(bytes), false
+}
+
+func encodedRunePrefixBytes(value string, runes int) int64 {
+	var bytes int64
+	for offset, seen := 0, 0; offset < len(value) && seen < runes; seen++ {
+		r, size := utf8.DecodeRuneInString(value[offset:])
+		bytes += int64(utf8.RuneLen(r))
+		offset += size
+	}
+	return bytes
 }
 
 func doLpad(src string, tgtLen int64, pad string) (string, bool) {
@@ -1716,6 +1722,12 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null1 || null2 {
 			err = rs.AppendMustNullForBytesResult()
 		} else {
+			if v2 > 0 && len(v1) > 0 && v2 <= maxResultLen/int64(len(v1)) {
+				resultBytes := int64(len(v1)) * v2
+				if err = rs.GetResultVector().PreExtendWithArea(1, int(resultBytes), proc.Mp()); err != nil {
+					return err
+				}
+			}
 			r, null := repeatNTimes(functionUtil.QuickBytesToStr(v1), v2)
 			if null {
 				err = rs.AppendMustNullForBytesResult()

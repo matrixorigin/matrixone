@@ -10,8 +10,14 @@ A
 select convert(cast(-9223372036854775808 as signed) using binary) as converted_integer;
 ➤ converted_integer[-3,20,0]  𝄀
 -9223372036854775808
-select repeat(X'61', 2) as promoted_repeat;
-➤ promoted_repeat[-4,2147483647,0]  𝄀
+select repeat(X'61', 2) as bounded_repeat;
+➤ bounded_repeat[-3,2,0]  𝄀
+aa
+select lpad(X'61', 2, X'62') as bounded_lpad;
+➤ bounded_lpad[-3,2,0]  𝄀
+ba
+select repeat(X'61', cast(2 as signed)) as dynamic_repeat;
+➤ dynamic_repeat[-4,2147483647,0]  𝄀
 aa
 select make_set(7, 'a', 'b', 'c') as bounded_make_set;
 ➤ bounded_make_set[12,5,0]  𝄀

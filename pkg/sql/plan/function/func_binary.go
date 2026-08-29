@@ -8827,7 +8827,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	return nil
 }
 
-func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -8845,6 +8845,16 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 		} else {
 			v1Str := functionUtil.QuickBytesToStr(v1)
 			v2Str := functionUtil.QuickBytesToStr(v2)
+			resultBytes, ok := replaceResultByteLength(v1, v2, v3, maxStringFunctionResultLength(result))
+			if !ok {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.GetResultVector().PreExtendWithArea(1, resultBytes, proc.Mp()); err != nil {
+				return err
+			}
 			var res string
 			if v2Str == "" {
 				res = v1Str
@@ -8860,7 +8870,19 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func replaceResultByteLength(src, needle, replacement []byte, maxBytes int64) (int, bool) {
+	if len(needle) == 0 {
+		return len(src), int64(len(src)) <= maxBytes
+	}
+	matches := bytes.Count(src, needle)
+	resultBytes := int64(len(src)) + int64(matches)*(int64(len(replacement))-int64(len(needle)))
+	if resultBytes < 0 || resultBytes > maxBytes {
+		return 0, false
+	}
+	return int(resultBytes), true
+}
+
+func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
@@ -8878,6 +8900,16 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				return err
 			}
 		} else {
+			maxBytes := maxStringFunctionResultLength(result)
+			if int64(len(v1)) > maxBytes-int64(len(v4)) {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.GetResultVector().PreExtendWithArea(1, len(v1)+len(v4), proc.Mp()); err != nil {
+				return err
+			}
 			str := functionUtil.QuickBytesToStr(v1)
 			pos := v2
 			replaceLen := v3

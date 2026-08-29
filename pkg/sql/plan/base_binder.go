@@ -4959,6 +4959,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "repeat":
+		refineBinaryRepeatLiteralReturnType(args, &returnType)
+
+	case "lpad", "rpad":
+		refineBinaryPadLiteralReturnType(args, &returnType)
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]
@@ -5026,6 +5032,64 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func refineBinaryRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 || returnType.Charset != types.CharsetBinary {
+		return
+	}
+	countLiteral := args[1].GetLit()
+	if countLiteral == nil {
+		return
+	}
+	count, ok := literalSignedValue(countLiteral)
+	if !ok || count < 0 {
+		return
+	}
+	sourceWidth, known := binaryExprByteBound(args[0])
+	if !known {
+		return
+	}
+	if sourceWidth != 0 && uint64(count) > math.MaxUint64/sourceWidth {
+		return
+	}
+	refineKnownBinaryResultType(returnType, sourceWidth*uint64(count))
+}
+
+func refineBinaryPadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 3 || returnType.Charset != types.CharsetBinary {
+		return
+	}
+	targetLiteral := args[1].GetLit()
+	if targetLiteral == nil {
+		return
+	}
+	target, ok := literalSignedValue(targetLiteral)
+	if !ok || target < 0 {
+		return
+	}
+	refineKnownBinaryResultType(returnType, uint64(target))
+}
+
+func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			return uint64(len(value.Sval)), true
+		}
+	}
+	width := expr.Typ.Width
+	if width > 0 && types.T(expr.Typ.Id) != types.T_blob {
+		return uint64(width), true
+	}
+	return 0, false
+}
+
+func refineKnownBinaryResultType(returnType *types.Type, width uint64) {
+	if width <= uint64(types.MaxVarBinaryLen) {
+		*returnType = types.T_varbinary.ToType()
+		returnType.Width = int32(width)
+		returnType.Charset = types.CharsetBinary
+	}
 }
 
 func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {

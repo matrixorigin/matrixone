@@ -1023,8 +1023,8 @@ func QuoteString(str string) string {
 	var result strings.Builder
 	result.WriteByte('\'')
 
-	for _, r := range str {
-		switch r {
+	for i := 0; i < len(str); i++ {
+		switch str[i] {
 		case '\'':
 			// Escape single quote by doubling it
 			result.WriteString("''")
@@ -1047,8 +1047,8 @@ func QuoteString(str string) string {
 			// Escape Ctrl+Z (EOF in Windows)
 			result.WriteString("\\Z")
 		default:
-			// Write the character as-is
-			result.WriteRune(r)
+			// Quote is byte-preserving for binary strings, including invalid UTF-8.
+			result.WriteByte(str[i])
 		}
 	}
 
