@@ -81,6 +81,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			execSQLRequire(t, ctx, tenantDB, "create database branch_quota_race")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.src (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.mode_probe (a int primary key)")
+			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.logtail_marker (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "insert into branch_quota_race.src values (1)")
 			execSQLRequire(t, ctx, tenantDB, "create snapshot issue_26087_sp for table branch_quota_race src")
 			waitForCatalog := func(
@@ -304,7 +305,24 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.Zero(t, fixedSnapshotProbe,
 				"feature-limit freshness must not advance the outer SI transaction")
 			require.NoError(t, execConn(conn1, "rollback"))
-			require.NoError(t, execConn(conn2, "delete from branch_quota_race.mode_probe where a = 2"))
+			cleanupResult, err := conn2.ExecContext(execCtx,
+				"delete from branch_quota_race.mode_probe where a = 2")
+			require.NoError(t, err)
+			cleanupRows, err := cleanupResult.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 1, cleanupRows)
+			// The driver acknowledges conn2's commit before CN0 necessarily applies
+			// its logtail. Commit a later write marker and wait for its frontier before
+			// conn1 opens the next SI snapshot.
+			markerCommitTS := testutils.ExecSQLWithReadResultAndAccount(
+				t,
+				accountID,
+				"branch_quota_race",
+				cn,
+				nil,
+				"insert into branch_quota_race.logtail_marker values (1)",
+			)
+			require.False(t, markerCommitTS.IsEmpty())
 
 			require.NoError(t, execConn(conn1, "set autocommit = 0"))
 			var modeProbeCount int
