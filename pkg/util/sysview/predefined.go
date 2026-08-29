@@ -66,10 +66,10 @@ const (
 	// multibyte view identifiers. The version-comment prefix recognizes only a
 	// mysqldump wrapper, so a trailing */ is removed only for that wrapper and
 	// not for an application comment.
-	informationSchemaViewDefinitionSQL = "concat('', trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
+	informationSchemaViewDefinitionSQL = "cast(trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
-		"2 * least(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ", 1))))"
+		"2 * least(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ", 1))) as text)"
 )
 
 // `mysql` database system tables
