@@ -17,6 +17,7 @@ package engine
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -29,6 +30,17 @@ func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 
 func (e *EntireEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.Engine.LatestLogtailAppliedTime()
+}
+
+func (e *EntireEngine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	barrier, ok := e.Engine.(LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewNotSupported(
+			ctx, "logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
