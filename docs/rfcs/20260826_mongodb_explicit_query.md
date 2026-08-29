@@ -16,7 +16,7 @@ recorded below names the reviewed revision and decision.
 approved the design at revision
 `76b76496a70d2cca5f408f9ce19a617b5b01f75b`. It confirmed the collection-scoped
 read surface, fail-closed allowlist, bounded capacity envelope, 30-second
-client lifetime, digest-only diagnostics, v36 compatibility fences, ownership
+client lifetime, digest-only diagnostics, v37 compatibility fences, ownership
 model, rollout/fallback, and validation map. This status update records that
 decision; it does not self-approve the implementation.
 
@@ -209,9 +209,9 @@ not retain a prior query/cursor/client lease.
 `MongoScan` adds protobuf fields numbered 16–21.  The legacy zero values retain
 the old find behavior; newer readers treat a zero kind as no explicit query.
 Older readers ignore unknown fields and consequently cannot execute the new
-operation semantics. `MORPCVersion36` is therefore the capability gate: a
+operation semantics. `MORPCVersion37` is therefore the capability gate: a
 nonzero `user_query_kind` is rejected while the service-local oldest-live
-deployment version is below 36, rather than silently falling back to an
+deployment version is below 37, rather than silently falling back to an
 unfiltered find. The gate is checked while compiling, immediately before a
 remote scope is serialized, while it is decoded, and in `MongoScan.Prepare`.
 Deployment raises that version only after all receivers understand the payload
@@ -252,7 +252,7 @@ semantic correctness.
 | Compile selection, residual separation, empty candidate and legacy behavior | `pkg/sql/compile: TestConfigureMongoUserQuery*` | Existing external-table execution path in CI. |
 | BSON transport revalidation and safe diagnostics | `pkg/sql/mongodb` plan round trips; `pkg/pb/plan` diagnostic tests; `pkg/sql/compile: TestCompileMongoDBQueryDiagnosticsAreRedacted` | CI UT and coverage jobs on the implementation head. |
 | Find/pipeline invocation, mapping projection, zero-column row carrier, cancellation and cleanup | `pkg/sql/colexec/mongoscan: TestMongoScan*` including filter, pipeline, large irrelevant field, reset/free/error controls | Local MongoDB E2E runner uses a real server command profiler: the raw MO aggregation returns five MongoDB documents and the reducing pipeline returns one; the JSON report records both counts. |
-| Wire rollback | `pkg/sql/compile: TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries`; `pkg/sql/colexec/mongoscan: TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall` | Compile at v36, lower to immediate predecessor v35 before send/receive/prepare, and fail before a MongoDB operation. |
+| Wire rollback | `pkg/sql/compile: TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries`; `pkg/sql/colexec/mongoscan: TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall` | Compile at v37, lower to immediate predecessor v36 before send/receive/prepare, and fail before a MongoDB operation. |
 | SQL statement/prepared/parse-failure redaction | `pkg/frontend` focused redaction/statement-recording tests | Statement telemetry and remote `ProcessInfo` diagnostic tests in dependent compile/frontend paths. |
 | External SQL contract | `test/mongodb/mongodb_e2e_local.go` with minimum fixture documents | CI compose/BVT lanes remain the service-level regression net; no new distributed case is added because the feature's real MongoDB fixture is isolated in its existing test-owned runner. |
 | Concurrency/lifecycle | focused normal and race tests for MongoDB/mongoscan/frontend; repeated reset/free controls | Existing CI UT/coverage exercises the package graph; no new global state or background worker exists. |

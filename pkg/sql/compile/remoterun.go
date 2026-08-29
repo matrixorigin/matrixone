@@ -1879,7 +1879,7 @@ func validateRemoteMongoUserQueryPipelineProtocol(
 		}
 		if proc == nil || !supportsRemoteMongoUserQuery(proc.GetService()) {
 			return moerr.NewNotSupportedNoCtx(
-				"MongoDB explicit-query remote execution requires MORPC protocol version 36",
+				"MongoDB explicit-query remote execution requires MORPC protocol version 37",
 			)
 		}
 	}
