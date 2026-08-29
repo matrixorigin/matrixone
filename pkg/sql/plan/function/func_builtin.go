@@ -1601,11 +1601,46 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func doLpad(src string, tgtLen int64, pad string, maxLen int64) (string, bool) {
+func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
+	if tgtLen < 0 || tgtLen > int64(^uint(0)>>1) {
+		return 0, true
+	}
+	srcRunes, padRunes := []rune(src), []rune(pad)
+	target := int(tgtLen)
+	var bytes int64
+	switch {
+	case target <= len(srcRunes):
+		for _, r := range srcRunes[:target] {
+			bytes += int64(utf8.RuneLen(r))
+		}
+	case len(padRunes) == 0:
+		bytes = 0
+	default:
+		if int64(len(src)) > maxBytes {
+			return 0, true
+		}
+		missing := target - len(srcRunes)
+		full, partial := missing/len(padRunes), missing%len(padRunes)
+		padBytes := int64(len(pad))
+		if padBytes != 0 && int64(full) > (maxBytes-int64(len(src)))/padBytes {
+			return 0, true
+		}
+		bytes = int64(len(src)) + int64(full)*padBytes
+		for _, r := range padRunes[:partial] {
+			bytes += int64(utf8.RuneLen(r))
+		}
+	}
+	if bytes > maxBytes {
+		return 0, true
+	}
+	return int(bytes), false
+}
+
+func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > maxLen {
+	if tgtLen < 0 {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -1620,11 +1655,11 @@ func doLpad(src string, tgtLen int64, pad string, maxLen int64) (string, bool) {
 	}
 }
 
-func doRpad(src string, tgtLen int64, pad string, maxLen int64) (string, bool) {
+func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > maxLen {
+	if tgtLen < 0 {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -1695,7 +1730,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1707,12 +1742,18 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doLpad(string(v1), v2, string(v3), maxResultLen)
+			resultBytes, shouldNull := padResultByteLength(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.GetResultVector().PreExtendWithArea(1, resultBytes, proc.Mp()); err != nil {
 					return err
 				}
-				continue
+				rval, runtimeNull := doLpad(string(v1), v2, string(v3))
+				if !runtimeNull {
+					if err := rs.AppendBytes([]byte(rval), false); err != nil {
+						return err
+					}
+					continue
+				}
 			}
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {
@@ -1722,7 +1763,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1734,12 +1775,18 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doRpad(string(v1), v2, string(v3), maxResultLen)
+			resultBytes, shouldNull := padResultByteLength(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.GetResultVector().PreExtendWithArea(1, resultBytes, proc.Mp()); err != nil {
 					return err
 				}
-				continue
+				rval, runtimeNull := doRpad(string(v1), v2, string(v3))
+				if !runtimeNull {
+					if err := rs.AppendBytes([]byte(rval), false); err != nil {
+						return err
+					}
+					continue
+				}
 			}
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {

@@ -49,6 +49,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaCollationCharacterSetApplicability(),
 	backfillMoColumnsAttIsUnsigned(),
 	upgradeInformationSchemaStatistics(),
+	upgradeInformationSchemaColumnsBinaryCharset(),
 }
 
 const moColumnsUnsignedMismatchPredicate = "account_id = current_account_id() " +
@@ -93,6 +94,12 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 // Keep a separate entry so tenants that already completed v4.0.6 rerun the
 // COLUMNS upgrade after the view starts filtering att_is_hidden columns.
 func upgradeInformationSchemaColumnsHideInternalColumns() versions.UpgradeEntry {
+	return upgradeInformationSchemaColumns()
+}
+
+// Keep this last so tenants that already completed the prior v4.0.6 offsets
+// refresh COLUMNS after binary string types gain their own charset code.
+func upgradeInformationSchemaColumnsBinaryCharset() versions.UpgradeEntry {
 	return upgradeInformationSchemaColumns()
 }
 

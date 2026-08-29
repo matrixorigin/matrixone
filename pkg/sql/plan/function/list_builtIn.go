@@ -190,6 +190,67 @@ func coalesceStringReturnType(resultOID types.T, parameters []types.Type) types.
 	return commonConditionalStringType(resultOID.ToType(), parameters)
 }
 
+func makeSetReturnType(parameters []types.Type) types.Type {
+	if len(parameters) <= 1 {
+		return types.T_varchar.ToType()
+	}
+	binary := hasBinaryStringDomain(parameters[1:])
+	bound := concatTextResultBound(parameters, 1)
+	if binary {
+		bound = concatResultBound(parameters, 1)
+	}
+	bound = addStringResultBounds(bound, stringResultBound{bytes: uint64(len(parameters) - 2)})
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, types.MergeStringCharset(parameters[1:], types.CharsetUTF8))
+}
+
+func exportSetReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	binary := hasBinaryStringDomain(parameters[1:])
+	boundFor := declaredTextCharacterBound
+	if binary {
+		boundFor = formattedStringByteBound
+	}
+	on := boundFor(parameters[1])
+	off := boundFor(parameters[2])
+	value := on
+	if off.unknown || (!value.unknown && off.bytes > value.bytes) {
+		value = off
+	}
+	separator := stringResultBound{bytes: 1}
+	if len(parameters) > 3 {
+		separator = boundFor(parameters[3])
+	}
+	bound := addStringResultBounds(
+		multiplyStringResultBound(value, 64),
+		multiplyStringResultBound(separator, 63),
+	)
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, types.MergeStringCharset(parameters[1:], types.CharsetUTF8))
+}
+
+func quoteReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_varchar.ToType()
+	}
+	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary
+	bound := declaredTextCharacterBound(parameters[0])
+	if binary {
+		bound = declaredStringByteBound(parameters[0])
+	}
+	bound = addStringResultBounds(multiplyStringResultBound(bound, 2), stringResultBound{bytes: 2})
+	if binary {
+		return binaryStringResultType(bound)
+	}
+	return textStringResultType(bound, parameters[0].Charset)
+}
+
 func selectedStringReturnType(parameters []types.Type, start int) types.Type {
 	if start < 0 || start > len(parameters) {
 		return types.T_text.ToType()
@@ -546,7 +607,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: CONVERT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -696,7 +757,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return selectedStringReturnType(parameters, 1)
+					return makeSetReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return MakeSet
@@ -716,7 +777,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return selectedStringReturnType(parameters, 1)
+					return exportSetReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return ExportSet
@@ -2686,7 +2747,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LPAD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2779,7 +2840,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REPLACE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2800,7 +2861,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INSERT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2934,7 +2995,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_REPLACE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2975,7 +3036,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_SUBSTR,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3018,7 +3079,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REPEAT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3080,7 +3141,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: RPAD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4379,7 +4440,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return quoteReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -4389,7 +4450,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return quoteReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -4399,7 +4460,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return quoteReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote

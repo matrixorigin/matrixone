@@ -639,6 +639,22 @@ func TestConvertToJSONBuildsCastExpr(t *testing.T) {
 	require.False(t, isCast)
 }
 
+func TestConvertUsingDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select convert(payload using binary) from t",
+		"select convert('1' using utf8mb4)",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		require.Contains(t, formatted, " using ")
+		_, err = ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+	}
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}

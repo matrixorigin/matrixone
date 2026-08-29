@@ -212,6 +212,48 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+// stringDomainFixedTypeMatch keeps every MySQL string input in its original
+// OID/width/charset while applying the ordinary fixed matcher to control
+// arguments. Varlena string executors can consume every string family; casting
+// them through VARCHAR would truncate BLOB and erase the binary domain before
+// return-type derivation.
+func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	for overloadIndex, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+		targets := make([]types.Type, len(inputs))
+		needsCast := false
+		matched := true
+		for i, expected := range ov.args {
+			if expected.IsMySQLString() && inputs[i].Oid.IsMySQLString() {
+				targets[i] = inputs[i]
+				continue
+			}
+			status, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
+			if status == matchFailed {
+				matched = false
+				break
+			}
+			if status == matchByCast {
+				needsCast = true
+				targets[i] = expected.ToType()
+				SetTargetScaleFromSource(&inputs[i], &targets[i])
+			} else {
+				targets[i] = inputs[i]
+			}
+		}
+		if !matched {
+			continue
+		}
+		if needsCast {
+			return newCheckResultWithCast(overloadIndex, targets)
+		}
+		return newCheckResultWithSuccess(overloadIndex)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 func isCollatedTextType(oid types.T) bool {
 	return oid == types.T_char || oid == types.T_varchar || oid == types.T_text
 }

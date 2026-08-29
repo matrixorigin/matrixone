@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -193,6 +194,54 @@ func TestConcatReturnTypePromotesWithoutCapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binaryCharset := types.NewWithCharset(types.T_varchar, 6, 0, types.CharsetBinary)
+	for _, test := range []struct {
+		name    string
+		inputs  []types.Type
+		wantOID types.T
+	}{
+		{name: "convert", inputs: []types.Type{types.T_blob.ToType(), binaryCharset}, wantOID: types.T_blob},
+		{name: "repeat", inputs: []types.Type{types.T_blob.ToType(), types.T_int64.ToType()}, wantOID: types.T_blob},
+		{name: "replace", inputs: []types.Type{
+			types.New(types.T_varbinary, 8, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0),
+		}, wantOID: types.T_blob},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.wantOID, resolved.GetReturnType().Oid)
+			casts, needCast := resolved.ShouldDoImplicitTypeCast()
+			require.False(t, needCast)
+			require.Empty(t, casts)
+		})
+	}
+}
+
+func TestExpandingReturnTypeBounds(t *testing.T) {
+	one := types.New(types.T_varchar, 1, 0)
+	makeSet := makeSetReturnType([]types.Type{types.T_uint64.ToType(), one, one, one})
+	require.Equal(t, types.T_varchar, makeSet.Oid)
+	require.Equal(t, int32(5), makeSet.Width)
+
+	exportSet := exportSetReturnType([]types.Type{types.T_uint64.ToType(), one, one, one})
+	require.Equal(t, types.T_varchar, exportSet.Oid)
+	require.Equal(t, int32(127), exportSet.Width)
+
+	quoted := quoteReturnType([]types.Type{types.New(types.T_varchar, 0, 0)})
+	require.Equal(t, types.T_varchar, quoted.Oid)
+	require.Equal(t, int32(2), quoted.Width)
+}
+
+func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
+	length, rejected := padResultByteLength("😀", 2, "😀", 8)
+	require.False(t, rejected)
+	require.Equal(t, 8, length)
+	_, rejected = padResultByteLength("😀", int64(types.MaxBlobLen), "😀", int64(types.MaxBlobLen))
+	require.True(t, rejected)
 }
 
 func TestCharReturnTypeIsBinaryAndPromotesLargeArity(t *testing.T) {

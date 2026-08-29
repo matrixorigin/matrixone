@@ -54,3 +54,21 @@
 - UT：`pkg/sql/plan/function`、`pkg/sql/plan`、MySQL parser、`pkg/util/sysview` owning package 均通过。
 - BVT：`dtype/binary_string_result_domain.test` 在 clean ready instance 生成 result 后 normal comparison 连续运行两次，均为 12/12 passed；覆盖 direct protocol metadata、70,000-byte runtime/CTAS、DESC 和 information_schema。
 - 最终 self-review：R2 width/runtime/parser closure 与 R3 catalog-view consumer closure 已逐项核对；generated parser 可重复生成；无 concurrency、wait、background state 或新持久化/wire schema；无未解决 blocker。
+
+## Review findings 修复计划
+
+1. 为 `CONVERT ... USING` 增加保留原字符串 OID/width/charset 的 overload resolution，避免 BLOB/VARBINARY 在执行前转成 VARCHAR；非字符串仍按现有 conversion cast。
+2. 为 REPEAT/REPLACE/INSERT/REGEXP/LPAD/RPAD 增加 binary string overload/checker，使真实 BINARY/VARBINARY/BLOB 与 binary-charset VARCHAR 使用同一 binary return-domain callback，且不经 text cast。
+3. 将 MAKE_SET、EXPORT_SET、QUOTE 从 selected/source-preserving width helper 分离：分别计算 contributor+separator 上界、64-slot 上界和 checked quote escaping 上界。
+4. LPAD/RPAD 以 byte budget 预检最终编码大小，并避免未记账的大 Go-heap intermediate；补 allocation/boundary 测试。
+5. 在 v4_0_6 tenant upgrade list 末尾追加 information_schema.COLUMNS refresh entry和 offset/upgrade 测试，覆盖已升级租户。
+6. 跑 owning package、upgrade tests、BVT、最终 self-review，直接 push review fix 并更新 PR。
+
+## Review findings 完成记录
+
+- CONVERT 与扩张函数使用 string-domain-aware checker，真实 BLOB/VARBINARY/BINARY 不再经过 VARCHAR；typed probe 与 70,000-byte BVT 均验证无截断。
+- MAKE_SET、EXPORT_SET、QUOTE 使用独立 checked width helper；BVT metadata 分别为 VARCHAR(5)、VARCHAR(127)、VARCHAR(2)。
+- LPAD/RPAD 在构造 Go result 前计算 UTF-8 byte size并预留 MPool area；emoji 上限和低-cap allocation rejection UT 通过。
+- v4_0_6 tenant upgrade list 末尾追加 COLUMNS binary charset refresh entry，offset/entry UT 通过。
+- 修复 CONVERT USING formatter/reparse，CTAS from BLOB 成功保留 70,000 bytes并物化为 BLOB。
+- 更新后的 BVT 在 clean-ready instance normal mode 连续两次 21/21 passed；owning packages 全量通过。

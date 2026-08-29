@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1111,6 +1112,23 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
+	for name, fn := range map[string]executeLogicOfOverload{"lpad": builtInLpad, "rpad": builtInRpad} {
+		t.Run(name, func(t *testing.T) {
+			mp, err := mpool.NewMPool("pad-allocation-rejection", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{500000}, nil),
+				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"😀"}, nil),
+			}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(fn))
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 

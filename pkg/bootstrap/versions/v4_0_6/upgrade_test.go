@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 21)
+	require.Len(t, tenantUpgEntries, 22)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -139,6 +139,13 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaStatisticsDDL, statistics.UpgSql)
 	require.Contains(t, strings.ToLower(statistics.PreSql),
 		"drop view if exists information_schema.statistics")
+	binaryCharsetColumns := tenantUpgEntries[21]
+	require.Equal(t, versions.MODIFY_VIEW, binaryCharsetColumns.UpgType)
+	require.Equal(t, sysview.InformationDBConst, binaryCharsetColumns.Schema)
+	require.Equal(t, "COLUMNS", binaryCharsetColumns.TableName)
+	require.Equal(t, sysview.InformationSchemaColumnsDDL, binaryCharsetColumns.UpgSql)
+	require.Contains(t, strings.ToLower(binaryCharsetColumns.PreSql),
+		"drop view if exists information_schema.columns")
 }
 
 func TestMoColumnsUnsignedBackfillPredicate(t *testing.T) {
@@ -247,7 +254,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 21)
+	require.Len(t, tenantUpgEntries, 22)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
