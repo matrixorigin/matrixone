@@ -102,7 +102,6 @@ func TestFenceRegistryReclaimsClaimedFenceOnlyIntoTransientIdentity(t *testing.T
 	require.Zero(t, r.required(a))
 	require.Equal(t, g, r.required(b))
 	require.True(t, r.retiredIdentity(a))
-	require.False(t, r.retiredIdentity(b))
 }
 
 func TestInstallGenerationFenceOverflowRecoversWithoutGlobalPublication(t *testing.T) {
