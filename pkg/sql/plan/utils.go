@@ -1653,6 +1653,9 @@ func constantFoldWithPreparedExactSource(
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -1670,6 +1673,7 @@ func constantFoldWithPreparedExactSource(
 					Len:          int32(vec.Length()),
 					Data:         data,
 					IsSerialized: isSerialized,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1727,6 +1731,9 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1741,8 +1748,9 @@ func constantFoldWithPreparedExactSource(
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1752,6 +1760,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
+		c.StringSource = uint32(source) + 1
+	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
