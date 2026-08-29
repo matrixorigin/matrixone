@@ -23,16 +23,28 @@ import (
 
 const (
 	informationSchemaViewIdentifierPattern = "(?:`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|[^[:space:].(),]+)"
-	// GetRootSql preserves line comments, so separators in the persisted DDL must
+	// GetRootSql preserves comments, so separators in the persisted DDL must
 	// accept every lexer-supported form wherever valid SQL permits whitespace
-	// between view tokens.
+	// between view tokens. Keep ordinary block comments whole while scanning to
+	// the structural VIEW token: words in a comment must not be parsed as DDL.
 	informationSchemaViewLineCommentPattern       = "(?:(?:--|#|//)[^\\r\\n]*(?:\\r?\\n|$))"
-	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + ")*"
-	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + ")+"
+	informationSchemaViewBlockCommentPattern      = "/[*](?:[^*]|[*][^/])*[*]/"
+	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + "|" + informationSchemaViewBlockCommentPattern + ")*"
+	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + "|" + informationSchemaViewBlockCommentPattern + ")+"
+	// The character alternatives exclude every ordinary-comment introducer, so
+	// comments cannot be consumed one byte at a time and expose a fake VIEW.
+	informationSchemaViewPrefixSpanPattern = "(?:" +
+		informationSchemaViewBlockCommentPattern + "|" +
+		informationSchemaViewLineCommentPattern + "|" +
+		"`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|" +
+		"/(?:[^/*]|$)|-(?:[^-]|$)|[^`\"/#-])*?"
 	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
-	// DEFINER, and SQL SECURITY clauses as well as mysqldump's version comments.
-	informationSchemaViewDefinitionPrefixPattern = "(?is)^[[:space:]]*(?:/[*]![0-9]+[[:space:]]*)?" +
-		"(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter).*?" + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+	// DEFINER, and SQL SECURITY clauses. mysqldump executable comments carry SQL
+	// themselves, so retain their existing wrapper-aware path separately.
+	informationSchemaViewDefinitionPrefixPattern = "(?is)^(?:" +
+		"[[:space:]]*/[*]![0-9]+[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter).*?" + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+		"|[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter)" + informationSchemaViewPrefixSpanPattern + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+		")" +
 		"(?:if" + informationSchemaViewRequiredSeparatorPattern + "(?:not" + informationSchemaViewRequiredSeparatorPattern + ")?exists" + informationSchemaViewRequiredSeparatorPattern + ")?" +
 		informationSchemaViewIdentifierPattern +
 		"(?:" + informationSchemaViewOptionalSeparatorPattern + "[.]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern + ")?" +
