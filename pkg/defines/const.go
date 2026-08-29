@@ -74,7 +74,8 @@ const (
 	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
 	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
 	MORPCVersion38     int64 = 38 // session temporary-table connection migration
-	MORPCLatestVersion       = MORPCVersion38
+	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
+	MORPCLatestVersion       = MORPCVersion39
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -60,6 +60,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -80,6 +81,19 @@ func currentProtocolVersion(proc *process.Process) int64 {
 		return defines.MORPCVersion4
 	}
 	return version
+}
+
+func authenticationLogtailReadBarrierSupported(ses *Session) bool {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion39
 }
 
 // reusablePlanGenerationSupported reports whether every live service in the
@@ -2306,10 +2320,10 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
-// advanceAuthenticationSnapshot installs a session minimum timestamp that is
-// strictly beyond the clock uncertainty window captured for this login. The
-// authentication background transaction inherits this timestamp and waits for
-// the local logtail before reading security catalog state.
+// advanceAuthenticationSnapshot is the rolling-upgrade fallback for services
+// predating the TN-ordered logtail read barrier. It is correct but may wait for
+// the full clock uncertainty interval, so new clusters use the generic engine
+// barrier in prepareAuthenticationSnapshot instead.
 func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	if rt == nil {
@@ -2337,23 +2351,35 @@ func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
 	return nil
 }
 
-// prepareAuthenticationSnapshot installs the authentication fence and waits
-// for the local logtail before creating the user transaction. Waiting outside
-// TxnClient.New keeps the uncertainty interval from consuming a user-transaction
-// admission slot. The transaction still inherits the same session minimum, so
-// the default sacrificing-freshness path confirms it immediately and preserves
-// the snapshot contract. Freshness-preserving mode retains its existing wait for
-// the later of the current clock and this minimum.
+// prepareAuthenticationSnapshot installs a session snapshot minimum only after
+// a generic TN publication barrier has reached this CN's normal apply pipeline.
+// The protocol gate preserves correctness during rolling upgrades by falling
+// back to the legacy HLC uncertainty fence until every service supports the
+// barrier wire contract.
 func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
-	if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
-		return err
-	}
-
-	minimum := ses.getLastCommitTS()
 	pu := getPuIfPresent(ses.GetService())
 	if pu == nil || pu.TxnClient == nil {
 		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
 	}
+
+	if authenticationLogtailReadBarrierSupported(ses) {
+		if pu.StorageEngine == nil {
+			return moerr.NewInternalError(ctx, "missing storage engine for authentication snapshot")
+		}
+		barrier, ok := pu.StorageEngine.(engine.LogtailReadBarrier)
+		if !ok {
+			return moerr.NewInternalError(ctx, "storage engine does not support logtail read barrier")
+		}
+		frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+		if err != nil {
+			return err
+		}
+		ses.updateLastCommitTS(frontier)
+	} else if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
 	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
 	if err != nil {
 		return err

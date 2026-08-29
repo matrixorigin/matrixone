@@ -59,6 +59,7 @@ import (
 
 var _ engine.Engine = new(Engine)
 var _ engine.StatsRefresher = new(Engine)
+var _ engine.LogtailReadBarrier = new(Engine)
 
 const (
 	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
@@ -1318,6 +1319,12 @@ func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 
 func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
+}
+
+func (e *Engine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
 // RunGCScheduler runs all GC tasks in a single goroutine with different intervals
