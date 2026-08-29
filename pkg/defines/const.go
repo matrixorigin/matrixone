@@ -72,7 +72,8 @@ const (
 	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
 	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
 	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
-	MORPCLatestVersion       = MORPCVersion36
+	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
+	MORPCLatestVersion       = MORPCVersion37
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
