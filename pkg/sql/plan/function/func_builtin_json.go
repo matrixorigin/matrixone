@@ -33,7 +33,136 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
-const JsonOrderingParamFunctionName = "__mo_json_ordering_param"
+const (
+	JsonOrderingParamFunctionName   = "__mo_json_ordering_param"
+	JsonComparisonParamFunctionName = "__mo_json_comparison_param"
+)
+
+// normalizeJsonComparisonParam preserves the runtime scalar category of a
+// prepared parameter before a JSON equality comparison. Prepared parameters
+// use TEXT as their transport type; treating that transport type as the SQL
+// type would unquote both JSON strings and JSON booleans to the same text.
+func normalizeJsonComparisonParam(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	to := vector.MustFunctionResult[types.Varlena](result)
+	resultVector := to.GetResultVector()
+	paramType := parameters[0].GetPrepareParamType()
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		if err := to.AppendMultiBytes(nil, true, length); err != nil {
+			return err
+		}
+		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
+		resultVector.SetPrepareParamType(paramType)
+		resultVector.SetPreparedJSONComparisonParam()
+		return nil
+	}
+
+	// A direct prepared parameter is normally constant for the batch. Encode
+	// its physical value once, share the varlena payload across all rows, and
+	// keep the provenance in the scalar sidecar fast path.
+	if parameters[0].IsConst() && (selectList == nil || selectList.ShouldEvalAllRow()) {
+		value, null := from.GetStrValue(0)
+		kind := parameters[0].GetPrepareParamKindAt(0)
+		if null {
+			if err := to.AppendMultiBytes(nil, true, length); err != nil {
+				return err
+			}
+		} else {
+			encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+			if err != nil {
+				return err
+			}
+			if err := to.AppendMultiBytes(encoded, false, length); err != nil {
+				return err
+			}
+		}
+		resultVector.SetPrepareParamKind(kind)
+		resultVector.SetPrepareParamType(paramType)
+		resultVector.SetPreparedJSONComparisonParam()
+		return nil
+	}
+
+	var (
+		firstKind vector.PrepareParamKind
+		seenKind  bool
+		kinds     []vector.PrepareParamKind
+	)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+		if !seenKind {
+			firstKind, seenKind = kind, true
+		} else if kinds == nil && kind != firstKind {
+			kinds = make([]vector.PrepareParamKind, length)
+			for prior := uint64(0); prior < i; prior++ {
+				kinds[prior] = firstKind
+			}
+		}
+		if kinds != nil {
+			kinds[i] = kind
+		}
+
+		encoded, err := encodeJsonComparisonParam(proc.Ctx, value, kind)
+		if err != nil {
+			return err
+		}
+		if err := to.AppendBytes(encoded, false); err != nil {
+			return err
+		}
+	}
+	if !seenKind {
+		// The marker, not its value, distinguishes this adapter output from an
+		// ordinary JSON vector even when every logical row is NULL.
+		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
+	} else if kinds == nil {
+		resultVector.SetPrepareParamKind(firstKind)
+	} else if err := resultVector.SetPrepareParamKindsWithMP(kinds, proc.Mp()); err != nil {
+		return err
+	}
+	resultVector.SetPrepareParamType(paramType)
+	resultVector.SetPreparedJSONComparisonParam()
+	return nil
+}
+
+func encodeJsonComparisonParam(
+	ctx context.Context,
+	value []byte,
+	kind vector.PrepareParamKind,
+) ([]byte, error) {
+	var scalar any = string(value)
+	if kind != vector.PrepareParamNone {
+		var err error
+		scalar, err = preparedTextToJSONValue(ctx, string(value), kind)
+		if err != nil {
+			return nil, err
+		}
+	}
+	jsonValue, err := bytejson.CreateByteJSON(scalar)
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(jsonValue)
+}
 
 func normalizeJsonOrderingParam(
 	parameters []*vector.Vector,
