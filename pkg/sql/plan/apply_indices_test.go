@@ -5384,6 +5384,62 @@ func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testi
 	}
 }
 
+func TestFullTextCandidateLimitRejectsVolatileResidualFilter(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+	mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+	mockCtx.fulltextBloomFilterPushdown = 1
+	scan := builder.qry.Nodes[leftScanID]
+	convertFullTextJoinTestToFulltext2(builder, scan)
+
+	pkType := planpb.Type{Id: int32(types.T_int64)}
+	scan.TableDef.Cols[0].Typ = pkType
+	indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
+	indexTable.Cols[1].Typ = pkType
+	matchFn := scan.FilterList[0].GetF()
+	matchFn.Args[0] = makePlan2StringConstExprWithType("+needle +world", false)
+	matchFn.Args[1] = makePlan2Int64ConstExprWithType(int64(tree.FULLTEXT_BOOLEAN))
+	scan.FilterList = append(scan.FilterList,
+		makeVolatileJoinFilter(t, mockCtx.MockCompilerContext, nil))
+	scan.Limit = makePlan2Uint64ConstExprWithType(2)
+	scan.Offset = makePlan2Uint64ConstExprWithType(1)
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 1)
+	require.Nil(t, functions[0].Limit,
+		"a volatile residual must not receive a filter-dependent candidate bound")
+
+	var volatileScanNodes int
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		node := builder.qry.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == planpb.Node_TABLE_SCAN {
+			for _, filter := range node.FilterList {
+				if containsVolatileFunction(filter) {
+					volatileScanNodes++
+					break
+				}
+			}
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	visit(newID)
+	require.Equal(t, 1, volatileScanNodes,
+		"the volatile residual must be evaluated only by the final scan")
+}
+
 func convertFullTextJoinTestToFulltext2(builder *QueryBuilder, scan *planpb.Node) {
 	logical := scan.TableDef.Indexes[0]
 	store := *logical

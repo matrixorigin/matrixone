@@ -96,6 +96,14 @@ explain select id from ft_exact
 where match(body) against('+needle ~other' in boolean mode) and category = 'keep'
 limit 2 offset 1;
 
+-- A volatile residual is evaluated independently per row. It must not be
+-- duplicated into the copied prefilter scan or receive a filter-dependent
+-- candidate bound.
+-- @regex("Limit: 3",false)
+explain select id from ft_exact
+where match(body) against('+needle +world' in boolean mode) and category = 'keep' and rand() < 0.5
+limit 2 offset 1;
+
 -- The existing no-residual path remains broader than the residual-WHERE fast
 -- path and continues to push LIMIT+OFFSET without a membership dependency.
 -- @regex("Limit: 3",true)

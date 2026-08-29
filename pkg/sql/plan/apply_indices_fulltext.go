@@ -426,6 +426,18 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			}
 		}
 	}
+	if pushdownEnabled {
+		for _, filter := range scanNode.FilterList {
+			if containsVolatileFunction(filter) {
+				// The prefilter topology evaluates residual filters in both the
+				// candidate scan and the final scan. A volatile predicate can
+				// produce different results in those evaluations, so it cannot
+				// safely participate in candidate-limit pushdown.
+				pushdownEnabled = false
+				break
+			}
+		}
+	}
 
 	exactPrefilter := docfilter.SupportsBitset(types.T(pkType.Id).ToType())
 

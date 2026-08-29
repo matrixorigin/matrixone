@@ -247,6 +247,24 @@ Project  𝄀
                     ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
                           Filter Cond: (ft_exact.category = 'keep')
 explain select id from ft_exact
+where match(body) against('+needle +world' in boolean mode) and category = 'keep' and rand() < 0.5
+limit 2 offset 1;
+-- @regex("Limit: 3", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep'), (rand() < 0.5)  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Table Function on fulltext2_search  𝄀
+                    Runtime Filter Probe: #[7,0]
+explain select id from ft_exact
 where match(body) against('needle' in natural language mode)
 limit 2 offset 1;
 -- @regex("Limit: 3", true)
