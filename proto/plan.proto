@@ -24,6 +24,11 @@ import "timestamp.proto";
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.protosizer_all) = true;
 option (gogoproto.sizer_all) = false;
+// Keep the generated message layout compatible with the checked-in bindings
+// and preserve unknown fields when plans cross mixed-version nodes.
+option (gogoproto.goproto_unrecognized_all) = true;
+option (gogoproto.goproto_sizecache_all) = true;
+option (gogoproto.goproto_unkeyed_all) = true;
 
 message Type {
   int32 id = 1;
@@ -87,6 +92,9 @@ message Literal {
   // literal_form records binder-visible syntax independently from isBin and
   // the resolved SQL string domain. Zero keeps old serialized plans valid.
   StringLiteralForm literal_form = 28;
+  // Executable value ownership encoded as container/types.StringSource + 1.
+  // Zero means an ordinary source literal for compatibility with old plans.
+  uint32 string_source = 29;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -233,6 +241,22 @@ message Function {
   repeated Expr args = 2;
   bytes agg_config = 3;
   AggregateConfigType agg_config_type = 4;
+  // Planner provenance only. Explicit CAST syntax can share the legacy CAST
+  // overload while optimizers still distinguish it from an implicit cast.
+  // Older CNs safely ignore this unknown field and execute the legacy overload.
+  bool syntax_explicit_cast = 5;
+}
+
+// PreparedNumericMetadata is sparse planner provenance for a numeric overload
+// that cannot be selected until COM_STMT_EXECUTE supplies a parameter type.
+// It is kept behind one optional pointer on Expr because the metadata is rare;
+// ordinary expressions must not carry five always-resident scalar fields.
+message PreparedNumericMetadata {
+  bool fallback = 1;
+  int32 param_pos = 2;
+  bool fallback_source = 3;
+  int32 fallback_source_node_id = 4;
+  int32 fallback_source_col_pos = 5;
 }
 
 message Expr {
@@ -257,6 +281,13 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  // prepared_numeric is explicit planner metadata, not an executor memo
+  // identity (AuxId), and therefore survives plan copies and RPC
+  // serialization. A negative param_pos means there is no single source
+  // marker. The source identity lets a flattened scalar-subquery consumer
+  // refresh its ColRef type after the inner projection is rebound.
+  PreparedNumericMetadata prepared_numeric = 19;
+  reserved 20 to 23;
 }
 
 message FoldVal {
@@ -271,6 +302,9 @@ message LiteralVec {
   // True when at least one element is a tuple-encoded serial value. This is
   // diagnostic provenance only; execution semantics remain in data.
   bool is_serialized = 3;
+  // Uniform runtime value owner. Values follow container/types.StringSource;
+  // zero is Expression so legacy and runtime-produced payloads stay ordinary.
+  uint32 string_source = 4;
 }
 
 enum CompressType {

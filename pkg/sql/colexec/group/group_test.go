@@ -120,6 +120,15 @@ func minTextColumnAgg(pos int32) aggexec.AggFuncExecExpression {
 	)
 }
 
+func anyTextColumnAgg(pos int32) aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfAny,
+		false,
+		[]*plan.Expr{colExpr(pos, types.T_text)},
+		nil,
+	)
+}
+
 func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 	config := []byte{2}
 	config = binary.BigEndian.AppendUint32(config, 1)
@@ -164,6 +173,170 @@ func newMergeGroupOp(aggs []aggexec.AggFuncExecExpression) *MergeGroup {
 		OperatorInfo: vm.OperatorInfo{Idx: 0, IsFirst: false, IsLast: false},
 	}
 	return mg
+}
+
+func TestGroupKeyMergesDuplicateStringSourcesDeterministically(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		sources []types.StringSource
+		want    types.StringSource
+	}{
+		{name: "same source", sources: []types.StringSource{types.StringSourceLiteral, types.StringSourceLiteral}, want: types.StringSourceLiteral},
+		{name: "mixed forward", sources: []types.StringSource{types.StringSourceUserVariable, types.StringSourceLiteral}, want: types.StringSourceExpression},
+		{name: "mixed reverse", sources: []types.StringSource{types.StringSourceLiteral, types.StringSourceUserVariable}, want: types.StringSourceExpression},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			for range test.sources {
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("same"), false, proc.Mp()))
+			}
+			require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(test.sources, proc.Mp()))
+			input.SetRowCount(len(test.sources))
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)}, nil)
+			g.AppendChild(child)
+			require.NoError(t, g.Prepare(proc))
+			outputs := collectBatches(t, g, proc)
+			require.Len(t, outputs, 1)
+			require.Equal(t, 1, outputs[0].RowCount())
+			require.Equal(t, test.want, outputs[0].Vecs[0].GetStringSourceAt(0))
+			g.Reset(proc, false, nil)
+			g.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			require.Zero(t, proc.Mp().CurrNB())
+			proc.Free()
+		})
+	}
+}
+
+func TestGroupExistingAndNewStringSourcesPublishAtomically(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	makeInput := func(values []string, sources []types.StringSource) *batch.Batch {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(
+				input.Vecs[0], []byte(value), false, proc.Mp()))
+		}
+		require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, proc.Mp()))
+		input.SetRowCount(len(values))
+		return input
+	}
+	first := makeInput([]string{"a"}, []types.StringSource{types.StringSourceLiteral})
+	second := makeInput(
+		[]string{"a", "b"},
+		[]types.StringSource{types.StringSourceExpression, types.StringSourceLiteral})
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 2, outputs[0].RowCount())
+	require.Equal(t, []types.StringSource{
+		types.StringSourceExpression, types.StringSourceLiteral,
+	}, outputs[0].Vecs[0].GetStringSources())
+
+	g.Reset(proc, false, nil)
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func TestGroupKeySourceMergeDoesNotMutateSharedAggregateArgument(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[0], []byte("same"), false, proc.Mp()))
+	}
+	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, proc.Mp()))
+	input.SetRowCount(2)
+	inputSources := input.Vecs[0].GetStringSources()
+	inputSourceBacking := &inputSources[0]
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_text)},
+		[]aggexec.AggFuncExecExpression{anyTextColumnAgg(0)},
+	)
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 1, outputs[0].RowCount())
+	require.Equal(t, types.StringSourceExpression,
+		outputs[0].Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceLiteral,
+		outputs[0].Vecs[1].GetStringSourceAt(0))
+	require.Equal(t, []types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, input.Vecs[0].GetStringSources())
+	require.Same(t, inputSourceBacking, &input.Vecs[0].GetStringSources()[0])
+
+	g.Reset(proc, false, nil)
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func TestGroupKeyStringSourceMergeSurvivesSpillReload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const uniqueRows = 64
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	sources := make([]types.StringSource, 0, uniqueRows+2)
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("same"), false, proc.Mp()))
+	sources = append(sources, types.StringSourceLiteral)
+	for i := range uniqueRows {
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[0], []byte(fmt.Sprintf("unique-%03d", i)), false, proc.Mp()))
+		sources = append(sources, types.StringSourceExpression)
+	}
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("same"), false, proc.Mp()))
+	sources = append(sources, types.StringSourceUserVariable)
+	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, proc.Mp()))
+	input.SetRowCount(len(sources))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)}, nil)
+	g.SpillMem = 2
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, g.Prepare(proc))
+	found := false
+	gotValues := make([]string, 0, uniqueRows+1)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			value := result.Batch.Vecs[0].GetStringAt(row)
+			gotValues = append(gotValues, value)
+			if value == "same" {
+				found = true
+				require.Equal(t, types.StringSourceExpression, result.Batch.Vecs[0].GetStringSourceAt(row))
+			}
+		}
+	}
+	require.True(t, found, "group keys: %v", gotValues)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
 }
 
 func TestSharedAggExpressionsPrepareConcurrently(t *testing.T) {
@@ -3311,4 +3484,20 @@ func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV14(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
 	require.False(t, useLegacyTextMinMaxForRemote(proc))
+}
+
+func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
+	require.True(t, useLegacyVarianceStateForRemote(proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
+	require.True(t, useLegacyVarianceStateForRemote(proc))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
+	require.False(t, useLegacyVarianceStateForRemote(proc))
 }

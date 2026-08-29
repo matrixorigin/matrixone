@@ -231,11 +231,16 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 			DatabaseID: 100,
 			TableID:    101,
 		}
-		assert.True(t, gs.shouldExecuteUpdate(k1))
-		assert.False(t, gs.shouldExecuteUpdate(k1))
-		gs.markUpdateComplete(k1, true, 1, 1.0)
+		generation := gs.currentOrCreateUpdateRecord(k1)
+		_, started := gs.startAutomaticUpdate(k1, generation)
+		assert.True(t, started)
+		_, started = gs.startAutomaticUpdate(k1, generation)
+		assert.False(t, started)
+		gs.markAutomaticUpdateComplete(
+			k1, generation, true, 1, 1.0)
 		time.Sleep(MinUpdateInterval)
-		assert.True(t, gs.shouldExecuteUpdate(k1))
+		_, started = gs.startAutomaticUpdate(k1, generation)
+		assert.True(t, started)
 	})
 
 	t.Run("parallel", func(t *testing.T) {
@@ -256,11 +261,13 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		var wg sync.WaitGroup
 		updateFn := func() {
 			defer wg.Done()
-			if !gs.shouldExecuteUpdate(k1) {
+			generation := gs.currentOrCreateUpdateRecord(k1)
+			if _, started := gs.startAutomaticUpdate(k1, generation); !started {
 				return
 			}
 			count.Add(1)
-			gs.markUpdateComplete(k1, true, 2, 1.0)
+			gs.markAutomaticUpdateComplete(
+				k1, generation, true, 2, 1.0)
 		}
 		for i := 0; i < 20; i++ {
 			wg.Add(1)
@@ -1267,7 +1274,8 @@ func TestSamplingForceAtLeastOneObject(t *testing.T) {
 // by calling shouldEnqueueUpdate once and then markUpdateComplete to set the baseObjectCount
 func initTableForTest(gs *GlobalStats, key statsinfo.StatsInfoKey, baseObjectCount int64) {
 	gs.shouldEnqueueUpdate(key, 0, false)
-	gs.markUpdateComplete(key, true, baseObjectCount, 1.0)
+	gs.markExplicitUpdateComplete(
+		key, gs.currentOrCreateUpdateRecord(key), baseObjectCount, 1.0)
 }
 
 // TestGlobalStats_ShouldEnqueue tests the shouldEnqueue logic for large table throttling
@@ -1732,19 +1740,133 @@ func TestRemoveTid(t *testing.T) {
 			gs.mu.statsInfoMap[k2] = nil // simulate failed update
 			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
 			gs.mu.Unlock()
+			generation := gs.currentOrCreateUpdateRecord(k1)
+			gs.currentOrCreateUpdateRecord(k2)
+			gs.currentOrCreateUpdateRecord(k3)
+			gs.markExplicitUpdateComplete(k1, generation, 1, 1)
+			gs.markAutomaticUpdateComplete(
+				k2, gs.currentOrCreateUpdateRecord(k2), false, 0, 0)
+			gs.markExplicitUpdateComplete(
+				k3, gs.currentOrCreateUpdateRecord(k3), 2, 1)
 
 			// Remove table 1001 entries
 			gs.RemoveTid(1001)
+			// A worker admitted before cleanup may finish afterward. Its stale
+			// publication or completion must not recreate table-owned state.
+			queuedAfterCleanup, enqueueAfterCleanup :=
+				gs.shouldEnqueueExistingStatsUpdateGeneration(k1, 1, false)
+			assert.False(t, enqueueAfterCleanup)
+			assert.Nil(t, queuedAfterCleanup)
+			gs.completeAutomaticStatsCacheUpdate(k1, generation, plan2.NewStatsInfo(), true)
+			gs.completeAutomaticStatsRefresh(
+				k1, generation, plan2.NewStatsInfo(), true, 3, 1, func() {})
 
 			gs.mu.Lock()
-			defer gs.mu.Unlock()
 			_, ok1 := gs.mu.statsInfoMap[k1]
 			_, ok2 := gs.mu.statsInfoMap[k2]
 			_, ok3 := gs.mu.statsInfoMap[k3]
+			gs.mu.Unlock()
 			assert.False(t, ok1, "k1 should be removed")
 			assert.False(t, ok2, "k2 should be removed")
 			assert.True(t, ok3, "k3 should not be removed")
+
+			gs.updatingMu.Lock()
+			_, updating1 := gs.updatingMu.updating[k1]
+			_, updating2 := gs.updatingMu.updating[k2]
+			_, updating3 := gs.updatingMu.updating[k3]
+			gs.updatingMu.Unlock()
+			assert.False(t, updating1, "k1 scheduling metadata should be removed")
+			assert.False(t, updating2, "k2 scheduling metadata should be removed")
+			assert.True(t, updating3, "unrelated scheduling metadata should remain")
+
+			// Reuse of the same table key creates a distinct generation. Neither
+			// an old queued job nor its late callbacks may publish into it.
+			replacement := &updateRecord{inProgress: true, pendingChanges: 7}
+			gs.updatingMu.Lock()
+			gs.updatingMu.updating[k1] = replacement
+			gs.updatingMu.Unlock()
+			gs.completeAutomaticStatsCacheUpdate(k1, generation, plan2.NewStatsInfo(), true)
+			gs.completeAutomaticStatsRefresh(
+				k1, generation, plan2.NewStatsInfo(), true, 4, 0.5, func() {})
+			_, oldGenerationStarted := gs.startAutomaticUpdate(k1, generation)
+			assert.False(t, oldGenerationStarted, "an old queued generation should be rejected")
+
+			gs.mu.Lock()
+			_, oldStatsPublished := gs.mu.statsInfoMap[k1]
+			gs.mu.Unlock()
+			assert.False(t, oldStatsPublished, "an old generation should not publish into its replacement")
+			gs.updatingMu.Lock()
+			current := gs.updatingMu.updating[k1]
+			gs.updatingMu.Unlock()
+			require.Same(t, replacement, current)
+			assert.True(t, current.inProgress)
+			assert.Equal(t, 7, current.pendingChanges)
 		})
+	})
+
+	t.Run("first_queued_and_explicit_refreshes_cannot_cross_cleanup_generation", func(t *testing.T) {
+		gs := &GlobalStats{
+			updateC:      make(chan statsUpdateJob, 1),
+			queueWatcher: newQueueWatcher(),
+		}
+		gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
+		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+		gs.mu.cond = sync.NewCond(&gs.mu)
+
+		key := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
+		generation := gs.currentOrCreateUpdateRecord(key)
+		require.True(t, gs.enqueueStatsUpdateForRecord(statsinfo.StatsInfoKeyWithContext{
+			Ctx: context.Background(),
+			Key: key,
+		}, false, generation))
+		job := <-gs.updateC
+		require.NotNil(t, job.expectedRecord,
+			"the first queued refresh must own a concrete lifetime token")
+
+		gs.RemoveTid(key.TableID)
+		gs.coordinateStatsUpdateJob(job)
+		gs.markAutomaticUpdateComplete(key, job.expectedRecord, true, 1, 1)
+		assert.False(t, gs.publishStatsForGeneration(
+			key, job.expectedRecord, plan2.NewStatsInfo()))
+
+		gs.mu.Lock()
+		_, cached := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		gs.updatingMu.Lock()
+		_, scheduled := gs.updatingMu.updating[key]
+		gs.updatingMu.Unlock()
+		assert.False(t, cached, "old work must not recreate the statistics cache")
+		assert.False(t, scheduled, "old work must not recreate scheduling metadata")
+
+		replacement := gs.currentOrCreateUpdateRecord(key)
+		assert.False(t, gs.publishStatsForGeneration(
+			key, job.expectedRecord, plan2.NewStatsInfo()),
+			"old explicit work must not publish into a replacement lifetime")
+		fresh := plan2.NewStatsInfo()
+		fresh.TableCnt = 42
+		require.True(t, gs.publishStatsForGeneration(key, replacement, fresh))
+		gs.mu.Lock()
+		assert.Same(t, fresh, gs.mu.statsInfoMap[key])
+		gs.mu.Unlock()
+	})
+
+	t.Run("explicit_completion_preserves_admitted_automatic_refresh", func(t *testing.T) {
+		gs := &GlobalStats{}
+		gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
+		key := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
+		generation := &updateRecord{inProgress: true, pendingChanges: 7}
+		gs.updatingMu.updating[key] = generation
+
+		gs.markExplicitUpdateComplete(key, generation, 42, 0.5)
+
+		gs.updatingMu.Lock()
+		got := *gs.updatingMu.updating[key]
+		gs.updatingMu.Unlock()
+		assert.True(t, got.inProgress,
+			"explicit completion must not reopen admission for another automatic refresh")
+		assert.Equal(t, int64(42), got.baseObjectCount)
+		assert.Zero(t, got.pendingChanges)
+		assert.Equal(t, 0.5, got.samplingRatio)
 	})
 
 	t.Run("remove_nonexistent_table", func(t *testing.T) {
@@ -1766,46 +1888,42 @@ func TestRemoveTid(t *testing.T) {
 		})
 	})
 
-	t.Run("remove_wakes_waiting_goroutines", func(t *testing.T) {
-		runTest(t, func(ctx context.Context, e *Engine) {
-			gs := e.globalStats
+}
 
-			// Set up: goroutine will cond.Wait() on a key, RemoveTid should broadcast
-			targetKey := statsinfo.StatsInfoKey{TableID: 42, DatabaseID: 1}
+func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	stopOwner()
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 10, TableID: 42}
+	lastGood := plan2.NewStatsInfo()
+	lastGood.TableCnt = 7
+	generation := &updateRecord{
+		inProgress:      true,
+		baseObjectCount: 7,
+		samplingRatio:   0.25,
+	}
+	gs := &GlobalStats{ctx: ownerCtx}
+	gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: lastGood}
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
 
-			woken := make(chan bool, 1)
-			gs.mu.Lock()
-			go func() {
-				gs.mu.Lock()
-				defer gs.mu.Unlock()
-				// Block on cond.Wait() like production GlobalStats.Get does
-				for {
-					if _, ok := gs.mu.statsInfoMap[targetKey]; ok {
-						break
-					}
-					// cond.Wait releases the lock and waits for Broadcast
-					gs.mu.cond.Wait()
-					// After Broadcast, check if our condition changed
-					break
-				}
-				woken <- true
-			}()
-			gs.mu.Unlock()
+	fresh := plan2.NewStatsInfo()
+	fresh.TableCnt = 42
+	releases := 0
+	gs.completeAutomaticStatsRefresh(
+		key, generation, fresh, true, 42, 1, func() { releases++ })
+	require.False(t, gs.publishStatsForGeneration(key, generation, fresh))
+	require.Equal(t, 1, releases)
 
-			// Small sleep to let goroutine enter cond.Wait()
-			time.Sleep(50 * time.Millisecond)
-
-			// RemoveTid broadcasts to cond, which should wake the waiting goroutine
-			gs.RemoveTid(999)
-
-			select {
-			case <-woken:
-				// ok — goroutine was woken by Broadcast
-			case <-time.After(2 * time.Second):
-				t.Fatal("RemoveTid did not wake goroutine blocked on cond.Wait()")
-			}
-		})
-	})
+	gs.mu.Lock()
+	require.Same(t, lastGood, gs.mu.statsInfoMap[key],
+		"shutdown must preserve the last successfully published statistics")
+	gs.mu.Unlock()
+	gs.updatingMu.Lock()
+	require.False(t, generation.inProgress)
+	require.Equal(t, int64(7), generation.baseObjectCount,
+		"failed publication must not advance the object-count baseline")
+	require.Equal(t, 0.25, generation.samplingRatio)
+	gs.updatingMu.Unlock()
 }
 
 func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
@@ -1816,6 +1934,17 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 
 		e.pClient.eng = e
 		e.pClient.subscribed.eng = e
+		partition := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, commit := partition.MutateState()
+		objectID := objectio.NewObjectid()
+		objectStats := objectio.NewObjectStatsWithObjectID(
+			&objectID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(objectStats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *objectStats,
+			CreateTime:  types.BuildTS(1, 0),
+		}, false))
+		commit()
 
 		ent := &subEntry{dbID: dbID, state: Subscribed}
 		ent.lastTs.Store(time.Now().UnixNano())
@@ -1854,10 +1983,11 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		getDone := make(chan struct{})
+		getDone := make(chan *statsinfo.StatsInfo, 1)
+		getCompleted := make(chan struct{})
 		go func() {
-			defer close(getDone)
-			_ = gs.Get(getCtx, key, false)
+			getDone <- gs.Get(getCtx, key, false)
+			close(getCompleted)
 		}()
 
 		require.Eventually(t, func() bool {
@@ -1869,16 +1999,19 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 			}
 		}, time.Second, 10*time.Millisecond, "GlobalStats.Get did not reach subscribe path")
 
+		published := plan2.NewStatsInfo()
+		published.TableCnt = 42
 		muAcquired := make(chan struct{})
 		go func() {
 			gs.mu.Lock()
+			gs.mu.statsInfoMap[key] = published
 			gs.mu.Unlock()
 			close(muAcquired)
 		}()
 
 		require.Eventually(t, func() bool {
 			select {
-			case <-getDone:
+			case <-getCompleted:
 				return false
 			default:
 			}
@@ -1894,11 +2027,56 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 		e.pClient.subscribed.rw.Unlock()
 
 		select {
-		case <-getDone:
+		case result := <-getDone:
+			require.Same(t, published, result,
+				"a non-blocking Get must recheck publication after subscription")
 		case <-time.After(time.Second):
 			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
 		}
 	})
+}
+
+func newSynchronousStatsGetHarness(
+	t *testing.T,
+	ctx context.Context,
+	e *Engine,
+	key statsinfo.StatsInfoKey,
+) (*GlobalStats, *subEntry) {
+	t.Helper()
+	partition := e.GetOrCreateLatestPart(ctx, uint64(key.AccId), key.DatabaseID, key.TableID)
+	state, commit := partition.MutateState()
+	objectID := objectio.NewObjectid()
+	objectStats := objectio.NewObjectStatsWithObjectID(
+		&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsSize(objectStats, 1))
+	require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+		ObjectStats: *objectStats,
+		CreateTime:  types.BuildTS(1, 0),
+	}, false))
+	commit()
+
+	e.pClient.eng = e
+	e.pClient.subscribed.eng = e
+	ent := &subEntry{dbID: key.DatabaseID, state: Subscribed}
+	ent.lastTs.Store(time.Now().UnixNano())
+	e.pClient.subscribed.rw.Lock()
+	if e.pClient.subscribed.m == nil {
+		e.pClient.subscribed.m = make(map[uint64]*subEntry)
+	}
+	e.pClient.subscribed.m[key.TableID] = ent
+	e.pClient.subscribed.rw.Unlock()
+
+	gs := &GlobalStats{
+		ctx:          ctx,
+		engine:       e,
+		updateC:      make(chan statsUpdateJob, 1),
+		queueWatcher: newQueueWatcher(),
+	}
+	gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	gs.initStatsRefreshAdmission()
+	return gs, ent
 }
 
 func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
@@ -1913,41 +2091,15 @@ func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
 			DbName:     "d",
 		}
 
-		partition := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
-		state, commit := partition.MutateState()
-		objectID := objectio.NewObjectid()
-		objectStats := objectio.NewObjectStatsWithObjectID(
-			&objectID, false, false, false)
-		require.NoError(t, objectio.SetObjectStatsSize(objectStats, 1))
-		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
-			ObjectStats: *objectStats,
-			CreateTime:  types.BuildTS(1, 0),
-		}, false))
-		commit()
-
-		e.pClient.eng = e
-		e.pClient.subscribed.eng = e
-		e.pClient.subscribed.rw.Lock()
-		if e.pClient.subscribed.m == nil {
-			e.pClient.subscribed.m = make(map[uint64]*subEntry)
-		}
-		e.pClient.subscribed.m[tblID] = &subEntry{
-			dbID:  dbID,
-			state: Subscribed,
-		}
-		e.pClient.subscribed.rw.Unlock()
-
 		// This isolated GlobalStats has no update worker. Receiving its forced
 		// request below proves Get reached the synchronous update path, after
 		// which no data-path goroutine can broadcast the condition variable.
-		gs := &GlobalStats{
-			ctx:          ctx,
-			engine:       e,
-			updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
-			queueWatcher: newQueueWatcher(),
+		gs, _ := newSynchronousStatsGetHarness(t, ctx, e, key)
+		waitEntered := make(chan struct{})
+		var waitOnce sync.Once
+		gs.beforeStatsWait = func(statsinfo.StatsInfoKey, *updateRecord) {
+			waitOnce.Do(func() { close(waitEntered) })
 		}
-		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
-		gs.mu.cond = sync.NewCond(&gs.mu)
 
 		getCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -1956,10 +2108,16 @@ func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
 			result <- gs.Get(getCtx, key, true)
 		}()
 
+		var job statsUpdateJob
 		select {
-		case <-gs.updateC:
+		case job = <-gs.updateC:
 		case <-time.After(time.Second):
 			t.Fatal("GlobalStats.Get did not enqueue the synchronous update")
+		}
+		select {
+		case <-waitEntered:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not register its condition wait")
 		}
 		cancel()
 
@@ -1969,29 +2127,350 @@ func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("GlobalStats.Get did not return after context cancellation")
 		}
+		gs.unregisterStatsUpdateJob(key, job.expectedRecord)
 		gs.queueWatcher.del(tblID)
 	})
 }
 
-func TestEnqueueStatsUpdateForceReturnsWhenContextCanceled(t *testing.T) {
+func TestGlobalStatsGetReturnsPublishedStatsFromAcceptedProducer(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    10006,
+			TableName:  "t",
+			DbName:     "d",
+		}
+		gs, _ := newSynchronousStatsGetHarness(t, ctx, e, key)
+		result := make(chan *statsinfo.StatsInfo, 1)
+		go func() { result <- gs.Get(ctx, key, true) }()
+
+		var job statsUpdateJob
+		select {
+		case job = <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("synchronous read did not enqueue its producer")
+		}
+		generation, started, noProducer := gs.startAutomaticUpdateJob(job)
+		require.True(t, started)
+		require.False(t, noProducer)
+		published := plan2.NewStatsInfo()
+		published.TableCnt = 42
+		gs.completeAutomaticStatsCacheUpdate(key, generation, published, true)
+		gs.markAutomaticUpdateComplete(key, generation, true, 1, 1)
+
+		select {
+		case info := <-result:
+			require.Same(t, published, info)
+		case <-time.After(time.Second):
+			t.Fatal("synchronous read did not observe accepted producer publication")
+		}
+		gs.queueWatcher.del(key.TableID)
+	})
+}
+
+func TestGlobalStatsGetReturnsWhenCleanupPrecedesWait(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    10002,
+			TableName:  "t",
+			DbName:     "d",
+		}
+		gs, _ := newSynchronousStatsGetHarness(t, ctx, e, key)
+
+		// Hold the watcher after updateC accepts the job. This is an observable
+		// barrier between producer ownership transfer and wait registration.
+		gs.queueWatcher.Lock()
+		watcherLocked := true
+		defer func() {
+			if watcherLocked {
+				gs.queueWatcher.Unlock()
+			}
+		}()
+
+		waitEntered := make(chan struct{})
+		var waitOnce sync.Once
+		gs.beforeStatsWait = func(statsinfo.StatsInfoKey, *updateRecord) {
+			waitOnce.Do(func() { close(waitEntered) })
+		}
+		result := make(chan *statsinfo.StatsInfo, 1)
+		go func() { result <- gs.Get(ctx, key, true) }()
+
+		var staleJob statsUpdateJob
+		select {
+		case staleJob = <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not transfer the refresh job")
+		}
+
+		// Cleanup broadcasts before Get is able to enter cond.Wait. Processing
+		// the stale job produces no second notification.
+		gs.RemoveTid(key.TableID)
+		gs.coordinateStatsUpdateJob(staleJob)
+		watcherLocked = false
+		gs.queueWatcher.Unlock()
+
+		select {
+		case info := <-result:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get lost the cleanup wake before cond.Wait")
+		}
+		select {
+		case <-waitEntered:
+			t.Fatal("GlobalStats.Get waited after its producer generation was removed")
+		default:
+		}
+		gs.queueWatcher.del(key.TableID)
+	})
+}
+
+func TestGlobalStatsGetReturnsWhenCleanupFollowsWait(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    10003,
+			TableName:  "t",
+			DbName:     "d",
+		}
+		gs, _ := newSynchronousStatsGetHarness(t, ctx, e, key)
+		waitEntered := make(chan struct{})
+		var waitOnce sync.Once
+		gs.beforeStatsWait = func(statsinfo.StatsInfoKey, *updateRecord) {
+			waitOnce.Do(func() { close(waitEntered) })
+		}
+		result := make(chan *statsinfo.StatsInfo, 1)
+		go func() { result <- gs.Get(ctx, key, true) }()
+
+		var staleJob statsUpdateJob
+		select {
+		case staleJob = <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not transfer the refresh job")
+		}
+		select {
+		case <-waitEntered:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not reach cond.Wait")
+		}
+
+		gs.RemoveTid(key.TableID)
+		select {
+		case info := <-result:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get was not released by cleanup after cond.Wait")
+		}
+		gs.coordinateStatsUpdateJob(staleJob)
+		gs.queueWatcher.del(key.TableID)
+	})
+}
+
+func TestGlobalStatsGetDoesNotOutliveCanceledSharedProducer(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    10004,
+			TableName:  "t",
+			DbName:     "d",
+		}
+		gs, _ := newSynchronousStatsGetHarness(t, ctx, e, key)
+
+		// Occupy the table stripe so the first producer can be canceled after
+		// worker admission but before it starts object work.
+		releaseStripe, err := gs.acquireStatsRefresh(context.Background(), key)
+		require.NoError(t, err)
+		stripeHeld := true
+		defer func() {
+			if stripeHeld {
+				releaseStripe()
+			}
+		}()
+
+		producerStarted := make(chan struct{})
+		var producerOnce sync.Once
+		gs.afterAutomaticUpdateStarted = func(statsinfo.StatsInfoKey, *updateRecord) {
+			producerOnce.Do(func() { close(producerStarted) })
+		}
+
+		producerCtx, cancelProducer := context.WithCancel(ctx)
+		defer cancelProducer()
+		producerResult := make(chan *statsinfo.StatsInfo, 1)
+		go func() { producerResult <- gs.Get(producerCtx, key, true) }()
+		var producerJob statsUpdateJob
+		select {
+		case producerJob = <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("first synchronous read did not enqueue its producer")
+		}
+		producerDone := make(chan struct{})
+		go func() {
+			gs.coordinateStatsUpdateJob(producerJob)
+			close(producerDone)
+		}()
+		select {
+		case <-producerStarted:
+		case <-time.After(time.Second):
+			t.Fatal("first producer did not reach worker admission")
+		}
+
+		sharedResult := make(chan *statsinfo.StatsInfo, 1)
+		go func() { sharedResult <- gs.Get(ctx, key, true) }()
+		var sharedJob statsUpdateJob
+		select {
+		case sharedJob = <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("second synchronous read did not enqueue its shared job")
+		}
+		// This job coalesces behind the in-progress producer. Its waiter must
+		// still be released if that producer is canceled before publication.
+		gs.coordinateStatsUpdateJob(sharedJob)
+		cancelProducer()
+
+		select {
+		case <-producerDone:
+		case <-time.After(time.Second):
+			t.Fatal("canceled producer did not leave refresh admission")
+		}
+		select {
+		case info := <-producerResult:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("producer caller did not observe cancellation")
+		}
+		select {
+		case info := <-sharedResult:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("shared waiter outlived its canceled producer")
+		}
+
+		stripeHeld = false
+		releaseStripe()
+		gs.queueWatcher.del(key.TableID)
+	})
+}
+
+func TestGlobalStatsGetReturnsWhenStatsWorkersStop(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    10005,
+			TableName:  "t",
+			DbName:     "d",
+		}
+		gs, _ := newSynchronousStatsGetHarness(t, ctx, e, key)
+		workerCtx, stopWorkers := context.WithCancel(ctx)
+		gs.ctx = workerCtx
+		context.AfterFunc(workerCtx, gs.notifyStatsWaiters)
+		waitEntered := make(chan struct{})
+		var waitOnce sync.Once
+		gs.beforeStatsWait = func(statsinfo.StatsInfoKey, *updateRecord) {
+			waitOnce.Do(func() { close(waitEntered) })
+		}
+
+		result := make(chan *statsinfo.StatsInfo, 1)
+		go func() { result <- gs.Get(ctx, key, true) }()
+		var abandonedJob statsUpdateJob
+		select {
+		case abandonedJob = <-gs.updateC:
+		case <-time.After(time.Second):
+			t.Fatal("synchronous read did not enqueue before worker shutdown")
+		}
+		select {
+		case <-waitEntered:
+		case <-time.After(time.Second):
+			t.Fatal("synchronous read did not wait for its queued producer")
+		}
+
+		stopWorkers()
+		select {
+		case info := <-result:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("synchronous read outlived the statistics worker lifecycle")
+		}
+		gs.unregisterStatsUpdateJob(key, abandonedJob.expectedRecord)
+		gs.queueWatcher.del(key.TableID)
+	})
+}
+
+func TestStatsUpdateGenerationRequiresLiveSubscriptionOwner(t *testing.T) {
+	key := statsinfo.StatsInfoKey{DatabaseID: 10, TableID: 42}
+	e := &Engine{}
 	gs := &GlobalStats{
-		updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+		engine:       e,
+		updateC:      make(chan statsUpdateJob, 1),
 		queueWatcher: newQueueWatcher(),
 	}
+	gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.cond = sync.NewCond(&gs.mu)
+	e.pClient.subscribed.rw.Lock()
+	e.pClient.subscribed.m = make(map[uint64]*subEntry)
+	e.pClient.subscribed.rw.Unlock()
+
+	require.False(t, gs.PrefetchTableMeta(context.Background(), key))
+	gs.updatingMu.Lock()
+	_, retained := gs.updatingMu.updating[key]
+	gs.updatingMu.Unlock()
+	require.False(t, retained,
+		"prefetch without a subscription cleanup owner must not create a generation")
+
+	oldEnt := &subEntry{dbID: key.DatabaseID, state: Subscribed}
+	e.pClient.subscribed.rw.Lock()
+	e.pClient.subscribed.m[key.TableID] = oldEnt
+	e.pClient.subscribed.rw.Unlock()
+	oldGeneration, ok := gs.currentOrCreateExactSubscribedUpdateRecord(key, oldEnt)
+	require.True(t, ok)
+	require.True(t, gs.PrefetchTableMeta(context.Background(), key))
+	job := <-gs.updateC
+	require.Same(t, oldGeneration, job.expectedRecord)
+	gs.queueWatcher.del(key.TableID)
+
+	gs.RemoveTid(key.TableID)
+	gs.coordinateStatsUpdateJob(job)
+	gs.updatingMu.Lock()
+	require.Zero(t, oldGeneration.queued)
+	gs.updatingMu.Unlock()
+	newEnt := &subEntry{dbID: key.DatabaseID, state: Subscribed}
+	e.pClient.subscribed.rw.Lock()
+	e.pClient.subscribed.m[key.TableID] = newEnt
+	e.pClient.subscribed.rw.Unlock()
+	_, ok = gs.currentOrCreateExactSubscribedUpdateRecord(key, oldEnt)
+	require.False(t, ok,
+		"work captured from an old subscription must not target its replacement")
+	gs.updatingMu.Lock()
+	_, retained = gs.updatingMu.updating[key]
+	gs.updatingMu.Unlock()
+	require.False(t, retained,
+		"rejecting an old subscription must not create idle replacement metadata")
+	newGeneration, ok := gs.currentOrCreateExactSubscribedUpdateRecord(key, newEnt)
+	require.True(t, ok)
+	require.NotSame(t, oldGeneration, newGeneration)
+}
+
+func TestEnqueueStatsUpdateForceReturnsWhenContextCanceled(t *testing.T) {
+	gs := &GlobalStats{
+		updateC:      make(chan statsUpdateJob, 1),
+		queueWatcher: newQueueWatcher(),
+	}
+	gs.updatingMu.updating = make(map[statsinfo.StatsInfoKey]*updateRecord)
 	queued := statsinfo.StatsInfoKeyWithContext{
 		Ctx: context.Background(),
 		Key: statsinfo.StatsInfoKey{TableID: 1},
 	}
-	gs.updateC <- queued
+	gs.updateC <- statsUpdateJob{wrapKey: queued}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	accepted := gs.enqueueStatsUpdate(statsinfo.StatsInfoKeyWithContext{
+	generation := gs.currentOrCreateUpdateRecord(statsinfo.StatsInfoKey{TableID: 2})
+	accepted := gs.enqueueStatsUpdateForRecord(statsinfo.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: statsinfo.StatsInfoKey{TableID: 2},
-	}, true)
+	}, true, generation)
 	require.False(t, accepted)
-	require.Equal(t, queued, <-gs.updateC)
+	require.Equal(t, queued, (<-gs.updateC).wrapKey)
 }
 
 func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {

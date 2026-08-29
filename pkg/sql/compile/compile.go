@@ -6331,7 +6331,8 @@ func (c *Compile) compileGroupWithoutShuffle(
 	ns []*plan.Node,
 	distinctRequiresSingleStage bool,
 ) []*Scope {
-	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) {
+	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
 	if c.IsSingleScope(ss) {
@@ -6435,6 +6436,19 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 	return false
 }
 
+func hasVarianceAggregate(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch int64(uint64(fn.Func.Obj) & function.DistinctMask) {
+			case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+				aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
@@ -6464,6 +6478,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion17
+}
+
+func (c *Compile) supportsRemoteVarianceAggregates() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion35
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
@@ -6548,17 +6572,17 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
-func supportsRemotePreparedNumericPrefix(service string) bool {
+func remoteMORPCProtocolVersion(service string) (int64, bool) {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return false
+		return 0, false
 	}
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return false
+		return 0, false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion30
+	return protocolVersion, ok
 }
 
 func supportsRemoteStatementLastInsertID(service string) bool {
@@ -6591,7 +6615,8 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
-		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates())
+		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

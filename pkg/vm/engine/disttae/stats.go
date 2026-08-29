@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"runtime"
 	"sync"
@@ -54,7 +55,7 @@ import (
 // logtailConsumer (1个 goroutine)
 //     │
 //     │ 判断入队条件（第一层）：
-//     │ - keyExists(): key 必须已存在
+//     │ - cache/generation 原子检查：key 必须已存在
 //     │ - CkpLocation: checkpoint 时触发
 //     │ - MetaEntry: object 元数据变更时触发
 //     │
@@ -65,10 +66,10 @@ import (
 // spawnUpdateWorkers (16-27个 goroutine)
 //     │
 //     │ 判断执行条件（第二层）： 便于统一 debounce force/normal update request
-//     │ - shouldExecuteUpdate(): 检查 inProgress 和 MinUpdateInterval (15s)
+//     │ - startAutomaticUpdate(): 检查 generation、inProgress 和 MinUpdateInterval (15s)
 //     │
 //     ▼
-// coordinateStatsUpdate()
+// coordinateStatsUpdateJob()
 //     │
 //     ├─→ 订阅表获取 PartitionState
 //     ├─→ 从 CatalogCache 获取 TableDef
@@ -181,6 +182,8 @@ type GlobalStatsConfig struct {
 	LogtailUpdateStatsThreshold int
 }
 
+const optimizerStatsRefreshStripes = 64
+
 type GlobalStatsOption func(s *GlobalStats)
 
 // WithUpdateWorkerFactor set the update worker factor.
@@ -199,6 +202,11 @@ func WithApproxObjectNumUpdater(f func() int64) GlobalStatsOption {
 
 // updateRecord records the update status of a key.
 type updateRecord struct {
+	// queued is the number of registered enqueue attempts that have not reached
+	// worker admission or rolled back. It includes a forced sender blocked on a
+	// full queue. Together with inProgress it is the durable predicate that
+	// proves a synchronous waiter still has a producer.
+	queued int
 	// inProgress indicates if the stats of a table is being updated.
 	inProgress bool
 	// lastUpdate is the time of the stats last updated.
@@ -209,6 +217,17 @@ type updateRecord struct {
 	pendingChanges int
 	// samplingRatio is the sampling ratio used in the last stats update.
 	samplingRatio float64
+}
+
+// statsUpdateJob carries the scheduling generation observed by the producer.
+// Pointer identity prevents a queued worker from publishing into a newer table
+// generation after RemoveTid deleted the old record.
+type statsUpdateJob struct {
+	wrapKey        pb.StatsInfoKeyWithContext
+	expectedRecord *updateRecord
+	// registered means enqueueStatsUpdateForRecord accounted this job in
+	// expectedRecord. Direct test helpers leave it false.
+	registered bool
 }
 
 type GlobalStats struct {
@@ -222,7 +241,7 @@ type GlobalStats struct {
 	// TODO(volgariver6): add metrics of the chan length.
 	tailC chan *logtail.TableLogtail
 
-	updateC chan pb.StatsInfoKeyWithContext
+	updateC chan statsUpdateJob
 
 	// queueWatcher keeps the table id and its enqueue time.
 	// and watch the queue item in the queue.
@@ -232,6 +251,11 @@ type GlobalStats struct {
 		sync.Mutex
 		updating map[pb.StatsInfoKey]*updateRecord
 	}
+
+	// Explicit ANALYZE refreshes and automatic logtail refreshes share this
+	// bounded admission layer. The same table is calculated and published in
+	// order; unrelated tables normally remain parallel.
+	refreshAdmission [optimizerStatsRefreshStripes]chan struct{}
 
 	// statsInfoMap is the global stats info in engine which
 	// contains all subscribed tables stats info.
@@ -263,6 +287,14 @@ type GlobalStats struct {
 
 	// beforeSubscribeTable is for test only.
 	beforeSubscribeTable func(pb.StatsInfoKey)
+
+	// beforeStatsWait is for deterministic wait-protocol tests only. It runs
+	// with gs.mu held immediately before cond.Wait atomically releases it.
+	beforeStatsWait func(pb.StatsInfoKey, *updateRecord)
+
+	// afterAutomaticUpdateStarted is for deterministic producer-cancellation
+	// tests only. It runs after worker admission and before refresh admission.
+	afterAutomaticUpdateStarted func(pb.StatsInfoKey, *updateRecord)
 }
 
 func NewGlobalStats(
@@ -272,13 +304,17 @@ func NewGlobalStats(
 		ctx:          ctx,
 		engine:       e,
 		tailC:        make(chan *logtail.TableLogtail, 10000),
-		updateC:      make(chan pb.StatsInfoKeyWithContext, 3000),
+		updateC:      make(chan statsUpdateJob, 3000),
 		KeyRouter:    keyRouter,
 		queueWatcher: newQueueWatcher(),
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.cond = sync.NewCond(&s.mu)
+	// One lifecycle callback wakes every current waiter when update workers
+	// stop. Register it once per GlobalStats rather than once per cache miss.
+	context.AfterFunc(ctx, s.notifyStatsWaiters)
+	s.initStatsRefreshAdmission()
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -316,24 +352,110 @@ func NewGlobalStats(
 	return s
 }
 
-// keyExists returns true only if key already exists in the map.
-func (gs *GlobalStats) keyExists(key pb.StatsInfoKey) bool {
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-	_, ok := gs.mu.statsInfoMap[key]
-	return ok
+func (gs *GlobalStats) initStatsRefreshAdmission() {
+	for i := range gs.refreshAdmission {
+		gs.refreshAdmission[i] = make(chan struct{}, 1)
+	}
 }
 
-// RemoveTid removes all statsInfoMap entries for the given table ID.
+func optimizerStatsRefreshStripe(key pb.StatsInfoKey) int {
+	mixed := key.TableID ^ uint64(key.AccId)*0x9e3779b97f4a7c15
+	return int(mixed % optimizerStatsRefreshStripes)
+}
+
+func (gs *GlobalStats) acquireStatsRefresh(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+) (func(), error) {
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return nil, cause
+	}
+	admission := gs.refreshAdmission[optimizerStatsRefreshStripe(key)]
+	select {
+	case admission <- struct{}{}:
+		// Cancellation can race the select and make both cases ready. Recheck
+		// the authoritative caller and owner contexts before transferring the
+		// admission token to the caller.
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			<-admission
+			return nil, cause
+		}
+		return func() { <-admission }, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	case <-gs.lifecycleDone():
+		return nil, gs.statsRefreshCancellationCause(ctx)
+	}
+}
+
+// statsRefreshCancellationCause treats the request context and the GlobalStats
+// owner lifecycle as durable predicates. Async callbacks may wake blocked work,
+// but they are never the source of truth for admission or publication.
+func (gs *GlobalStats) statsRefreshCancellationCause(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if gs.ctx != nil {
+		return context.Cause(gs.ctx)
+	}
+	return nil
+}
+
+// newStatsRefreshContext preserves request values and deadlines while linking
+// downstream subscription and object I/O to the GlobalStats owner lifecycle.
+// The returned context delivers cancellation; admission and publication still
+// re-read statsRefreshCancellationCause as their durable predicate.
+func (gs *GlobalStats) newStatsRefreshContext(
+	ctx context.Context,
+) (context.Context, func(), error) {
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return nil, nil, cause
+	}
+	if gs.ctx == nil {
+		return ctx, func() {}, nil
+	}
+	refreshCtx, cancelRefresh := context.WithCancelCause(ctx)
+	stopOwnerWatch := context.AfterFunc(gs.ctx, func() {
+		cause := context.Cause(gs.ctx)
+		if cause == nil {
+			cause = context.Canceled
+		}
+		cancelRefresh(cause)
+	})
+	stop := func() {
+		stopOwnerWatch()
+		cancelRefresh(nil)
+	}
+	// Close the owner check/register race without depending on callback
+	// dispatch. No downstream operation is admitted on the error path.
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		stop()
+		return nil, nil, cause
+	}
+	return refreshCtx, stop, nil
+}
+
+// RemoveTid removes every GlobalStats entry owned by the given table ID.
 // Called from cleanMemoryTableWithTable (1+ hour after unsubscribe/drop)
-// to prevent unbounded map growth. Safe because no queries target a
-// table that has been unsubscribed for over an hour.
+// to prevent both published statistics and refresh-scheduling metadata from
+// growing for the process lifetime. Safe because no queries target a table
+// that has been unsubscribed for over an hour.
 func (gs *GlobalStats) RemoveTid(tableID uint64) {
+	// Keep the established gs.mu -> updatingMu lock order used by
+	// broadcastStats. Table cleanup is the common lifetime boundary for both
+	// maps, so a removed table cannot retain one owner after losing the other.
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
 	for key := range gs.mu.statsInfoMap {
 		if key.TableID == tableID {
 			delete(gs.mu.statsInfoMap, key)
+		}
+	}
+	for key := range gs.updatingMu.updating {
+		if key.TableID == tableID {
+			delete(gs.updatingMu.updating, key)
 		}
 	}
 	if gs.mu.cond != nil {
@@ -346,7 +468,69 @@ func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 		Ctx: ctx,
 		Key: key,
 	}
-	return gs.enqueueStatsUpdate(wrapkey, false)
+	generation, ok := gs.currentOrCreateSubscribedUpdateRecord(key)
+	if !ok {
+		return false
+	}
+	return gs.enqueueStatsUpdateForRecord(wrapkey, false, generation)
+}
+
+// currentOrCreateUpdateRecord returns the table-lifetime token that every
+// queued or explicit refresh must carry. In particular, the first refresh must
+// not use nil as an "expected absence" token: RemoveTid can make absence true
+// again, allowing old queued work to cross the cleanup boundary and recreate
+// table-owned state. Production callers must already hold or have proved a
+// cleanup owner; use currentOrCreateSubscribedUpdateRecord for request-driven
+// work and shouldEnqueueExistingStatsUpdateGeneration for logtail work.
+func (gs *GlobalStats) currentOrCreateUpdateRecord(key pb.StatsInfoKey) *updateRecord {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	rec := gs.updatingMu.updating[key]
+	if rec == nil {
+		rec = &updateRecord{}
+		gs.updatingMu.updating[key] = rec
+	}
+	return rec
+}
+
+// currentOrCreateSubscribedUpdateRecord captures the scheduling generation
+// only while the subscription that owns its cleanup is still current. Explicit
+// refreshes call this after toSubscribeTable succeeds, so a failed subscription
+// cannot leave metadata that no unsubscribe path can reclaim. Holding the
+// subscription read lock across record creation also prevents cleanup from
+// falling between subscription validation and token capture.
+func (gs *GlobalStats) currentOrCreateSubscribedUpdateRecord(
+	key pb.StatsInfoKey,
+) (*updateRecord, bool) {
+	gs.engine.pClient.subscribed.rw.RLock()
+	defer gs.engine.pClient.subscribed.rw.RUnlock()
+
+	ent, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || ent == nil || ent.dbID != key.DatabaseID || ent.state != Subscribed {
+		return nil, false
+	}
+	return gs.currentOrCreateUpdateRecord(key), true
+}
+
+// currentOrCreateExactSubscribedUpdateRecord is the first-read variant. It
+// validates the exact subscription generation before mutating scheduling
+// state, so an old read cannot create even idle metadata for a replacement
+// lifetime.
+func (gs *GlobalStats) currentOrCreateExactSubscribedUpdateRecord(
+	key pb.StatsInfoKey,
+	expectedEnt *subEntry,
+) (*updateRecord, bool) {
+	if expectedEnt == nil {
+		return nil, false
+	}
+	gs.engine.pClient.subscribed.rw.RLock()
+	defer gs.engine.pClient.subscribed.rw.RUnlock()
+
+	ent, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || ent != expectedEnt || ent.dbID != key.DatabaseID || ent.state != Subscribed {
+		return nil, false
+	}
+	return gs.currentOrCreateUpdateRecord(key), true
 }
 
 func (gs *GlobalStats) subscribedEntry(key pb.StatsInfoKey) *subEntry {
@@ -422,11 +606,23 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		key.DatabaseID,
 		key.DbName)
 
-	if err == nil && ps.ApproxDataObjectsNum() == 0 {
+	if err != nil {
+		// A failed initial subscription has no table-lifetime cleanup owner.
+		// Retrying through updateC would create a scheduling generation (and
+		// potentially a nil cache sentinel) that RemoveTid can never reclaim.
+		return nil
+	}
+	if ps.ApproxDataObjectsNum() == 0 {
 		return nil
 	}
 
 	subscribedEnt := gs.subscribedEntry(key)
+	if subscribedEnt == nil {
+		// Cleanup crossed the successful subscribe return before this read could
+		// capture the exact lifetime. Do not let nil mean "accept any later
+		// subscription" when the synchronous producer is created below.
+		return nil
+	}
 	var remoteInfo *pb.StatsInfo
 	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
@@ -460,57 +656,71 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 
-	if sync {
-		stopWake := context.AfterFunc(ctx, func() {
-			gs.mu.Lock()
-			gs.mu.cond.Broadcast()
-			gs.mu.Unlock()
-		})
-		defer stopWake()
+	// Another producer may have published while subscription or remote lookup
+	// was in progress. Preserve this recheck for both synchronous and non-blocking
+	// callers. For a synchronous caller, an existing nil sentinel still admits a
+	// background retry, as before.
+	gs.mu.Lock()
+	info = gs.mu.statsInfoMap[key]
+	gs.mu.Unlock()
+	if info != nil {
+		return info
 	}
+	if !sync {
+		return nil
+	}
+
+	// Capture the producer generation only while the exact subscription
+	// observed above still owns cleanup. A replacement subscription must not
+	// silently retarget this read to a new table lifetime.
+	generation, generationOwned :=
+		gs.currentOrCreateExactSubscribedUpdateRecord(key, subscribedEnt)
+	if !generationOwned {
+		return nil
+	}
+
+	// A forced enqueue is the ownership transfer to a producer. If admission
+	// is canceled, no waiter may depend on work that was never accepted.
+	if !gs.enqueueStatsUpdateForRecord(wrapkey, true, generation) {
+		return nil
+	}
+	return gs.waitForStatsUpdate(ctx, key, generation)
+}
+
+// waitForStatsUpdate waits on durable state, not on a Broadcast edge. The
+// cache predicate and exact queued/running producer predicate are both checked
+// while gs.mu is held; RemoveTid uses the same gs.mu -> updatingMu order.
+// Cleanup or producer exhaustion therefore either changes the predicate before
+// this check, or broadcasts after cond.Wait has atomically registered the
+// waiter and released gs.mu.
+func (gs *GlobalStats) waitForStatsUpdate(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+) *pb.StatsInfo {
+	stopWake := context.AfterFunc(ctx, gs.notifyStatsWaiters)
+	defer stopWake()
 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-
-	// Recheck local cache after lock reacquired, another goroutine may have updated it.
-	info, ok = gs.mu.statsInfoMap[key]
-	if ok && info != nil {
-		return info
-	}
-
-	ok = false
-	if sync {
-		for !ok {
-			if ctx.Err() != nil {
-				return nil
-			}
-
-			func() {
-				// A forced update can block while the channel is full. A worker
-				// draining it may need gs.mu, so unlock before enqueueing.
-				gs.mu.Unlock()
-				defer gs.mu.Lock()
-				// If the trigger condition is not satisfied, the stats will not be updated
-				// for long time. So we trigger the update here to get the stats info as soon
-				// as possible.
-				gs.enqueueStatsUpdate(wrapkey, true)
-			}()
-
-			info, ok = gs.mu.statsInfoMap[key]
-			if ok {
-				break
-			}
-			if ctx.Err() != nil {
-				return nil
-			}
-
-			// Wait until stats info of the key is updated.
-			gs.mu.cond.Wait()
-
-			info, ok = gs.mu.statsInfoMap[key]
+	for {
+		if info, complete := gs.mu.statsInfoMap[key]; complete {
+			return info
 		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if gs.ctx != nil && gs.ctx.Err() != nil {
+			return nil
+		}
+		if !gs.statsUpdateProducerActive(key, generation) {
+			return nil
+		}
+		if gs.beforeStatsWait != nil {
+			gs.beforeStatsWait(key, generation)
+		}
+		gs.mu.cond.Wait()
 	}
-	return info
 }
 
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
@@ -541,41 +751,102 @@ func (gs *GlobalStats) spawnUpdateWorkers(ctx context.Context, num int) {
 				case <-ctx.Done():
 					return
 
-				case key := <-gs.updateC:
+				case job := <-gs.updateC:
 					// after dequeue from the chan, remove the table ID from the queue watcher.
-					gs.queueWatcher.del(key.Key.TableID)
+					gs.queueWatcher.del(job.wrapKey.Key.TableID)
 
 					v2.StatsTriggerConsumeCounter.Add(1)
-					gs.coordinateStatsUpdate(key)
+					gs.coordinateStatsUpdateJob(job)
 				}
 			}
 		}()
 	}
 }
 
-func (gs *GlobalStats) enqueueStatsUpdate(key pb.StatsInfoKeyWithContext, force bool) bool {
+func (gs *GlobalStats) enqueueStatsUpdateForRecord(
+	key pb.StatsInfoKeyWithContext,
+	force bool,
+	expectedRecord *updateRecord,
+) bool {
+	if expectedRecord == nil {
+		return false
+	}
 	defer func() {
 		v2.StatsTriggerQueueSizeGauge.Set(float64(len(gs.updateC)))
 	}()
+	gs.registerStatsUpdateJob(expectedRecord)
+	job := statsUpdateJob{
+		wrapKey:        key,
+		expectedRecord: expectedRecord,
+		registered:     true,
+	}
 	if force {
 		select {
-		case gs.updateC <- key:
+		case gs.updateC <- job:
 			gs.queueWatcher.add(key.Key.TableID)
 			v2.StatsTriggerForcedCounter.Add(1)
 			return true
 		case <-key.Ctx.Done():
+			if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+				gs.notifyStatsWaiters()
+			}
+			return false
+		case <-gs.lifecycleDone():
+			if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+				gs.notifyStatsWaiters()
+			}
 			return false
 		}
 	}
 
 	select {
-	case gs.updateC <- key:
+	case gs.updateC <- job:
 		gs.queueWatcher.add(key.Key.TableID)
 		v2.StatsTriggerUnforcedCounter.Add(1)
 		return true
 	default:
+		if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+			gs.notifyStatsWaiters()
+		}
 		return false
 	}
+}
+
+func (gs *GlobalStats) registerStatsUpdateJob(generation *updateRecord) {
+	gs.updatingMu.Lock()
+	generation.queued++
+	gs.updatingMu.Unlock()
+}
+
+// unregisterStatsUpdateJob rolls back a job that never reached worker
+// admission. It returns true only when the current generation has no remaining
+// queued or running producer and waiters must re-evaluate their predicate.
+func (gs *GlobalStats) unregisterStatsUpdateJob(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+) bool {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	if generation.queued > 0 {
+		generation.queued--
+	}
+	current, ok := gs.updatingMu.updating[key]
+	return ok && current == generation && generation.queued == 0 && !generation.inProgress
+}
+
+func (gs *GlobalStats) notifyStatsWaiters() {
+	gs.mu.Lock()
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	gs.mu.Unlock()
+}
+
+func (gs *GlobalStats) lifecycleDone() <-chan struct{} {
+	if gs.ctx == nil {
+		return nil
+	}
+	return gs.ctx.Done()
 }
 
 func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLogtail) {
@@ -598,11 +869,14 @@ func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLo
 	}
 
 	if len(tail.CkpLocation) > 0 || metaChanges > 0 {
-		if gs.keyExists(key) && gs.shouldEnqueueUpdate(key, metaChanges, len(tail.CkpLocation) > 0) {
-			gs.enqueueStatsUpdate(pb.StatsInfoKeyWithContext{
+		record, ok := gs.shouldEnqueueExistingStatsUpdateGeneration(
+			key, metaChanges, len(tail.CkpLocation) > 0,
+		)
+		if ok {
+			gs.enqueueStatsUpdateForRecord(pb.StatsInfoKeyWithContext{
 				Ctx: ctx,
 				Key: key,
-			}, false)
+			}, false, record)
 		}
 	}
 }
@@ -617,17 +891,52 @@ func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLo
 //   - Accumulated change rate >= 5%, OR
 //   - Time since last update > 30min
 func (gs *GlobalStats) shouldEnqueueUpdate(key pb.StatsInfoKey, metaChanges int, hasCheckpoint bool) bool {
+	_, ok := gs.shouldEnqueueUpdateGeneration(key, metaChanges, hasCheckpoint)
+	return ok
+}
 
+func (gs *GlobalStats) shouldEnqueueUpdateGeneration(
+	key pb.StatsInfoKey,
+	metaChanges int,
+	hasCheckpoint bool,
+) (*updateRecord, bool) {
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
+	return gs.shouldEnqueueUpdateGenerationLocked(key, metaChanges, hasCheckpoint)
+}
 
+// shouldEnqueueExistingStatsUpdateGeneration links the logtail producer to the
+// same table-lifetime boundary as RemoveTid. The cache-existence check and
+// scheduling-record capture are atomic in the established gs.mu -> updatingMu
+// lock order, so cleanup cannot fall between them.
+func (gs *GlobalStats) shouldEnqueueExistingStatsUpdateGeneration(
+	key pb.StatsInfoKey,
+	metaChanges int,
+	hasCheckpoint bool,
+) (*updateRecord, bool) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	if _, ok := gs.mu.statsInfoMap[key]; !ok {
+		return nil, false
+	}
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	return gs.shouldEnqueueUpdateGenerationLocked(key, metaChanges, hasCheckpoint)
+}
+
+func (gs *GlobalStats) shouldEnqueueUpdateGenerationLocked(
+	key pb.StatsInfoKey,
+	metaChanges int,
+	hasCheckpoint bool,
+) (*updateRecord, bool) {
 	rec, ok := gs.updatingMu.updating[key]
 	if !ok {
 		// First time: create record and enqueue
-		gs.updatingMu.updating[key] = &updateRecord{
+		rec = &updateRecord{
 			pendingChanges: metaChanges,
 		}
-		return true
+		gs.updatingMu.updating[key] = rec
+		return rec, true
 	}
 
 	// Accumulate pending changes
@@ -635,7 +944,7 @@ func (gs *GlobalStats) shouldEnqueueUpdate(key pb.StatsInfoKey, metaChanges int,
 
 	// Small table: enqueue on any change
 	if rec.baseObjectCount < LargeTableThreshold {
-		return metaChanges > 0 || hasCheckpoint
+		return rec, metaChanges > 0 || hasCheckpoint
 	}
 
 	// Large table: check two conditions (enqueue if either is true)
@@ -643,52 +952,126 @@ func (gs *GlobalStats) shouldEnqueueUpdate(key pb.StatsInfoKey, metaChanges int,
 	if rec.baseObjectCount > 0 {
 		changeRate := float64(rec.pendingChanges) / float64(rec.baseObjectCount)
 		if changeRate >= LargeTableChangeRateThreshold {
-			return true
+			return rec, true
 		}
 	}
 
 	// Condition 2: Time since last update > 30min
 	if time.Since(rec.lastUpdate) > LargeTableMaxUpdateInterval {
-		return true
+		return rec, true
 	}
 
-	return false
+	return rec, false
 }
 
-// shouldUpdate implements a debounce mechanism to prevent excessive stats updates.
-
-// shouldExecuteUpdate implements a debounce mechanism to prevent excessive stats updates.
-// Only checks inProgress and MinUpdateInterval.
-// Change rate is NOT checked here (already checked in shouldEnqueueUpdate).
-func (gs *GlobalStats) shouldExecuteUpdate(key pb.StatsInfoKey) bool {
+func (gs *GlobalStats) startAutomaticUpdate(
+	key pb.StatsInfoKey,
+	expectedRecord *updateRecord,
+) (*updateRecord, bool) {
+	if expectedRecord == nil {
+		return nil, false
+	}
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
+	return gs.startAutomaticUpdateLocked(key, expectedRecord)
+}
+
+func (gs *GlobalStats) startAutomaticUpdateJob(
+	job statsUpdateJob,
+) (*updateRecord, bool, bool) {
+	if job.expectedRecord == nil {
+		return nil, false, false
+	}
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	if job.registered && job.expectedRecord.queued > 0 {
+		job.expectedRecord.queued--
+	}
+	generation, started :=
+		gs.startAutomaticUpdateLocked(job.wrapKey.Key, job.expectedRecord)
+	if started {
+		return generation, true, false
+	}
+	current, ok := gs.updatingMu.updating[job.wrapKey.Key]
+	noProducer := ok && current == job.expectedRecord &&
+		job.expectedRecord.queued == 0 && !job.expectedRecord.inProgress
+	return nil, false, noProducer
+}
+
+func (gs *GlobalStats) startAutomaticUpdateLocked(
+	key pb.StatsInfoKey,
+	expectedRecord *updateRecord,
+) (*updateRecord, bool) {
 	rec, ok := gs.updatingMu.updating[key]
-	if !ok {
-		gs.updatingMu.updating[key] = &updateRecord{
-			inProgress: true,
-		}
-		return true
+	if !ok || rec != expectedRecord {
+		return nil, false
 	}
 	if rec.inProgress {
-		return false
+		return nil, false
 	}
 	if time.Since(rec.lastUpdate) > MinUpdateInterval {
 		rec.inProgress = true
-		return true
+		return rec, true
 	}
-	return false
+	return nil, false
 }
 
-func (gs *GlobalStats) markUpdateComplete(key pb.StatsInfoKey, updated bool, actualObjectCount int64, samplingRatio float64) {
+func (gs *GlobalStats) statsUpdateGenerationActive(key pb.StatsInfoKey, generation *updateRecord) bool {
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
 	rec, ok := gs.updatingMu.updating[key]
-	if !ok {
-		// set new record for RefreshWithMode
-		rec = &updateRecord{}
-		gs.updatingMu.updating[key] = rec
+	return ok && rec == generation
+}
+
+func (gs *GlobalStats) statsUpdateProducerActive(key pb.StatsInfoKey, generation *updateRecord) bool {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	rec, ok := gs.updatingMu.updating[key]
+	return ok && rec == generation && (rec.queued > 0 || rec.inProgress)
+}
+
+// markExplicitUpdateComplete advances the refresh baseline without stealing
+// the in-progress bit from an automatic refresh that was admitted before the
+// explicit refresh acquired the shared table stripe.
+func (gs *GlobalStats) markExplicitUpdateComplete(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	actualObjectCount int64,
+	samplingRatio float64,
+) {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	rec, ok := gs.updatingMu.updating[key]
+	if !ok || rec != generation {
+		return
 	}
+	rec.lastUpdate = time.Now()
+	rec.baseObjectCount = actualObjectCount
+	rec.pendingChanges = 0
+	rec.samplingRatio = samplingRatio
+}
+
+// markAutomaticUpdateComplete closes a generation opened by
+// shouldExecuteUpdate. Unlike the explicit RefreshWithMode completion path, it
+// must not recreate scheduling metadata that table-lifetime cleanup removed
+// while an old worker was still unwinding.
+func (gs *GlobalStats) markAutomaticUpdateComplete(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	updated bool,
+	actualObjectCount int64,
+	samplingRatio float64,
+) {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	rec, ok := gs.updatingMu.updating[key]
+	if !ok || rec != generation {
+		return
+	}
+	completeUpdateRecord(rec, updated, actualObjectCount, samplingRatio)
+}
+
+func completeUpdateRecord(rec *updateRecord, updated bool, actualObjectCount int64, samplingRatio float64) {
 	rec.inProgress = false
 	// only if the stats is updated, set the update time and reset baseline.
 	if updated {
@@ -872,33 +1255,100 @@ func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
 	})
 }
 
-func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext) {
+// completeAutomaticStatsCacheUpdate is the only automatic-refresh transition
+// for statsInfoMap. A successful generation replaces the published value. A
+// failed generation never destroys the last successful value; it installs a
+// nil sentinel only when no generation has completed before, so synchronous
+// first-read waiters can terminate without treating failure as publication.
+func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+	updated bool,
+) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	// GlobalStats shutdown is an authoritative failed-publication predicate.
+	// In particular, do not install a first-generation nil sentinel here: the
+	// lifecycle watcher already wakes waiters, and shutdown must leave the cache
+	// and its scheduling baseline unchanged.
+	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		return false
+	}
+	// The update record is also the automatic generation's table-lifetime
+	// token. RemoveTid deletes it under the same gs.mu -> updatingMu order; an
+	// old worker that completes afterward must not resurrect either cache.
+	if !gs.statsUpdateGenerationActive(key, generation) {
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		return false
+	}
+	if updated {
+		gs.mu.statsInfoMap[key] = stats
+		gs.broadcastStats(key)
+	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
+		gs.mu.statsInfoMap[key] = nil
+	}
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	return updated
+}
+
+func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
+	wrapKey := job.wrapKey
 	statser := statistic.StatsInfoFromContext(wrapKey.Ctx)
 	crs := new(perfcounter.CounterSet)
-	if !gs.shouldExecuteUpdate(wrapKey.Key) {
+	generation, ok, noProducer := gs.startAutomaticUpdateJob(job)
+	if !ok {
+		if noProducer {
+			gs.notifyStatsWaiters()
+		}
 		return
+	}
+	if gs.afterAutomaticUpdateStarted != nil {
+		gs.afterAutomaticUpdateStarted(wrapKey.Key, generation)
 	}
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
 	var actualObjectCount int64
 	var samplingRatio float64
-	defer func() {
-		gs.markUpdateComplete(wrapKey.Key, updated, actualObjectCount, samplingRatio)
-	}()
-
-	broadcastWithoutUpdate := func() {
-		gs.mu.Lock()
-		defer gs.mu.Unlock()
-		gs.mu.statsInfoMap[wrapKey.Key] = nil
-		gs.mu.cond.Broadcast()
+	var stats *pb.StatsInfo
+	release, err := gs.acquireStatsRefresh(wrapKey.Ctx, wrapKey.Key)
+	if err != nil {
+		// Worker admission opened this generation before refresh admission. Close it
+		// even when cancellation prevents this worker from acquiring the stripe.
+		gs.markAutomaticUpdateComplete(wrapKey.Key, generation, false, 0, 0)
+		gs.notifyStatsWaiters()
+		return
 	}
+	if !gs.statsUpdateGenerationActive(wrapKey.Key, generation) {
+		// Table cleanup removed this queued generation while it waited for
+		// admission. Avoid re-subscribing and doing object work for stale state.
+		release()
+		return
+	}
+	defer func() {
+		gs.completeAutomaticStatsRefresh(
+			wrapKey.Key, generation, stats, updated,
+			actualObjectCount, samplingRatio, release)
+	}()
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(wrapKey.Ctx)
+	if err != nil {
+		return
+	}
+	defer stopRefresh()
 
 	// Get the latest partition state of the table.
 	//Notice that for snapshot read, subscribing the table maybe failed since the invalid table id,
 	//We should handle this case in next PR if needed.
 	ps, err := gs.engine.pClient.toSubscribeTable(
-		wrapKey.Ctx,
+		refreshCtx,
 		uint64(wrapKey.Key.AccId),
 		wrapKey.Key.TableID,
 		wrapKey.Key.TableName,
@@ -910,12 +1360,11 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 			wrapKey.Key.TableID,
 			wrapKey.Key.TableName,
 			err)
-		broadcastWithoutUpdate()
 		return
 	}
-	stats := plan2.NewStatsInfo()
+	stats = plan2.NewStatsInfo()
 
-	newCtx := perfcounter.AttachS3RequestKey(wrapKey.Ctx, crs)
+	newCtx := perfcounter.AttachS3RequestKey(refreshCtx, crs)
 	updated, samplingRatio = gs.executeStatsUpdate(newCtx, ps, wrapKey.Key, stats)
 
 	// Get actual object count for baseline update
@@ -932,37 +1381,82 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 	})
 
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-	if updated {
-		gs.mu.statsInfoMap[wrapKey.Key] = stats
-		gs.broadcastStats(wrapKey.Key)
-	} else if _, ok := gs.mu.statsInfoMap[wrapKey.Key]; !ok {
-		gs.mu.statsInfoMap[wrapKey.Key] = nil
-	}
+}
 
-	// Notify all the waiters to read the new stats info.
-	gs.mu.cond.Broadcast()
+// completeAutomaticStatsRefresh is the sole terminal owner for an admitted
+// automatic refresh. Cache publication decides whether the result committed;
+// only that committed result may advance scheduling metadata, and both happen
+// before the table-scoped admission token is released.
+func (gs *GlobalStats) completeAutomaticStatsRefresh(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+	calculated bool,
+	actualObjectCount int64,
+	samplingRatio float64,
+	release func(),
+) {
+	committed := gs.completeAutomaticStatsCacheUpdate(
+		key, generation, stats, calculated)
+	gs.markAutomaticUpdateComplete(
+		key, generation, committed, actualObjectCount, samplingRatio)
+	release()
 }
 
 // RefreshWithMode triggers a stats refresh with the specified sampling mode
 func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey, samplingMode string) error {
+	_, err := gs.refreshStatsWithMode(ctx, key, samplingMode)
+	return err
+}
+
+// refreshStatsWithMode returns the exact statistics object published while
+// same-table refresh admission is still held. Callers that define a synchronous
+// publication boundary must use this result instead of re-reading the map after
+// admission has been released.
+func (gs *GlobalStats) refreshStatsWithMode(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	samplingMode string,
+) (*pb.StatsInfo, error) {
+	release, err := gs.acquireStatsRefresh(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	refreshCtx, stopRefresh, err := gs.newStatsRefreshContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stopRefresh()
+
 	// Get partition state
 	ps, err := gs.engine.pClient.toSubscribeTable(
-		ctx,
+		refreshCtx,
 		uint64(key.AccId),
 		key.TableID,
 		key.TableName,
 		key.DatabaseID,
 		key.DbName)
 	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
 	}
 
 	// Get table definition
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	if table == nil || table.TableDef == nil {
-		return moerr.NewInternalErrorNoCtx("table not found")
+		return nil, moerr.NewInternalErrorNoCtx("table not found")
+	}
+
+	// The subscription owns eventual RemoveTid cleanup. Capture the refresh
+	// generation only after subscription and catalog resolution succeed, and
+	// only while that exact subscription lifetime is still current.
+	generation, ok := gs.currentOrCreateSubscribedUpdateRecord(key)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"table statistics refresh crossed subscription boundary for table %d", key.TableID)
 	}
 
 	// Create stats info
@@ -987,21 +1481,65 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 	}
 
 	// Execute stats update
-	samplingRatio, err := CollectAndCalculateStats(ctx, req, gs.concurrentExecutor)
+	samplingRatio, err := CollectAndCalculateStats(refreshCtx, req, gs.concurrentExecutor)
 	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("failed to update stats: %v", err)
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtxf("failed to update stats: %v", err)
+	}
+	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+		return nil, cause
 	}
 
-	// Update cache
+	if !gs.publishStatsForGeneration(key, generation, stats) {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"table statistics refresh crossed cleanup boundary for table %d", key.TableID)
+	}
+	// Record the baseline only if this exact table lifetime is still current.
+	// Preserve a concurrently admitted automatic refresh's in-progress bit.
+	gs.markExplicitUpdateComplete(
+		key, generation, stats.AccurateObjectNumber, samplingRatio)
+
+	return stats, nil
+}
+
+// publishStatsForGeneration replaces the cache only while the exact table
+// lifetime captured by the refresh remains current. The gs.mu -> updatingMu
+// order matches RemoveTid, making validation and publication atomic with
+// respect to cleanup. A late explicit refresh therefore cannot resurrect an
+// unsubscribed table or publish into a replacement generation.
+func (gs *GlobalStats) publishStatsForGeneration(
+	key pb.StatsInfoKey,
+	generation *updateRecord,
+	stats *pb.StatsInfo,
+) bool {
+	if generation == nil || stats == nil {
+		return false
+	}
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+		return false
+	}
+	if !gs.statsUpdateGenerationActive(key, generation) {
+		if gs.mu.cond != nil {
+			gs.mu.cond.Broadcast()
+		}
+		return false
+	}
 	gs.mu.statsInfoMap[key] = stats
 	gs.broadcastStats(key)
-	gs.mu.cond.Broadcast()
-	// Record sampling ratio in updateRecord
-	gs.markUpdateComplete(key, true, stats.AccurateObjectNumber, samplingRatio)
-
-	return nil
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	return true
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {
@@ -1038,6 +1576,9 @@ func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay
 	samplingRatio, err := CollectAndCalculateStats(ctx, req, gs.concurrentExecutor)
 	if err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
+		return false, 0
+	}
+	if context.Cause(ctx) != nil {
 		return false, 0
 	}
 	v2.StatsUpdateDurationHistogram.Observe(time.Since(start).Seconds())
@@ -1174,7 +1715,7 @@ func collectTableStats(
 	var sampledRowCount float64
 	var sampledObjectCount int64
 
-	onObjFn := func(obj objectio.ObjectEntry) error {
+	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		objName := obj.ObjectShortName()
 
 		// ===== Phase 1: Get exact values from ObjectStats (no IO) =====
@@ -1205,7 +1746,7 @@ func collectTableStats(
 
 		// Sampled object: read ObjectMeta (requires IO)
 		location := obj.Location()
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
 		if err != nil {
 			return err
 		}
@@ -1344,6 +1885,7 @@ func collectTableStats(
 	}
 
 	if err := ForeachVisibleObjects(
+		ctx,
 		req.partitionState,
 		req.ts,
 		onObjFn,
@@ -1398,6 +1940,16 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	// The zero-object fast path below does not enter ForeachVisibleObjects. Keep
+	// executor shutdown as a failed refresh by checking its authoritative
+	// lifecycle before any successful early return.
+	if executor != nil {
+		if lifecycle := executor.LifecycleContext(); lifecycle != nil {
+			if cause := context.Cause(lifecycle); cause != nil {
+				return 0, cause
+			}
+		}
+	}
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {

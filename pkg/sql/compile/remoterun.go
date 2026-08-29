@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -101,7 +102,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -168,7 +169,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
-		if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
@@ -1664,6 +1665,12 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isVarianceAggregate(agg) &&
+			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
+			return moerr.NewNotSupportedNoCtx(
+				"variance remote execution requires MORPC protocol version 35",
+			)
+		}
 		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
 			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
 			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
@@ -1687,6 +1694,25 @@ func validateRemoteAggregateProtocol(
 		}
 	}
 	return nil
+}
+
+func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
+	switch agg.GetAggID() {
+	case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
+		aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
+		return true
+	}
+	return false
+}
+
+func procSupportsRemoteVarianceAggregates(proc *process.Process) bool {
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion35
 }
 
 func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
@@ -1768,20 +1794,37 @@ func validateRemoteStringProvenancePipelineProtocol(
 	return nil
 }
 
-func validateRemoteNumericPrefixPipelineProtocol(
+func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	requiresVersion30, err := plan.RequiresMORPCVersion30NumericPrefix(p)
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
-	if !requiresVersion30 {
+	if !features.Any() {
 		return nil
 	}
-	if proc == nil || !supportsRemotePreparedNumericPrefix(proc.GetService()) {
+	protocolVersion, hasProtocolVersion := int64(0), false
+	if proc != nil {
+		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.NumericPrefix &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
 		return moerr.NewNotSupportedNoCtx(
 			"prepared numeric-prefix casts require MORPC protocol version 30",
+		)
+	}
+	if features.JSONComparisonParam &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared JSON comparison parameters require MORPC protocol version 36",
+		)
+	}
+	if features.MixedJSONBooleanEquality &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
 	}
 	return nil

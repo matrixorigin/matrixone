@@ -1,0 +1,125 @@
+drop database if exists ivf_prep_range;
+create database ivf_prep_range;
+use ivf_prep_range;
+set experimental_ivf_index = 1;
+create table t(id int primary key, v vecf32(3));
+insert into t values (1,'[1,1,1]'),(2,'[2,2,2]'),(3,'[9,9,9]'),(4,'[10,10,10]');
+create index idx using ivfflat on t(v) lists=1 op_type 'vector_l2_ops';
+select id from t where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from t where l2_distance(v,'[1,1,1]') > 5 order by l2_distance(v,'[1,1,1]') limit 2;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+select id from t where l2_distance(v,'[1,1,1]') <= 1.7320508 order by l2_distance(v,'[1,1,1]') limit 4;
+➤ id[4,32,0]  𝄀
+1
+create table u(id int primary key, v vecf32(3), lim double);
+insert into u values (1,'[1,1,1]',5),(2,'[2,2,2]',5),(3,'[9,9,9]',0.5),(4,'[10,10,10]',100);
+create index uidx using ivfflat on u(v) lists=1 op_type 'vector_l2_ops';
+explain select id from t where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("Vector Index Scan", true)
+-- @regex("Table Scan", false)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on idx [l2_distance]  𝄀
+              Vector Index: idx, Metric: l2_distance, Candidate Limit: 2, NProbe: 5
+prepare plan_stmt from 'explain select id from t where l2_distance(v,''[1,1,1]'') < ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute plan_stmt using @d;
+-- @regex("Vector Index Scan", true)
+-- @regex("Table Scan", false)
+-- @regex("Join", false)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on idx [l2_distance]  𝄀
+              Vector Index: idx, Metric: l2_distance, Candidate Limit: 2, NProbe: 5
+deallocate prepare plan_stmt;
+explain select id from u where l2_distance(v,'[1,1,1]') < lim order by id;
+-- @regex("Table Scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: u.id INTERNAL  𝄀
+        ->  Table Scan on ivf_prep_range.u  𝄀
+              Filter Cond: (l2_distance(u.v, ) < u.lim)
+prepare lt_stmt from 'select id from t where l2_distance(v,''[1,1,1]'') < ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute lt_stmt using @d;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+execute lt_stmt using @d;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+set @d2=1;
+execute lt_stmt using @d2;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare lt_stmt;
+prepare gt_stmt from 'select id from t where l2_distance(v,''[1,1,1]'') > ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute gt_stmt using @d;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+deallocate prepare gt_stmt;
+prepare band_stmt from 'select id from t where l2_distance(v,''[1,1,1]'') > ? and l2_distance(v,''[1,1,1]'') < ? order by l2_distance(v,''[1,1,1]'') limit 4';
+set @lo=1;
+set @hi=14;
+execute band_stmt using @lo,@hi;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+deallocate prepare band_stmt;
+prepare null_upper from 'select id from t where l2_distance(v,''[1,1,1]'') < ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute null_upper using @d;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+set @d=null;
+execute null_upper using @d;
+➤ id[4,32,0]
+set @d=5;
+execute null_upper using @d;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+deallocate prepare null_upper;
+prepare null_lower from 'select id from t where l2_distance(v,''[1,1,1]'') > ? order by l2_distance(v,''[1,1,1]'') limit 2';
+set @d=5;
+execute null_lower using @d;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+set @d=null;
+execute null_lower using @d;
+➤ id[4,32,0]
+set @d=5;
+execute null_lower using @d;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+deallocate prepare null_lower;
+prepare null_both from 'select id from t where l2_distance(v,''[1,1,1]'') > ? and l2_distance(v,''[1,1,1]'') < ? order by id';
+set @lo=null;
+set @hi=null;
+execute null_both using @lo,@hi;
+➤ id[4,32,0]
+deallocate prepare null_both;
+select id from u where l2_distance(v,'[1,1,1]') < lim order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4
+drop database ivf_prep_range;
