@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -248,32 +249,66 @@ func TestClientConfigValidate(t *testing.T) {
 
 func TestHAKeeperClientConfigValidate(t *testing.T) {
 	tests := []struct {
-		cfg HAKeeperClientConfig
-		ok  bool
+		name        string
+		cfg         HAKeeperClientConfig
+		ok          bool
+		wantTimeout time.Duration
 	}{
 		{
-			HAKeeperClientConfig{}, true,
+			"defaults", HAKeeperClientConfig{}, true, defaultBackendReadTimeout,
 		},
 		{
-			HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
+			"discovery address", HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
+			defaultBackendReadTimeout,
 		},
 		{
-			HAKeeperClientConfig{ServiceAddresses: []string{"localhost:9090"}}, true,
+			"service address", HAKeeperClientConfig{ServiceAddresses: []string{"localhost:9090"}}, true,
+			defaultBackendReadTimeout,
 		},
 		{
+			"both address forms",
 			HAKeeperClientConfig{
 				DiscoveryAddress: "localhost:9091",
 				ServiceAddresses: []string{"localhost:9090"},
-			}, true,
+			},
+			true,
+			defaultBackendReadTimeout,
+		},
+		{
+			"explicit backend timeout",
+			HAKeeperClientConfig{
+				BackendReadTimeout: toml.Duration{Duration: 20 * time.Second},
+			},
+			true,
+			20 * time.Second,
+		},
+		{
+			"negative backend timeout",
+			HAKeeperClientConfig{
+				BackendReadTimeout: toml.Duration{Duration: -time.Second},
+			},
+			false,
+			0,
 		},
 	}
 
 	for _, tt := range tests {
-		err := tt.cfg.Validate()
-		if tt.ok {
-			assert.NoError(t, err)
-		} else {
-			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.ok {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantTimeout, tt.cfg.BackendReadTimeout.Duration)
+			} else {
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			}
+		})
 	}
+}
+
+func TestGetHAKeeperClientConfigPreservesBackendReadTimeout(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.HAKeeperClientConfig.BackendReadTimeout.Duration = 20 * time.Second
+
+	clientCfg := cfg.GetHAKeeperClientConfig()
+	require.Equal(t, 20*time.Second, clientCfg.BackendReadTimeout.Duration)
 }
