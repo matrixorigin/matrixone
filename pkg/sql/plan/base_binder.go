@@ -3417,11 +3417,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedNumericPeer := false
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
-		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name)) {
+		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
+			name == "if" || name == "iff" || name == "case") {
 		var err error
 		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
 			return nil, err
+		}
+		if !preparedNumericProvenance && (name == "if" || name == "iff" || name == "case") {
+			for _, arg := range args {
+				if preparedExprContainsParam(arg) {
+					preparedNumericProvenance = true
+					break
+				}
+			}
 		}
 		preparedNumericPeer = preparedNumericProvenance && name == "/"
 	}
@@ -3498,8 +3507,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err == nil {
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
-					if source != nil && i < len(fn.Args) && fn.Args[i].GetLit() != nil && fn.Args[i].GetLit().Src == nil {
-						fn.Args[i].GetLit().Src = source
+					if source == nil || i >= len(fn.Args) || !makeTypeByPlan2Expr(fn.Args[i]).Oid.IsFloat() {
+						continue
+					}
+					if literal := fn.Args[i].GetLit(); literal != nil && literal.Src == nil {
+						literal.Src = source
+						continue
+					}
+					castFn := fn.Args[i].GetF()
+					if castFn != nil && castFn.Func != nil && castFn.Func.GetObjName() == "cast" && len(castFn.Args) > 0 {
+						_, overload := function.DecodeOverloadID(castFn.Func.GetObj())
+						if literal := castFn.Args[0].GetLit(); overload == 0 && literal != nil && literal.Src == nil {
+							// A later constant-fold pass reconstructs this implicit cast in
+							// Literal.Src, preserving proof that its FLOAT result was provisional.
+							literal.Src = source
+						}
 					}
 				}
 			}

@@ -1209,25 +1209,12 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if !changed {
 			return expr, false, nil
 		}
-		// A numeric expression under the prepare-time ABS fallback is initially
-		// bound against DOUBLE because the marker is TEXT.  Rebinding an integer
-		// packet must also remove integral DOUBLE literals introduced by that
-		// provisional context (for example the `0` in ABS(? + 0)); otherwise the
-		// enclosing arithmetic function remains on its lossy DOUBLE overload.
-		runtimeDomain := rule.preparedNumericRuntimeDomain(positions)
-		if runtimeDomain == preparedNumericRuntimeInteger {
-			for i, arg := range copy.GetF().Args {
-				if integral, integralOK := provisionalIntegralFloatLiteral(arg); integralOK {
-					copy.GetF().Args[i] = integral
-				}
-			}
-		} else if runtimeDomain == preparedNumericRuntimeDecimal {
-			for i, arg := range copy.GetF().Args {
-				if decimal, decimalOK, decimalErr := provisionalDecimalFloatLiteral(rule.ctx, arg); decimalErr != nil {
-					return nil, false, decimalErr
-				} else if decimalOK {
-					copy.GetF().Args[i] = decimal
-				}
+		// Recover only peers whose source explicitly proves that FLOAT was a
+		// prepare-time envelope. Source-less scientific literals and explicit
+		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
+		for i, arg := range copy.GetF().Args {
+			if source, sourceOK := provisionalExactNumericSource(arg); sourceOK {
+				copy.GetF().Args[i] = source
 			}
 		}
 		name := fn.Func.GetObjName()
@@ -1264,103 +1251,30 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	return expr, false, nil
 }
 
-type preparedNumericRuntimeDomain uint8
-
-const (
-	preparedNumericRuntimeUnknown preparedNumericRuntimeDomain = iota
-	preparedNumericRuntimeInteger
-	preparedNumericRuntimeDecimal
-	preparedNumericRuntimeFloat
-)
-
-func (rule *ResetParamRefRule) preparedNumericRuntimeDomain(
-	positions map[int32]struct{},
-) preparedNumericRuntimeDomain {
-	domain := preparedNumericRuntimeInteger
-	if len(positions) == 0 {
-		return preparedNumericRuntimeUnknown
-	}
-	for pos := range positions {
-		runtimeType, ok := rule.runtimeParamType(int(pos))
-		if !ok {
-			return preparedNumericRuntimeUnknown
-		}
-		switch {
-		case runtimeType.Oid.IsFloat():
-			return preparedNumericRuntimeFloat
-		case runtimeType.Oid.IsDecimal():
-			domain = preparedNumericRuntimeDecimal
-		case runtimeType.Oid.IsInteger():
-		default:
-			return preparedNumericRuntimeUnknown
-		}
-	}
-	return domain
-}
-
-func provisionalIntegralFloatLiteral(expr *plan.Expr) (*Expr, bool) {
+func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 	if expr == nil || (expr.Typ.Id != int32(types.T_float32) && expr.Typ.Id != int32(types.T_float64)) {
 		return nil, false
 	}
 	lit := expr.GetLit()
-	if lit == nil || lit.Isnull {
-		return nil, false
-	}
-	var value float64
-	switch valueImpl := lit.Value.(type) {
-	case *plan.Literal_Dval:
-		value = valueImpl.Dval
-	case *plan.Literal_Fval:
-		value = float64(valueImpl.Fval)
-	default:
-		return nil, false
-	}
-	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value ||
-		value < math.MinInt64 || value > math.MaxInt64 {
-		return nil, false
-	}
-	return makePlan2Int64ConstExprWithType(int64(value)), true
-}
-
-func provisionalDecimalFloatLiteral(ctx context.Context, expr *plan.Expr) (*Expr, bool, error) {
-	if expr == nil || (expr.Typ.Id != int32(types.T_float32) && expr.Typ.Id != int32(types.T_float64)) {
-		return nil, false, nil
-	}
-	lit := expr.GetLit()
-	if lit == nil || lit.Isnull {
-		return nil, false, nil
-	}
-	var value string
-	switch valueImpl := lit.Value.(type) {
-	case *plan.Literal_Dval:
-		if math.IsNaN(valueImpl.Dval) || math.IsInf(valueImpl.Dval, 0) {
-			return nil, false, nil
+	if lit != nil && !lit.Isnull && lit.Src != nil {
+		sourceType := makeTypeByPlan2Expr(lit.Src)
+		if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+			return DeepCopyExpr(lit.Src), true
 		}
-		value = strconv.FormatFloat(valueImpl.Dval, 'g', -1, 64)
-	case *plan.Literal_Fval:
-		if math.IsNaN(float64(valueImpl.Fval)) || math.IsInf(float64(valueImpl.Fval), 0) {
-			return nil, false, nil
-		}
-		value = strconv.FormatFloat(float64(valueImpl.Fval), 'g', -1, 32)
-	default:
-		return nil, false, nil
-	}
-	typ, ok := PreparedRuntimeTypeFromString(value)
-	if !ok || !typ.IsDecimal() {
-		// A provisional Dval for an integer literal such as `0` has no decimal
-		// point, so the generic runtime inference reports INT64.  Within a
-		// DECIMAL expression it is still an exact decimal operand; derive the
-		// bounded decimal representation from the same textual prefix helper.
-		typ = PreparedNumericPrefixTypeFromString(value)
-		if !typ.IsDecimal() {
-			return nil, false, nil
+		if source, ok := provisionalExactNumericSource(lit.Src); ok {
+			return source, true
 		}
 	}
-	converted, err := preparedRuntimeParamExpr(ctx, value, lit.IsBin, typ)
-	if err != nil {
-		return nil, false, err
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload == 0 {
+			sourceType := makeTypeByPlan2Expr(fn.Args[0])
+			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+				return DeepCopyExpr(fn.Args[0]), true
+			}
+		}
 	}
-	return converted, true, nil
+	return nil, false
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {

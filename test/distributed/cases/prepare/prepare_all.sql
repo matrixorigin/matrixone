@@ -673,6 +673,22 @@ deallocate prepare issue25408_nested_abs;
 prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
 execute issue25408_nested_multiply using @issue25408_runtime_value;
 deallocate prepare issue25408_nested_multiply;
+select abs(@issue25408_runtime_value + 1) as result;
+prepare issue25408_abs_exact from 'select abs(? + 1) as result';
+execute issue25408_abs_exact using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_exact;
+select abs(@issue25408_runtime_value + 1e0) as result;
+prepare issue25408_abs_scientific from 'select abs(? + 1e0) as result';
+execute issue25408_abs_scientific using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_scientific;
+select abs(@issue25408_runtime_value + 1e-1) as result;
+prepare issue25408_abs_fractional from 'select abs(? + 1e-1) as result';
+execute issue25408_abs_fractional using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_fractional;
+select abs(@issue25408_runtime_value + cast(1 as double)) as result;
+prepare issue25408_abs_explicit_double from 'select abs(? + cast(1 as double)) as result';
+execute issue25408_abs_explicit_double using @issue25408_runtime_value;
+deallocate prepare issue25408_abs_explicit_double;
 
 -- @case
 -- @desc:Prepared exact integer comparisons do not pass BIGINT/BIT text through DOUBLE

@@ -912,6 +912,38 @@ execute issue25408_nested_multiply using @issue25408_runtime_value;
 ➤ result[3,38,7]  𝄀
 13510798882111490.2500000
 deallocate prepare issue25408_nested_multiply;
+select abs(@issue25408_runtime_value + 1) as result;
+➤ result[3,38,1]  𝄀
+9007199254740994.5
+prepare issue25408_abs_exact from 'select abs(? + 1) as result';
+execute issue25408_abs_exact using @issue25408_runtime_value;
+➤ result[3,38,1]  𝄀
+9007199254740994.5
+deallocate prepare issue25408_abs_exact;
+select abs(@issue25408_runtime_value + 1e0) as result;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+prepare issue25408_abs_scientific from 'select abs(? + 1e0) as result';
+execute issue25408_abs_scientific using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+deallocate prepare issue25408_abs_scientific;
+select abs(@issue25408_runtime_value + 1e-1) as result;
+➤ result[5,0,0]  𝄀
+9.007199254740994e+15
+prepare issue25408_abs_fractional from 'select abs(? + 1e-1) as result';
+execute issue25408_abs_fractional using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+9.007199254740994e+15
+deallocate prepare issue25408_abs_fractional;
+select abs(@issue25408_runtime_value + cast(1 as double)) as result;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+prepare issue25408_abs_explicit_double from 'select abs(? + cast(1 as double)) as result';
+execute issue25408_abs_explicit_double using @issue25408_runtime_value;
+➤ result[5,0,0]  𝄀
+9.007199254740996e+15
+deallocate prepare issue25408_abs_explicit_double;
 drop table if exists issue27492_exact_cmp;
 create table issue27492_exact_cmp(id int primary key, u bigint unsigned, b bit(64));
 insert into issue27492_exact_cmp values (1, 9007199254740992, 9007199254740992), (2, 9007199254740993, 9007199254740993), (3, 9007199254740994, 9007199254740994);

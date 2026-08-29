@@ -173,6 +173,44 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			}
 		})
 
+		t.Run("SQL PREPARE ABS preserves numeric peer provenance", func(t *testing.T) {
+			for _, expression := range []struct {
+				name          string
+				prepared      string
+				direct        string
+				floatBoundary bool
+			}{
+				{name: "exact integer peer", prepared: "abs(? + 1)", direct: "abs(@issue25408_abs + 1)"},
+				{name: "scientific integral float peer", prepared: "abs(? + 1e0)", direct: "abs(@issue25408_abs + 1e0)", floatBoundary: true},
+				{name: "scientific fractional float peer", prepared: "abs(? + 1e-1)", direct: "abs(@issue25408_abs + 1e-1)", floatBoundary: true},
+				{name: "explicit double peer", prepared: "abs(? + cast(1 as double))", direct: "abs(@issue25408_abs + cast(1 as double))", floatBoundary: true},
+			} {
+				t.Run(expression.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "prepare issue25408_abs from 'select "+expression.prepared+" as result'")
+					defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_abs")
+					assignments := []string{"9007199254740993.5"}
+					if expression.floatBoundary {
+						assignments = append(assignments, "2", "'2'")
+					}
+					for _, assignment := range assignments {
+						execSQLRequire(t, ctx, db, "set @issue25408_abs = "+assignment)
+						directRows, directErr := db.QueryContext(ctx, "select "+expression.direct+" as result")
+						require.NoError(t, directErr)
+						defer directRows.Close()
+						direct := observeScalar(t, directRows)
+						require.NoError(t, directRows.Err())
+
+						preparedRows, preparedErr := db.QueryContext(ctx, "execute issue25408_abs using @issue25408_abs")
+						require.NoError(t, preparedErr)
+						defer preparedRows.Close()
+						prepared := observeScalar(t, preparedRows)
+						require.NoError(t, preparedRows.Err())
+						require.Equal(t, direct, prepared, "runtime assignment %s", assignment)
+					}
+				})
+			}
+		})
+
 		t.Run("COM_STMT runtime numeric type reuse", func(t *testing.T) {
 			stmt, prepareErr := db.PrepareContext(ctx, "select ? + 1 as plus_one")
 			require.NoError(t, prepareErr)
