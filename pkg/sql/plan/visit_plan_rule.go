@@ -1372,7 +1372,73 @@ func (rule *ResetParamRefRule) preparedNumericSourceType(expr *plan.Expr) (plan.
 	if node == nil || int(colPos) >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
 		return plan.Type{}, false
 	}
-	return node.ProjectList[colPos].Typ, true
+	return preparedNumericProjectionType(query, nodeID, colPos, make(map[[2]int32]struct{}))
+}
+
+// preparedNumericProjectionType follows pass-through ColRefs introduced while
+// flattening a scalar subquery.  The fallback metadata identifies the
+// subquery's result projection, but join/project nodes added afterwards can
+// leave that projection with its prepare-time DOUBLE type even after the
+// marker-bearing child has been rebound to an exact integer or decimal.
+func preparedNumericProjectionType(
+	query *plan.Query,
+	nodeID, colPos int32,
+	visiting map[[2]int32]struct{},
+) (plan.Type, bool) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return plan.Type{}, false
+	}
+	key := [2]int32{nodeID, colPos}
+	if _, ok := visiting[key]; ok {
+		return plan.Type{}, false
+	}
+	visiting[key] = struct{}{}
+	defer delete(visiting, key)
+
+	node := query.Nodes[nodeID]
+	if node == nil || int(colPos) >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
+		return plan.Type{}, false
+	}
+	expr := node.ProjectList[colPos]
+	col := expr.GetCol()
+	if col == nil {
+		return expr.Typ, true
+	}
+
+	childID := int32(-1)
+	// Prefer global binding tags while they are present. Later planner stages
+	// can replace them with join/APPLY input ordinals, so fall back to the
+	// positional form only when no child owns the reference as a binding tag.
+	for _, candidateID := range node.Children {
+		if candidateID < 0 || int(candidateID) >= len(query.Nodes) || query.Nodes[candidateID] == nil {
+			continue
+		}
+		for _, tag := range query.Nodes[candidateID].BindingTags {
+			if tag == col.RelPos {
+				childID = candidateID
+				break
+			}
+		}
+		if childID >= 0 {
+			break
+		}
+	}
+	if childID < 0 && col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+		childID = node.Children[col.RelPos]
+	}
+	if childID < 0 && len(node.Children) == 1 {
+		childID = node.Children[0]
+	}
+	if childID < 0 {
+		return expr.Typ, true
+	}
+
+	typ, ok := preparedNumericProjectionType(query, childID, col.ColPos, visiting)
+	if !ok {
+		return expr.Typ, true
+	}
+	expr.Typ = typ
+	return typ, true
 }
 
 func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*Expr, bool, error) {
@@ -1456,9 +1522,33 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	if rewritten, ok := rule.exprMemo[e]; ok {
 		return rewritten, nil
 	}
+	// A scalar subquery may be flattened to a ColRef while its parameter stays
+	// in the inner PROJECT list. Snapshot a marked source expression before the
+	// ordinary replacement walk turns its marker into a literal; the snapshot
+	// lets the numeric fallback remove prepare-time casts and rebuild the full
+	// source in the execute-time integer or decimal domain.
+	var fallbackSource *plan.Expr
+	if e.GetPreparedNumeric().GetFallback() && e.GetCol() == nil && e.GetSub() == nil {
+		fallbackSource = DeepCopyExpr(e)
+	}
 	rewritten, err := rule.applyExpr(e)
 	if err != nil {
 		return nil, err
+	}
+	if fallbackSource != nil {
+		if source, ok := preparedNumericFallbackSource(fallbackSource); ok {
+			positions := preparedNumericValueParamPositions(fallbackSource)
+			if len(positions) > 0 {
+				bound, changed, bindErr := rule.rebindPreparedNumericExpr(source, positions)
+				if bindErr != nil {
+					return nil, bindErr
+				}
+				if changed {
+					rewritten = bound
+					rule.specialized = true
+				}
+			}
+		}
 	}
 	if rule.exprMemo == nil {
 		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)

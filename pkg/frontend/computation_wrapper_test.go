@@ -908,6 +908,60 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
 }
 
+func TestBinaryProtocolIntegerRebindPreservesNestedAbsDomain(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(
+		t, 114, "select abs((select ? from (select 1) src limit 1))")
+	defer prepareStmt.Close()
+
+	const value = "-9007199254740993"
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+	cw.proc.SetPrepareParamsWithMeta(
+		params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamInteger},
+	)
+	paramTypes := []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+	values, err := preparedParamValues(cw.proc, paramTypes)
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	param, ok := values[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_int64, param.RuntimeType.Oid)
+	param.RetainParamRef = true
+	values[0] = param
+
+	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		context.Background(), prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.NoError(t, plan2.RestorePreparedRuntimeParamRefs(context.Background(), runtimePlan))
+
+	var abs *plan.Expr
+	for _, node := range runtimePlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		for _, projection := range node.ProjectList {
+			if projection.GetF() != nil && projection.GetF().Func.GetObjName() == "abs" {
+				abs = projection
+				break
+			}
+		}
+		if abs != nil {
+			break
+		}
+	}
+	require.NotNil(t, abs)
+	require.Equal(t, int32(types.T_int64), abs.Typ.Id)
+	require.Equal(t, int32(types.T_int64), abs.GetF().Args[0].Typ.Id)
+}
+
 func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 111, "select ?")
