@@ -11375,6 +11375,9 @@ func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDat
 	}
 }
 
+// InplaceSort orders every supported vector type without compacting duplicate
+// values and marks that order in the vector metadata. Unsupported types remain
+// untouched and unflagged.
 func (v *Vector) InplaceSort() {
 	if v.inplaceSortRowMetadata(false) {
 		return
@@ -11556,7 +11559,10 @@ func (v *Vector) InplaceSort() {
 		sortArrayElement[int8](v)
 	case types.T_array_uint8:
 		sortArrayElement[uint8](v)
+	default:
+		return
 	}
+	v.SetSorted(true)
 }
 
 // sortArrayElement sorts a narrow-typed vector in place using the

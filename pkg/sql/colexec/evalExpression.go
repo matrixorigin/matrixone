@@ -2285,8 +2285,9 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 // IN list unsorted to keep its null bitmap aligned with its values (both in
 // pkg/sql/plan/rule/constant_fold.go), so an unordered payload arrives with no flag.
 //
-// For varlen the order is verified directly, in the byte order AnyIn and PrefixIn
-// search, with a NULL slot's empty payload sorting first exactly as they see it.
+// For byte-string varlen types the order is verified directly, in the byte order
+// AnyIn and PrefixIn search, with a NULL slot's empty payload sorting first exactly
+// as they see it. Array payloads use value comparators and are handled separately.
 // A prefix search needs one condition more than order -- see the walk below --
 // which is why the flag does not short-circuit it. Fixed-width types would need a
 // per-type comparator, so absent the flag their order is unknown and the caller
@@ -2296,6 +2297,27 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 // needles [30,10] against a block zonemap [5,15] make AnyIn's binary search probe
 // 30, answer false, and drop a block holding the matching needle 10.
 func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
+	oid := vec.GetType().Oid
+	if oid.IsArrayRelate() {
+		// PrefixIn compares physical bytes and is not defined for array values.
+		// AnyIn supports float32/float64 arrays with ArrayCompare, so only the
+		// comparator-consistent flag produced by InplaceSort or
+		// InplaceSortAndCompact proves
+		// their order. Narrow arrays currently fail open in AnyIn and stay
+		// conservative here regardless of their metadata.
+		if prefixSearch {
+			return false
+		}
+		if vec.Length() < 2 {
+			return true
+		}
+		switch oid {
+		case types.T_array_float32, types.T_array_float64:
+			return vec.GetSorted()
+		default:
+			return false
+		}
+	}
 	if vec.Length() < 2 {
 		return true
 	}
@@ -2303,6 +2325,13 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
 		// Fixed-width order can only come from the flag. PrefixIn never reaches
 		// these -- it reads varlena slots directly.
 		return vec.GetSorted()
+	}
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_text, types.T_datalink:
+	default:
+		return false
 	}
 
 	// The flag alone is not enough for a prefix search, so this walks even when it

@@ -55,7 +55,11 @@ func zmVarcharBlockMeta(t *testing.T, values ...string) objectio.BlockObject {
 }
 
 func zmInExpr(fnName string, data []byte, rows int) *plan.Expr {
-	colTyp := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	return zmTypedInExpr(fnName, data, rows, types.T_varchar.ToType())
+}
+
+func zmTypedInExpr(fnName string, data []byte, rows int, typ types.Type) *plan.Expr {
+	colTyp := plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale}
 	return &plan.Expr{
 		Typ:   plan.Type{Id: int32(types.T_bool)},
 		AuxId: 0,
@@ -262,9 +266,9 @@ func TestZoneMapInVectorFailsOpenForUnsortedPayload(t *testing.T) {
 // zonemap [5,15] make the search probe 30, answer false, and drop a block holding
 // the matching needle 10.
 //
-// Reachable beyond constant folding: readutil.ConstructInExpr serialises a
-// caller-supplied vector verbatim (transfer and snapshot filtering), so the
-// serialised sorted flag is not a universal invariant.
+// Reachable beyond canonical producers: constant folding can publish an
+// unflagged function-result vector, so the serialized sorted flag is not a
+// universal invariant.
 func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -275,7 +279,7 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T)
 	for _, n := range []int64{30, 10} {
 		require.NoError(t, vector.AppendFixed(vec, n, false, mp))
 	}
-	require.False(t, vec.GetSorted(), "constant folding marshals such a payload without sorting or flagging")
+	require.False(t, vec.GetSorted(), "the counterexample must reach the unflagged consumer path")
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
 
@@ -302,6 +306,74 @@ func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedFixedWidthIn(t *testing.T)
 	got, ok := zoneMapInVector(sdata, false)
 	require.True(t, ok, "a flagged ordered payload keeps its pruning")
 	require.Equal(t, 2, got.Length())
+}
+
+// Array vectors are varlen physically, but AnyIn orders their logical values
+// with ArrayCompare. Raw little-endian bytes put [2.0] before [1.0], so a byte
+// order check would accept this descending payload and prune a matching block.
+func TestEvaluateFilterByZoneMapKeepsBlockForUnflaggedArrayIn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	proc := testutil.NewProcess(t)
+	typ := types.T_array_float32.ToType()
+
+	payload := vector.NewVec(typ)
+	defer payload.Free(mp)
+	require.NoError(t, vector.AppendArray(payload, []float32{2}, false, mp))
+	require.NoError(t, vector.AppendArray(payload, []float32{1}, false, mp))
+	require.False(t, payload.GetSorted())
+	data, err := payload.MarshalBinary()
+	require.NoError(t, err)
+
+	// Array UpdateZM is intentionally disabled in production today. BuildZM
+	// constructs the complete valid internal domain for the AnyIn comparator.
+	zm := index.BuildZM(types.T_array_float32, types.ArrayToBytes([]float32{0.5}))
+	index.UpdateZM(zm, types.ArrayToBytes([]float32{1.5}))
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	meta.MustGetColumn(0).SetZoneMap(zm)
+
+	require.True(t, evalZoneMap(
+		t, proc, zmTypedInExpr("in", data, payload.Length(), typ), meta),
+		"block [[0.5],[1.5]] must be kept: needle [1.0] is inside it")
+
+	// The comparator-consistent flag keeps the ordinary pruning fast path.
+	ordered := vector.NewVec(typ)
+	defer ordered.Free(mp)
+	require.NoError(t, vector.AppendArray(ordered, []float32{3}, false, mp))
+	require.NoError(t, vector.AppendArray(ordered, []float32{2}, false, mp))
+	ordered.InplaceSortAndCompact()
+	require.True(t, ordered.GetSorted())
+	require.False(t, zm.AnyIn(ordered),
+		"the direct ArrayCompare oracle must prune the disjoint block")
+	storedZM := meta.MustGetColumn(0).ZoneMap()
+	require.True(t, storedZM.IsInited())
+	require.Equal(t, types.T_array_float32, storedZM.GetType())
+	require.False(t, storedZM.AnyIn(ordered),
+		"the block metadata must preserve the array zonemap comparator")
+	orderedData, err := ordered.MarshalBinary()
+	require.NoError(t, err)
+	require.False(t, evalZoneMap(
+		t, proc, zmTypedInExpr("in", orderedData, ordered.Length(), typ), meta),
+		"ordered needles [2.0],[3.0] must prune the disjoint block")
+}
+
+func TestZoneMapInVectorKeepsNarrowArraysConservative(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec := vector.NewVec(types.T_array_int8.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendArray(vec, []int8{2}, false, mp))
+	require.NoError(t, vector.AppendArray(vec, []int8{1}, false, mp))
+	vec.InplaceSortAndCompact()
+	require.True(t, vec.GetSorted(), "the control must carry sorted metadata")
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+
+	_, ok := zoneMapInVector(data, false)
+	require.False(t, ok,
+		"AnyIn has no narrow-array pruning comparator and must remain fail-open")
 }
 
 // A constant vector represents one repeated value, so its order is not in
