@@ -1,8 +1,8 @@
-- Status: draft
+- Status: in-progress
 - Start Date: 2026-08-26
 - Authors: iamlinjunhong
-- Implementation PR: https://github.com/matrixorigin/matrixone/pull/27623
-- Issue for this RFC: https://github.com/matrixorigin/matrixone/issues/27602
+- Implementation PR: [#27623](https://github.com/matrixorigin/matrixone/pull/27623)
+- Issue for this RFC: [#27602](https://github.com/matrixorigin/matrixone/issues/27602)
 
 # Lossless temporary-table migration through Proxy
 
@@ -14,6 +14,16 @@ them. The migration transfers a bounded temporary-table identity snapshot, then
 the target creates target-owned temporary clones before it restores prepared
 statements. It never transfers a source session's physical temporary relation
 as target-owned state.
+
+## Design decision
+
+Independent review of this exact v36 RFC and its patch-equivalent production
+series passed on 2026-08-28. The decision records that the ownership transfer,
+partial-clone and unknown-result handling, retry/idempotency, fail-closed
+mixed-version policy, bounds, rollback behavior, and topology acceptance map
+are coherent. The review also confirms that the checked-in two-CN + Proxy
+Connector/J result remains applicable after the v36-only protocol-gate
+renumbering. Decision record: [review 5052244278](https://github.com/matrixorigin/matrixone/pull/27623#pullrequestreview-5052244278).
 
 ## Problem and invariant
 
@@ -141,5 +151,5 @@ and all three acceptance results for `eed54db29b02a70a777fefd086871d3cda09d548`.
 ## Open questions
 
 No implementation-blocking question remains. The topology acceptance test is
-checked in and was run against the two-CN + Proxy launch configuration; an
-independent design approval is still required before status changes from draft.
+checked in and was run against the two-CN + Proxy launch configuration. The
+independent design decision above advanced this RFC to in-progress.
