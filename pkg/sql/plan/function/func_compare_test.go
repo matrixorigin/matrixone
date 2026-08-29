@@ -670,6 +670,9 @@ func BenchmarkJSONBooleanComparison(b *testing.B) {
 			false, func(c int) bool { return c == 0 }, nil); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
 func TestCharEqualityIgnoresRepresentationPadding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
