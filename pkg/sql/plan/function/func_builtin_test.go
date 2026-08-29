@@ -171,6 +171,11 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 			fn:     builtInInternalCharSize,
 			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
 		},
+		{
+			name:   "character set domain",
+			fn:     builtInInternalCharacterSet,
+			values: []int64{0, 0, 0, 0, 2, 2, 2, 0},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tc := NewFunctionTestCase(

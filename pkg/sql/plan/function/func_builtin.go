@@ -823,8 +823,13 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
+			switch typ.Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				if err := rs.Append(2, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_varchar, types.T_char, types.T_text, types.T_datalink:
 				if err := rs.Append(int64(typ.Scale), false); err != nil {
 					return err
 				}

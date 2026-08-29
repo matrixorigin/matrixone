@@ -1,0 +1,30 @@
+-- @suite
+
+-- @case
+-- @desc: lossless binary-string return domains and CTAS materialization
+-- @label:bvt
+
+--- @metacmp(true)
+
+drop database if exists binary_string_result_domain;
+create database binary_string_result_domain;
+use binary_string_result_domain;
+
+-- Direct text-protocol metadata must agree with the binary expression domain.
+select char(65, 66) as default_binary_char;
+select char(65 using utf8mb4) as explicit_text_char;
+select convert(cast(-9223372036854775808 as signed) using binary) as converted_integer;
+select repeat(X'61', 2) as promoted_repeat;
+
+-- Materialization must retain all 70,000 bytes and the promoted BLOB type.
+create table binary_result_ctas as
+select repeat(X'61', 70000) as repeated,
+       concat(cast(X'61' as binary(65535)), repeat(X'62', 4465)) as concatenated;
+select length(repeated), length(concatenated) from binary_result_ctas;
+desc binary_result_ctas;
+select column_name, data_type, character_maximum_length, character_set_name, collation_name
+from information_schema.columns
+where table_schema = 'binary_string_result_domain' and table_name = 'binary_result_ctas'
+order by ordinal_position;
+
+drop database binary_string_result_domain;
