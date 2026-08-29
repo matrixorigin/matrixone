@@ -319,11 +319,14 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 		config:                          util.NewConfigData(nil),
 		viewMetadataAdmissionGeneration: 7,
 	}
+	// Model a restart whose deployment protocol has been explicitly restored to
+	// v37. Fresh default-runtime startup is covered separately below.
+	s.ddlVisibilityActivationComplete.Store(true)
 	require.NoError(t, s.prepareDDLVisibilityBarrier())
 	require.True(t, s.ddlVisibilityBarrierPrepared.Load())
 	require.False(t, s.ddlVisibilityActivationPrepared.Load())
 	require.False(t, s.ddlVisibilityActivationFenced.Load())
-	require.False(t, s.ddlVisibilityActivationComplete.Load())
+	require.True(t, s.ddlVisibilityActivationComplete.Load())
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.Equal(t, 1, cluster.refreshCalls)
 	require.Equal(t, []string{"self:6001", "peer:6001"}, queryClient.requests)
@@ -331,18 +334,20 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 	require.Equal(t, 2, queryClient.releases)
 }
 
-func TestDefaultV37StartupKeepsPublicIngressClosedUntilActivation(t *testing.T) {
-	const serviceID = "ddl-visibility-default-v37-startup-closed-test"
+func TestDefaultV37StartupUsesLastDeployedProtocolUntilActivation(t *testing.T) {
+	const serviceID = "ddl-visibility-default-v37-startup-protocol-test"
 	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
 	gate := frontend.NewDDLCommitGate()
 	s := &service{cfg: &Config{UUID: serviceID}, ddlCommitGate: gate}
-	s.ddlVisibilityBarrierPrepared.Store(true)
-	s.ddlVisibilityBarrierReady.Store(true)
 
+	require.NoError(t, s.prepareDDLVisibilityBarrier())
 	require.NoError(t, s.publishDDLVisibilityIngressAfterStart())
+	version, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion36, version)
 	require.True(t, s.ddlVisibilityListenersReady.Load())
-	require.False(t, s.viewMetadataIngressReady.Load())
-	require.False(t, gate.PublicDDLEnabled())
+	require.True(t, s.viewMetadataIngressReady.Load())
+	require.True(t, gate.PublicDDLEnabled())
 	require.False(t, s.ddlVisibilityActivationPrepared.Load())
 	require.False(t, s.ddlVisibilityActivationFenced.Load())
 }
@@ -354,6 +359,7 @@ func TestPrepareDDLVisibilityBarrierRejectsMissingProductionDependencies(t *test
 		cfg:                             &Config{UUID: serviceID},
 		viewMetadataAdmissionGeneration: 1,
 	}
+	s.ddlVisibilityActivationComplete.Store(true)
 
 	err := s.prepareDDLVisibilityBarrier()
 	require.ErrorContains(t, err, "dependencies are unavailable")

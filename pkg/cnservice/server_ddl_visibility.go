@@ -39,6 +39,19 @@ func ddlVisibilityBarrierSupported(serviceID string) bool {
 // frontier held by the already-published barrier participants before public
 // SQL ingress can be admitted.
 func (s *service) prepareDDLVisibilityBarrier() error {
+	// MORPCLatestVersion describes compiled capability, not deployment-wide
+	// activation. A fresh upgraded process starts on the last deployed protocol
+	// so normal ingress remains available until the control plane explicitly
+	// performs the complete-target v37 cut. Restarting conservatively requires
+	// reactivation rather than assuming that an earlier distributed cut survived.
+	rt := moruntime.ServiceRuntime(s.cfg.UUID)
+	if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+		if version, valid := value.(int64); valid && version >= defines.MORPCVersion37 &&
+			!s.ddlVisibilityActivationComplete.Load() {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		}
+	}
+
 	s.ddlVisibilityBarrierMu.Lock()
 	defer s.ddlVisibilityBarrierMu.Unlock()
 	if err := s.prepareDDLVisibilityBarrierLocked(); err != nil {
