@@ -138,25 +138,37 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 
 		t.Run("SQL PREPARE nested numeric consumers retain decimal domain", func(t *testing.T) {
 			for _, test := range []struct {
-				name       string
-				expression string
-				wantValue  string
+				name             string
+				expression       string
+				directExpression string
+				wantValue        string
+				wantDatabaseType string
 			}{
-				{name: "addition", expression: "(? / 2) + 1", wantValue: "4503599627370497.7500000"},
-				{name: "abs", expression: "abs(? / 2)", wantValue: "4503599627370496.7500000"},
-				{name: "multiplication", expression: "(? / 2) * 3", wantValue: "13510798882111490.2500000"},
+				{name: "exact integer peer", expression: "(? / 2) + 1", directExpression: "(@issue25408_nested / 2) + 1", wantValue: "4503599627370497.7500000", wantDatabaseType: "DECIMAL"},
+				{name: "scientific integral float peer", expression: "(? / 2) + 1e0", directExpression: "(@issue25408_nested / 2) + 1e0", wantValue: "4.503599627370498e+15", wantDatabaseType: "DOUBLE"},
+				{name: "scientific fractional float peer", expression: "(? / 2) + 1e-1", directExpression: "(@issue25408_nested / 2) + 1e-1", wantValue: "4.503599627370497e+15", wantDatabaseType: "DOUBLE"},
+				{name: "explicit double peer", expression: "(? / 2) + cast(1 as double)", directExpression: "(@issue25408_nested / 2) + cast(1 as double)", wantValue: "4.503599627370498e+15", wantDatabaseType: "DOUBLE"},
+				{name: "abs", expression: "abs(? / 2)", directExpression: "abs(@issue25408_nested / 2)", wantValue: "4503599627370496.7500000", wantDatabaseType: "DECIMAL"},
+				{name: "multiplication", expression: "(? / 2) * 3", directExpression: "(@issue25408_nested / 2) * 3", wantValue: "13510798882111490.2500000", wantDatabaseType: "DECIMAL"},
 			} {
 				t.Run(test.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "set @issue25408_nested = 9007199254740993.5")
+					directRows, directErr := db.QueryContext(ctx, "select "+test.directExpression+" as result")
+					require.NoError(t, directErr)
+					defer directRows.Close()
+					direct := observeScalar(t, directRows)
+					require.NoError(t, directRows.Err())
+					require.Equal(t, test.wantValue, direct.value)
+					require.Equal(t, test.wantDatabaseType, direct.databaseType)
+
 					execSQLRequire(t, ctx, db, "prepare issue25408_nested from 'select "+test.expression+" as result'")
 					defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_nested")
-					execSQLRequire(t, ctx, db, "set @issue25408_nested = 9007199254740993.5")
 					rows, queryErr := db.QueryContext(ctx, "execute issue25408_nested using @issue25408_nested")
 					require.NoError(t, queryErr)
 					defer rows.Close()
 					observed := observeScalar(t, rows)
 					require.NoError(t, rows.Err())
-					require.Equal(t, test.wantValue, observed.value)
-					require.Equal(t, "DECIMAL", observed.databaseType)
+					require.Equal(t, direct, observed)
 				})
 			}
 		})

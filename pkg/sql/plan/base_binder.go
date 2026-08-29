@@ -3415,12 +3415,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	preparedNumericPeer := false
-	if b.builder != nil && b.builder.isPrepareStatement && name == "/" {
+	preparedNumericProvenance := false
+	if b.builder != nil && b.builder.isPrepareStatement &&
+		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name)) {
 		var err error
-		preparedNumericPeer, err = b.hasPreparedNumericParamExprs(astArgs, depth)
+		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
+		preparedNumericPeer = preparedNumericProvenance && name == "/"
 	}
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
@@ -3430,16 +3433,25 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	preparedPeerSources := make([]*plan.Expr, len(args))
-	if preparedNumericPeer {
+	if preparedNumericProvenance {
 		for i, arg := range args {
-			fn := arg.GetF()
-			if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 ||
-				!makeTypeByPlan2Expr(arg).Oid.IsFloat() || preparedExprContainsParam(fn.Args[0]) {
+			if arg == nil || preparedExprContainsParam(arg) {
 				continue
 			}
-			sourceType := makeTypeByPlan2Expr(fn.Args[0])
+			source := arg
+			fn := arg.GetF()
+			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
+				makeTypeByPlan2Expr(arg).Oid.IsFloat() && !preparedExprContainsParam(fn.Args[0]) {
+				_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+				if overload == 0 {
+					source = fn.Args[0]
+				}
+			}
+			sourceType := makeTypeByPlan2Expr(source)
 			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
-				preparedPeerSources[i] = DeepCopyExpr(fn.Args[0])
+				// Preserve only a proven exact peer. Scientific FLOAT literals and
+				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
+				preparedPeerSources[i] = DeepCopyExpr(source)
 			}
 		}
 	}

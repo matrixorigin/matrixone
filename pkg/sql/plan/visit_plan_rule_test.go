@@ -1390,6 +1390,35 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 			require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
 		})
 	}
+	for _, test := range []struct {
+		name string
+		peer func() (*planpb.Expr, error)
+	}{
+		{name: "scientific integral float peer", peer: func() (*planpb.Expr, error) {
+			return makePlan2Float64ConstExprWithType(1), nil
+		}},
+		{name: "scientific fractional float peer", peer: func() (*planpb.Expr, error) {
+			return makePlan2Float64ConstExprWithType(0.1), nil
+		}},
+		{name: "explicit double peer", peer: func() (*planpb.Expr, error) {
+			doubleType := types.T_float64.ToType()
+			return appendExplicitCastBeforeExpr(ctx, makePlan2Int64ConstExprWithType(1), makePlan2Type(&doubleType))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			peer, peerErr := test.peer()
+			require.NoError(t, peerErr)
+			expr, bindErr := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{makeDivision(), peer})
+			require.NoError(t, bindErr)
+			filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, makeQuery(t, expr), []any{ParamValue{
+					Value: "9007199254740993.5", SourceType: types.New(types.T_decimal128, 17, 1), HasSourceType: true,
+				}})
+			require.NoError(t, fillErr)
+			require.True(t, specialized)
+			require.Equal(t, int32(types.T_float64), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Id)
+		})
+	}
 
 	intType := types.T_int32.ToType()
 	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{

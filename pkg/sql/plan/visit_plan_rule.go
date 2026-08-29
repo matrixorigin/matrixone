@@ -1906,19 +1906,6 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					boundArgs[i] = unwrapped
 					needResetFunction = true
 					compareArgTypes = true
-				} else if sqlExecuteNumericNestedDependent && !sqlExecuteNumericSourceArgs[i] {
-					// SQL binding represents an integer literal beside a provisional
-					// DOUBLE child as Dval without source provenance. Once the child
-					// rebinds to DECIMAL, recover that exact literal in the same domain.
-					decimal, decimalOK, decimalErr := provisionalDecimalFloatLiteral(rule.ctx, candidate)
-					if decimalErr != nil {
-						return nil, decimalErr
-					}
-					if decimalOK {
-						boundArgs[i] = decimal
-						needResetFunction = true
-						compareArgTypes = true
-					}
 				}
 			}
 		}
