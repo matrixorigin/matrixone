@@ -4411,6 +4411,78 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedJSONComparisonParamPositions returns the direct parameter markers
+// whose runtime SQL type controls a JSON equality comparison. The hidden
+// adapter remains in a cacheable generic plan; execution metadata supplies the
+// concrete type for only these positions.
+func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	seen := make(map[*plan.Expr]struct{})
+	// The protobuf owner walker covers every present and future plan field. The
+	// expression collector below owns tree recursion because owner walking stops
+	// at each expression root.
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedJSONComparisonParamPositions(expr, positions, seen)
+		return nil
+	})
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func collectPreparedJSONComparisonParamPositions(
+	expr *plan.Expr,
+	positions map[int32]struct{},
+	seen map[*plan.Expr]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if _, ok := seen[expr]; ok {
+		return
+	}
+	seen[expr] = struct{}{}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
+			len(impl.F.Args) == 1 {
+			if param := impl.F.Args[0].GetP(); param != nil {
+				positions[param.Pos] = struct{}{}
+			}
+		}
+		for _, arg := range impl.F.Args {
+			collectPreparedJSONComparisonParamPositions(arg, positions, seen)
+		}
+	case *plan.Expr_W:
+		window := impl.W
+		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen)
+		for _, item := range window.GetPartitionBy() {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+		for _, order := range window.GetOrderBy() {
+			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen)
+		}
+		if frame := window.GetFrame(); frame != nil {
+			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen)
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+	case *plan.Expr_Sub:
+		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen)
+	}
+}
+
 func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {
 	positions := make(map[int32]struct{})
 	if preparePlan == nil {

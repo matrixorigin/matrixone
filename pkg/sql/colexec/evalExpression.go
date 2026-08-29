@@ -601,6 +601,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
 		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		expr.vec.SetPrepareParamType(proc.GetPrepareParamType(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
 		expr.vec.SetLength(rowCount)
@@ -1349,6 +1350,8 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	runtimeType := *selectedResult.GetType()
 	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
+	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
+	runtimePrepareParamType := selectedResult.GetPrepareParamType()
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
 	}
@@ -1391,6 +1394,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// summary is only the compatibility fallback for uniform results.
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
+		}
+		if runtimePreparedJSONComparisonParam {
+			result.SetPrepareParamType(runtimePrepareParamType)
+			result.SetPreparedJSONComparisonParam()
 		}
 	}
 	return result, nil
