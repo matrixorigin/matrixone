@@ -198,7 +198,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
-			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
 
 	case *tree.BitCastExpr:
@@ -6079,6 +6079,21 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+// appendSyntaxExplicitCastBeforeExpr keeps the legacy CAST overload on the
+// wire while recording syntax provenance in an optional protobuf field. Old
+// CNs ignore that field and continue to execute overload 0, while new planners
+// can distinguish this user-written CAST from implicit reconciliation casts.
+func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	cast, err := appendCastBeforeExprWithOverload(ctx, expr, toType, 0)
+	if err != nil {
+		return nil, err
+	}
+	if fn := cast.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" {
+		fn.SyntaxExplicitCast = true
+	}
+	return cast, nil
 }
 
 func appendCastBeforeExprWithOverload(
