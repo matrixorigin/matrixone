@@ -1137,6 +1137,19 @@ func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
 	}
 }
 
+func TestDeduceNotNullableForJSONBooleanComparison(t *testing.T) {
+	jsonNotNull := &plan.Expr{Typ: plan.Type{Id: int32(types.T_json), NotNullable: true}}
+	booleanNotNull := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}}
+	for _, fid := range []int32{EQUAL, NOT_EQUAL} {
+		require.False(t, DeduceNotNullable(
+			EncodeOverloadID(fid, 0), []*plan.Expr{jsonNotNull, booleanNotNull}))
+		require.False(t, DeduceNotNullable(
+			EncodeOverloadID(fid, 0), []*plan.Expr{booleanNotNull, jsonNotNull}))
+	}
+	require.True(t, DeduceNotNullable(
+		EncodeOverloadID(NULL_SAFE_EQUAL, 0), []*plan.Expr{jsonNotNull, booleanNotNull}))
+}
+
 func TestDeduceNotNullablePreservesExplicitContracts(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}

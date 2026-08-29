@@ -59,6 +59,16 @@ func isDatetimeTimestampComparison(left, right types.Type) bool {
 		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
+// isJSONBooleanComparison identifies equality predicates whose result depends
+// on the JSON scalar category. Letting the generic cast rule turn both operands
+// into BOOL would make a JSON string such as "true" indistinguishable from the
+// JSON boolean true. Equality evaluates this pair directly instead; explicit
+// JSON-to-BOOL casts retain their independent public conversion contract.
+func isJSONBooleanComparison(left, right types.Type) bool {
+	return left.Oid == types.T_json && right.Oid == types.T_bool ||
+		left.Oid == types.T_bool && right.Oid == types.T_json
+}
+
 var supportedOperators = []FuncNew{
 	// operator `=`
 	// return true if a = b, return false if a != b, return null if one of a and b is null
@@ -68,6 +78,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
 				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
@@ -119,6 +132,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
@@ -374,6 +390,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
 				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
