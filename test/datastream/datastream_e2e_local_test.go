@@ -550,8 +550,9 @@ func TestDatastreamThroughMatrixOne(t *testing.T) {
 
 // TestConnectorJConnectionPoolReset runs the exact Connector/J pooled-borrow
 // API from #27644 against a reachable MatrixOne. The Java probe uses
-// MysqlConnectionPoolDataSource rather than a synthetic packet client and
-// validates modern COM_RESET_CONNECTION cleanup on repeated logical borrows.
+// MysqlConnectionPoolDataSource rather than a synthetic packet client. It runs
+// the Connector/J 8.0.15 COM_CHANGE_USER fallback and 8.4/9.7
+// COM_RESET_CONNECTION paths on repeated logical borrows.
 func TestConnectorJConnectionPoolReset(t *testing.T) {
 	if _, err := exec.LookPath("java"); err != nil {
 		t.Skip("java not found; skip Connector/J pool E2E")
@@ -574,9 +575,23 @@ func TestConnectorJConnectionPoolReset(t *testing.T) {
 
 	jdbcURL := strings.SplitN(jdbcURLFromDSN(dsn), "?", 2)[0] + "/" + database +
 		"?useSSL=false&allowPublicKeyRetrieval=true"
-	cmd := exec.Command("java", "-cp", jar, "io.matrixone.jstfu.ConnectorJPoolResetProbe",
-		jdbcURL, "dump", "111", database, table)
-	cmd.Env = os.Environ()
-	output, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "Connector/J pool probe failed:\n%s", output)
+	versions := []struct {
+		name string
+		jar  string
+	}{
+		{name: "8.0.15", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-java-8.0.15.jar")},
+		{name: "8.4", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-j-8.4.0.jar")},
+		{name: "9.7", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-j-9.7.0.jar")},
+	}
+	for _, version := range versions {
+		t.Run(version.name, func(t *testing.T) {
+			_, err := os.Stat(version.jar)
+			require.NoErrorf(t, err, "Connector/J %s artifact is missing after `make jstfu`", version.name)
+			cmd := exec.Command("java", "-cp", version.jar+string(os.PathListSeparator)+jar,
+				"io.matrixone.jstfu.ConnectorJPoolResetProbe", jdbcURL, "dump", "111", database, table)
+			cmd.Env = os.Environ()
+			output, err := cmd.CombinedOutput()
+			require.NoErrorf(t, err, "Connector/J %s pool probe failed:\n%s", version.name, output)
+		})
+	}
 }

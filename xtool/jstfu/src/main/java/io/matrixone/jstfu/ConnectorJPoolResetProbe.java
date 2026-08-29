@@ -18,6 +18,7 @@ import com.mysql.cj.jdbc.MysqlConnectionPoolDataSource;
 
 import javax.sql.PooledConnection;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -86,6 +87,53 @@ public final class ConnectorJPoolResetProbe {
             }
         } finally {
             pooled.close();
+        }
+
+        verifyReplacementAfterResetFailure(dataSource, url, user, password, database);
+    }
+
+    private static void verifyReplacementAfterResetFailure(
+            MysqlConnectionPoolDataSource dataSource,
+            String url,
+            String user,
+            String password,
+            String database) throws SQLException {
+        PooledConnection failedPool = dataSource.getPooledConnection(user, password);
+        long failedConnectionId;
+        boolean resetFailed = false;
+        try {
+            try (Connection connection = failedPool.getConnection()) {
+                failedConnectionId = longValue(connection, "SELECT CONNECTION_ID()");
+            }
+
+            try (Connection control = DriverManager.getConnection(url, user, password);
+                 Statement statement = control.createStatement()) {
+                statement.execute("KILL CONNECTION " + failedConnectionId);
+            }
+
+            try {
+                failedPool.getConnection();
+            } catch (SQLException expected) {
+                // A failed server-side reset must make this pooled physical
+                // connection unusable rather than exposing a stale generation.
+                resetFailed = true;
+            }
+        } finally {
+            failedPool.close();
+        }
+
+        require(resetFailed, "pooled connection remained borrowable after reset failure");
+
+        PooledConnection replacementPool = dataSource.getPooledConnection(user, password);
+        try {
+            try (Connection replacement = replacementPool.getConnection()) {
+                requireEquals(database, stringValue(replacement, "SELECT DATABASE()"),
+                        "replacement borrow database");
+                requireEquals(Long.valueOf(1), Long.valueOf(longValue(replacement, "SELECT 1")),
+                        "replacement borrow query");
+            }
+        } finally {
+            replacementPool.close();
         }
     }
 
