@@ -6035,6 +6035,35 @@ func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 	require.Equal(t, "uq_parent_code", unique.Def.ReferencedIndexName)
 }
 
+func TestCreateExistingTableDoesNotRebuildReverseForeignKeys(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProcess(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	queriedReverseForeignKeys := false
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if strings.Contains(sql, "`mo_catalog`.`mo_foreign_keys`") {
+				queriedReverseForeignKeys = true
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("existing relation reverse FKs must not be rebuilt")
+			}
+			return executor.Result{}, nil
+		}),
+	)
+
+	for _, sql := range []string{
+		"create table nation (replacement_only int)",
+		"create table if not exists nation (replacement_only int)",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		require.Empty(t, logicPlan.GetDdl().GetCreateTable().GetFksReferToMe())
+	}
+	require.False(t, queriedReverseForeignKeys)
+}
+
 func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
 	for _, referencedIndexName := range []string{"idx1", ""} {
 		mode := "persisted name"

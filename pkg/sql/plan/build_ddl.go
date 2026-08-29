@@ -3506,36 +3506,47 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	skip := IsFkBannedDatabase(createTable.Database)
 	if !skip {
-		fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+		// Existing relations are handled by the execution-time RelationExists
+		// check. Their reverse foreign keys belong to the existing definition and
+		// must never be validated against the ignored replacement definition.
+		_, existingTableDef, err := ctx.Resolve(
+			createTable.Database, createTable.TableDef.Name, nil,
+		)
 		if err != nil {
 			return err
 		}
-		// for fk forward reference. the column id of the tableDef is not ready.
-		// setup fake column id to distinguish the columns
-		for i, def := range createTable.TableDef.Cols {
-			def.ColId = uint64(i)
-		}
-		for rkey, fkDefs := range fks {
-			for constraintName, defs := range fkDefs {
-				data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
-				if err != nil {
-					return err
+		if existingTableDef == nil {
+			fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+			if err != nil {
+				return err
+			}
+			// for fk forward reference. the column id of the tableDef is not ready.
+			// setup fake column id to distinguish the columns
+			for i, def := range createTable.TableDef.Cols {
+				def.ColId = uint64(i)
+			}
+			for rkey, fkDefs := range fks {
+				for constraintName, defs := range fkDefs {
+					data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
+					if err != nil {
+						return err
+					}
+					// The child was created while foreign_key_checks was disabled, so
+					// its catalog row has no parent key name. Persist the selected key
+					// when the metadata column exists; an old-layout row is reconciled
+					// by the tenant migration after the columns are committed.
+					if catalogLayout == foreignKeyCatalogExtended {
+						createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
+							getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
+					}
+					info := &plan.ForeignKeyInfo{
+						Db:           rkey.Db,
+						Table:        rkey.Tbl,
+						ColsReferred: data.ColsReferred,
+						Def:          data.Def,
+					}
+					createTable.FksReferToMe = append(createTable.FksReferToMe, info)
 				}
-				// The child was created while foreign_key_checks was disabled, so
-				// its catalog row has no parent key name. Persist the selected key
-				// when the metadata column exists; an old-layout row is reconciled
-				// by the tenant migration after the columns are committed.
-				if catalogLayout == foreignKeyCatalogExtended {
-					createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
-						getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
-				}
-				info := &plan.ForeignKeyInfo{
-					Db:           rkey.Db,
-					Table:        rkey.Tbl,
-					ColsReferred: data.ColsReferred,
-					Def:          data.Def,
-				}
-				createTable.FksReferToMe = append(createTable.FksReferToMe, info)
 			}
 		}
 	}

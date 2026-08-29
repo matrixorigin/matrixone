@@ -1653,6 +1653,9 @@ func constantFoldWithPreparedExactSource(
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -1670,6 +1673,7 @@ func constantFoldWithPreparedExactSource(
 					Len:          int32(vec.Length()),
 					Data:         data,
 					IsSerialized: isSerialized,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1727,6 +1731,9 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1741,8 +1748,9 @@ func constantFoldWithPreparedExactSource(
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1752,6 +1760,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
+		c.StringSource = uint32(source) + 1
+	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -4619,8 +4630,9 @@ type ParamValue struct {
 	HasRuntimeType bool
 	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
 	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
-	// numeric-prefix domain used by common-type consumers; a direct result uses
-	// this scale-preserving domain without parsing the packet again.
+	// numeric-prefix domain used by common-type consumers; a direct result keeps
+	// the visible scale when representable and otherwise uses the normalized
+	// domain for lexemes whose only excess digits are removable trailing zeroes.
 	DirectResultType    types.Type
 	HasDirectResultType bool
 	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
@@ -4787,9 +4799,10 @@ func absInt64Within(value, limit int64) bool {
 // PreparedDecimalRuntimeTypes parses one complete binary-protocol DECIMAL
 // lexeme and returns both domains needed by prepared execution. normalized is
 // the trailing-zero-free domain used by numeric-prefix/common-type consumers;
-// visible preserves the lexeme's effective scale for a direct result. The scan
-// performs no input-length allocation, even for a max_allowed_packet-sized
-// value.
+// visible preserves the lexeme's effective scale when representable and falls
+// back to normalized when redundant trailing zeroes alone exceed DECIMAL256.
+// The scan performs no input-length allocation, even for a
+// max_allowed_packet-sized value.
 func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, ok bool) {
 	normalized, visible, _, ok = preparedDecimalRuntimeDomains(value, false)
 	return normalized, visible, ok
@@ -4821,7 +4834,7 @@ func preparedDecimalRuntimeDomains(
 
 	var digitCount, leadingZeros, fractionalDigits, trailingZeros int64
 	var coefficient [76]byte
-	coefficientLen := 0
+	coefficientStored := 0
 	seenDigit, seenPoint, seenNonZero := false, false, false
 	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
 		ch := value[pos]
@@ -4843,11 +4856,9 @@ func preparedDecimalRuntimeDomains(
 			} else {
 				trailingZeros = 0
 			}
-			if seenNonZero {
-				if coefficientLen < len(coefficient) {
-					coefficient[coefficientLen] = ch
-				}
-				coefficientLen++
+			if seenNonZero && coefficientStored < len(coefficient) {
+				coefficient[coefficientStored] = ch
+				coefficientStored++
 			}
 		case ch == '.' && !seenPoint:
 			seenPoint = true
@@ -4897,37 +4908,47 @@ func preparedDecimalRuntimeDomains(
 		return types.Type{}, types.Type{}, "", false
 	}
 
-	visibleExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
-	if !bounded {
-		return types.Type{}, types.Type{}, "", false
-	}
-	visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
-	if !ok {
-		return types.Type{}, types.Type{}, "", false
-	}
-
+	visibleExponent, visibleExponentBounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
 	normalizedExponent, bounded := addPreparedDecimalExponent(
 		exponent, -fractionalDigits+trailingZeros)
 	if !bounded {
 		return types.Type{}, types.Type{}, "", false
 	}
-	normalized, ok = preparedDecimalTypeFromCoefficient(
-		coefficientDigits-trailingZeros, normalizedExponent)
-	if !ok || coefficientLen != int(coefficientDigits) || coefficientLen > len(coefficient) {
+	normalizedCoefficientDigits := coefficientDigits - trailingZeros
+	normalized, ok = preparedDecimalTypeFromCoefficient(normalizedCoefficientDigits, normalizedExponent)
+	if !ok || normalizedCoefficientDigits > int64(len(coefficient)) {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	canonicalCoefficientDigits := coefficientDigits
+	canonicalExponent := visibleExponent
+	if visibleExponentBounded {
+		visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
+	}
+	if !visibleExponentBounded || !ok {
+		// A DECIMAL transport lexeme can expose more than 76 coefficient digits
+		// solely through removable trailing zeroes. Preserve the exact value by
+		// falling back to its normalized domain instead of rejecting it before
+		// normalization or materializing the unbounded visible spelling.
+		visible = normalized
+		canonicalCoefficientDigits = normalizedCoefficientDigits
+		canonicalExponent = normalizedExponent
+	}
+	if canonicalCoefficientDigits > int64(len(coefficient)) {
 		return types.Type{}, types.Type{}, "", false
 	}
 	if !materialize {
 		return normalized, visible, "", true
 	}
 	var canonicalBuilder strings.Builder
-	canonicalBuilder.Grow(coefficientLen + 5)
+	canonicalBuilder.Grow(int(canonicalCoefficientDigits) + 21)
 	if negative {
 		canonicalBuilder.WriteByte('-')
 	}
-	canonicalBuilder.Write(coefficient[:coefficientLen])
-	if visibleExponent != 0 {
+	canonicalBuilder.Write(coefficient[:int(canonicalCoefficientDigits)])
+	if canonicalExponent != 0 {
 		canonicalBuilder.WriteByte('e')
-		canonicalBuilder.WriteString(strconv.FormatInt(visibleExponent, 10))
+		canonicalBuilder.WriteString(strconv.FormatInt(canonicalExponent, 10))
 	}
 	return normalized, visible, canonicalBuilder.String(), true
 }

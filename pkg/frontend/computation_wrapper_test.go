@@ -385,6 +385,8 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
+	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(1))
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
@@ -392,6 +394,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Nil(t, params.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParams().GetStringSourceAt(0))
 
 	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
@@ -515,6 +518,7 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	install("-42", defines.MYSQL_TYPE_LONGLONG, false)
 	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
+	require.Equal(t, types.StringSourceCOMStmt, prepareStmt.params.GetStringSourceAt(0))
 	require.Nil(t, retComp)
 	require.NotSame(t, ordinaryPlan, runtimePlan)
 	require.Equal(t, int32(types.T_int64), resultExpr(runtimePlan).Typ.Id)
