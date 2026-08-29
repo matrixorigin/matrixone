@@ -1123,6 +1123,212 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	})
 }
 
+func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt1 from 'select ? as result'")
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
+	require.True(t, PreparedPlanHasDirectResultParams(queryPlan))
+	require.Equal(t, []int32{0}, PreparedPlanDirectResultParamPositions(queryPlan))
+
+	functionPrepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt2 from 'select abs(?)'")
+	require.NoError(t, err)
+	require.False(t, PreparedPlanHasDirectResultParams(functionPrepared.GetDcl().GetPrepare().GetPlan()))
+	require.Empty(t, PreparedPlanDirectResultParamPositions(functionPrepared.GetDcl().GetPrepare().GetPlan()))
+
+	filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+		ParamValue{
+			Value:          "-42",
+			RuntimeType:    types.T_int64.ToType(),
+			HasRuntimeType: true,
+		},
+	})
+	require.NoError(t, err)
+	root := filled.GetQuery().Nodes[filled.GetQuery().Steps[len(filled.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int64(-42), root.ProjectList[0].GetLit().GetI64Val())
+}
+
+func TestPreparedDirectResultSpecializationIsPositionScoped(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_direct_scope from 'select ? as direct_text, ? as direct_number, abs(?) as nested_number'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().GetPlan()
+	require.Equal(t, []int32{0, 1}, PreparedPlanDirectResultParamPositions(original))
+	originalRoot := original.GetQuery().Nodes[original.GetQuery().Steps[len(original.GetQuery().Steps)-1]]
+	require.Len(t, originalRoot.ProjectList, 3)
+	originalDirectText := originalRoot.ProjectList[0].String()
+	originalNested := originalRoot.ProjectList[2].String()
+
+	runtimePlan, specialized, err := FillValuesOfParamsInPlanWithSpecializationAtPositions(
+		context.Background(), original, []any{
+			ParamValue{Value: "text", IsBinaryProtocol: true},
+			ParamValue{Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1.25", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		}, []int32{1})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	runtimeRoot := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, originalDirectText, runtimeRoot.ProjectList[0].String(),
+		"a nonnumeric direct result must retain its prepared binding")
+	require.Equal(t, int32(types.T_int64), runtimeRoot.ProjectList[1].Typ.Id)
+	require.Equal(t, originalNested, runtimeRoot.ProjectList[2].String(),
+		"a numeric packet outside the direct result must retain its prepared binding")
+}
+
+func TestPreparedDecimalRuntimeType(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		wantType  types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "integral wire decimal", value: "123", wantType: types.T_decimal64, wantWidth: 3},
+		{name: "wide wire decimal", value: "123456789012345678901234567890", wantType: types.T_decimal128, wantWidth: 30},
+		{name: "small exponent wire decimal", value: "1e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
+		{name: "fixed scale zero wire decimal", value: "0.00", wantType: types.T_decimal64, wantWidth: 2, wantScale: 2},
+		{name: "exponent zero wire decimal", value: "0e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
+		{name: "large exponent wire decimal", value: "1e+37", wantType: types.T_decimal128, wantWidth: 38},
+		{name: "decimal256 boundary", value: "123456789012345678901234567890123456789012345678901234567890123456789012345.1", wantType: types.T_decimal256, wantWidth: 76, wantScale: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedDecimalRuntimeType(test.value)
+			require.True(t, ok)
+			require.Equal(t, test.wantType, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestPreparedRuntimeParamExprMaterializesProtocolTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		runtimeTyp types.Type
+		wantLit    func(*plan.Literal) bool
+		wantCast   bool
+	}{
+		{name: "bool", value: "true", runtimeTyp: types.T_bool.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Bval); return l != nil && ok }},
+		{name: "bool cast fallback", value: "not-bool", runtimeTyp: types.T_bool.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int8", value: "-8", runtimeTyp: types.T_int8.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I8Val); return l != nil && ok }},
+		{name: "int8 cast fallback", value: "128", runtimeTyp: types.T_int8.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int16", value: "-16", runtimeTyp: types.T_int16.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I16Val); return l != nil && ok }},
+		{name: "int16 cast fallback", value: "32768", runtimeTyp: types.T_int16.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int32", value: "-32", runtimeTyp: types.T_int32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I32Val); return l != nil && ok }},
+		{name: "int32 cast fallback", value: "2147483648", runtimeTyp: types.T_int32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int64", value: "-64", runtimeTyp: types.T_int64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I64Val); return l != nil && ok }},
+		{name: "int64 cast fallback", value: "bad", runtimeTyp: types.T_int64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint8", value: "8", runtimeTyp: types.T_uint8.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U8Val); return l != nil && ok }},
+		{name: "uint8 cast fallback", value: "256", runtimeTyp: types.T_uint8.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint16", value: "16", runtimeTyp: types.T_uint16.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U16Val); return l != nil && ok }},
+		{name: "uint16 cast fallback", value: "bad", runtimeTyp: types.T_uint16.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint32", value: "32", runtimeTyp: types.T_uint32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U32Val); return l != nil && ok }},
+		{name: "uint32 cast fallback", value: "bad", runtimeTyp: types.T_uint32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint64", value: "64", runtimeTyp: types.T_uint64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U64Val); return l != nil && ok }},
+		{name: "bit", value: "7", runtimeTyp: types.T_bit.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U64Val); return l != nil && ok }},
+		{name: "uint64 cast fallback", value: "bad", runtimeTyp: types.T_uint64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "year", value: "2026", runtimeTyp: types.T_year.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I32Val); return l != nil && ok }},
+		{name: "year cast fallback", value: "bad", runtimeTyp: types.T_year.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "float32", value: "1.25", runtimeTyp: types.T_float32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Fval); return l != nil && ok }},
+		{name: "float32 cast fallback", value: "bad", runtimeTyp: types.T_float32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "float64", value: "1.25", runtimeTyp: types.T_float64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Dval); return l != nil && ok }},
+		{name: "float64 cast fallback", value: "bad", runtimeTyp: types.T_float64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal64", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 integral wire value", value: "123", runtimeTyp: types.New(types.T_decimal64, 3, 0), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal64Val)
+			return l != nil && ok && v.Decimal64Val.A == 123
+		}},
+		{name: "decimal64 fixed scale zero", value: "0.00", runtimeTyp: types.New(types.T_decimal64, 2, 2), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal64Val)
+			return l != nil && ok && v.Decimal64Val.A == 0
+		}},
+		{name: "decimal64 inferred", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal128", value: "12.34", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 negative exponent", value: "1e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal128Val)
+			return l != nil && ok && v.Decimal128Val.A == 1 && v.Decimal128Val.B == 0
+		}},
+		{name: "decimal128 exponent zero", value: "0e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal128Val)
+			return l != nil && ok && v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
+		}},
+		{name: "decimal128 inferred", value: "123456789012345678901234567890123456.12", runtimeTyp: types.New(types.T_decimal128, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal256 cast", value: "12.34", runtimeTyp: types.New(types.T_decimal256, 20, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "text", value: "text", runtimeTyp: types.T_text.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Sval); return l != nil && ok }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := preparedRuntimeParamExpr(context.Background(), test.value, true, test.runtimeTyp)
+			require.NoError(t, err)
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.runtimeTyp.Oid), expr.Typ.Id)
+			lit := expr.GetLit()
+			if test.wantCast {
+				require.Nil(t, lit, "expected cast expression")
+			} else {
+				require.NotNil(t, lit)
+				require.True(t, test.wantLit(lit), "unexpected literal form: %T", lit.Value)
+			}
+		})
+	}
+}
+
+func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
+	param := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	literal := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	makePlan := func(query *plan.Query) *Plan {
+		return &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+	tests := []struct {
+		name string
+		plan *Plan
+		want bool
+	}{
+		{name: "nil", want: false},
+		{name: "non-select", plan: makePlan(&plan.Query{StmtType: plan.Query_INSERT}), want: false},
+		{name: "no steps", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT}), want: false},
+		{name: "invalid returning step", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, HasReturning: true, ReturningStep: 2}), want: false},
+		{name: "negative node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{-1}}), want: false},
+		{name: "out of range node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{1}, Nodes: []*plan.Node{{}}}), want: false},
+		{name: "nil node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{nil}}), want: false},
+		{name: "no direct marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{nil, literal}}}}), want: false},
+		{name: "direct marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{literal, param}}}}), want: true},
+		{name: "returning marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0, 1}, HasReturning: true, ReturningStep: 1, Nodes: []*plan.Node{{}, {ProjectList: []*plan.Expr{param}}}}), want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedPlanHasDirectResultParams(test.plan))
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "order by pass through", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
+		{name: "distinct pass through", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
+		{name: "union common type owns result", sql: "prepare direct_union from 'select ? as result union all select 1'", want: nil},
+		{name: "explicit decimal cast fixes result type", sql: "prepare direct_explicit_decimal from 'select cast(? as decimal(38,9))'", want: nil},
+		{name: "explicit integer cast fixes result type", sql: "prepare direct_explicit_integer from 'select cast(? as int)'", want: nil},
+		{name: "explicit floating cast fixes result type", sql: "prepare direct_explicit_float from 'select cast(? as double)'", want: nil},
+		{name: "explicit cast in union branch fixes result type", sql: "prepare direct_explicit_union from 'select cast(? as int) union all select 1'", want: nil},
+		{name: "nested parameter is not direct", sql: "prepare direct_nested from 'select ? as direct_value, abs(?) as nested_value'", want: []int32{0}},
+		{name: "numeric function only", sql: "prepare direct_abs from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			got := PreparedPlanDirectResultParamPositions(prepared.GetDcl().GetPrepare().GetPlan())
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string
