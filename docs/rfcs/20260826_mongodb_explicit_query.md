@@ -1,4 +1,4 @@
-- Status: draft — implementation review remains blocked pending an independent design decision
+- Status: in progress — independent design decision recorded below
 - Start Date: 2026-08-26
 - Authors: iamlinjunhong
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27553
@@ -9,10 +9,16 @@
 ## Decision record
 
 This document is the stable design artifact for issue #27536 and PR #27553.
-It is intentionally a draft: the implementation is not the approval authority.
-The required independent design review must record the exact commit containing
-this document and a PASS/REQUEST_CHANGES decision before implementation
-approval can proceed.
+Implementation is not the approval authority. The independent design review
+recorded below names the reviewed revision and decision.
+
+**Independent design decision (2026-08-29): PASS.** The independent review
+approved the design at revision
+`76b76496a70d2cca5f408f9ce19a617b5b01f75b`. It confirmed the collection-scoped
+read surface, fail-closed allowlist, bounded capacity envelope, 30-second
+client lifetime, digest-only diagnostics, v36 compatibility fences, ownership
+model, rollout/fallback, and validation map. This status update records that
+decision; it does not self-approve the implementation.
 
 **Scope and trigger.** This is a feature, not a bug fix.  It adds a SQL-visible
 operation selector, changes the `MongoScan` plan/pipeline payload, and crosses
@@ -245,7 +251,7 @@ semantic correctness.
 | Envelope parsing, canonical digest, strict duplicate/unsafe/oversize rejection | `pkg/sql/mongodb: TestParseUserQuery*`, `TestUserQueryPlanRevalidationFailsClosed` | Local MongoDB E2E filter/pipeline rejection coverage. |
 | Compile selection, residual separation, empty candidate and legacy behavior | `pkg/sql/compile: TestConfigureMongoUserQuery*` | Existing external-table execution path in CI. |
 | BSON transport revalidation and safe diagnostics | `pkg/sql/mongodb` plan round trips; `pkg/pb/plan` diagnostic tests; `pkg/sql/compile: TestCompileMongoDBQueryDiagnosticsAreRedacted` | CI UT and coverage jobs on the implementation head. |
-| Find/pipeline invocation, mapping projection, zero-column row carrier, cancellation and cleanup | `pkg/sql/colexec/mongoscan: TestMongoScan*` including filter, pipeline, large irrelevant field, reset/free/error controls | Local MongoDB E2E runner uses a real server command profiler: the raw MO aggregation returns four MongoDB documents and the reducing pipeline returns one; the JSON report records both counts. |
+| Find/pipeline invocation, mapping projection, zero-column row carrier, cancellation and cleanup | `pkg/sql/colexec/mongoscan: TestMongoScan*` including filter, pipeline, large irrelevant field, reset/free/error controls | Local MongoDB E2E runner uses a real server command profiler: the raw MO aggregation returns five MongoDB documents and the reducing pipeline returns one; the JSON report records both counts. |
 | Wire rollback | `pkg/sql/compile: TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries`; `pkg/sql/colexec/mongoscan: TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall` | Compile at v36, lower to immediate predecessor v35 before send/receive/prepare, and fail before a MongoDB operation. |
 | SQL statement/prepared/parse-failure redaction | `pkg/frontend` focused redaction/statement-recording tests | Statement telemetry and remote `ProcessInfo` diagnostic tests in dependent compile/frontend paths. |
 | External SQL contract | `test/mongodb/mongodb_e2e_local.go` with minimum fixture documents | CI compose/BVT lanes remain the service-level regression net; no new distributed case is added because the feature's real MongoDB fixture is isolated in its existing test-owned runner. |
@@ -253,10 +259,10 @@ semantic correctness.
 
 The test fixtures use minimum documents and explicit local runner ownership;
 they do not use sleep-based synchronization or a throughput assertion as a
-functional oracle.  Before implementation approval, the record must attach the
-exact head, terminal test results, relevant race mode, and the real MongoDB E2E
-result.  A design-only edit does not invalidate already green code evidence;
-rebasing requires rechecking only changed base-side contracts.
+functional oracle. The PR delivery record attaches the exact head, terminal
+test results, relevant race mode, and the real MongoDB E2E result. A design-only
+edit does not invalidate already green code evidence; rebasing requires
+rechecking only changed base-side contracts.
 
 ## Risks and approval questions
 
@@ -268,7 +274,6 @@ rebasing requires rechecking only changed base-side contracts.
    workload measurement; it is not an open blocker for this revision.
 
 These are continuing admission conditions, not open design questions for this
-revision. The independent approval record must name the reviewed document
-commit and state whether the selected invariants and validation plan PASS.
-Until then, the design status remains `draft` and implementation approval is
-blocked.
+revision. The independent PASS above names the reviewed document revision and
+the selected invariants and validation plan. The RFC is therefore `in progress`;
+implementation approval remains a separate review decision.
