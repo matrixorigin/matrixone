@@ -166,24 +166,216 @@ type groupInsertPreview struct {
 	newGroups int
 }
 
+type groupKeySourcePublication struct {
+	overrides    [][]types.StringSource
+	destinations []*vector.Vector
+}
+
+func (publication *groupKeySourcePublication) addDestination(destination *vector.Vector) {
+	for _, existing := range publication.destinations {
+		if existing == destination {
+			return
+		}
+	}
+	publication.destinations = append(publication.destinations, destination)
+}
+
+func (publication *groupKeySourcePublication) finalize() {
+	for _, destination := range publication.destinations {
+		destination.FinalizeStringSourcePreflight()
+	}
+}
+
+type groupPrePublicationError struct {
+	cause error
+}
+
+func (err *groupPrePublicationError) Error() string { return err.cause.Error() }
+func (err *groupPrePublicationError) Unwrap() error { return err.cause }
+
+func isGroupPrePublicationError(err error) bool {
+	_, ok := err.(*groupPrePublicationError)
+	return ok
+}
+
 func (ctr *container) commitGroupByChunk(
 	vectors []*vector.Vector,
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
+	if !hasStringSourceMetadata {
+		for _, vec := range vectors {
+			if vec.HasStringSourceMetadata() {
+				hasStringSourceMetadata = true
+				break
+			}
+		}
+	}
+	var sourcePublication groupKeySourcePublication
+	if hasStringSourceMetadata {
+		defer sourcePublication.finalize()
+		if err := ctr.preflightPreviewGroupKeyStringSources(
+			vectors, offset, preview.values, preview.inserted,
+			&sourcePublication); err != nil {
+			return nil, 0, &groupPrePublicationError{cause: err}
+		}
+	}
 	values, _, err := ctr.hr.TxnItr.CommitPreview(&ctr.hr.insertPlan)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	more, err := ctr.appendGroupByBatch(vectors, offset, preview.inserted)
+	more, err := ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	if more != preview.newGroups {
 		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
+	if hasStringSourceMetadata {
+		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
+			return nil, 0, err
+		}
+		ctr.groupKeyStringSourceMetadata = true
+	}
 	return values, more, nil
+}
+
+func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
+	batchIndex := groupIndex / aggBatchSize
+	batchRow := groupIndex % aggBatchSize
+	if batchIndex < len(ctr.groupByBatches) {
+		return ctr.groupByBatches[batchIndex], batchRow, nil
+	}
+	if batchIndex == len(ctr.groupByBatches) && ctr.groupByStandby != nil {
+		return ctr.groupByStandby, batchRow, nil
+	}
+	return nil, 0, mpool.ErrAllocationAccountInvariant
+}
+
+func (ctr *container) forEachPreviewGroupKeyStringSource(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+	fn func(destination *vector.Vector, row int, source types.StringSource) error,
+) error {
+	for row, group := range groups {
+		if group == 0 {
+			continue
+		}
+		seen := false
+		for previous := 0; previous < row; previous++ {
+			if groups[previous] == group {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			continue
+		}
+		groupIndex := int(group - 1)
+		destinationBatch, destinationRow, err := ctr.previewGroupDestination(groupIndex)
+		if err != nil {
+			return err
+		}
+		for column, sourceVector := range vectors {
+			destination := destinationBatch.Vecs[column]
+			merged := sourceVector.GetStringSourceAt(offset + row)
+			if destinationRow < destination.Length() {
+				merged, err = types.MergeStringSources(
+					destination.GetStringSourceAt(destinationRow), merged)
+				if err != nil {
+					return err
+				}
+			}
+			for candidate := row + 1; candidate < len(groups); candidate++ {
+				if groups[candidate] != group {
+					continue
+				}
+				merged, err = types.MergeStringSources(
+					merged, sourceVector.GetStringSourceAt(offset+candidate))
+				if err != nil {
+					return err
+				}
+			}
+			if err := fn(destination, destinationRow, merged); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (ctr *container) preflightPreviewGroupKeyStringSources(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+	inserted []uint8,
+	publication *groupKeySourcePublication,
+) error {
+	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) || publication == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if err := ctr.forEachPreviewGroupKeyStringSource(
+		vectors, offset, groups,
+		func(destination *vector.Vector, row int, source types.StringSource) error {
+			publication.addDestination(destination)
+			if err := destination.PreflightSetStringSourceAtLength(
+				row, max(destination.Length(), row+1), source, ctr.mp); err != nil {
+				return err
+			}
+			// Existing-row preflight has finalLength == Length and therefore does
+			// not infer a deferred publication. Keep both current and standby
+			// reservations alive until groupKeySourcePublication.finalize.
+			destination.RetainStringSourcePreflight()
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+	// Keep preview results in operator-owned, UnitLimit-bounded scratch. The
+	// selected append consumes these overrides without modifying borrowed input.
+	publication.overrides = make([][]types.StringSource, len(vectors))
+	for column := range publication.overrides {
+		publication.overrides[column] = make([]types.StringSource, len(groups))
+	}
+	for row, flag := range inserted {
+		if flag == 0 {
+			continue
+		}
+		group := groups[row]
+		for column, sourceVector := range vectors {
+			merged := sourceVector.GetStringSourceAt(offset + row)
+			for candidate := row + 1; candidate < len(groups); candidate++ {
+				if groups[candidate] != group {
+					continue
+				}
+				var err error
+				merged, err = types.MergeStringSources(
+					merged, sourceVector.GetStringSourceAt(offset+candidate))
+				if err != nil {
+					return err
+				}
+			}
+			publication.overrides[column][row] = merged
+		}
+	}
+	return nil
+}
+
+func (ctr *container) applyPreviewGroupKeyStringSources(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+) error {
+	return ctr.forEachPreviewGroupKeyStringSource(
+		vectors, offset, groups,
+		func(destination *vector.Vector, row int, source types.StringSource) error {
+			return destination.SetStringSourceAtWithMP(row, source, ctr.mp)
+		},
+	)
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
@@ -1277,7 +1469,16 @@ reloadLoop:
 		vals, more, err := ctr.commitGroupByChunk(
 			gbBatch.Vecs, 0, rowCount, preview)
 		if err != nil {
-			return false, err
+			if !isGroupPrePublicationError(err) {
+				return false, err
+			}
+			ctr.cancelGroupByPreflights()
+			retried, retryErr := ctr.retrySpillReloadRecord(
+				proc, opAnalyzer, opStats, bkt, bufferedFile, recordStart, err)
+			if !retried {
+				return false, retryErr
+			}
+			continue reloadLoop
 		}
 
 		if len(ctr.aggList) > 0 {

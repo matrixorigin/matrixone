@@ -36,6 +36,8 @@ const (
 	selectedRowsKindMask    = byte(3 << selectedRowsKindShift)
 	selectedRowsBinaryShift = 4
 	selectedRowsBinaryMask  = byte(3 << selectedRowsBinaryShift)
+	selectedRowsSourceShift = 6
+	selectedRowsSourceMask  = byte(3 << selectedRowsSourceShift)
 
 	selectedRowsRowBinary = byte(1 << 2)
 	selectedRowsRowText   = byte(1 << 3)
@@ -48,6 +50,10 @@ const (
 	selectedRowsBinaryUniform = byte(1)
 	selectedRowsBinaryRows    = byte(2)
 	selectedRowsBinaryText    = byte(3)
+
+	selectedRowsSourceNone    = byte(0)
+	selectedRowsSourceUniform = byte(1)
+	selectedRowsSourceRows    = byte(2)
 )
 
 // MarshalSelectedRowsTo writes a bounded, private execution codec for the
@@ -168,11 +174,40 @@ func (v *Vector) marshalSelectedRowsTo(
 		binaryMode = selectedRowsBinaryRows
 	}
 	metadata |= binaryMode << selectedRowsBinaryShift
+	var firstSource types.StringSource
+	sourceSeen := false
+	sourceMixed := false
+	if v.HasStringSourceMetadata() {
+		for i := 0; i < count; i++ {
+			source := v.GetStringSourceAt(rowAt(i))
+			if !source.Valid() {
+				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
+			}
+			if !sourceSeen {
+				firstSource, sourceSeen = source, true
+			} else if source != firstSource {
+				sourceMixed = true
+			}
+		}
+	}
+	sourceMode := selectedRowsSourceNone
+	if sourceSeen && firstSource != types.StringSourceExpression {
+		sourceMode = selectedRowsSourceUniform
+	}
+	if sourceMixed {
+		sourceMode = selectedRowsSourceRows
+	}
+	metadata |= sourceMode << selectedRowsSourceShift
 	if err := writeVectorMarshalByte(w, metadata); err != nil {
 		return err
 	}
 	if kindMode == selectedRowsKindUniform {
 		if err := writeVectorMarshalByte(w, byte(firstKind)); err != nil {
+			return err
+		}
+	}
+	if sourceMode == selectedRowsSourceUniform {
+		if err := writeVectorMarshalByte(w, byte(firstSource)); err != nil {
 			return err
 		}
 	}
@@ -223,6 +258,13 @@ func (v *Vector) marshalSelectedRowsTo(
 			}
 		}
 	}
+	if sourceMode == selectedRowsSourceRows {
+		for i := 0; i < count; i++ {
+			if err := writeVectorMarshalByte(w, byte(v.GetStringSourceAt(rowAt(i)))); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -255,9 +297,9 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 	}
 	kindMode := (metadata & selectedRowsKindMask) >> selectedRowsKindShift
 	binaryMode := (metadata & selectedRowsBinaryMask) >> selectedRowsBinaryShift
-	if metadata&^(selectedRowsHasNull|selectedRowsHasGrouping|
-		selectedRowsKindMask|selectedRowsBinaryMask) != 0 ||
-		kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryText {
+	sourceMode := (metadata & selectedRowsSourceMask) >> selectedRowsSourceShift
+	if kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryText ||
+		sourceMode > selectedRowsSourceRows {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector metadata")
 	}
 	var uniformKind PrepareParamKind
@@ -269,6 +311,17 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		uniformKind = PrepareParamKind(encoded)
 		if uniformKind > PrepareParamBoolean {
 			return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
+		}
+	}
+	var uniformSource types.StringSource
+	if sourceMode == selectedRowsSourceUniform {
+		encoded, err := types.ReadByte(r)
+		if err != nil {
+			return err
+		}
+		uniformSource = types.StringSource(encoded)
+		if !uniformSource.Valid() || uniformSource == types.StringSourceExpression {
+			return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
 		}
 	}
 
@@ -351,6 +404,16 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		v.SetPrepareParamKind(uniformKind)
 	case selectedRowsKindRows:
 		if err := v.SetPrepareParamKindsFromReader(r, count, mp); err != nil {
+			return err
+		}
+	}
+	switch sourceMode {
+	case selectedRowsSourceUniform:
+		if err := v.SetStringSource(uniformSource); err != nil {
+			return err
+		}
+	case selectedRowsSourceRows:
+		if err := v.SetStringSourcesFromReader(r, count, mp); err != nil {
 			return err
 		}
 	}
