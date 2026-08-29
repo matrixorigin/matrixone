@@ -4117,7 +4117,7 @@ func bindMixedInListComparison(
 		}
 		left, right = operands[0], operands[1]
 	}
-	operands := []*Expr{left, right}
+	operands = []*Expr{left, right}
 	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
 		return nil, err
 	}
