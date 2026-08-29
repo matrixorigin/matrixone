@@ -104,6 +104,7 @@ type readBarrierEvent struct {
 	barrierID uint64
 	timestamp timestamp.Timestamp
 	session   *Session
+	release   func()
 }
 
 // LogtailServer handles logtail push logic.
@@ -145,6 +146,12 @@ type LogtailServer struct {
 	pullWorkerPool chan struct{}
 
 	event *Notifier
+	// readBarrierSlots bounds barrier work across the entire shared publication
+	// path, from TN queue admission through notifier ordering to the per-session
+	// response hand-off. Releasing at the manager frontier would be too early:
+	// a multi-CN login flood could otherwise accumulate in the notifier and
+	// backpressure ordinary logtail publication.
+	readBarrierSlots chan struct{}
 
 	logtailer taelogtail.Logtailer
 
@@ -211,6 +218,7 @@ func NewLogtailServer(
 		subReqChan:             make(chan subscription, 100),
 		subTailChan:            make(chan *LogtailPhase, 300),
 		pullWorkerPool:         make(chan struct{}, cfg.PullWorkerPoolSize),
+		readBarrierSlots:       make(chan struct{}, defaultMaxConcurrentReadBarriers),
 		logtailer:              logtailer,
 	}
 	s.pendingSessionErrors.items = make(map[*Session]error)
@@ -320,6 +328,24 @@ func (s *LogtailServer) onReadBarrier(
 	stream morpcStream,
 	req *logtail.ReadBarrierRequest,
 ) error {
+	select {
+	case s.readBarrierSlots <- struct{}{}:
+	case <-sendCtx.Done():
+		return context.Cause(sendCtx)
+	case <-s.rootCtx.Done():
+		return context.Cause(s.rootCtx)
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { <-s.readBarrierSlots })
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			release()
+		}
+	}()
+
 	session, err := s.getSession(stream)
 	if err != nil {
 		return err
@@ -328,12 +354,18 @@ func (s *LogtailServer) onReadBarrier(
 	if err != nil {
 		return err
 	}
-	return s.event.NotifyReadBarrier(sendCtx, readBarrierEvent{
+	err = s.event.NotifyReadBarrier(sendCtx, readBarrierEvent{
 		timeout:   ContextTimeout(sendCtx, s.cfg.ResponseSendTimeout),
 		barrierID: req.BarrierId,
 		timestamp: target,
 		session:   session,
+		release:   release,
 	})
+	if err != nil {
+		return err
+	}
+	transferred = true
+	return nil
 }
 
 // onSubscription handls subscription.
@@ -683,6 +715,9 @@ bootstrap:
 }
 
 func (s *LogtailServer) sendReadBarrier(ctx context.Context, barrier readBarrierEvent) {
+	if barrier.release != nil {
+		defer barrier.release()
+	}
 	sendCtx, cancel := context.WithTimeout(ctx, barrier.timeout)
 	defer cancel()
 	// A normal publish may omit an update when none of its table tails are

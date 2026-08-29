@@ -137,14 +137,25 @@ applied timestamp below the required minimum rejects the login.
 ## 6. Concurrency, Ownership, and Boundedness
 
 - A manager barrier owns one buffered completion channel. Once admitted, TN
-  queue progress never depends on whether its caller is still waiting.
+  queue progress never depends on whether its caller is still waiting. The
+  marker, not the canceled caller, retains and eventually releases admission.
 - Queue admission is context-aware. A canceled producer withdraws its pending
   count before ownership transfers; shutdown can still drain all admitted
   items without waiting forever.
-- A CN client owns one pending-map entry per in-flight barrier. Request IDs are
-  monotonic and responses may complete out of order. Return, cancellation,
-  stream breakage, and client closure all remove or abandon the entry without
-  spawning a per-request goroutine.
+- Each CN admits at most 100 concurrent barriers before allocating request IDs
+  and pending-map entries. Additional callers wait context-aware, so connection
+  bursts cannot grow retained correlation state or the stream request queue
+  without bound. Request IDs are monotonic and responses may complete out of
+  order. Return, cancellation, stream breakage, and client closure all remove
+  or abandon the entry without spawning a per-request goroutine.
+- The logtail server admits at most 100 barriers globally across the complete
+  shared publication path. A slot remains owned through TN marker processing,
+  notifier ordering, and response hand-off; shutdown draining releases queued
+  events. The manager independently admits at most 100 markers, equal to one
+  queue batch. Thus authentication load can neither fill the 10,000-entry
+  commit FIFO nor accumulate in the notifier and backpressure ordinary logtail
+  publication. Additional server calls wait before the FIFO and honor their
+  request context.
 - The normal receive goroutine remains the only stream reader. Barrier
   responses are control messages and are not exposed to the logtail dispatcher.
 - The existing per-session response queue remains bounded. A congested session
@@ -182,8 +193,11 @@ old protocol is no longer supported. There is no persisted-data migration.
 
 ## 9. Performance Model
 
-The barrier adds no work to ordinary SQL or the transaction commit path beyond
-recognizing a rare control marker in the existing queue.
+The barrier adds no work to ordinary SQL. The transaction-only manager path
+performs one atomic pending-barrier load and then follows the original
+collection/publication code without scanning or type-asserting the batch twice.
+The generic `SafeQueue.Enqueue` path remains the original direct channel send;
+only the new request-scoped API pays context checks and a cancellation select.
 
 For a barrier caller, cost is:
 
@@ -206,6 +220,9 @@ load, the wait reflects real causal work that must become visible.
 The marker divides manager batches so post-barrier collection does not consume
 workers needed by pre-barrier transactions. Collection and publication for
 normal transaction-only batches retain their previous parallel/ordered shape.
+Adjacent barriers at the same FIFO position share one captured frontier and do
+not create empty collection segments. Admission is concurrency-bounded rather
+than rate-limited, so an uncontended login pays no artificial pacing delay.
 
 ## 10. Alternatives Rejected
 
@@ -243,6 +260,10 @@ barrier lets only operations with an explicit real-time contract pay for it.
 White-box tests must establish:
 
 - queue cancellation withdraws pending ownership and shutdown completes;
+- CN and TN admission bounds stop correlation/FIFO growth, canceled waiters
+  exit, and completed markers make their slots reusable;
+- a caller canceled after TN admission cannot release the marker's slot before
+  the queue has processed that marker;
 - the manager returns the exact published frontier and rejects missing
   publishers or canceled callers;
 - parallel barrier requests are correlated correctly even when responses
@@ -274,3 +295,8 @@ Performance validation compares fresh-connection latency on the same binary,
 configuration, host, and warm state. Coverage is not satisfied by a mocked
 frontend-only test; the real TN queue, stream response, CN apply waiter, and
 authentication transaction must all be exercised.
+
+`TestIssue27834CrossCNAuthenticationReadsLatestCatalog` provides that topology
+cell on the shared two-CN embedded cluster. CN-0 repeatedly changes credentials
+and revokes/grants an explicit role; each committed mutation is immediately
+checked through a fresh connection to CN-1 without retry or sleep.

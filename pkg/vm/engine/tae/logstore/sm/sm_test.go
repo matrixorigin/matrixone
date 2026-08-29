@@ -152,6 +152,41 @@ func TestSafeQueueRejectsAlreadyCanceledContext(t *testing.T) {
 	require.Zero(t, queue.pending.Load())
 }
 
+func BenchmarkSafeQueueEnqueue(b *testing.B) {
+	benchmarks := []struct {
+		name    string
+		enqueue func(*safeQueue, any) (any, error)
+	}{
+		{
+			name: "background-hot-path",
+			enqueue: func(queue *safeQueue, item any) (any, error) {
+				return queue.Enqueue(item)
+			},
+		},
+		{
+			name: "request-context",
+			enqueue: func(queue *safeQueue, item any) (any, error) {
+				return queue.EnqueueWithContext(context.Background(), item)
+			},
+		},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			queue := NewSafeQueue(10_000, 100, nil)
+			queue.Start()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := benchmark.enqueue(queue, i); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			queue.Stop()
+		})
+	}
+}
+
 func TestNewNonBlockingQueue(t *testing.T) {
 	wait := sync.WaitGroup{}
 	wait.Add(1)

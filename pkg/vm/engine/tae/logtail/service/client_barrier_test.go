@@ -101,6 +101,70 @@ func TestLogtailClientReadBarrierCorrelatesConcurrentResponses(t *testing.T) {
 	require.Equal(t, firstTS, first.ts)
 }
 
+func TestLogtailClientReadBarrierBoundsPendingCorrelationState(t *testing.T) {
+	requests := make(chan uint64, 2)
+	client := newBarrierTestClient(t, func(request *LogtailRequest) error {
+		requests <- request.GetReadBarrier().BarrierId
+		return nil
+	})
+	client.readBarrierSlots = make(chan struct{}, 1)
+
+	type result struct {
+		ts  timestamp.Timestamp
+		err error
+	}
+	firstDone := make(chan result, 1)
+	go func() {
+		ts, err := client.ReadBarrier(t.Context())
+		firstDone <- result{ts: ts, err: err}
+	}()
+	firstID := <-requests
+
+	blockedCtx, cancelBlocked := context.WithCancel(t.Context())
+	blockedDone := make(chan error, 1)
+	go func() {
+		_, err := client.ReadBarrier(blockedCtx)
+		blockedDone <- err
+	}()
+	cancelBlocked()
+	require.ErrorIs(t, <-blockedDone, context.Canceled)
+	select {
+	case unexpected := <-requests:
+		t.Fatalf("read-barrier correlation state exceeded its bound: %d", unexpected)
+	default:
+	}
+
+	firstTS := timestamp.Timestamp{PhysicalTime: 1, LogicalTime: 1}
+	client.completeReadBarrier(&logtail.ReadBarrierResponse{
+		BarrierId: firstID,
+		Timestamp: &firstTS,
+	})
+	first := <-firstDone
+	require.NoError(t, first.err)
+	require.Equal(t, firstTS, first.ts)
+
+	lastDone := make(chan result, 1)
+	go func() {
+		ts, err := client.ReadBarrier(t.Context())
+		lastDone <- result{ts: ts, err: err}
+	}()
+	lastID := <-requests
+	lastTS := timestamp.Timestamp{PhysicalTime: 2, LogicalTime: 2}
+	client.completeReadBarrier(&logtail.ReadBarrierResponse{
+		BarrierId: lastID,
+		Timestamp: &lastTS,
+	})
+	last := <-lastDone
+	require.NoError(t, last.err)
+	require.Equal(t, lastTS, last.ts)
+
+	client.barriers.Lock()
+	pending := len(client.barriers.pending)
+	client.barriers.Unlock()
+	require.Zero(t, pending)
+	require.Empty(t, client.readBarrierSlots)
+}
+
 func TestLogtailClientReceiveConsumesBarrierControlResponse(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	stream := mock_morpc.NewMockStream(ctrl)
@@ -239,6 +303,7 @@ func TestLogtailClientReadBarrierSendFailureBreaksStream(t *testing.T) {
 	_, err := client.ReadBarrier(ctx)
 	require.Error(t, err)
 	require.True(t, client.streamBroken())
+	require.Empty(t, client.readBarrierSlots)
 	require.Error(t, client.Subscribe(t.Context(), api.TableID{}),
 		"requests after a broken stream must fail instead of entering an orphaned send queue")
 }

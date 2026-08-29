@@ -162,6 +162,34 @@ func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
 	require.NotNil(t, barrier)
 	require.Equal(t, uint64(7), barrier.BarrierId)
 	require.Equal(t, frontier, *barrier.Timestamp)
+	require.Empty(t, server.readBarrierSlots,
+		"the end-to-end admission slot must be released after response hand-off")
+}
+
+func TestReadBarrierServerAdmissionHonorsCancellation(t *testing.T) {
+	barrierCalled := false
+	logtailer := &controlledLogtailer{
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			barrierCalled = true
+			return timestamp.Timestamp{}, nil
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	server.readBarrierSlots = make(chan struct{}, 1)
+	server.readBarrierSlots <- struct{}{}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := server.onReadBarrier(
+		ctx,
+		newCaptureStream(newCaptureSession()),
+		&logtail.ReadBarrierRequest{BarrierId: 1},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, barrierCalled)
+	require.Len(t, server.readBarrierSlots, 1,
+		"a canceled waiter must not release another request's slot")
+	<-server.readBarrierSlots
 }
 
 func TestReadBarrierForcesFilteredProgressBeforeResponse(t *testing.T) {

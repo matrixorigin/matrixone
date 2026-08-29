@@ -92,6 +92,9 @@ func (n *Notifier) Drain() {
 			if event.closeCB != nil {
 				callbacks = append(callbacks, event.closeCB)
 			}
+			if event.barrier != nil && event.barrier.release != nil {
+				callbacks = append(callbacks, event.barrier.release)
+			}
 		default:
 			n.mu.Unlock()
 			for _, callback := range callbacks {

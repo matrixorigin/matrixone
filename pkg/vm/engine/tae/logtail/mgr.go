@@ -39,6 +39,9 @@ import (
 
 const (
 	LogtailHeartbeatDuration = time.Millisecond * 2
+
+	logtailQueueBatchSize  = 100
+	maxPendingReadBarriers = logtailQueueBatchSize
 )
 
 func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error {
@@ -91,8 +94,13 @@ type Manager struct {
 	previousSaveTS  types.TS
 	logtailCallback atomic.Pointer[callback]
 	logtailQueue    sm.ContextQueue
-	eventOnce       sync.Once
-	nextCompactTS   types.TS
+	// readBarrierSlots bounds control-plane work admitted to the same FIFO as
+	// commit logtails. Its capacity is one queue batch, so any number of login
+	// attempts can add at most one batch of markers ahead of commit producers.
+	readBarrierSlots    chan struct{}
+	pendingReadBarriers atomic.Int64
+	eventOnce           sync.Once
+	nextCompactTS       types.TS
 
 	collectPool *ants.Pool
 }
@@ -112,7 +120,6 @@ func NewManager(
 		nowClock: nowClock,
 	}
 
-	const batSize = 100
 	// Re-panic from ants's internal recover so a panic inside a
 	// collect goroutine crashes the process instead of being silently
 	// swallowed. If we only logged and continued, a committed txn
@@ -124,7 +131,12 @@ func NewManager(
 		runtime.NumCPU(),
 		ants.WithPanicHandler(func(v any) { panic(v) }),
 	)
-	mgr.logtailQueue = sm.NewSafeQueue(batSize*batSize, batSize, mgr.onTxnLogTails)
+	mgr.logtailQueue = sm.NewSafeQueue(
+		logtailQueueBatchSize*logtailQueueBatchSize,
+		logtailQueueBatchSize,
+		mgr.onTxnLogTails,
+	)
+	mgr.readBarrierSlots = make(chan struct{}, maxPendingReadBarriers)
 
 	return mgr
 }
@@ -139,17 +151,29 @@ type txnWithLogtails struct {
 // the manager reaches it, every transaction queued before the marker has been
 // collected and handed to the logtail publisher in PrepareTS order.
 type readBarrier struct {
-	done chan timestamp.Timestamp
+	done    chan timestamp.Timestamp
+	release func()
+	once    sync.Once
 }
 
-func newReadBarrier() *readBarrier {
-	return &readBarrier{done: make(chan timestamp.Timestamp, 1)}
+func newReadBarrier(release func()) *readBarrier {
+	return &readBarrier{
+		done:    make(chan timestamp.Timestamp, 1),
+		release: release,
+	}
 }
 
 func (b *readBarrier) complete(ts timestamp.Timestamp) {
-	// The channel is buffered because the request may be canceled after the
-	// marker was admitted. Queue progress must never depend on that caller.
-	b.done <- ts
+	b.once.Do(func() {
+		// The channel is buffered because the request may be canceled after the
+		// marker was admitted. Queue progress must never depend on that caller.
+		b.done <- ts
+		b.release()
+	})
+}
+
+func (b *readBarrier) abort() {
+	b.once.Do(b.release)
 }
 
 // orderedCollectAndPublish collects logtails for n items in parallel via submit,
@@ -289,48 +313,73 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 		return builder.CollectLogtail(txn)
 	}
 
+	// This is the normal commit path. Do not scan and type-assert the batch a
+	// second time when no barrier is outstanding. A marker acquired after this
+	// load cannot be part of items, which the queue already removed atomically.
+	if mgr.pendingReadBarriers.Load() == 0 {
+		mgr.collectAndPublishTxnSegment(items, collect)
+		return
+	}
+
 	// A barrier splits a queue batch into ordered transaction segments. Work
 	// after the barrier is deliberately not scheduled before the marker: it
 	// cannot contribute to the frontier and must not compete with the work the
 	// caller is waiting for. Each segment retains parallel collection and
 	// PrepareTS-ordered publication through orderedCollectAndPublish.
 	segmentStart := 0
-	flush := func(segmentEnd int) {
-		segment := items[segmentStart:segmentEnd]
-		orderedCollectAndPublish(
-			len(segment),
-			func(i int) bool {
-				txn, ok := segment[i].(txnif.AsyncTxn)
-				if !ok {
-					panic(fmt.Sprintf("unknown logtail queue item %T", segment[i]))
-				}
-				return txn.IsReplay()
-			},
-			func(fn func()) {
-				if err := mgr.collectPool.Submit(fn); err != nil {
-					panic(err)
-				}
-			},
-			func(i int) *txnWithLogtails {
-				return collectOneTxn(segment[i].(txnif.AsyncTxn), collect)
-			},
-			mgr.generateLogtailWithTxn,
-		)
-	}
-
-	for i, item := range items {
+	for i := 0; i < len(items); {
+		item := items[i]
 		barrier, ok := item.(*readBarrier)
 		if !ok {
 			if _, ok := item.(txnif.AsyncTxn); !ok {
 				panic(fmt.Sprintf("unknown logtail queue item %T", item))
 			}
+			i++
 			continue
 		}
-		flush(i)
-		barrier.complete(mgr.previousSaveTS.ToTimestamp())
-		segmentStart = i + 1
+		mgr.collectAndPublishTxnSegment(items[segmentStart:i], collect)
+		frontier := mgr.previousSaveTS.ToTimestamp()
+		// Adjacent barriers share exactly the same FIFO frontier. Complete them
+		// together without creating empty transaction segments between markers.
+		for i < len(items) {
+			barrier, ok = items[i].(*readBarrier)
+			if !ok {
+				break
+			}
+			barrier.complete(frontier)
+			i++
+		}
+		segmentStart = i
 	}
-	flush(len(items))
+	mgr.collectAndPublishTxnSegment(items[segmentStart:], collect)
+}
+
+func (mgr *Manager) collectAndPublishTxnSegment(
+	segment []any,
+	collect txnLogtailCollector,
+) {
+	if len(segment) == 0 {
+		return
+	}
+	orderedCollectAndPublish(
+		len(segment),
+		func(i int) bool {
+			txn, ok := segment[i].(txnif.AsyncTxn)
+			if !ok {
+				panic(fmt.Sprintf("unknown logtail queue item %T", segment[i]))
+			}
+			return txn.IsReplay()
+		},
+		func(fn func()) {
+			if err := mgr.collectPool.Submit(fn); err != nil {
+				panic(err)
+			}
+		},
+		func(i int) *txnWithLogtails {
+			return collectOneTxn(segment[i].(txnif.AsyncTxn), collect)
+		},
+		mgr.generateLogtailWithTxn,
+	)
 }
 
 // ReadBarrier returns the latest logtail frontier after all transactions that
@@ -345,8 +394,18 @@ func (mgr *Manager) ReadBarrier(ctx context.Context) (timestamp.Timestamp, error
 		return timestamp.Timestamp{}, context.Cause(ctx)
 	}
 
-	barrier := newReadBarrier()
+	select {
+	case mgr.readBarrierSlots <- struct{}{}:
+		mgr.pendingReadBarriers.Add(1)
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, context.Cause(ctx)
+	}
+	barrier := newReadBarrier(func() {
+		mgr.pendingReadBarriers.Add(-1)
+		<-mgr.readBarrierSlots
+	})
 	if _, err := mgr.logtailQueue.EnqueueWithContext(ctx, barrier); err != nil {
+		barrier.abort()
 		return timestamp.Timestamp{}, err
 	}
 

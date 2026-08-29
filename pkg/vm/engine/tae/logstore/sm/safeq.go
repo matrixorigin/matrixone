@@ -141,17 +141,45 @@ func (q *safeQueue) waitStop() {
 }
 
 func (q *safeQueue) Enqueue(item any) (any, error) {
-	return q.enqueue(context.Background(), item)
+	if q.state.Load() != Running {
+		return item, ErrClose
+	}
+
+	if q.blocking {
+		q.pending.Add(1)
+		// Stop may begin after the first state check. Register before the
+		// second check so Stop keeps the receiver alive until this producer
+		// either sends or withdraws its pending item.
+		if q.state.Load() != Running {
+			q.pending.Add(-1)
+			return item, ErrClose
+		}
+		// Keep the established background-producer hot path exact: unlike a
+		// request-scoped enqueue it has no context checks and no select. Stop
+		// waits for pending to reach zero, so the receiver remains alive until
+		// this send is handled.
+		q.queue <- item
+		return item, nil
+	}
+
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
+		return item, ErrClose
+	}
+	select {
+	case q.queue <- item:
+		return item, nil
+	default:
+		q.pending.Add(-1)
+		return item, ErrFull
+	}
 }
 
 func (q *safeQueue) EnqueueWithContext(ctx context.Context, item any) (any, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return q.enqueue(ctx, item)
-}
-
-func (q *safeQueue) enqueue(ctx context.Context, item any) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return item, context.Cause(ctx)
 	}
@@ -178,21 +206,21 @@ func (q *safeQueue) enqueue(ctx context.Context, item any) (any, error) {
 			q.pending.Add(-1)
 			return item, context.Cause(ctx)
 		}
-	} else {
-		q.pending.Add(1)
-		if q.state.Load() != Running {
-			q.pending.Add(-1)
-			return item, ErrClose
-		}
-		select {
-		case q.queue <- item:
-			return item, nil
-		case <-ctx.Done():
-			q.pending.Add(-1)
-			return item, context.Cause(ctx)
-		default:
-			q.pending.Add(-1)
-			return item, ErrFull
-		}
+	}
+
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
+		return item, ErrClose
+	}
+	select {
+	case q.queue <- item:
+		return item, nil
+	case <-ctx.Done():
+		q.pending.Add(-1)
+		return item, context.Cause(ctx)
+	default:
+		q.pending.Add(-1)
+		return item, ErrFull
 	}
 }

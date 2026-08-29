@@ -34,6 +34,10 @@ import (
 
 const (
 	defaultRequestChanSize = 512
+	// Read barriers are control-plane requests sharing publication resources
+	// with ordinary logtails. Apply the same bound per client and globally at
+	// the server without rate-limiting the uncontended login path.
+	defaultMaxConcurrentReadBarriers = 100
 	// defaultRequestDeadline : default deadline for every request (subscribe and unsubscribe).
 	defaultRequestDeadline = 2 * time.Minute
 )
@@ -61,8 +65,9 @@ type LogtailClient struct {
 	broken    chan struct{} // mark morpc stream as broken when necessary
 	once      sync.Once
 
-	nextBarrierID atomic.Uint64
-	barriers      struct {
+	nextBarrierID    atomic.Uint64
+	readBarrierSlots chan struct{}
+	barriers         struct {
 		sync.Mutex
 		pending map[uint64]chan readBarrierResult
 	}
@@ -89,6 +94,9 @@ func NewLogtailClient(ctx context.Context, stream morpc.Stream, opts ...ClientOp
 		stream:    stream,
 		broken:    make(chan struct{}),
 		breakChan: make(chan struct{}, 10),
+		readBarrierSlots: make(
+			chan struct{}, defaultMaxConcurrentReadBarriers,
+		),
 	}
 	client.barriers.pending = make(map[uint64]chan readBarrierResult)
 
@@ -172,9 +180,22 @@ func (c *LogtailClient) Unsubscribe(
 func (c *LogtailClient) ReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, error) {
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, context.Cause(ctx)
+	}
 	if c.streamBroken() {
 		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
 	}
+	select {
+	case c.readBarrierSlots <- struct{}{}:
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, context.Cause(ctx)
+	case <-c.ctx.Done():
+		return timestamp.Timestamp{}, context.Cause(c.ctx)
+	case <-c.broken:
+		return timestamp.Timestamp{}, moerr.NewStreamClosedNoCtx()
+	}
+	defer func() { <-c.readBarrierSlots }()
 
 	barrierID := c.nextBarrierID.Add(1)
 	resultC := make(chan readBarrierResult, 1)
