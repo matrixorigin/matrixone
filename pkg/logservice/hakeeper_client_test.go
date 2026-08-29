@@ -2080,13 +2080,38 @@ func TestAllocateIDByKeyBurstSharesRefills(t *testing.T) {
 	require.Equal(t, int64(10), sendCalls.Load())
 }
 
+// contextDoneObserver makes the waiter's refill-wait admission observable
+// without adding a production-side synchronization hook.
+type contextDoneObserver struct {
+	context.Context
+	observed chan<- struct{}
+	once     sync.Once
+}
+
+func (c *contextDoneObserver) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.observed)
+	})
+	return c.Context.Done()
+}
+
 func TestAllocateIDByKeyWaiterRetriesAfterRefillFailure(t *testing.T) {
+	const phaseTimeout = time.Second
+
 	originalSend := sendCNAllocateIDFunc
 	defer func() {
 		sendCNAllocateIDFunc = originalSend
 	}()
 
 	firstRefillStarted := make(chan struct{})
+	firstRefillFailure := make(chan struct{})
+	var releaseFirstRefill sync.Once
+	releaseRefill := func() {
+		releaseFirstRefill.Do(func() {
+			close(firstRefillFailure)
+		})
+	}
+	defer releaseRefill()
 	var sendCalls atomic.Int64
 	sendCNAllocateIDFunc = func(
 		_ *hakeeperClient,
@@ -2096,8 +2121,13 @@ func TestAllocateIDByKeyWaiterRetriesAfterRefillFailure(t *testing.T) {
 	) (uint64, error) {
 		if sendCalls.Add(1) == 1 {
 			close(firstRefillStarted)
-			<-ctx.Done()
-			return 0, ctx.Err()
+			// Keep failure behind an explicit gate so context expiry cannot race
+			// the waiter's admission.
+			select {
+			case <-firstRefillFailure:
+			case <-ctx.Done():
+			}
+			return 0, context.DeadlineExceeded
 		}
 		return 200, nil
 	}
@@ -2107,21 +2137,62 @@ func TestAllocateIDByKeyWaiterRetriesAfterRefillFailure(t *testing.T) {
 	}
 	client := &hakeeperClient{}
 	c.mu.client = client
-	leaderCtx, cancelLeader := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	leaderCtx, cancelLeader := context.WithTimeout(context.Background(), time.Minute)
 	defer cancelLeader()
 	leaderDone := make(chan error, 1)
 	go func() {
 		_, err := c.AllocateIDByKeyWithBatch(leaderCtx, "connection", 2)
 		leaderDone <- err
 	}()
-	<-firstRefillStarted
+	select {
+	case <-firstRefillStarted:
+	case err := <-leaderDone:
+		t.Fatalf("leader failed before first refill admission: %v", err)
+	case <-time.After(phaseTimeout):
+		t.Fatal("leader did not reach first refill admission")
+	}
 
-	waiterCtx, cancelWaiter := context.WithTimeout(context.Background(), time.Second)
+	waiterCtx, cancelWaiter := context.WithTimeout(context.Background(), phaseTimeout)
 	defer cancelWaiter()
-	waiterID, waiterErr := c.AllocateIDByKeyWithBatch(waiterCtx, "connection", 2)
-	require.NoError(t, waiterErr)
-	require.Equal(t, uint64(200), waiterID)
-	require.ErrorIs(t, <-leaderDone, context.DeadlineExceeded)
+	waiterWaiting := make(chan struct{})
+	waiterCtx = &contextDoneObserver{
+		Context:  waiterCtx,
+		observed: waiterWaiting,
+	}
+	waiterDone := make(chan struct {
+		id  uint64
+		err error
+	}, 1)
+	go func() {
+		id, err := c.AllocateIDByKeyWithBatch(waiterCtx, "connection", 2)
+		waiterDone <- struct {
+			id  uint64
+			err error
+		}{id: id, err: err}
+	}()
+	select {
+	case <-waiterWaiting:
+	case <-time.After(phaseTimeout):
+		t.Fatal("waiter did not reach the refill wait")
+	}
+	releaseRefill()
+	var waiterResult struct {
+		id  uint64
+		err error
+	}
+	select {
+	case waiterResult = <-waiterDone:
+	case <-time.After(phaseTimeout):
+		t.Fatal("waiter did not retry after refill failure")
+	}
+	require.NoError(t, waiterResult.err)
+	require.Equal(t, uint64(200), waiterResult.id)
+	select {
+	case err := <-leaderDone:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(phaseTimeout):
+		t.Fatal("leader did not finish after refill failure")
+	}
 	require.Equal(t, int64(2), sendCalls.Load())
 	require.Same(t, client, c.mu.client)
 }

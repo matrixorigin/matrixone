@@ -278,6 +278,12 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	if err := expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return err
 	}
+	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.resultVector.GetResultVector(), expr.parameterResults[0], execLen, proc.Mp()); err != nil {
+			return err
+		}
+	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		if err := expr.applyFlowControlPrepareParamKinds(
 			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {

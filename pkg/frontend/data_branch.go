@@ -3118,7 +3118,10 @@ func getDatabaseCreatedTimeLowerBoundByPK(
 
 	attrs := []string{catalog.SystemDBAttr_ID, catalog.SystemDBAttr_CreateAt}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_timestamp.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+	if cerr != nil {
+		return types.TS{}, cerr
+	}
 
 	found := false
 	result := types.TS{}
@@ -3193,7 +3196,10 @@ func getTableCreationCommitTSByID(
 
 	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	if cerr != nil {
+		return types.TS{}, cerr
+	}
 
 	found := false
 	result := types.TS{}

@@ -1123,13 +1123,15 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if qry.TableDef.Indexes != nil {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
-					err = lockIndexTable(
+					err = lockIndexTableForAlter(
 						c.proc.Ctx,
 						dbSource,
 						c.e,
 						c.proc,
-						indexdef.IndexTableName,
-						true,
+						tblName,
+						qry.TableDef.TblId,
+						indexdef,
+						retryErr != nil,
 					)
 					if err != nil {
 						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
@@ -1231,6 +1233,14 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if originRel.GetTableID(c.proc.Ctx) != oldId {
 			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
+	}
+
+	// Read the live relation constraint instead of relying only on the planned
+	// TableDef. A just-created foreign key can already be enforced by the engine
+	// while the planner-facing cached definition still lacks ForeignKeyDef.
+	sourceForeignKeys, sourceRefChildTbls, err := snapshotAlterCopyForeignKeyState(c.proc.Ctx, originRel)
+	if err != nil {
+		return err
 	}
 
 	// 3. create temporary replica table which doesn't have foreign key constraints
@@ -1558,44 +1568,20 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
-	if len(qry.CopyTableDef.RefChildTbls) > 0 {
-		// Restore the original table's foreign key child table ids to the copy table definition
-		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls); err != nil {
-			c.proc.Error(c.proc.Ctx, "Restore original table's foreign key child table ids to copyTable definition for alter table",
-				zap.String("origin tableName", qry.GetTableDef().Name),
-				zap.String("copy table name", qry.CopyTableDef.Name),
-				zap.Error(err))
-			return err
-		}
-
-		if err = reconcileAlterCopyChildForeignKeyReferences(
-			c,
-			qry.ChangeTblColIdMap,
-			qry.CopyTableDef.RefChildTbls,
-			originRel.GetTableID(c.proc.Ctx),
-			newRel.GetTableID(c.proc.Ctx),
-		); err != nil {
-			c.proc.Error(c.proc.Ctx, "update foreign key child table references to the current table for alter table",
-				zap.String("origin tableName", qry.GetTableDef().Name),
-				zap.String("copy table name", qry.CopyTableDef.Name),
-				zap.Error(err))
-			return err
-		}
-	}
-
-	if len(qry.TableDef.Fkeys) > 0 {
-		if err = reconcileAlterCopyParentForeignKeyReferences(
-			c,
-			qry.CopyTableDef.Fkeys,
-			originRel.GetTableID(c.proc.Ctx),
-			newRel.GetTableID(c.proc.Ctx),
-		); err != nil {
-			c.proc.Error(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
-				zap.String("origin tableName", qry.GetTableDef().Name),
-				zap.String("copy table name", qry.CopyTableDef.Name),
-				zap.Error(err))
-			return err
-		}
+	if err = applyAlterCopyForeignKeyState(
+		c,
+		newRel,
+		sourceForeignKeys,
+		sourceRefChildTbls,
+		qry.ChangeTblColIdMap,
+		originRel.GetTableID(c.proc.Ctx),
+		newRel.GetTableID(c.proc.Ctx),
+	); err != nil {
+		c.proc.Error(c.proc.Ctx, "restore and reconcile foreign keys for alter table copy",
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
+		return err
 	}
 
 	// update merge settings in mo_catalog.mo_merge_settings
@@ -2111,6 +2097,149 @@ func reconcileAlterCopyChildForeignKeyReferences(
 	return nil
 }
 
+func snapshotAlterCopyForeignKeyState(
+	ctx context.Context,
+	sourceRel engine.Relation,
+) ([]*plan.ForeignKeyDef, []uint64, error) {
+	constraintDef, err := GetConstraintDef(ctx, sourceRel)
+	if err != nil {
+		return nil, nil, err
+	}
+	var foreignKeys []*plan.ForeignKeyDef
+	for _, constraint := range constraintDef.Cts {
+		switch definition := constraint.(type) {
+		case *engine.ForeignKeyDef:
+			for _, foreignKey := range definition.Fkeys {
+				if foreignKey == nil {
+					return nil, nil, moerr.NewInternalError(ctx, "nil foreign key definition in ALTER COPY source constraint")
+				}
+				foreignKeys = append(foreignKeys, plan2.DeepCopyFkey(foreignKey))
+			}
+		}
+	}
+	return foreignKeys, slices.Clone(canonicalRefChildTableIDs(constraintDef)), nil
+}
+
+func applyAlterCopyForeignKeyState(
+	c *Compile,
+	replacementRel engine.Relation,
+	sourceForeignKeys []*plan.ForeignKeyDef,
+	sourceRefChildTbls []uint64,
+	changeColDefMap map[uint64]*plan.ColDef,
+	oldTableID uint64,
+	newTableID uint64,
+) error {
+	replacementForeignKeys, replacementRefChildTbls, err := remapAlterCopyForeignKeyState(
+		c.proc.Ctx,
+		sourceForeignKeys,
+		sourceRefChildTbls,
+		changeColDefMap,
+		oldTableID,
+	)
+	if err != nil {
+		return err
+	}
+
+	// The live source relation is authoritative even when either set is empty.
+	// Replace both constraints together so a stale planned temporary definition
+	// cannot resurrect one side of the relationship.
+	if err = restoreAlterCopyForeignKeyState(
+		c.proc.Ctx, replacementRel, replacementForeignKeys, replacementRefChildTbls,
+	); err != nil {
+		return err
+	}
+	if err = reconcileAlterCopyChildForeignKeyReferences(
+		c, changeColDefMap, replacementRefChildTbls, oldTableID, newTableID,
+	); err != nil {
+		return err
+	}
+	return reconcileAlterCopyParentForeignKeyReferences(
+		c, replacementForeignKeys, oldTableID, newTableID,
+	)
+}
+
+func remapAlterCopyForeignKeyState(
+	ctx context.Context,
+	sourceForeignKeys []*plan.ForeignKeyDef,
+	sourceRefChildTbls []uint64,
+	changeColDefMap map[uint64]*plan.ColDef,
+	oldTableID uint64,
+) ([]*plan.ForeignKeyDef, []uint64, error) {
+	result := make([]*plan.ForeignKeyDef, len(sourceForeignKeys))
+	hasSelfReference := false
+	for i, sourceForeignKey := range sourceForeignKeys {
+		if sourceForeignKey == nil {
+			return nil, nil, moerr.NewInternalError(ctx, "nil foreign key definition in ALTER COPY")
+		}
+		foreignKey := plan2.DeepCopyFkey(sourceForeignKey)
+		for j, oldColumnID := range foreignKey.Cols {
+			newColumn, ok := changeColDefMap[oldColumnID]
+			if !ok {
+				return nil, nil, moerr.NewInternalErrorf(ctx,
+					"foreign key %s child column %d was not retained by ALTER COPY",
+					foreignKey.Name, oldColumnID)
+			}
+			foreignKey.Cols[j] = newColumn.ColId
+		}
+
+		selfReference := foreignKey.ForeignTbl == 0 || foreignKey.ForeignTbl == oldTableID
+		if selfReference {
+			hasSelfReference = true
+			for j, oldColumnID := range foreignKey.ForeignCols {
+				newColumn, ok := changeColDefMap[oldColumnID]
+				if !ok {
+					return nil, nil, moerr.NewInternalErrorf(ctx,
+						"foreign key %s parent column %d was not retained by ALTER COPY",
+						foreignKey.Name, oldColumnID)
+				}
+				foreignKey.ForeignCols[j] = newColumn.ColId
+			}
+			// Zero is the durable self-reference sentinel. Keeping a physical table
+			// generation here would make the replacement relation look like an
+			// external parent during reconciliation.
+			foreignKey.ForeignTbl = 0
+		}
+		result[i] = foreignKey
+	}
+
+	refChildTbls := make([]uint64, 0, len(sourceRefChildTbls)+1)
+	seen := make(map[uint64]struct{}, len(sourceRefChildTbls)+1)
+	for _, childTableID := range sourceRefChildTbls {
+		if childTableID == oldTableID {
+			childTableID = 0
+		}
+		if _, exists := seen[childTableID]; exists {
+			continue
+		}
+		seen[childTableID] = struct{}{}
+		refChildTbls = append(refChildTbls, childTableID)
+	}
+	if hasSelfReference {
+		if _, exists := seen[0]; !exists {
+			refChildTbls = append(refChildTbls, 0)
+		}
+	}
+	return result, refChildTbls, nil
+}
+
+func restoreAlterCopyForeignKeyState(
+	ctx context.Context,
+	replacementRel engine.Relation,
+	foreignKeys []*plan.ForeignKeyDef,
+	refChildTbls []uint64,
+) error {
+	constraintDef, err := GetConstraintDef(ctx, replacementRel)
+	if err != nil {
+		return err
+	}
+	constraintDef, err = MakeNewCreateConstraint(constraintDef, &engine.ForeignKeyDef{Fkeys: foreignKeys})
+	if err != nil {
+		return err
+	}
+	setRefChildTableIDs(constraintDef, refChildTbls)
+	return replacementRel.UpdateConstraint(ctx, constraintDef)
+}
+
 // updateTableForeignKeyColId updates one child relation only when it still
 // references the replaced parent relation.
 func updateTableForeignKeyColId(
@@ -2193,16 +2322,6 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changeColDefMap ma
 		}
 	}
 	return nil
-}
-
-// restoreNewTableRefChildTbls Restore the original table's foreign key child table ids to the copy table definition
-func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTbls []uint64) error {
-	oldCt, err := GetConstraintDef(c.proc.Ctx, copyRel)
-	if err != nil {
-		return err
-	}
-	addRefChildTableIDs(oldCt, refChildTbls)
-	return copyRel.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
 func reconcileAlterCopyParentForeignKeyReferences(

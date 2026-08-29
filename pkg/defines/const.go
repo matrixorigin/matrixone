@@ -71,7 +71,11 @@ const (
 	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
 	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
 	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
-	MORPCLatestVersion       = MORPCVersion35
+	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
+	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
+	MORPCVersion38     int64 = 38 // session temporary-table connection migration
+	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
+	MORPCLatestVersion       = MORPCVersion39
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

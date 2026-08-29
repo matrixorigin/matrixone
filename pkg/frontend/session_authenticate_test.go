@@ -26,11 +26,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type authenticationBarrierEngine struct {
+	engine.Engine
+	acquire func(context.Context) (timestamp.Timestamp, error)
+}
+
+type unsupportedAuthenticationBarrierEngine struct {
+	engine.Engine
+}
+
+func (e *authenticationBarrierEngine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.acquire(ctx)
+}
 
 func newAuthenticationSnapshotTestSession(
 	t *testing.T,
@@ -49,6 +66,7 @@ func newAuthenticationSnapshotTestSession(
 		)),
 	)
 	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
 	InitServerLevelVars(service)
 	return &Session{feSessionImpl: feSessionImpl{service: service}}
 }
@@ -123,6 +141,17 @@ func TestAdvanceAuthenticationSnapshot(t *testing.T) {
 	})
 }
 
+func TestLogtailReadBarrierSupportedProtocolBoundary(t *testing.T) {
+	ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+	rt := moruntime.ServiceRuntime(ses.GetService())
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+	require.False(t, logtailReadBarrierSupported(ses),
+		"v38 advertises temporary-table migration, not the logtail read barrier")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+	require.True(t, logtailReadBarrierSupported(ses))
+}
+
 func TestPrepareAuthenticationSnapshotFailsClosed(t *testing.T) {
 	t.Run("missing parameter unit", func(t *testing.T) {
 		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
@@ -169,6 +198,96 @@ func TestPrepareAuthenticationSnapshotFailsClosed(t *testing.T) {
 			ses.prepareAuthenticationSnapshot(t.Context()),
 			"did not reach the required timestamp",
 		)
+	})
+}
+
+func TestPrepareAuthenticationSnapshotUsesTNOrderedBarrier(t *testing.T) {
+	ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+
+	barrierFrontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), barrierFrontier).
+		Return(barrierFrontier.Next(), nil)
+	setPu(ses.GetService(), &mo_config.ParameterUnit{
+		TxnClient: txnClient,
+		StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+			timestamp.Timestamp, error,
+		) {
+			return barrierFrontier, nil
+		}},
+	})
+
+	require.NoError(t, ses.prepareAuthenticationSnapshot(t.Context()))
+	require.Equal(t, barrierFrontier, ses.getLastCommitTS())
+}
+
+func TestPrepareAuthenticationSnapshotBarrierPreservesLaterSessionMinimum(t *testing.T) {
+	ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+	moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion39)
+	barrierFrontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	wantMinimum := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 7}
+	ses.lastCommitTS = wantMinimum
+
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), wantMinimum).
+		Return(wantMinimum.Next(), nil)
+	setPu(ses.GetService(), &mo_config.ParameterUnit{
+		TxnClient: txnClient,
+		StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+			timestamp.Timestamp, error,
+		) {
+			return barrierFrontier, nil
+		}},
+	})
+
+	require.NoError(t, ses.prepareAuthenticationSnapshot(t.Context()))
+	require.Equal(t, wantMinimum, ses.getLastCommitTS())
+}
+
+func TestPrepareAuthenticationSnapshotBarrierFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		engine  engine.Engine
+		wantErr string
+	}{
+		{name: "missing engine", wantErr: "missing storage engine"},
+		{name: "unsupported engine", engine: &unsupportedAuthenticationBarrierEngine{}, wantErr: "does not support"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+			moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCVersion39)
+			ctrl := gomock.NewController(t)
+			setPu(ses.GetService(), &mo_config.ParameterUnit{
+				TxnClient:     mock_frontend.NewMockTxnClient(ctrl),
+				StorageEngine: test.engine,
+			})
+			require.ErrorContains(t, ses.prepareAuthenticationSnapshot(t.Context()), test.wantErr)
+			require.True(t, ses.getLastCommitTS().IsEmpty())
+		})
+	}
+
+	t.Run("barrier failure", func(t *testing.T) {
+		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+		moruntime.ServiceRuntime(ses.GetService()).SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		ctrl := gomock.NewController(t)
+		wantErr := moerr.NewInternalErrorNoCtx("barrier unavailable")
+		setPu(ses.GetService(), &mo_config.ParameterUnit{
+			TxnClient: mock_frontend.NewMockTxnClient(ctrl),
+			StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+				timestamp.Timestamp, error,
+			) {
+				return timestamp.Timestamp{}, wantErr
+			}},
+		})
+		require.ErrorIs(t, ses.prepareAuthenticationSnapshot(t.Context()), wantErr)
+		require.True(t, ses.getLastCommitTS().IsEmpty())
 	})
 }
 
@@ -223,7 +342,7 @@ func TestPrepareAuthenticationSnapshotHonorsRequestCancellation(t *testing.T) {
 	}
 }
 
-func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.T) {
+func TestAuthenticateUserWaitsForLogtailBarrierBeforeBackgroundTransaction(t *testing.T) {
 	const physicalTime = int64(100)
 	const maxOffset = 20 * time.Nanosecond
 	service := "authenticate-snapshot-integration"
@@ -237,17 +356,28 @@ func TestAuthenticateUserAdvancesSnapshotBeforeBackgroundTransaction(t *testing.
 		)),
 	)
 	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
 	InitServerLevelVars(service)
 	ctrl := gomock.NewController(t)
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	wantMinimum := timestamp.Timestamp{PhysicalTime: 121}
+	wantMinimum := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 7}
+	barrierCompleted := false
 	waitCompleted := false
 	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), wantMinimum).
 		DoAndReturn(func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error) {
+			require.True(t, barrierCompleted)
 			waitCompleted = true
 			return wantMinimum.Next(), nil
 		})
-	setPu(service, &mo_config.ParameterUnit{TxnClient: txnClient})
+	setPu(service, &mo_config.ParameterUnit{
+		TxnClient: txnClient,
+		StorageEngine: &authenticationBarrierEngine{acquire: func(context.Context) (
+			timestamp.Timestamp, error,
+		) {
+			barrierCompleted = true
+			return wantMinimum, nil
+		}},
+	})
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{service: service},
