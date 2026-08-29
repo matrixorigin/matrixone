@@ -102,6 +102,10 @@ CREATE TABLE t_time_range (id INT, t6 TIME(6));
 INSERT INTO t_time_range VALUES (1, '838:59:59.000000');
 INSERT INTO t_time_range VALUES (2, '838:59:59.000001');
 INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
+-- A syntactically valid value beyond MatrixOne's internal duration range must
+-- still follow the TIME-column assignment boundary rather than fail parsing.
+INSERT INTO t_time_range VALUES (4, '2562047788:00:00');
+INSERT INTO t_time_range VALUES (5, '-2562047788:00:00');
 SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
 DROP TABLE t_time_range;
 

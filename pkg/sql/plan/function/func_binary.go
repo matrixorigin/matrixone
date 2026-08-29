@@ -8880,6 +8880,18 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool, bool) {
 	significantDigits := lastNonzeroDigit - firstNonzeroDigit + 1
 	fractionDigits := fractionEnd - fractionStart
 	trailingZeroDigits := totalDigits - lastNonzeroDigit - 1
+	// DECIMAL bounds the original mantissa before applying its exponent. Keep
+	// that decision independent from the normalized arithmetic below: otherwise
+	// a compensating exponent could make an overflowing significand look like a
+	// small TIME value (for example, 1 followed by 81 zeroes and e-81).
+	mantissaDigits := totalDigits - firstNonzeroDigit
+	if mantissaDigits > 81 {
+		clampTime := types.MySQLTimeFunctionMaxForScale(0)
+		if negative {
+			return -clampTime, true, true
+		}
+		return clampTime, true, true
+	}
 	exponent += trailingZeroDigits - fractionDigits
 	integerDigits := integerEnd - integerStart
 	significantDigitAt := func(index int) byte {

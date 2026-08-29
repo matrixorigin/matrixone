@@ -10294,6 +10294,30 @@ func TestSecToTimeVarcharDecimalConversionBoundaryWarnings(t *testing.T) {
 	}
 }
 
+func TestSecToTimeVarcharMantissaOverflowBeforeExponent(t *testing.T) {
+	valid := "1" + strings.Repeat("0", 80) + "e-80"
+	overflow := "1" + strings.Repeat("0", 81) + "e-81"
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{valid, overflow}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.MicroSecsPerSec, types.MySQLTimeFunctionMaxForScale(0)}, nil),
+		SecToTime)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	// The overflowing mantissa produces its DECIMAL diagnostic and the
+	// independent SEC_TO_TIME range diagnostic; the adjacent 81-digit control
+	// remains exactly one second with no warning.
+	require.Len(t, session.warnings, 2)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+	}
+	require.Contains(t, session.warnings[0].msg, "DECIMAL")
+	require.Contains(t, session.warnings[1].msg, "time")
+}
+
 func TestMakeTimeFractionAndSign(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)
