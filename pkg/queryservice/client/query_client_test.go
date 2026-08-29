@@ -36,7 +36,7 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
 }
 
-func TestSyncCommitV2RequiresProtocolVersion37(t *testing.T) {
+func TestSyncCommitV2RequiresProtocolVersion38(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion38, methodVersions[query.CmdMethod_SyncCommitV2])
 
 	const serviceID = "sync-commit-v2-version-test"

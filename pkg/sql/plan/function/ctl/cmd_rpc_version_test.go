@@ -217,9 +217,9 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 	proc := &process.Process{Base: &process.BaseProcess{QueryClient: qcli}}
 
 	result, err := handleSetProtocolVersion(
-		proc, cn, strings.Join(targets, ",")+":37", nil)
+		proc, cn, strings.Join(targets, ",")+":38", nil)
 	require.NoError(t, err)
-	require.Equal(t, "activation-cn-1:37, activation-cn-2:37", result.Data)
+	require.Equal(t, "activation-cn-1:38, activation-cn-2:38", result.Data)
 	require.Equal(t, int32(2), qcli.started.Load())
 	require.Equal(t, int32(2), qcli.releases.Load())
 	qcli.mu.Lock()
@@ -229,7 +229,7 @@ func TestHandleSetProtocolVersionDispatchesCompleteTargetSetConcurrently(t *test
 		require.Equal(t, targets, requestTargets)
 	}
 
-	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:37", nil)
+	_, err = handleSetProtocolVersion(proc, cn, "activation-cn-1,activation-cn-1:38", nil)
 	require.ErrorContains(t, err, "duplicated")
 }
 
