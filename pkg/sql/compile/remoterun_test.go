@@ -967,7 +967,7 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 }
 
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
-	require.Equal(t, defines.MORPCVersion36, defines.MORPCLatestVersion,
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
 		"a capability is unavailable after a full rollout unless latest advertises it")
 
 	proc := testutil.NewProcess(t)
