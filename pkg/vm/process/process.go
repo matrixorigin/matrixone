@@ -431,10 +431,10 @@ func PrepareParamMetadataForRemote(
 			hasType = true
 		}
 		if hasType {
-			if protocolVersion < defines.MORPCVersion30 {
+			if protocolVersion < defines.MORPCVersion36 {
 				return nil, moerr.NewNotSupportedNoCtxf(
 					"typed prepared parameters require MORPC protocol version %d",
-					defines.MORPCVersion30)
+					defines.MORPCVersion36)
 			}
 		} else {
 			// Canonicalize an empty typed extension before applying the older

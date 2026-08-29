@@ -310,7 +310,7 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	require.Error(t, err, "invalid packed kind bits must be rejected")
 }
 
-func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
+func TestTypedPrepareParamMetadataRequiresVersion36AndRoundTrips(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	defer func() {
@@ -347,13 +347,13 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 		binaryString,
 	)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
 	_, err := PrepareParamMetadataForRemote(
 		"", proc.GetPrepareParams().Length(), proc.Base.prepareParamsIsBin)
-	require.ErrorContains(t, err, "protocol version 30",
-		"typed metadata must be rejected before the older kind gate can strip it")
+	require.ErrorContains(t, err, "protocol version 36",
+		"the previous latest protocol must not accept the new typed extension")
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
 	validationParams := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(validationParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(validationParams, []byte("2"), false, proc.Mp()))
@@ -370,11 +370,11 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 	_, err = PrepareParamMetadataForRemote("", 2, invalidTypeMetadata)
 	require.ErrorContains(t, err, "invalid prepare parameter type")
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion29)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
 	_, err = proc.BuildProcessInfo("select ?, ?")
-	require.ErrorContains(t, err, "protocol version 30")
+	require.ErrorContains(t, err, "protocol version 36")
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
 	info, err := proc.BuildProcessInfo("select ?, ?")
 	require.NoError(t, err)
 	require.Len(t, info.PrepareParams.IsBin, len(concreteTypes)*12)
@@ -383,11 +383,11 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
 		nil, nil, nil, nil, nil, nil, nil,
 	).(*codecService)
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion29)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
 	_, err = svc.Decode(context.Background(), info)
-	require.ErrorContains(t, err, "protocol version 30")
+	require.ErrorContains(t, err, "protocol version 36")
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
 	decoded, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decoded.Free()

@@ -256,7 +256,7 @@ func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion30JSONComparisonParam(t *testing.T) {
+func TestRequiresMORPCVersion36JSONComparisonParam(t *testing.T) {
 	param := func(typ Type, pos int32) *Expr {
 		return &Expr{Typ: typ, Expr: &Expr_P{P: &ParamRef{Pos: pos}}}
 	}
@@ -271,7 +271,7 @@ func TestRequiresMORPCVersion30JSONComparisonParam(t *testing.T) {
 		jsonComparison(param(Type{Id: 1}, 0)),
 		jsonComparison(param(Type{Id: 61}, 1)),
 	}}
-	required, err := RequiresMORPCVersion30JSONComparisonParam(&owner)
+	required, err := RequiresMORPCVersion36JSONComparisonParam(&owner)
 	require.NoError(t, err)
 	require.True(t, required)
 
@@ -279,7 +279,7 @@ func TestRequiresMORPCVersion30JSONComparisonParam(t *testing.T) {
 		Func: &ObjectRef{Obj: int64(21) << 32},
 		Args: []*Expr{param(Type{Id: 61}, 0)},
 	}}}
-	required, err = RequiresMORPCVersion30JSONComparisonParam(ordinary)
+	required, err = RequiresMORPCVersion36JSONComparisonParam(ordinary)
 	require.NoError(t, err)
 	require.False(t, required)
 
@@ -296,19 +296,19 @@ func TestRequiresMORPCVersion30JSONComparisonParam(t *testing.T) {
 			Args: []*Expr{ordinary, prefixCast, jsonComparison(param(Type{Id: 1}, 0))},
 		}},
 	}}}
-	features, err := RequiredMORPCVersion30Features(mixedOwner)
+	features, err := RequiredRemoteExpressionFeatures(mixedOwner)
 	require.NoError(t, err)
 	require.True(t, features.NumericPrefix)
 	require.True(t, features.JSONComparisonParam)
 	require.False(t, features.MixedJSONBooleanEquality)
 	require.True(t, features.Any())
 
-	features, err = RequiredMORPCVersion30Features(ordinary)
+	features, err = RequiredRemoteExpressionFeatures(ordinary)
 	require.NoError(t, err)
 	require.False(t, features.Any())
 }
 
-func TestRequiresMORPCVersion30MixedJSONBooleanEquality(t *testing.T) {
+func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 	operand := func(typeID int32, position int32) *Expr {
 		return &Expr{
 			Typ:  Type{Id: typeID},
@@ -336,7 +336,7 @@ func TestRequiresMORPCVersion30MixedJSONBooleanEquality(t *testing.T) {
 			{name: "json_right", leftType: planBooleanTypeID, rightType: planJSONTypeID},
 		} {
 			t.Run(fmt.Sprintf("function_%d_%s", functionID, orientation.name), func(t *testing.T) {
-				required, err := RequiresMORPCVersion30MixedJSONBooleanEquality(
+				required, err := RequiresMORPCVersion36MixedJSONBooleanEquality(
 					comparison(functionID, orientation.leftType, orientation.rightType))
 				require.NoError(t, err)
 				require.True(t, required)
@@ -347,9 +347,9 @@ func TestRequiresMORPCVersion30MixedJSONBooleanEquality(t *testing.T) {
 	for _, control := range []*Expr{
 		comparison(equalFunctionID, planJSONTypeID, planJSONTypeID),
 		comparison(equalFunctionID, planBooleanTypeID, planBooleanTypeID),
-		comparison(4, planJSONTypeID, planBooleanTypeID), // ordering is not a v30 equality overload
+		comparison(4, planJSONTypeID, planBooleanTypeID), // ordering is not a versioned equality overload
 	} {
-		required, err := RequiresMORPCVersion30MixedJSONBooleanEquality(control)
+		required, err := RequiresMORPCVersion36MixedJSONBooleanEquality(control)
 		require.NoError(t, err)
 		require.False(t, required)
 	}

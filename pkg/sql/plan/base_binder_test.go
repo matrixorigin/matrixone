@@ -1386,7 +1386,7 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 			require.Equal(t, int32(types.T_json), result.GetF().Args[0].Typ.Id)
 			require.Equal(t, int32(types.T_bool), result.GetF().Args[1].Typ.Id)
 
-			required, err := plan.RequiresMORPCVersion30MixedJSONBooleanEquality(result)
+			required, err := plan.RequiresMORPCVersion36MixedJSONBooleanEquality(result)
 			require.NoError(t, err)
 			require.True(t, required)
 		})

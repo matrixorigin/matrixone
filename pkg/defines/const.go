@@ -65,13 +65,14 @@ const (
 	MORPCVersion27     int64 = 27 // native ASOF join pipeline fields and semantics
 	MORPCVersion28     int64 = 28 // owner-local lock snapshots and table-scoped remote unlock
 	MORPCVersion29     int64 = 29 // FOUND_ROWS connection migration state
-	MORPCVersion30     int64 = 30 // prepared numeric-prefix casts and JSON comparison execution capabilities
+	MORPCVersion30     int64 = 30 // prepared numeric-prefix common-type casts
 	MORPCVersion31     int64 = 31 // batched multi-table remote transaction unlock
 	MORPCVersion32     int64 = 32 // cross-transaction logical-plan generation snapshot
 	MORPCVersion33     int64 = 33 // stable complete-key distributed string shuffle hash
 	MORPCVersion34     int64 = 34 // correct persisted unsigned-column metadata
 	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
-	MORPCLatestVersion       = MORPCVersion35
+	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
+	MORPCLatestVersion       = MORPCVersion36
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

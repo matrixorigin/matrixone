@@ -2,7 +2,7 @@
 
 - Status: proposed for PR #27540
 - Tracking issue: #27529
-- Wire capability: MORPC v30
+- Wire capabilities: numeric-prefix casts use MORPC v30; prepared JSON comparison uses MORPC v36
 
 ## Problem
 
@@ -107,18 +107,22 @@ protocols and operand orientations.
 
 ## Compatibility and unhappy paths
 
-MORPC v30 has three independent expression capabilities: numeric-prefix casts,
-the hidden prepared-JSON adapter/exact metadata, and direct mixed JSON/BOOL
-equality execution. The last capability has no new protobuf field, but older
-workers dispatch the BOOL operand through a varlena comparison overload and
-therefore cannot safely execute the plan. The owner scanner identifies the
-final physical equality expressions (`=`, `!=`/`<>`, and `<=>`); mixed
-`IN`/`NOT IN` elements are covered after their binder lowering to equality.
+MORPC v30 contains only the pre-existing numeric-prefix cast capability.
+MORPC v36 independently introduces the hidden prepared-JSON adapter, exact
+typed parameter metadata, and direct mixed JSON/BOOL equality execution. The
+last capability has no new protobuf field, but pre-v36 workers dispatch the
+BOOL operand through a varlena comparison overload and therefore cannot safely
+execute the plan. The owner scanner identifies the final physical equality
+expressions (`=`, `!=`/`<>`, and `<=>`); mixed `IN`/`NOT IN` elements are
+covered after their binder lowering to equality.
 
-Both the sender and receiver reject a pipeline below v30 for each capability
-independently. Adapter plans are rejected even for BOOL and string parameters
-that do not carry exact metadata. Typed metadata is also validated
-independently at codec boundaries.
+Protocol versions are monotonic rollout capabilities and must never be reused
+for a later feature: a worker advertising the old capability would otherwise
+be mistaken for an implementation of the new one. Both sender and receiver
+therefore reject numeric-prefix pipelines below v30 and prepared-JSON or mixed
+JSON/BOOL pipelines below v36. Adapter plans are rejected even for BOOL and
+string parameters that do not carry exact metadata. Typed metadata is also
+validated independently at both codec boundaries and requires v36.
 
 Invalid metadata length, unsupported type IDs, category/type mismatches,
 truncated JSON, invalid literal codes, overflow, and unsupported object/array
@@ -155,8 +159,10 @@ Required gates:
 - ordinary JSON joins and unrelated feature-registry calls;
 - `COUNT(NULL)` and `COUNT(CAST(NULL AS SIGNED))` remain zero;
 - all-selected, partially selected, and all-masked execution;
-- local and remote Process codec at v29/v30, including malformed metadata;
-- sender and receiver v29 rejection/v30 acceptance for direct JSON/BOOL `=`,
-  `!=`/`<>`, and `<=>` in both orientations, plus lowered `IN`/`NOT IN` plans;
+- local and remote Process codec at v35/v36, including malformed metadata;
+- sender and receiver v29 rejection/v30 acceptance for numeric-prefix casts;
+- sender and receiver v35 rejection/v36 acceptance for prepared JSON and direct
+  JSON/BOOL `=`, `!=`/`<>`, and `<=>` in both orientations, plus lowered
+  `IN`/`NOT IN` plans;
 - reset/reuse and plan-rebuild generations;
 - focused race tests and allocation benchmark for the JSON comparison row loop.

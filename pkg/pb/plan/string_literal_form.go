@@ -149,25 +149,25 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 // RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
 // planner-injected CAST that uses the numeric-prefix sentinel.
 func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
-	features, err := RequiredMORPCVersion30Features(owner)
+	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.NumericPrefix, err
 }
 
-// RequiresMORPCVersion30JSONComparisonParam reports whether an owner contains
+// RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
 // the internal prepared-JSON comparison function.  The function is deliberately
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an
 // implementation detail and the receiver dispatches it by ID after decoding.
-func RequiresMORPCVersion30JSONComparisonParam(owner any) (bool, error) {
-	features, err := RequiredMORPCVersion30Features(owner)
+func RequiresMORPCVersion36JSONComparisonParam(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONComparisonParam, err
 }
 
-// RequiresMORPCVersion30MixedJSONBooleanEquality reports whether an owner
+// RequiresMORPCVersion36MixedJSONBooleanEquality reports whether an owner
 // contains an equality operation whose physical operands are JSON and BOOL.
-// Pre-v30 workers dispatch such plans through varlena comparison overloads and
+// Pre-v36 workers dispatch such plans through varlena comparison overloads and
 // cannot safely execute the BOOL vector.
-func RequiresMORPCVersion30MixedJSONBooleanEquality(owner any) (bool, error) {
-	features, err := RequiredMORPCVersion30Features(owner)
+func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.MixedJSONBooleanEquality, err
 }
 
@@ -180,27 +180,28 @@ const (
 	planJSONTypeID                   int32 = 62
 )
 
-// MORPCVersion30Features is the complete set of independent expression
-// capabilities introduced in MORPC v30. A struct makes compatibility call
-// sites name every capability instead of relying on positional booleans that
-// become unsafe as the protocol evolves.
-type MORPCVersion30Features struct {
+// RemoteExpressionFeatures is the complete set of versioned expression
+// capabilities that can make a pipeline unsafe on an older remote worker.
+// NumericPrefix requires MORPC v30. JSONComparisonParam and
+// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
+// call sites name every capability instead of relying on positional booleans.
+type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 }
 
-func (features MORPCVersion30Features) Any() bool {
+func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality
 }
 
-// RequiredMORPCVersion30Features reports the independent v30 expression
-// features present in owner. Keep the features separate so callers can retain
-// precise diagnostics, while sharing one owner walk so adding one v30 feature
-// cannot accidentally replace another feature's compatibility gate.
-func RequiredMORPCVersion30Features(owner any) (features MORPCVersion30Features, err error) {
+// RequiredRemoteExpressionFeatures reports the independent versioned
+// expression features present in owner. Keep the features separate so callers
+// can retain precise diagnostics, while sharing one owner walk so adding one
+// feature cannot accidentally replace another feature's compatibility gate.
+func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			fn := current.GetF()
