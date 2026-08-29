@@ -352,7 +352,7 @@ func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
 	})
 }
 
-func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV37Target(t *testing.T) {
+func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV38Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
 		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
@@ -376,7 +376,7 @@ func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV37Target(t *testing.T
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
 		})
-		assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v37 target")
+	assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v38 target")
 		assert.Empty(t, sc.statements)
 	})
 }

@@ -3440,9 +3440,9 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		}
 	}
 	if len(req.TempTables) > 0 {
-		if currentProtocolVersion(ses.proc) < defines.MORPCVersion37 {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion38 {
 			return moerr.NewInternalError(ctx,
-				"temporary-table migration requires protocol version 37")
+				"temporary-table migration requires protocol version 38")
 		}
 		// Clone before typed system-variable restoration. migrateTempTables also
 		// commits explicitly because Proxy compatibility replay may already have

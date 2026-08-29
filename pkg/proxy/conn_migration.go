@@ -120,9 +120,9 @@ func (c *clientConn) migrateConnToContext(
 			return moerr.NewInternalError(ctx,
 				"cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
 		}
-		if len(info.TempTables) > 0 && targetProtocol < defines.MORPCVersion37 {
+		if len(info.TempTables) > 0 && targetProtocol < defines.MORPCVersion38 {
 			return moerr.NewInternalError(ctx,
-				"cannot migrate temporary tables to a pre-v37 target")
+				"cannot migrate temporary tables to a pre-v38 target")
 		}
 		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
 			return moerr.NewInternalError(ctx,
