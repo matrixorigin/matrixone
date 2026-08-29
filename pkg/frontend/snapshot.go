@@ -754,6 +754,15 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	// Cluster restore replaces mo_branch_metadata after reading snapshot state,
+	// while lineage GC locks branch metadata before reading snapshots and PITR.
+	// Acquire their stable lifecycle gate first so the two transactions cannot
+	// form a distributed lock cycle across CNs.
+	if stmt.Level == tree.RESTORELEVELCLUSTER {
+		if err = lockBranchMetadataLifecycle(ctx, bh); err != nil {
+			return stats, err
+		}
+	}
 	// Serialize catalog restore with View metadata recovery before either path
 	// locks a target View. The gate row belongs to a preserved catalog table, so
 	// it remains stable while relation identities are rebuilt.
@@ -943,6 +952,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	return
+}
+
+func lockBranchMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return bh.Exec(systemCtx, catalog.BranchMetadataLifecycleGateSQL)
 }
 
 func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecord, stmt *tree.RestoreSnapShot) (err error) {

@@ -479,6 +479,27 @@ func TestViewMetadataTablesAreRebuiltDuringRestore(t *testing.T) {
 	}
 }
 
+func TestLockBranchMetadataLifecycleUsesStableSystemCatalogGate(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 42)
+
+	t.Run("success", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, lockBranchMetadataLifecycle(ctx, bh))
+		require.Equal(t, []string{catalog.BranchMetadataLifecycleGateSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{catalog.System_Account}, bh.executionAccountIDs)
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := moerr.NewInternalErrorNoCtx("lifecycle gate failed")
+		bh.sql2err[catalog.BranchMetadataLifecycleGateSQL] = wantErr
+		require.ErrorIs(t, lockBranchMetadataLifecycle(ctx, bh), wantErr)
+		require.Equal(t, []string{catalog.BranchMetadataLifecycleGateSQL}, bh.executedSQLs)
+	})
+}
+
 func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)

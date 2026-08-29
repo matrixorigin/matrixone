@@ -2302,6 +2302,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	results := map[string]executor.Result{
+		catalog.BranchMetadataLifecycleGateSQL: {},
 		metadataSQL: newAlterLineageMetadataResult(
 			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
 			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
@@ -2324,6 +2325,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 
 	require.NoError(t, compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now))
 	require.Equal(t, []string{
+		catalog.BranchMetadataLifecycleGateSQL,
 		metadataSQL,
 		alterDataBranchLineageEdgeSQL(),
 		alterDataBranchSnapshotSourceSQL(),
@@ -2331,6 +2333,24 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
 		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
 	}, executed)
+}
+
+func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateError(t *testing.T) {
+	wantErr := errors.New("lifecycle gate failed")
+	var executed []string
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == catalog.BranchMetadataLifecycleGateSQL {
+			return executor.Result{}, wantErr
+		}
+		return executor.Result{}, nil
+	})
+
+	err := compactExpiredAlterDataBranchLineageWithExecutor(
+		context.Background(), sqlExecutor, time.Now().UTC(),
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, []string{catalog.BranchMetadataLifecycleGateSQL}, executed)
 }
 
 type lineageGCDeadlineExecutor struct {
@@ -2377,6 +2397,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	results := map[string]executor.Result{
+		catalog.BranchMetadataLifecycleGateSQL: {},
 		metadataSQL: newAlterLineageMetadataResult(
 			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
 			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},

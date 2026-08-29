@@ -50,6 +50,11 @@ func compactExpiredAlterDataBranchLineageWithExecutor(
 ) error {
 	return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		statementOpts := executor.StatementOption{}.WithAccountID(catalog.System_Account)
+		gate, err := txn.Exec(catalog.BranchMetadataLifecycleGateSQL, statementOpts)
+		if err != nil {
+			return err
+		}
+		gate.Close()
 		query := func(sql string) (executor.Result, error) {
 			return txn.Exec(sql, statementOpts)
 		}
