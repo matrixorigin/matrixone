@@ -36,7 +36,7 @@ const (
 	dataBranchLineageGCLockWaitTimeout        = time.Second
 )
 
-var errDataBranchLineageGCCriticalSectionTimeout = errors.New(
+var errDataBranchLineageGCCriticalSectionTimeout = moerr.NewInternalErrorNoCtx(
 	"data branch lineage GC critical section timeout",
 )
 
