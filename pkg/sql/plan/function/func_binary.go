@@ -8842,7 +8842,10 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool, bool) {
 		}
 		exponentStart := end
 		exponentMagnitude := 0
-		exponentLimit := totalDigits + 14
+		// This cap only bounds parsing work. It deliberately exceeds every
+		// representable DECIMAL exponent after the significand adjustment below;
+		// it must not itself decide whether DECIMAL conversion was truncated.
+		exponentLimit := len(value) + 82
 		exponentOverflow := false
 		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
 			digit := int(value[end] - '0')
@@ -8862,9 +8865,9 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool, bool) {
 				}
 				clampTime := types.MySQLTimeFunctionMaxForScale(0)
 				if negative {
-					return -clampTime, true, conversionTruncated
+					return -clampTime, true, true
 				}
-				return clampTime, true, conversionTruncated
+				return clampTime, true, true
 			}
 			if negativeExponent {
 				exponent = -exponentMagnitude
@@ -8888,6 +8891,12 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool, bool) {
 	}
 
 	integerValueDigits := significantDigits + exponent
+	// MySQL's DECIMAL conversion range admits at most 81 integer digits or
+	// 81 fractional digits after insignificant trailing zeroes are removed.
+	// Keep this diagnostic state distinct from SEC_TO_TIME's much smaller TIME
+	// result range: for example, 1e-81 is a valid DECIMAL that rounds to zero,
+	// while 1e-82 is an underflowing DECIMAL conversion.
+	conversionTruncated = conversionTruncated || integerValueDigits > 81 || exponent < -81
 	if integerValueDigits > 7 {
 		clampTime := types.MySQLTimeFunctionMaxForScale(0)
 		if negative {

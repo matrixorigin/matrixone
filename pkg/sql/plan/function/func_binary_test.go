@@ -10223,9 +10223,20 @@ func TestSecToTimeOutOfRangeWarning(t *testing.T) {
 				SecToTime)
 			ok, info := tc.Run()
 			require.True(t, ok, info)
-			require.Len(t, session.warnings, 1)
-			require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
-			require.Contains(t, session.warnings[0].msg, "Truncated incorrect time value")
+			wantWarnings := 1
+			if input.typ.Oid == types.T_varchar {
+				// A textual exponent beyond DECIMAL's conversion range retains
+				// that diagnostic in addition to SEC_TO_TIME's TIME-range warning.
+				wantWarnings = 2
+			}
+			require.Len(t, session.warnings, wantWarnings)
+			for _, warning := range session.warnings {
+				require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+			}
+			if input.typ.Oid == types.T_varchar {
+				require.Contains(t, session.warnings[0].msg, "Truncated incorrect DECIMAL value")
+			}
+			require.Contains(t, session.warnings[len(session.warnings)-1].msg, "Truncated incorrect time value")
 		})
 	}
 }
@@ -10255,6 +10266,32 @@ func TestSecToTimeVarcharConversionWarningsAreBounded(t *testing.T) {
 	require.Contains(t, session.warnings[4].msg, "DECIMAL")
 	require.Contains(t, session.warnings[5].msg, "time")
 	require.Len(t, session.warnings[6].msg, len("Truncated incorrect DECIMAL value: ''")+128)
+}
+
+func TestSecToTimeVarcharDecimalConversionBoundaryWarnings(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"1e-81", "1e-82", "1e80", "1e81"}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{0, 0, types.MySQLTimeFunctionMaxForScale(0), types.MySQLTimeFunctionMaxForScale(0)}, nil),
+		SecToTime)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// 1e-81 is a valid DECIMAL value which simply rounds to zero. 1e-82
+	// underflows DECIMAL, whereas 1e81 has both a DECIMAL conversion warning
+	// and SEC_TO_TIME's independent TIME-range warning.
+	require.Len(t, session.warnings, 4)
+	require.Contains(t, session.warnings[0].msg, "DECIMAL")
+	require.Contains(t, session.warnings[1].msg, "time")
+	require.Contains(t, session.warnings[2].msg, "DECIMAL")
+	require.Contains(t, session.warnings[3].msg, "time")
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+	}
 }
 
 func TestMakeTimeFractionAndSign(t *testing.T) {
