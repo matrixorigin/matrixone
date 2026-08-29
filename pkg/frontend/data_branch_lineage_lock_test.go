@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -28,13 +29,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 type lineagePublicationLockExec struct {
 	backgroundExecTest
 	accountID uint32
+}
+
+type lineageLifecycleCommitSQLExecutor struct {
+	sqls []string
+	opts []executor.Options
+	err  error
+}
+
+func (e *lineageLifecycleCommitSQLExecutor) Exec(
+	_ context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	e.sqls = append(e.sqls, sql)
+	e.opts = append(e.opts, opts)
+	return executor.Result{}, e.err
+}
+
+func (e *lineageLifecycleCommitSQLExecutor) ExecTxn(
+	_ context.Context,
+	_ func(executor.TxnExecutor) error,
+	_ executor.Options,
+) error {
+	panic("unexpected transaction creation")
 }
 
 func TestLockRestoreLineageOwnerLifecycleCoversWholeCatalogRestore(t *testing.T) {
@@ -150,17 +177,31 @@ func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) 
 	require.Equal(t, []string{"begin", gateSQL, "rollback;"}, bh.executedSqls)
 }
 
-func TestGetDataBranchMutationExecutorRejectsExplicitTransactionBeforeAdmission(t *testing.T) {
+func TestValidateDataBranchLineageOwnerLifecycleAtCommitFastFailsStableWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	ses := newTestSession(t, ctrl)
-	t.Cleanup(ses.Close)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true})
-	ses.proc.Base.TxnOperator = txnOp
+	sqlExecutor := &lineageLifecycleCommitSQLExecutor{}
+	require.NoError(t, validateDataBranchLineageOwnerLifecycleWithExecutor(
+		context.Background(), sqlExecutor, txnOp, time.UTC,
+	))
+	require.Equal(t, []string{databranchutils.LineageOwnerLifecycleLockSQL()}, sqlExecutor.sqls)
+	require.Len(t, sqlExecutor.opts, 1)
+	opts := sqlExecutor.opts[0]
+	require.True(t, opts.DisableIncrStatement())
+	require.Same(t, txnOp, opts.Txn())
+	require.True(t, opts.KeepTxnAlive())
+	require.True(t, opts.HasAccountID())
+	require.Equal(t, uint32(catalog.System_Account), opts.AccountID())
+	require.Equal(t, lockpb.WaitPolicy_FastFail, opts.StatementOption().WaitPolicy())
+	require.True(t, opts.StatementOption().HasAccountID())
+	require.Equal(t, uint32(catalog.System_Account), opts.StatementOption().AccountID())
 
-	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses, true)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "DATA BRANCH create/delete is not supported inside an explicit transaction")
-	require.Nil(t, returned)
-	require.Nil(t, cleanup)
+	wantErr := errors.New("validation failed")
+	sqlExecutor = &lineageLifecycleCommitSQLExecutor{err: wantErr}
+	require.ErrorIs(t,
+		validateDataBranchLineageOwnerLifecycleWithExecutor(
+			context.Background(), sqlExecutor, txnOp, time.UTC,
+		),
+		wantErr,
+	)
 }

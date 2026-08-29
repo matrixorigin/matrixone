@@ -197,18 +197,34 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			}
 
 			require.NoError(t, execConn(conn1, "begin"))
-			explicitMutationErr := execConn(conn1,
-				"data branch create table branch_quota_race.explicit_holder from branch_quota_race.src")
-			require.Error(t, explicitMutationErr)
-			require.Contains(t, explicitMutationErr.Error(),
-				"DATA BRANCH create/delete is not supported inside an explicit transaction")
-			// Keep the rejected tenant transaction open while a system-account
-			// owner-catalog writer crosses the same global lifecycle boundary. It
-			// must not wait for the tenant's later rollback.
-			execSQLRequire(t, ctx, sysDB,
-				"create snapshot issue_26087_holder_probe for account "+accountName)
+			require.NoError(t, execConn(conn1,
+				"data branch create table branch_quota_race.explicit_holder from branch_quota_race.src"))
+			// The explicit tenant transaction has already mutated owner catalogs but
+			// must not own the global lifecycle row between statements. A system
+			// owner writer therefore completes before the tenant chooses COMMIT.
+			snapshotDone := make(chan error, 1)
+			go func() {
+				_, snapshotErr := sysDB.ExecContext(execCtx,
+					"create snapshot issue_26087_holder_probe for account "+accountName)
+				snapshotDone <- snapshotErr
+			}()
+			select {
+			case snapshotErr := <-snapshotDone:
+				require.NoError(t, snapshotErr)
+			case <-time.After(5 * time.Second):
+				t.Fatal("system snapshot waited for the open tenant transaction")
+			}
+			commitErr := execConn(conn1, "commit")
+			require.Error(t, commitErr,
+				"commit must validate and lose to the completed lifecycle writer")
+			require.NotContains(t, strings.ToLower(commitErr.Error()), "deadlock")
+			require.NotContains(t, strings.ToLower(commitErr.Error()), "lock wait timeout")
+			var explicitHolderCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = 'explicit_holder'",
+			).Scan(&explicitHolderCount))
+			require.Zero(t, explicitHolderCount)
 			execSQLRequire(t, ctx, sysDB, "drop snapshot issue_26087_holder_probe")
-			require.NoError(t, execConn(conn1, "rollback"))
 
 			createErrs := runConcurrent(
 				struct {
@@ -308,7 +324,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			require.Error(t, explicitErr)
 			require.Contains(t, explicitErr.Error(),
-				"DATA BRANCH create/delete is not supported inside an explicit transaction")
+				"finite branch quota requires a pessimistic read committed transaction")
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe where a = 2",
 			).Scan(&fixedSnapshotProbe))

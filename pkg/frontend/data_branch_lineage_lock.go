@@ -16,10 +16,16 @@ package frontend
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec) error {
@@ -30,6 +36,55 @@ func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec)
 	})
 	bh.ClearExecResultSet()
 	return err
+}
+
+func validateDataBranchLineageOwnerLifecycleAtCommit(
+	ctx context.Context,
+	ses FeSession,
+	txnOp client.TxnOperator,
+) error {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return moerr.NewInternalErrorNoCtx("missing runtime for lifecycle commit validation")
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("missing executor for lifecycle commit validation")
+	}
+	sqlExecutor, ok := value.(executor.SQLExecutor)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("invalid executor for lifecycle commit validation")
+	}
+	return validateDataBranchLineageOwnerLifecycleWithExecutor(
+		ctx, sqlExecutor, txnOp, ses.GetTimeZone(),
+	)
+}
+
+func validateDataBranchLineageOwnerLifecycleWithExecutor(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	txnOp client.TxnOperator,
+	timeZone *time.Location,
+) error {
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(txnOp).
+		WithKeepTxnAlive().
+		WithTimeZone(timeZone).
+		WithAccountID(catalog.System_Account).
+		WithStatementOption(executor.StatementOption{}.
+			WithWaitPolicy(lockpb.WaitPolicy_FastFail).
+			WithAccountID(catalog.System_Account))
+	result, err := sqlExecutor.Exec(
+		ctx,
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
 }
 
 // admitFeatureLimitedLineageOwnerMutation installs the TN-ordered catalog

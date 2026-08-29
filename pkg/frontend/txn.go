@@ -284,6 +284,13 @@ type TxnHandler struct {
 	hasSessionTxnIsolation bool
 	nextTxnIsolation       pbtxn.TxnIsolation
 	hasNextTxnIsolation    bool
+
+	// lineageOwnerLifecycleValidation is set when an explicit user transaction
+	// mutates data-branch owner catalogs. Such a transaction cannot take the
+	// cluster-wide lifecycle row before doing its work: the client controls how
+	// long it remains open. Commit instead fast-fails on the row, performs the SI
+	// validation write, and immediately commits while holding the row.
+	lineageOwnerLifecycleValidation bool
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -319,6 +326,7 @@ func (th *TxnHandler) Close() {
 	th.optionBits = defaultOptionBits
 	th.hasSessionTxnIsolation = false
 	th.hasNextTxnIsolation = false
+	th.lineageOwnerLifecycleValidation = false
 }
 
 func txnIsolationFromSystemValue(ctx context.Context, value interface{}) (pbtxn.TxnIsolation, error) {
@@ -483,10 +491,17 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 // since they are session-level settings that should persist across transactions.
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
+	th.lineageOwnerLifecycleValidation = false
 	// Preserve SERVER_STATUS_AUTOCOMMIT flag, only clear SERVER_STATUS_IN_TRANS
 	clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
 	// Preserve autocommit option bits (OPTION_AUTOCOMMIT or OPTION_NOT_AUTOCOMMIT), only clear OPTION_BEGIN
 	clearBits(&th.optionBits, OPTION_BEGIN)
+}
+
+func (th *TxnHandler) requireLineageOwnerLifecycleValidation() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.lineageOwnerLifecycleValidation = true
 }
 
 func (th *TxnHandler) InActiveTxn() bool {
@@ -753,6 +768,27 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPCommit)
 	defer execCtx.ses.ExitFPrint(FPCommit)
 	var err error
+	th.mu.Lock()
+	shouldCommit := !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
+		th.inActiveTxnUnsafe() && needToFinishTransactionAtStatementEnd(execCtx) ||
+		execCtx.txnOpt.byCommit
+	validateLifecycle := shouldCommit && th.lineageOwnerLifecycleValidation
+	th.mu.Unlock()
+	if validateLifecycle {
+		err = validateDataBranchLineageOwnerLifecycleAtCommit(
+			execCtx.reqCtx, execCtx.ses, th.GetTxn(),
+		)
+		if err != nil {
+			// Commit-time lifecycle validation is terminal. Rolling back only the
+			// current statement would leave the explicit transaction and its
+			// catalog locks alive after COMMIT has already returned an error. Use
+			// the transaction cleanup context so request cancellation cannot skip
+			// releasing those locks.
+			execCtx.txnOpt.byRollback = true
+			rollbackErr := th.Rollback(execCtx)
+			return errors.Join(err, rollbackErr)
+		}
+	}
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	/*
