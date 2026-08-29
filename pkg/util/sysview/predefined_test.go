@@ -437,8 +437,11 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
 		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
 	assert.Contains(t, InformationSchemaViewsDDL, "2 * least(char_length(coalesce(regexp_substr(")
-	assert.Contains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
-	assert.NotContains(t, InformationSchemaViewsDDL, "cast(trim(substr(")
+	// System-view definitions are replayed by database clone. Keep this as an
+	// explicit text cast: the equivalent concat wrapper fails when the stored
+	// view definition is parsed by the execution path.
+	assert.Contains(t, InformationSchemaViewsDDL, "cast(trim(substr(")
+	assert.NotContains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
 	assert.NotContains(t, InformationSchemaViewsDDL, "trim(if(")
 	assert.Contains(t, InformationSchemaViewsDDL, "'NO' AS `IS_UPDATABLE`")
