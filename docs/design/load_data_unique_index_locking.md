@@ -1,13 +1,14 @@
 # LOAD DATA Unique-Index Lock Ownership
 
 - Status: mandatory design review pending
-- Design revision: v3
-- Supersedes: v1 at commit `30a0943ec3`; unapproved v2 draft
+- Design revision: v4
+- Supersedes: v1 at commit `30a0943ec3`; unapproved v2 draft; v3 at commit
+  `44d0d92292`
 - Tracking issue: [matrixorigin/matrixone#27775](https://github.com/matrixorigin/matrixone/issues/27775)
 - Implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
 - Authors: XuPeng-SH
 - Required reviewers: one SQL planner/compile owner and one lockservice owner
-- Last updated: 2026-08-29
+- Last updated: 2026-08-30
 
 ## 1. Decision summary
 
@@ -21,6 +22,8 @@ AND large-load path (Query.LoadWriteS3=true)
 AND one finite planner input-size estimate of at least 1 GiB
 AND automatic statement retry is enabled
 AND no prepared/session-cached logical generation is reused
+AND the process transaction client implements the close-aware snapshot-fence
+    capability for this transaction operator
 AND ordinary, non-temporary, non-partitioned user base table
 AND real primary key
 AND physical base primary key is BIGINT or the canonical binary VARCHAR
@@ -79,7 +82,7 @@ optimistic transactions, or any hidden physical row-lock target other than
 other hidden target type, including FLOAT/DOUBLE and serialized composite keys,
 stays on its precise row lock in this PR.
 
-Revision v3 corrects eight earlier design mistakes:
+Revision v4 corrects nine earlier design mistakes:
 
 1. v1/v2 did not preserve RC visibility when a direct hidden writer committed
    after LOAD's snapshot but before hidden full-lock acquisition, and an
@@ -105,7 +108,13 @@ Revision v3 corrects eight earlier design mistakes:
    and
 8. a large LOAD's external object size can change outside catalog invalidation.
    V3 uses the existing non-cacheable bit at the same size boundary so a direct
-   execution cannot inherit stale admission statistics or ownership state.
+   execution cannot inherit stale admission statistics or ownership state; and
+9. v3 called `TxnOperator.UpdateSnapshot` and claimed that `TxnClient.Close`
+   independently terminated the wait, but that operator entry point receives no
+   client-close channel. V4 makes the transaction client own the complete
+   wait-and-install operation. It waits without holding either the client
+   lifecycle gate or the operator mutex, then linearizes close, transaction
+   generation, terminal status, and monotonic snapshot installation together.
 
 ## 2. Problem and evidence
 
@@ -339,8 +348,9 @@ and ineligibility introduces no new user-visible internal error.
 3. After the final ownership lock is acquired, the coordinator constructs a
    non-empty HLC strict upper-bound fence. Under the configured max-offset
    contract, every lock-aware commit that completed before acquisition is no
-   later than that bound. Logtail application and `UpdateSnapshot` produce a
-   snapshot strictly greater than it before any source can initialize.
+   later than that bound. The transaction client's close-aware fence advancer
+   applies logtail and atomically installs a snapshot strictly greater than it
+   before any source can initialize.
 4. The no-active-writer order in section 2.1 and owner rebind/restart are
    covered. Freshness does not depend on `Result.Timestamp`, `HasConflict`,
    `HasPrevCommit`, or an owner-local timestamp surviving generations.
@@ -531,10 +541,11 @@ fence fields, after the previous physical attempt is quiescent.
 After the full set is owned, pre-run follows an explicit state machine:
 
 - with an empty stored fence, construct the coordinator clock's strict
-  upper-bound fence, call `UpdateSnapshot` through the logtail timestamp waiter,
-  require the installed transaction snapshot to be strictly greater, then
-  store the fence and current physical execution generation before returning
-  one existing `ErrTxnNeedRetry`;
+  upper-bound fence, call the transaction client's close-aware snapshot-fence
+  capability, require the returned and installed transaction snapshot to be
+  strictly greater, then store the fence, installed snapshot, and current
+  physical execution generation before returning one existing
+  `ErrTxnNeedRetry`;
 - with a non-empty stored fence, continue to source initialization only if the
   transaction ID and exact target vector still match, the current physical
   execution generation is strictly later than the recorded generation, and
@@ -609,12 +620,67 @@ the later HLC fence. Thus every relevant lock-aware commit is bounded by the
 fence and no later writer can enter the owned ranges. This ordering is frozen
 by commit/unlock barrier tests for commit, rollback, and unknown resolution.
 
-The compiler calls `txnOp.UpdateSnapshot(ctx, fence)`. The RC timestamp waiter
-must wait until logtail is applied through the fence and install a snapshot
-strictly greater than it. Empty/equal/older results fail the statement. The
-compiler records the completed fence in its coordinator-local generation
-object and then returns one existing `ErrTxnNeedRetry`; it does not initialize
-a source or write a LOAD row.
+The compiler must not call `TxnOperator.UpdateSnapshot` for this fence. That
+entry point has no independent edge to `TxnClient.Close`, and waiting while it
+holds the operator mutex would also put commit/rollback behind a stalled
+logtail data path. V4 adds an optional internal Go capability implemented by
+the production transaction client without changing the existing `TxnClient`
+interface or any wire contract:
+
+```go
+type TxnSnapshotFenceAdvancer interface {
+    AdvanceTxnSnapshotForFence(
+        ctx context.Context,
+        txnOp TxnOperator,
+        fence timestamp.Timestamp,
+    ) (installed timestamp.Timestamp, err error)
+}
+```
+
+Eligibility checks the capability before changing the local `LockOp` copy or
+acquiring an optimization-only lock; an absent capability leaves the statement
+on exact `main` behavior. The production `Process` already owns a matched
+client/operator pair. The advancer nevertheless validates that pair, the
+non-empty fence, and pessimistic-RC mode and returns a terminal internal error
+on a violated ownership contract rather than updating an unrelated operator.
+
+The production implementation owns the complete wait-and-install transition:
+
+1. capture the exact transaction generation token (`Txn.ID` plus the existing
+   restart generation identity) under the operator mutex, then independently
+   validate the client's active-generation map and revalidate the same open
+   operator generation. The implementation never nests operator-mutex then
+   active-shard acquisition, because existing active scans use the opposite
+   order;
+2. release the operator mutex and call the client's existing close-aware
+   `WaitLogTailAppliedAt(ctx, fence)`. No client lifecycle gate or operator
+   mutex is held while logtail is stalled, so context cancellation,
+   `TxnClient.Close`, commit, and rollback remain independent terminal edges;
+3. require the waiter result to be strictly greater than `fence`;
+4. acquire `txnClient.lifecycle.gate.RLock`, reject an already closed client,
+   then acquire the operator mutex in that order;
+5. revalidate the exact generation, pessimistic-RC mode, and open status. The
+   pre-wait active-generation validation plus this token check proves the same
+   client ownership without taking an active-shard lock in the final section.
+   Install `max(currentSnapshot, waiterResult)` so concurrent RC
+   advancement cannot move the snapshot backwards, and return that installed
+   value; and
+6. release the operator mutex before the client lifecycle gate.
+
+The final lifecycle-gate section linearizes a successful install before
+`TxnClient.Close`; if close wins, the call returns `ErrClientClosed` and
+publishes no compiler fence proof. Capturing and revalidating the generation
+prevents a waiter started by generation N from updating a restarted generation
+N+1. The lock order is always lifecycle gate before operator mutex at the final
+transition, matching restart publication; no control path holds either lock
+while waiting on logtail. The timestamp waiter remains the sole owner of its
+registered entry and removes it on success, cancellation, or client close.
+
+The compiler requires the returned value and `txnOp.SnapshotTS()` to be
+strictly greater than the fence before recording the completed fence and the
+installed snapshot in its coordinator-local generation object. It then returns
+one existing `ErrTxnNeedRetry`; it does not initialize a source or write a LOAD
+row.
 
 Progress does not depend on user commits. TN creates heartbeat transactions at
 the existing 2 ms cadence; although `OnEndPrePrepare` excludes their empty
@@ -628,10 +694,11 @@ wait is therefore bounded by clock convergence plus TN heartbeat, progress
 interval, network, queue, and apply latency. Because the coordinator fence is
 its local HLC plus `MaxOffset`, while a TN wall clock may legally trail that CN
 by `MaxOffset`, the worst skew-only component is approximately
-`2 * MaxOffset`, not one offset. If TN
-heartbeat or logtail delivery is unavailable, the wait ends only through the
-existing statement context/client-close path; it does not create a goroutine or
-private timer.
+`2 * MaxOffset`, not one offset. If TN heartbeat or logtail delivery is
+unavailable, the wait ends only through the existing statement context or the
+transaction client's lifecycle-close channel; it does not create a goroutine
+or private timer. Client close does not wait for the operator mutex to signal
+that channel.
 
 The retry is required even though runtime readers have not been initialized.
 Physical compilation can already resolve relations and attach remote-scan
@@ -669,6 +736,10 @@ The permanent deterministic matrix must cover:
 - cancellation while acquiring each target and while waiting for the fence, lock
   timeout, deadlock, definition change, retry-transition failure, and terminal
   transaction lock release;
+- client close with a live caller context and stalled timestamp waiter, plus
+  close-versus-notify, commit/rollback-versus-notify, and generation-N wait
+  versus generation-N+1 restart. Every losing path must remove its waiter,
+  publish no proof, and leave the newer generation/snapshot unchanged;
 - fresh source initialization and regenerated remote tombstone/payload state on
   the one admitted retry.
 
@@ -719,7 +790,7 @@ the old row-lock guarantee and this design.
 
 ## 8. Physical key-domain admission
 
-V3 admits two base physical PK shapes:
+V4 admits two base physical PK shapes:
 
 - a real single-column `types.T_int64` PK; or
 - the generated `catalog.CPrimaryKeyColName` whose authoritative
@@ -733,7 +804,7 @@ bytes through `Packer.EncodeStringTypeMax`; every serialized composite tuple is
 encoded as a string value strictly within those sentinels. A user-declared
 VARCHAR PK does not qualify merely because it shares the OID.
 
-V3 admits exactly one promoted hidden physical primary-key OID:
+V4 admits exactly one promoted hidden physical primary-key OID:
 `types.T_int64`, with the same integer endpoints. No width/scale
 reinterpretation, projection cast, or SQL source type can substitute for the
 authoritative base or hidden physical primary-key column definition.
@@ -765,7 +836,7 @@ evidence.
 | acquiring | target reports definition change | stop immediately | definition retry | txn owns acquired prefix |
 | acquiring | final hidden acquired | every target owned | ownership-complete | none |
 | ownership-complete | construct HLC fence | valid next-physical upper bound | fencing | overflow/invalid clock; txn owns locks |
-| fencing | update RC snapshot and record proof | logtail applied and snapshot > fence | retry-marked | cancel/client close/update error; txn owns locks and no proof is published |
+| fencing | client-owned wait, generation revalidation, and RC snapshot install | logtail applied; lifecycle gate won; same open txn generation; snapshot > fence | retry-marked | cancel/client close/commit/rollback/restart/update error; txn owns locks and no proof is published |
 | retry-marked | return one data retry | proof records txn, exact targets, fence, and generation | retry transition | transition error; txn owns locks |
 | retry transition | recompile/re-enter | ordinary retry inherits exact local generation; later generation and snapshot > fence | fenced | mismatch is terminal; explicit txn retains locks until its terminal action |
 | definition retry | set sticky disable, then rebuild logical plan | before rebuild; current catalog snapshot | exact main | old valid locks remain txn-owned; no later optimization fence in this Run |
@@ -788,9 +859,9 @@ transaction's accumulated locks as exact `main`.
 | Q1 | compiler target slice | compiler instance; cleared and nilled on every release/reuse path | no stale values or pooled backing-array retention |
 | Q1 | execution proof | root coordinator object; ordinary retry borrows, logical rebuild disables and drops, release only nils borrower | no remote/cache/pool leak and no clearing while borrowed |
 | Q1 | acquired range locks | transaction/lockservice; commit or rollback | no compiler cleanup/double unlock |
-| Q1 | HLC fence/refreshed snapshot | stack value then transaction operator; retry generation consumes snapshot | fence dominates prior commits; snapshot is strictly later and visible to new sources |
+| Q1 | HLC fence/refreshed snapshot | stack value then transaction client atomically installs into the exact operator generation; retry generation consumes snapshot | fence dominates prior commits; snapshot is strictly later and visible to new sources |
 | Q2 | base/hidden wait | lockservice waiter observing context, timeout, deadlock, holder unlock | every terminal path tested |
-| Q2 | future logtail fence wait | transaction timestamp waiter observing context and client close | idle TN heartbeat progresses; outage cancels without private worker |
+| Q2 | future logtail fence wait | transaction client and timestamp waiter observe context/client close without holding lifecycle gate or operator mutex | idle TN heartbeat progresses; outage cancels without private worker; close/commit/rollback/restart remain independent |
 | Q2 | retry-marked acquisition | compiler continues only after successful lock | substantive error is not swallowed |
 | Q2 | partial prefix | transaction remains owner; terminal txn action releases | no compensating wait/unlock |
 | Q3 | target collection | schema UNIQUE count | finite and reset on reuse |
@@ -811,7 +882,8 @@ After ownership completes, freshness has a separate acyclic progress chain:
 
 ```text
 LOAD caller
-  -> CN transaction timestamp waiter
+  -> transaction-client close-aware snapshot advancer
+  -> CN transaction timestamp waiter (no lifecycle/operator lock held)
   -> minimum applied frontier across CN logtail consumer routines
   -> ordered TN empty-progress publication
   -> TN heartbeat transaction/HLC reaching the coordinator fence
@@ -819,7 +891,10 @@ LOAD caller
 
 Heartbeat transactions do not acquire the LOAD's table locks, so this chain has
 no edge back to the ownership wait graph. Context cancellation or txn-client
-closure terminates it if TN/logtail progress is unavailable.
+closure terminates it if TN/logtail progress is unavailable. After notification,
+the advancer takes lifecycle gate then operator mutex only for a bounded local
+generation check and monotonic assignment; neither section performs I/O or
+waits on another owner.
 
 For the eligible schema, current ordinary INSERT/UPDATE/DELETE/REPLACE reaches
 the base namespace before hidden locks/writes: modern paths order base targets
@@ -890,7 +965,7 @@ upper-bound fence is generation-independent and needs no wire change.
 ### 10.9 Fix generic FLOAT/DOUBLE table ranges here
 
 Deferred. The correction is valid but independent of the BIGINT reproducer and
-widens the production diff. V3 keeps scalar FLOAT/DOUBLE row locks. A separate
+widens the production diff. V4 keeps scalar FLOAT/DOUBLE row locks. A separate
 change may fix and admit those types after independent review.
 
 ### 10.10 Add a logical lock group to `plan.proto`
@@ -1080,6 +1155,8 @@ Primary operational risks:
 | raw HLC upper bound does not dominate equal-physical logical TS | unseen commit could escape freshness | shared next-physical-tick helper plus boundary tests |
 | HLC fence is ahead of applied logtail | fixed pre-run wait approaching `2 * MaxOffset`, timeout, or cancel | finite >=1 GiB/retry-enabled gate plus opposite-skew wait-latency evidence |
 | TN heartbeat/logtail stalls while no user commits occur | fence wait does not make progress | idle-heartbeat progress test plus context/client-close cancellation test |
+| client closes while logtail is stalled or notification races close | wait leaks or snapshot mutates after the losing terminal transition | client-owned wait/install boundary, no locks held during wait, final lifecycle-gate linearization, exact close-versus-notify tests |
+| transaction commits, rolls back, or restarts while the fence waits | stale work updates a closed or newer operator generation | pre/post exact generation and open-status validation plus monotonic install under operator mutex |
 | small or unknown input is mistaken for large | fixed fence cost becomes a latency regression | finite external-scan byte estimate and boundary tests; `LoadWriteS3` is not sufficient alone |
 | stale/mismatched retry state is treated as fence proof | source starts without a proved execution | exact transaction/target vector, later execution generation, and snapshot > fence checks |
 | fence emitted twice | retry/compile/metric amplification | shared execution proof, sticky rebuild disable, and exact-one fence assertion |
@@ -1107,7 +1184,8 @@ Primary operational risks:
 | active conflict freshness | barrier-based real lockservice test | retry/wait metrics | base/hidden holder commit or rollback, then the same one global retry; caller cancellation/timeout |
 | one fence for all targets | base plus two hidden targets | retry/compile-count metric | every acquisition precedes fence; one optimization retry; no second fence after re-entry |
 | HLC fence construction | shared clock-helper UT and allocator equivalence test | fence-wait latency | max logical at raw upper physical tick, negative offset/time, overflow, configured skew boundaries |
-| strict refreshed snapshot | timestamp waiter/operator contract test | retry-count metric | installed snapshot equal/older than fence fails; exact local proof with greater snapshot re-enters once |
+| strict refreshed snapshot | transaction-client advancer contract test | retry-count metric | absent capability remains exact main; equal/older waiter result fails; concurrent newer snapshot is preserved; exact local proof with greater snapshot re-enters once |
+| snapshot-fence lifecycle | deterministic transaction-client waiter barriers | client-close/error diagnostics | live context + stalled logtail + client-only close returns `ErrClientClosed`; close/notify, commit/rollback/notify, and restart-generation races publish at most one valid outcome and remove the waiter |
 | idle fence progress | real TN heartbeat plus timestamp waiter test | no-writer scale run | opposite allowed CN/TN skew reaches the fence via PrepareTS heartbeat; stopped heartbeat and disconnected logtail cancel |
 | owner-generation independence | remote/proxy/rebind/restart/mirror lockservice UT | 3-CN restart/rebind stress | old owner timestamp absent/stale yet coordinator fence covers commit; cancel while logtail waits |
 | schema/index race | metadata-lock plus physical-lock integration UT | concurrent ALTER control | add/drop/rebuild between plan and pre-run; definition retry rebuilds before source init; ineligible rebuild retains old txn lock until terminal action |
@@ -1146,15 +1224,17 @@ Decision log:
 | --- | --- | --- |
 | v1 (`30a0943ec3`) | superseded | preserving FK routing did not preserve FK lock behavior; implementation remained over-broad |
 | v2 (unapproved draft) | superseded | fallback/planner full-target construction was unnecessary; generic table lock missed a concrete no-active-conflict RC freshness window |
-| v3 | pending | >=1 GiB modern LOAD compiler promotion, large-LOAD cache exclusion, deferred target-local freshness, at most one coordinator strict-HLC fence per Run, sticky exact-main rebuild fallback, canonical lock-target preservation, issue-specific integer/composite base admission, and `T_int64`-only hidden promotion |
+| v3 (`44d0d92292`) | superseded | `TxnOperator.UpdateSnapshot` could not observe standalone `TxnClient.Close` and held the operator mutex across a future logtail wait |
+| v4 | pending | v3 scope plus a client-owned, close-aware, generation-safe, monotonic snapshot wait/install transition with no lifecycle/operator lock held during logtail wait |
 
 The v2 freshness blocker was proven with a real local lockservice diagnostic,
-not only code inspection. V3 also rejects owner-local `tableCommittedAt` as a
+not only code inspection. V4 also rejects owner-local `tableCommittedAt` as a
 generation-stable proof after auditing bind/restart transport, rejects mutable
 snapshot ordering as proof, bounds opposite-skew wait at approximately twice
-`MaxOffset`, and verifies idle TN heartbeat progress before using a future HLC
-fence. Production implementation review and delivery remain
-blocked while v3 is `mandatory design review pending`.
+`MaxOffset`, verifies idle TN heartbeat progress before using a future HLC
+fence, and closes the client-close/operator-generation wait boundary. Production
+implementation review and delivery remain blocked while v4 is `mandatory
+design review pending`.
 
 Approval must be traceable in PR #27814 and include both SQL planner/compile and
 lockservice ownership perspectives. Record reviewer handles, links, decision,
