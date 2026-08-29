@@ -22,11 +22,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -122,7 +122,21 @@ func featureLimitCheckerForAccount(
 		sqlRet.Close()
 	}()
 
-	if limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
+	// Feature limits are admission-control state. Establish the operation's
+	// cross-CN linearization point before deciding whether the feature is
+	// disabled, finite, or unlimited. A branch running inside an explicit SI
+	// transaction uses an independent short RC transaction for this control-plane
+	// read; advancing the caller's fixed snapshot would violate its isolation.
+	if featureCode == featureCodeBranch && featureLimitTxnUsesFixedSnapshot(bh) {
+		limitQuota, err = queryQuotaInIndependentTxn(
+			ctx, ses, accId, featureCode, featureScope,
+		)
+	} else {
+		if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err == nil {
+			limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	// Serialize finite branch quota checks on the account's quota row. The lock
@@ -214,6 +228,104 @@ func checkBranchQuotaTxn(bh BackgroundExec) error {
 	return nil
 }
 
+func featureLimitTxnUsesFixedSnapshot(bh BackgroundExec) bool {
+	backExec, ok := bh.(*backExec)
+	if !ok || backExec == nil || backExec.backSes == nil || backExec.backSes.GetTxnHandler() == nil {
+		return false
+	}
+	txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+	return txnOp != nil && !txnOp.Txn().IsRCIsolation()
+}
+
+func queryQuotaInIndependentTxn(
+	ctx context.Context,
+	ses *Session,
+	accID uint32,
+	featureCode string,
+	featureScope string,
+) (quota int64, err error) {
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
+		forcePessimisticRC:         true,
+		cancelTxnCreateWithRequest: true,
+	})
+	defer bh.Close()
+
+	if err = bh.Exec(ctx, "begin"); err != nil {
+		return 0, err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
+		return 0, err
+	}
+	return queryQuota(ctx, ses, bh, accID, featureCode, featureScope)
+}
+
+func advanceFeatureLimitSnapshot(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	backExec, ok := bh.(*backExec)
+	if !ok {
+		// Lightweight executor doubles do not expose a transaction. Production
+		// feature admission always uses backExec.
+		return nil
+	}
+	if backExec == nil || backExec.backSes == nil || backExec.backSes.GetTxnHandler() == nil {
+		return moerr.NewInternalErrorNoCtx("missing transaction handler for feature-limit snapshot refresh")
+	}
+	txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+	if txnOp == nil {
+		return moerr.NewInternalErrorNoCtx("missing transaction for feature-limit snapshot refresh")
+	}
+	return advanceFeatureLimitTxnSnapshot(ctx, ses, txnOp)
+}
+
+func advanceFeatureLimitTxnSnapshot(
+	ctx context.Context,
+	ses *Session,
+	txnOp TxnOperator,
+) error {
+	if txnOp == nil {
+		return moerr.NewInternalErrorNoCtx("missing transaction for feature-limit snapshot refresh")
+	}
+	var (
+		frontier timestamp.Timestamp
+		err      error
+	)
+
+	if logtailReadBarrierSupported(ses) {
+		frontier, err = ses.acquireLogtailReadBarrier(ctx)
+	} else {
+		var minimum timestamp.Timestamp
+		minimum, err = ses.legacyLogtailReadFence(ctx)
+		if err == nil {
+			pu := getPuIfPresent(ses.GetService())
+			if pu == nil || pu.TxnClient == nil {
+				return moerr.NewInternalError(
+					ctx, "missing transaction client for feature-limit snapshot refresh")
+			}
+			frontier, err = pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+			if err == nil && frontier.Less(minimum) {
+				return moerr.NewInternalError(
+					ctx, "feature-limit snapshot did not reach the required timestamp")
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	workspace := txnOp.GetWorkspace()
+	if workspace == nil {
+		return moerr.NewInternalErrorNoCtx("missing workspace for feature-limit snapshot refresh")
+	}
+	return workspace.AdvanceSnapshot(ctx, frontier)
+}
+
 func lockFeatureQuota(
 	ctx context.Context,
 	ses *Session,
@@ -241,35 +353,12 @@ func lockFeatureQuota(
 	sqlRet.Close()
 	sqlRet = executor.Result{}
 
-	// A locking read can wait without refreshing its transaction snapshot.
-	// Advance it while retaining the quota-row lock, then re-read the quota and
-	// active branch metadata from a snapshot that includes the prior creator.
-	if backExec, ok := bh.(*backExec); ok {
-		txnOp := backExec.backSes.GetTxnHandler().GetTxn()
-		if txnOp == nil {
-			return 0, moerr.NewInternalErrorNoCtx("missing transaction for branch quota snapshot refresh")
-		}
-		txnMeta := txnOp.Txn()
-		if txnMeta.Mode != pbtxn.TxnMode_Pessimistic || txnMeta.Isolation != pbtxn.TxnIsolation_RC {
-			return 0, moerr.NewInternalErrorNoCtx(
-				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
-		}
-		rt := moruntime.ServiceRuntime(ses.service)
-		if rt == nil {
-			return 0, moerr.NewInternalErrorNoCtx("missing service runtime for branch quota snapshot refresh")
-		}
-		now, _ := rt.Clock().Now()
-		txnClient := getPu(ses.service).TxnClient
-		if txnClient == nil {
-			return 0, moerr.NewInternalErrorNoCtx("missing transaction client for branch quota snapshot refresh")
-		}
-		applied, waitErr := txnClient.WaitLogTailAppliedAt(ctx, now)
-		if waitErr != nil {
-			return 0, waitErr
-		}
-		if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, applied); err != nil {
-			return 0, err
-		}
+	// A locking read can wait behind the previous creator without refreshing
+	// this transaction's snapshot. Retain the quota-row lock while installing a
+	// new TN-ordered frontier, so both the locked quota and prior branch metadata
+	// are visible to the re-read below.
+	if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
+		return 0, err
 	}
 
 	if sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql); err != nil {
