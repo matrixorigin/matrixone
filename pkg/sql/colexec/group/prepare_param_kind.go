@@ -486,7 +486,7 @@ func stringSourceWireEnabled(proc *process.Process) bool {
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion36
+	return ok && version >= defines.MORPCVersion37
 }
 
 type aggregateStringSourceProtocolWriter interface {

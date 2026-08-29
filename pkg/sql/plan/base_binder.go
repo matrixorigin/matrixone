@@ -4099,7 +4099,11 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 		}
 		left, right = operands[0], operands[1]
 	}
-	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
+	operands := []*Expr{left, right}
+	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, operator, operands)
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
@@ -4152,12 +4156,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err := convertValueIntoBool(name, args, true); err != nil {
 			return nil, err
 		}
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=", "<=>", "<", "<=", ">", ">=", "<>":
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
-		if err := adjustJsonOrderingDynamicParamType(ctx, name, args); err != nil {
+		if err := adjustJsonDynamicParamType(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -5784,9 +5788,13 @@ func isCharacterStringType(typeID int32) bool {
 	}
 }
 
-func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {
+func adjustJsonDynamicParamType(ctx context.Context, name string, args []*Expr) error {
+	paramFunction := ""
 	switch name {
 	case "<", "<=", ">", ">=":
+		paramFunction = function.JsonOrderingParamFunctionName
+	case "=", "<=>", "<>", "!=":
+		paramFunction = function.JsonComparisonParamFunctionName
 	default:
 		return nil
 	}
@@ -5796,12 +5804,12 @@ func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args [
 
 	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
 		var err error
-		args[1], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[1]})
+		args[1], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{args[1]})
 		return err
 	}
 	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
 		var err error
-		args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[0]})
+		args[0], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{args[0]})
 		return err
 	}
 	return nil

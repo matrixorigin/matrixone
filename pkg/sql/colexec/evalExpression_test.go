@@ -1888,6 +1888,58 @@ func TestFunctionExpressionExecutorShrinkingSelectList(t *testing.T) {
 	}
 }
 
+func TestFunctionExpressionExecutorSelectedRowsPreservesJSONComparisonIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := vector.NewVec(types.T_json.ToType())
+	defer input.Free(proc.Mp())
+	for range 3 {
+		require.NoError(t, vector.AppendBytes(input, []byte{1}, false, proc.Mp()))
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = input
+	bat.SetRowCount(3)
+
+	expr := &FunctionExpressionExecutor{}
+	require.NoError(t, expr.Init(proc, 1, types.T_json.ToType()))
+	defer expr.Free()
+	expr.evalFn = func(
+		_ []*vector.Vector,
+		result vector.FunctionResultWrapper,
+		_ *process.Process,
+		length int,
+		_ *function.FunctionSelectList,
+	) error {
+		output := vector.MustFunctionResult[types.Varlena](result)
+		for range length {
+			if err := output.AppendBytes([]byte{1}, false); err != nil {
+				return err
+			}
+			output.GetResultVector().SetPrepareParamKind(vector.PrepareParamInteger)
+			output.GetResultVector().SetPrepareParamType(types.T_int64)
+			output.GetResultVector().SetPreparedJSONComparisonParam()
+		}
+		return nil
+	}
+	column := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_json)},
+	}
+	parameter, err := NewExpressionExecutor(proc, column)
+	require.NoError(t, err)
+	expr.SetParameter(0, parameter)
+
+	result, err := expr.Eval(proc, []*batch.Batch{bat}, []bool{true, false, true})
+	require.NoError(t, err)
+	require.True(t, result.IsPreparedJSONComparisonParam())
+	require.Equal(t, types.T_int64, result.GetPrepareParamType())
+	require.Equal(t, vector.PrepareParamInteger, result.GetPrepareParamKind())
+	require.False(t, result.IsNull(0))
+	require.True(t, result.IsNull(1))
+	require.False(t, result.IsNull(2))
+}
+
 func testFunctionExpressionExecutorShrinkingSelectList(t *testing.T, op string, want float64) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

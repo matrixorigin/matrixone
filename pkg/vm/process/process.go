@@ -187,19 +187,57 @@ func (proc *Process) SetPrepareParamsWithMeta(
 	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, false)
 }
 
-// SetPrepareParamsWithReusableMeta is SetPrepareParamsWithMeta with caller-owned
-// scratch storage for the packed metadata. It avoids a per-execution allocation
-// on prepared-statement hot paths. The returned slice must be retained by the
-// caller and must not be mutated while proc is evaluating the parameters.
+// SetPrepareParamsWithReusableMeta reuses caller-provided metadata storage.
 func (proc *Process) SetPrepareParamsWithReusableMeta(
 	prepareParams *vector.Vector,
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
 	metadata []bool,
 ) []bool {
-	metadata = prepareParamMetadataInto(prepareParams, isBin, kinds, metadata)
+	metadata = prepareParamMetadataWithTypesReuse(
+		prepareParams, isBin, kinds, nil, metadata)
 	proc.setPrepareParams(prepareParams, metadata, nil, false)
 	return metadata
+}
+
+// SetPrepareParamsWithReusableTypedMeta is the allocation-stable counterpart
+// of SetPrepareParamsWithTypedMeta. Cached prepared statements reuse the
+// packed metadata buffer across executions, including transitions between the
+// four-section category form and the twelve-section exact-type form.
+func (proc *Process) SetPrepareParamsWithReusableTypedMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
+	metadata []bool,
+) []bool {
+	metadata = prepareParamMetadataWithTypesReuse(
+		prepareParams, isBin, kinds, paramTypes, metadata)
+	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	return metadata
+}
+
+// SetPrepareParamsWithTypedMeta borrows prepareParams and additionally keeps
+// the concrete SQL type needed by prepared JSON comparisons. Exact types use a
+// separate metadata axis; they must never be folded into PrepareParamKind,
+// whose five values are conversion categories rather than SQL types.
+func (proc *Process) SetPrepareParamsWithTypedMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
+	binaryString ...[]bool,
+) {
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(
+		prepareParams,
+		prepareParamMetadataWithTypes(prepareParams, isBin, kinds, paramTypes),
+		binary,
+		false,
+	)
 }
 
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
@@ -231,42 +269,81 @@ func (proc *Process) SetOwnedPrepareParamsWithMeta(
 	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, true)
 }
 
+// SetOwnedPrepareParamsWithTypedMeta transfers prepareParams to proc and
+// preserves the same exact-type contract as SetPrepareParamsWithTypedMeta.
+func (proc *Process) SetOwnedPrepareParamsWithTypedMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
+	binaryString ...[]bool,
+) {
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(
+		prepareParams,
+		prepareParamMetadataWithTypes(prepareParams, isBin, kinds, paramTypes),
+		binary,
+		true,
+	)
+}
+
 func prepareParamMetadata(
 	prepareParams *vector.Vector,
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
 ) []bool {
-	return prepareParamMetadataInto(prepareParams, isBin, kinds, nil)
+	return prepareParamMetadataWithTypes(prepareParams, isBin, kinds, nil)
 }
 
-func prepareParamMetadataInto(
+func prepareParamMetadataWithTypes(
 	prepareParams *vector.Vector,
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
+) []bool {
+	return prepareParamMetadataWithTypesReuse(
+		prepareParams, isBin, kinds, paramTypes, nil)
+}
+
+func prepareParamMetadataWithTypesReuse(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	paramTypes []types.T,
 	metadata []bool,
 ) []bool {
 	paramCount := 0
 	if prepareParams != nil {
 		paramCount = prepareParams.Length()
 	}
-	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0) {
+	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0 && len(paramTypes) == 0) {
 		return metadata[:0]
 	}
 	hasMetadata := false
+	hasType := false
 	for i := 0; i < paramCount; i++ {
 		if (i < len(isBin) && isBin[i]) || (i < len(kinds) && kinds[i] != vector.PrepareParamNone) {
 			hasMetadata = true
-			break
+		}
+		if i < len(paramTypes) && paramTypes[i] != types.T_any {
+			hasType = true
 		}
 	}
-	if !hasMetadata {
+	if !hasMetadata && !hasType {
 		return metadata[:0]
 	}
-	metadataSize := paramCount * 4
-	if cap(metadata) < metadataSize {
-		metadata = make([]bool, metadataSize)
+	sectionCount := 4
+	if hasType {
+		sectionCount += 8
+	}
+	metadataLength := paramCount * sectionCount
+	if cap(metadata) < metadataLength {
+		metadata = make([]bool, metadataLength)
 	} else {
-		metadata = metadata[:metadataSize]
+		metadata = metadata[:metadataLength]
 		clear(metadata)
 	}
 	copy(metadata[:paramCount], isBin)
@@ -275,15 +352,23 @@ func prepareParamMetadataInto(
 		metadata[paramCount*2+i] = kinds[i]&2 != 0
 		metadata[paramCount*3+i] = kinds[i]&4 != 0
 	}
+	if hasType {
+		for i := 0; i < paramCount && i < len(paramTypes); i++ {
+			for bit := 0; bit < 8; bit++ {
+				metadata[paramCount*(4+bit)+i] = uint8(paramTypes[i])&(1<<bit) != 0
+			}
+		}
+	}
 	return metadata
 }
 
 // PrepareParamMetadataForRemote validates and adapts the packed prepare
 // parameter metadata at a process wire boundary. The first N entries are the
-// legacy binary flags; a complete extended payload has four N entries, with
-// the remaining three sections carrying PrepareParamKind bits. A receiver
-// below MORPCVersion12 may safely receive binary-only metadata, but must not
-// receive source-kind provenance that it would silently discard.
+// legacy binary flags; a category payload has four N entries, with the next
+// three sections carrying PrepareParamKind bits. A typed payload has twelve N
+// entries and uses the final eight sections for the concrete types.T value.
+// Each extension is rejected below its protocol version instead of silently
+// losing comparison semantics during a rolling upgrade.
 func PrepareParamMetadataForRemote(
 	service string,
 	paramCount int,
@@ -301,7 +386,7 @@ func PrepareParamMetadataForRemote(
 	if len(metadata) <= paramCount {
 		return append([]bool(nil), metadata...), nil
 	}
-	if len(metadata) != paramCount*4 {
+	if len(metadata) != paramCount*4 && len(metadata) != paramCount*12 {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"invalid prepare parameter metadata length %d for %d parameters",
 			len(metadata), paramCount)
@@ -309,16 +394,7 @@ func PrepareParamMetadataForRemote(
 
 	hasKind := false
 	for i := 0; i < paramCount; i++ {
-		kind := vector.PrepareParamNone
-		if metadata[paramCount+i] {
-			kind |= vector.PrepareParamInteger
-		}
-		if metadata[paramCount*2+i] {
-			kind |= vector.PrepareParamFloat
-		}
-		if metadata[paramCount*3+i] {
-			kind |= vector.PrepareParamBoolean
-		}
+		kind := preparedParamKindFromMetadata(metadata, paramCount, i)
 		if kind != vector.PrepareParamNone {
 			if kind > vector.PrepareParamBoolean {
 				return nil, moerr.NewInvalidInputNoCtxf(
@@ -328,7 +404,46 @@ func PrepareParamMetadataForRemote(
 		}
 	}
 
-	if prepareParamProtocolVersion(service) < defines.MORPCVersion12 {
+	protocolVersion := prepareParamProtocolVersion(service)
+	if len(metadata) == paramCount*12 {
+		hasType := false
+		for i := 0; i < paramCount; i++ {
+			var typ types.T
+			for bit := 0; bit < 8; bit++ {
+				if metadata[paramCount*(4+bit)+i] {
+					typ |= types.T(1 << bit)
+				}
+			}
+			if typ == types.T_any {
+				continue
+			}
+			expectedKind, supported := vector.PrepareParamKindForType(typ)
+			if !supported {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"invalid prepare parameter type %d at parameter %d", typ, i)
+			}
+			kind := preparedParamKindFromMetadata(metadata, paramCount, i)
+			if kind != expectedKind {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"prepare parameter type %s does not match kind %d at parameter %d",
+					typ.String(), kind, i)
+			}
+			hasType = true
+		}
+		if hasType {
+			if protocolVersion < defines.MORPCVersion36 {
+				return nil, moerr.NewNotSupportedNoCtxf(
+					"typed prepared parameters require MORPC protocol version %d",
+					defines.MORPCVersion36)
+			}
+		} else {
+			// Canonicalize an empty typed extension before applying the older
+			// source-kind compatibility gate below.
+			metadata = metadata[:paramCount*4]
+		}
+	}
+
+	if protocolVersion < defines.MORPCVersion12 {
 		if hasKind {
 			return nil, moerr.NewNotSupportedNoCtxf(
 				"prepared-parameter source provenance requires MORPC protocol version %d",
@@ -337,6 +452,24 @@ func PrepareParamMetadataForRemote(
 		return append([]bool(nil), metadata[:paramCount]...), nil
 	}
 	return append([]bool(nil), metadata...), nil
+}
+
+func preparedParamKindFromMetadata(
+	metadata []bool,
+	paramCount int,
+	position int,
+) vector.PrepareParamKind {
+	kind := vector.PrepareParamNone
+	if metadata[paramCount+position] {
+		kind |= vector.PrepareParamInteger
+	}
+	if metadata[paramCount*2+position] {
+		kind |= vector.PrepareParamFloat
+	}
+	if metadata[paramCount*3+position] {
+		kind |= vector.PrepareParamBoolean
+	}
+	return kind
 }
 
 // BinaryStringPrepareParamMetadataForRemote validates the v18-only prepared
@@ -402,7 +535,7 @@ func StringSourcePrepareParamMetadataForRemote(
 	if !hasMetadata {
 		return nil, nil
 	}
-	if prepareParamProtocolVersion(service) < defines.MORPCVersion36 {
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion37 {
 		return nil, nil
 	}
 	return append([]uint32(nil), metadata...), nil
