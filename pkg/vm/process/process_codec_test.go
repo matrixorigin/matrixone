@@ -323,12 +323,28 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 
 	proc, _ := newCodecTestProcess(t)
 	defer proc.Free()
+	concreteTypes := []types.T{
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32,
+	}
+	params := proc.GetPrepareParams()
+	for params.Length() < len(concreteTypes) {
+		require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	}
+	kinds := make([]vector.PrepareParamKind, len(concreteTypes))
+	for i := range kinds {
+		kinds[i] = vector.PrepareParamInteger
+	}
+	kinds[len(kinds)-1] = vector.PrepareParamFloat
+	binaryString := make([]bool, len(concreteTypes))
+	binaryString[1] = true
 	proc.SetPrepareParamsWithTypedMeta(
-		proc.GetPrepareParams(),
-		[]bool{false, false},
-		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamFloat},
-		[]types.T{types.T_int64, types.T_float32},
-		[]bool{false, true},
+		params,
+		make([]bool, len(concreteTypes)),
+		kinds,
+		concreteTypes,
+		binaryString,
 	)
 
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
@@ -338,15 +354,19 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 		"typed metadata must be rejected before the older kind gate can strip it")
 
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	validationParams := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(validationParams, []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(validationParams, []byte("2"), false, proc.Mp()))
+	defer validationParams.Free(proc.Mp())
 	mismatchedMetadata := prepareParamMetadataWithTypes(
-		proc.GetPrepareParams(), nil,
+		validationParams, nil,
 		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone},
 		[]types.T{types.T_int64, types.T_any})
 	_, err = PrepareParamMetadataForRemote("", 2, mismatchedMetadata)
 	require.ErrorContains(t, err, "does not match kind")
 
 	invalidTypeMetadata := prepareParamMetadataWithTypes(
-		proc.GetPrepareParams(), nil, nil, []types.T{types.T(255), types.T_any})
+		validationParams, nil, nil, []types.T{types.T(255), types.T_any})
 	_, err = PrepareParamMetadataForRemote("", 2, invalidTypeMetadata)
 	require.ErrorContains(t, err, "invalid prepare parameter type")
 
@@ -357,7 +377,7 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
 	info, err := proc.BuildProcessInfo("select ?, ?")
 	require.NoError(t, err)
-	require.Len(t, info.PrepareParams.IsBin, 24)
+	require.Len(t, info.PrepareParams.IsBin, len(concreteTypes)*12)
 
 	svc := NewCodecService(
 		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
@@ -371,10 +391,10 @@ func TestTypedPrepareParamMetadataRequiresVersion30AndRoundTrips(t *testing.T) {
 	decoded, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decoded.Free()
-	require.Equal(t, types.T_int64, decoded.GetPrepareParamType(0))
-	require.Equal(t, types.T_float32, decoded.GetPrepareParamType(1))
-	require.Equal(t, vector.PrepareParamInteger, decoded.GetPrepareParamKind(0))
-	require.Equal(t, vector.PrepareParamFloat, decoded.GetPrepareParamKind(1))
+	for i, concreteType := range concreteTypes {
+		require.Equal(t, concreteType, decoded.GetPrepareParamType(i))
+		require.Equal(t, kinds[i], decoded.GetPrepareParamKind(i))
+	}
 	require.True(t, decoded.GetPrepareParamIsBinaryString(1))
 }
 

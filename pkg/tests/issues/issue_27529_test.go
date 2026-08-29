@@ -216,5 +216,39 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			"set @issue_27529_signed = cast(9223372036854775807 as signed)")
 		_, err = db.ExecContext(ctx, "execute issue_27529_signed using @issue_27529_signed")
 		require.Error(t, err)
+
+		execSQLRequire(t, ctx, db,
+			`prepare issue_27529_tinyint from "select json_extract('128', '$') = ?"`)
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_tinyint")
+		directTinyintErr := db.QueryRowContext(ctx,
+			`select json_extract('128', '$') = cast(1 as tinyint)`).Scan(new(bool))
+		require.Error(t, directTinyintErr)
+		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as tinyint)")
+		_, err = db.ExecContext(ctx, "execute issue_27529_tinyint using @issue_27529_narrow")
+		require.EqualError(t, err, directTinyintErr.Error(),
+			"SQL EXECUTE must preserve the direct TINYINT overflow behavior")
+
+		// Rebinding a reused EXECUTE statement must replace, not retain, the
+		// previous assignment type in both directions.
+		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as signed)")
+		var narrowEqual bool
+		require.NoError(t, db.QueryRowContext(
+			ctx, "execute issue_27529_tinyint using @issue_27529_narrow").Scan(&narrowEqual))
+		require.False(t, narrowEqual)
+		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as tinyint)")
+		_, err = db.ExecContext(ctx, "execute issue_27529_tinyint using @issue_27529_narrow")
+		require.EqualError(t, err, directTinyintErr.Error(),
+			"a later TINYINT execution must not reuse BIGINT metadata")
+
+		execSQLRequire(t, ctx, db,
+			`prepare issue_27529_utinyint from "select json_extract('256', '$') = ?"`)
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_utinyint")
+		directUnsignedTinyintErr := db.QueryRowContext(ctx,
+			`select json_extract('256', '$') = cast(1 as tinyint unsigned)`).Scan(new(bool))
+		require.Error(t, directUnsignedTinyintErr)
+		execSQLRequire(t, ctx, db, "set @issue_27529_unsigned = cast(1 as tinyint unsigned)")
+		_, err = db.ExecContext(ctx, "execute issue_27529_utinyint using @issue_27529_unsigned")
+		require.EqualError(t, err, directUnsignedTinyintErr.Error(),
+			"SQL EXECUTE must preserve the direct TINYINT UNSIGNED overflow behavior")
 	})
 }

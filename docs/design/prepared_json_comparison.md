@@ -46,6 +46,13 @@ uint8-uint64, or FLOAT32 type. Process owns the packed per-execution metadata;
 its reusable buffer avoids steady-state allocation. Remote Process transport
 uses the existing category sections plus eight exact-type bits.
 
+For SQL `EXECUTE ... USING`, the concrete type comes from the binder's
+assignment-time user-variable type. Re-inferring it from the decoded Go value
+is not equivalent: that compatibility inference intentionally widens all
+signed integers to BIGINT and all unsigned integers to BIGINT UNSIGNED. Callers
+without binder metadata retain that conservative fallback, while an exact
+type/category mismatch fails closed.
+
 Exact types are intentionally sparse. BOOL has its own category; FLOAT64 and
 DECIMAL already select their established comparison domains. Adding exact
 metadata to unrelated parameters would increase wire size and rolling-upgrade

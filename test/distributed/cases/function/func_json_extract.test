@@ -400,6 +400,25 @@ set @json_signed_compare_param = cast(9223372036854775807 as signed);
 -- @regex("invalid argument operator cast, bad value \[JSON -> BIGINT\]",true)
 execute json_signed_compare_stmt using @json_signed_compare_param;
 deallocate prepare json_signed_compare_stmt;
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+select json_extract('128', '$') = cast(1 as tinyint);
+prepare json_tinyint_compare_stmt from 'select json_extract(''128'', ''$'') = ? as narrow_equal';
+set @json_narrow_compare_param = cast(1 as tinyint);
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+set @json_narrow_compare_param = cast(1 as signed);
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+set @json_narrow_compare_param = cast(1 as tinyint);
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+deallocate prepare json_tinyint_compare_stmt;
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT UNSIGNED\]",true)
+select json_extract('256', '$') = cast(1 as tinyint unsigned);
+prepare json_utinyint_compare_stmt from 'select json_extract(''256'', ''$'') = ? as unsigned_narrow_equal';
+set @json_unsigned_compare_param = cast(1 as tinyint unsigned);
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT UNSIGNED\]",true)
+execute json_utinyint_compare_stmt using @json_unsigned_compare_param;
+deallocate prepare json_utinyint_compare_stmt;
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
 select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;

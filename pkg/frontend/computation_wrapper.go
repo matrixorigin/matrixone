@@ -2076,6 +2076,42 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 	return runtimeTypes
 }
 
+// executeUserParamConcreteType returns the assignment-time SQL type carried by
+// the EXECUTE ... USING expression when that width changes JSON comparison
+// semantics. The Go value is only a compatibility fallback for callers which
+// cannot provide binder type metadata (for example, legacy stored-procedure
+// helpers); inferUserDefinedVarType deliberately widens Go integers and must
+// not replace a real SQL TINYINT/SMALLINT/INT type.
+func executeUserParamConcreteType(
+	proc *process.Process,
+	arg *plan.Expr,
+	param any,
+	kind vector.PrepareParamKind,
+	position int,
+) (types.T, error) {
+	if arg != nil {
+		concreteType := types.T(arg.Typ.Id)
+		if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported {
+			if expectedKind != kind {
+				return types.T_any, moerr.NewInternalErrorf(
+					proc.Ctx,
+					"EXECUTE parameter type %s does not match kind %d at parameter %d",
+					concreteType.String(), kind, position)
+			}
+			return concreteType, nil
+		}
+	}
+
+	// Preserve the pre-existing conservative behavior for untyped callers. In
+	// particular, arbitrary Go integer widths are intentionally normalized to
+	// BIGINT/UBIGINT rather than treated as proof of an SQL assignment type.
+	concreteType := types.T(inferUserDefinedVarType(param).Id)
+	if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported && expectedKind == kind {
+		return concreteType, nil
+	}
+	return types.T_any, nil
+}
+
 func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
@@ -2121,8 +2157,12 @@ func buildExecuteUserParams(
 			paramKinds[i] = prepareParamKindFromValue(param)
 		}
 		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
-			concreteType := types.T(inferUserDefinedVarType(param).Id)
-			if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported && expectedKind == paramKinds[i] {
+			var concreteType types.T
+			concreteType, err = executeUserParamConcreteType(proc, arg, param, paramKinds[i], i)
+			if err != nil {
+				return
+			}
+			if concreteType != types.T_any {
 				if paramTypes == nil {
 					paramTypes = make([]types.T, len(args))
 				}

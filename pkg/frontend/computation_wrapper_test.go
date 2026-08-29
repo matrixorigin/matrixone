@@ -1713,6 +1713,71 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
 }
 
+func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 118)
+	defer prepareStmt.Close()
+
+	tests := []struct {
+		name  string
+		typ   types.T
+		value any
+	}{
+		{name: "int8", typ: types.T_int8, value: int8(1)},
+		{name: "int16", typ: types.T_int16, value: int16(1)},
+		{name: "int32", typ: types.T_int32, value: int32(1)},
+		{name: "int64", typ: types.T_int64, value: int64(1)},
+		{name: "uint8", typ: types.T_uint8, value: uint8(1)},
+		{name: "uint16", typ: types.T_uint16, value: uint16(1)},
+		{name: "uint32", typ: types.T_uint32, value: uint32(1)},
+		{name: "uint64", typ: types.T_uint64, value: uint64(1)},
+		{name: "float32", typ: types.T_float32, value: float32(1)},
+		{name: "typed null", typ: types.T_int8, value: nil},
+	}
+	args := make([]*plan.Expr, 0, len(tests))
+	typedPositions := make([]int32, 0, len(tests))
+	wantTypes := make([]types.T, 0, len(tests))
+	for i, test := range tests {
+		require.NoError(t, ses.setUserDefinedVarWithType(
+			test.name, test.value, "", false, plan.Type{Id: int32(test.typ)}))
+		args = append(args, &plan.Expr{
+			Typ:  plan.Type{Id: int32(test.typ)},
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: test.name}},
+		})
+		typedPositions = append(typedPositions, int32(i))
+		wantTypes = append(wantTypes, test.typ)
+	}
+
+	params, _, _, paramKinds, paramTypes, err := buildExecuteUserParams(
+		cw.proc, args, typedPositions)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+	require.Equal(t, wantTypes, paramTypes)
+	for i, test := range tests {
+		wantKind := vector.PrepareParamInteger
+		if test.typ == types.T_float32 {
+			wantKind = vector.PrepareParamFloat
+		}
+		require.Equal(t, wantKind, paramKinds[i], test.name)
+	}
+	require.True(t, params.IsNull(uint64(len(tests)-1)))
+}
+
+func TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 119)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVarWithKind(
+		"mismatched", int8(1), "", false, vector.PrepareParamFloat))
+
+	params, _, _, _, _, err := buildExecuteUserParams(cw.proc, []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int8)},
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "mismatched"}},
+	}}, []int32{0})
+	require.ErrorContains(t, err, "EXECUTE parameter type TINYINT does not match kind")
+	require.Zero(t, params.Length())
+	require.Nil(t, params.GetData())
+	require.Nil(t, params.GetArea())
+}
+
 func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 104)
 	defer prepareStmt.Close()
