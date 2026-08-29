@@ -1,142 +1,68 @@
 # LOAD DATA Unique-Index Lock Ownership
 
-- Status: mandatory design review pending
-- Design revision: v5
-- Supersedes: v1 at commit `30a0943ec3`; unapproved v2 draft; v3 at commit
-  `44d0d92292`; v4 at commit `47c3f1e748`
+- Status: causal validation and mandatory design review pending
+- Design revision: v6
+- Supersedes: v1-v5 in this PR
 - Tracking issue: [matrixorigin/matrixone#27775](https://github.com/matrixorigin/matrixone/issues/27775)
-- Implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
-- Authors: XuPeng-SH
+- Design and implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
+- Reused prerequisite: TN-ordered logtail read barrier from
+  [matrixorigin/matrixone#27842](https://github.com/matrixorigin/matrixone/pull/27842),
+  active at `MORPCVersion39`
 - Required reviewers: one SQL planner/compile owner and one lockservice owner
+- Authors: XuPeng-SH
 - Last updated: 2026-08-30
 
-## 1. Decision summary
+> Production implementation is intentionally absent from the current PR head.
+> The #26706 causal boundary must first be demonstrated. The exact v6 revision
+> must then be approved by both required owner perspectives before production
+> implementation starts. Green docs-only CI is delivery hygiene, not causal,
+> implementation, or performance evidence.
 
-Optimize only the modern planner's existing lock shape for a deliberately
-narrow class of `LOAD DATA` statements:
+## 1. Decision
 
-```text
-statement-owned autocommit transaction
-AND TxnOptions.Autocommit=true
-AND TxnOptions.ByBegin=false
-AND pessimistic RC transaction
-AND modern LOAD plan
-AND large-load path (Query.LoadWriteS3=true)
-AND one finite planner input-size estimate of at least 1 GiB
-AND automatic statement retry is enabled
-AND no prepared/session-cached logical generation is reused
-AND the process transaction client implements the close-aware snapshot-fence
-    capability for this transaction operator
-AND ordinary, non-temporary, non-partitioned user base table
-AND real primary key
-AND physical base primary key is BIGINT or the canonical binary VARCHAR
-    composite-primary-key column
-AND no outgoing foreign keys
-AND no incoming foreign-key references
-AND at least one existing default/BTREE synchronous UNIQUE row-lock target
-    whose hidden physical primary-key type is exactly T_int64
-```
+Optimize only a narrow, positively identified class of large modern `LOAD DATA`
+statements. The existing logical plan remains unchanged: it contains one
+Exclusive full-domain base-table target and precise Exclusive row targets for
+each synchronous regular UNIQUE hidden table.
 
-The planner keeps the exact logical lock shape it produces on `main`: one
-Exclusive full-domain base-table target followed by precise Exclusive row
-targets for writable regular UNIQUE hidden tables. Compilation performs a
-two-pass, fail-closed analysis of that existing modern `LOCK_OP`. For each promotable
-hidden target, it copies only the physical table ID and primary-key type into
-statement-local state, removes that exact target from the runtime `LockOp`, and
-acquires one Exclusive full-domain hidden-table lock after the existing base
-lock. Hidden targets that are not promotable remain exact per-row locks.
+On physical generation zero, compile validates the complete plan and
+collects a statement-local vector of promotable hidden targets without removing
+their row targets. Before any runtime source is initialized, the coordinator:
 
-The acquisition order is:
+1. acquires existing metadata/general locks;
+2. acquires the existing base-table full-domain lock;
+3. acquires one Exclusive full-domain lock for each promoted hidden UNIQUE table,
+   ordered by physical table ID;
+4. invokes the existing `engine.LogtailReadBarrier` through a bounded context;
+5. advances the same pessimistic-RC transaction snapshot beyond the returned
+   applied frontier; and
+6. returns one ordinary physical retry.
+
+The read barrier already establishes the required real-time boundary for a
+commit that has completed at TN:
 
 ```text
-metadata locks
-  -> existing general/base table locks
-  -> promoted hidden UNIQUE tables by ascending physical table ID
-  -> construct the coordinator HLC strict upper-bound fence
-  -> wait for logtail and advance the RC snapshot past that bound
-  -> record a compiler-local execution proof
-  -> one physical retry with the same transaction-owned locks and proof
-  -> runtime data-source initialization on the retried generation
-  -> first input row enters the pipeline
+commit C completes before barrier B begins
+  => C precedes B in TN publication order
+  => C's logtail precedes B's response
+  => the local CN applies C before B returns
 ```
 
-After all ownership locks are held, one coordinator HLC strict upper-bound
-fence acts as the RC freshness linearization point for both the base and
-promoted hidden tables. Under the configured max-clock-offset contract, every
-lock-aware writer that committed before the last acquisition has a commit
-timestamp no greater than that bound. Advancing logtail and the transaction
-snapshot strictly past it, then physically recompiling, closes both active-wait
-and no-active-conflict windows without relying on owner-local
-`tableCommittedAt` surviving a bind change. A compiler-local execution proof
-carries the exact target vector and completed fence only across ordinary
-physical retries in the same `Compile.Run`. The retried generation reuses the
-now-held transaction locks, validates that proof, and initializes all sources
-at the refreshed snapshot.
+For a committing pessimistic holder, TN completion and logtail-FIFO admission
+precede lock release. LOAD can acquire the conflicting domain only after that
+release, and it submits the marker afterwards. The marker is therefore ordered
+after that commit even if the holder's client-facing `Commit` call has not yet
+returned. The barrier also covers the already-committed/no-active-conflict
+window. No owner-local lock timestamp, future HLC, idle heartbeat, new wire
+message, or new transaction-client wait protocol is required.
 
-Planning-time file existence checks, metadata/statistics reads, and the existing
-prefix read used for `IGNORE LINES` remain as on `main`; they are outside the
-runtime ownership linearization claim.
+On the retried physical generation, an exact coordinator-local proof authorizes
+compile to remove only the covered hidden row targets from a local `LockOp` copy.
+The canonical plan is never mutated. A logical rebuild or any proof mismatch
+permanently disables the optimization for that `Compile.Run` and preserves exact
+`main` behavior.
 
-The optimization does not change planner routing, `plan.proto`, generic table
-lock semantics, the unsupported-DML fallback, FK plans, pessimistic SI,
-optimistic transactions, or any hidden physical row-lock target other than
-`T_int64`. It does not modify any generic table-range implementation. Every
-other hidden target type, including FLOAT/DOUBLE and serialized composite keys,
-stays on its precise row lock in this PR.
-
-Revision v5 preserves the nine corrections made through v4 and closes three
-additional review findings:
-
-1. v1/v2 did not preserve RC visibility when a direct hidden writer committed
-   after LOAD's snapshot but before hidden full-lock acquisition, and an
-   owner-local commit timestamp alone is not generation-stable;
-2. planner-generated full-lock targets and fallback metadata changes were
-   unnecessary because the modern plan already contains all exact physical
-   row targets needed for a compiler-local transformation;
-3. admitting every generic table-lock key type is not required to fix the
-   BIGINT UNIQUE reproducer, so v3 admits only `T_int64` and retains every
-   other hidden target's row locks;
-4. `LoadWriteS3=true` alone is not a large-workload guarantee: it can include
-   roughly 1 MiB inputs and small compressed files, for which one future-clock
-   wait would be a material regression;
-5. inferring a completed fence merely because the mutable transaction snapshot
-   is newer than a plan snapshot is fragile. V3 carries an explicit,
-   fail-closed execution proof instead;
-6. relying on every generic base-table range was broader than the evidence.
-   V3 admits only the issue fixtures' `T_int64` base PK and canonical binary
-   `T_varchar` composite-PK encoding, each with an independent range oracle;
-7. fencing once per definition-rebuilt logical generation left optimization
-   wait/retry amplification unbounded under catalog churn. V3 permanently
-   disables promotion for the remainder of a Run before any logical rebuild;
-   and
-8. a large LOAD's external object size can change outside catalog invalidation.
-   Reused logical generations therefore fail closed through
-   `planGenerationReused`; current direct modern LOAD already becomes
-   non-cacheable when compilation reaches its `MULTI_UPDATE`, independently of
-   the 1 GiB admission threshold; and
-9. v3 called `TxnOperator.UpdateSnapshot` and claimed that `TxnClient.Close`
-   independently terminated the wait, but that operator entry point receives no
-   client-close channel. V4 makes the transaction client own the complete
-   wait-and-install operation. It waits without holding either the client
-   lifecycle gate or the operator mutex, then linearizes close, transaction
-   generation, terminal status, and monotonic snapshot installation together;
-10. v4 admitted explicit multi-statement transactions even though #27775 needs
-    only one statement. A stalled future fence could then retain base and
-    hidden full-domain locks beyond a failed statement and combine with locks
-    or workspace state from earlier statements. V5 positively admits only
-    `Autocommit=true && ByBegin=false`, making the frontend's existing terminal
-    commit/rollback the owner of every acquired prefix;
-11. v4 proposed a planner-time size-dependent `Node.NotCacheable` write and a
-    shared planner/compiler estimate helper. Current compilation already marks
-    every reachable `MULTI_UPDATE` non-cacheable before frontend cache
-    publication. V5 removes the duplicate policy and keeps the 1 GiB estimate
-    solely as a compiler fixed-cost gate; and
-12. v4 required fence-duration evidence without defining a lock-safe emission
-    point. V5 times exactly the close-aware timestamp wait, outside all client
-    lifecycle/operator locks, and emits one bounded-cardinality metric sample
-    and outcome per attempted fence, with no per-heartbeat/target/batch log.
-
-## 2. Problem and evidence
+## 2. Problem, hypothesis, and missing evidence
 
 Issue #27775 reports a reproducible indexed-LOAD regression on the same 3-CN
 TKE topology and data source:
@@ -148,1207 +74,757 @@ TKE topology and data source:
 | PK + indexes, 100M | 116.962 s | 253.823 s | 2.170x |
 | Composite PK + indexes, 1B | 1,150.165 s | 2,782.444 s | 2.419x |
 
-The no-index control moved only 7-9%, while indexed cases moved 115-142%.
-Profiles correlate the regression with lock contention: mutex delay rose 3.12x
-and `_LostContendedRuntimeLock` became 59.1% of mutex delay in the bad run.
+Equal-window profiles show substantially more mutex delay and
+`runtime._LostContendedRuntimeLock` while CPU utilization falls. The modern
+indexed LOAD path repeatedly encodes and submits hidden UNIQUE lock keys; owner
+side accumulation/coarsening is correlated with the regression. The no-index
+control does not pay that work.
 
-The changed code path is mechanically consistent with that evidence:
+This is still a performance hypothesis, not a proven root cause. In particular,
+the required A/B comparison between #26706's direct parent
+`6742f958d466ac6bd538c631aaafbddff8ad3329` and merge
+`35db232dfc3be3264c4dc0d2547a3429624392fb` has not been run. The old 5M
+experiment changed the indexed/no-index ratio by only about 2.5% after
+normalization. It is mechanism evidence and cannot establish causality or close
+#27775.
 
-1. a real-primary-key LOAD already acquires an Exclusive base-table range lock
-   before the pipeline starts;
-2. the modern path still encodes and submits Exclusive keys/ranges for each
-   synchronously maintained regular UNIQUE hidden table on every batch;
-3. large loads repeatedly rebuild ownership for the same physical hidden table
-   and can cross the lock-row budget, causing owner-side coarsening and extra
-   lockservice bookkeeping/contention.
+### 2.1 Causal gate before implementation
 
-The exact issue fixtures use ordinary, non-partitioned tables with no FK
-relationships and one `UNIQUE BIGINT(col4)` key. One base PK is
-`BIGINT(id)`; the other is composite `PRIMARY KEY(id BIGINT, col1 TINYINT)` and
-therefore uses the canonical binary VARCHAR composite column. They are handled
-by the modern planner, and the single-part hidden UNIQUE primary key resolves
-to `types.T_int64`. The v5 base and hidden range restrictions therefore still
-cover both reported 100M shapes and the composite 1B shape.
+Before production code is added to this PR:
 
-### 2.1 Freshness counterexample found during review
+1. deploy those two exact boundary commits on the same 3-CN/1-TN TKE topology;
+2. alternate them for at least three successful 100M composite-PK/index runs
+   each, with a same-run no-index control;
+3. report medians, spread, normalized indexed/no-index ratio, exact SQL time,
+   lock requests/coarsening, mutex profile, and effective configuration; and
+4. require a reproducible boundary jump aligned with hidden-UNIQUE lock work.
 
-The existing per-key hidden row lock passes its key batch to `doLock`, so RC
-can ask `PrimaryKeysMayBeModified` whether a matching key committed after the
-snapshot and request statement retry. `LockTableWithMode` passes `bat=nil`;
-the current `hasNewVersionInRange` immediately returns false for a nil batch.
+If the boundary does not reproduce, this implementation is abandoned and the
+`37c75ed2..32053f54` range is bisected. If the boundary reproduces but lock
+request/coarsening and mutex evidence do not move with it, the mechanism is
+rejected and profiling continues. A design approval may record that v6 is
+correct conditional on the hypothesis, but it does not authorize production
+implementation until this gate passes.
 
-The local lock table still returns its latest `tableCommittedAt` as
-`Result.Timestamp` for a successful no-conflict range acquisition. Therefore
-the following reachable order is unsafe if precise hidden row locks are simply
-removed:
+After implementation, a separate exact-current-main versus exact-final-head
+100M/1B endpoint gate is still mandatory. The first gate establishes causality;
+the second establishes that the chosen repair is effective and does not regress
+the control.
+
+## 3. First-principles contract
+
+### 3.1 Safety invariants
+
+For every optimized statement:
+
+1. **Ownership:** before the first input row enters the pipeline, the transaction
+   owns the existing base full domain and every promoted hidden UNIQUE full
+   domain in one deterministic order.
+2. **Freshness:** the runtime snapshot is later than an applied TN publication
+   frontier ordered after every earlier TN commit whose pessimistic lock release
+   allowed statement-wide ownership to be established, plus every commit that
+   had already completed before the barrier began.
+3. **Generation:** only a later physical generation in the same `Compile.Run`,
+   transaction, schema target vector, and logical generation may consume the
+   ownership/freshness proof.
+4. **Fallback:** if positive eligibility or the exact proof is unavailable, no
+   hidden row target is removed and behavior is exact `main`.
+5. **Cleanup:** compile never unlocks. The statement-owned autocommit transaction
+   is the sole owner of acquired locks and releases them exactly once through
+   terminal commit or whole-transaction rollback.
+
+Useful negations, which are review and test oracles:
+
+- a hidden row target is removed before every ownership lock and the barrier
+  have succeeded;
+- a direct hidden-table commit entered TN publication order before its
+  conflicting lock was released but remains absent from the retried snapshot;
+- a logical rebuild, prepared/cache reuse, remote fragment, restarted
+  transaction, or pooled compiler consumes stale proof;
+- cancellation or timeout leaves the transaction running with a partial lock
+  prefix;
+- an unsupported protocol sends a v39 barrier message;
+- one `Compile.Run` emits more than one optimization barrier or retry.
+
+### 3.2 Liveness invariant
+
+Every blocking edge reaches holder release, caller cancellation, client/stream
+failure, deadlock resolution, or a finite timeout. In particular, all extra
+promotion work runs under one statement-wide deadline that is independent of
+the 24-hour default frontend session timeout. It starts immediately before the
+first promoted hidden lock and covers every promoted lock, the logtail barrier,
+and snapshot installation.
+
+The promotion budget is:
 
 ```text
-T0: LOAD obtains RC snapshot
-T1: direct hidden-table writer commits key K and releases its row lock
-T2: LOAD acquires hidden full-domain lock with no active conflict
-T3: generic table-lock path sees bat=nil, does not refresh, and returns success
-T4: LOAD duplicate scan starts at T0 and can miss K
+configured = txnclient.LockWaitTimeoutFromTxn(txnOp)
+hard cap   = defines.DefaultLockWaitTimeoutSeconds (currently 120 s)
+internal budget = min(configured, hard cap)
+effective end   = min(now + internal budget, caller deadline if any)
 ```
 
-A deterministic diagnostic probe against the real local lockservice reproduced
-this exact result: the writer unlocked at `snapshot.Next()`, the later
-`LockTableWithMode` returned `nil`, and the expected `ErrTxnNeedRetry` assertion
-failed. The permanent implementation test must first fail on exact `main` and
-then pass through the LOAD-only freshness API. The diagnostic probe itself is
-not committed as a test that asserts broken behavior.
+Eligibility requires `configured > 0`. The frontend system variable has a
+positive minimum; a missing internal/legacy value therefore fails closed to
+exact `main` before any promoted hidden lock is acquired. Compiler creates the
+child with `context.WithTimeoutCause(..., lockservice.ErrLockTimeout)` and passes
+it through the existing context-aware table-lock helper and barrier. Only that
+internal cause is reported as the ordinary non-retryable lock-wait timeout
+class. If the parent caller cancels or its own deadline wins, the original
+caller error is preserved. Neither case is converted into an automatic retry,
+which would amplify an unhealthy lock/logtail path.
 
-Further review found that `tableCommittedAt` cannot be the correctness fence.
-It is owner-local, is not carried by `LockTable` binding metadata, and a new
-`localLockTable` initializes it from that owner's `clock.Now()`. Lockservice RPC
-does not currently install the MORPC HLC codec header, so a bind change/restart
-does not itself causally advance the new owner's HLC from the requesting CN.
-The new value may also represent a fresh owner or committed no-op rather than a
-data mutation. Treating it as a generation-stable mutation timestamp would be
-an unsupported assumption.
+The 120-second hard cap bounds the aggregate extra promotion phase, not each
+hidden target independently. It is a safety ceiling, not the expected latency.
+The existing TN-ordered barrier normally waits only for real queue/network/apply
+lag and has no fixed `MaxOffset` delay. Final scale evidence must show its
+distribution and prove the cap does not create false failures.
 
-V5 therefore does not use `Result.Timestamp`, `HasConflict`, `HasPrevCommit`,
-or `tableCommittedAt` to decide LOAD data freshness. It first acquires every
-required ownership lock with ordinary data-version handling deferred, then
-takes the coordinator clock's upper-bound timestamp. Waiting for applied
-logtail and updating the RC snapshot strictly past that bound gives one
-statement-wide fence without a new wire field, owner-state migration, storage
-scan, or per-target retry.
-
-This remains a root-cause hypothesis for the performance endpoint until the
-controlled 100M/1B evidence in section 11 passes. Eliminating coarsening is
-mechanism evidence, not endpoint proof. Existing 5M measurements improve the
-indexed/no-index ratio by only about 2.5% after normalization and cannot close
-the performance claim.
-
-## 3. Goals and non-goals
-
-### Goals
-
-- Eliminate input-row/batch-proportional UNIQUE lock encoding and submission
-  for the issue's modern pessimistic-RC LOAD class.
-- Preserve serial ownership of each physical hidden table whose precise row
-  locks are removed.
-- Preserve RC visibility for commits before acquisition, including the
-  no-active-conflict window.
-- Keep memory, lock requests, retries, and ordering work schema bounded.
-- Preserve cancellation, whole-transaction rollback, retry/re-entry,
-  plan-generation isolation, and compiler-pool behavior for statement-owned
-  autocommit execution.
-- Prove the performance endpoint on the original 100M reproducer before merge.
-
-### Non-goals
-
-- Changing LOAD planner routing or the unsupported-DML fallback.
-- Changing or repairing FK LOAD planning, validation, or lock behavior.
-- Optimizing pessimistic SI or optimistic transactions.
-- Optimizing `BEGIN`/`START TRANSACTION`, `autocommit=0`, or any transaction
-  that can contain an earlier or later user statement.
-- Optimizing temporary, partitioned, system, external, subscription, or direct
-  physical hidden-table LOAD targets.
-- Fencing referenced parents or changing disjoint-key FK concurrency.
-- Optimizing secondary non-UNIQUE, asynchronous, cron-maintained, or irregular
-  index families.
-- Optimizing a base physical PK shape other than issue #27775's `T_int64` or
-  canonical binary `T_varchar` composite-PK column.
-- Promoting any hidden physical key type other than `T_int64`, or correcting
-  generic table-lock endpoints for those types in this PR.
-- Redesigning generic table-lock freshness, lock escalation, lockservice wire
-  compatibility, or intention locking.
-- Adding a new public SQL error class.
-
-## 4. Eligibility contract
-
-Eligibility is evaluated in compile against the exact modern plan before any
-target is removed. The transformation activates only when every statement-level
-condition below is true:
-
-1. `Query.LoadTag` and `Compile.stmt` both identify the same LOAD, its
-   duplicate mode is the default error mode rather than LOAD IGNORE/REPLACE,
-   it has no multi-account `Accounts` target, and the current transaction is
-   pessimistic RC with a non-empty transaction ID. Its immutable
-   `TxnOptions` must positively report both `Autocommit == true` and
-   `ByBegin == false`. `BEGIN` can retain `Autocommit=true`, so testing only
-   `Autocommit` is insufficient; `autocommit=0` reports false. This exact pair
-   is populated when the operator is created and limits the optimization to a
-   transaction whose user-visible lifetime is this statement. On a terminal
-   execution error, current `finishTxnFunc` calls `rollbackTxnFunc`, and
-   `TxnHandler.rollback` takes the whole-transaction branch when neither
-   `OPTION_BEGIN` nor `OPTION_NOT_AUTOCOMMIT` is set. An integration test freezes
-   that options-to-terminal-cleanup correspondence instead of making compile
-   depend directly on mutable frontend session bits.
-2. `Query.LoadWriteS3 == true`, `Compile.disableRetry == false`,
-   `Compile.isPrepare == false`, and `Compile.planGenerationReused == false`.
-   The reachable graph has exactly one LOAD `EXTERNAL_SCAN`; its `Stats.Cost`
-   and `Stats.Rowsize` are finite and positive, and their overflow-checked
-   product is at least the compiler-local constant
-   `loadUniqueLockPromotionMinEstimatedBytes = 1 << 30`. For current LOAD
-   planning that product approximates known input bytes. Unknown-size, smaller,
-   prepare-time and reused prepared/session-cache generations keep exact `main`
-   behavior so the mandatory upper-bound wait and physical retry cannot regress
-   latency-sensitive statements or inherit proof from another transaction. A
-   freshly rebuilt prepared generation has `planGenerationReused=false` and is
-   intentionally treated like any other fresh logical plan when
-   `Compile.isPrepare=false`; admission depends on execution-generation
-   freshness, not on SQL protocol origin.
-3. The `LOCK_OP` has a canonical non-nil `Node.TableDef` and one existing base
-   target with `LockTable=true`, effective Exclusive mode, and a non-zero
-   `TableId` equal to both `Node.TableDef.TblId` and its `ObjRef.Obj`. That
-   target has `LockTableAtTheEnd=false`,
-   `Block=false`, `HasPartitionCol=false`, and `LockRows=nil`.
-4. The resolved base `ObjRef` is non-nil, has no `PubInfo`, does not opt out of
-   metadata locking, names a non-system database, and has an object ID matching
-   the base target and `TableDef`; the base is not a catalog system table.
-5. `TableDef.TableType == catalog.SystemOrdinaryRel`,
-   `TableDef.IsTemporary == false`, `TableDef.FeatureFlag == 0`, and
-   `TableDef.Partition == nil`. The zero feature flag deliberately rejects an
-   index table, partitioned parent/child, and every external-table subtype.
-6. `TableDef.Pkey` exists and is not the fake primary key. The base target's
-   key type exactly matches the authoritative physical PK column. It is either
-   `types.T_int64`, or it is the canonical
-   `catalog.CPrimaryKeyColName`/`CompPkeyCol` with `types.T_varchar`,
-   `types.MaxVarcharLen`, zero scale, and binary charset. An ordinary
-   user-declared VARCHAR PK and every other base physical type are ineligible.
-7. `len(TableDef.Fkeys) == 0` and `len(TableDef.RefChildTbls) == 0`, regardless
-   of the current `foreign_key_checks` value.
-8. Every `TableDef.Indexes` entry has `TableExist=true`, an empty/default or
-   BTREE algorithm, an empty algorithm-table subtype, and a successful false
-   result from `indexplugin.IsAsync`. RTree, fulltext, vector, master, malformed
-   async parameters, and every separate post-DML/cron maintenance topology
-   disable the transform.
-9. The reachable statement graph contains exactly one candidate ownership
-   `LOCK_OP`; its copied base target is the statement's only pre-pipeline data
-   table lock. Any additional full-table target or general data-lock source
-   disables the optimization, keeping the ownership order and the number of
-   optimization-induced retries independently auditable.
-10. Every non-base lock target is recognized as an existing regular UNIQUE
-   index target from this `TableDef`; an unknown target disables the whole
-   transformation.
-11. At least one recognized hidden target is promotable.
-
-A recognized hidden target must satisfy all of these:
-
-- it is an existing precise row target with both `LockTable=false` and
-  `LockTableAtTheEnd=false`, `Block=false`, `HasPartitionCol=false`, and
-  `LockRows=nil`;
-- its effective mode is Exclusive;
-- its `ObjRef`, physical table ID, object ID, and key type are non-zero and
-  internally consistent;
-- its object name equals exactly one `IndexDef.IndexTableName` with
-  `Unique=true` and the statement-wide default/BTREE synchronous checks above;
-- it maps exactly to one `MULTI_UPDATE.UpdateCtx` whose `ObjRef` and
-  `TableDef.TblId` match the target. The hidden `TableDef` is the authoritative
-  source of the physical primary-key type and metadata-lock identity; its
-  primary-key definition and column must both exist and must not be fake;
-- the target and matching update-context `ObjRef` both have `PubInfo=nil` and
-  `NotLockMeta=false`, and agree on tenant, schema, object name, and object ID;
-- it is already present in the modern planner's lock target list. Absence is
-  authoritative for the existing static-NULL proof; compile does not recreate
-  an omitted target;
-- its lock-target key type exactly matches the hidden primary-key column type,
-  including OID, width, scale, and charset; and
-- that physical type is exactly `types.T_int64`.
-
-There is no open-ended allowlist in v5. A recognized target whose hidden key is
-not `T_int64` remains in the runtime `LockOp` with its exact `main` row-lock
-behavior. In particular, scalar FLOAT32/FLOAT64 and composite keys represented
-by a serialized byte/string physical key are not promoted.
-
-The analysis is query-wide, two-pass, and atomic from the plan's perspective:
-
-1. walk only nodes reachable from `Query.Steps`, reject invalid child indexes
-   and cycles, and classify every reachable `LOCK_OP`, mutation context, and
-   target without mutating a node or compiler lock state;
-2. only after the complete positive decision, register value copies and build
-   a filtered physical `LockOp` target list.
-
-Missing metadata, an unsupported future lock shape, an unexpected extra
-target, an identity mismatch, or contradictory duplicate metadata disables the
-optimization and preserves the exact `main` target list. The intended candidate
-set may be a type-selected subset (for example, promote `T_int64` while keeping
-FLOAT row scoped), but that complete classified set is installed atomically or
-not at all. A late validation failure cannot leave an earlier target promoted,
-and ineligibility introduces no new user-visible internal error.
-
-## 5. Required invariants
-
-### 5.1 Safety
-
-1. Before an optimized LOAD initializes a runtime data source or admits its
-   first input row, the transaction owns an Exclusive full-domain lock for the
-   base and every physical hidden table whose runtime row target was removed.
-2. A row target is removed only for the exact validated physical table ID and
-   key type copied into the promoted set.
-3. After the final ownership lock is acquired, the coordinator constructs a
-   non-empty HLC strict upper-bound fence. Under the configured max-offset
-   contract, every lock-aware commit that completed before acquisition is no
-   later than that bound. The transaction client's close-aware fence advancer
-   applies logtail and atomically installs a snapshot strictly greater than it
-   before any source can initialize.
-4. The no-active-writer order in section 2.1 and owner rebind/restart are
-   covered. Freshness does not depend on `Result.Timestamp`, `HasConflict`,
-   `HasPrevCommit`, or an owner-local timestamp surviving generations.
-5. No Shared full-domain target is created by this optimization.
-6. Explicit/multi-statement, small, retry-disabled, prepare-time/reused-plan,
-   SI, optimistic, fallback, FK-related, temporary, partitioned, fake-PK,
-   direct system/internal-target, and ordinary non-LOAD statements retain exact
-   `main` row/table lock targets.
-7. A statically NULL UNIQUE target stays absent only because the modern planner
-   already omitted it. Compile neither reruns nor broadens that proof.
-8. The existing base full-domain endpoint is admitted only for encoded
-   `T_int64`, or canonical binary composite-PK `T_varchar` from encoded empty
-   through `EncodeStringTypeMax`. The promoted hidden endpoint covers the
-   complete encoded `T_int64` domain, including `math.MinInt64` and
-   `math.MaxInt64`. Every other base shape is ineligible and every other hidden
-   physical key type retains row locks.
-9. Duplicate discovery of one identical physical target produces one
-   Exclusive request. Different physical IDs are never coalesced.
-10. The canonical logical plan and target flags are not rewritten by the
-    optimization. Prepared execution, ordinary retry compilation, and an
-    isolation-mode change cannot inherit a previous execution's filtered list.
-11. Existing metadata locks cover the base and every promoted hidden mutation
-    object before physical locks are acquired. Missing coverage disables the
-    transformation.
-12. Only the top-level coordinator compile owns and acquires the promoted slice.
-    Remote fragments receive neither a second promoted request nor private
-    freshness state.
-13. A physical compile generation built before a freshness update is never
-    reused. This includes relation handles, remote-scan tombstones, source
-    parameters, and remote pipeline payloads derived from the old snapshot.
-14. Snapshot ordering alone is never treated as proof that a fence completed.
-    Admission after retry requires the same compiler-local execution-proof
-    record, exact value-equal ownership target vector, transaction ID,
-    non-empty fence, a later physical execution generation, and a current
-    snapshot strictly greater than that fence. A logical-plan rebuild and a
-    prepare-time/reused-plan execution cannot inherit this record.
-
-The ownership linearization point for one target is successful completion of
-its lockservice full-domain acquisition. Statement-wide ownership is complete
-after the last target succeeds. The visibility linearization point is later:
-application of the post-acquisition coordinator HLC fence to the RC
-snapshot. Runtime source initialization is admitted only on the physically
-rebuilt generation after both points are complete.
-
-### 5.2 Liveness
-
-1. Existing general/base locks keep exact `main` ordering. The LOAD-only hidden
-   order is ascending physical table ID.
-2. Current ordinary INSERT/UPDATE/DELETE/REPLACE plans for the eligible schema
-   reach the base namespace before hidden row locks or writes; this precondition
-   is frozen by modern and legacy plan-order tests.
-3. One `Compile.Run` emits at most one optimization-induced ordinary data-retry
-   signal, after base and all promoted hidden locks are acquired and the global
-   upper-bound fence succeeds. An ordinary physical retry inherits the same
-   local proof, validates its fence, and does not emit it again. Any logical-plan
-   rebuild sets a root-owned sticky disable bit before rebuilding; that Run then
-   uses exact `main` lock targets and can never construct another optimization
-   fence, even if the rebuilt plan would otherwise qualify.
-4. A physical ownership wait terminates through lock acquisition,
-   statement-context cancellation, lock timeout, or transaction/deadlock
-   handling. The later fence wait terminates through applied-frontier progress,
-   statement-context cancellation/deadline, or transaction-client close. It
-   holds no lock needed by a concurrent terminal operation.
-5. Failure after acquiring a prefix returns the substantive error. Locks remain
-   transaction-owned and are released exactly once by commit/rollback rather
-   than independently by the compiler.
-6. A freshness retry retains acquired locks under the same statement-owned
-   transaction and re-enters with a refreshed snapshot. If acquisition,
-   fencing, physical retry, source initialization, execution, or commit fails,
-   the existing autocommit terminal path rolls back the whole transaction and
-   releases every acquired prefix. The compiler never unlocks independently.
-7. Compiler pooling and retry-compile release clear every retained LOAD value
-   before reuse.
-8. No eligible transaction has an earlier or later user statement, so the
-   design has no cross-statement workspace, retained-lock, or reentrant
-   row-to-range obligation. Ordinary retry re-entry under the same transaction
-   remains reentrant and cannot create a second ownership request.
-
-### 5.3 Boundedness
+### 3.3 Boundedness invariant
 
 For one optimized statement:
 
 ```text
-promoted target count <= recognized regular UNIQUE row-target count
-compiler memory       = O(plan nodes + index defs + update contexts + lock targets)
-ordering work         = O(promoted target count log promoted target count)
-new lock rows          = one encoded range pair per promoted target
-ownership requests     = one base request + promoted target count
-fence proof            = one exact schema-bounded target vector
-new goroutines         = 0
-new logging sites      = 0
-HLC fence waits        <= 1 per Compile.Run
-fence metric samples   = exactly 1 per attempted HLC fence wait
-fence outcome labels   = one of 4 fixed values
-fence histogram bounds = 21 fixed buckets plus +Inf
-optimization retries   <= 1 per Compile.Run
+promoted targets      <= synchronous regular UNIQUE index count
+compiler state        = O(plan nodes + index defs + lock targets)
+ownership requests    = one base request + promoted target count
+barriers              <= 1 per Compile.Run
+optimization retries  <= 1 per Compile.Run
+new goroutines        = 0
+new channels          = 0
+new logs              = 0
+metric label values   = 4 fixed outcomes
+input-sized retention = 0
 ```
 
-The four metric outcomes are `success`, `canceled`, `client_closed`, and
-`error`; no transaction, table, target, file, batch, timestamp, tenant, or
-error text enters a label. The histogram uses 21 fixed exponential bounds from
-0.1 ms through approximately 105 s plus `+Inf`, rather than the generic
-high-resolution duration buckets. The retained slice is schema bounded and
-recycled with the compiler. No input row, batch, file size, retry count, or
-transaction duration can grow it. A
-recognized target that remains row scoped keeps its existing input-dependent
-cost; the issue fixture has no such target.
+The reused read-barrier implementation already bounds CN correlation state,
+server admission, TN markers, and response queues. This PR adds no second queue,
+request map, stream reader, marker, or background worker.
 
-The no-index and ineligible fast paths perform one bounded reachable-plan scan
-plus schema-index checks. They return before allocating candidate maps or
-sorting slices when there is no synchronous UNIQUE definition or no precise
-UNIQUE lock target. They add no lock request, log, metric sample, storage lookup,
-or data-source work.
+## 4. Exact eligibility
 
-## 6. Planner, compiler, and freshness contract
+The optimization is enabled only when every positive condition below is true on
+physical execution generation zero:
 
-### 6.1 Planner and session-plan cache
-
-The logical lock plan is unchanged. The planner still emits the exact base and
-hidden row targets present on `main`; it adds no lock marker or protobuf field.
-
-For modern LOAD, exact `main` already provides all required evidence in one
-`LOCK_OP`:
-
-- canonical base `Node.TableDef`;
-- one base target marked for full-table acquisition;
-- one resolved precise target for each writable UNIQUE hidden table not removed
-  by static-NULL analysis;
-- physical IDs, object references, batch expressions, and key types;
-- matching `MULTI_UPDATE.UpdateCtx` entries with the authoritative hidden
-  `TableDef` and mutation identity.
-
-The unsupported-DML fallback is not enhanced and remains exact `main`. No
-shared LOAD target builder, fallback `Node.TableDef` population, FK rerouting,
-or new lock-plan field is introduced.
-
-No planner or session-cache policy changes. A modern LOAD reaches
-`MULTI_UPDATE`; exact `main` compilation already sets that node's existing
-`NotCacheable` bit unconditionally, and frontend calls `checkNodeCanCache` only
-after compilation. A directly planned modern LOAD therefore is not published
-to the session plan cache regardless of estimated size. Adding a planner-time
->=1 GiB write would duplicate that policy and create a second threshold to
-maintain without changing any reachable cache decision.
-
-The finite >=1 GiB estimate is consequently a compiler-local fixed-cost gate,
-not a cache contract. Every direct execution replans under existing behavior
-and recomputes it from the current external scan. `Compile.planGenerationReused`
-remains a fail-closed defense for a legacy session-cache entry or reused
-prepared generation already admitted by another lifecycle: such execution
-keeps exact `main` lock behavior even if its stored estimate is large. No new
-planner helper, planner constant, or `NotCacheable` write is introduced.
-
-### 6.2 Compiler
-
-The top-level coordinator compile runs the query-wide two-pass predicate in
-section 4 before physical node compilation. It reads the current operator's
-immutable transaction options and rejects unless both positive statement-owner
-bits match; it does not infer this scope from session variables or from the
-absence of prior workspace writes. On a positive decision it:
-
-1. records the sole candidate `LOCK_OP` identity and places a deep value copy
-   of the base target in the existing `Compile.lockTables` path, marked as the
-   LOAD ownership base, without calling the mutating
-   `shouldPrePipelineLockTable` helper on the canonical target;
-2. verifies each promoted target against its unique mutation context and copies
-   the authoritative hidden primary-key type into a dedicated statement-local
-   `loadIndexLockTables` value slice containing only table ID and physical key
-   type;
-3. sorts that slice by ascending physical table ID and coalesces only identical
-   ID/type pairs;
-4. when compiling that exact node, deep-copies each retained target and builds
-   a stack-local/shallow node copy whose target slice excludes the copied base
-   target and promoted hidden targets; `constructLockOp` consumes this copy;
-5. leaves every non-promoted hidden row target and unrelated target unchanged;
-6. never serializes the promoted slice into a remote fragment;
-7. creates one coordinator-local `loadOwnershipGeneration` containing an exact
-   value copy of the transaction ID and sorted base/promoted target vector; and
-8. clear-and-nils compiler-owned value slices and nils the generation pointer
-   on `Reset`, retry-compile release, normal release, and pool return; only the
-   root terminal release makes its proof unreachable, while a borrower never
-   clears shared contents. The sticky disable bit is also reset before any new
-   execution. A pooled compiler does not retain a large backing array from a
-   previous schema.
-
-Neither the existing base-target removal nor the optimization is allowed to
-assign to the canonical `Node.LockTargets`, mutate `LockTableAtTheEnd`, or store
-a canonical target pointer in compiler state on this eligible path. The next
-data retry therefore reclassifies the same complete logical plan; a prepared
-execution in a different transaction/isolation mode sees the original targets.
-All non-eligible statements keep exact `main` compilation behavior.
-
-`prePipelineInitializer` retains existing metadata and general table-lock
-steps. For an eligible statement, the candidate base is the only data entry in
-`lockTables`; its acquisition and every promoted hidden acquisition use the
-deferred-freshness helper in section 6.3. The base remains first and hidden IDs
-remain ascending. The general map/comparator is not broadened into logical lock
-groups, and ineligible statements retain its exact behavior.
-
-The generation object is shared only by the root coordinator and ordinary
-physical retry compiles for this `Compile.Run`. It is not a hash and has no
-collision assumption: each retry classifier compares its complete sorted
-value vector with the stored vector. Only the coordinator pre-run mutates its
-fence fields, after the previous physical attempt is quiescent.
-
-After the full set is owned, pre-run follows an explicit state machine:
-
-- with an empty stored fence, construct the coordinator clock's strict
-  upper-bound fence, call the transaction client's close-aware snapshot-fence
-  capability, require the returned and installed transaction snapshot to be
-  strictly greater, then store the fence, installed snapshot, and current
-  physical execution generation before returning one existing
-  `ErrTxnNeedRetry`;
-- with a non-empty stored fence, continue to source initialization only if the
-  transaction ID and exact target vector still match, the current physical
-  execution generation is strictly later than the recorded generation, and
-  the current transaction snapshot is strictly greater than the stored fence;
-- any partial, mismatched, equal/older, or same-generation state is a contract
-  error. It cannot trigger another fence or admit execution.
-
-`buildRetryCompile(false)` inherits the same generation object before
-classification; the classifier must compare and bind that object rather than
-replace it. Before any `buildRetryCompile(true)`, the root sets the sticky
-optimization-disable bit. A successful rebuild publishes the new logical plan
-with a nil ownership object and exact `main` targets; a failed rebuild is
-terminal. Releasing a retry compile only nils its pointer; it never clears a
-shared object still owned by the root compile. Prepare-time/reused-plan
-executions never create the object, and remote fragments never receive it.
-
-### 6.3 Deferred ownership acquisition and global HLC fence
-
-Generic `LockTableWithMode` keeps its current behavior. The cross-package entry
-point is deliberately narrow and always requests an Exclusive, non-DDL table
-lock:
-
-```go
-func LockTableForLoadOwnership(
-    eng engine.Engine,
-    proc *process.Process,
-    tableID uint64,
-    pkType types.Type,
-) (definitionChanged bool, err error)
+```text
+top-level non-internal statement
+AND TxnOptions.Autocommit=true
+AND TxnOptions.ByBegin=false
+AND pessimistic RC transaction
+AND automatic statement retry enabled
+AND modern LOAD plan with Query.LoadWriteS3=true
+AND finite planner estimate Cost*Rowsize >= 1 GiB
+AND physical execution generation zero
+AND fresh logical generation (not prepared/session-cache reused)
+AND active deployment protocol >= MORPCVersion39
+AND engine implements engine.LogtailReadBarrier
+AND txn lock-wait timeout is positive
+AND one ordinary, non-temporary, non-partitioned user base table
+AND no incoming or outgoing foreign keys
+AND no unsupported index family or asynchronous index maintenance
+AND real base PK physically encoded as T_int64 or canonical composite T_varchar
+AND at least one existing synchronous default/BTREE UNIQUE hidden row target
+AND every promoted hidden table has authoritative physical PK type T_int64
 ```
 
-It rejects a non-pessimistic-RC transaction. The compiler separately guarantees
-that promoted hidden targets are `T_int64` and the copied base target is either
-`T_int64` or the canonical binary composite-PK `T_varchar`; each retains the
-same physical range it uses on `main`. The helper calls existing
-`doLock` with `bat=nil`, `LockTable=true`, `changeDef=false`, and one new local
-`LockOptions.deferDataRefreshToLoadFence` bit. That bit takes effect only after a
-successful lock and existing definition-change detection: ordinary data
-freshness branches return without consulting `Result.Timestamp`, scanning
-storage, or updating the snapshot. Cancellation, timeout, deadlock, bind retry,
-transaction failure, and definition-change behavior remain substantive and
-unchanged. The option is process-local; no protobuf, RPC, lock mode, or owner
-state changes.
+All conditions are positive. Missing, nil, contradictory, stale, duplicate, or
+unrecognized metadata makes the whole transformation ineligible. There is no
+partial optimization.
 
-After the base and every promoted hidden lock succeed, the compiler calls a new
-shared clock helper:
+Explicit transactions are excluded even when `BEGIN` retains
+`Autocommit=true`; both transaction options are required. `autocommit=0`, SI,
+optimistic transactions, fake-PK tables, FK plans, partitions, temporary/system
+tables, small/unknown/compressed-size-ambiguous inputs, legacy LOAD, prepare-time
+plans, reused logical generations, and protocol <=38 keep exact `main` behavior.
 
-```go
-// package clock
-func NowUpperBoundFence(c Clock) (timestamp.Timestamp, bool)
-```
+The 1 GiB threshold is a fixed-cost admission guard, not a planner cache policy.
+Current compilation already marks reachable `MULTI_UPDATE` plans non-cacheable
+before frontend cache publication. No new planner helper, size-dependent cache
+write, or duplicated constant is introduced.
 
-The helper rejects a nil clock or negative `Clock.MaxOffset()`, obtains
-`Clock.Now()`'s upper bound, rejects negative physical time and
-`math.MaxInt64`, then increments the physical time by one and sets logical time
-to zero. Moving to the next physical tick is essential: the raw upper bound's
-logical component is zero and does not dominate larger logical timestamps at
-the same physical tick. Lock allocator's existing `newFenceTS` is refactored to
-call this helper with equivalent behavior for every valid clock and fail-closed
-behavior for invalid clocks, giving both users one overflow-tested
-implementation.
+## 5. Change and ownership map
 
-Under the configured HLC max-offset contract, the resulting fence is later
-than every cluster timestamp generated before this post-acquisition call. A
-lock-aware writer releases its lock only with its terminal commit/rollback
-outcome: `txnOperator.doWrite(commit=true)` registers unlock as a defer around
-the commit RPC/result path, unknown commits transfer lock release to the
-resolver, and RC commit waits for its own applied logtail before unlock. An SI
-writer may unlock before its logtail is applied, so correctness does not rely
-only on the RC optimization: its terminal commit timestamp is still bounded by
-the later HLC fence. Thus every relevant lock-aware commit is bounded by the
-fence and no later writer can enter the owned ranges. This ordering is frozen
-by commit/unlock barrier tests for commit, rollback, and unknown resolution.
-
-The compiler must not call `TxnOperator.UpdateSnapshot` for this fence. That
-entry point has no independent edge to `TxnClient.Close`, and waiting while it
-holds the operator mutex would also put commit/rollback behind a stalled
-logtail data path. V5 adds an optional internal Go capability implemented by
-the production transaction client without changing the existing `TxnClient`
-interface or any wire contract:
-
-```go
-type TxnSnapshotFenceAdvancer interface {
-    AdvanceTxnSnapshotForFence(
-        ctx context.Context,
-        txnOp TxnOperator,
-        fence timestamp.Timestamp,
-    ) (installed timestamp.Timestamp, err error)
-}
-```
-
-Eligibility checks the capability before changing the local `LockOp` copy or
-acquiring an optimization-only lock; an absent capability leaves the statement
-on exact `main` behavior. The production `Process` already owns a matched
-client/operator pair. The advancer nevertheless validates that pair, the
-non-empty fence, and pessimistic-RC mode and returns a terminal internal error
-on a violated ownership contract rather than updating an unrelated operator.
-
-The advancer is also the sole observability owner for an attempted fence. It
-does not call `txnOperator.doCostAction(UpdateSnapshotEvent, ...)`: that helper
-holds `op.mu.RLock` across its action and would put commit/rollback behind the
-future logtail wait. Instead, the implementation uses one fixed metric family,
-`mo_txn_load_snapshot_fence_wait_duration_seconds`, whose only label is
-`outcome={success,canceled,client_closed,error}`. The implementation:
-
-1. starts a local monotonic timer immediately before
-   `WaitLogTailAppliedAt`, when neither a lifecycle/active-shard/operator lock
-   nor a transaction event callback is held;
-2. captures elapsed time immediately when that wait returns, excluding
-   generation validation and snapshot installation;
-3. routes every post-wait return through one epilogue after all locks are
-   released, observes the histogram exactly once, and classifies the whole
-   advancer result as successful install, caller cancellation/deadline,
-   `ErrClientClosed`, or every other wait/generation/install error; and
-4. emits nothing when pre-wait validation rejects the call, because no fence
-   wait was attempted.
-
-The histogram's `_count` is the attempted-wait count, so no duplicate counter
-or event is needed. All four observers are pre-bound at registration. It uses
-`prometheus.ExponentialBuckets(0.0001, 2, 21)` plus the implicit `+Inf`, not the
-repository's much denser generic duration buckets; outcome therefore creates
-four fixed label sets with a deliberately bounded exposition cost. No
-transaction, table, tenant, file, target, timestamp, or error value appears in
-a label. No log site is added. This gives the acceptance gate a fence-only
-duration and terminal outcome without retaining identity or callbacks across
-the wait.
-
-The production implementation owns the complete wait-and-install transition:
-
-1. capture the exact transaction generation token (`Txn.ID` plus the existing
-   restart generation identity) under the operator mutex, then independently
-   validate the client's active-generation map and revalidate the same open
-   operator generation. The implementation never nests operator-mutex then
-   active-shard acquisition, because existing active scans use the opposite
-   order;
-2. release the operator mutex and call the client's existing close-aware
-   `WaitLogTailAppliedAt(ctx, fence)`. No client lifecycle gate or operator
-   mutex is held while logtail is stalled, so context cancellation,
-   `TxnClient.Close`, commit, and rollback remain independent terminal edges;
-3. require the waiter result to be strictly greater than `fence`;
-4. acquire `txnClient.lifecycle.gate.RLock`, reject an already closed client,
-   then acquire the operator mutex in that order;
-5. revalidate the exact generation, pessimistic-RC mode, and open status. The
-   pre-wait active-generation validation plus this token check proves the same
-   client ownership without taking an active-shard lock in the final section.
-   Install `max(currentSnapshot, waiterResult)` so concurrent RC
-   advancement cannot move the snapshot backwards, and return that installed
-   value; and
-6. release the operator mutex before the client lifecycle gate.
-
-The final lifecycle-gate section linearizes a successful install before
-`TxnClient.Close`; if close wins, the call returns `ErrClientClosed` and
-publishes no compiler fence proof. Capturing and revalidating the generation
-prevents a waiter started by generation N from updating a restarted generation
-N+1. The lock order is always lifecycle gate before operator mutex at the final
-transition, matching restart publication; no control path holds either lock
-while waiting on logtail. The timestamp waiter remains the sole owner of its
-registered entry and removes it on success, cancellation, or client close.
-
-The compiler requires the returned value and `txnOp.SnapshotTS()` to be
-strictly greater than the fence before recording the completed fence and the
-installed snapshot in its coordinator-local generation object. It then returns
-one existing `ErrTxnNeedRetry`; it does not initialize a source or write a LOAD
-row.
-
-Progress does not depend on user commits. TN creates heartbeat transactions at
-the existing 2 ms cadence; although `OnEndPrePrepare` excludes their empty
-stores from the data-tail table, `OnEndPrepareWAL` still enqueues them and the
-ordered logtail publisher advances `To` with their PrepareTS. CN applies empty
-update responses, coalesced by the configured logtail collection/progress
-interval, and advances the global timestamp waiter only after every consumer
-routine reaches that timestamp. A transport-level idle heartbeat only repeats
-`sentThrough` and is not counted as progress. With no user writes, the fence
-wait is therefore bounded by clock convergence plus TN heartbeat, progress
-interval, network, queue, and apply latency. Because the coordinator fence is
-its local HLC plus `MaxOffset`, while a TN wall clock may legally trail that CN
-by `MaxOffset`, the worst skew-only component is approximately
-`2 * MaxOffset`, not one offset. If TN heartbeat or logtail delivery is
-unavailable, the wait ends only through the existing statement context or the
-transaction client's lifecycle-close channel; it does not create a goroutine
-or private timer. Client close does not wait for the operator mutex to signal
-that channel.
-
-The retry is required even though runtime readers have not been initialized.
-Physical compilation can already resolve relations and attach remote-scan
-tombstones through `generateNodes` at the old snapshot. Rebuilding the physical
-compile discards that generation and regenerates all relation, tombstone,
-source, and remote-payload state. Continuing in place is not allowed.
-
-On the data retry, base and hidden acquisitions are reentrant under the same
-transaction. Section 6.2 admits source initialization only through the shared
-local generation proof and its strict snapshot check, without a second HLC
-wait. No owner-local commit timestamp or transported proof is used. Any
-logical-plan rebuild instead activates the sticky exact-main fallback for the
-remainder of this Run.
-
-The permanent deterministic matrix must cover:
-
-- positive `Autocommit=true && ByBegin=false` admission and negative
-  `BEGIN`/`START TRANSACTION` plus `autocommit=0` controls, proving no
-  optimization lock or fence is attempted for multi-statement ownership;
-- no competing writer: one HLC-fence wait/retry, then reentrant execution;
-- commit before full-lock request, with no active conflict;
-- active base or hidden writer commit after the LOAD waits;
-- active writer rollback;
-- multiple hidden targets, proving all locks precede one global fence;
-- local owner, remote owner, forwarded/mirror transaction, bind change, and
-  owner restart/reallocation with clocks at the configured skew boundaries;
-- exact transaction/target-vector proof inheritance on ordinary retry, sticky
-  exact-main fallback on logical rebuild, and rejection of same-generation,
-  prepare-time/reused, mismatched, or equal/older-snapshot state;
-- clock-helper boundary tests for same-physical logical maxima, negative time,
-  negative max offset, and `math.MaxInt64`, plus a timestamp waiter/operator
-  stub that installs an equal or older snapshot, proving the compiler fails
-  rather than loops or admits stale execution;
-- an idle system with no user commit and CN/TN clocks at both allowed skew
-  extremes, proving TN heartbeat progress carries the waiter beyond the future
-  fence and measuring the approximately `2 * MaxOffset` upper case, plus
-  stopped-heartbeat/disconnected-logtail cancellation;
-- cancellation while acquiring each target and while waiting for the fence, lock
-  timeout, deadlock, definition change, retry-transition failure, and terminal
-  transaction lock release;
-- client close with a live caller context and stalled timestamp waiter, plus
-  close-versus-notify, commit/rollback-versus-notify, and generation-N wait
-  versus generation-N+1 restart. Every losing path must remove its waiter,
-  publish no proof, and leave the newer generation/snapshot unchanged;
-- one and only one fence-wait histogram observation for success, caller
-  cancellation/deadline, client close, and generic error; pre-wait rejection
-  emits none, lifecycle races do not duplicate it, and no txn/table/error value
-  is retained by instrumentation; and
-- fresh source initialization and regenerated remote tombstone/payload state on
-  the one admitted retry.
-
-## 7. Why hidden physical ownership is required
-
-The base-table lock serializes supported ordinary DML because those plans reach
-the base lock namespace before writing synchronous hidden indexes. It does not
-by itself own a separate physical hidden-table lock namespace.
-
-Direct DML against a resolved system index relation is planner-reachable, and
-internal maintenance can address physical tables without proving that it
-acquired this LOAD's base owner. Removing a hidden row lock while acquiring
-only the base lock therefore leaves a concrete ownership and visibility hole.
-
-One hidden Exclusive full-domain lock closes that hole for each promoted
-target. For normal base-table writers it does not reduce concurrency: the
-existing base Exclusive full-domain owner already blocks them for the LOAD
-duration. The one HLC-fence retry is additional fixed pre-run work, not an
-input-dependent lock operation.
-
-It deliberately broadens availability impact for lock-aware clients that write
-a physical hidden table directly. The old row locks blocked only keys reached
-by the LOAD; the full-domain owner also blocks disjoint keys. A direct commit in
-the snapshot-to-lock window is covered by the same mandatory statement fence,
-even when its key is disjoint from the eventual input; it does not create one
-retry per writer or target. A direct writer that first owns a physical key and
-then requests another table can add a new wait/deadlock edge. Cancellation,
-lock timeout, or a deadlock victim can therefore become visible in a workload
-that previously did not conflict.
-
-Even with no writer, every eligible large LOAD waits through one strict HLC
-fence and physically recompiles once. Inputs below 1 GiB or with unknown size,
-retry-disabled statements, and prepare-time/reused-plan executions are ineligible
-specifically so this fixed correctness cost does not become a latency
-regression or a guaranteed user-visible retry error.
-
-Source opening and parsing occur after the fences. A missing/changed object,
-decode error, or early pipeline failure therefore reaches the existing
-statement-owned autocommit rollback, which releases the base and every hidden
-lock together. Locks are retained only for rollback latency, never for a later
-user statement. Ordinary base-table writers were already blocked by that base
-owner; direct physical hidden writers experience the additional bounded
-availability impact and are included in failure-path tests.
-
-This is a real accepted tradeoff, not an impossible counterexample. The scale
-gate must reject material retry, timeout, deadlock, wait, or diagnostic
-amplification. Writers that bypass the transaction lockservice are outside both
-the old row-lock guarantee and this design.
-
-## 8. Physical key-domain admission
-
-V5 admits two base physical PK shapes:
-
-- a real single-column `types.T_int64` PK; or
-- the generated `catalog.CPrimaryKeyColName` whose authoritative
-  `CompPkeyCol` is the canonical max-width binary `types.T_varchar` used for a
-  composite PK.
-
-The first base range is the existing
-`Packer.EncodeInt64(math.MinInt64)` through
-`Packer.EncodeInt64(math.MaxInt64)` pair. The composite range is encoded empty
-bytes through `Packer.EncodeStringTypeMax`; every serialized composite tuple is
-encoded as a string value strictly within those sentinels. A user-declared
-VARCHAR PK does not qualify merely because it shares the OID.
-
-V5 admits exactly one promoted hidden physical primary-key OID:
-`types.T_int64`, with the same integer endpoints. No width/scale
-reinterpretation, projection cast, or SQL source type can substitute for the
-authoritative base or hidden physical primary-key column definition.
-
-Independent oracle tests encode `math.MinInt64`, `math.MaxInt64`, `-1`, `0`,
-and `1`, plus representative and boundary serialized composite tuples. They
-check endpoint order and use the real lockservice to prove Shared and Exclusive
-row requests at endpoints/interior values conflict with each full range. The
-two actual #27775 planner fixtures must assert respectively a `T_int64` base
-and canonical binary composite-PK base, and both must resolve the hidden UNIQUE
-table to `T_int64`; hand-built compiler nodes are insufficient.
-
-Every other OID defaults to its exact row lock. In particular, this PR makes no
-claim about scalar FLOAT/DOUBLE extrema, decimal precision, temporal SQL
-domains, UUID/string endpoints, or serialized composite-key bytes. Expanding
-admission is a separate reviewed change with its own encoding oracle and scale
-evidence.
-
-## 9. Ownership and unhappy-path model
-
-### 9.1 State transitions
-
-| From | Event | Guard / linearization | To | Failure behavior |
+| Closure | First owner | Consumers | Risk | Contract |
 | --- | --- | --- | --- | --- |
-| planned | classify targets | complete positive two-pass result | main or candidate | exact main on uncertainty |
-| candidate | compile value copies | canonical plan untouched | compiled | compile error; no locks acquired |
-| compiled | acquire metadata/general/base | existing order succeeds | base-owned | substantive error; txn owns prefix until terminal rollback |
-| base-owned | acquire hidden target N | prior targets owned | acquiring | cancel/timeout/deadlock; txn owns prefix until terminal rollback |
-| acquiring | target reports definition change | stop immediately | definition retry | txn owns acquired prefix |
-| acquiring | final hidden acquired | every target owned | ownership-complete | none |
-| ownership-complete | construct HLC fence | valid next-physical upper bound | fencing | overflow/invalid clock; txn owns locks until terminal rollback |
-| fencing | client-owned wait, generation revalidation, and RC snapshot install | logtail applied; lifecycle gate won; same open txn generation; snapshot > fence | retry-marked | cancel/client close/commit/rollback/restart/update error; txn owns locks until terminal rollback and no proof is published |
-| retry-marked | return one data retry | proof records txn, exact targets, fence, and generation | retry transition | transition error; txn owns locks until terminal rollback |
-| retry transition | recompile/re-enter | ordinary retry inherits exact local generation; later generation and snapshot > fence | fenced | mismatch is terminal; autocommit rollback releases all locks |
-| definition retry | set sticky disable, then rebuild logical plan | before rebuild; current catalog snapshot | exact main | old valid locks remain txn-owned until statement commit/rollback; no later optimization fence in this Run |
-| fenced | initialize runtime sources | ownership and freshness hold | running | statement error triggers whole autocommit rollback |
-| any non-terminal state | terminal statement error/cancel | statement-owned autocommit | rolling-back | frontend invokes whole-txn rollback; compiler does not unlock |
-| running | successful statement completion | statement-owned autocommit | committing | frontend invokes commit |
-| committing or rolling-back | transaction terminal result | lockservice terminal action | terminal | lockservice releases ownership exactly once |
+| LOAD classification | root coordinator `Compile` | retry compile, local `LockOp` | R3 hot path/retry | atomic positive admission; canonical plan unchanged |
+| promoted target vector | root coordinator execution proof | pre-pipeline ownership, retried compile | R3 generation/pooling | exact sorted value copy; schema bounded; root clears |
+| base/hidden locks | transaction/lockservice | ordinary and direct physical writers | R3 distributed ownership | deterministic order; terminal txn releases once |
+| logtail barrier | existing engine capability | LOAD coordinator | R3 distributed wait | v39-only; caller-bounded; no duplicated primitive |
+| refreshed snapshot | transaction operator | retried physical sources | R3 RC correctness | install after successful barrier; snapshot strictly later |
+| metric sample | compiler call epilogue | Prometheus/scale gate | R2 operations | one sample per attempted barrier; fixed labels/buckets |
 
-The compiler owns only bounded value records. The transaction/lockservice is
-the sole owner of acquired locks. The compiler never unlocks a partial prefix.
-After any logical rebuild, that Run uses the exact `main` target shape, but any
-full hidden lock acquired by the earlier eligible generation necessarily
-remains transaction-owned until commit or rollback. This can only reduce
-availability; releasing it in the compiler would violate transaction lock
-ownership. The transition is covered explicitly instead of describing the
-transaction's accumulated locks as exact `main`.
+The existing read-barrier implementation and wire protocol are dependencies,
+not modified consumers. Their queue, stream, reconnect, ordering, and apply
+contracts remain owned and tested by #27842.
 
-### 9.2 Q1-Q3 audit
+## 6. Detailed design
 
-| Q | Resource/dependency | Owner and terminal path | Verdict required |
-| --- | --- | --- | --- |
-| Q1 | compiler target slice | compiler instance; cleared and nilled on every release/reuse path | no stale values or pooled backing-array retention |
-| Q1 | execution proof | root coordinator object; ordinary retry borrows, logical rebuild disables and drops, release only nils borrower | no remote/cache/pool leak and no clearing while borrowed |
-| Q1 | acquired range locks | statement-owned transaction/lockservice; frontend terminal commit or whole-txn rollback | no compiler cleanup, cross-statement retention, or double unlock |
-| Q1 | HLC fence/refreshed snapshot | stack value then transaction client atomically installs into the exact operator generation; retry generation consumes snapshot | fence dominates prior commits; snapshot is strictly later and visible to new sources |
-| Q1 | fence timing state | advancer-local start/elapsed/outcome values; one metric observation at epilogue | no transaction/event callback or identity retained across wait |
-| Q2 | base/hidden wait | lockservice waiter observing context, timeout, deadlock, holder unlock | every terminal path tested |
-| Q2 | future logtail fence wait | transaction client and timestamp waiter observe context/client close without holding lifecycle gate or operator mutex | idle TN heartbeat progresses; outage cancels without private worker; commit/rollback/restart are not wake sources but need no lock held by the waiter |
-| Q2 | retry-marked acquisition | compiler continues only after successful lock | substantive error is not swallowed |
-| Q2 | partial prefix | transaction remains owner; terminal txn action releases | no compensating wait/unlock |
-| Q3 | target collection | schema UNIQUE count | finite and reset on reuse |
-| Q3 | lock rows | one range pair per promoted target | independent of LOAD rows/batches |
-| Q3 | retry/log amplification | at most one deterministic optimization retry and one fence histogram sample per `Compile.Run`; no new log site | sticky rebuild disable plus finite >=1 GiB gate rejects storms |
-| Q3 | metric cardinality | one family, four pre-bound outcomes, 21 fixed bounds plus `+Inf` | independent of transaction/table/tenant/file/target/error cardinality |
+### 6.1 Atomic analysis without planner mutation
 
-Wait-for shape for the optimized path:
+The logical planner remains unchanged. Compiler analysis walks the reachable
+coordinator statement graph once and requires exactly one candidate `LOCK_OP`
+feeding the LOAD `MULTI_UPDATE` shape. It cross-checks:
 
-```text
-LOAD caller
-  -> existing base owner
-  -> promoted hidden target 1 ... N
-  -> conflicting direct physical transaction
-  -> holder commit/rollback, caller cancellation/timeout, or deadlock resolution
+- base `TableDef`, PK definition, column encoding, table identity, and existing
+  full-domain base target;
+- every synchronous regular UNIQUE `IndexDef` against one authoritative
+  `MULTI_UPDATE.UpdateCtx` hidden-table definition;
+- hidden object/table IDs, names, PK type, lock target mode, row position, and
+  static-NULL omission;
+- absence of FK, partition, temporary, unsupported algorithm, asynchronous,
+  fake-PK, reused-generation, and contradictory duplicate shapes.
+
+Analysis is two-pass and is attempted only on execution generation zero:
+
+1. validate and copy the complete sorted promoted target vector into root-owned
+   statement state;
+2. publish eligibility only after every check succeeds.
+
+Physical generation zero retains the exact row targets in its local
+`LockOp`. This generation can therefore fall back before promotion without
+reconstructing or mutating the plan. It never reaches pipeline execution after a
+successful promotion because the barrier path returns the retry first.
+
+The retried physical generation filters only value-equal promoted row targets
+from a deep local copy after validating the completed proof. The canonical plan,
+prepared/session state, remote payload source, and unrelated targets are never
+modified.
+
+### 6.2 Final admission and ownership acquisition
+
+Immediately before acquiring the first promoted hidden lock, the coordinator
+revalidates the local prerequisites that can drift after compilation:
+
+- exact transaction ID/options/mode/isolation/open state;
+- deployment protocol >=39;
+- engine barrier capability;
+- positive transaction lock-wait timeout;
+- unchanged root proof phase and target vector.
+
+If revalidation fails before the first promoted hidden lock, promotion is
+disabled for that Run and the first generation continues with exact row targets.
+The existing base lock may already be held; that is exact current LOAD behavior.
+
+If metadata/base locking or any other path requests an ordinary retry before
+the root reaches `retry-marked`, retry transition first makes promotion
+`disabled`. The next generation then uses exact-main row targets. This avoids
+starting a new ownership protocol after a generation has already failed or
+executed work; only the retry deliberately emitted by completed promotion can
+consume the proof.
+
+Promoted hidden tables are then acquired in ascending physical table ID using
+the existing Exclusive full-domain table-lock mechanism and the one promotion
+context created before target 1. The existing context-aware helper is exported
+without changing its lock semantics; no per-target deadline is restarted. Base
+remains before hidden. No planner-global owner/group field or generic lock
+ordering is added.
+
+The promoted targets are copied from row targets into coordinator-owned
+metadata; they are not inserted into the canonical plan. Thus the first
+generation's `LockOp` still contains exact rows, but it cannot execute them:
+the pre-pipeline promotion path returns the retry after fencing and before
+`runOnce`. The later physical compile removes them only after validating the
+root proof.
+
+If a hidden acquisition waits, times out, deadlocks, is canceled, detects a
+definition change, or fails after a partial prefix, the substantive error is
+returned. The compiler does not attempt compensating unlock. The existing
+autocommit terminal path rolls back the transaction and releases base plus every
+hidden lock already acquired.
+
+### 6.3 Reused TN-ordered freshness barrier
+
+After every ownership lock succeeds, compiler reuses the still-live promotion
+context described in section 3.2 and invokes:
+
+```go
+barrier := c.e.(engine.LogtailReadBarrier)
+frontier, err := barrier.AcquireLogtailReadBarrier(barrierCtx)
 ```
 
-After ownership completes, freshness has a separate acyclic progress chain:
+No lifecycle gate, transaction-operator mutex, active-transaction shard lock,
+or compiler pool lock is held across the call. Cancellation, deadline, stream
+failure, engine shutdown, and the read-barrier implementation's own bounded
+admission paths remain independent terminal edges.
+
+On success, the existing engine capability has already waited for the shared CN
+timestamp waiter to reach `frontier`. Compiler then calls the existing
+`TxnOperator.UpdateSnapshot(barrierCtx, frontier)`. It may take the operator
+mutex, but its timestamp check is now immediate against the same CN waiter; no
+future or remote progress is awaited while that mutex is held. Compiler requires
+the resulting transaction snapshot to be strictly greater than `frontier`.
+
+The call is deliberately not routed through a new `TxnClient` optional
+capability. V5 needed that capability only because it asked the transaction
+operator to wait for a future HLC while supporting standalone client close. V6
+makes the distributed wait engine-owned and bounded before the short existing
+snapshot install, so the extra ownership boundary and generation protocol are
+unnecessary.
+
+### 6.4 Physical retry proof
+
+After snapshot installation, the root execution object records:
 
 ```text
-LOAD caller
-  -> transaction-client close-aware snapshot advancer
-  -> CN transaction timestamp waiter (no lifecycle/operator lock held)
-  -> minimum applied frontier across CN logtail consumer routines
-  -> ordered TN empty-progress publication
-  -> TN heartbeat transaction/HLC reaching the coordinator fence
+phase                  = fenced
+txn ID                 = exact current transaction ID
+logical generation     = exact fresh plan generation
+first physical gen     = generation that acquired ownership
+target vector          = sorted (physical table ID, PK type)
+barrier frontier       = returned TN frontier
+installed snapshot     = transaction snapshot, strictly > frontier
 ```
 
-Heartbeat transactions do not acquire the LOAD's table locks, so this chain has
-no edge back to the ownership wait graph. Context cancellation or txn-client
-closure terminates it if TN/logtail progress is unavailable. Commit, rollback,
-and restart do not themselves wake the timestamp waiter; the admitted frontend
-ordering invokes them only after the statement returns, while defensive
-generation revalidation prevents stale installation if another internal owner
-wins such a race. After notification, the advancer takes lifecycle gate then
-operator mutex only for a bounded local generation check and monotonic
-assignment; neither section performs I/O or waits on another owner.
+Compiler then returns one existing `ErrTxnNeedRetry`. Existing retry transition
+cancels/joins remote work, invokes `RollbackLastStatement` for the empty first
+attempt, increments the statement generation, and physically recompiles.
+`RollbackLastStatement` rewinds workspace writes and statement metadata; it
+does not call lockservice unlock. Transaction locks therefore remain owned by
+the same transaction and exact transaction ID.
 
-For the eligible schema, current ordinary INSERT/UPDATE/DELETE/REPLACE reaches
-the base namespace before hidden locks/writes: modern paths order base targets
-first, while legacy UPDATE/DELETE materialize a base-locked source before
-hidden branches. Thus one ordinary statement cannot hold a hidden row while
-waiting behind this LOAD's base owner.
+On the retried pre-pipeline pass, the ordinary base full-domain request may
+re-enter. The completed proof suppresses a second promoted-hidden acquisition
+and barrier. Hidden ownership persists from the first attempt; the local
+`LockOp` now omits only the covered rows. Later ordinary physical retries may
+reuse the same proof, but the optimization itself creates at most one retry and
+one barrier.
 
-The eligible LOAD cannot retain locks from an earlier statement. The proof does
-not constrain a competing direct physical client using arbitrary multi-table
-order; residual cycles with such a client use existing deadlock detection. No
-global order beyond the admitted LOAD is claimed.
+The retried generation may filter the promoted row targets only when all fields
+above match, its physical generation is later, the transaction is still open
+pessimistic RC, and both the recorded and current snapshots remain strictly
+greater than the barrier frontier. Mismatch is an internal fail-closed error; it
+is never interpreted as proof.
 
-## 10. Alternatives and decision log
+Any logical-plan/definition rebuild first sets the root phase to `disabled` and
+then rebuilds. That Run uses exact `main` row targets and cannot attempt a second
+promotion barrier. The old full locks may remain until this one autocommit
+statement terminates, reducing availability but not changing correctness or
+cross-statement behavior.
 
-### 10.1 Keep all per-batch UNIQUE row locks
+Proof state is coordinator-local. It is not serialized into remote pipelines,
+stored in planner/session caches, or copied into borrower compiles. Borrowers
+read the root object; only the root clears it during release. Pool reset nils the
+target slice and all generation fields.
 
-Correct but rejected for promotable targets in the issue workload. Work and
-retained ownership scale with batches/keys and enter the coarsening path
-implicated by the regression.
+### 6.5 Observability
 
-### 10.2 Use only the base-table lock
-
-Rejected. Hidden UNIQUE tables are separate physical namespaces and direct
-physical writers are reachable. Base-only ownership also cannot close the RC
-visibility window for a hidden-only commit.
-
-### 10.3 Generate full-table targets in the planner
-
-Rejected. The modern plan already carries exact resolved hidden row targets.
-Changing target flags in the logical plan complicates SI/optimistic behavior,
-prepared-plan reuse, remote serialization, and retry generations without adding
-evidence. Compiler-local promotion is narrower and reversible.
-
-### 10.4 Optimize the unsupported-DML fallback
-
-Deferred. Main's fallback lock node lacks the modern hidden row-target evidence
-and canonical base metadata used by the transformation. Populating new fields
-and resolving a second ownership contract is unnecessary for #27775. Fallback
-therefore remains byte-for-byte plan-equivalent to `main`.
-
-### 10.5 Optimize FK, partitioned, or temporary tables
-
-Rejected from this PR. Their physical topology and wait-for graph differ from
-the single ordinary base owner proved here. The reported workload requires none
-of them.
-
-### 10.6 Optimize SI or optimistic transactions
-
-Rejected from this PR. SI needs an explicit stale-snapshot/WW-conflict contract
-for no-active-conflict full locks. Optimistic execution does not use the
-lockservice ownership mechanism whose contention this PR addresses. Both keep
-exact `main` targets.
-
-### 10.7 Change generic `LockTableWithMode` freshness
-
-Rejected. Existing callers use full-table locks for operations that do not all
-need row-data refresh. A global conservative retry would broaden behavior and
-cost without a caller-specific proof. Only the eligible LOAD ownership helper
-defers target-local data freshness and completes it with one statement-wide HLC
-fence.
-
-### 10.8 Use owner-local `tableCommittedAt` as the LOAD fence
-
-Rejected. It detects useful stable-owner cases but is neither durable nor part
-of lock-table binding migration. New owners synthesize it from their local HLC,
-and lockservice RPC currently has no HLC codec header. The coordinator strict
-upper-bound fence is generation-independent and needs no wire change.
-
-### 10.9 Fix generic FLOAT/DOUBLE table ranges here
-
-Deferred. The correction is valid but independent of the BIGINT reproducer and
-widens the production diff. V5 keeps scalar FLOAT/DOUBLE row locks. A separate
-change may fix and admit those types after independent review.
-
-### 10.10 Add a logical lock group to `plan.proto`
-
-Rejected. One eligible modern LOAD has one existing base owner and only local
-Exclusive hidden promotions. A distributed grouping field adds no safety or
-performance value.
-
-### 10.11 Collect all precise keys before mutation
-
-Rejected. It retains O(input rows) material, requires full input
-materialization/spill before mutation, and still sends large lock sets.
-
-### 10.12 Initialize every lock-table owner with a future generation fence
-
-Rejected for this PR. Replacing `tableCommittedAt` with an upper-bound fence
-would return a future timestamp on ordinary first row locks and force unrelated
-RC statements to wait through the clock uncertainty window before their
-key-specific version check. Keeping a separate owner-generation fence and
-returning it only to LOAD requires new request/result capability fields and a
-mixed-version fallback. That is a broader lockservice protocol change than one
-coordinator-local fence for the admitted large LOAD class.
-
-### 10.13 Infer fence completion from snapshot ordering
-
-Rejected. An RC snapshot can advance for metadata, another table target,
-prepared-plan reuse, or future pre-run helpers. `snapshot > planSnapshot` does
-not identify which operation supplied the freshness proof. The explicit local
-generation object records the exact transaction, target vector, fence, and
-physical generation without a timestamp-origin inference.
-
-### 10.14 Acquire and fence before physical compilation
-
-Deferred. In principle this avoids the second physical compile, but current
-metadata-target collection and retry handling live across physical compilation
-and pre-run. Moving lock waits into `Compile` would need a new definition-change
-rebuild loop and would retain transaction locks on later compile-only failures.
-That architectural change is not justified until the 100M endpoint proves the
-smaller existing retry mechanism is insufficient.
-
-### 10.15 Add a size-dependent LOAD cache policy
-
-Rejected as duplicate mechanism. Exact `main` compilation already marks every
-reachable `MULTI_UPDATE` node `NotCacheable` before frontend cache publication,
-so direct modern LOAD executions replan at every size. The compiler-only 1 GiB
-gate then evaluates current statistics. Reused legacy/session/prepared logical
-generations remain exact main through `planGenerationReused`; a freshly rebuilt
-prepared generation may qualify. No planner helper or threshold-coupled cache
-write is required.
-
-### 10.16 Fence each definition-rebuilt plan generation
-
-Rejected. Repeated catalog churn could produce one future wait and retry for
-every rebuild because the generic retry loop has no optimization-specific
-attempt cap. The root sticky disable makes any logical rebuild exact main and
-bounds this optimization to one fence and one retry per `Compile.Run`.
-
-## 11. Performance and acceptance gate
-
-### 11.1 Cost model
-
-Before for one promotable UNIQUE target:
+One dedicated histogram measures only the engine barrier call:
 
 ```text
-lock encoding/submission = O(input batches)
-owner bookkeeping        = input-key dependent, with possible coarsening
+mo_txn_load_logtail_read_barrier_duration_seconds
+  outcome={success,canceled,timeout,error}
 ```
 
-After:
+It uses four pre-bound observers and
+`prometheus.ExponentialBuckets(0.0001, 2, 21)` plus `+Inf`. One attempted barrier
+emits exactly one sample in a post-call epilogue. Pre-admission fallback emits no
+sample. Transaction, table, tenant, file, target, timestamp, error text, and
+request identity never appear in labels. No new log site is added.
 
-```text
-compile classification   = O(reachable plan nodes + schema indexes +
-                             update contexts + lock targets)
-pre-pipeline requests    = O(promoted UNIQUE count)
-sorting                  = O(promoted UNIQUE count log promoted UNIQUE count)
-HLC/logtail fence        = at most one wait per Compile.Run
-fence instrumentation   = one O(1) histogram observation per attempted wait
-physical compilation    = two generations before first source initialization
-batch-path lock work     = 0 for promoted targets
-```
+Existing lock wait, retry, compile, deadlock, and logtail metrics remain the
+other operational signals. The final performance report correlates equal
+windows rather than adding per-row, per-batch, per-target, or per-heartbeat
+telemetry.
 
-Every hidden type other than `T_int64` retains its existing batch cost. The
-issue fixtures have one `UNIQUE BIGINT` target whose resolved hidden primary
-key is `T_int64`, and therefore remove all covered UNIQUE batch-lock work.
+## 7. Correctness proof
 
-Freshness adds no storage scan or input-key materialization, but it always adds
-one strict HLC/logtail wait and one physical recompile to an eligible large
-LOAD, including the no-writer case. At the allowed opposite CN/TN skew
-extremes, the wait can approach twice the configured clock max offset (about
-1 s under the default 500 ms HLC configuration) plus heartbeat and logtail
-delivery/apply latency. `LoadWriteS3` alone is insufficient because its
-current planner gate can admit roughly 1 MiB and small compressed inputs. The
-additional finite 1 GiB input estimate, retry, and fresh-plan gates keep that
-fixed cost off smaller, unknown-size, and reused statements. Large direct LOAD
-plans, like smaller modern LOAD plans, already are not inserted into the session
-cache because compilation reaches `MULTI_UPDATE`; repeated direct executions
-therefore replan and can qualify with current input statistics. The compiler
-1 GiB constant is intentionally conservative for #27775; lowering it requires
-separate normalized evidence around the proposed boundary.
+Let `L` be successful acquisition of the last required ownership lock and `B`
+the subsequent TN-ordered read barrier.
 
-Validation reports estimated input bytes, the dedicated fence-wait histogram by
-its four fixed outcomes, both compile durations, and exactly one
-optimization-induced retry separately from runtime lock savings; the endpoint
-gate decides whether the trade is worthwhile. The fence metric measures only
-`WaitLogTailAppliedAt`, not transaction-lock validation or recompilation.
+### 7.1 Pessimistic writer that was active at acquisition
 
-### 11.2 Controlled endpoint validation
+An incompatible base or hidden writer prevents the corresponding full-domain
+lock from succeeding. LOAD reaches `L` only after the holder rolls back or its
+TN commit completes and lock ownership is released/resolved. TN admits the
+commit to the ordered logtail FIFO before successful completion; the client
+operator releases pessimistic locks only after the TN response. Consequently
+the commit is already ahead of the later barrier marker when LOAD reaches `L`.
+The existing barrier makes it locally visible before `B` returns even if the
+writer's outer client-facing call is still finishing.
 
-Use the issue's 3-CN TKE topology, same runner, COS objects, SQL,
-configuration, and tenant. Compare exact `origin/main` and exact PR head with
-alternating runs to reduce time/environment bias.
+### 7.2 Writer that committed before acquisition
 
-Minimum evidence:
+The writer no longer appears as an active conflict, but its commit still
+completed before `B` begins. It is ordered before the barrier marker and is
+applied locally before the barrier returns. This closes the no-active-conflict
+window without trusting `NewLockAdd`, `HasPrevCommit`, an owner-local timestamp,
+or lock-table generation state.
 
-1. three successful runs per revision of the 100M no-index control;
-2. three successful runs per revision of both 100M indexed cases;
-3. median, min/max, and indexed/no-index ratio for each revision;
-4. exact row count and error-free completion for every run;
-5. lock request/coarsening counts and equal-window CPU/mutex profiles;
-6. HLC-fence wait, first/retry compile duration, retry count, lock-wait count,
-   deadlock count, and relevant log volume;
-7. synthetic planner/compiler boundary cases just below and at 1 GiB, plus a
-   real input near the boundary to reject a fixed-cost latency regression; and
-8. one 1B indexed confirmation after the 100M gate passes.
+### 7.3 Concurrent or later writer
 
-Accept only if:
+After its full-domain lock is acquired, a conflicting writer cannot acquire a
+covered base/hidden key until LOAD commits or rolls back. A writer concurrent
+with `B` may order on either side of the marker, but it cannot mutate a covered
+domain before LOAD releases ownership. Its visibility is therefore irrelevant
+to this LOAD generation.
 
-- the PR improves the median normalized indexed/no-index ratio by at least 30%
-  versus exact current main;
-- the PR's 100M indexed median is no more than 1.25x the issue's previous-good
-  baseline after normalization by the same-run no-index control;
-- the no-index median changes by no more than 15%, unless attributed with
-  evidence to an environment or unrelated-code cause;
-- no correctness, OOM, hang, retry storm, deadlock amplification, material new
-  lock-wait regression, or log storm appears.
-- every eligible successful Run without a logical rebuild has exactly one
-  optimization-induced retry; an eligible Run that logically rebuilds has at
-  most one before permanently falling back to exact main. A second fence retry
-  or a user-visible optimization retry is a rejection. Unrelated retries are
-  reported separately and must not be amplified by the change.
+This exclusion statement applies to pessimistic, lock-aware writers. An
+optimistic writer does not honor either main's row locks or the promoted full
+lock. V6 therefore does not claim new exclusion against it: the existing TN
+write-write/constraint conflict is still authoritative. A commit ordered before
+`B` becomes visible through the barrier; one ordered after `B` remains a
+concurrent transaction and can make LOAD lose/retry exactly as under main.
 
-A 5M local run can validate mechanism but cannot pass this gate.
+### 7.4 Rollback and unknown commit outcome
 
-## 12. Compatibility, rollout, and operations
+Rollback produces no committed data. An unknown commit retains or transfers
+lock cleanup to the existing resolver; LOAD cannot acquire the conflicting
+domain until resolution. If resolution is commit, its TN publication admission
+precedes the lock release that lets LOAD proceed and therefore precedes the
+later barrier; if rollback, there is no version to observe.
 
-No plan or lockservice protobuf, lock mode, catalog object, on-disk data,
-configuration, planner cache policy, or durable version is added. Logical lock
-targets and existing `Node.NotCacheable` behavior are unchanged. Promotion and
-freshness state are local to the compiling CN. One new metric family adds only
-the four fixed `outcome` label values and fixed bucket set defined in section
-6.3; it carries no identity or user-controlled cardinality.
-`clock.NowUpperBoundFence` only centralizes the lock allocator's existing
-next-physical-tick construction; refactoring that caller must preserve exact
-behavior for valid clocks and fail closed for invalid ones.
+### 7.5 Rebind, restart, and mixed lock owners
 
-During a rolling CN upgrade:
+The proof never reads owner-local `tableCommittedAt` and requires no timestamp
+to survive lock-table rebind/restart. Physical lock ownership supplies exclusion;
+the independent TN barrier supplies commit-to-local-visibility ordering.
 
-- upgraded CNs promote admitted hidden row targets for eligible statements;
-- older CNs retain their existing per-batch hidden row/range requests;
-- both conflict in the same physical lock namespace;
-- the performance benefit is per statement;
-- no old CN must understand a new plan field or lockservice result.
+### 7.6 Snapshot and source generation
 
-Downgrade or rollback replaces/restarts CN binaries. Process-local compiler
-state and plans disappear with the process. Existing transactions finish or
-roll back under ordinary lockservice ownership; no migration or data rewrite is
-required.
+The engine barrier first applies every preceding commit locally. Updating the RC
+snapshot strictly beyond its frontier makes those versions visible. Physical
+recompile discards relation, tombstone, source, and remote payload state bound to
+the old snapshot. No runtime source initializes before that recompile succeeds.
 
-No per-row, per-batch, per-heartbeat, per-target, or error-detail logging site is
-added. One histogram observation is emitted per attempted fence wait, including
-the unsuccessful outcomes; it is not emitted by each timestamp-waiter wakeup.
-The normal eligible path reduces lock requests. Broader direct-physical
-conflicts can increase existing wait diagnostics, and every successfully
-fenced Run increments the existing statement-retry metric exactly once. A Run
-rebuilt before fencing has no optimization retry; definition and unrelated
-retries retain their existing accounting. The first ordinary RC retry is not
-emitted by `fatalLog`; a second fence retry, repeated unrelated retry, or
-user-visible retry can still use existing diagnostics. Scale validation
-compares log volume, the new histogram `_count`, and retry/wait cardinality and
-rejects amplification.
+## 8. State machine
 
-The dedicated fence-wait duration/outcome, existing lock wait duration,
-transaction wait-lock state, lockservice request and coarsening metrics,
-statement retry count, statement duration, and CPU/mutex profiles are the
-primary diagnostics. No authentication, authorization, tenant identity,
-hidden-table visibility, or trust boundary changes.
+| State | Event | Guard | Next | Failure behavior |
+| --- | --- | --- | --- | --- |
+| exact-main | classifier succeeds | all positive predicates | eligible | otherwise continue exact main |
+| eligible | final admission | txn/protocol/capability/budget still valid | acquiring | failure before hidden lock disables promotion |
+| eligible | unrelated retry requested | no completed promotion proof | disabled | next generation is exact main |
+| acquiring | hidden target N acquired | deterministic order | acquiring/owned | error returns; txn owns prefix until rollback |
+| owned | read barrier begins | all base/hidden ownership held | fencing | bounded context owns cancellation/deadline |
+| fencing | barrier returns | local apply >= frontier | installing | cancel/timeout/error returns; rollback releases locks |
+| installing | snapshot update | open same txn; snapshot > frontier | retry-marked | error returns; no proof published |
+| retry-marked | physical retry transition | exact existing retry path | fenced | transition failure rolls back transaction |
+| fenced | retry compile validates proof | later physical generation; all fields equal | running | mismatch fails closed |
+| fenced | logical rebuild requested | root atomically disables first | disabled | exact-main targets on rebuilt plan |
+| running | execution/commit | ordinary autocommit terminal path | terminal | error/cancel causes whole-txn rollback |
 
-Primary operational risks:
+No transition from `eligible`, `acquiring`, `owned`, `fencing`, or `installing`
+can enter the data pipeline.
 
-| Risk | Impact | Control |
+## 9. Unhappy-path audit
+
+### 9.1 Q1: ownership and cleanup
+
+| Resource | Owner | Terminal paths |
 | --- | --- | --- |
-| ineligible plan accidentally promoted | changed correctness/availability | two-pass positive predicate plus negative shape matrix |
-| canonical lock targets mutated | SI/prepared/retry execution loses row locks | local filtered copy plus cross-mode cache/retry tests |
-| large LOAD reuses stale file statistics or a specialized cached plan | wrong admission or missing statement-local state | existing unconditional `MULTI_UPDATE` non-cacheability plus `planGenerationReused` fail-closed test; no threshold-coupled planner policy |
-| stale hidden commit before lock | duplicate scan uses old snapshot | real lockservice no-active-conflict freshness test |
-| target-local helper advances snapshot before all ownership | later target commit escapes global proof | defer ordinary data freshness; definition errors still stop |
-| raw HLC upper bound does not dominate equal-physical logical TS | unseen commit could escape freshness | shared next-physical-tick helper plus boundary tests |
-| HLC fence is ahead of applied logtail | fixed pre-run wait approaching `2 * MaxOffset`, timeout, or cancel | finite >=1 GiB/retry-enabled gate plus opposite-skew wait-latency evidence |
-| TN heartbeat/logtail stalls while no user commits occur | fence wait does not make progress | idle-heartbeat progress test plus context/client-close cancellation test |
-| client closes while logtail is stalled or notification races close | wait leaks or snapshot mutates after the losing terminal transition | client-owned wait/install boundary, no locks held during wait, final lifecycle-gate linearization, exact close-versus-notify tests |
-| transaction commits, rolls back, or restarts while the fence waits | stale work updates a closed or newer operator generation | pre/post exact generation and open-status validation plus monotonic install under operator mutex |
-| fence observability reuses the generic snapshot event wrapper | operator read lock is held across stalled logtail and blocks commit/rollback | dedicated lock-free wait timer, single post-unlock epilogue, exact-one outcome test |
-| observability records dynamic identity or every waiter notification | cardinality or telemetry storm | one histogram family, four fixed outcomes, one sample per attempted fence, no new log |
-| small or unknown input is mistaken for large | fixed fence cost becomes a latency regression | finite external-scan byte estimate and boundary tests; `LoadWriteS3` is not sufficient alone |
-| stale/mismatched retry state is treated as fence proof | source starts without a proved execution | exact transaction/target vector, later execution generation, and snapshot > fence checks |
-| fence emitted twice | retry/compile/metric amplification | shared execution proof, sticky rebuild disable, and exact-one fence assertion |
-| incomplete base or promoted endpoint | writer escapes ownership after the fence | admit only tested integer/canonical-composite base ranges and integer hidden range; every other base is ineligible and every other hidden type remains row scoped |
-| hidden target without base owner | ordering/ownership hole | disable whole transformation before mutation |
-| remote fragment repeats promotion | duplicate locks or inconsistent snapshot owner | coordinator-only state plus serialization test |
-| direct physical writer uses a disjoint key | broader wait/retry/timeout/cycle | explicit approval plus conflict/retry/deadlock scale gate |
-| explicit/multi-statement execution is admitted | full-domain locks survive a failed statement or combine with prior lock order/workspace | positive `Autocommit && !ByBegin` gate plus BEGIN/autocommit-off negative tests |
-| partial acquisition on cancellation | base/hidden prefix survives until terminal cleanup | statement-owned transaction plus whole-autocommit-rollback release test |
-| logical rebuild activates fallback | superseded full locks remain and broaden waits | sticky exact-main rebuilt target test plus terminal commit/rollback release |
-| source init/parse fails after fencing | hidden locks outlive failed statement | source-failure test proving automatic whole-txn rollback and release |
-| compiler reuse retains targets/capacity | wrong-table lock or pooled memory growth | clear-and-nil on every release/retry/pool path |
-| mechanism does not fix endpoint | complexity without benefit | mandatory normalized 100M/1B gate |
+| promoted target slice | root `Compile` execution object | cleared/nilled on release and pool reset |
+| execution proof | root `Compile.Run` | consumed by physical retry; disabled on logical rebuild; cleared on release |
+| base/hidden locks | transaction/lockservice | commit, rollback, resolver-owned unknown outcome |
+| barrier request/correlation | existing #27842 implementation | success, caller cancel, stream failure, shutdown; bounded slots released there |
+| promotion timer | compiler promotion scope | immediate `defer cancel()` on every return |
+| metric timing values | stack/epilogue | exactly one observation after attempted call |
+
+The compiler has no unlock callback, waiter goroutine, channel, remote proof, or
+second destruction owner.
+
+### 9.2 Q2: wait-for graph
+
+```text
+LOAD caller
+  -> existing metadata/base lock
+  -> one <=120s promotion context
+    -> promoted hidden lock 1..N
+     -> holder commit/rollback, caller cancel, lock timeout, deadlock victim
+    -> engine.LogtailReadBarrier
+     -> bounded CN admission
+     -> bounded server/TN marker admission
+     -> ordered logtail publication and CN apply
+     -> caller cancel, stream/client failure, shutdown, or promotion timeout
+    -> immediate TxnOperator.UpdateSnapshot against already-applied frontier
+```
+
+The barrier path holds no lock needed by commit, rollback, logtail publication,
+client/stream close, or timeout delivery. Frontend terminal rollback begins when
+the bounded call returns and releases the transaction-owned prefix.
+
+### 9.3 Q3: accumulation
+
+Target/proof memory is bounded by schema metadata. Barrier/retry/metric count is
+one per Run. Existing read-barrier CN/server/TN queues each have fixed admission
+bounds. There is no input-row, batch, file, transaction-ID, table-ID, tenant,
+error, or heartbeat cardinality in retained state or telemetry.
+
+## 10. Performance and availability model
+
+Current indexed LOAD lock work is approximately:
+
+```text
+O(input batches * promoted UNIQUE targets * encoded keys)
+```
+
+The optimized ownership path is:
+
+```text
+O(promoted UNIQUE targets log targets)
++ one real TN publication/apply barrier
++ one physical recompile
+```
+
+Unlike v3-v5's future HLC fence, the reused barrier has no fixed clock-skew wait;
+healthy idle latency reflects only real queue/network/apply progress. Unlike a
+new generic lockservice coarsening policy, the optimization is restricted to a
+statement that already owns the base table for its whole execution.
+
+Availability changes remain explicit:
+
+- direct physical hidden-table writers can wait on disjoint keys behind the
+  promoted full domain;
+- an arbitrary multi-table transaction containing such a writer can add a new
+  deadlock edge;
+- the LOAD holds base and hidden full locks during the barrier, physical retry,
+  source initialization, execution, and commit;
+- hidden-lock or barrier outage retains promoted ownership for at most one
+  aggregate promotion phase bounded by the smaller configured/caller deadline
+  and the 120-second cap, then whole-txn rollback begins.
+
+Concurrent ordinary LOAD/DML for the same base table is already serialized by
+the existing base full-domain owner. The additional availability surface is
+therefore limited to direct physical hidden-table access and must be explicitly
+accepted by the lockservice owner.
+
+## 11. Compatibility, rollout, and rollback
+
+- No new protobuf, MORPC message, catalog field, lock mode, table-range encoding,
+  durable state, or planner cache policy is added.
+- Optimization requires deployment protocol >=39. During rolling upgrade or
+  downgrade with any older live service, it is disabled and exact row locking
+  remains active.
+- Engine capability and protocol are revalidated before the first promoted
+  hidden lock. A later stream/protocol failure returns an error and rolls back;
+  it never silently claims freshness.
+- Mixed new/old CNs continue to contend in the same existing physical lock
+  namespaces. An old CN simply never emits promoted ownership.
+- Removing the implementation restores exact `main` behavior and requires no
+  data migration, cleanup, replay, or catalog rewrite.
+- Restart loses only ephemeral compile proof. Transaction/lockservice terminal
+  handling remains authoritative for surviving or unresolved locks.
+
+Security and tenant isolation are unchanged. The optimization adds no external
+input, privilege bypass, object-name lookup, cross-tenant identifier, or new
+trust boundary. Its broader physical ownership can reduce availability but
+cannot grant data access.
+
+## 12. Alternatives
+
+### 12.1 Keep exact per-batch row locks
+
+Correct and lowest design risk, but preserves the suspected indexed-only
+contention and cannot meet the endpoint if the hypothesis is confirmed.
+
+### 12.2 Treat the base lock as covering hidden tables and drop row locks
+
+Rejected. Ordinary DML reaches base before synchronous hidden updates, but
+physical hidden tables are addressable by internal/direct SQL paths. Removing
+their row locks without physical hidden ownership leaves a reachable writer
+outside the exclusion proof.
+
+### 12.3 Change generic lockservice coarsening
+
+Potentially useful as a separate lockservice optimization, but it affects every
+large transaction, preserves per-batch encoding/submission, and changes global
+contention policy. It is not required to test this narrower LOAD ownership
+hypothesis. If the final endpoint gate fails, revisit lockservice contention
+with profiles instead of broadening this PR preemptively.
+
+### 12.4 Use generic table-lock return timestamps
+
+Rejected. Full-table acquisition uses `bat=nil`; owner-local commit timestamps
+are not durable causal proofs across bind/restart generations and can miss an
+already committed writer with no active conflict.
+
+### 12.5 Construct a future HLC and wait for idle heartbeat progress
+
+Rejected by v6. It can be made correct under the clock-offset contract, but it
+duplicates the stronger existing TN-ordered read barrier, adds a fixed delay up
+to roughly `2*MaxOffset`, depends on future progress, and required a new
+transaction-client wait/install lifecycle protocol. Reusing #27842 removes all
+of those mechanisms.
+
+### 12.6 Add a new LOAD-specific TN or lockservice RPC
+
+Rejected. The generic v39 read barrier already supplies the exact publication
+and local-apply boundary. A second RPC would duplicate wire, admission,
+correlation, reconnect, upgrade, shutdown, and test obligations.
 
 ## 13. Validation map
 
-| Invariant | Cheapest deterministic proof | Public/scale proof | Nearest controls |
-| --- | --- | --- | --- |
-| exact statement eligibility | compiler classifier UT plus actual planner fixture | issue's modern indexed LOAD | `Autocommit=true && ByBegin=false` admitted; BEGIN/START TRANSACTION and autocommit=0 rejected; estimated bytes below/at 1 GiB, NaN/Inf/zero/missing stats, admitted/other base PK shapes, `LoadWriteS3=false`, retry-disabled, prepare-time/reused generation, freshly rebuilt prepared generation, RC/SI/optimistic, fallback, LOAD IGNORE/REPLACE/accounts, FK/checks-off, system/subscription, ID mismatch, feature flag/partition/temp/fake PK |
-| plan-generation isolation | compiler/frontend baseline plus classifier UT | repeat identical direct LOAD SQL and prepared control | current direct modern LOAD remains non-cacheable at every size through existing `MULTI_UPDATE`; no new planner write; legacy/reused generation fails closed to main |
-| exact hidden mapping | compiler UT over existing targets and mutation contexts | LOAD result/count | static NULL absent, dynamic present, non-UNIQUE, non-default/BTREE, async/malformed params, `TableExist=false`, missing/duplicate/mismatched `UpdateCtx`, unknown extra target |
-| atomic fail-closed transform | canonical-plan and filtered-copy UT | existing ineligible LOAD corpus | late mismatch after earlier valid target, contradictory duplicate, missing metadata coverage |
-| base before hidden; acquire once | compiler recorder UT plus ordinary-DML plan-order UT | real lockservice competitor | reversed IDs, duplicate ID, modern and legacy INSERT/UPDATE/DELETE/REPLACE |
-| deferred target freshness | lockop result-matrix UT | concurrent LOAD stress | no conflict, active commit/rollback, stale/no-op `tableCommittedAt`; no ordinary snapshot update before all locks |
-| global no-active freshness | real lockservice + RC txn test | concurrent LOAD stress | writer commits before request; post-acquisition HLC fence causes one retry and refreshed re-entry |
-| active conflict freshness | barrier-based real lockservice test | retry/wait metrics | base/hidden holder commit or rollback, then the same one global retry; caller cancellation/timeout |
-| one fence for all targets | base plus two hidden targets | retry/compile-count metric | every acquisition precedes fence; one optimization retry; no second fence after re-entry |
-| HLC fence construction | shared clock-helper UT and allocator equivalence test | fence-wait latency | max logical at raw upper physical tick, negative offset/time, overflow, configured skew boundaries |
-| strict refreshed snapshot | transaction-client advancer contract test | retry-count metric | absent capability remains exact main; equal/older waiter result fails; concurrent newer snapshot is preserved; exact local proof with greater snapshot re-enters once |
-| snapshot-fence lifecycle | deterministic transaction-client waiter barriers | client-close/error diagnostics | live context + stalled logtail + client-only close returns `ErrClientClosed`; close/notify, commit/rollback/notify, and restart-generation races publish at most one valid outcome and remove the waiter |
-| fence observability | injected waiter plus metric gatherer | scale metric/log comparison | exactly one duration/outcome for success, cancel/deadline, client close, generic error, and post-wait generation failure; no sample before an actual wait; no duplicate on races; no dynamic label or log |
-| idle fence progress | real TN heartbeat plus timestamp waiter test | no-writer scale run | opposite allowed CN/TN skew reaches the fence via PrepareTS heartbeat; stopped heartbeat and disconnected logtail cancel |
-| owner-generation independence | remote/proxy/rebind/restart/mirror lockservice UT | 3-CN restart/rebind stress | old owner timestamp absent/stale yet coordinator fence covers commit; cancel while logtail waits |
-| schema/index race | metadata-lock plus physical-lock integration UT | concurrent ALTER control | add/drop/rebuild between plan and pre-run; definition retry rebuilds before source init; ineligible rebuild retains old txn lock until terminal action |
-| retry-state isolation | repeated compile from same plan | prepared LOAD control | prepare-time/reused paths remain exact main; ordinary retry shares exact local proof; logical rebuild permanently disables promotion for the Run; mismatch fails closed |
-| coordinator-only ownership | remote-plan serialization/compile UT | 3-CN issue run | one promoted request per physical target; no remote freshness state |
-| cancellation/partial prefix | deterministic waiter barrier UT | autocommit rollback semantics | cancel before first and while later target waits; transition failure; every acquired prefix is released by whole-txn rollback |
-| explicit transaction exclusion | transaction-option classifier UT | BEGIN/START TRANSACTION and `SET autocommit=0` SQL controls | no promoted lock, fence wait, or optimization retry; exact main targets remain |
-| compiler reuse | pooled compiler UT | N/A: internal lifecycle | fresh compiler equivalence after success/error/retry |
-| physical type admission | independent integer/composite base and integer-hidden encoding oracles with real conflicts | both issue table shapes | integer min/max/interior; serialized composite empty/max/interior; user VARCHAR and all other base shapes ineligible; every non-int64 hidden OID retained, including FLOAT32/FLOAT64 and serialized composite |
-| direct physical availability tradeoff | disjoint-row wait and cycle-termination UT | wait/retry/deadlock/log gate | competing direct physical transaction commit, rollback, cancel, timeout, and arbitrary multi-table lock cycle |
-| no covered batch-lock work | exact call-count UT | 100M/1B benchmark/profile | no-index, mixed `T_int64` plus non-promoted target, and ineligible LOAD |
-| no public FK/fallback change | exact main-vs-PR plan-shape snapshot | existing FK/fallback BVT | no new FK BVT because FK plans are unchanged |
+### 13.1 Focused compiler and planner tests
 
-UT data is limited to the minimum rows and targets needed to distinguish
-states. Concurrency tests use explicit barriers and outer deadlines, not
-sleeps. Performance assertions remain in the big-data harness rather than
-UT/BVT.
+- actual modern indexed-LOAD fixture is admitted;
+- `BEGIN`, `START TRANSACTION`, `autocommit=0`, internal/derived execution,
+  SI/optimistic, retry-disabled, protocol <=38, missing capability, missing
+  timeout, prepared/reused generation, FK/partition/temp/system/fake-PK,
+  unsupported index, unknown/small/NaN/Inf estimates are rejected;
+- any ordinary generation-zero retry before promotion sticks to exact main;
+- first generation retains every canonical and local row target;
+- late classifier mismatch publishes no partial target vector;
+- successful proof filters only exact promoted targets on the later physical
+  generation;
+- logical rebuild disables promotion before rebuilding and cannot emit a second
+  barrier;
+- compiler release/reuse clears root and borrower state.
 
-## 14. Design review record
+### 13.2 Causal boundary evidence
 
-Change scope: statement-owned autocommit classifier -> modern LOAD `LOCK_OP` ->
-compiler-local hidden target promotion -> LOAD-only RC freshness wrapper ->
-pre-pipeline acquisition -> one local execution fence proof and physical retry
--> one bounded fence-wait metric observation.
+Run section 2.1 before implementation. Archive exact commit/config identities,
+raw per-case timings, metrics, and equal-window profiles. A visually plausible
+profile or one faster indexed run does not pass; the normalized boundary and
+lock-mechanism signals must move together. This evidence belongs on #27775 and
+in the PR body so the issue, design, and implementation cannot drift.
 
-Mandatory triggers:
+### 13.3 Deterministic barrier/snapshot tests
 
-- crosses planner-output, compiler, transaction-snapshot, and lockservice
-  ownership boundaries;
-- changes a distributed concurrency/availability path;
-- changes a material LOAD hot path;
-- requires mixed-version, rollback, boundedness, and scale evidence.
+Use an injected engine barrier and explicit phase channels, not sleeps:
 
-Decision log:
+- barrier is called only after base and every sorted hidden target succeeds;
+- successful frontier is installed and source initialization occurs only on the
+  retried generation;
+- caller cancellation, engine error, stream-style error, timeout at configured
+  and 120-second-cap boundaries, and snapshot-update error publish no proof;
+- target 1 consumes most of the budget; target 2 and the barrier receive only
+  the shared remainder rather than restarting a per-step timeout;
+- caller context remains live while the internal barrier deadline fires;
+- a shorter caller deadline remains the caller's error, while only the internal
+  timeout maps to `ErrLockWaitTimeout`;
+- timeout is non-retryable, waiter/call returns, whole-txn rollback releases the
+  acquired prefix, and a competing writer proceeds;
+- one attempted call emits exactly one fixed-outcome metric sample; fallback
+  emits none; no race duplicates the sample.
+- a TN-committed pessimistic writer is paused after TN success but before its
+  outer `Commit` returns; lock release followed by LOAD's barrier still orders
+  and applies that commit;
+- an optimistic concurrent writer retains exact-main conflict/retry behavior;
+  the test does not pretend the promoted lock excludes it.
 
-| Revision | Decision | Rationale |
+The internal deadline is injected/configured to milliseconds in UT. The outer
+test deadline is only a hang guard and is larger than the tested timeout.
+
+### 13.4 Real lockservice integration
+
+With minimal rows and deterministic barriers:
+
+- direct hidden writer commits before acquisition with no active wait;
+- base and hidden writers commit or roll back while LOAD waits;
+- owner rebind/restart loses all owner-local timestamp history yet the reused
+  TN barrier still supplies freshness;
+- endpoint and interior hidden keys conflict with the promoted range;
+- cancellation while target N is blocked rolls back the already owned prefix;
+- direct-writer timeout/cancel/deadlock cycles terminate;
+- repeated physical entry is reentrant and emits no second barrier.
+
+### 13.5 Reused prerequisite evidence
+
+Do not duplicate #27842's implementation tests in this PR. Reuse its exact
+contracts for:
+
+- commit-to-marker-to-stream-to-local-apply ordering;
+- concurrent response correlation;
+- v39 protocol gating;
+- CN/server/TN admission bounds;
+- cancel before/after admission, stream break, reconnect, shutdown drain, and
+  exactly-once slot cleanup.
+
+Add only one real consumer integration proving LOAD invokes that capability
+after ownership and updates the transaction snapshot before retry.
+
+### 13.6 Public SQL and performance layers
+
+No new SQL result/error contract is introduced on the healthy path, so ordinary
+BVT does not prove the optimization. Reuse existing indexed LOAD correctness
+cases; keep timeout/fault ordering in deterministic component tests. Do not add
+a sleep-based multi-session BVT.
+
+Final endpoint evidence is mandatory:
+
+1. alternating exact-main and exact-final-head on the same 3-CN environment;
+2. three successful 100M runs for each indexed shape and no-index control;
+3. median, spread, normalized indexed/no-index ratio, SQL duration, rows, lock
+   requests/coarsening, barrier histogram, first/retry compile duration,
+   retries, waits, timeouts, deadlocks, and relevant log count;
+4. equal-window CPU and mutex profiles;
+5. for each 100M indexed shape, recover at least 80% of the normalized
+   regression gap from the reported bad ratio back toward the reported good
+   ratio:
+
+   ```text
+   recovered = (R_bad - R_candidate) / (R_bad - R_good) >= 0.80
+   R = indexed median / same-build no-index median
+   ```
+
+6. no no-index median regression greater than 15%;
+7. one 1B confirmation only after the 100M gate passes, with row-count and
+   profile/lock signals consistent with the 100M mechanism.
+
+If the normalized gate fails, this mechanism is not accepted merely because
+lock request counts or a microbenchmark improved.
+
+## 14. Risk register
+
+| Risk | Consequence | Control/evidence |
 | --- | --- | --- |
-| v1 (`30a0943ec3`) | superseded | preserving FK routing did not preserve FK lock behavior; implementation remained over-broad |
-| v2 (unapproved draft) | superseded | fallback/planner full-target construction was unnecessary; generic table lock missed a concrete no-active-conflict RC freshness window |
-| v3 (`44d0d92292`) | superseded | `TxnOperator.UpdateSnapshot` could not observe standalone `TxnClient.Close` and held the operator mutex across a future logtail wait |
-| v4 (`47c3f1e748`) | superseded | explicit transactions unnecessarily widened lock lifetime/cycle/workspace obligations; proposed size-dependent planner cache policy duplicated existing `MULTI_UPDATE` behavior; mandatory fence timing lacked a safe emission contract |
-| v5 | pending | statement-owned autocommit only; compiler-only 1 GiB admission with unchanged cache policy; client-owned, close-aware, generation-safe wait/install plus one lock-free, bounded-cardinality fence metric |
+| ineligible shape promoted | correctness/availability change | atomic positive classifier and negative matrix |
+| first generation drops rows early | stale execution on failure/fallback | retain exact rows until completed proof and retry |
+| writer commit absent from snapshot | missed duplicate/conflict | existing TN-ordered barrier plus snapshot > frontier |
+| #26706 is not causal | wrong subsystem and wasted complexity | mandatory parent/merge A/B before implementation |
+| protocol/capability missing | invalid wire call | v39/capability gates before promotion |
+| promoted lock/barrier stalls | table-level blocking | one min configured/120s aggregate deadline, non-retryable rollback |
+| timeout retries automatically | request/log amplification | ordinary lock-timeout class, no optimization retry |
+| snapshot update waits under op mutex | terminal blockage | barrier first applies same shared waiter frontier; deterministic immediate-update assertion |
+| stale proof crosses generation | row targets removed unsafely | exact txn/logical/physical/vector/frontier checks |
+| logical rebuild repeats barrier | unbounded retry/wait | root sticky disable before rebuild |
+| direct hidden writer blocked broadly | availability/deadlock surface | explicit lockservice-owner decision and scale/cycle tests |
+| optimistic writer ignores promoted lock | false exclusion claim | preserve exact-main TN conflict semantics; explicit test and proof scope |
+| metric/log storm | operational overload | one sample, four labels, fixed buckets, no new logs |
+| hypothesis is wrong | complexity without endpoint gain | normalized 100M/1B acceptance gate and rollback plan |
 
-The v2 freshness blocker was proven with a real local lockservice diagnostic,
-not only code inspection. V5 also rejects owner-local `tableCommittedAt` as a
-generation-stable proof after auditing bind/restart transport, rejects mutable
-snapshot ordering as proof, bounds opposite-skew wait at approximately twice
-`MaxOffset`, verifies idle TN heartbeat progress before using a future HLC
-fence, closes the client-close/operator-generation wait boundary, and removes
-the cross-statement and duplicate-cache-policy surface. Production
-implementation review and delivery remain blocked while v5 is `mandatory
-design review pending`.
+## 15. Review convergence contract
 
-Approval must be traceable in PR #27814 and include both SQL planner/compile and
-lockservice ownership perspectives. Record reviewer handles, links, decision,
-and the exact approved design commit here before implementing or pushing
-production changes.
+The earlier review loop failed because it skipped causal proof, repaired the
+most recent counterexample while retaining its mechanism, and repeatedly
+declared “no new blocker” without freezing the complete decision surface. V6
+changes the process:
+
+1. Section 2.1 proves or rejects the suspected causal boundary before code is
+   added; issue status cannot promote correlation to root cause.
+2. This document is the single change map for safety, freshness, generation,
+   timeout, ownership, performance, compatibility, observability, and tests.
+3. Required owners review the same exact commit and return their complete
+   blocker set against sections 3-14, rather than one serial concern per round.
+4. A subjective availability/performance tradeoff is closed once its owner,
+   assumptions, decision, and evidence requirement are recorded. It is reopened
+   only by materially new evidence that invalidates those assumptions.
+5. Correctness, hang, leak, compatibility, and mandatory evidence failures
+   cannot be self-waived by the author.
+6. Implementation starts only after the causal gate and both owner approvals.
+   Implementation review checks conformance to this approved revision; a
+   material deviation updates the design and reopens only the affected decision,
+   not the entire history.
+7. The PR body, issue status, and decision log must describe the same state. No
+   comment may call the hypothesis a root cause or final fix before the endpoint
+   gate passes.
+
+Reviewer closure table:
+
+| Perspective | Required decision |
+| --- | --- |
+| SQL planner/compile owner | classifier authority, canonical-plan isolation, retry generation, source rebuild, cache/fallback, timeout propagation |
+| lockservice owner | base/hidden ownership invariant, direct-writer availability/deadlock tradeoff, partial-prefix rollback, timeout semantics |
+| shared prerequisite | #27842 contract/version unchanged and reused, not re-reviewed as new code |
+| performance gate | final implementation only; cannot be approved from docs CI or old 5M data |
+
+## 16. Decision log
+
+| Revision | Decision | Why superseded |
+| --- | --- | --- |
+| v1-v2 | implementation-first base/hidden ownership variants | over-broad planner/FK/wire changes and incomplete freshness proof |
+| v3 | future HLC fence through `TxnOperator.UpdateSnapshot` | client close could not independently terminate a future wait held under operator mutex |
+| v4 | client-owned future wait/install | admitted explicit transactions, duplicated planner cache policy, and lacked safe metric ownership |
+| v5 | narrowed autocommit future-HLC design | still duplicated the existing v39 TN-ordered read barrier, paid fixed clock-skew latency, and let outage retention follow the 24-hour session timeout |
+| v6 | causal gate, then reuse existing bounded TN-ordered read barrier | pending causal evidence and dual-owner approval |
+
+Record reviewer handles, links, decisions, and the exact approved v6 commit here
+before production implementation is pushed.
