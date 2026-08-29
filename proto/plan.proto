@@ -238,6 +238,10 @@ message Function {
   repeated Expr args = 2;
   bytes agg_config = 3;
   AggregateConfigType agg_config_type = 4;
+  // Planner provenance only. Explicit CAST syntax can share the legacy CAST
+  // overload while optimizers still distinguish it from an implicit cast.
+  // Older CNs safely ignore this unknown field and execute the legacy overload.
+  bool syntax_explicit_cast = 5;
 }
 
 // PreparedNumericMetadata is sparse planner provenance for a numeric overload

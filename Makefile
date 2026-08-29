@@ -406,9 +406,10 @@ ut: $(UT_PREREQUISITES)
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	# The race suite is split into light, exclusive, heavy, and plan shards.
-	# Keep the outer budget above the per-package timeout so an expanded main
-	# branch cannot be killed while later shards are still making progress.
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress.
 	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
@@ -416,6 +417,8 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+UT_SHARD ?= all
+export UT_SHARD
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
