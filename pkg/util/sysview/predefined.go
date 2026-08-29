@@ -51,24 +51,21 @@ const (
 		informationSchemaViewOptionalSeparatorPattern + "(?:[(]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern +
 		"(?:" + informationSchemaViewOptionalSeparatorPattern + "[,]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern + ")*" + informationSchemaViewOptionalSeparatorPattern + "[)])?" +
 		informationSchemaViewRequiredSeparatorPattern + "as" + informationSchemaViewRequiredSeparatorPattern
-	informationSchemaViewDefinitionVersionCommentPrefixPattern = "(?is)^[[:space:]]*/[*]![0-9]+[[:space:]]*"
-	informationSchemaViewDefinitionCommentSuffixPattern        = "(?is)[[:space:]]*[*]/[[:space:]]*;?[[:space:]]*$"
-	informationSchemaViewStatementSQL                          = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
-	informationSchemaViewStatementWithoutTerminatorSQL         = "trim(regexp_replace(trim(" +
+	informationSchemaViewStatementSQL                  = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
+	informationSchemaViewStatementWithoutTerminatorSQL = "trim(regexp_replace(trim(" +
 		informationSchemaViewStatementSQL + "), '[;][[:space:]]*$', '', 1, 1))"
 	informationSchemaViewDefinitionPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionPrefixPattern + "'), ''))"
-	informationSchemaViewDefinitionVersionCommentPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
-		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionVersionCommentPrefixPattern + "'), ''))"
-	// Keep the persisted system-view definition free of CASE/IF and type wrappers,
-	// which the database-clone catalog restore cannot parse in this view definition.
+	// IF is already used by persisted information_schema definitions. It keeps
+	// the wrapper adjustment numeric, while avoiding the unsupported SIGN/LEAST
+	// calls and preserving an ordinary trailing application comment.
 	// Prefix lengths are counted in characters so they match substr even for
-	// multibyte view identifiers. sign is 0 when the mysqldump wrapper is absent
-	// and 1 when its prefix is present, so only that wrapper loses its final */.
+	// multibyte view identifiers. Only a mysqldump executable-comment wrapper
+	// loses its final */.
 	informationSchemaViewDefinitionSQL = "trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
-		"2 * sign(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ")))"
+		"2 * if(left(" + informationSchemaViewStatementWithoutTerminatorSQL + ", 3) = '/*!', 1, 0)))"
 )
 
 // `mysql` database system tables
