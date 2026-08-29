@@ -1372,6 +1372,7 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	routine.setSession(oldSession)
 	rm.sessionManager.AddSession(oldSession)
 	protocol := oldSession.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	oldSession.SetDatabaseName("db1")
 	conn := protocol.GetTcpConnection()
 	rm.setRoutine(conn, protocol.ConnectionID(), routine)
 	require.Len(t, rm.sessionManager.GetAllSessions(), 1)
@@ -1389,6 +1390,7 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	require.NotSame(t, oldSession, newSession)
 	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
 	require.Equal(t, connectionID, newSession.GetConnectionID())
+	require.Equal(t, "db1", newSession.GetDatabaseName(), "COM_RESET_CONNECTION preserves the selected database")
 	_, err = newSession.GetUserDefinedVar("must_not_leak")
 	require.ErrorContains(t, err, "does not exist")
 	_, err = newSession.GetPrepareStmt(context.Background(), "must_not_leak")
@@ -1692,13 +1694,24 @@ func wireOKPacketStatus(t *testing.T, payload []byte) uint16 {
 }
 
 func wireHandshakeResponse(username string) []byte {
+	return wireHandshakeResponseWithDatabase(username, "")
+}
+
+func wireHandshakeResponseWithDatabase(username, database string) []byte {
 	capability := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
+	if database != "" {
+		capability |= CLIENT_CONNECT_WITH_DB
+	}
 	payload := make([]byte, 4+4+1+23)
 	binary.LittleEndian.PutUint32(payload, capability)
 	binary.LittleEndian.PutUint32(payload[4:], 1<<24)
 	payload[8] = byte(Utf8mb4CollationID)
 	payload = append(payload, username...)
 	payload = append(payload, 0, 0) // username terminator and empty auth response
+	if database != "" {
+		payload = append(payload, database...)
+		payload = append(payload, 0)
+	}
 	payload = append(payload, AuthNativePassword...)
 	return append(payload, 0)
 }
@@ -1771,6 +1784,75 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 		require.NotNil(t, routine)
 		require.Equal(t, connectionID, routine.getConnectionID())
 		require.Equal(t, "dump", routine.getSession().GetTenantInfo().GetUser())
+	}
+
+	require.NoError(t, clientConn.Close())
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("MySQL wire server did not stop after the client closed")
+	}
+}
+
+func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
+	previousServerVars, ok := serverVarsMap.Load("")
+	require.True(t, ok)
+	serverVarsMap.Store("", &ServerLevelVariables{})
+	parameters := &config.FrontendParameters{}
+	parameters.SetDefaultValues()
+	parameters.SkipCheckUser = true
+	parameters.KillRountinesInterval = 0
+	setPu("", config.NewParameterUnit(parameters, nil, nil, nil))
+	setSessionAlloc("", NewLeakCheckAllocator())
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	setRtMgr("", rm)
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		rm.cancelCtx()
+		serverVarsMap.Store("", previousServerVars)
+	})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		startInnerServer(serverConn)
+	}()
+
+	_, handshake := readWirePacket(t, clientConn)
+	versionEnd := 1
+	for versionEnd < len(handshake) && handshake[versionEnd] != 0 {
+		versionEnd++
+	}
+	require.Greater(t, len(handshake), versionEnd+4)
+	connectionID := binary.LittleEndian.Uint32(handshake[versionEnd+1:])
+	writeWirePacket(t, clientConn, 1, wireHandshakeResponseWithDatabase("dump", "db1"))
+	_, response := readWirePacket(t, clientConn)
+	require.NotEmpty(t, response)
+	require.Equal(t, byte(defines.OKHeader), response[0])
+	// The in-process wire fixture does not install the catalog-backed global
+	// system-variable snapshot that a real authenticated session already has.
+	// Supply the empty snapshot explicitly so reset does not create a background
+	// transaction merely to populate it.
+	routine := rm.getRoutineByConnID(connectionID)
+	require.NotNil(t, routine)
+	routine.getSession().gSysVars = &SystemVariables{mp: map[string]interface{}{}}
+
+	// Connector/J 8.4 and later use COM_RESET_CONNECTION before exposing each
+	// logical pooled borrow. A successful reset must retain the URL-selected DB.
+	for borrow := 0; borrow < 2; borrow++ {
+		writeWirePacket(t, clientConn, 0, []byte{byte(COM_RESET_CONNECTION)})
+		_, response = readWirePacket(t, clientConn)
+		require.NotEmpty(t, response)
+		require.Equal(t, byte(defines.OKHeader), response[0])
+		require.NotZero(t, wireOKPacketStatus(t, response)&SERVER_STATUS_AUTOCOMMIT)
+
+		routine := rm.getRoutineByConnID(connectionID)
+		require.NotNil(t, routine)
+		require.Equal(t, connectionID, routine.getConnectionID())
+		require.Equal(t, "db1", routine.getSession().GetDatabaseName())
 	}
 
 	require.NoError(t, clientConn.Close())

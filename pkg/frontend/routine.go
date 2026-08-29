@@ -881,7 +881,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 
 func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
 	return rt.resetSessionWithAdmission(
-		rt.getCancelRoutineCtx(), baseServiceID, resp, false,
+		rt.getCancelRoutineCtx(), baseServiceID, resp, false, false,
 	)
 }
 
@@ -890,7 +890,10 @@ func (rt *Routine) resetSessionWithContext(
 	baseServiceID string,
 	resp *query.ResetSessionResponse,
 ) error {
-	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true)
+	// COM_RESET_CONNECTION resets session-scoped state but retains the selected
+	// database. Proxy reset has a distinct handoff contract and intentionally
+	// starts its replacement generation without one.
+	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true, true)
 }
 
 func (rt *Routine) resetSessionWithAdmission(
@@ -898,6 +901,7 @@ func (rt *Routine) resetSessionWithAdmission(
 	baseServiceID string,
 	resp *query.ResetSessionResponse,
 	waitForRequest bool,
+	preserveDatabase bool,
 ) error {
 	var operationCtx context.Context
 	var ok bool
@@ -930,10 +934,13 @@ func (rt *Routine) resetSessionWithAdmission(
 	cancelCtx := rt.getCancelRoutineCtx()
 	cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, baseServiceID)
 
-	// before create new session, we should reset the database on the protocol.
+	// Proxy reset deliberately starts without a selected database. The MySQL wire
+	// COM_RESET_CONNECTION contract preserves it across a session reset.
 	protocol := rt.getProtocol()
 	previousDB := protocol.GetStr(DBNAME)
-	protocol.SetStr(DBNAME, "")
+	if !preserveDatabase {
+		protocol.SetStr(DBNAME, "")
+	}
 
 	newSession := NewSession(cancelCtx, baseServiceID, protocol, nil)
 	resetCommitted := false

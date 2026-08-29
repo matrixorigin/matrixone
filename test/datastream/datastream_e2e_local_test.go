@@ -547,3 +547,36 @@ func TestDatastreamThroughMatrixOne(t *testing.T) {
 	require.NoError(t, <-errCh)
 	require.Equal(t, 5, countRows("select count(*) from datastream_e2e.dest2"))
 }
+
+// TestConnectorJConnectionPoolReset runs the exact Connector/J pooled-borrow
+// API from #27644 against a reachable MatrixOne. The Java probe uses
+// MysqlConnectionPoolDataSource rather than a synthetic packet client and
+// validates modern COM_RESET_CONNECTION cleanup on repeated logical borrows.
+func TestConnectorJConnectionPoolReset(t *testing.T) {
+	if _, err := exec.LookPath("java"); err != nil {
+		t.Skip("java not found; skip Connector/J pool E2E")
+	}
+	jar := filepath.Join(repoRoot(t), "xtool/jstfu/target/jstfu.jar")
+	if _, err := os.Stat(jar); err != nil {
+		t.Skip("xtool/jstfu/target/jstfu.jar not built; run `make jstfu` first")
+	}
+
+	db, dsn := moConnect(t)
+	defer db.Close()
+	const database = "connectorj_pool_reset"
+	const table = "pool_reset_rows"
+	mustExec(t, db,
+		"drop database if exists "+database,
+		"create database "+database,
+		"create table "+database+"."+table+" (v int)",
+	)
+	t.Cleanup(func() { _, _ = db.Exec("drop database if exists " + database) })
+
+	jdbcURL := strings.SplitN(jdbcURLFromDSN(dsn), "?", 2)[0] + "/" + database +
+		"?useSSL=false&allowPublicKeyRetrieval=true"
+	cmd := exec.Command("java", "-cp", jar, "io.matrixone.jstfu.ConnectorJPoolResetProbe",
+		jdbcURL, "dump", "111", database, table)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "Connector/J pool probe failed:\n%s", output)
+}
