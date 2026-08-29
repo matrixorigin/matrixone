@@ -4713,3 +4713,103 @@ func TestTemporalRangeFixedUnitConversionOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestTemporalRangeCalendarIntervalOverflow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	tests := []struct {
+		name       string
+		ascending  []string
+		descending []string
+		newVector  func([]string) *vector.Vector
+		add        func(int64, int64) error
+		sub        func(int64, int64) error
+	}{
+		{
+			name:       "date",
+			ascending:  []string{"2024-01-01", "2024-01-02"},
+			descending: []string{"2024-01-02", "2024-01-01"},
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil, values)
+			},
+			add: func(diff, unit int64) error {
+				_, err := doDateAdd(types.DateFromCalendar(2024, 1, 1), diff, unit)
+				return err
+			},
+			sub: func(diff, unit int64) error {
+				_, err := doDateSub(types.DateFromCalendar(2024, 1, 1), diff, unit)
+				return err
+			},
+		},
+		{
+			name:       "datetime",
+			ascending:  []string{"2024-01-01 00:00:00", "2024-01-02 00:00:00"},
+			descending: []string{"2024-01-02 00:00:00", "2024-01-01 00:00:00"},
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil, values)
+			},
+			add: func(diff, unit int64) error {
+				_, err := doDatetimeAdd(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0), diff, unit)
+				return err
+			},
+			sub: func(diff, unit int64) error {
+				_, err := doDatetimeSub(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0), diff, unit)
+				return err
+			},
+		},
+		{
+			name:       "timestamp",
+			ascending:  []string{"2024-01-01 00:00:00", "2024-01-02 00:00:00"},
+			descending: []string{"2024-01-02 00:00:00", "2024-01-01 00:00:00"},
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil, values)
+			},
+			add: func(diff, unit int64) error {
+				start := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC)
+				_, err := doTimestampAdd(time.UTC, start, diff, unit)
+				return err
+			},
+			sub: func(diff, unit int64) error {
+				start := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC)
+				_, err := doTimestampSub(time.UTC, start, diff, unit)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		for _, interval := range []struct {
+			unit types.IntervalType
+			diff int64
+		}{
+			{types.Month, 12 * (1 << 32)},
+			{types.Quarter, 4 * (1 << 32)},
+			{types.Year, 1 << 32},
+		} {
+			t.Run(fmt.Sprintf("%s_%s", tc.name, interval.unit), func(t *testing.T) {
+				require.True(t, moerr.IsMoErrCode(tc.add(interval.diff, int64(interval.unit)), moerr.ErrOutOfRange))
+				require.True(t, moerr.IsMoErrCode(tc.sub(interval.diff, int64(interval.unit)), moerr.ErrOutOfRange))
+
+				asc := tc.newVector(tc.ascending)
+				defer asc.Free(mp)
+				expr := intervalExpr(interval.diff, interval.unit)
+				left, err := searchLeft(0, asc.Length(), 0, asc, expr, true, false)
+				require.NoError(t, err)
+				require.Equal(t, asc.Length(), left)
+				right, err := searchRight(0, asc.Length(), 0, asc, expr, true, false)
+				require.NoError(t, err)
+				require.Equal(t, 0, right)
+
+				desc := tc.newVector(tc.descending)
+				defer desc.Free(mp)
+				left, err = searchLeft(0, desc.Length(), 0, desc, expr, false, true)
+				require.NoError(t, err)
+				require.Equal(t, 0, left)
+				right, err = searchRight(0, desc.Length(), 0, desc, expr, false, true)
+				require.NoError(t, err)
+				require.Equal(t, desc.Length(), right)
+			})
+		}
+	}
+}

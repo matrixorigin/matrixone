@@ -2525,6 +2525,9 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, true, types.DateType)
 		if !ok {
@@ -2571,6 +2574,9 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
 		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, true, types.DateTimeType)
 		if !ok {
@@ -2592,6 +2598,9 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 		return 0, err
 	}
 	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 	if types.IntervalType(unit) == types.MicroSecond {
@@ -3154,6 +3163,47 @@ func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool
 	return diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier
 }
 
+// temporalRangeCalendarIntervalInDomain evaluates calendar arithmetic in the
+// wide representation used by AddDateTime before that function narrows the
+// result year to int32. A wrapped year is a valid-looking but incorrect RANGE
+// search key, so calendar bounds outside the temporal domain must follow the
+// same out-of-domain path as fixed-duration bounds.
+func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, unit types.IntervalType, subtract bool) bool {
+	if subtract {
+		if diff == math.MinInt64 {
+			return false
+		}
+		diff = -diff
+	}
+
+	year, month, _, _ := start.ToDate().Calendar(true)
+	boundaryYear := int64(year)
+	boundaryMonth := int64(month)
+	switch unit {
+	case types.Month, types.Year_Month:
+		boundaryYear += diff / 12
+		boundaryMonth += diff % 12
+	case types.Quarter:
+		if diff > math.MaxInt64/3 || diff < math.MinInt64/3 {
+			return false
+		}
+		months := diff * 3
+		boundaryYear += months / 12
+		boundaryMonth += months % 12
+	case types.Year:
+		boundaryYear += diff
+	default:
+		return true
+	}
+
+	if boundaryMonth <= 0 {
+		boundaryYear--
+	} else if boundaryMonth > 12 {
+		boundaryYear++
+	}
+	return boundaryYear >= int64(types.MinDatetimeYear) && boundaryYear <= int64(types.MaxDatetimeYear)
+}
+
 // checkedDatetimeMicrosecondInterval validates both the signed arithmetic and
 // the resulting DATE/DATETIME domain. Datetime.AddInterval intentionally
 // fast-paths MICROSECOND without a calendar validation, so RANGE bounds must
@@ -3185,6 +3235,9 @@ func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 		return 0, err
 	}
 	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
 	if types.IntervalType(unit) == types.MicroSecond {
@@ -3233,6 +3286,9 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
 		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
 	if types.IntervalType(unit) == types.MicroSecond {
 		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, false, types.DateTimeType)
 		if !ok {
@@ -3254,6 +3310,9 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 		return 0, err
 	}
 	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 	if types.IntervalType(unit) == types.MicroSecond {
