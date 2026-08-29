@@ -1,6 +1,8 @@
 # Object privilege lifecycle and DDL transaction protocol
 
-- Status: **in review; implementation approval remains blocked until this document is approved**
+- Status: **approved**
+- Approved design revision: `7670e86db96db9f8b2b6d8d13845957d8d175c12`
+- Independent review decision: **PASS**, recorded 2026-08-29
 - Owning issue: [#27723](https://github.com/matrixorigin/matrixone/issues/27723)
 - Implementation PR: [#27745](https://github.com/matrixorigin/matrixone/pull/27745)
 - Historical cleanup follow-up: [#27836](https://github.com/matrixorigin/matrixone/issues/27836)
@@ -218,16 +220,16 @@ Resolved decisions:
 6. Private workflow transaction is selected before BEGIN; snapshot-read ownership is a separate option.
 7. Forward prevention ships independently from historical cleanup.
 
-Blocking review item: an implementation reviewer must approve this exact design revision before PR #27745 can be approved. Material deviations in lock order, transaction admission, identity, or private ownership require updating this document and re-reviewing the affected sections.
+An independent implementation reviewer approved design revision `7670e86db96db9f8b2b6d8d13845957d8d175c12` with decision PASS. Material deviations in lock order, transaction admission, identity, or private ownership require updating this document and re-reviewing the affected sections.
 
 ### Design review record
 
 ```text
 Change scope: complete issue #27723 implementation in PR #27745
 Trigger: authorization boundary + distributed lock/lifecycle protocol + restore/rollback ownership
-Design: this versioned document; status IN REVIEW
-Blocking findings: independent reviewer approval is pending; no unresolved technical question is deferred
+Design: this versioned document at revision 7670e86db96db9f8b2b6d8d13845957d8d175c12; status APPROVED
+Blocking findings: none
 Decision log: sections 2-13 and resolved decisions 1-7 above
-Decision: REQUEST_CHANGES until design approval is recorded
-Implementation deviations: none currently identified; reviewer must verify against this revision
+Decision: PASS (independent review recorded 2026-08-29)
+Implementation deviations: none identified against the approved revision
 ```
