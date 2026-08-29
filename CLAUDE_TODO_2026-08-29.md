@@ -86,3 +86,17 @@
 - REPEAT/REPLACE/INSERT/REGEXP 与 PAD 在构造扩张结果前执行 checked MPool admission；PAD preflight 改为 allocation-free UTF-8 scan；补 low-cap rejection UT。
 - binder 对 REPEAT count literal 与 LPAD/RPAD target literal 细化 VARBINARY width；动态表达式维持 BLOB。
 - BVT 更新为 23/23 passed；`repeat(X'61',2)` 和 `lpad(...)` 均报告 VARBINARY(2)，动态 count 报告 BLOB。
+
+## 第三轮 review findings 修复计划
+
+1. 取消 PAD 的错误 target==byte 推导：结合 source/pad 的已知每字符最大字节上界推导，否则保持 BLOB；补 emoji metadata/CTAS 反例。
+2. 删除与 regexp 引擎语义不一致的独立扫描；让匹配、size 计算和结果写入共享同一迭代状态，保持锚点与 empty-match 规则。
+3. 为 varlena result 增加 MPool-owned direct writer，QUOTE、PAD、REPEAT、REPLACE、INSERT、REGEXP 直接写入最终 area，删除 Builder、完整 string、[]rune 和全量 match slice。
+4. INSERT 使用实际 position/removal 推导精确输出；REGEXP_SUBSTR 仅在找到目标 match 后按实际 match size admission，所有 arity 共用路径；PAD invalid UTF-8 sizing 与 runtime writer 同源。
+5. 为每个函数族分别补 low-cap、大输入小输出、anchor/empty match、invalid UTF-8 typed UT，跑 owning packages/BVT/self-review 后直接 push。
+
+## REGEXP ownership 决议
+
+- 用户确认按 #27217/#27218 边界继续。
+- #27218 撤回 REGEXP admission/iterator 改动；matcher、anchor/empty-match、operand compatibility 和 match-memory Q3 归 #27217。
+- #27218 继续修复 PAD metadata、QUOTE/PAD/REPEAT/REPLACE/INSERT direct writer 与精确 admission。

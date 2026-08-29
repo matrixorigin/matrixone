@@ -377,7 +377,7 @@ func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, resul
 	}, selectList)
 }
 
-func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -392,9 +392,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				if err := rs.GetResultVector().PreExtendWithArea(1, len(v1), proc.Mp()); err != nil {
-					return err
-				}
 				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
 				match, res, err := op.regMap.regularSubstr(pat, expr, 1, 1)
 				if err != nil {
@@ -583,7 +580,7 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0]) // expr
 	p2 := vector.GenerateFunctionStrParameter(parameters[1]) // pat
 	p3 := vector.GenerateFunctionStrParameter(parameters[2]) // repl
@@ -609,7 +606,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				val, err := op.regMap.regularReplaceAdmitted(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), 1, 0, result, proc)
+				val, err := op.regMap.regularReplace(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), 1, 0)
 				if err != nil {
 					return err
 				}
@@ -631,7 +628,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				val, err := op.regMap.regularReplaceAdmitted(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), v4, 0, result, proc)
+				val, err := op.regMap.regularReplace(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), v4, 0)
 				if err != nil {
 					return err
 				}
@@ -655,7 +652,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				val, err := op.regMap.regularReplaceAdmitted(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), v4, v5, result, proc)
+				val, err := op.regMap.regularReplace(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), v4, v5)
 				if err != nil {
 					return err
 				}
@@ -797,54 +794,6 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 		return false, "", nil
 	}
 	return true, matches[occurrence-1], nil
-}
-
-func (rs *regexpSet) regularReplaceAdmitted(pat, str, repl string, pos, occurrence int64, result vector.FunctionResultWrapper, proc *process.Process) (string, error) {
-	reg, err := rs.getRegularMatcher(pat)
-	if err != nil {
-		return "", err
-	}
-	resultBytes := int64(len(str))
-	for offset, seen := 0, int64(0); offset <= len(str); {
-		match := reg.FindStringIndex(str[offset:])
-		if match == nil {
-			break
-		}
-		if occurrence != 0 && offset+match[0] < int(pos-1) {
-			advance := match[1]
-			if advance == 0 {
-				_, advance = utf8.DecodeRuneInString(str[offset:])
-				if advance == 0 {
-					break
-				}
-			}
-			offset += advance
-			continue
-		}
-		seen++
-		if occurrence == 0 || occurrence == seen {
-			resultBytes += int64(len(repl) - (match[1] - match[0]))
-			if occurrence != 0 {
-				break
-			}
-		}
-		advance := match[1]
-		if advance == 0 {
-			_, size := utf8.DecodeRuneInString(str[offset:])
-			if size == 0 {
-				break
-			}
-			advance = size
-		}
-		offset += advance
-	}
-	if resultBytes < 0 || resultBytes > maxStringFunctionResultLength(result) {
-		return "", moerr.NewOutOfRangeNoCtx("regexp_replace", "result is too large")
-	}
-	if err := result.GetResultVector().PreExtendWithArea(1, int(resultBytes), proc.Mp()); err != nil {
-		return "", err
-	}
-	return rs.regularReplace(pat, str, repl, pos, occurrence)
 }
 
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {
