@@ -648,6 +648,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Truef(t, isExplicitPreparedCast(copiedFn.GetF().Args[0]),
 		"explicit cast overload was lost: original=%d copied=%d",
 		fn.GetF().Args[0].GetF().GetFunc().GetObj(), copiedFn.GetF().Args[0].GetF().GetFunc().GetObj())
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
 		ParamValue{Value: "9007199254740993", PrepareParamKind: vector.PrepareParamInteger},
 	})

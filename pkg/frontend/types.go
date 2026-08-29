@@ -361,6 +361,11 @@ type PrepareStmt struct {
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// runtimeTextComparisonParamPositions is computed once per prepared-plan
+	// generation. Only a text packet at one of these positions can require the
+	// domain-sensitive comparison rebind; stable numeric DML remains on the
+	// cached compile path without an execute-time plan walk.
+	runtimeTextComparisonParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -823,6 +828,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.runtimeTextComparisonParamPositions = nil
 	prepareStmt.remapDb = nil
 }
 

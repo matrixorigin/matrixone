@@ -2897,6 +2897,8 @@ func createPrepareStmtInSession(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
+		runtimeTextComparisonParamPositions: plan2.PreparedPlanRuntimeTextComparisonParamPositions(
+			prepareControl.Plan, len(prepareControl.ParamTypes)),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
