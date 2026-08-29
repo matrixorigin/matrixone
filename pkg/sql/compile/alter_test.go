@@ -19,7 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sync"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -2299,7 +2300,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 	mp := c.proc.Mp()
 
 	metadataSQL := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	results := map[string]executor.Result{
@@ -2326,17 +2327,25 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 
 	require.NoError(t, compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now))
 	require.Equal(t, []string{
-		databranchutils.LineageOwnerLifecycleLockSQL(),
 		metadataSQL,
 		alterDataBranchLineageEdgeSQL(),
 		alterDataBranchSnapshotSourceSQL(),
 		alterDataBranchPitrSourceSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQL(),
 		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
 		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
 	}, executed)
 }
 
 func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateError(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
 	wantErr := errors.New("lifecycle gate failed")
 	var executed []string
 	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -2344,200 +2353,244 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateErr
 		if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
 			return executor.Result{}, wantErr
 		}
-		return executor.Result{}, nil
+		switch sql {
+		case metadataSQL:
+			return newAlterLineageMetadataResult(
+				t, mp, []uint64{2}, []uint64{1}, []int64{now.Add(-48 * time.Hour).UnixNano()},
+				[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{true},
+			), nil
+		case alterDataBranchLineageEdgeSQL():
+			return newAlterLineageEdgeResult(t, mp, nil, nil, nil, nil, nil, nil), nil
+		case alterDataBranchSnapshotSourceSQL():
+			return newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil), nil
+		case alterDataBranchPitrSourceSQL():
+			return newAlterLineagePitrSourceResult(t, mp, nil, nil, nil, nil, nil, nil, nil), nil
+		default:
+			return executor.Result{}, nil
+		}
 	})
 
 	err := compactExpiredAlterDataBranchLineageWithExecutor(
-		context.Background(), sqlExecutor, time.Now().UTC(),
+		context.Background(), sqlExecutor, now,
 	)
 	require.ErrorIs(t, err, wantErr)
-	require.Equal(t, []string{databranchutils.LineageOwnerLifecycleLockSQL()}, executed)
+	require.Equal(t, []string{
+		metadataSQL,
+		alterDataBranchLineageEdgeSQL(),
+		alterDataBranchSnapshotSourceSQL(),
+		alterDataBranchPitrSourceSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+	}, executed)
 }
 
-type lineageGCDeadlineExecutor struct {
-	deadline   time.Time
-	opts       executor.Options
-	executed   []string
-	stmtOpts   []executor.StatementOption
-	execErr    error
-	rolledBack bool
+type lineageGCTestExecutor struct {
+	t                   *testing.T
+	mp                  *mpool.MPool
+	remaining           []uint64
+	expectedBatchSize   int
+	gateErr             error
+	onGate              func()
+	opts                []executor.Options
+	transactions        [][]string
+	statementOpts       [][]executor.StatementOption
+	committedBatchSizes []int
+	rolledBack          int
 }
 
-type lineageGCTxnExecutor struct {
-	owner *lineageGCDeadlineExecutor
+type lineageGCTestTxnExecutor struct {
+	owner       *lineageGCTestExecutor
+	txnIndex    int
+	deleteCount int
 }
 
-func (e *lineageGCTxnExecutor) Use(string) {}
+func (e *lineageGCTestTxnExecutor) Use(string) {}
 
-func (e *lineageGCTxnExecutor) LockTable(string) error { return nil }
+func (e *lineageGCTestTxnExecutor) LockTable(string) error { return nil }
 
-func (e *lineageGCTxnExecutor) Txn() client.TxnOperator { return nil }
+func (e *lineageGCTestTxnExecutor) Txn() client.TxnOperator { return nil }
 
-func (e *lineageGCTxnExecutor) Exec(
+func (e *lineageGCTestTxnExecutor) Exec(
 	sql string,
 	opts executor.StatementOption,
 ) (executor.Result, error) {
-	e.owner.executed = append(e.owner.executed, sql)
-	e.owner.stmtOpts = append(e.owner.stmtOpts, opts)
-	if sql == databranchutils.LineageOwnerLifecycleLockSQL() && e.owner.execErr != nil {
-		return executor.Result{}, e.owner.execErr
+	e.owner.transactions[e.txnIndex] = append(e.owner.transactions[e.txnIndex], sql)
+	e.owner.statementOpts[e.txnIndex] = append(e.owner.statementOpts[e.txnIndex], opts)
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	switch sql {
+	case metadataSQL:
+		rowCount := len(e.owner.remaining)
+		parents := make([]uint64, rowCount)
+		cloneTSs := make([]int64, rowCount)
+		creators := make([]uint64, rowCount)
+		levels := make([]string, rowCount)
+		deleted := make([]bool, rowCount)
+		for i := range rowCount {
+			cloneTSs[i] = 1
+			creators[i] = uint64(catalog.System_Account)
+			levels[i] = databranchutils.AlterLineageLevel
+			deleted[i] = true
+		}
+		return newAlterLineageMetadataResult(
+			e.owner.t, e.owner.mp, e.owner.remaining, parents, cloneTSs, creators, levels, deleted,
+		), nil
+	case alterDataBranchLineageEdgeSQL():
+		return newAlterLineageEdgeResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil), nil
+	case alterDataBranchSnapshotSourceSQL():
+		return newAlterLineageSnapshotSourceResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil), nil
+	case alterDataBranchPitrSourceSQL():
+		return newAlterLineagePitrSourceResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil, nil), nil
+	case databranchutils.LineageOwnerLifecycleLockSQL():
+		if e.owner.onGate != nil {
+			e.owner.onGate()
+		}
+		return executor.Result{}, e.owner.gateErr
+	default:
+		if strings.HasPrefix(sql, "delete from mo_catalog.mo_branch_metadata") {
+			e.deleteCount = min(e.owner.expectedBatchSize, len(e.owner.remaining))
+		}
+		return executor.Result{}, nil
 	}
-	return executor.Result{}, nil
 }
 
-func (e *lineageGCDeadlineExecutor) Exec(
+func (e *lineageGCTestExecutor) Exec(
 	context.Context, string, executor.Options,
 ) (executor.Result, error) {
 	return executor.Result{}, nil
 }
 
-func (e *lineageGCDeadlineExecutor) ExecTxn(
-	ctx context.Context,
+func (e *lineageGCTestExecutor) ExecTxn(
+	_ context.Context,
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
-	e.deadline, _ = ctx.Deadline()
-	e.opts = opts
-	err := execFunc(&lineageGCTxnExecutor{owner: e})
-	if err != nil {
-		e.rolledBack = true
-	}
-	return err
-}
-
-func TestDataBranchLineageGCExecutorSetsDeadline(t *testing.T) {
-	spyExec := &lineageGCDeadlineExecutor{}
-	started := time.Now()
-	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(context.Background(), nil))
-	require.False(t, spyExec.deadline.IsZero())
-	require.WithinDuration(t, started.Add(dataBranchLineageGCCriticalSectionTimeout), spyExec.deadline, time.Second)
-	require.True(t, spyExec.opts.HasLockWaitTimeout())
-	require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts.LockWaitTimeout())
-	require.NotEmpty(t, spyExec.stmtOpts)
-	require.Equal(t, lock.WaitPolicy_FastFail, spyExec.stmtOpts[0].WaitPolicy())
-
-	parentDeadline := time.Now().Add(time.Second)
-	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
-	defer cancel()
-	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(ctx, nil))
-	require.WithinDuration(t, parentDeadline, spyExec.deadline, time.Second)
-}
-
-type lineageGCBoundedExecutor struct {
-	gate        sync.Mutex
-	gateOwned   chan struct{}
-	scanStarted chan struct{}
-	ctx         context.Context
-	rolledBack  bool
-}
-
-type lineageGCBoundedTxnExecutor struct {
-	owner    *lineageGCBoundedExecutor
-	ownsGate bool
-}
-
-func (e *lineageGCBoundedTxnExecutor) Use(string) {}
-
-func (e *lineageGCBoundedTxnExecutor) LockTable(string) error { return nil }
-
-func (e *lineageGCBoundedTxnExecutor) Txn() client.TxnOperator { return nil }
-
-func (e *lineageGCBoundedTxnExecutor) Exec(
-	sql string,
-	_ executor.StatementOption,
-) (executor.Result, error) {
-	if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
-		e.owner.gate.Lock()
-		e.ownsGate = true
-		close(e.owner.gateOwned)
-		return executor.Result{}, nil
-	}
-	select {
-	case <-e.owner.scanStarted:
-	default:
-		close(e.owner.scanStarted)
-	}
-	<-e.owner.ctx.Done()
-	return executor.Result{}, context.Cause(e.owner.ctx)
-}
-
-func (e *lineageGCBoundedExecutor) Exec(
-	context.Context, string, executor.Options,
-) (executor.Result, error) {
-	return executor.Result{}, nil
-}
-
-func (e *lineageGCBoundedExecutor) ExecTxn(
-	ctx context.Context,
-	execFunc func(executor.TxnExecutor) error,
-	_ executor.Options,
-) error {
-	e.ctx = ctx
-	txn := &lineageGCBoundedTxnExecutor{owner: e}
+	txnIndex := len(e.transactions)
+	e.opts = append(e.opts, opts)
+	e.transactions = append(e.transactions, nil)
+	e.statementOpts = append(e.statementOpts, nil)
+	txn := &lineageGCTestTxnExecutor{owner: e, txnIndex: txnIndex}
 	err := execFunc(txn)
 	if err != nil {
-		e.rolledBack = true
+		e.rolledBack++
+		return err
 	}
-	if txn.ownsGate {
-		e.gate.Unlock()
+	if txn.deleteCount > 0 {
+		e.remaining = e.remaining[txn.deleteCount:]
+		e.committedBatchSizes = append(e.committedBatchSizes, txn.deleteCount)
 	}
-	return err
+	return nil
 }
 
-func TestDataBranchLineageGCExecutorBoundsGCFirstRestoreWait(t *testing.T) {
-	spyExec := &lineageGCBoundedExecutor{
-		gateOwned:   make(chan struct{}),
-		scanStarted: make(chan struct{}),
+func newLineageGCTestExecutor(
+	t *testing.T,
+	remaining []uint64,
+	batchSize int,
+) *lineageGCTestExecutor {
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	return &lineageGCTestExecutor{
+		t:                 t,
+		mp:                c.proc.Mp(),
+		remaining:         append([]uint64(nil), remaining...),
+		expectedBatchSize: batchSize,
 	}
-	const criticalSectionTimeout = 100 * time.Millisecond
-	gcDone := make(chan error, 1)
-	go func() {
-		gcDone <- dataBranchLineageGCExecutor(
-			spyExec, criticalSectionTimeout,
-		)(context.Background(), nil)
-	}()
+}
 
-	<-spyExec.gateOwned
-	<-spyExec.scanStarted
-	restoreAdmitted := make(chan struct{})
-	go func() {
-		spyExec.gate.Lock()
-		close(restoreAdmitted)
-		spyExec.gate.Unlock()
-	}()
-	select {
-	case <-restoreAdmitted:
-		t.Fatal("restore crossed the lifecycle gate while GC still owned it")
-	default:
-	}
+func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T) {
+	const batchSize = 2
+	spyExec := newLineageGCTestExecutor(t, []uint64{1, 2, 3, 4, 5}, batchSize)
+	run := dataBranchLineageGCExecutor(spyExec, batchSize, 2)
 
-	require.NoError(t, <-gcDone)
-	require.True(t, spyExec.rolledBack)
-	select {
-	case <-restoreAdmitted:
-	case <-time.After(time.Second):
-		t.Fatal("restore remained blocked after the bounded GC transaction rolled back")
+	require.NoError(t, run(context.Background(), nil))
+	require.Equal(t, []uint64{5}, spyExec.remaining)
+	require.Equal(t, []int{2, 2}, spyExec.committedBatchSizes)
+	require.NoError(t, run(context.Background(), nil))
+	require.Empty(t, spyExec.remaining)
+	require.Equal(t, []int{2, 2, 1}, spyExec.committedBatchSizes)
+	require.Zero(t, spyExec.rolledBack)
+
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	var metadataDeletes []string
+	for txnIndex, sqls := range spyExec.transactions {
+		require.True(t, spyExec.opts[txnIndex].HasLockWaitTimeout())
+		require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts[txnIndex].LockWaitTimeout())
+		require.True(t, spyExec.opts[txnIndex].HasTxnIsolation())
+		require.Equal(t, txn.TxnIsolation_SI, spyExec.opts[txnIndex].TxnIsolation())
+		gateIndex := slices.Index(sqls, gateSQL)
+		if gateIndex < 0 {
+			// The final empty discovery transaction performs no mutation.
+			require.Len(t, sqls, 1)
+			continue
+		}
+		require.Equal(t, 4, gateIndex, "unbounded discovery must precede lifecycle admission")
+		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[txnIndex][gateIndex].WaitPolicy())
+		require.Len(t, sqls[gateIndex+1:], 2, "only the bounded delete pair may execute while owning the gate")
+		metadataDeletes = append(metadataDeletes, sqls[gateIndex+2])
 	}
+	require.Equal(t, []string{
+		"delete from mo_catalog.mo_branch_metadata where table_id in (1,2) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (3,4) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (5) and (level = 'alter' or level like 'alter:%')",
+	}, metadataDeletes)
 }
 
 func TestDataBranchLineageGCExecutorDefersAfterContentionRollback(t *testing.T) {
 	for _, contentionErr := range []error{
 		moerr.NewLockConflictNoCtx(),
 		moerr.NewLockWaitTimeoutNoCtx(),
+		moerr.NewTxnNeedRetryNoCtx(),
+		moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
 	} {
-		spyExec := &lineageGCDeadlineExecutor{execErr: contentionErr}
-		require.NoError(t, DataBranchLineageGCExecutor(spyExec)(context.Background(), nil))
-		require.True(t, spyExec.rolledBack)
-		require.Equal(t,
-			[]string{databranchutils.LineageOwnerLifecycleLockSQL()},
-			spyExec.executed,
-		)
-		require.Len(t, spyExec.stmtOpts, 1)
-		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.stmtOpts[0].WaitPolicy())
+		spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+		spyExec.gateErr = contentionErr
+		require.NoError(t, dataBranchLineageGCExecutor(spyExec, 1, 1)(context.Background(), nil))
+		require.Equal(t, 1, spyExec.rolledBack)
+		require.Equal(t, []uint64{1}, spyExec.remaining)
+		require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), spyExec.transactions[0][4])
+		require.Len(t, spyExec.transactions[0], 5)
+		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[0][4].WaitPolicy())
 	}
 }
 
-func TestDataBranchLineageGCExecutorDoesNotSuppressCancellationOrOtherErrors(t *testing.T) {
+func TestDataBranchLineageGCExecutorParentContextPrecedesContention(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		cause         error
+		contentionErr error
+	}{
+		{
+			name:          "canceled parent with lock conflict",
+			cause:         context.Canceled,
+			contentionErr: moerr.NewLockConflictNoCtx(),
+		},
+		{
+			name:          "expired parent with lock timeout",
+			cause:         context.DeadlineExceeded,
+			contentionErr: moerr.NewLockWaitTimeoutNoCtx(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+			spyExec.gateErr = tc.contentionErr
+			spyExec.onGate = func() { cancel(tc.cause) }
+			err := dataBranchLineageGCExecutor(spyExec, 1, 1)(ctx, nil)
+			require.ErrorIs(t, err, tc.cause)
+			require.Equal(t, 1, spyExec.rolledBack)
+			require.Equal(t, []uint64{1}, spyExec.remaining)
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+	require.ErrorIs(t, dataBranchLineageGCExecutor(spyExec, 1, 1)(ctx, nil), context.Canceled)
+	require.Empty(t, spyExec.transactions, "an ended parent must stop before transaction admission")
+}
+
+func TestDataBranchLineageGCExecutorDoesNotSuppressOtherErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -2548,19 +2601,17 @@ func TestDataBranchLineageGCExecutorDoesNotSuppressCancellationOrOtherErrors(t *
 		{name: "execution failure", err: errors.New("gc failed")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spyExec := &lineageGCDeadlineExecutor{execErr: tc.err}
-			err := DataBranchLineageGCExecutor(spyExec)(context.Background(), nil)
+			spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+			spyExec.gateErr = tc.err
+			err := dataBranchLineageGCExecutor(spyExec, 1, 1)(context.Background(), nil)
 			require.Error(t, err)
 			if moerr.IsMoErrCode(tc.err, moerr.ErrRemoteLockWaitTimeout) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout))
 			} else {
 				require.ErrorIs(t, err, tc.err)
 			}
-			require.True(t, spyExec.rolledBack)
-			require.Equal(t,
-				[]string{databranchutils.LineageOwnerLifecycleLockSQL()},
-				spyExec.executed,
-			)
+			require.Equal(t, 1, spyExec.rolledBack)
+			require.Equal(t, []uint64{1}, spyExec.remaining)
 		})
 	}
 }
@@ -2623,7 +2674,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t
 	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
 	mp := c.proc.Mp()
 	metadataSQL := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	results := map[string]executor.Result{

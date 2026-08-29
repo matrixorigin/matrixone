@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,69 +23,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 const (
-	// Bound the complete transaction because it owns the foreground lifecycle
-	// gate from its first statement through commit or rollback. This is also the
-	// maximum time a restore arriving just after GC admission can wait on GC.
-	dataBranchLineageGCCriticalSectionTimeout = 5 * time.Second
-	dataBranchLineageGCLockWaitTimeout        = time.Second
-)
-
-var errDataBranchLineageGCCriticalSectionTimeout = moerr.NewInternalErrorNoCtx(
-	"data branch lineage GC critical section timeout",
+	// Discovery does not own the lifecycle gate. Each successful transaction
+	// validates its discovery by writing the shared gate, then commits at most
+	// one bounded batch. Repeated transactions make durable progress without
+	// retaining the foreground gate through a full-catalog scan.
+	dataBranchLineageGCBatchSize        = 128
+	dataBranchLineageGCMaxBatchesPerRun = 16
+	dataBranchLineageGCLockWaitTimeout  = time.Second
 )
 
 func DataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
 ) taskservice.TaskExecutor {
 	return dataBranchLineageGCExecutor(
-		sqlExecutor, dataBranchLineageGCCriticalSectionTimeout,
+		sqlExecutor,
+		dataBranchLineageGCBatchSize,
+		dataBranchLineageGCMaxBatchesPerRun,
 	)
 }
 
 func dataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
-	criticalSectionTimeout time.Duration,
+	batchSize int,
+	maxBatches int,
 ) taskservice.TaskExecutor {
 	return func(ctx context.Context, _ task.Task) error {
-		ctx, cancel := context.WithTimeoutCause(
-			ctx, criticalSectionTimeout,
-			errDataBranchLineageGCCriticalSectionTimeout,
-		)
-		defer cancel()
-		err := compactExpiredAlterDataBranchLineageWithExecutor(
-			ctx, sqlExecutor, time.Now().UTC(),
-		)
-		if isDataBranchLineageGCContention(err) ||
-			isDataBranchLineageGCCriticalSectionTimeout(ctx, err) {
-			// Background maintenance yields to foreground owner publication and
-			// restore. ExecTxn has already rolled back the complete GC attempt;
-			// the next scheduled run will recompute it from catalog state.
-			return nil
+		for range maxBatches {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			compacted, err := compactExpiredAlterDataBranchLineageBatchWithExecutor(
+				ctx, sqlExecutor, time.Now().UTC(), batchSize,
+			)
+			if err != nil {
+				// Parent control always wins over local contention classification.
+				// In particular, a lock error racing cancellation must not turn a
+				// canceled task into a successful maintenance attempt.
+				if cause := context.Cause(ctx); cause != nil {
+					return cause
+				}
+				if isDataBranchLineageGCContention(err) {
+					// ExecTxn rolled back this batch. A foreground owner writer or
+					// restore crossed the validation gate; recompute next run.
+					return nil
+				}
+				return moerr.AttachCause(ctx, err)
+			}
+			if !compacted {
+				return nil
+			}
 		}
-		return moerr.AttachCause(ctx, err)
+		return nil
 	}
 }
 
 func isDataBranchLineageGCContention(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout)
-}
-
-func isDataBranchLineageGCCriticalSectionTimeout(ctx context.Context, err error) bool {
-	if !errors.Is(context.Cause(ctx), errDataBranchLineageGCCriticalSectionTimeout) {
-		return false
-	}
-	// Do not hide a substantive execution failure merely because it raced with
-	// the maintenance budget. Only cancellation-shaped results caused by this
-	// executor's own deadline are a safe, retryable deferral.
-	return errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, errDataBranchLineageGCCriticalSectionTimeout) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 }
 
 func compactExpiredAlterDataBranchLineageWithExecutor(
@@ -94,19 +95,32 @@ func compactExpiredAlterDataBranchLineageWithExecutor(
 	sqlExecutor executor.SQLExecutor,
 	now time.Time,
 ) error {
-	return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+	_, err := compactExpiredAlterDataBranchLineageBatchWithExecutor(
+		ctx, sqlExecutor, now, dataBranchLineageGCBatchSize,
+	)
+	return err
+}
+
+func compactExpiredAlterDataBranchLineageBatchWithExecutor(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	now time.Time,
+	batchSize int,
+) (bool, error) {
+	compacted := false
+	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		statementOpts := executor.StatementOption{}.WithAccountID(catalog.System_Account)
-		gateOpts := statementOpts.WithWaitPolicy(lock.WaitPolicy_FastFail)
-		gate, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
-		if err != nil {
-			return err
-		}
-		gate.Close()
 		query := func(sql string) (executor.Result, error) {
 			return txn.Exec(sql, statementOpts)
 		}
 
-		dag, err := loadAlterDataBranchDAGWithQuery(query, true)
+		// Read a transactionally consistent candidate plan without owning the
+		// foreground lifecycle gate. The gate write below is the validation
+		// point: explicit snapshot isolation keeps this discovery snapshot fixed,
+		// and every owner writer writes the same row before catalog mutation. A
+		// writer that crossed after discovery therefore makes this transaction
+		// conflict at the gate or commit instead of applying a stale plan.
+		dag, err := loadAlterDataBranchDAGWithQuery(query, false)
 		if err != nil || len(dag.Info) == 0 {
 			return err
 		}
@@ -122,6 +136,23 @@ func compactExpiredAlterDataBranchLineageWithExecutor(
 		if len(plan.TableIDs) == 0 {
 			return nil
 		}
+		if batchSize <= 0 {
+			return moerr.NewInternalErrorNoCtx("invalid data branch lineage GC batch size")
+		}
+		if len(plan.TableIDs) > batchSize {
+			plan.TableIDs = plan.TableIDs[:batchSize]
+		}
+		plan.SnapshotNames = make([]string, len(plan.TableIDs))
+		for i, tableID := range plan.TableIDs {
+			plan.SnapshotNames[i] = databranchutils.BranchSnapshotName(tableID)
+		}
+
+		gateOpts := statementOpts.WithWaitPolicy(lock.WaitPolicy_FastFail)
+		gate, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
+		if err != nil {
+			return err
+		}
+		gate.Close()
 		for _, sql := range []string{
 			databranchutils.BuildAlterLineageSnapshotDeleteSQL(plan.SnapshotNames),
 			databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs),
@@ -132,8 +163,11 @@ func compactExpiredAlterDataBranchLineageWithExecutor(
 				return execErr
 			}
 		}
+		compacted = true
 		return nil
 	}, executor.Options{}.
 		WithAccountID(catalog.System_Account).
+		WithTxnIsolation(txn.TxnIsolation_SI).
 		WithLockWaitTimeout(dataBranchLineageGCLockWaitTimeout))
+	return compacted, err
 }
