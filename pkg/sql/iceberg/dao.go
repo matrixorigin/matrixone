@@ -198,7 +198,10 @@ func (d *DAO) InsertResidencyPolicyWithPrivilege(ctx context.Context, actorAccou
 	if err := ValidateResidencyPolicyPrivilege(ctx, actorAccountID, isClusterAdmin, policy); err != nil {
 		return err
 	}
-	return d.execSQL(ctx, InsertResidencyPolicySQL(policy))
+	return d.publishCatalogDependency(ctx, policy.AccountID, policy.CatalogID, func(exec SQLExecutor) error {
+		_, err := exec.Exec(ctx, InsertResidencyPolicySQL(policy))
+		return err
+	})
 }
 
 func (d *DAO) ListResidencyPolicies(ctx context.Context, accountID uint32, catalogID uint64) ([]model.ResidencyPolicy, error) {
@@ -459,23 +462,24 @@ func (d *DAO) InsertMaintenanceJob(ctx context.Context, job model.MaintenanceJob
 }
 
 // publishCatalogDependency makes the catalog row the admission lock for every
-// DAO-owned dependency table checked by DROP ICEBERG CATALOG. The production
-// internal executor supplies ExecTxn; lightweight SQL-builder fakes retain the
-// direct path so their unit tests can stay independent of transaction wiring.
+// DAO-owned dependency table checked by DROP ICEBERG CATALOG. Every publisher
+// must provide a transaction-capable executor so validation and publication are
+// atomic with respect to the catalog lifecycle row lock.
 func (d *DAO) publishCatalogDependency(ctx context.Context, accountID uint32, catalogID uint64, publish func(SQLExecutor) error) error {
-	if txExec, ok := d.exec.(transactionalSQLExecutor); ok {
-		return txExec.ExecTxn(ctx, func(exec SQLExecutor) error {
-			var lockedCatalogID uint64
-			if err := exec.QueryRow(ctx, GetCatalogByIDForUpdateSQL(accountID, catalogID)).Scan(&lockedCatalogID); err != nil {
-				return err
-			}
-			if lockedCatalogID != catalogID {
-				return moerr.NewInternalErrorf(ctx, "iceberg catalog lifecycle lock selected unexpected catalog %d", lockedCatalogID)
-			}
-			return publish(exec)
-		})
+	txExec, ok := d.exec.(transactionalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "iceberg catalog dependency publication requires a transactional SQL executor")
 	}
-	return publish(d.exec)
+	return txExec.ExecTxn(ctx, func(exec SQLExecutor) error {
+		var lockedCatalogID uint64
+		if err := exec.QueryRow(ctx, GetCatalogByIDForUpdateSQL(accountID, catalogID)).Scan(&lockedCatalogID); err != nil {
+			return err
+		}
+		if lockedCatalogID != catalogID {
+			return moerr.NewInternalErrorf(ctx, "iceberg catalog lifecycle lock selected unexpected catalog %d", lockedCatalogID)
+		}
+		return publish(exec)
+	})
 }
 
 func (d *DAO) UpdateMaintenanceJobStatus(ctx context.Context, accountID uint32, jobID, status, errorCategory string, snapshotAfter string, rewrittenFileCount, removedFileCount uint64, expectedVersion uint64) error {
@@ -941,7 +945,12 @@ func GetCatalogByIDSQL(accountID uint32, catalogID uint64) string {
 }
 
 func GetCatalogByIDForUpdateSQL(accountID uint32, catalogID uint64) string {
-	return GetCatalogByIDSQL(accountID, catalogID) + " for update"
+	return fmt.Sprintf(
+		"select catalog_id from mo_catalog.%s where account_id = %d and catalog_id = %d for update",
+		TableCatalogs,
+		accountID,
+		catalogID,
+	)
 }
 
 func GetTableMappingSQL(accountID uint32, databaseID uint64, tableID uint64) string {

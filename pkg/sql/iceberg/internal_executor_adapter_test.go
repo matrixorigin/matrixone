@@ -60,6 +60,30 @@ func TestInternalSQLExecutorAdapterScansRows(t *testing.T) {
 	}
 }
 
+func TestInternalSQLExecutorAdapterScansCatalogLifecycleLockProjection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint64(7), false, mp))
+	bat.SetRowCount(1)
+
+	exec := &fakeInternalSQLExecutor{result: internalexecutor.Result{Batches: []*batch.Batch{bat}, Mp: mp}}
+	var catalogID uint64
+	sql := GetCatalogByIDForUpdateSQL(9, 7)
+	if !strings.HasPrefix(sql, "select catalog_id from ") || strings.Contains(sql, "select account_id,") {
+		t.Fatalf("catalog lifecycle lock must project only catalog_id: %s", sql)
+	}
+	requireNoErr(t, (InternalSQLExecutorAdapter{Executor: exec}).QueryRow(context.Background(), sql).Scan(&catalogID))
+	if catalogID != 7 {
+		t.Fatalf("unexpected catalog lifecycle lock id: %d", catalogID)
+	}
+
+	noRows := InternalSQLExecutorAdapter{Executor: &fakeInternalSQLExecutor{}}
+	if err := noRows.QueryRow(context.Background(), GetCatalogByIDForUpdateSQL(9, 7)).Scan(new(uint64)); err == nil {
+		t.Fatalf("expected no-row catalog lifecycle lock error")
+	}
+}
+
 func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 	exec := &fakeInternalSQLExecutor{result: internalexecutor.Result{AffectedRows: 3}}
 	affected, err := (InternalSQLExecutorAdapter{Executor: exec}).Exec(context.Background(), "insert into mo_catalog.t values (1)")
