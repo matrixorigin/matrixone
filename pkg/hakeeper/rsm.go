@@ -1705,10 +1705,11 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNStores:    make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		TNStores:    make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
-		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
-		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
+		CNStores:                      make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
+		TNStores:                      make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
+		LogStores:                     make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		ProxyStores:                   make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
+		DDLVisibilityDeployedProtocol: s.state.CNState.DDLVisibilityDeployedProtocol,
 	}
 	if s.viewMetadataAdmissionActive() {
 		cd.ViewMetadataAdmission = &pb.ViewMetadataAdmission{
@@ -1750,6 +1751,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ViewMetadataObservedEpoch:       info.ViewMetadataObservedEpoch,
 			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 			DDLVisibilityBarrierReady:       info.DDLVisibilityBarrierReady,
+			DDLVisibilityDeployedProtocol:   info.DDLVisibilityDeployedProtocol,
 			ViewMetadataIngressReady:        info.ViewMetadataIngressReady,
 		}
 		cd.CNStores = append(cd.CNStores, n)

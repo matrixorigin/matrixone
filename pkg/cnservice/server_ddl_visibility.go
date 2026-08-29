@@ -46,6 +46,22 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 	// whether this restart can produce v38 DDL. A fresh upgraded process has no
 	// marker and starts on v37 until the complete-target cut persists v38.
 	deployedVersion := s.loadDDLVisibilityDeployedProtocol()
+	if deployedVersion == 0 && s._hakeeperClient != nil {
+		ctx, cancel := s.newDDLVisibilityBarrierContext(context.Background())
+		details, err := s._hakeeperClient.GetClusterDetails(ctx)
+		if err != nil {
+			err = moerr.AttachCause(ctx, err)
+			cancel()
+			return err
+		}
+		cancel()
+		if details.DDLVisibilityDeployedProtocol >= defines.MORPCVersion38 {
+			// Markerless scale-out/replacement after the cluster cut joins v38 as
+			// provisional. It can synchronize and receive activation RPCs, but it
+			// cannot publish ingress or produce DDL before joining the exact cut.
+			deployedVersion = -details.DDLVisibilityDeployedProtocol
+		}
+	}
 	rt := moruntime.ServiceRuntime(s.cfg.UUID)
 	if deployedVersion >= defines.MORPCVersion38 {
 		s.ddlVisibilityActivationComplete.Store(true)

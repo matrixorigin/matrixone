@@ -172,13 +172,22 @@ func activationTestPeerProtocols() map[string]query.GetProtocolVersionResponse {
 
 type ddlVisibilityWithdrawalHAKeeperClient struct {
 	logservice.CNHAKeeperClient
-	cluster               *ddlVisibilityTestCluster
-	queryClosed           <-chan struct{}
-	sendErr               error
-	sendErrors            map[int]error
-	heartbeats            []logservicepb.CNStoreHeartbeat
-	queryClosedBeforeSend bool
-	closeCalls            int
+	cluster                 *ddlVisibilityTestCluster
+	queryClosed             <-chan struct{}
+	sendErr                 error
+	sendErrors              map[int]error
+	heartbeats              []logservicepb.CNStoreHeartbeat
+	queryClosedBeforeSend   bool
+	closeCalls              int
+	clusterDeployedProtocol int64
+}
+
+func (c *ddlVisibilityWithdrawalHAKeeperClient) GetClusterDetails(
+	context.Context,
+) (logservicepb.ClusterDetails, error) {
+	return logservicepb.ClusterDetails{
+		DDLVisibilityDeployedProtocol: c.clusterDeployedProtocol,
+	}, nil
 }
 
 func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
@@ -388,6 +397,28 @@ func TestDefaultV38StartupUsesLastDeployedProtocolUntilActivation(t *testing.T) 
 	require.True(t, gate.PublicDDLEnabled())
 	require.False(t, s.ddlVisibilityActivationPrepared.Load())
 	require.False(t, s.ddlVisibilityActivationFenced.Load())
+}
+
+func TestMarkerlessCNJoinsCommittedClusterFailClosed(t *testing.T) {
+	const serviceID = "ddl-visibility-markerless-post-cut-test"
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	cluster := &ddlVisibilityTestCluster{}
+	gate := frontend.NewDDLCommitGate()
+	s := &service{
+		cfg: &Config{UUID: serviceID}, ddlCommitGate: gate,
+		_hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{
+			cluster: cluster, clusterDeployedProtocol: defines.MORPCVersion38,
+		},
+	}
+
+	require.NoError(t, s.prepareDDLVisibilityBarrier())
+	require.NoError(t, s.publishDDLVisibilityIngressAfterStart())
+	version, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion38, version)
+	require.False(t, s.ddlVisibilityActivationComplete.Load())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, gate.PublicDDLEnabled())
 }
 
 func TestProvisionalV38RestartRemainsFailClosed(t *testing.T) {

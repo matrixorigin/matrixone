@@ -66,6 +66,7 @@ message CNStore {
   bool DDLVisibilityBarrierReady = 21;
   // ViewMetadataIngressReady is retained for raw control-plane inventory.
   bool ViewMetadataIngressReady = 22;
+  int64 DDLVisibilityDeployedProtocol = 23;
 }
 
 message TNStore {
@@ -170,6 +171,9 @@ message CNStoreHeartbeat {
   // listener has started successfully. Admission alone is not routability.
   bool            ViewMetadataIngressReady = 24;
   bool            DDLVisibilityBarrierReady = 25;
+  // DDLVisibilityDeployedProtocol reports only a locally committed deployment
+  // marker. Provisional activation must never advance the cluster-wide epoch.
+  int64           DDLVisibilityDeployedProtocol = 26;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -694,12 +698,17 @@ message CNStoreInfo {
   bool ViewMetadataAdmissionReady = 25;
   bool ViewMetadataIngressReady = 26;
   bool DDLVisibilityBarrierReady = 27;
+  int64 DDLVisibilityDeployedProtocol = 28;
 }
 
 // CNState contains all CN details known to the HAKeeper.
 message CNState {
-  // Stores is keyed by CN store UUID. 
+  // Stores is keyed by CN store UUID.
   map<string, CNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
+  // DDLVisibilityDeployedProtocol is a monotonic cluster deployment epoch.
+  // Once a complete-target cut commits, markerless replacement/scale-out CNs
+  // must join that fence instead of reopening on an older protocol.
+  int64 DDLVisibilityDeployedProtocol = 2;
 }
 
 
@@ -765,6 +774,7 @@ message ClusterDetails {
   repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
   repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
   ViewMetadataAdmission ViewMetadataAdmission = 6;
+  int64 DDLVisibilityDeployedProtocol = 7;
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
