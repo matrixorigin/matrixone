@@ -51,27 +51,24 @@ const (
 		informationSchemaViewOptionalSeparatorPattern + "(?:[(]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern +
 		"(?:" + informationSchemaViewOptionalSeparatorPattern + "[,]" + informationSchemaViewOptionalSeparatorPattern + informationSchemaViewIdentifierPattern + ")*" + informationSchemaViewOptionalSeparatorPattern + "[)])?" +
 		informationSchemaViewRequiredSeparatorPattern + "as" + informationSchemaViewRequiredSeparatorPattern
-	// A mysqldump executable comment must lose only its final wrapper terminator.
-	// regexp_replace cannot retain a capture in MatrixOne, so select the whole
-	// normalized statement instead: the first alternative stops immediately
-	// before the final */ only when the statement starts with /*!<version>.
-	informationSchemaViewVersionCommentStatementPattern = "(?is)^(?:[[:space:]]*/[*]![0-9]+.*[^*/]|.*)"
-	informationSchemaViewStatementSQL                   = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
-	informationSchemaViewStatementWithoutTerminatorSQL  = "trim(regexp_replace(trim(" +
+	informationSchemaViewDefinitionVersionCommentPrefixPattern = "(?is)^[[:space:]]*/[*]![0-9]+[[:space:]]*"
+	informationSchemaViewDefinitionCommentSuffixPattern        = "(?is)[[:space:]]*[*]/[[:space:]]*;?[[:space:]]*$"
+	informationSchemaViewStatementSQL                          = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
+	informationSchemaViewStatementWithoutTerminatorSQL         = "trim(regexp_replace(trim(" +
 		informationSchemaViewStatementSQL + "), '[;][[:space:]]*$', '', 1, 1))"
-	informationSchemaViewNormalizedStatementSQL = "trim(coalesce(regexp_substr(" +
-		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewVersionCommentStatementPattern + "'), ''))"
 	informationSchemaViewDefinitionPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
-		informationSchemaViewNormalizedStatementSQL + ", '" + informationSchemaViewDefinitionPrefixPattern + "'), ''))"
+		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionPrefixPattern + "'), ''))"
+	informationSchemaViewDefinitionVersionCommentPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
+		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionVersionCommentPrefixPattern + "'), ''))"
 	// Keep the persisted system-view definition free of CASE/IF and type wrappers,
 	// which the database-clone catalog restore cannot parse in this view definition.
 	// Prefix lengths are counted in characters so they match substr even for
-	// multibyte view identifiers. Normalizing the executable-comment terminator
-	// before extraction keeps ordinary trailing application comments intact and
-	// avoids unsupported conditional/minimum functions in this persisted view.
-	informationSchemaViewDefinitionSQL = "trim(substr(" + informationSchemaViewNormalizedStatementSQL +
+	// multibyte view identifiers. sign is 0 when the mysqldump wrapper is absent
+	// and 1 when its prefix is present, so only that wrapper loses its final */.
+	informationSchemaViewDefinitionSQL = "trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
-		informationSchemaViewNormalizedStatementSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + "))"
+		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
+		"2 * sign(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ")))"
 )
 
 // `mysql` database system tables

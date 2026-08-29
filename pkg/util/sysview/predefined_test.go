@@ -25,7 +25,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
@@ -435,8 +437,8 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
-		"trim(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
-	assert.Contains(t, InformationSchemaViewsDDL, "(?is)^(?:[[:space:]]*/[*]![0-9]+.*[^*/]|.*)")
+		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
+	assert.Contains(t, InformationSchemaViewsDDL, "2 * sign(char_length(coalesce(regexp_substr(")
 	// System-view definitions are replayed by database clone. The natural string
 	// type of trim/substr preserves the metadata contract without a wrapper that
 	// the persisted-view execution path rejects.
@@ -527,13 +529,14 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "select 1",
 		},
 	}
-	terminator := regexp.MustCompile("[;][[:space:]]*$")
-	versionComment := regexp.MustCompile(informationSchemaViewVersionCommentStatementPattern)
+	suffix := regexp.MustCompile(informationSchemaViewDefinitionCommentSuffixPattern)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			statement := strings.TrimSpace(terminator.ReplaceAllString(strings.TrimSpace(test.createSQL), ""))
-			statement = strings.TrimSpace(versionComment.FindString(statement))
-			definition := strings.TrimSpace(prefix.ReplaceAllString(statement, ""))
+			definition := strings.TrimSpace(prefix.ReplaceAllString(test.createSQL, ""))
+			if strings.HasPrefix(strings.TrimSpace(test.createSQL), "/*!") {
+				definition = strings.TrimSpace(suffix.ReplaceAllString(definition, ""))
+			}
+			definition = strings.TrimSuffix(definition, ";")
 			assert.Equal(t, test.definition, definition)
 		})
 	}
@@ -554,6 +557,12 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	statements, err := mysql.Parse(context.Background(), InformationSchemaViewsDDL, 1)
 	assert.NoError(t, err)
 	for _, statement := range statements {
+		persisted := tree.StringWithOpts(statement, dialect.MYSQL, tree.WithSingleQuoteString())
+		roundTripped, err := mysql.Parse(context.Background(), persisted, 1)
+		assert.NoError(t, err, persisted)
+		for _, roundTrippedStatement := range roundTripped {
+			roundTrippedStatement.Free()
+		}
 		statement.Free()
 	}
 }
