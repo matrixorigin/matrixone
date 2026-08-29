@@ -1076,6 +1076,22 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 	}
 
 	{
+		const resultLength = 70000
+		tc := tcTemp{
+			info: "repeat permits a result above the VARBINARY limit after BLOB promotion",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{resultLength}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{strings.Repeat("x", resultLength)}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
 		tc := tcTemp{
 			info: "test repeat(null, num) with num = -1, 0, 1, 3, null, 1000000000000",
 			inputs: []FunctionTestInput{

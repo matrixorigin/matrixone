@@ -2927,6 +2927,32 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
 }
 
+func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
+	const sql = `create table copied as select
+		convert(cast(1 as signed) using binary) converted,
+		char(65, 66) default_char,
+		char(65 using utf8mb4) text_char,
+		repeat(X'61', 70000) repeated,
+		concat(cast(X'61' as binary(65535)), X'62') concatenated`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 5)
+
+	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
+	require.Equal(t, int32(20), cols[0].Typ.Width)
+	require.Equal(t, uint32(types.CharsetBinary), cols[0].Typ.Charset)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(8), cols[1].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.Id)
+	require.Equal(t, int32(types.T_blob), cols[3].Typ.Id)
+	require.Equal(t, int32(types.T_blob), cols[4].Typ.Id)
+}
+
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false)

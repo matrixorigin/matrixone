@@ -1,6 +1,6 @@
 # Binary-string 返回域与 CTAS 宽度契约设计
 
-- 状态：Proposed，等待独立设计审批
+- 状态：Approved
 - Owning issue：[matrixorigin/matrixone#27218](https://github.com/matrixorigin/matrixone/issues/27218)
 - 依赖契约：`CLAUDE_BINARY_STRING_SEMANTIC_MODEL.md`
 - 设计 owner：SQL planner/function registry；CTAS、frontend protocol 为 consumer
@@ -118,7 +118,7 @@ BVT 数据规模固定为单行、单表达式；边界由 `repeat`/literal 构�
 
 ## 8. 审批记录
 
-- 设计 revision：待本文提交后的精确 commit SHA
-- 审批者：待 maintainer/user
-- 决定：Pending
-- 实现偏差：实现前为 none；任何 width 分类、promotion threshold、CHAR domain 或 CTAS authority 变更必须更新本文并重新审批
+- 设计 revision：`ba4592e694a35b20af9a211d98db95a545c8585d`
+- 审批者：user（会话内明确回复 “go ahead”）
+- 决定：Approved，2026-08-29
+- 实现偏差：为保持既有 text-only compatibility，动态扩张函数仅在静态 binary domain 无法证明上界时晋升 BLOB；普通 text domain 继续使用既有 VARCHAR 返回族。该收窄不改变已批准的 binary lossless invariant。

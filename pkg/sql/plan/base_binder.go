@@ -4640,6 +4640,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	// CONVERT's executor consumes a VARCHAR cast, but its declared result bound
+	// belongs to the pre-cast source type. Derive metadata before inserting the
+	// execution cast so fixed numeric/temporal/UUID widths are not replaced by
+	// VARCHAR(65535) and spuriously promoted to BLOB.
+	if name == "convert" {
+		returnType = function.ConvertReturnTypeForBinder(argsType)
+	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage

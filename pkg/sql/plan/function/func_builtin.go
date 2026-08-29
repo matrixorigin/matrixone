@@ -1596,11 +1596,11 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func doLpad(src string, tgtLen int64, pad string) (string, bool) {
+func doLpad(src string, tgtLen int64, pad string, maxLen int64) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+	if tgtLen < 0 || tgtLen > maxLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -1615,11 +1615,11 @@ func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	}
 }
 
-func doRpad(src string, tgtLen int64, pad string) (string, bool) {
+func doRpad(src string, tgtLen int64, pad string, maxLen int64) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+	if tgtLen < 0 || tgtLen > maxLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -1634,21 +1634,31 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	}
 }
 
+func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
+	switch result.GetResultVector().GetType().Oid {
+	case types.T_blob, types.T_text:
+		return int64(types.MaxBlobLen)
+	default:
+		return int64(types.MaxVarcharLen)
+	}
+}
+
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxResultLen := maxStringFunctionResultLength(result)
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
 		if n <= 0 {
 			return "", false
 		}
 
-		// return null if result is too long.
-		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
-		// and there is no documentation about the limit of the result length.
+		// Keep the runtime domain aligned with the planner's BLOB promotion.
+		// The division check avoids integer overflow before strings.Repeat and
+		// bounds one scalar result by MatrixOne's existing BLOB payload limit.
 		sourceLen := int64(len(base))
 		if sourceLen == 0 {
 			return "", false
 		}
-		if n > types.MaxVarcharLen/sourceLen {
+		if n > maxResultLen/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -1686,12 +1696,13 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxResultLen := maxStringFunctionResultLength(result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doLpad(string(v1), v2, string(v3))
+			rval, shouldNull := doLpad(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
 				if err := rs.AppendBytes([]byte(rval), false); err != nil {
 					return err
@@ -1712,12 +1723,13 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxResultLen := maxStringFunctionResultLength(result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doRpad(string(v1), v2, string(v3))
+			rval, shouldNull := doRpad(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
 				if err := rs.AppendBytes([]byte(rval), false); err != nil {
 					return err
