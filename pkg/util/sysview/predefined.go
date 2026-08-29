@@ -60,16 +60,16 @@ const (
 		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionPrefixPattern + "'), ''))"
 	informationSchemaViewDefinitionVersionCommentPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionVersionCommentPrefixPattern + "'), ''))"
-	// Keep the persisted system-view definition free of CASE/IF, which the
-	// database-clone catalog restore cannot parse in this view definition.
+	// Keep the persisted system-view definition free of CASE/IF and type wrappers,
+	// which the database-clone catalog restore cannot parse in this view definition.
 	// Prefix lengths are counted in characters so they match substr even for
 	// multibyte view identifiers. The version-comment prefix recognizes only a
 	// mysqldump wrapper, so a trailing */ is removed only for that wrapper and
 	// not for an application comment.
-	informationSchemaViewDefinitionSQL = "cast(trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
+	informationSchemaViewDefinitionSQL = "trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
 		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
-		"2 * least(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ", 1))) as text)"
+		"2 * least(" + informationSchemaViewDefinitionVersionCommentPrefixLengthSQL + ", 1)))"
 )
 
 // `mysql` database system tables
