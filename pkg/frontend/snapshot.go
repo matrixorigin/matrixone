@@ -325,10 +325,17 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	}
 
-	// Serialize the timestamp choice and owner-row publication with COPY ALTER.
-	// Unlike locking mo_snapshots itself, this stable catalog write also covers
-	// an empty owner set and forces an optimistic loser to retry.
-	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+	// Install the quota/catalog frontier before the lifecycle write. Advancing
+	// the transaction snapshot after that write can expose both workspace
+	// versions of the feature-registry gate row to the quota query.
+	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
+		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else {
+		// Cluster snapshots have no quota state to refresh, but still serialize
+		// timestamp choice and owner-row publication with COPY ALTER.
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
 		return err
 	}
 	// Keep quota admission and snapshot publication in the same serialized

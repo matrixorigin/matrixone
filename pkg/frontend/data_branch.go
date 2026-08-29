@@ -485,13 +485,19 @@ func handleDataBranch(
 func getDataBranchMutationExecutor(
 	ctx context.Context,
 	ses *Session,
+	featureLimited bool,
 	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
 	bh, deferred, err := getBackExecutor(ctx, ses, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+	if featureLimited {
+		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else {
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
 		// The lifecycle boundary is transaction admission for every data-branch
 		// create/delete path. A failure must end the owned transaction here so no
 		// target-account, table, metadata, snapshot, or PITR lock can follow it.
@@ -513,7 +519,7 @@ func dataBranchCreateTable(
 	)
 
 	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {
 		return
 	}
@@ -591,7 +597,7 @@ func dataBranchCreateDatabase(
 	)
 	stats.Reset()
 	if bh, deferred, err = getDataBranchMutationExecutor(
-		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {
 		return
 	}
@@ -732,7 +738,7 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 
@@ -797,7 +803,7 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 

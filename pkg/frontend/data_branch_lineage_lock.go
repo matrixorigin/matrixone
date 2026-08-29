@@ -31,3 +31,18 @@ func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec)
 	bh.ClearExecResultSet()
 	return err
 }
+
+// admitFeatureLimitedLineageOwnerMutation installs the TN-ordered catalog
+// frontier before crossing the lifecycle write barrier. Advancing an RC
+// snapshot after the gate write can expose both workspace versions of the
+// feature-registry row to later quota reads.
+func admitFeatureLimitedLineageOwnerMutation(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	if err := advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
+		return err
+	}
+	return lockDataBranchLineageOwnerLifecycle(ctx, bh)
+}

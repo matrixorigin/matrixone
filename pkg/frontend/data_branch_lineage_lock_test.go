@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -97,28 +98,33 @@ func TestLockDataBranchLineageOwnerLifecycleUsesSystemAccount(t *testing.T) {
 }
 
 func TestGetDataBranchMutationExecutorAdmitsBeforeMutation(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ses := newTestSession(t, ctrl)
-	t.Cleanup(ses.Close)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
-	ses.proc.Base.TxnOperator = txnOp
+	for _, featureLimited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("feature-limited=%t", featureLimited), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+			ses.proc.Base.TxnOperator = txnOp
 
-	bh := &backgroundExecTestWithHistory{}
-	bh.init()
-	stub := gostub.StubFunc(&NewBackgroundExec, bh)
-	t.Cleanup(stub.Reset)
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			t.Cleanup(stub.Reset)
 
-	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses)
-	require.NoError(t, err)
-	require.Same(t, bh, returned)
-	require.NotNil(t, cleanup)
-	require.Equal(t, []string{
-		"begin",
-		databranchutils.LineageOwnerLifecycleLockSQL(),
-	}, bh.executedSqls)
-	require.NoError(t, cleanup(nil))
-	require.Equal(t, "commit;", bh.executedSqls[len(bh.executedSqls)-1])
+			returned, cleanup, err := getDataBranchMutationExecutor(
+				context.Background(), ses, featureLimited)
+			require.NoError(t, err)
+			require.Same(t, bh, returned)
+			require.NotNil(t, cleanup)
+			require.Equal(t, []string{
+				"begin",
+				databranchutils.LineageOwnerLifecycleLockSQL(),
+			}, bh.executedSqls)
+			require.NoError(t, cleanup(nil))
+			require.Equal(t, "commit;", bh.executedSqls[len(bh.executedSqls)-1])
+		})
+	}
 }
 
 func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) {
@@ -137,7 +143,7 @@ func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) 
 	stub := gostub.StubFunc(&NewBackgroundExec, bh)
 	t.Cleanup(stub.Reset)
 
-	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses)
+	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses, false)
 	require.ErrorIs(t, err, wantErr)
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
