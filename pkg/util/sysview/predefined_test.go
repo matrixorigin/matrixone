@@ -500,6 +500,21 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "select 1",
 		},
 		{
+			name:       "block comment before as",
+			createSQL:  "create view v /* migration */ as select 1;",
+			definition: "select 1",
+		},
+		{
+			name:       "adjacent block comment before as",
+			createSQL:  "create view v/* migration */as select 1;",
+			definition: "select 1",
+		},
+		{
+			name:       "block comment before view cannot supply fake tokens",
+			createSQL:  "create /* migration view fake as */ view v as select 1;",
+			definition: "select 1",
+		},
+		{
 			name:       "unrecognized metadata remains visible",
 			createSQL:  "select 1",
 			definition: "select 1",
@@ -519,6 +534,9 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	for _, createSQL := range []string{
 		"create view hash_comment_v # migration comment\n as select 1;",
 		"create view slash_comment_v // migration comment\n as select 1;",
+		"create view block_comment_v /* migration */ as select 1;",
+		"create view adjacent_block_comment_v/* migration */as select 1;",
+		"create /* migration view fake as */ view block_before_view_v as select 1;",
 	} {
 		statements, err := mysql.Parse(context.Background(), createSQL, 1)
 		assert.NoError(t, err)
