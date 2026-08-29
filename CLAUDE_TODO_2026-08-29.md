@@ -46,3 +46,11 @@
 - Issue 范围跨 planner、function runtime、frontend protocol 和 CTAS，可能触发正式设计门禁；实现前先根据代码现状拆分 closure，避免一次性大改。
 - `REGEXP_*` 与 #25299 的兼容语义有边界重叠，本任务只处理返回域/宽度，不扩展到 regexp source compatibility。
 - 若发现 #27218 依赖尚未进入 `main` 的前置 PR，将先列出依赖和影响，不擅自搬入依赖代码。
+
+## 完成记录
+
+- 设计审批：`ba4592e694a35b20af9a211d98db95a545c8585d`，用户明确批准。
+- 实现：checked Known/Unknown width、VARBINARY→BLOB promotion、CONVERT pre-cast width、默认/显式 CHAR domain、扩张函数 metadata、CTAS 与 information_schema binary charset。
+- UT：`pkg/sql/plan/function`、`pkg/sql/plan`、MySQL parser、`pkg/util/sysview` owning package 均通过。
+- BVT：`dtype/binary_string_result_domain.test` 在 clean ready instance 生成 result 后 normal comparison 连续运行两次，均为 12/12 passed；覆盖 direct protocol metadata、70,000-byte runtime/CTAS、DESC 和 information_schema。
+- 最终 self-review：R2 width/runtime/parser closure 与 R3 catalog-view consumer closure 已逐项核对；generated parser 可重复生成；无 concurrency、wait、background state 或新持久化/wire schema；无未解决 blocker。
