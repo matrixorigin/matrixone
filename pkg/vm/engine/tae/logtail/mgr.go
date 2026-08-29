@@ -329,7 +329,7 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 	segmentStart := 0
 	for i := 0; i < len(items); {
 		item := items[i]
-		barrier, ok := item.(*readBarrier)
+		_, ok := item.(*readBarrier)
 		if !ok {
 			if _, ok := item.(txnif.AsyncTxn); !ok {
 				panic(fmt.Sprintf("unknown logtail queue item %T", item))
@@ -342,7 +342,7 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 		// Adjacent barriers share exactly the same FIFO frontier. Complete them
 		// together without creating empty transaction segments between markers.
 		for i < len(items) {
-			barrier, ok = items[i].(*readBarrier)
+			barrier, ok := items[i].(*readBarrier)
 			if !ok {
 				break
 			}
