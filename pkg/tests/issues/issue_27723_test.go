@@ -18,13 +18,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,6 +53,19 @@ func TestIssue27723GrantDropLifecycleLockProtocol(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create role `"+role+"`")
 		execSQLRequire(t, ctx, db, "create database `"+database+"`")
 
+		lifecycleCatalogTables := make(map[uint64]struct{}, 2)
+		rows, err := db.QueryContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname in ('mo_database', 'mo_tables')")
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var tableID uint64
+			require.NoError(t, rows.Scan(&tableID))
+			lifecycleCatalogTables[tableID] = struct{}{}
+		}
+		require.NoError(t, rows.Err())
+		require.Len(t, lifecycleCatalogTables, 2)
+
 		execConn := func(conn *sql.Conn, statement string) {
 			t.Helper()
 			_, execErr := conn.ExecContext(ctx, statement)
@@ -62,38 +76,28 @@ func TestIssue27723GrantDropLifecycleLockProtocol(t *testing.T) {
 			defer cleanupCancel()
 			_, _ = conn.ExecContext(cleanupCtx, "rollback")
 		}
-		waitForStatement := func(fragment, message string) {
+		installWaiterBarrier := func(t *testing.T) <-chan struct{} {
 			t.Helper()
-			require.Eventually(t, func() bool {
-				rows, queryErr := db.QueryContext(ctx, "show processlist")
-				if queryErr != nil {
-					return false
+			waiterQueued := make(chan struct{})
+			var once sync.Once
+			restore := lockservice.SetWaiterEnqueuedHookForTest(func(
+				tableID uint64, waiterTxnID []byte, holderTxnIDs [][]byte,
+			) {
+				if _, ok := lifecycleCatalogTables[tableID]; ok &&
+					len(waiterTxnID) > 0 && len(holderTxnIDs) > 0 {
+					once.Do(func() { close(waiterQueued) })
 				}
-				defer rows.Close()
-				columns, columnsErr := rows.Columns()
-				if columnsErr != nil {
-					return false
-				}
-				for rows.Next() {
-					values := make([]sql.RawBytes, len(columns))
-					dest := make([]any, len(columns))
-					for i := range values {
-						dest[i] = &values[i]
-					}
-					if rows.Scan(dest...) != nil {
-						return false
-					}
-					for _, value := range values {
-						if strings.Contains(string(value), fragment) {
-							return true
-						}
-					}
-				}
-				if rows.Err() != nil {
-					return false
-				}
-				return false
-			}, 30*time.Second, 10*time.Millisecond, message)
+			})
+			t.Cleanup(restore)
+			return waiterQueued
+		}
+		waitForWaiter := func(t *testing.T, waiterQueued <-chan struct{}, message string) {
+			t.Helper()
+			select {
+			case <-waiterQueued:
+			case <-time.After(30 * time.Second):
+				t.Fatal(message)
+			}
 		}
 
 		t.Run("grant holder commits before waiting drop", func(t *testing.T) {
@@ -101,18 +105,23 @@ func TestIssue27723GrantDropLifecycleLockProtocol(t *testing.T) {
 
 			grantConn, err := db.Conn(ctx)
 			require.NoError(t, err)
-			defer grantConn.Close()
+			t.Cleanup(func() { require.NoError(t, grantConn.Close()) })
 			dropConn, err := db.Conn(ctx)
 			require.NoError(t, err)
-			defer dropConn.Close()
+			t.Cleanup(func() { require.NoError(t, dropConn.Close()) })
 
 			grantLocked := make(chan struct{})
 			releaseGrant := make(chan struct{})
-			restoreHook := frontend.SetGrantPrivilegeObjectLockedHookForTest(func() {
-				close(grantLocked)
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releaseGrant) }) }
+			t.Cleanup(release)
+			var grantLockedOnce sync.Once
+			restoreGrantHook := frontend.SetGrantPrivilegeObjectLockedHookForTest(func() {
+				grantLockedOnce.Do(func() { close(grantLocked) })
 				<-releaseGrant
 			})
-			defer restoreHook()
+			t.Cleanup(restoreGrantHook)
+			waiterQueued := installWaiterBarrier(t)
 
 			grantDone := make(chan error, 1)
 			go func() {
@@ -131,10 +140,10 @@ func TestIssue27723GrantDropLifecycleLockProtocol(t *testing.T) {
 				_, dropErr := dropConn.ExecContext(ctx, "drop table `"+database+"`.`t_grant_first`")
 				dropDone <- dropErr
 			}()
-			waitForStatement("drop table `"+database+"`.`t_grant_first`",
-				"DROP did not reach GRANT's object lifecycle lock")
+			waitForWaiter(t, waiterQueued,
+				"DROP was not enqueued behind GRANT's object lifecycle lock")
 
-			close(releaseGrant)
+			release()
 			require.NoError(t, <-grantDone)
 			require.NoError(t, <-dropDone)
 
@@ -148,14 +157,15 @@ func TestIssue27723GrantDropLifecycleLockProtocol(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create table `"+database+"`.`t_drop_first`(id int)")
 			dropConn, err := db.Conn(ctx)
 			require.NoError(t, err)
-			defer dropConn.Close()
+			t.Cleanup(func() { require.NoError(t, dropConn.Close()) })
 			grantConn, err := db.Conn(ctx)
 			require.NoError(t, err)
-			defer grantConn.Close()
+			t.Cleanup(func() { require.NoError(t, grantConn.Close()) })
 
 			execConn(dropConn, "begin")
 			defer rollbackConn(dropConn)
 			execConn(dropConn, "drop table `"+database+"`.`t_drop_first`")
+			waiterQueued := installWaiterBarrier(t)
 
 			grantDone := make(chan error, 1)
 			go func() {
@@ -163,8 +173,8 @@ func TestIssue27723GrantDropLifecycleLockProtocol(t *testing.T) {
 					"grant select on table `"+database+"`.`t_drop_first` to `"+role+"`")
 				grantDone <- grantErr
 			}()
-			waitForStatement("grant select on table `"+database+"`.`t_drop_first`",
-				"GRANT did not reach DROP's object lifecycle lock")
+			waitForWaiter(t, waiterQueued,
+				"GRANT was not enqueued behind DROP's object lifecycle lock")
 			execConn(dropConn, "commit")
 			require.Error(t, <-grantDone)
 
