@@ -201,7 +201,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion37)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion38)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 }
 

@@ -43,15 +43,15 @@ func requireCurrentRolesProtocol(ctx context.Context, proc *process.Process) err
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"mo_current_roles requires all CNs to support protocol version 37",
+			"mo_current_roles requires all CNs to support protocol version 38",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion37 {
+	if !ok || !valid || version < defines.MORPCVersion38 {
 		return moerr.NewNotSupported(
 			ctx,
-			"mo_current_roles requires all CNs to support protocol version 37",
+			"mo_current_roles requires all CNs to support protocol version 38",
 		)
 	}
 	return nil

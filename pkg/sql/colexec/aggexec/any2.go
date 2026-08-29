@@ -35,6 +35,7 @@ func (exec *anyExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 }
 
 func (exec *anyExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -61,6 +62,7 @@ func (exec *anyExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 }
 
 func (exec *anyExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	other := next.(*anyExec)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {

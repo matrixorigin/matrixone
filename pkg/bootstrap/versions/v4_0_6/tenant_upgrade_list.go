@@ -70,7 +70,7 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 		UpgSql:                  viewDDL,
 		CheckFunc:               checkViewDefinition(viewName, viewDDL),
 		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 	}
 }
 
@@ -112,7 +112,7 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
@@ -306,7 +306,7 @@ func addMoRoleGrantGranteeIndex() versions.UpgradeEntry {
 		TableName:               "mo_role_grant",
 		UpgType:                 versions.ADD_INDEX,
 		UpgSql:                  "create index idx_mo_role_grant_grantee_id on mo_catalog.mo_role_grant(grantee_id)",
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckIndexDefinition(
 				txn, accountID, catalog.MO_CATALOG, "mo_role_grant", "idx_mo_role_grant_grantee_id",
@@ -362,7 +362,7 @@ func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
 		TableName:               "KEY_COLUMN_USAGE",
 		UpgType:                 versions.CREATE_VIEW,
 		UpgSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc:               checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
 		PreSql:                  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
 		PostSql:                 sysview.InformationSchemaKeyColumnUsageDDL,
@@ -375,7 +375,7 @@ func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
 		TableName:               "REFERENTIAL_CONSTRAINTS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaReferentialConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc:               checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
 		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
 	}
@@ -387,7 +387,7 @@ func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
 		TableName:               "CHECK_CONSTRAINTS",
 		UpgType:                 versions.CREATE_VIEW,
 		UpgSql:                  sysview.InformationSchemaCheckConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
 			sysview.InformationSchemaCheckConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
@@ -401,7 +401,7 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 		TableName:               "TABLE_CONSTRAINTS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaTableConstraintsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc: checkViewDefinition("TABLE_CONSTRAINTS",
 			sysview.InformationSchemaTableConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
@@ -416,7 +416,7 @@ func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
 		TableName:               "STATISTICS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaStatisticsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion37,
+		RequiredProtocolVersion: defines.MORPCVersion38,
 		CheckFunc:               checkViewDefinition("STATISTICS", sysview.InformationSchemaStatisticsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
 			sysview.InformationDBConst, "STATISTICS"),
