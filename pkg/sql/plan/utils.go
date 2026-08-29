@@ -3588,6 +3588,21 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		if node == nil {
 			continue
 		}
+		// LOCK_OP consumes the primary-key expression positionally from its
+		// child batch. Multi-table INSERT builds each target as an independent
+		// write step, so these row-image roots are not necessarily reachable
+		// from a MULTI_UPDATE child edge.
+		if node.NodeType == plan.Node_LOCK_OP && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) {
+				input := query.Nodes[childID]
+				if input != nil {
+					for _, expr := range input.ProjectList {
+						add(expr)
+					}
+				}
+			}
+		}
 		// INSERT/MULTI_UPDATE may carry a writer projection directly on the
 		// sink node.  DELETE has no value projection; its parameters belong to
 		// filter expressions and must remain eligible for specialization.

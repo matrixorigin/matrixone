@@ -858,16 +858,16 @@ deallocate prepare issue25408_runtime_reexecute;
 prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
 set @issue25408_runtime_value = 2.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-➤ quotient[8,53,1]  𝄀
-1.25
+➤ quotient[3,38,7]  𝄀
+1.2500000
+set @issue25408_runtime_value = 9007199254740993.5;
+execute issue25408_runtime_divide using @issue25408_runtime_value;
+➤ quotient[3,38,7]  𝄀
+4503599627370496.7500000
 set @issue25408_runtime_value = 3.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-➤ quotient[8,53,1]  𝄀
-1.75
-set @issue25408_runtime_value = 4;
-execute issue25408_runtime_divide using @issue25408_runtime_value;
-➤ quotient[8,53,31]  𝄀
-2.0
+➤ quotient[3,38,7]  𝄀
+1.7500000
 deallocate prepare issue25408_runtime_divide;
 drop table if exists issue27492_exact_cmp;
 create table issue27492_exact_cmp(id int primary key, u bigint unsigned, b bit(64));

@@ -113,12 +113,14 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue25408_divide")
 
 			for _, execution := range []struct {
-				assignment string
-				wantValue  string
+				assignment       string
+				wantValue        string
+				wantDatabaseType string
 			}{
-				{assignment: "set @issue25408_divide = 2.5", wantValue: "1.25"},
-				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.75"},
-				{assignment: "set @issue25408_divide = 4", wantValue: "2"},
+				{assignment: "set @issue25408_divide = 2.5", wantValue: "1.2500000", wantDatabaseType: "DECIMAL"},
+				{assignment: "set @issue25408_divide = 9007199254740993.5", wantValue: "4503599627370496.7500000",
+					wantDatabaseType: "DECIMAL"},
+				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.7500000", wantDatabaseType: "DECIMAL"},
 			} {
 				execSQLRequire(t, ctx, db, execution.assignment)
 				preparedRows, preparedErr := db.QueryContext(
@@ -126,6 +128,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				prepared := observeScalar(t, preparedRows, preparedErr)
 				require.Equal(t, execution.wantValue, prepared.value,
 					"prepared division must use the current value before evaluating its provisional cast")
+				require.Equal(t, execution.wantDatabaseType, prepared.databaseType)
 			}
 		})
 

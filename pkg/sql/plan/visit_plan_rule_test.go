@@ -1355,6 +1355,22 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 	require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, decimalFilled))
 	require.True(t, preparedExprContainsParam(decimalResult), decimalResult.String())
 
+	division, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
+		makeParam(), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	divisionFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeQuery(t, division), []any{ParamValue{
+			Value: "9007199254740993.5", SourceType: types.New(types.T_decimal128, 17, 1), HasSourceType: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	divisionResult := divisionFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.True(t, types.T(divisionResult.Typ.Id).IsDecimal(), divisionResult.String())
+	for _, arg := range divisionResult.GetF().Args {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal(), divisionResult.String())
+	}
+
 	intType := types.T_int32.ToType()
 	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
 		{Typ: makePlan2Type(&intType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
@@ -1581,6 +1597,9 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		{name: "uint64 above double precision", value: "9007199254740993", target: uint64Type, want: 9007199254740993},
 		{name: "bit64 numeric prefix", value: "9007199254740993tail", target: bit64Type, want: 9007199254740993},
 		{name: "integral exponent", value: "9007199254740993e0", target: uint64Type, want: 9007199254740993},
+		{name: "bounded exponent cancellation", value: "9007199254740993000e-3", target: uint64Type,
+			want: 9007199254740993},
+		{name: "long mantissa cancellation", value: "100000000000000000000e-20", target: uint64Type, want: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, ok, err := preparedComparisonExactIntegerExpr(ctx, test.value, test.target)
@@ -1601,6 +1620,8 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		{name: "negative unsigned", value: "-1", target: uint64Type},
 		{name: "int64 overflow", value: "9223372036854775808", target: int64Type},
 		{name: "nonnumeric", value: "tail", target: bit64Type},
+		{name: "huge positive exponent", value: "1e1000000", target: uint64Type},
+		{name: "huge negative exponent", value: "1e-1000000", target: uint64Type},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, ok, err := preparedComparisonExactIntegerExpr(ctx, test.value, test.target)
@@ -1609,6 +1630,41 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 			require.Nil(t, expr)
 		})
 	}
+}
+
+func TestNormalizePreparedLockRowsMatchesPrimaryKeyType(t *testing.T) {
+	ctx := context.Background()
+	target := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+	rule := NewResetParamRefRule(ctx, nil)
+
+	rewritten := makePlan2Int64ConstExprWithType(7)
+	normalized, err := rule.NormalizePreparedLockRows(rewritten, target)
+	require.NoError(t, err)
+	require.Equal(t, target, normalized.Typ)
+	require.Equal(t, "cast", normalized.GetF().Func.GetObjName())
+
+	rule.numericComparisonTextFallbackExprs = map[*planpb.Expr]struct{}{rewritten: {}}
+	normalized, err = rule.NormalizePreparedLockRows(rewritten, target)
+	require.NoError(t, err)
+	require.Equal(t, target, normalized.Typ)
+	require.True(t, normalized.GetLit().GetIsnull())
+
+	sharedLockRows := makePlan2Int64ConstExprWithType(7)
+	planToVisit := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{1},
+		Nodes: []*planpb.Node{
+			{NodeType: planpb.Node_PROJECT, ProjectList: []*planpb.Expr{sharedLockRows}},
+			{NodeType: planpb.Node_LOCK_OP, Children: []int32{0}, LockTargets: []*planpb.LockTarget{{
+				PrimaryColIdxInBat: 0,
+				PrimaryColTyp:      target,
+				LockRows:           sharedLockRows,
+			}}},
+		},
+	}}}
+	rebindRule := NewResetParamRefRule(ctx, nil)
+	require.NoError(t, NewVisitPlan(planToVisit, []VisitPlanRule{rebindRule}).Visit(ctx))
+	lockNode := planToVisit.GetQuery().Nodes[1]
+	require.Equal(t, target, lockNode.LockTargets[0].LockRows.Typ)
 }
 
 func TestFillValuesOfParamsKeepsBitDomainForExactTextComparison(t *testing.T) {

@@ -644,9 +644,9 @@ deallocate prepare issue25408_runtime_reexecute;
 prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
 set @issue25408_runtime_value = 2.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-set @issue25408_runtime_value = 3.5;
+set @issue25408_runtime_value = 9007199254740993.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-set @issue25408_runtime_value = 4;
+set @issue25408_runtime_value = 3.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
 deallocate prepare issue25408_runtime_divide;
 
