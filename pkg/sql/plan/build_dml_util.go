@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // TODO: choose either PostInsertFullText or PreInsertFullText
@@ -5295,11 +5296,21 @@ func runSqlWithSnapshot(
 	sql string,
 	snapshot *Snapshot,
 ) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
 	proc := ctx.GetProcess()
+	var exec executor.SQLExecutor
+	var hasScopedExecutor bool
+	if provider, ok := ctx.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		exec, hasScopedExecutor = provider.getInternalSQLExecutor(proc)
+	}
+	if !hasScopedExecutor {
+		v, exists := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+		if !exists {
+			panic("missing lock service")
+		}
+		exec = v.(executor.SQLExecutor)
+	}
 
 	topContext := proc.GetTopContext()
 	accountId, err := defines.GetAccountId(topContext)
@@ -5315,7 +5326,6 @@ func runSqlWithSnapshot(
 		topContext = defines.AttachAccountId(topContext, accountId)
 	}
 
-	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// Internal SQL here is part of the input statement and must not increment it.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
