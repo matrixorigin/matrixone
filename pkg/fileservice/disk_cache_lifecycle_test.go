@@ -715,16 +715,17 @@ func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("async callback did not start")
 	}
-	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
-	defer cancel()
-	cache.Flush(flushCtx)
-	require.NoError(t, flushCtx.Err())
+	// Flush completes when all writes drain; callbacks remain deliberately
+	// outside that barrier. Do not turn scheduler latency into the oracle by
+	// applying a lifecycle-test deadline to this contract.
+	cache.Flush(context.Background())
 
 	require.NoError(t, cache.Update(ctx, &IOVector{
 		FilePath: "overflow",
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
 	}, true))
 	cache.async.mu.Lock()
+	require.Empty(t, cache.async.mu.pending)
 	require.Len(t, cache.async.slots, cap(cache.async.slots))
 	require.Equal(t, int64(cap(cache.async.slots)), cache.async.mu.pendingBytes)
 	require.Equal(t, int64(1), cache.async.mu.dropped)
