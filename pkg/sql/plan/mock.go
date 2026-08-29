@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -70,8 +69,9 @@ type MockCompilerContext struct {
 }
 
 type mockProcessHolder struct {
-	once sync.Once
-	proc *process.Process
+	once                sync.Once
+	proc                *process.Process
+	internalSQLExecutor executor.SQLExecutor
 }
 
 var mockProcessHolderMu sync.RWMutex
@@ -2199,14 +2199,28 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	}
 	holder.once.Do(func() {
 		holder.proc = testutil.NewProc(nil)
-		moruntime.ServiceRuntime(holder.proc.GetService()).SetGlobalVariables(
-			moruntime.InternalSQLExecutor,
-			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				return executor.Result{}, nil
-			}),
-		)
+		holder.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			return executor.Result{}, nil
+		})
 	})
 	return holder.proc
+}
+
+func (m *MockCompilerContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if m.GetProcessFunc != nil {
+		return nil, false
+	}
+	if m.GetProcess() != proc {
+		return nil, false
+	}
+
+	mockProcessHolderMu.RLock()
+	holder := m.processHolder
+	mockProcessHolderMu.RUnlock()
+	if holder == nil || holder.internalSQLExecutor == nil {
+		return nil, false
+	}
+	return holder.internalSQLExecutor, true
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

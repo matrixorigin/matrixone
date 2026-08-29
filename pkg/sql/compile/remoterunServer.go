@@ -1092,12 +1092,13 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote results")
 	}
-	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
+	if b.HasPrepareParamKindMetadataWithoutStringSources() && version < defines.MORPCVersion12 {
 		return moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote results")
 	}
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithPrepareParamKinds(&transport, false)
+	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
+		&transport, false, version >= defines.MORPCVersion37)
 	if err != nil {
 		return err
 	}

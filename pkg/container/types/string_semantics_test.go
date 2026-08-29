@@ -166,6 +166,35 @@ func TestMergeStringSemanticStates(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMergeStringSources(t *testing.T) {
+	sources := []StringSource{
+		StringSourceExpression,
+		StringSourceLiteral,
+		StringSourceUserVariable,
+		StringSourceSQLPrepare,
+		StringSourceCOMStmt,
+	}
+	for _, left := range sources {
+		require.True(t, left.Valid())
+		for _, right := range sources {
+			merged, err := MergeStringSources(left, right)
+			require.NoError(t, err)
+			reverse, err := MergeStringSources(right, left)
+			require.NoError(t, err)
+			require.Equal(t, merged, reverse)
+			if left == right {
+				require.Equal(t, left, merged)
+			} else {
+				require.Equal(t, StringSourceExpression, merged)
+			}
+		}
+	}
+	unknown := StringSource(255)
+	require.False(t, unknown.Valid())
+	_, err := MergeStringSources(unknown, StringSourceLiteral)
+	require.Error(t, err)
+}
+
 func TestStaticStringDomain(t *testing.T) {
 	binaryText := T_varchar.ToType()
 	binaryText.Charset = CharsetBinary

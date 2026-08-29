@@ -725,6 +725,50 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
 }
 
+func TestMessageReceiverSendBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("literal"), false, mp))
+	require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       405,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NotNil(t, sent)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
+}
+
 func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
@@ -781,6 +825,34 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 	require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(1))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
+
+	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt, types.StringSourceSQLPrepare,
+	}, mp))
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	require.NoError(t, receiver.sendBatch(bat))
+	decodedWithoutSources := batch.NewOffHeapEmpty()
+	defer decodedWithoutSources.Clean(mp)
+	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
+
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion37)
+	require.NoError(t, receiver.sendBatch(bat))
+	decodedWithSources := batch.NewOffHeapEmpty()
+	defer decodedWithSources.Clean(mp)
+	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {

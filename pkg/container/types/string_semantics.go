@@ -52,6 +52,27 @@ const (
 	stringSourceMax = StringSourceCOMStmt
 )
 
+// Valid reports whether source is a value defined by the wire-stable enum.
+// Decoders must reject unknown values instead of silently treating them as
+// expression-owned data.
+func (source StringSource) Valid() bool {
+	return source <= stringSourceMax
+}
+
+// MergeStringSources is the contributing-values ownership rule. Equal owners
+// remain exact; values contributed by different owners become expression
+// results. The rule is deliberately commutative and associative.
+func MergeStringSources(left, right StringSource) (StringSource, error) {
+	if !left.Valid() || !right.Valid() {
+		return StringSourceExpression, moerr.NewInvalidInputNoCtxf(
+			"invalid string source merge %d and %d", left, right)
+	}
+	if left == right {
+		return left, nil
+	}
+	return StringSourceExpression, nil
+}
+
 // StringLiteralForm records binder-visible literal syntax. Raw hexadecimal and
 // bit forms remain separate from binary-string domain provenance because they
 // also control numeric conversion.

@@ -255,7 +255,7 @@ func TestTransferToCNAllowsActivationFence(t *testing.T) {
 
 	qcli := &addressRecordingQueryClient{}
 	started := time.Now()
-	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion37, []string{serviceID})
+	_, err := transferToCN(qcli, serviceID, defines.MORPCVersion38, []string{serviceID})
 	require.Error(t, err)
 	require.Equal(t, "activation-cn:6001", qcli.address)
 	require.Equal(t, []string{serviceID},

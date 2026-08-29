@@ -113,7 +113,7 @@ func handleSetProtocolVersion(proc *process.Process,
 	}
 
 	if service == cn && targets != nil {
-		if version >= defines.MORPCVersion37 {
+		if version >= defines.MORPCVersion38 {
 			const maxDDLVisibilityActivationTargets = 1024
 			if len(targets) == 0 || len(targets) > maxDDLVisibilityActivationTargets {
 				return Result{}, moerr.NewInternalErrorNoCtxf(
@@ -132,7 +132,7 @@ func handleSetProtocolVersion(proc *process.Process,
 				seen[target] = struct{}{}
 			}
 		}
-		if version < defines.MORPCVersion37 {
+		if version < defines.MORPCVersion38 {
 			versions := make([]string, 0, len(targets))
 			for _, target := range targets {
 				resp, sendErr := transferToCN(qt, target, version, nil)
@@ -151,7 +151,7 @@ func handleSetProtocolVersion(proc *process.Process,
 			return Result{Method: SetProtocolVersionMethod, Data: strings.Join(versions, ", ")}, nil
 		}
 
-		// Live v37 activation is a distributed barrier. Dispatch every target
+		// Live v38 activation is a distributed barrier. Dispatch every target
 		// concurrently so each CN can block local DDL producers before any CN
 		// waits for the complete Prepared set.
 		type targetResult struct {
@@ -264,7 +264,7 @@ func transferToCN(
 ) (resp *querypb.Response, err error) {
 	cluster := clusterservice.GetMOCluster(qt.ServiceID())
 	var selected metadata.CNService
-	if version >= defines.MORPCVersion37 {
+	if version >= defines.MORPCVersion38 {
 		refresher, refreshOK := cluster.(clusterservice.AuthoritativeRefresher)
 		if !refreshOK {
 			return nil, moerr.NewInternalErrorNoCtx(

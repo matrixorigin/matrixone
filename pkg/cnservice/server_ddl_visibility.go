@@ -26,29 +26,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/file"
+	"github.com/matrixorigin/matrixone/pkg/util/protoc"
 )
 
 func ddlVisibilityBarrierSupported(serviceID string) bool {
 	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion37
+	return ok && valid && version >= defines.MORPCVersion38
 }
 
 // prepareDDLVisibilityBarrier publishes this CN only after QueryService is
-// listening. With protocol v37 active, it then catches up to the largest
+// listening. With protocol v38 active, it then catches up to the largest
 // frontier held by the already-published barrier participants before public
 // SQL ingress can be admitted.
 func (s *service) prepareDDLVisibilityBarrier() error {
 	// MORPCLatestVersion describes compiled capability, not deployment-wide
-	// activation. A fresh upgraded process starts on the last deployed protocol
-	// so normal ingress remains available until the control plane explicitly
-	// performs the complete-target v37 cut. Restarting conservatively requires
-	// reactivation rather than assuming that an earlier distributed cut survived.
+	// activation. Restore the durable per-CN deployed protocol before deciding
+	// whether this restart can produce v38 DDL. A fresh upgraded process has no
+	// marker and starts on v37 until the complete-target cut persists v38.
+	deployedVersion := s.loadDDLVisibilityDeployedProtocol()
 	rt := moruntime.ServiceRuntime(s.cfg.UUID)
-	if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-		if version, valid := value.(int64); valid && version >= defines.MORPCVersion37 &&
-			!s.ddlVisibilityActivationComplete.Load() {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+	if deployedVersion >= defines.MORPCVersion38 {
+		s.ddlVisibilityActivationComplete.Store(true)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, deployedVersion)
+	} else if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+		if version, valid := value.(int64); valid && version >= defines.MORPCVersion38 {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
 		}
 	}
 
@@ -110,8 +114,8 @@ func (s *service) prepareDDLVisibilityBarrierLocked() error {
 // overwrite this final withdrawal.
 func (s *service) publishDDLVisibilityIngressAfterStart() error {
 	// Serialize listener-ready publication with startup/activation/shutdown.
-	// Compiled v37 capability is not evidence that the deployment-wide producer
-	// cut completed: a default-v37 CN stays fail-closed until its complete-target
+	// Compiled v38 capability is not evidence that the deployment-wide producer
+	// cut completed: a default-v38 CN stays fail-closed until its complete-target
 	// activation succeeds. If activation raced ahead of listener startup, this
 	// method remains the sole owner that opens ingress after listeners are live.
 	s.ddlVisibilityBarrierMu.Lock()
@@ -184,7 +188,7 @@ func (s *service) ddlVisibilityBarrierRetryInterval() time.Duration {
 // Every target CN blocks and drains local DDL before publishing Prepared. Once
 // all targets are prepared, no v34 DDL producer exists; each CN applies the
 // converged frontier and publishes Fenced. A CN releases its DDL gate only after
-// every target is fenced, at which point all later DDL uses the v37 fan-out and
+// every target is fenced, at which point all later DDL uses the v38 fan-out and
 // every still-fencing receiver remains barrier-reachable.
 func (s *service) setProtocolVersion(ctx context.Context, version int64, targets []string) error {
 	s.ddlVisibilityBarrierMu.Lock()
@@ -203,9 +207,12 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return moerr.NewInternalError(ctx, "invalid protocol version")
 	}
 	pending := s.ddlVisibilityActivationPending.Load()
-	if version < defines.MORPCVersion37 {
+	if version < defines.MORPCVersion38 {
 		if pending {
 			return moerr.NewInvalidStateNoCtx("cannot downgrade during DDL visibility activation")
+		}
+		if err := s.persistDDLVisibilityDeployedProtocol(version); err != nil {
+			return err
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		s.ddlVisibilityActivationPrepared.Store(false)
@@ -217,7 +224,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
 	}
-	if current >= defines.MORPCVersion37 && !pending &&
+	if current >= defines.MORPCVersion38 && !pending &&
 		s.ddlVisibilityActivationComplete.Load() {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		return nil
@@ -238,7 +245,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	barrierCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
 	defer cancel()
 	if !pending {
-		// A default-v37 process deliberately keeps ingress closed until the
+		// A default-v38 process deliberately keeps ingress closed until the
 		// complete-target cut. Restore ingress when listeners are already live;
 		// if activation races before listener startup, Start opens it afterward.
 		s.ddlVisibilityRestoreIngress.Store(
@@ -260,7 +267,7 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return err
 	}
 
-	// Version 36 is visible only after the local v34 producers are drained. It
+	// Version 38 is visible only after the local pre-v38 producers are drained. It
 	// acts as the distributed Prepared signal queried by every other target.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 	s.ddlVisibilityActivationPrepared.Store(true)
@@ -279,6 +286,11 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	if s.ddlVisibilityBarrierClosing.Load() || s.viewMetadataGenerationRevoked.Load() {
 		return moerr.NewServiceUnavailableNoCtx("CN is closing")
 	}
+	// Persist the deployed cut before reopening ingress. A restart after this
+	// point restores v38 and fences its startup frontier before admitting DDL.
+	if err := s.persistDDLVisibilityDeployedProtocol(version); err != nil {
+		return err
+	}
 	if err := s.setDDLVisibilityIngressLocked(
 		barrierCtx, s.ddlVisibilityRestoreIngress.Load()); err != nil {
 		cleanupCtx, cleanupCancel := s.newDDLVisibilityBarrierContext(context.Background())
@@ -293,6 +305,24 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		s.ddlCommitGate.EnablePublicDDL()
 	}
 	s.ddlCommitGate.Unblock()
+	return nil
+}
+
+func (s *service) loadDDLVisibilityDeployedProtocol() int64 {
+	return s.metadata.DDLVisibilityDeployedProtocol
+}
+
+func (s *service) persistDDLVisibilityDeployedProtocol(version int64) error {
+	if s.metadataFS == nil {
+		// Focused service tests may omit the local metadata file service.
+		return nil
+	}
+	previous := s.metadata.DDLVisibilityDeployedProtocol
+	s.metadata.DDLVisibilityDeployedProtocol = version
+	if err := file.WriteFile(s.metadataFS, getMetadataFile(s.cfg.UUID), protoc.MustMarshal(&s.metadata)); err != nil {
+		s.metadata.DDLVisibilityDeployedProtocol = previous
+		return err
+	}
 	return nil
 }
 
@@ -430,7 +460,7 @@ func (s *service) waitForDDLVisibilityActivationPhase(
 					"missing protocol activation response from CN %s", serviceID)
 			}
 			phase := resp.GetProtocolVersion
-			allReady = phase.Version >= defines.MORPCVersion37 &&
+			allReady = phase.Version >= defines.MORPCVersion38 &&
 				phase.DDLVisibilityActivationPrepared &&
 				(!requireFenced || phase.DDLVisibilityActivationFenced)
 			s.queryClient.Release(resp)

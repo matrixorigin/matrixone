@@ -95,6 +95,24 @@ func TestSelectedRowsCodecMatchesFlagSelectionWire(t *testing.T) {
 	require.Equal(t, fromFlags.Bytes(), fromRows.Bytes())
 }
 
+func TestSelectedRowsCodecPreservesStringSource(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
+	require.NoError(t, source.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
+	}, mp))
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 2}))
+	destination := NewVec(types.T_varchar.ToType())
+	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
+	require.Equal(t, [][]byte{[]byte("a"), []byte("c")}, InefficientMustBytesCol(destination))
+	require.Equal(t, []types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, destination.GetStringSources())
+	destination.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func BenchmarkSelectedRowsCodecAvoidsSparseFlagScans(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())
@@ -287,7 +305,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 			name: "reserved-vector-metadata",
 			payload: func(buf *bytes.Buffer) {
 				require.NoError(t, types.WriteInt32(buf, 1))
-				require.NoError(t, buf.WriteByte(0x80))
+				require.NoError(t, buf.WriteByte(0xc0))
 			},
 			want: "metadata",
 		},

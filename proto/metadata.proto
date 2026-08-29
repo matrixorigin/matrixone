@@ -110,6 +110,9 @@ message CNStore {
   string UUID = 1;
   // Role CN role
   CNRole Role  = 2;
+  // DDLVisibilityDeployedProtocol is the durable activation level restored
+  // before this CN admits SQL after an ordinary restart.
+  int64 DDLVisibilityDeployedProtocol = 3;
 }
 
 // CNService cn service metadata

@@ -1340,6 +1340,9 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
+		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
 		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
 		if plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(executionPlan, runtimeParamTypes) {
 			runtimeTextComparisonSpecialization = true
@@ -1445,6 +1448,10 @@ func initExecuteStmtParamWithResolverInSession(
 		params, paramVals, paramIsBin, paramKinds, paramTypes, err := buildExecuteUserParams(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions)
 		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if err = params.SetStringSource(types.StringSourceSQLPrepare); err != nil {
+			params.Free(cwft.proc.Mp())
 			return nil, nil, nil, originSQL, false, err
 		}
 		if paramTypes != nil {
