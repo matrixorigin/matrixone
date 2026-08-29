@@ -1,9 +1,9 @@
 # LOAD DATA Unique-Index Lock Ownership
 
 - Status: mandatory design review pending
-- Design revision: v4
+- Design revision: v5
 - Supersedes: v1 at commit `30a0943ec3`; unapproved v2 draft; v3 at commit
-  `44d0d92292`
+  `44d0d92292`; v4 at commit `47c3f1e748`
 - Tracking issue: [matrixorigin/matrixone#27775](https://github.com/matrixorigin/matrixone/issues/27775)
 - Implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
 - Authors: XuPeng-SH
@@ -16,7 +16,10 @@ Optimize only the modern planner's existing lock shape for a deliberately
 narrow class of `LOAD DATA` statements:
 
 ```text
-pessimistic RC transaction
+statement-owned autocommit transaction
+AND TxnOptions.Autocommit=true
+AND TxnOptions.ByBegin=false
+AND pessimistic RC transaction
 AND modern LOAD plan
 AND large-load path (Query.LoadWriteS3=true)
 AND one finite planner input-size estimate of at least 1 GiB
@@ -36,8 +39,7 @@ AND at least one existing default/BTREE synchronous UNIQUE row-lock target
 
 The planner keeps the exact logical lock shape it produces on `main`: one
 Exclusive full-domain base-table target followed by precise Exclusive row
-targets for writable regular UNIQUE hidden tables. It uses only the existing
-`NotCacheable` policy bit for direct large LOADs. Compilation performs a
+targets for writable regular UNIQUE hidden tables. Compilation performs a
 two-pass, fail-closed analysis of that existing modern `LOCK_OP`. For each promotable
 hidden target, it copies only the physical table ID and primary-key type into
 statement-local state, removes that exact target from the runtime `LockOp`, and
@@ -82,7 +84,8 @@ optimistic transactions, or any hidden physical row-lock target other than
 other hidden target type, including FLOAT/DOUBLE and serialized composite keys,
 stays on its precise row lock in this PR.
 
-Revision v4 corrects nine earlier design mistakes:
+Revision v5 preserves the nine corrections made through v4 and closes three
+additional review findings:
 
 1. v1/v2 did not preserve RC visibility when a direct hidden writer committed
    after LOAD's snapshot but before hidden full-lock acquisition, and an
@@ -107,14 +110,31 @@ Revision v4 corrects nine earlier design mistakes:
    disables promotion for the remainder of a Run before any logical rebuild;
    and
 8. a large LOAD's external object size can change outside catalog invalidation.
-   V3 uses the existing non-cacheable bit at the same size boundary so a direct
-   execution cannot inherit stale admission statistics or ownership state; and
+   Reused logical generations therefore fail closed through
+   `planGenerationReused`; current direct modern LOAD already becomes
+   non-cacheable when compilation reaches its `MULTI_UPDATE`, independently of
+   the 1 GiB admission threshold; and
 9. v3 called `TxnOperator.UpdateSnapshot` and claimed that `TxnClient.Close`
    independently terminated the wait, but that operator entry point receives no
    client-close channel. V4 makes the transaction client own the complete
    wait-and-install operation. It waits without holding either the client
    lifecycle gate or the operator mutex, then linearizes close, transaction
-   generation, terminal status, and monotonic snapshot installation together.
+   generation, terminal status, and monotonic snapshot installation together;
+10. v4 admitted explicit multi-statement transactions even though #27775 needs
+    only one statement. A stalled future fence could then retain base and
+    hidden full-domain locks beyond a failed statement and combine with locks
+    or workspace state from earlier statements. V5 positively admits only
+    `Autocommit=true && ByBegin=false`, making the frontend's existing terminal
+    commit/rollback the owner of every acquired prefix;
+11. v4 proposed a planner-time size-dependent `Node.NotCacheable` write and a
+    shared planner/compiler estimate helper. Current compilation already marks
+    every reachable `MULTI_UPDATE` non-cacheable before frontend cache
+    publication. V5 removes the duplicate policy and keeps the 1 GiB estimate
+    solely as a compiler fixed-cost gate; and
+12. v4 required fence-duration evidence without defining a lock-safe emission
+    point. V5 times exactly the close-aware timestamp wait, outside all client
+    lifecycle/operator locks, and emits one bounded-cardinality metric sample
+    and outcome per attempted fence, with no per-heartbeat/target/batch log.
 
 ## 2. Problem and evidence
 
@@ -147,7 +167,7 @@ relationships and one `UNIQUE BIGINT(col4)` key. One base PK is
 `BIGINT(id)`; the other is composite `PRIMARY KEY(id BIGINT, col1 TINYINT)` and
 therefore uses the canonical binary VARCHAR composite column. They are handled
 by the modern planner, and the single-part hidden UNIQUE primary key resolves
-to `types.T_int64`. The v3 base and hidden range restrictions therefore still
+to `types.T_int64`. The v5 base and hidden range restrictions therefore still
 cover both reported 100M shapes and the composite 1B shape.
 
 ### 2.1 Freshness counterexample found during review
@@ -186,7 +206,7 @@ The new value may also represent a fresh owner or committed no-op rather than a
 data mutation. Treating it as a generation-stable mutation timestamp would be
 an unsupported assumption.
 
-V3 therefore does not use `Result.Timestamp`, `HasConflict`, `HasPrevCommit`,
+V5 therefore does not use `Result.Timestamp`, `HasConflict`, `HasPrevCommit`,
 or `tableCommittedAt` to decide LOAD data freshness. It first acquires every
 required ownership lock with ordinary data-version handling deferred, then
 takes the coordinator clock's upper-bound timestamp. Waiting for applied
@@ -211,8 +231,9 @@ the performance claim.
 - Preserve RC visibility for commits before acquisition, including the
   no-active-conflict window.
 - Keep memory, lock requests, retries, and ordering work schema bounded.
-- Preserve cancellation, rollback, retry/re-entry, plan-cache isolation, and
-  compiler-pool behavior.
+- Preserve cancellation, whole-transaction rollback, retry/re-entry,
+  plan-generation isolation, and compiler-pool behavior for statement-owned
+  autocommit execution.
 - Prove the performance endpoint on the original 100M reproducer before merge.
 
 ### Non-goals
@@ -220,6 +241,8 @@ the performance claim.
 - Changing LOAD planner routing or the unsupported-DML fallback.
 - Changing or repairing FK LOAD planning, validation, or lock behavior.
 - Optimizing pessimistic SI or optimistic transactions.
+- Optimizing `BEGIN`/`START TRANSACTION`, `autocommit=0`, or any transaction
+  that can contain an earlier or later user statement.
 - Optimizing temporary, partitioned, system, external, subscription, or direct
   physical hidden-table LOAD targets.
 - Fencing referenced parents or changing disjoint-key FK concurrency.
@@ -242,21 +265,31 @@ condition below is true:
 1. `Query.LoadTag` and `Compile.stmt` both identify the same LOAD, its
    duplicate mode is the default error mode rather than LOAD IGNORE/REPLACE,
    it has no multi-account `Accounts` target, and the current transaction is
-   both pessimistic and RC with a non-empty transaction ID.
+   pessimistic RC with a non-empty transaction ID. Its immutable
+   `TxnOptions` must positively report both `Autocommit == true` and
+   `ByBegin == false`. `BEGIN` can retain `Autocommit=true`, so testing only
+   `Autocommit` is insufficient; `autocommit=0` reports false. This exact pair
+   is populated when the operator is created and limits the optimization to a
+   transaction whose user-visible lifetime is this statement. On a terminal
+   execution error, current `finishTxnFunc` calls `rollbackTxnFunc`, and
+   `TxnHandler.rollback` takes the whole-transaction branch when neither
+   `OPTION_BEGIN` nor `OPTION_NOT_AUTOCOMMIT` is set. An integration test freezes
+   that options-to-terminal-cleanup correspondence instead of making compile
+   depend directly on mutable frontend session bits.
 2. `Query.LoadWriteS3 == true`, `Compile.disableRetry == false`,
    `Compile.isPrepare == false`, and `Compile.planGenerationReused == false`.
    The reachable graph has exactly one LOAD `EXTERNAL_SCAN`; its `Stats.Cost`
    and `Stats.Rowsize` are finite and positive, and their overflow-checked
-   product is at least the shared planner/compiler constant
-   `plan.LoadUniqueLockPromotionMinEstimatedBytes = 1 << 30`. For current LOAD
+   product is at least the compiler-local constant
+   `loadUniqueLockPromotionMinEstimatedBytes = 1 << 30`. For current LOAD
    planning that product approximates known input bytes. Unknown-size, smaller,
    prepare-time and reused prepared/session-cache generations keep exact `main`
-   behavior so the
-   mandatory upper-bound wait and physical retry cannot regress
+   behavior so the mandatory upper-bound wait and physical retry cannot regress
    latency-sensitive statements or inherit proof from another transaction. A
    freshly rebuilt prepared generation has `planGenerationReused=false` and is
-   intentionally treated like any other fresh logical plan; admission depends
-   on generation freshness, not on SQL protocol origin.
+   intentionally treated like any other fresh logical plan when
+   `Compile.isPrepare=false`; admission depends on execution-generation
+   freshness, not on SQL protocol origin.
 3. The `LOCK_OP` has a canonical non-nil `Node.TableDef` and one existing base
    target with `LockTable=true`, effective Exclusive mode, and a non-zero
    `TableId` equal to both `Node.TableDef.TblId` and its `ObjRef.Obj`. That
@@ -315,7 +348,7 @@ A recognized hidden target must satisfy all of these:
   including OID, width, scale, and charset; and
 - that physical type is exactly `types.T_int64`.
 
-There is no open-ended allowlist in v3. A recognized target whose hidden key is
+There is no open-ended allowlist in v5. A recognized target whose hidden key is
 not `T_int64` remains in the runtime `LockOp` with its exact `main` row-lock
 behavior. In particular, scalar FLOAT32/FLOAT64 and composite keys represented
 by a serialized byte/string physical key are not promoted.
@@ -355,9 +388,10 @@ and ineligibility introduces no new user-visible internal error.
    covered. Freshness does not depend on `Result.Timestamp`, `HasConflict`,
    `HasPrevCommit`, or an owner-local timestamp surviving generations.
 5. No Shared full-domain target is created by this optimization.
-6. Small, retry-disabled, prepare-time/reused-plan, SI, optimistic, fallback, FK-related,
-   temporary, partitioned, fake-PK, direct system/internal-target, and ordinary
-   non-LOAD statements retain exact `main` row/table lock targets.
+6. Explicit/multi-statement, small, retry-disabled, prepare-time/reused-plan,
+   SI, optimistic, fallback, FK-related, temporary, partitioned, fake-PK,
+   direct system/internal-target, and ordinary non-LOAD statements retain exact
+   `main` row/table lock targets.
 7. A statically NULL UNIQUE target stays absent only because the modern planner
    already omitted it. Compile neither reruns nor broadens that proof.
 8. The existing base full-domain endpoint is admitted only for encoded
@@ -408,23 +442,25 @@ rebuilt generation after both points are complete.
    rebuild sets a root-owned sticky disable bit before rebuilding; that Run then
    uses exact `main` lock targets and can never construct another optimization
    fence, even if the rebuilt plan would otherwise qualify.
-4. A wait terminates through lock acquisition, statement-context cancellation,
-   lock timeout, transaction/deadlock handling, or transaction termination.
+4. A physical ownership wait terminates through lock acquisition,
+   statement-context cancellation, lock timeout, or transaction/deadlock
+   handling. The later fence wait terminates through applied-frontier progress,
+   statement-context cancellation/deadline, or transaction-client close. It
+   holds no lock needed by a concurrent terminal operation.
 5. Failure after acquiring a prefix returns the substantive error. Locks remain
    transaction-owned and are released exactly once by commit/rollback rather
    than independently by the compiler.
-6. A freshness retry retains acquired locks under the existing transaction,
-   rolls back only the failed statement workspace generation, and re-enters
-   with a refreshed snapshot.
+6. A freshness retry retains acquired locks under the same statement-owned
+   transaction and re-enters with a refreshed snapshot. If acquisition,
+   fencing, physical retry, source initialization, execution, or commit fails,
+   the existing autocommit terminal path rolls back the whole transaction and
+   releases every acquired prefix. The compiler never unlocks independently.
 7. Compiler pooling and retry-compile release clear every retained LOAD value
    before reuse.
-8. Writes from earlier statements in the same explicit transaction remain
-   visible through the workspace and are not rolled back by the LOAD freshness
-   transition; reentrant row-to-range ownership cannot wait on itself.
-
-This design does not claim a global cross-statement lock order. A transaction
-that retained a direct physical-table lock from an earlier statement can still
-form a cycle; existing deadlock detection remains the terminal owner.
+8. No eligible transaction has an earlier or later user statement, so the
+   design has no cross-statement workspace, retained-lock, or reentrant
+   row-to-range obligation. Ordinary retry re-entry under the same transaction
+   remains reentrant and cannot create a second ownership request.
 
 ### 5.3 Boundedness
 
@@ -440,18 +476,26 @@ fence proof            = one exact schema-bounded target vector
 new goroutines         = 0
 new logging sites      = 0
 HLC fence waits        <= 1 per Compile.Run
+fence metric samples   = exactly 1 per attempted HLC fence wait
+fence outcome labels   = one of 4 fixed values
+fence histogram bounds = 21 fixed buckets plus +Inf
 optimization retries   <= 1 per Compile.Run
 ```
 
-The retained slice is schema bounded and recycled with the compiler. No input
-row, batch, file size, retry count, or transaction duration can grow it. A
+The four metric outcomes are `success`, `canceled`, `client_closed`, and
+`error`; no transaction, table, target, file, batch, timestamp, tenant, or
+error text enters a label. The histogram uses 21 fixed exponential bounds from
+0.1 ms through approximately 105 s plus `+Inf`, rather than the generic
+high-resolution duration buckets. The retained slice is schema bounded and
+recycled with the compiler. No input row, batch, file size, retry count, or
+transaction duration can grow it. A
 recognized target that remains row scoped keeps its existing input-dependent
 cost; the issue fixture has no such target.
 
 The no-index and ineligible fast paths perform one bounded reachable-plan scan
 plus schema-index checks. They return before allocating candidate maps or
 sorting slices when there is no synchronous UNIQUE definition or no precise
-UNIQUE lock target. They add no lock request, log, metric label, storage lookup,
+UNIQUE lock target. They add no lock request, log, metric sample, storage lookup,
 or data-source work.
 
 ## 6. Planner, compiler, and freshness contract
@@ -476,23 +520,29 @@ The unsupported-DML fallback is not enhanced and remains exact `main`. No
 shared LOAD target builder, fallback `Node.TableDef` population, FK rerouting,
 or new lock-plan field is introduced.
 
-One execution-lifecycle policy does change: a LOAD external scan whose finite,
-positive `Stats.Cost * Stats.Rowsize` reaches the same 1 GiB threshold is marked
-with the existing `Node.NotCacheable` flag. The input object and its byte
-estimate can change independently of MatrixOne catalog publication, and the
-session cache retains both the old estimate and a plan that compilation may
-otherwise specialize. Replanning a >=1 GiB LOAD is negligible relative to its
-runtime and guarantees that every direct execution revalidates the size gate
-and receives fresh statement-local ownership state. Smaller LOADs retain the
-existing cache policy. `Compile.planGenerationReused` remains a fail-closed
-defense for an already-admitted legacy cache entry and reused prepared plans.
-Planner marking and compiler admission call one shared, overflow/NaN/Inf-safe
-estimate helper and constant; they cannot drift into different boundaries.
+No planner or session-cache policy changes. A modern LOAD reaches
+`MULTI_UPDATE`; exact `main` compilation already sets that node's existing
+`NotCacheable` bit unconditionally, and frontend calls `checkNodeCanCache` only
+after compilation. A directly planned modern LOAD therefore is not published
+to the session plan cache regardless of estimated size. Adding a planner-time
+>=1 GiB write would duplicate that policy and create a second threshold to
+maintain without changing any reachable cache decision.
+
+The finite >=1 GiB estimate is consequently a compiler-local fixed-cost gate,
+not a cache contract. Every direct execution replans under existing behavior
+and recomputes it from the current external scan. `Compile.planGenerationReused`
+remains a fail-closed defense for a legacy session-cache entry or reused
+prepared generation already admitted by another lifecycle: such execution
+keeps exact `main` lock behavior even if its stored estimate is large. No new
+planner helper, planner constant, or `NotCacheable` write is introduced.
 
 ### 6.2 Compiler
 
 The top-level coordinator compile runs the query-wide two-pass predicate in
-section 4 before physical node compilation. On a positive decision it:
+section 4 before physical node compilation. It reads the current operator's
+immutable transaction options and rejects unless both positive statement-owner
+bits match; it does not infer this scope from session variables or from the
+absence of prior workspace writes. On a positive decision it:
 
 1. records the sole candidate `LOCK_OP` identity and places a deep value copy
    of the base target in the existing `Compile.lockTables` path, marked as the
@@ -623,7 +673,7 @@ by commit/unlock barrier tests for commit, rollback, and unknown resolution.
 The compiler must not call `TxnOperator.UpdateSnapshot` for this fence. That
 entry point has no independent edge to `TxnClient.Close`, and waiting while it
 holds the operator mutex would also put commit/rollback behind a stalled
-logtail data path. V4 adds an optional internal Go capability implemented by
+logtail data path. V5 adds an optional internal Go capability implemented by
 the production transaction client without changing the existing `TxnClient`
 interface or any wire contract:
 
@@ -643,6 +693,35 @@ on exact `main` behavior. The production `Process` already owns a matched
 client/operator pair. The advancer nevertheless validates that pair, the
 non-empty fence, and pessimistic-RC mode and returns a terminal internal error
 on a violated ownership contract rather than updating an unrelated operator.
+
+The advancer is also the sole observability owner for an attempted fence. It
+does not call `txnOperator.doCostAction(UpdateSnapshotEvent, ...)`: that helper
+holds `op.mu.RLock` across its action and would put commit/rollback behind the
+future logtail wait. Instead, the implementation uses one fixed metric family,
+`mo_txn_load_snapshot_fence_wait_duration_seconds`, whose only label is
+`outcome={success,canceled,client_closed,error}`. The implementation:
+
+1. starts a local monotonic timer immediately before
+   `WaitLogTailAppliedAt`, when neither a lifecycle/active-shard/operator lock
+   nor a transaction event callback is held;
+2. captures elapsed time immediately when that wait returns, excluding
+   generation validation and snapshot installation;
+3. routes every post-wait return through one epilogue after all locks are
+   released, observes the histogram exactly once, and classifies the whole
+   advancer result as successful install, caller cancellation/deadline,
+   `ErrClientClosed`, or every other wait/generation/install error; and
+4. emits nothing when pre-wait validation rejects the call, because no fence
+   wait was attempted.
+
+The histogram's `_count` is the attempted-wait count, so no duplicate counter
+or event is needed. All four observers are pre-bound at registration. It uses
+`prometheus.ExponentialBuckets(0.0001, 2, 21)` plus the implicit `+Inf`, not the
+repository's much denser generic duration buckets; outcome therefore creates
+four fixed label sets with a deliberately bounded exposition cost. No
+transaction, table, tenant, file, target, timestamp, or error value appears in
+a label. No log site is added. This gives the acceptance gate a fence-only
+duration and terminal outcome without retaining identity or callbacks across
+the wait.
 
 The production implementation owns the complete wait-and-install transition:
 
@@ -715,6 +794,9 @@ remainder of this Run.
 
 The permanent deterministic matrix must cover:
 
+- positive `Autocommit=true && ByBegin=false` admission and negative
+  `BEGIN`/`START TRANSACTION` plus `autocommit=0` controls, proving no
+  optimization lock or fence is attempted for multi-statement ownership;
 - no competing writer: one HLC-fence wait/retry, then reentrant execution;
 - commit before full-lock request, with no active conflict;
 - active base or hidden writer commit after the LOAD waits;
@@ -740,6 +822,10 @@ The permanent deterministic matrix must cover:
   close-versus-notify, commit/rollback-versus-notify, and generation-N wait
   versus generation-N+1 restart. Every losing path must remove its waiter,
   publish no proof, and leave the newer generation/snapshot unchanged;
+- one and only one fence-wait histogram observation for success, caller
+  cancellation/deadline, client close, and generic error; pre-wait rejection
+  emits none, lifecycle races do not duplicate it, and no txn/table/error value
+  is retained by instrumentation; and
 - fresh source initialization and regenerated remote tombstone/payload state on
   the one admitted retry.
 
@@ -777,11 +863,12 @@ specifically so this fixed correctness cost does not become a latency
 regression or a guaranteed user-visible retry error.
 
 Source opening and parsing occur after the fences. A missing/changed object,
-decode error, or early pipeline failure therefore leaves the new hidden locks
-owned by an explicit transaction until the client commits or rolls back, just
-as the existing base lock is retained today. Ordinary base-table writers were
-already blocked by that base owner; direct physical hidden writers experience
-the additional availability impact and are included in failure-path tests.
+decode error, or early pipeline failure therefore reaches the existing
+statement-owned autocommit rollback, which releases the base and every hidden
+lock together. Locks are retained only for rollback latency, never for a later
+user statement. Ordinary base-table writers were already blocked by that base
+owner; direct physical hidden writers experience the additional bounded
+availability impact and are included in failure-path tests.
 
 This is a real accepted tradeoff, not an impossible counterexample. The scale
 gate must reject material retry, timeout, deadlock, wait, or diagnostic
@@ -790,7 +877,7 @@ the old row-lock guarantee and this design.
 
 ## 8. Physical key-domain admission
 
-V4 admits two base physical PK shapes:
+V5 admits two base physical PK shapes:
 
 - a real single-column `types.T_int64` PK; or
 - the generated `catalog.CPrimaryKeyColName` whose authoritative
@@ -804,7 +891,7 @@ bytes through `Packer.EncodeStringTypeMax`; every serialized composite tuple is
 encoded as a string value strictly within those sentinels. A user-declared
 VARCHAR PK does not qualify merely because it shares the OID.
 
-V4 admits exactly one promoted hidden physical primary-key OID:
+V5 admits exactly one promoted hidden physical primary-key OID:
 `types.T_int64`, with the same integer endpoints. No width/scale
 reinterpretation, projection cast, or SQL source type can substitute for the
 authoritative base or hidden physical primary-key column definition.
@@ -831,17 +918,19 @@ evidence.
 | --- | --- | --- | --- | --- |
 | planned | classify targets | complete positive two-pass result | main or candidate | exact main on uncertainty |
 | candidate | compile value copies | canonical plan untouched | compiled | compile error; no locks acquired |
-| compiled | acquire metadata/general/base | existing order succeeds | base-owned | substantive error; txn owns prefix |
-| base-owned | acquire hidden target N | prior targets owned | acquiring | cancel/timeout/deadlock; txn owns prefix |
+| compiled | acquire metadata/general/base | existing order succeeds | base-owned | substantive error; txn owns prefix until terminal rollback |
+| base-owned | acquire hidden target N | prior targets owned | acquiring | cancel/timeout/deadlock; txn owns prefix until terminal rollback |
 | acquiring | target reports definition change | stop immediately | definition retry | txn owns acquired prefix |
 | acquiring | final hidden acquired | every target owned | ownership-complete | none |
-| ownership-complete | construct HLC fence | valid next-physical upper bound | fencing | overflow/invalid clock; txn owns locks |
-| fencing | client-owned wait, generation revalidation, and RC snapshot install | logtail applied; lifecycle gate won; same open txn generation; snapshot > fence | retry-marked | cancel/client close/commit/rollback/restart/update error; txn owns locks and no proof is published |
-| retry-marked | return one data retry | proof records txn, exact targets, fence, and generation | retry transition | transition error; txn owns locks |
-| retry transition | recompile/re-enter | ordinary retry inherits exact local generation; later generation and snapshot > fence | fenced | mismatch is terminal; explicit txn retains locks until its terminal action |
-| definition retry | set sticky disable, then rebuild logical plan | before rebuild; current catalog snapshot | exact main | old valid locks remain txn-owned; no later optimization fence in this Run |
-| fenced | initialize runtime sources | ownership and freshness hold | running | statement error; txn owns locks |
-| running | commit or rollback | transaction terminal action | terminal | lockservice releases ownership |
+| ownership-complete | construct HLC fence | valid next-physical upper bound | fencing | overflow/invalid clock; txn owns locks until terminal rollback |
+| fencing | client-owned wait, generation revalidation, and RC snapshot install | logtail applied; lifecycle gate won; same open txn generation; snapshot > fence | retry-marked | cancel/client close/commit/rollback/restart/update error; txn owns locks until terminal rollback and no proof is published |
+| retry-marked | return one data retry | proof records txn, exact targets, fence, and generation | retry transition | transition error; txn owns locks until terminal rollback |
+| retry transition | recompile/re-enter | ordinary retry inherits exact local generation; later generation and snapshot > fence | fenced | mismatch is terminal; autocommit rollback releases all locks |
+| definition retry | set sticky disable, then rebuild logical plan | before rebuild; current catalog snapshot | exact main | old valid locks remain txn-owned until statement commit/rollback; no later optimization fence in this Run |
+| fenced | initialize runtime sources | ownership and freshness hold | running | statement error triggers whole autocommit rollback |
+| any non-terminal state | terminal statement error/cancel | statement-owned autocommit | rolling-back | frontend invokes whole-txn rollback; compiler does not unlock |
+| running | successful statement completion | statement-owned autocommit | committing | frontend invokes commit |
+| committing or rolling-back | transaction terminal result | lockservice terminal action | terminal | lockservice releases ownership exactly once |
 
 The compiler owns only bounded value records. The transaction/lockservice is
 the sole owner of acquired locks. The compiler never unlocks a partial prefix.
@@ -858,15 +947,17 @@ transaction's accumulated locks as exact `main`.
 | --- | --- | --- | --- |
 | Q1 | compiler target slice | compiler instance; cleared and nilled on every release/reuse path | no stale values or pooled backing-array retention |
 | Q1 | execution proof | root coordinator object; ordinary retry borrows, logical rebuild disables and drops, release only nils borrower | no remote/cache/pool leak and no clearing while borrowed |
-| Q1 | acquired range locks | transaction/lockservice; commit or rollback | no compiler cleanup/double unlock |
+| Q1 | acquired range locks | statement-owned transaction/lockservice; frontend terminal commit or whole-txn rollback | no compiler cleanup, cross-statement retention, or double unlock |
 | Q1 | HLC fence/refreshed snapshot | stack value then transaction client atomically installs into the exact operator generation; retry generation consumes snapshot | fence dominates prior commits; snapshot is strictly later and visible to new sources |
+| Q1 | fence timing state | advancer-local start/elapsed/outcome values; one metric observation at epilogue | no transaction/event callback or identity retained across wait |
 | Q2 | base/hidden wait | lockservice waiter observing context, timeout, deadlock, holder unlock | every terminal path tested |
-| Q2 | future logtail fence wait | transaction client and timestamp waiter observe context/client close without holding lifecycle gate or operator mutex | idle TN heartbeat progresses; outage cancels without private worker; close/commit/rollback/restart remain independent |
+| Q2 | future logtail fence wait | transaction client and timestamp waiter observe context/client close without holding lifecycle gate or operator mutex | idle TN heartbeat progresses; outage cancels without private worker; commit/rollback/restart are not wake sources but need no lock held by the waiter |
 | Q2 | retry-marked acquisition | compiler continues only after successful lock | substantive error is not swallowed |
 | Q2 | partial prefix | transaction remains owner; terminal txn action releases | no compensating wait/unlock |
 | Q3 | target collection | schema UNIQUE count | finite and reset on reuse |
 | Q3 | lock rows | one range pair per promoted target | independent of LOAD rows/batches |
-| Q3 | retry/log amplification | at most one deterministic optimization retry per `Compile.Run`; no new log site | sticky rebuild disable plus finite >=1 GiB gate rejects storms |
+| Q3 | retry/log amplification | at most one deterministic optimization retry and one fence histogram sample per `Compile.Run`; no new log site | sticky rebuild disable plus finite >=1 GiB gate rejects storms |
+| Q3 | metric cardinality | one family, four pre-bound outcomes, 21 fixed bounds plus `+Inf` | independent of transaction/table/tenant/file/target/error cardinality |
 
 Wait-for shape for the optimized path:
 
@@ -891,10 +982,13 @@ LOAD caller
 
 Heartbeat transactions do not acquire the LOAD's table locks, so this chain has
 no edge back to the ownership wait graph. Context cancellation or txn-client
-closure terminates it if TN/logtail progress is unavailable. After notification,
-the advancer takes lifecycle gate then operator mutex only for a bounded local
-generation check and monotonic assignment; neither section performs I/O or
-waits on another owner.
+closure terminates it if TN/logtail progress is unavailable. Commit, rollback,
+and restart do not themselves wake the timestamp waiter; the admitted frontend
+ordering invokes them only after the statement returns, while defensive
+generation revalidation prevents stale installation if another internal owner
+wins such a race. After notification, the advancer takes lifecycle gate then
+operator mutex only for a bounded local generation check and monotonic
+assignment; neither section performs I/O or waits on another owner.
 
 For the eligible schema, current ordinary INSERT/UPDATE/DELETE/REPLACE reaches
 the base namespace before hidden locks/writes: modern paths order base targets
@@ -902,9 +996,10 @@ first, while legacy UPDATE/DELETE materialize a base-locked source before
 hidden branches. Thus one ordinary statement cannot hold a hidden row while
 waiting behind this LOAD's base owner.
 
-That proof does not constrain locks retained from an earlier statement in the
-same transaction or a direct physical client using arbitrary multi-table order.
-Residual cycles use existing deadlock detection; no global order is claimed.
+The eligible LOAD cannot retain locks from an earlier statement. The proof does
+not constrain a competing direct physical client using arbitrary multi-table
+order; residual cycles with such a client use existing deadlock detection. No
+global order beyond the admitted LOAD is claimed.
 
 ## 10. Alternatives and decision log
 
@@ -965,7 +1060,7 @@ upper-bound fence is generation-independent and needs no wire change.
 ### 10.9 Fix generic FLOAT/DOUBLE table ranges here
 
 Deferred. The correction is valid but independent of the BIGINT reproducer and
-widens the production diff. V4 keeps scalar FLOAT/DOUBLE row locks. A separate
+widens the production diff. V5 keeps scalar FLOAT/DOUBLE row locks. A separate
 change may fix and admit those types after independent review.
 
 ### 10.10 Add a logical lock group to `plan.proto`
@@ -1006,14 +1101,15 @@ rebuild loop and would retain transaction locks on later compile-only failures.
 That architectural change is not justified until the 100M endpoint proves the
 smaller existing retry mechanism is insufficient.
 
-### 10.15 Reuse a large LOAD logical plan from the session cache
+### 10.15 Add a size-dependent LOAD cache policy
 
-Rejected. File bytes and size can change without a catalog-version event, while
-the cache retains the external-scan estimate used by admission. A cached plan
-therefore cannot prove that the current execution still passes the fixed-cost
-gate. The existing `NotCacheable` bit at the 1 GiB boundary is simpler and its
-replan cost is negligible relative to the admitted workload. Reused prepared
-plans remain exact main; a freshly rebuilt prepared generation may qualify.
+Rejected as duplicate mechanism. Exact `main` compilation already marks every
+reachable `MULTI_UPDATE` node `NotCacheable` before frontend cache publication,
+so direct modern LOAD executions replan at every size. The compiler-only 1 GiB
+gate then evaluates current statistics. Reused legacy/session/prepared logical
+generations remain exact main through `planGenerationReused`; a freshly rebuilt
+prepared generation may qualify. No planner helper or threshold-coupled cache
+write is required.
 
 ### 10.16 Fence each definition-rebuilt plan generation
 
@@ -1041,6 +1137,7 @@ compile classification   = O(reachable plan nodes + schema indexes +
 pre-pipeline requests    = O(promoted UNIQUE count)
 sorting                  = O(promoted UNIQUE count log promoted UNIQUE count)
 HLC/logtail fence        = at most one wait per Compile.Run
+fence instrumentation   = one O(1) histogram observation per attempted wait
 physical compilation    = two generations before first source initialization
 batch-path lock work     = 0 for promoted targets
 ```
@@ -1058,14 +1155,17 @@ delivery/apply latency. `LoadWriteS3` alone is insufficient because its
 current planner gate can admit roughly 1 MiB and small compressed inputs. The
 additional finite 1 GiB input estimate, retry, and fresh-plan gates keep that
 fixed cost off smaller, unknown-size, and reused statements. Large direct LOAD
-plans are not inserted into the session cache, so repeated executions replan
-and can qualify with current input statistics. The 1 GiB
-constant is intentionally conservative for #27775; lowering it requires
+plans, like smaller modern LOAD plans, already are not inserted into the session
+cache because compilation reaches `MULTI_UPDATE`; repeated direct executions
+therefore replan and can qualify with current input statistics. The compiler
+1 GiB constant is intentionally conservative for #27775; lowering it requires
 separate normalized evidence around the proposed boundary.
 
-Validation reports estimated input bytes, HLC wait duration, both compile
-durations, and exactly one optimization-induced retry separately from runtime
-lock savings; the endpoint gate decides whether the trade is worthwhile.
+Validation reports estimated input bytes, the dedicated fence-wait histogram by
+its four fixed outcomes, both compile durations, and exactly one
+optimization-induced retry separately from runtime lock savings; the endpoint
+gate decides whether the trade is worthwhile. The fence metric measures only
+`WaitLogTailAppliedAt`, not transaction-lock validation or recompilation.
 
 ### 11.2 Controlled endpoint validation
 
@@ -1107,10 +1207,11 @@ A 5M local run can validate mechanism but cannot pass this gate.
 ## 12. Compatibility, rollout, and operations
 
 No plan or lockservice protobuf, lock mode, catalog object, on-disk data,
-configuration, metric label, or durable version is added. Logical lock targets
-are unchanged; the existing `Node.NotCacheable` policy bit is set only on
-direct large-LOAD scans. Promotion and freshness state are local to the
-compiling CN.
+configuration, planner cache policy, or durable version is added. Logical lock
+targets and existing `Node.NotCacheable` behavior are unchanged. Promotion and
+freshness state are local to the compiling CN. One new metric family adds only
+the four fixed `outcome` label values and fixed bucket set defined in section
+6.3; it carries no identity or user-controlled cardinality.
 `clock.NowUpperBoundFence` only centralizes the lock allocator's existing
 next-physical-tick construction; refactoring that caller must preserve exact
 behavior for valid clocks and fail closed for invalid ones.
@@ -1128,20 +1229,24 @@ state and plans disappear with the process. Existing transactions finish or
 roll back under ordinary lockservice ownership; no migration or data rewrite is
 required.
 
-No per-row, per-batch, per-wait, or per-target logging site is added. The normal
-eligible path reduces lock requests. Broader direct-physical conflicts can
-increase existing wait diagnostics, and every successfully fenced Run
-increments the existing statement-retry metric exactly once. A Run rebuilt
-before fencing has no optimization retry; definition and unrelated retries
-retain their existing accounting. The first ordinary RC retry is not emitted
-by `fatalLog`; a second fence retry, repeated unrelated retry, or user-visible
-retry can still use existing diagnostics. Scale validation
-compares log volume and retry/wait cardinality and rejects amplification.
+No per-row, per-batch, per-heartbeat, per-target, or error-detail logging site is
+added. One histogram observation is emitted per attempted fence wait, including
+the unsuccessful outcomes; it is not emitted by each timestamp-waiter wakeup.
+The normal eligible path reduces lock requests. Broader direct-physical
+conflicts can increase existing wait diagnostics, and every successfully
+fenced Run increments the existing statement-retry metric exactly once. A Run
+rebuilt before fencing has no optimization retry; definition and unrelated
+retries retain their existing accounting. The first ordinary RC retry is not
+emitted by `fatalLog`; a second fence retry, repeated unrelated retry, or
+user-visible retry can still use existing diagnostics. Scale validation
+compares log volume, the new histogram `_count`, and retry/wait cardinality and
+rejects amplification.
 
-Existing lock wait duration, transaction wait-lock state, lockservice request
-and coarsening metrics, statement retry count, statement duration, and CPU/mutex
-profiles remain the primary diagnostics. No authentication, authorization,
-tenant identity, hidden-table visibility, or trust boundary changes.
+The dedicated fence-wait duration/outcome, existing lock wait duration,
+transaction wait-lock state, lockservice request and coarsening metrics,
+statement retry count, statement duration, and CPU/mutex profiles are the
+primary diagnostics. No authentication, authorization, tenant identity,
+hidden-table visibility, or trust boundary changes.
 
 Primary operational risks:
 
@@ -1149,7 +1254,7 @@ Primary operational risks:
 | --- | --- | --- |
 | ineligible plan accidentally promoted | changed correctness/availability | two-pass positive predicate plus negative shape matrix |
 | canonical lock targets mutated | SI/prepared/retry execution loses row locks | local filtered copy plus cross-mode cache/retry tests |
-| large LOAD reuses stale file statistics or a specialized cached plan | wrong admission or missing statement-local state | existing `NotCacheable` bit at the same 1 GiB gate plus legacy-cache fail-closed test |
+| large LOAD reuses stale file statistics or a specialized cached plan | wrong admission or missing statement-local state | existing unconditional `MULTI_UPDATE` non-cacheability plus `planGenerationReused` fail-closed test; no threshold-coupled planner policy |
 | stale hidden commit before lock | duplicate scan uses old snapshot | real lockservice no-active-conflict freshness test |
 | target-local helper advances snapshot before all ownership | later target commit escapes global proof | defer ordinary data freshness; definition errors still stop |
 | raw HLC upper bound does not dominate equal-physical logical TS | unseen commit could escape freshness | shared next-physical-tick helper plus boundary tests |
@@ -1157,6 +1262,8 @@ Primary operational risks:
 | TN heartbeat/logtail stalls while no user commits occur | fence wait does not make progress | idle-heartbeat progress test plus context/client-close cancellation test |
 | client closes while logtail is stalled or notification races close | wait leaks or snapshot mutates after the losing terminal transition | client-owned wait/install boundary, no locks held during wait, final lifecycle-gate linearization, exact close-versus-notify tests |
 | transaction commits, rolls back, or restarts while the fence waits | stale work updates a closed or newer operator generation | pre/post exact generation and open-status validation plus monotonic install under operator mutex |
+| fence observability reuses the generic snapshot event wrapper | operator read lock is held across stalled logtail and blocks commit/rollback | dedicated lock-free wait timer, single post-unlock epilogue, exact-one outcome test |
+| observability records dynamic identity or every waiter notification | cardinality or telemetry storm | one histogram family, four fixed outcomes, one sample per attempted fence, no new log |
 | small or unknown input is mistaken for large | fixed fence cost becomes a latency regression | finite external-scan byte estimate and boundary tests; `LoadWriteS3` is not sufficient alone |
 | stale/mismatched retry state is treated as fence proof | source starts without a proved execution | exact transaction/target vector, later execution generation, and snapshot > fence checks |
 | fence emitted twice | retry/compile/metric amplification | shared execution proof, sticky rebuild disable, and exact-one fence assertion |
@@ -1164,9 +1271,10 @@ Primary operational risks:
 | hidden target without base owner | ordering/ownership hole | disable whole transformation before mutation |
 | remote fragment repeats promotion | duplicate locks or inconsistent snapshot owner | coordinator-only state plus serialization test |
 | direct physical writer uses a disjoint key | broader wait/retry/timeout/cycle | explicit approval plus conflict/retry/deadlock scale gate |
-| partial acquisition on cancellation | locks retained in explicit txn | transaction ownership plus rollback-release test |
+| explicit/multi-statement execution is admitted | full-domain locks survive a failed statement or combine with prior lock order/workspace | positive `Autocommit && !ByBegin` gate plus BEGIN/autocommit-off negative tests |
+| partial acquisition on cancellation | base/hidden prefix survives until terminal cleanup | statement-owned transaction plus whole-autocommit-rollback release test |
 | logical rebuild activates fallback | superseded full locks remain and broaden waits | sticky exact-main rebuilt target test plus terminal commit/rollback release |
-| source init/parse fails after fencing | explicit txn retains hidden locks | source-failure test and documented client rollback requirement |
+| source init/parse fails after fencing | hidden locks outlive failed statement | source-failure test proving automatic whole-txn rollback and release |
 | compiler reuse retains targets/capacity | wrong-table lock or pooled memory growth | clear-and-nil on every release/retry/pool path |
 | mechanism does not fix endpoint | complexity without benefit | mandatory normalized 100M/1B gate |
 
@@ -1174,8 +1282,8 @@ Primary operational risks:
 
 | Invariant | Cheapest deterministic proof | Public/scale proof | Nearest controls |
 | --- | --- | --- | --- |
-| exact statement eligibility | compiler classifier UT plus actual planner fixture | issue's modern indexed LOAD | estimated bytes below/at 1 GiB, NaN/Inf/zero/missing stats, admitted/other base PK shapes, `LoadWriteS3=false`, retry-disabled, prepare-time/reused generation, freshly rebuilt prepared generation, RC/SI/optimistic, fallback, LOAD IGNORE/REPLACE/accounts, FK/checks-off, system/subscription, ID mismatch, feature flag/partition/temp/fake PK |
-| large-LOAD cache isolation | planner/frontend cache-policy UT | repeat identical direct LOAD SQL | >=1 GiB plan is not cached; below-threshold policy is unchanged; legacy cached generation fails closed to main |
+| exact statement eligibility | compiler classifier UT plus actual planner fixture | issue's modern indexed LOAD | `Autocommit=true && ByBegin=false` admitted; BEGIN/START TRANSACTION and autocommit=0 rejected; estimated bytes below/at 1 GiB, NaN/Inf/zero/missing stats, admitted/other base PK shapes, `LoadWriteS3=false`, retry-disabled, prepare-time/reused generation, freshly rebuilt prepared generation, RC/SI/optimistic, fallback, LOAD IGNORE/REPLACE/accounts, FK/checks-off, system/subscription, ID mismatch, feature flag/partition/temp/fake PK |
+| plan-generation isolation | compiler/frontend baseline plus classifier UT | repeat identical direct LOAD SQL and prepared control | current direct modern LOAD remains non-cacheable at every size through existing `MULTI_UPDATE`; no new planner write; legacy/reused generation fails closed to main |
 | exact hidden mapping | compiler UT over existing targets and mutation contexts | LOAD result/count | static NULL absent, dynamic present, non-UNIQUE, non-default/BTREE, async/malformed params, `TableExist=false`, missing/duplicate/mismatched `UpdateCtx`, unknown extra target |
 | atomic fail-closed transform | canonical-plan and filtered-copy UT | existing ineligible LOAD corpus | late mismatch after earlier valid target, contradictory duplicate, missing metadata coverage |
 | base before hidden; acquire once | compiler recorder UT plus ordinary-DML plan-order UT | real lockservice competitor | reversed IDs, duplicate ID, modern and legacy INSERT/UPDATE/DELETE/REPLACE |
@@ -1186,16 +1294,17 @@ Primary operational risks:
 | HLC fence construction | shared clock-helper UT and allocator equivalence test | fence-wait latency | max logical at raw upper physical tick, negative offset/time, overflow, configured skew boundaries |
 | strict refreshed snapshot | transaction-client advancer contract test | retry-count metric | absent capability remains exact main; equal/older waiter result fails; concurrent newer snapshot is preserved; exact local proof with greater snapshot re-enters once |
 | snapshot-fence lifecycle | deterministic transaction-client waiter barriers | client-close/error diagnostics | live context + stalled logtail + client-only close returns `ErrClientClosed`; close/notify, commit/rollback/notify, and restart-generation races publish at most one valid outcome and remove the waiter |
+| fence observability | injected waiter plus metric gatherer | scale metric/log comparison | exactly one duration/outcome for success, cancel/deadline, client close, generic error, and post-wait generation failure; no sample before an actual wait; no duplicate on races; no dynamic label or log |
 | idle fence progress | real TN heartbeat plus timestamp waiter test | no-writer scale run | opposite allowed CN/TN skew reaches the fence via PrepareTS heartbeat; stopped heartbeat and disconnected logtail cancel |
 | owner-generation independence | remote/proxy/rebind/restart/mirror lockservice UT | 3-CN restart/rebind stress | old owner timestamp absent/stale yet coordinator fence covers commit; cancel while logtail waits |
 | schema/index race | metadata-lock plus physical-lock integration UT | concurrent ALTER control | add/drop/rebuild between plan and pre-run; definition retry rebuilds before source init; ineligible rebuild retains old txn lock until terminal action |
 | retry-state isolation | repeated compile from same plan | prepared LOAD control | prepare-time/reused paths remain exact main; ordinary retry shares exact local proof; logical rebuild permanently disables promotion for the Run; mismatch fails closed |
 | coordinator-only ownership | remote-plan serialization/compile UT | 3-CN issue run | one promoted request per physical target; no remote freshness state |
-| cancellation/partial prefix | deterministic waiter barrier UT | txn rollback semantics | cancel before first and while later target waits; transition failure |
-| explicit transaction history | prior-statement base/hidden write plus freshness retry UT | commit/rollback SQL control | prior write remains visible, current generation alone rolls back, no self-wait |
+| cancellation/partial prefix | deterministic waiter barrier UT | autocommit rollback semantics | cancel before first and while later target waits; transition failure; every acquired prefix is released by whole-txn rollback |
+| explicit transaction exclusion | transaction-option classifier UT | BEGIN/START TRANSACTION and `SET autocommit=0` SQL controls | no promoted lock, fence wait, or optimization retry; exact main targets remain |
 | compiler reuse | pooled compiler UT | N/A: internal lifecycle | fresh compiler equivalence after success/error/retry |
 | physical type admission | independent integer/composite base and integer-hidden encoding oracles with real conflicts | both issue table shapes | integer min/max/interior; serialized composite empty/max/interior; user VARCHAR and all other base shapes ineligible; every non-int64 hidden OID retained, including FLOAT32/FLOAT64 and serialized composite |
-| direct physical availability tradeoff | disjoint-row wait and cycle-termination UT | wait/retry/deadlock/log gate | commit, rollback, cancel, timeout, prior-statement lock cycle |
+| direct physical availability tradeoff | disjoint-row wait and cycle-termination UT | wait/retry/deadlock/log gate | competing direct physical transaction commit, rollback, cancel, timeout, and arbitrary multi-table lock cycle |
 | no covered batch-lock work | exact call-count UT | 100M/1B benchmark/profile | no-index, mixed `T_int64` plus non-promoted target, and ineligible LOAD |
 | no public FK/fallback change | exact main-vs-PR plan-shape snapshot | existing FK/fallback BVT | no new FK BVT because FK plans are unchanged |
 
@@ -1206,9 +1315,10 @@ UT/BVT.
 
 ## 14. Design review record
 
-Change scope: large direct LOAD cache exclusion -> modern LOAD `LOCK_OP` ->
+Change scope: statement-owned autocommit classifier -> modern LOAD `LOCK_OP` ->
 compiler-local hidden target promotion -> LOAD-only RC freshness wrapper ->
-pre-pipeline acquisition -> one local execution fence proof and physical retry.
+pre-pipeline acquisition -> one local execution fence proof and physical retry
+-> one bounded fence-wait metric observation.
 
 Mandatory triggers:
 
@@ -1225,15 +1335,17 @@ Decision log:
 | v1 (`30a0943ec3`) | superseded | preserving FK routing did not preserve FK lock behavior; implementation remained over-broad |
 | v2 (unapproved draft) | superseded | fallback/planner full-target construction was unnecessary; generic table lock missed a concrete no-active-conflict RC freshness window |
 | v3 (`44d0d92292`) | superseded | `TxnOperator.UpdateSnapshot` could not observe standalone `TxnClient.Close` and held the operator mutex across a future logtail wait |
-| v4 | pending | v3 scope plus a client-owned, close-aware, generation-safe, monotonic snapshot wait/install transition with no lifecycle/operator lock held during logtail wait |
+| v4 (`47c3f1e748`) | superseded | explicit transactions unnecessarily widened lock lifetime/cycle/workspace obligations; proposed size-dependent planner cache policy duplicated existing `MULTI_UPDATE` behavior; mandatory fence timing lacked a safe emission contract |
+| v5 | pending | statement-owned autocommit only; compiler-only 1 GiB admission with unchanged cache policy; client-owned, close-aware, generation-safe wait/install plus one lock-free, bounded-cardinality fence metric |
 
 The v2 freshness blocker was proven with a real local lockservice diagnostic,
-not only code inspection. V4 also rejects owner-local `tableCommittedAt` as a
+not only code inspection. V5 also rejects owner-local `tableCommittedAt` as a
 generation-stable proof after auditing bind/restart transport, rejects mutable
 snapshot ordering as proof, bounds opposite-skew wait at approximately twice
 `MaxOffset`, verifies idle TN heartbeat progress before using a future HLC
-fence, and closes the client-close/operator-generation wait boundary. Production
-implementation review and delivery remain blocked while v4 is `mandatory
+fence, closes the client-close/operator-generation wait boundary, and removes
+the cross-statement and duplicate-cache-policy surface. Production
+implementation review and delivery remain blocked while v5 is `mandatory
 design review pending`.
 
 Approval must be traceable in PR #27814 and include both SQL planner/compile and
