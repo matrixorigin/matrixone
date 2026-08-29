@@ -22,9 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 )
 
-func lockDataBranchLineageOwnerPublication(ctx context.Context, bh BackgroundExec) error {
+func lockDataBranchLineageOwnerLifecycle(ctx context.Context, bh BackgroundExec) error {
 	lockCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	err := databranchutils.LockLineageOwnerPublication(func(sql string) error {
+	err := databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		bh.ClearExecResultSet()
 		return bh.Exec(lockCtx, sql)
 	})

@@ -21,12 +21,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-const dataBranchLineageGCTimeout = 4 * time.Minute
+const (
+	dataBranchLineageGCTimeout         = 4 * time.Minute
+	dataBranchLineageGCLockWaitTimeout = time.Second
+)
 
 func DataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
@@ -39,8 +43,18 @@ func DataBranchLineageGCExecutor(
 		err := compactExpiredAlterDataBranchLineageWithExecutor(
 			ctx, sqlExecutor, time.Now().UTC(),
 		)
+		if isDataBranchLineageGCContention(err) {
+			// Background maintenance yields to foreground owner publication and
+			// restore. ExecTxn has already rolled back the complete GC attempt.
+			return nil
+		}
 		return moerr.AttachCause(ctx, err)
 	}
+}
+
+func isDataBranchLineageGCContention(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout)
 }
 
 func compactExpiredAlterDataBranchLineageWithExecutor(
@@ -50,7 +64,8 @@ func compactExpiredAlterDataBranchLineageWithExecutor(
 ) error {
 	return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		statementOpts := executor.StatementOption{}.WithAccountID(catalog.System_Account)
-		gate, err := txn.Exec(catalog.BranchMetadataLifecycleGateSQL, statementOpts)
+		gateOpts := statementOpts.WithWaitPolicy(lock.WaitPolicy_FastFail)
+		gate, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
 		if err != nil {
 			return err
 		}
@@ -86,5 +101,7 @@ func compactExpiredAlterDataBranchLineageWithExecutor(
 			}
 		}
 		return nil
-	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	}, executor.Options{}.
+		WithAccountID(catalog.System_Account).
+		WithLockWaitTimeout(dataBranchLineageGCLockWaitTimeout))
 }

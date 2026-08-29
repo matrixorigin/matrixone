@@ -5386,7 +5386,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	// This prevents COPY ALTER from swapping the table generation between
 	// planning and publication.
 	pitrObjectID, err := preparePitrPublication(
-		c.lockDataBranchLineageOwnerPublication,
+		c.lockDataBranchLineageOwnerLifecycle,
 		func() error {
 			txnMeta := c.proc.GetTxnOperator().Txn()
 			if shouldAdvanceAlterDataBranchLineageSnapshot(
