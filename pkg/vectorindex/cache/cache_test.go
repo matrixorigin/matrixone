@@ -37,6 +37,72 @@ type MockSearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
+type transientMockSearch struct {
+	loads     int
+	searches  int
+	destroys  int
+	transient bool
+	loadErr   error
+}
+
+func (m *transientMockSearch) UseTransientLoad(*sqlexec.SqlProcess) (bool, error) {
+	return m.transient, nil
+}
+
+func (m *transientMockSearch) Load(*sqlexec.SqlProcess) error { m.loads++; return m.loadErr }
+func (m *transientMockSearch) Destroy()                       { m.destroys++ }
+func (m *transientMockSearch) CoherenceRetryPolicy() (int, []time.Duration) {
+	return 4, []time.Duration{0, 0, 0}
+}
+func (m *transientMockSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	m.searches++
+	return []int64{1}, []float64{2}, nil
+}
+func (m *transientMockSearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, []int64, []float32) error {
+	return nil
+}
+func (m *transientMockSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
+	m.searches++
+	return nil
+}
+
+func TestTransientLoadNeverPublishesGlobalEntry(t *testing.T) {
+	c := NewVectorIndexCache()
+	algo := &transientMockSearch{transient: true}
+
+	keys, distances, err := c.Search(nil, "retired", algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, keys)
+	require.Equal(t, []float64{2}, distances)
+	_, published := c.IndexMap.Load("retired")
+	require.False(t, published)
+	require.Equal(t, 1, algo.loads)
+	require.Equal(t, 1, algo.searches)
+	require.Equal(t, 1, algo.destroys)
+
+	require.NoError(t, c.SearchInto(nil, "retired", algo, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{}))
+	_, published = c.IndexMap.Load("retired")
+	require.False(t, published)
+	require.Equal(t, 2, algo.loads)
+	require.Equal(t, 2, algo.searches)
+	require.Equal(t, 2, algo.destroys)
+}
+
+func TestTransientLoadRetryIsBounded(t *testing.T) {
+	c := NewVectorIndexCache()
+	algo := &transientMockSearch{
+		transient: true,
+		loadErr:   NewRetryableLoadError(moerr.NewInvalidStateNoCtx("generation superseded")),
+	}
+
+	_, _, err := c.Search(nil, "retired", algo, nil, vectorindex.RuntimeConfig{})
+	require.ErrorContains(t, err, "cache coherence retry exhausted")
+	require.Equal(t, 4, algo.loads)
+	require.Equal(t, 4, algo.destroys)
+	_, published := c.IndexMap.Load("retired")
+	require.False(t, published)
+}
+
 func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float64{2.0}, nil

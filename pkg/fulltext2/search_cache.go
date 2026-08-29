@@ -60,7 +60,8 @@ type Fulltext2Query struct {
 
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
 // the positional index shares the VectorIndexCache (load-once, RW-shared, TTL
-// eviction) with bm25 and the vector plugins, keyed by its storage table name.
+// eviction) with bm25 and the vector plugins, keyed by its tenant-scoped hidden
+// storage/metadata table identity.
 // Before this, fulltext2_search reloaded the whole index (LoadAllBases +
 // LoadTailSegments + NewIndex) on EVERY query — ~1s per query at 50K vs bm25's ~3ms.
 // A loaded base segment's postings (docID/tf blocks + positions) are views into a
@@ -75,8 +76,9 @@ type Fulltext2Search struct {
 
 	// Generation captured at Load (same txn snapshot as the loaded data) for the cache's
 	// cross-CN freshness check (IsStale, called off the housekeeping goroutine): loadedTs =
-	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
-	// append). cnUUID/accountID are the durable handles to re-query in the background.
+	// the durable metadata marker (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail
+	// chunk_id) (CDC append). cnUUID/accountID are the durable handles to re-query
+	// in the background.
 	// genValid is false when capture failed / no resolver (unit tests) → IsStale is a no-op.
 	cnUUID         string
 	accountID      uint32
@@ -88,6 +90,7 @@ type Fulltext2Search struct {
 	pendingTrace   *loadTrace
 	pendingLoadErr error
 	pendingCancel  bool
+	transient      bool
 }
 
 var errLoadGenerationSuperseded = veccache.NewRetryableLoadError(
@@ -111,24 +114,43 @@ func NewFulltext2SearchForAccount(cfg TableConfig, accountID uint32) *Fulltext2S
 	return &Fulltext2Search{cfg: cfg, identity: cfg.CacheIdentity(accountID), identitySet: true}
 }
 
+func (s *Fulltext2Search) ensureIdentity(sqlproc *sqlexec.SqlProcess) error {
+	if s.identitySet {
+		return nil
+	}
+	accountID, err := sqlproc.GetAccountID()
+	if err != nil {
+		return err
+	}
+	s.identity = s.cfg.CacheIdentity(accountID)
+	s.cfg.AccountID = accountID
+	s.identitySet = true
+	return nil
+}
+
+// UseTransientLoad opts retired identities out of process-global publication.
+// They remain queryable from the caller's transaction snapshot, but the loaded
+// object is destroyed after this search and cannot poison a later transaction.
+func (s *Fulltext2Search) UseTransientLoad(sqlproc *sqlexec.SqlProcess) (bool, error) {
+	if err := s.ensureIdentity(sqlproc); err != nil {
+		return false, err
+	}
+	s.transient = requiresTransientLoad(s.identity)
+	return s.transient, nil
+}
+
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	ensureReusableLoadLifecycle()
-	if coherenceLoadsBlocked() {
-		return errLoadGenerationSuperseded
-	}
 	loadEpoch := currentCoherenceEpoch()
-	if !s.identitySet {
-		accountID, accountErr := sqlproc.GetAccountID()
-		if accountErr != nil {
-			return accountErr
-		}
-		s.identity = s.cfg.CacheIdentity(accountID)
-		s.cfg.AccountID = accountID
-		s.identitySet = true
+	if err := s.ensureIdentity(sqlproc); err != nil {
+		return err
+	}
+	if !s.transient && requiresTransientLoad(s.identity) {
+		return errLoadGenerationSuperseded
 	}
 	index := s.identity.Key()
 	generation := beginLoadGeneration(index)
@@ -211,7 +233,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	}
 	segs := append(bases, tails...)
 	idx := NewIndex(segs, deletes)
-	if required, exists := requiredGeneration(s.identity); coherenceLoadsBlocked() || loadEpoch != currentCoherenceEpoch() ||
+	if required, exists := requiredGeneration(s.identity); (!s.transient && requiresTransientLoad(s.identity)) || loadEpoch != currentCoherenceEpoch() ||
 		exists && !(Generation{BaseTimestamp: baseGeneration, TailChunk: appliedTail}).AtLeast(required) {
 		idx.Free()
 		return errLoadGenerationSuperseded
@@ -343,7 +365,7 @@ func (s *Fulltext2Search) IsStaleWithContext(parent context.Context) (bool, erro
 // a loaded but doc-less index (matches nothing) — the caller returns an empty result.
 func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (q Fulltext2Query, k int, pf *prefilter, free func(), empty bool, err error) {
 	free = func() {}
-	if s.loadedEpoch != currentCoherenceEpoch() {
+	if (!s.transient && requiresTransientLoad(s.identity)) || s.loadedEpoch != currentCoherenceEpoch() {
 		// Overflow recovery uses a process-wide epoch because SyncMap.Range may
 		// miss a concurrent insertion. Claim this exact entry while the cache read
 		// lease is held; release becomes the deferred destruction owner and the

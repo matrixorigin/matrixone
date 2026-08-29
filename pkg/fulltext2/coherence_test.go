@@ -80,7 +80,7 @@ func TestFenceRegistryMonotonicClaimAndOutOfOrder(t *testing.T) {
 	require.True(t, r.required(id).AtLeast(g2))
 }
 
-func TestFenceRegistryOverflowNeverForgetsClaimedLowerBound(t *testing.T) {
+func TestFenceRegistryReclaimsClaimedFenceOnlyIntoTransientIdentity(t *testing.T) {
 	r := newFenceRegistry(1)
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
 	b := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "b", MetadataTable: "mb"}
@@ -97,25 +97,24 @@ func TestFenceRegistryOverflowNeverForgetsClaimedLowerBound(t *testing.T) {
 
 	require.True(t, r.finishClaim(a, g))
 	claim, _, overflow = r.install(b, g)
-	require.False(t, claim)
-	require.True(t, overflow)
-	require.Equal(t, g, r.required(a))
-	require.Zero(t, r.required(b))
+	require.True(t, claim)
+	require.False(t, overflow)
+	require.Zero(t, r.required(a))
+	require.Equal(t, g, r.required(b))
+	require.True(t, r.retiredIdentity(a))
+	require.False(t, r.retiredIdentity(b))
 }
 
-func TestInstallGenerationFenceOverflowStaysFailClosed(t *testing.T) {
+func TestInstallGenerationFenceOverflowRecoversWithoutGlobalPublication(t *testing.T) {
 	oldRegistry := localFences
 	oldCache := veccache.Cache
 	oldEpoch := coherenceEpoch.Load()
-	oldBlocked := coherenceBlocked.Load()
 	localFences = newFenceRegistry(1)
-	coherenceBlocked.Store(false)
 	veccache.Cache = veccache.NewVectorIndexCache()
 	t.Cleanup(func() {
 		localFences = oldRegistry
 		veccache.Cache = oldCache
 		coherenceEpoch.Store(oldEpoch)
-		coherenceBlocked.Store(oldBlocked)
 	})
 
 	a := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "a", MetadataTable: "ma"}
@@ -130,14 +129,19 @@ func TestInstallGenerationFenceOverflowStaysFailClosed(t *testing.T) {
 	require.False(t, claimed)
 	require.True(t, overflow)
 	require.Equal(t, before+1, coherenceEpoch.Load())
-	require.True(t, coherenceLoadsBlocked())
 
 	require.True(t, localFences.finishClaim(a, g))
 	current, claimed, overflow := InstallGenerationFence(b, g)
-	require.Zero(t, current)
-	require.False(t, claimed)
-	require.True(t, overflow)
-	require.Equal(t, g, localFences.required(a))
+	require.Equal(t, g, current)
+	require.True(t, claimed)
+	require.False(t, overflow)
+	require.Zero(t, localFences.required(a))
+	require.True(t, requiresTransientLoad(a))
+
+	search := NewFulltext2SearchForAccount(a.TableConfig(), a.AccountID)
+	transient, err := search.UseTransientLoad(nil)
+	require.NoError(t, err)
+	require.True(t, transient)
 }
 
 func TestWarmSearchRejectsOlderCoherenceEpoch(t *testing.T) {

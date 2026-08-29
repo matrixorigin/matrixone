@@ -246,13 +246,13 @@ func AdvanceBaseGenerationSqls(cfg TableConfig) []string {
 	meta := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
 	id := sqlquote.String(Fulltext2GenerationMarkerID)
 	return []string{
-		fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) SELECT %s, COALESCE(MAX(%s), 0), '', 0, 0, 0 FROM %s ON DUPLICATE KEY UPDATE %s = VALUES(%s)",
+		fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) SELECT %s, COALESCE(MAX(%s), 0), '', 0, 0, 0 FROM %s ON DUPLICATE KEY UPDATE %s = %s",
 			meta,
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
 			id, catalog.FullText2Index_TblCol_Metadata_Timestamp, meta,
-			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Index_Id),
+			catalog.FullText2Index_TblCol_Metadata_Timestamp, catalog.FullText2Index_TblCol_Metadata_Timestamp),
 		fmt.Sprintf("UPDATE %s SET %s = %s + 1 WHERE %s = %s",
 			meta, catalog.FullText2Index_TblCol_Metadata_Timestamp, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, id),

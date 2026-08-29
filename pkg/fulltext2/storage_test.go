@@ -56,6 +56,8 @@ func TestDeleteSqls(t *testing.T) {
 	require.Contains(t, advance[0], Fulltext2GenerationMarkerID)
 	require.Contains(t, advance[0], "MAX(timestamp)")
 	require.Contains(t, advance[0], "ON DUPLICATE KEY UPDATE")
+	require.NotContains(t, advance[0], "index_id = VALUES(index_id)")
+	require.Contains(t, advance[0], "timestamp = timestamp")
 	require.Contains(t, advance[1], "timestamp + 1")
 	require.Contains(t, advance[1], Fulltext2GenerationMarkerID)
 

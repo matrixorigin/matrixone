@@ -60,17 +60,23 @@ required generation claimed.  Equal, duplicate, old, and no-cache deliveries
 are idempotent.  If a newer generation arrives during a claim, the old claim
 does not mark the newer generation complete.
 
-The registry keeps at most 1024 entries and never discards a lower bound,
-including a claimed one.  A transaction may have fixed an older snapshot before
-the claim and start its first MATCH only later, so eviction completion alone is
-not proof that the bound is reclaimable.  On capacity exhaustion the process
-enters a fail-closed FULLTEXT2 state until restart: it bumps a process-wide
-epoch, non-blockingly claims every visible `fulltext2:` cache entry, rejects new
-FULLTEXT2 loads, and returns no ACK.  Existing fences stay in their slots.  A
-load begun before the bump fails its pre-publish epoch check; an entry missed by
-the concurrent prefix scan cannot be republished because the load gate remains
-closed.  This rare availability failure preserves fixed memory and the rule
-that an old transaction can never recreate a stale process-global cache entry.
+The registry keeps at most 1024 exact entries.  A claimed lower bound is not
+simply forgotten: before reclaim, its identity is added to a fixed 16-Kbit,
+process-randomized retired Bloom filter.  A transaction may have fixed an older
+snapshot before the claim and start its first MATCH only later, so every retired
+identity bypasses the process-global cache permanently for that process.  It is
+still queryable through a one-shot load/search object that is destroyed after
+the statement; an old snapshot can therefore complete without publishing state
+that a later transaction could acquire.  Bloom false positives only disable
+caching for an additional FULLTEXT2 identity; they do not change results or
+availability.  DROP/recreate remains isolated by new hidden-table identities.
+
+If every exact slot is still pending, installation remains fail-closed: it
+bumps a process-wide FULLTEXT2 epoch, non-blockingly claims every visible
+`fulltext2:` cache entry, and returns no ACK.  Existing pending fences stay in
+their slots.  A load begun before the bump fails its pre-publish epoch check;
+after a claim completes, the sender retry can retire that lower bound and
+install the omitted identity without a process restart.
 
 A load reads its durable generation before data and checks the registry both
 after the generation read and immediately before publishing its `Index`.  A

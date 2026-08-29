@@ -167,6 +167,13 @@ type coherenceRetryPolicy interface {
 	CoherenceRetryPolicy() (maxAttempts int, backoff []time.Duration)
 }
 
+// transientLoadPolicy is optional. An algorithm can keep an identity queryable
+// while forbidding publication of transaction-snapshot state into this
+// process-global cache. Other vector algorithms retain the normal cache path.
+type transientLoadPolicy interface {
+	UseTransientLoad(*sqlexec.SqlProcess) (bool, error)
+}
+
 func coherenceRetry(sqlproc *sqlexec.SqlProcess, algo VectorIndexSearchIf, attempts int) error {
 	policy, ok := algo.(coherenceRetryPolicy)
 	if !ok {
@@ -194,6 +201,20 @@ func coherenceRetry(sqlproc *sqlexec.SqlProcess, algo VectorIndexSearchIf, attem
 	case <-timer.C:
 		return nil
 	}
+}
+
+func newVectorIndexSearch(algo VectorIndexSearchIf) *VectorIndexSearch {
+	s := &VectorIndexSearch{Algo: algo}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	return s
+}
+
+func useTransientLoad(sqlproc *sqlexec.SqlProcess, algo VectorIndexSearchIf) (bool, error) {
+	policy, ok := algo.(transientLoadPolicy)
+	if !ok {
+		return false, nil
+	}
+	return policy.UseTransientLoad(sqlproc)
 }
 
 // StaleChecker is an OPTIONAL capability an algo's search impl may implement (currently
@@ -720,12 +741,26 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	transient, err := useTransientLoad(sqlproc, newalgo)
+	if err != nil {
+		return nil, nil, err
+	}
+	if transient {
+		return searchTransient(sqlproc, newalgo, query, rt, 0)
+	}
 	attempts := 0
 	for {
 		attempts++
-		s := &VectorIndexSearch{Algo: newalgo}
-		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		if attempts > 1 {
+			transient, err = useTransientLoad(sqlproc, newalgo)
+			if err != nil {
+				return nil, nil, err
+			}
+			if transient {
+				return searchTransient(sqlproc, newalgo, query, rt, attempts-1)
+			}
+		}
+		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
@@ -768,16 +803,55 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 	}
 }
 
+func searchTransient(sqlproc *sqlexec.SqlProcess, algo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig, attempts int) (keys any, distances []float64, err error) {
+	for {
+		attempts++
+		s := newVectorIndexSearch(algo)
+		if err = s.Load(sqlproc); err != nil {
+			s.destroyFailedLoad()
+			if IsRetryableLoadError(err) {
+				if err = coherenceRetry(sqlproc, algo, attempts); err == nil {
+					continue
+				}
+			}
+			return nil, nil, err
+		}
+		keys, distances, err = s.Search(sqlproc, algo, query, rt)
+		s.Destroy()
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+			if err = coherenceRetry(sqlproc, algo, attempts); err == nil {
+				continue
+			}
+		}
+		return keys, distances, err
+	}
+}
+
 // SearchInto is the box-free twin of Search: it fills the caller-owned out SearchResult
 // (pk/scores/includes as reusable ColumnBuffers) instead of returning boxed []any keys.
 // Same LoadOrStore / retryable-load discipline as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	transient, err := useTransientLoad(sqlproc, newalgo)
+	if err != nil {
+		return err
+	}
+	if transient {
+		return searchIntoTransient(sqlproc, newalgo, query, rt, out, 0)
+	}
 	attempts := 0
 	for {
 		attempts++
-		s := &VectorIndexSearch{Algo: newalgo}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		if attempts > 1 {
+			transient, err = useTransientLoad(sqlproc, newalgo)
+			if err != nil {
+				return err
+			}
+			if transient {
+				return searchIntoTransient(sqlproc, newalgo, query, rt, out, attempts-1)
+			}
+		}
+		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
@@ -815,6 +889,30 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 	}
 }
 
+func searchIntoTransient(sqlproc *sqlexec.SqlProcess, algo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput, attempts int) (err error) {
+	for {
+		attempts++
+		s := newVectorIndexSearch(algo)
+		if err = s.Load(sqlproc); err != nil {
+			s.destroyFailedLoad()
+			if IsRetryableLoadError(err) {
+				if err = coherenceRetry(sqlproc, algo, attempts); err == nil {
+					continue
+				}
+			}
+			return err
+		}
+		err = s.SearchInto(sqlproc, query, rt, out)
+		s.Destroy()
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+			if err = coherenceRetry(sqlproc, algo, attempts); err == nil {
+				continue
+			}
+		}
+		return err
+	}
+}
+
 // remove key from cache
 // Remove drops a cached index by key so the next Search reloads it. Callers use
 // it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
@@ -844,6 +942,10 @@ func (c *VectorIndexCache) ClaimRemoveWithReason(key, reason string) {
 	}
 	algo, ok := value.(*VectorIndexSearch)
 	if !ok || !algo.beginEviction(false) {
+		return
+	}
+	value, loaded = c.IndexMap.Load(key)
+	if !loaded || value != algo {
 		return
 	}
 	algo.notifyCacheInvalidated(reason)

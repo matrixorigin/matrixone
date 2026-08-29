@@ -404,6 +404,49 @@ func TestFulltext2LoadCannotPublishBelowRequiredGeneration(t *testing.T) {
 	require.Equal(t, int64(2), loaded.loadedTail)
 }
 
+func TestRetiredFenceCannotBeRepublishedByOlderSnapshot(t *testing.T) {
+	previousCache := veccache.Cache
+	previousFences := localFences
+	veccache.Cache = veccache.NewVectorIndexCache()
+	localFences = newFenceRegistry(1)
+	t.Cleanup(func() {
+		veccache.Cache = previousCache
+		localFences = previousFences
+	})
+
+	cfg := testStorageCfg()
+	const accountID = uint32(23)
+	id := cfg.CacheIdentity(accountID)
+	other := CacheIdentity{AccountID: accountID, Database: cfg.DbName, StorageTable: "other", MetadataTable: "other_meta"}
+	required := Generation{BaseTimestamp: 2, TailChunk: 1}
+	claim, _, overflow := localFences.install(id, required)
+	require.True(t, claim)
+	require.False(t, overflow)
+	require.True(t, localFences.finishClaim(id, required))
+
+	proc, mp := mockSqlProc(t)
+	var retireOnce sync.Once
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		retireOnce.Do(func() {
+			claim, _, overflow = localFences.install(other, required)
+			require.True(t, claim)
+			require.False(t, overflow)
+		})
+		if strings.HasPrefix(sql, "SELECT (SELECT") {
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{generationBatch(mp, 1, -1)}}, nil
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+
+	loader := NewFulltext2SearchForAccount(cfg, accountID)
+	_, _, err := veccache.Cache.Search(proc, id.Key(), loader,
+		Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
+	require.NoError(t, err)
+	require.True(t, requiresTransientLoad(id))
+	_, published := veccache.Cache.IndexMap.Load(id.Key())
+	require.False(t, published, "an old transaction snapshot must never republish a retired identity")
+}
+
 func TestVectorIndexCacheRetriesSupersededFulltext2Load(t *testing.T) {
 	for _, tc := range []struct {
 		name string
