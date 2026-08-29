@@ -2512,7 +2512,7 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 	require.Zero(t, spyExec.rolledBack)
 
 	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
-	var metadataDeletes []string
+	metadataDeletes := make([]string, 0, len(spyExec.committedBatchSizes))
 	for txnIndex, sqls := range spyExec.transactions {
 		require.True(t, spyExec.opts[txnIndex].HasLockWaitTimeout())
 		require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts[txnIndex].LockWaitTimeout())
