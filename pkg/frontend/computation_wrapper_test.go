@@ -1498,10 +1498,6 @@ func TestBackgroundPreparedDMLDoesNotConsumeOrPublishClientRuntimeCompile(t *tes
 
 func BenchmarkBinaryDMLRuntimeSpecializationCache(b *testing.B) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 217, "select ?, ?")
-	defer func() {
-		cw.proc.SetPrepareParams(nil)
-		prepareStmt.Close()
-	}()
 
 	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
 		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
@@ -1528,6 +1524,17 @@ func BenchmarkBinaryDMLRuntimeSpecializationCache(b *testing.B) {
 		byte(defines.MYSQL_TYPE_LONGLONG), 0,
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 	}
+	integerParams := prepareStmt.params
+	floatParams := vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(floatParams, []byte("1.5"), false, cw.proc.Mp()))
+	require.NoError(b, vector.AppendBytes(floatParams, []byte("1.50"), false, cw.proc.Mp()))
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.params = nil
+		prepareStmt.Close()
+		integerParams.Free(cw.proc.Mp())
+		floatParams.Free(cw.proc.Mp())
+	}()
 
 	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
@@ -1540,18 +1547,57 @@ func BenchmarkBinaryDMLRuntimeSpecializationCache(b *testing.B) {
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	require.True(b, cw.installRuntimeCacheCandidate(runtimeCompile))
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		retComp, currentPlan, currentStmt, _, currentOwned, runErr := initExecuteStmtParam(
-			execCtx, ses, cw, nil, prepareStmt.Name)
-		if runErr != nil || retComp != runtimeCompile || currentPlan != runtimePlan {
-			b.Fatalf("runtime DML cache miss: comp=%p plan=%p err=%v", retComp, currentPlan, runErr)
+	b.Run("stable-domain", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			retComp, currentPlan, currentStmt, _, currentOwned, runErr := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			if runErr != nil || retComp != runtimeCompile || currentPlan != runtimePlan {
+				b.Fatalf("runtime DML cache miss: comp=%p plan=%p err=%v", retComp, currentPlan, runErr)
+			}
+			if currentOwned && currentStmt != nil {
+				currentStmt.Free()
+			}
 		}
-		if currentOwned && currentStmt != nil {
-			currentStmt.Free()
+	})
+
+	b.Run("type-switch", func(b *testing.B) {
+		useFloat := true
+		b.ReportAllocs()
+		for b.Loop() {
+			cw.proc.SetPrepareParams(nil)
+			if useFloat {
+				prepareStmt.params = floatParams
+				prepareStmt.ParamTypes = []byte{
+					byte(defines.MYSQL_TYPE_DOUBLE), 0,
+					byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+				}
+			} else {
+				prepareStmt.params = integerParams
+				prepareStmt.ParamTypes = []byte{
+					byte(defines.MYSQL_TYPE_LONGLONG), 0,
+					byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+				}
+			}
+
+			retComp, _, currentStmt, _, currentOwned, runErr := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			if runErr != nil || retComp != nil || cw.runtimeCacheTarget != prepareStmt {
+				b.Fatalf("runtime DML type switch did not stage a replacement: comp=%p err=%v", retComp, runErr)
+			}
+			if currentOwned && currentStmt != nil {
+				currentStmt.Free()
+			}
+			replacement := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			if !cw.stageRuntimeCacheCandidate(replacement) ||
+				!cw.completeRuntimeCacheExecution(replacement, nil, false) {
+				b.Fatal("runtime DML type switch failed to publish its replacement")
+			}
+			useFloat = !useFloat
 		}
-	}
+	})
 }
 
 func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *testing.T) {
