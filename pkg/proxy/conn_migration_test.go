@@ -376,7 +376,7 @@ func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV38Target(t *testing.T
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
 		})
-	assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v38 target")
+		assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v38 target")
 		assert.Empty(t, sc.statements)
 	})
 }
