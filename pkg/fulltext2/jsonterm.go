@@ -92,10 +92,10 @@ func JSONTupleTerms(bj bytejson.ByteJson, opt JSONTermOptions) []string {
 	}
 	for l := range bj.TokenizeLeaves(opt.IncludeFullPath) {
 		if l.Kind == bytejson.LeafDecimal {
-			// reachable from json_extract_float64 (as a number) AND from
-			// json_extract_string (as its text), so it needs both terms or one of
-			// those two probes would drop the row
-			emit(l, func(p *types.Packer) { p.EncodeStringType(l.Str) })
+			// A decimal is NUMERIC to both extractors: json_extract_float64
+			// returns it as a number and json_extract_string returns NULL for it,
+			// so only the numeric form is ever probed. An unparsable decimal text
+			// yields no term rather than a wrong one.
 			if f, err := strconv.ParseFloat(string(l.Str), 64); err == nil {
 				emit(l, func(p *types.Packer) { p.EncodeFloat64(f) })
 			}
@@ -176,26 +176,16 @@ func packProbe(head func(*types.Packer), path string, withPath bool) string {
 	return truncateTerm(p.Bytes())
 }
 
-// JSONEqualProbeTerms returns the terms whose disjunction is implied by
-// `json_extract_<fn>(col,'$.<path>.<tag>') = value`.
+// JSONEqualProbeTerms returns the terms implied by
+// `json_extract_string(col,'$.<path>.<tag>') = value` — a single exact term.
 //
-// The subtlety this exists for: json_extract_string RENDERS a numeric leaf, so
-// `json_extract_string(j,'$.a.b') = '3.14'` is TRUE for a document holding the
-// number 3.14 — but that document's term encodes 3.14 as a float, not as the
-// string "3.14". Probing only the string encoding would drop the row: a wrong
-// answer, not a missed optimization.
-//
-// So when the constant also parses as a number, both encodings are returned and
-// the caller ORs them. The document must contain one of the two, so the
-// disjunction remains a NECESSARY condition of the predicate, and the retained
-// predicate removes whichever rows the widening let through. A non-numeric
-// constant returns a single term and stays an exact lookup.
+// Only the STRING encoding, because json_extract_string returns NULL for every
+// numeric leaf (verified: json_extract_string('{"v":3.14}','$.v') IS NULL). A
+// document satisfying the comparison therefore always holds the string form,
+// and probing the float encoding too would add a term no qualifying document
+// can hold.
 func JSONEqualProbeTerms(tag, value, path string, withPath bool) []string {
-	terms := []string{JSONStringTerm(tag, value, path, withPath)}
-	if f, err := strconv.ParseFloat(value, 64); err == nil {
-		terms = append(terms, JSONFloatTerm(tag, f, path, withPath))
-	}
-	return terms
+	return []string{JSONStringTerm(tag, value, path, withPath)}
 }
 
 // JSONFloatRangeTerms returns the inclusive term bounds for a numeric

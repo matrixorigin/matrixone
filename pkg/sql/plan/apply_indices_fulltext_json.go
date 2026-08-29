@@ -126,11 +126,13 @@ func jsonExtractComparison(expr *plan.Expr) (jsonComparison, bool) {
 
 // jsonEqualProbe builds the equality probe.
 //
-// For json_extract_string the constant is probed under BOTH encodings when it
-// also parses as a number: json_extract_string RENDERS a numeric leaf, so
-// `= '3.14'` is true for a document holding the NUMBER 3.14, whose term is the
-// float encoding. Probing only the string form would drop that row. The
-// document must hold one of the two, so the OR stays implied.
+// One encoding per function, because the two extractors are DISJOINT on leaf
+// type: json_extract_string returns NULL for every numeric leaf and
+// json_extract_float64 returns NULL for every string one (verified against the
+// server: json_extract_string('{"v":3.14}','$.v') IS NULL). So
+// `json_extract_string(...) = '3.14'` can only be true for the STRING "3.14",
+// and probing the float encoding as well would add a term that no qualifying
+// document can hold.
 func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString, withPath bool) (jsonProbe, bool) {
 	if isString {
 		s, ok := lit.Value.(*plan.Literal_Sval)
@@ -154,22 +156,17 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString, withPath
 
 // jsonRangeProbe builds the >, >=, < and <= probe.
 //
-// json_extract_float64 is the easy half: it returns NULL for every non-numeric
-// leaf, so a numeric range is exactly implied — one tight range.
+// ONE range, in the encoding matching the extractor, because the two are
+// disjoint on leaf type (see jsonEqualProbe): a json_extract_string comparison
+// can only be satisfied by a string leaf, and a json_extract_float64 one only
+// by a numeric leaf. Text order IS the comparison order within each, so each
+// range is exactly implied.
 //
-// json_extract_string is the interesting half. It RENDERS numbers, so a leaf
-// satisfying the comparison may be stored under either encoding, and the two
-// orders do not agree ("10" < "9" as text). The probe therefore issues TWO
-// ranges and unions them:
-//
-//	string side  — the ordered range, since text order IS the comparison order
-//	numeric side — EVERY numeric term under the tag
-//
-// The numeric side is deliberately NOT tightened. There is no order-preserving
-// map from the text comparison onto the float encoding, so any attempt to
-// narrow it risks excluding a leaf that satisfies the predicate. Returning all
-// of them is a superset, and the retained predicate is re-evaluated on every
-// row the probe returns, so the answer stays exact — only the scan is wider.
+// An earlier version unioned the string range with EVERY numeric term under the
+// tag, on the mistaken belief that json_extract_string renders numbers. That was
+// not just redundant: expanding [-Inf,+Inf] materializes the whole numeric
+// vocabulary of the tag, so a selective string predicate turned into a near-full
+// term scan.
 func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isString, withPath bool) (jsonProbe, bool) {
 	if withPath {
 		// the ancestor path sorts AFTER the value, so a value range is not a
@@ -188,8 +185,7 @@ func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isStrin
 		if !ok {
 			return jsonProbe{}, false
 		}
-		nlo, nhi := fulltext2.JSONNumericTermBounds(tag)
-		p.Ranges = []jsonTermRange{r, {Lo: nlo, Hi: nhi}}
+		p.Ranges = []jsonTermRange{r}
 		return p, true
 	}
 

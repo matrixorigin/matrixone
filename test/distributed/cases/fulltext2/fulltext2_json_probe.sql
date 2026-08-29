@@ -38,8 +38,9 @@ select id from t_plain where json_extract_string(j,'$.foo') = 'bar' order by id;
 select id from t where json_extract_string(j,'$.deep.deeper.foo') = 'bar' order by id;
 select id from t_plain where json_extract_string(j,'$.deep.deeper.foo') = 'bar' order by id;
 
--- a numeric leaf reached through json_extract_string: the constant is probed
--- under BOTH encodings, so row 7 (the NUMBER 3.14) must not be lost
+-- json_extract_string is NULL for a numeric leaf, so this matches ONLY row 6
+-- (the string "3.14") and NOT row 7 (the number 3.14). The two extractors are
+-- disjoint on leaf type, which is why the probe needs one encoding, not two.
 select id from t where json_extract_string(j,'$.foo') = '3.14' order by id;
 select id from t_plain where json_extract_string(j,'$.foo') = '3.14' order by id;
 

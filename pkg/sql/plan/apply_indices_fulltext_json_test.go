@@ -97,13 +97,13 @@ func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
 	require.False(t, intersects(p, `{"foo":"other"}`))
 	require.False(t, intersects(p, `{"zzz":"bar"}`), "a different key must not match")
 
-	// json_extract_string('$.n') = '3.14' is TRUE for a NUMERIC leaf; the
-	// OR-of-encodings is what keeps that row
+	// json_extract_string is NULL for a numeric leaf, so `= '3.14'` is true only
+	// for the STRING "3.14": one term, and the numeric document must NOT match
 	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.n"), jpStrLit("3.14")), false)
 	require.True(t, ok)
-	require.Len(t, p.Terms, 2)
-	require.True(t, intersects(p, `{"n":3.14}`), "numeric leaf must stay reachable")
-	require.True(t, intersects(p, `{"n":"3.14"}`), "string leaf must stay reachable")
+	require.Len(t, p.Terms, 1, "the two extractors are disjoint on leaf type")
+	require.True(t, intersects(p, `{"n":"3.14"}`), "string leaf is reachable")
+	require.False(t, intersects(p, `{"n":3.14}`), "numeric leaf is NULL for json_extract_string")
 
 	// float equality reaches an integer leaf, since all numbers normalize
 	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractFloat(0, "$.n"), jpIntLit(3)), false)
@@ -139,23 +139,23 @@ func TestJSONProbeRanges(t *testing.T) {
 	}
 }
 
-// json_extract_string inequality: the leaf may be stored as a string OR as a
-// number (json_extract_string renders numbers), and the two orders disagree, so
-// the probe unions the ordered string range with EVERY numeric term. Wider, but
-// a superset — and the retained predicate re-checks each row.
-func TestJSONProbeStringRangeUnionsBothEncodings(t *testing.T) {
+// json_extract_string inequality probes the STRING range only. The numeric side
+// is not needed (json_extract_string is NULL for numbers) and unioning it would
+// expand [-Inf,+Inf] into the tag's whole numeric vocabulary, turning a
+// selective predicate into a near-full term scan.
+func TestJSONProbeStringRangeIsStringOnly(t *testing.T) {
 	p, ok := jsonExtractProbeFromExpr(
 		jpCallExpr(">", jpExtractStr(0, "$.n"), jpStrLit("m")), false)
 	require.True(t, ok)
-	require.Len(t, p.Ranges, 2, "string side + numeric side")
+	require.Len(t, p.Ranges, 1, "string side only")
 
 	slo, shi := fulltext2.JSONStringTermBounds("n")
-	nlo, nhi := fulltext2.JSONNumericTermBounds("n")
 	require.Equal(t, fulltext2.JSONStringTerm("n", "m", "", false), p.Ranges[0].Lo)
 	require.Equal(t, shi, p.Ranges[0].Hi)
-	require.Equal(t, jsonTermRange{Lo: nlo, Hi: nhi}, p.Ranges[1],
-		"the numeric side must stay untightened")
 	require.Less(t, slo, shi)
+	// the whole range stays inside the string encoding
+	nlo, _ := fulltext2.JSONNumericTermBounds("n")
+	require.NotEqual(t, nlo, p.Ranges[0].Lo)
 
 	// every leaf that satisfies the predicate must land in one of the ranges
 	opt := fulltext2.JSONTermOptions{IncludeKeys: true}
@@ -172,9 +172,8 @@ func TestJSONProbeStringRangeUnionsBothEncodings(t *testing.T) {
 		return false
 	}
 	require.True(t, covered(`{"n":"zebra"}`), "string leaf above the bound")
-	require.True(t, covered(`{"n":9}`), "numeric leaf: rendering is compared, so it must be covered")
-	require.True(t, covered(`{"n":1e300}`))
-	require.True(t, covered(`{"n":-4.5}`))
+	require.False(t, covered(`{"n":9}`),
+		"a numeric leaf is NULL for json_extract_string, so it must not be probed for")
 }
 
 // inTermRange mirrors the scan's own test: both ends inclusive.

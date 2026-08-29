@@ -1,9 +1,9 @@
 # A tuple-encoded JSON word breaker (issue #27704)
 
-Status: **encoder + both build paths implemented; optimizer rule implemented but
-not yet wired into `applyIndices`** (the execution side has no binary-probe or
-term-range support, so emitting the conjunct would break queries rather than
-accelerate them). See §7 for what is done and what remains.
+Status: **implemented end to end** — tuple encoder on both build paths, term
+ranges, probe dispatch, and the optimizer rule wired into `applyIndices`
+(`addJSONFulltextProbes`). Covered by BVT `fulltext2_json_probe.sql` and the
+rewritten json section of `fulltext2_parser.sql`. §7 lists what remains.
 
 ## 1. Where we are today
 
@@ -175,10 +175,21 @@ contradiction and should be rejected at DDL time, not silently ignored.
 
 ### 4.3 Surface
 
+**Implemented today** — the defaults, with no way to change them from SQL:
+
 ```sql
-CREATE FULLTEXT INDEX idx ON t(j) WITH PARSER json;                            -- keys on, leaf-only
-CREATE FULLTEXT INDEX idx ON t(j) WITH PARSER json, INCLUDE_FULL_PATH = TRUE;  -- keys on, full path
-CREATE FULLTEXT INDEX idx ON t(j) WITH PARSER json, INCLUDE_KEYS = FALSE;      -- legacy value-only
+CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json;   -- keys on, leaf-only
+```
+
+**Proposed, NOT yet implemented.** The grammar has no `INCLUDE_KEYS` /
+`INCLUDE_FULL_PATH` index option (only `POSITION_FREE` exists), so the two
+params below can currently only be set by writing `IndexAlgoParams` directly.
+Both are read end to end — build, incremental build, and the optimizer probe —
+so wiring the DDL is the only missing piece:
+
+```sql
+CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json, INCLUDE_FULL_PATH = TRUE;
+CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json, INCLUDE_KEYS = FALSE;
 ```
 
 Both land in `IndexAlgoParams` beside `parser` / `position_free`
@@ -392,7 +403,10 @@ decodes them verbatim — no text intermediate, so the keys are never discarded.
 
 **Later**
 
-7. `$.a.*.z` wildcard paths via prefix + residual filter.
+7. DDL: an `INCLUDE_KEYS` / `INCLUDE_FULL_PATH` index option so §4.3's proposed
+   surface is reachable from SQL, plus its `SHOW CREATE` round-trip. Everything
+   below the grammar already reads both params.
+8. `$.a.*.z` wildcard paths via prefix + residual filter.
 8. Cross-type acceleration (`json_extract_string` against a numeric leaf gets
    an exact probe rather than the §5.2 `OR`-of-encodings widening).
 

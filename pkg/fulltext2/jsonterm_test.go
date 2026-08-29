@@ -88,27 +88,22 @@ func TestLeafOnlyTermIsPrefixOfFullPathTerm(t *testing.T) {
 	require.Greater(t, len(full), len(leaf))
 }
 
-// The OR-of-encodings rule. json_extract_string renders a numeric leaf, so
-// `= '3.14'` is true for a document holding the NUMBER 3.14; probing only the
-// string encoding would drop that row.
-func TestEqualProbeCoversBothEncodingsForNumericConstants(t *testing.T) {
-	// non-numeric constant: one term, exact lookup, no widening
+// json_extract_string and json_extract_float64 are DISJOINT on leaf type:
+// json_extract_string('{"v":3.14}','$.v') IS NULL. So an equality probe needs
+// exactly ONE encoding — the string form — even for a numeric-looking constant.
+func TestEqualProbeUsesOnlyTheStringEncoding(t *testing.T) {
 	require.Len(t, JSONEqualProbeTerms("b", "XXX", "", false), 1)
 
 	probes := JSONEqualProbeTerms("b", "3.14", "", false)
-	require.Len(t, probes, 2)
+	require.Len(t, probes, 1, "a numeric-looking constant must NOT add a float term")
+	require.Equal(t, JSONStringTerm("b", "3.14", "", false), probes[0])
 
-	// the numeric document's build term must be one of the probes
-	docTerm := termsOf(t, `{"b":3.14}`, JSONTermOptions{IncludeKeys: true})[0]
-	require.Contains(t, probes, docTerm,
-		"a numeric leaf must be reachable from json_extract_string(...) = '3.14'")
-
-	// so must the string document's
-	strTerm := termsOf(t, `{"b":"3.14"}`, JSONTermOptions{IncludeKeys: true})[0]
-	require.Contains(t, probes, strTerm)
-
-	// and the two documents really are stored under different terms
-	require.NotEqual(t, docTerm, strTerm)
+	opt := JSONTermOptions{IncludeKeys: true}
+	// the STRING document is reachable...
+	require.Contains(t, probes, termsOf(t, `{"b":"3.14"}`, opt)[0])
+	// ...and the NUMERIC one is not, which is correct: the predicate is NULL
+	// for it, so it must not be returned
+	require.NotContains(t, probes, termsOf(t, `{"b":3.14}`, opt)[0])
 }
 
 // JSON has ONE number type: {"b":3} and {"b":3.0} are the same value and must
@@ -121,7 +116,9 @@ func TestIntegerAndFloatLeavesShareOneEncoding(t *testing.T) {
 	require.Equal(t, intTerm, floatTerm, "the same JSON number must encode identically")
 	require.Equal(t, JSONFloatTerm("b", 3, "", false), intTerm)
 
-	require.Contains(t, JSONEqualProbeTerms("b", "3", "", false), intTerm)
+	// reachable from the NUMERIC probe (json_extract_float64), which is the only
+	// extractor that returns a value for it
+	require.Equal(t, JSONFloatTerm("b", 3, "", false), intTerm)
 
 	// large integers still round-trip through the SAME normalization on both
 	// sides, so they match each other even where float64 loses precision

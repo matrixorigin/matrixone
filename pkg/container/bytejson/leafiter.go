@@ -30,8 +30,8 @@ const (
 	LeafInt64
 	LeafUint64
 	LeafFloat64
-	// LeafDecimal is reachable as BOTH a number and a string (see the walker),
-	// so its Str holds the decimal text and the encoder emits both forms.
+	// LeafDecimal carries its decimal TEXT in Str; the encoder parses that into
+	// the numeric encoding, which is the only form a probe can reach.
 	LeafDecimal
 )
 
@@ -139,10 +139,9 @@ func (w *leafWalker) walk(bj ByteJson, tag []byte, pathLen int) bool {
 	case TpCodeFloat64:
 		return w.emit(Leaf{Tag: tag, Kind: LeafFloat64, F64: bj.GetFloat64()}, pathLen)
 	case TpCodeDecimal:
-		// json_extract_float64 returns a decimal leaf as a number while
-		// json_extract_string renders its text, so it is reachable from both and
-		// must be indexed under both. Str carries the text; the encoder also
-		// emits the numeric form.
+		// Numeric to both extractors: json_extract_float64 returns it as a
+		// number, json_extract_string returns NULL for it. Str carries the
+		// decimal text; the encoder parses it into the numeric form.
 		return w.emit(Leaf{Tag: tag, Kind: LeafDecimal, Str: bj.GetString()}, pathLen)
 	default:
 		// TpCodeLiteral (true/false/null), Blob, Opaque and Bit are not indexed.
