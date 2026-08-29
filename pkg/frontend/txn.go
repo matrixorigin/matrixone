@@ -701,11 +701,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		if execCtx.reqCtx == nil {
 			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
 		}
-		// Authentication owns a short-lived background transaction. Its handshake
-		// deadline is the single timeout owner of the freshness wait; applying the
-		// ordinary CreateTxnOpTimeout here would silently shorten a configuration
-		// that was validated against ConnectTimeout. The child still guarantees
-		// prompt cleanup when TxnClient.New returns before the handshake does.
+		// The request owns this short-lived frontend control-plane transaction.
+		// Its deadline is the single timeout owner of the freshness wait; applying
+		// the ordinary CreateTxnOpTimeout here would silently shorten that owning
+		// request. The child still guarantees prompt cleanup when TxnClient.New
+		// returns before the request does.
 		tempCtx, tempCancel = context.WithCancel(execCtx.reqCtx)
 	} else {
 		// Ordinary session transaction creation intentionally keeps the long-lived

@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,7 +41,12 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
+			admissionCN, err := c.GetCNService(1)
+			require.NoError(t, err)
 			port := cn.GetServiceConfig().CN.Frontend.Port
+			admissionPort := admissionCN.GetServiceConfig().CN.Frontend.Port
+			require.NotEqual(t, port, admissionPort,
+				"the quota mutation and admission check must use distinct CNs")
 
 			sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 			require.NoError(t, err)
@@ -77,6 +83,76 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.mode_probe (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "insert into branch_quota_race.src values (1)")
 			execSQLRequire(t, ctx, tenantDB, "create snapshot issue_26087_sp for table branch_quota_race src")
+			waitForCatalog := func(
+				description string,
+				probe func(context.Context) (bool, error),
+			) {
+				t.Helper()
+				waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer waitCancel()
+				require.NoError(t, waitForCatalogVisibility(waitCtx, probe), description)
+			}
+			waitForCatalog("source database did not become visible on the admission CN",
+				func(probeCtx context.Context) (bool, error) {
+					return testutils.DBExistsWithAccountE(
+						probeCtx, accountID, "branch_quota_race", admissionCN)
+				})
+			waitForCatalog("source table did not become visible on the admission CN",
+				func(probeCtx context.Context) (bool, error) {
+					return testutils.TableExistsWithAccountE(
+						probeCtx, accountID, "branch_quota_race", "src", admissionCN)
+				})
+
+			// Keep one connection on CN-B alive across quota mutations committed on
+			// CN-A. This excludes login/setup convergence from the assertion: each
+			// DATA BRANCH statement must install its own TN-ordered catalog frontier.
+			admissionDB, err := sql.Open("mysql", fmt.Sprintf(
+				"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, admissionPort))
+			require.NoError(t, err)
+			defer admissionDB.Close()
+			admissionDB.SetMaxOpenConns(1)
+			admissionConn, err := admissionDB.Conn(ctx)
+			require.NoError(t, err)
+			defer admissionConn.Close()
+			var quotaProbe int
+			require.NoError(t, admissionConn.QueryRowContext(ctx, "select 1").Scan(&quotaProbe))
+			require.Equal(t, 1, quotaProbe)
+
+			setBranchQuota := func(quota int) {
+				t.Helper()
+				execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+					"select mo_feature_limit_upsert(%d, 'branch', '', %d)", accountID, quota))
+			}
+			createCrossCNBranch := func(name string) error {
+				t.Helper()
+				_, createErr := admissionConn.ExecContext(ctx, fmt.Sprintf(
+					"data branch create table branch_quota_race.%s from branch_quota_race.src", name))
+				return createErr
+			}
+			deleteCrossCNBranch := func(name string) error {
+				t.Helper()
+				_, deleteErr := admissionConn.ExecContext(ctx, fmt.Sprintf(
+					"data branch delete table branch_quota_race.%s", name))
+				return deleteErr
+			}
+			assertCrossCNDenied := func(name string) {
+				t.Helper()
+				createErr := createCrossCNBranch(name)
+				require.Error(t, createErr)
+				require.Contains(t, createErr.Error(),
+					"feature BRANCH with scope  has disabled for account "+accountName)
+			}
+
+			setBranchQuota(0)
+			assertCrossCNDenied("cross_cn_disabled_from_finite")
+			setBranchQuota(-1)
+			require.NoError(t, createCrossCNBranch("cross_cn_unlimited_from_disabled"))
+			require.NoError(t, deleteCrossCNBranch("cross_cn_unlimited_from_disabled"))
+			setBranchQuota(0)
+			assertCrossCNDenied("cross_cn_disabled_from_unlimited")
+			setBranchQuota(1)
+			require.NoError(t, createCrossCNBranch("cross_cn_finite_from_disabled"))
+			require.NoError(t, deleteCrossCNBranch("cross_cn_finite_from_disabled"))
 
 			conn1, err := tenantDB.Conn(ctx)
 			require.NoError(t, err)
@@ -211,12 +287,24 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, execConn(conn2, "set session transaction isolation level repeatable read"))
 
 			require.NoError(t, execConn(conn1, "begin"))
+			var fixedSnapshotProbe int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from branch_quota_race.mode_probe where a = 2",
+			).Scan(&fixedSnapshotProbe))
+			require.Zero(t, fixedSnapshotProbe)
+			require.NoError(t, execConn(conn2, "insert into branch_quota_race.mode_probe values (2)"))
 			explicitErr := execConn(conn1,
 				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			require.Error(t, explicitErr)
 			require.Contains(t, explicitErr.Error(),
 				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from branch_quota_race.mode_probe where a = 2",
+			).Scan(&fixedSnapshotProbe))
+			require.Zero(t, fixedSnapshotProbe,
+				"feature-limit freshness must not advance the outer SI transaction")
 			require.NoError(t, execConn(conn1, "rollback"))
+			require.NoError(t, execConn(conn2, "delete from branch_quota_race.mode_probe where a = 2"))
 
 			require.NoError(t, execConn(conn1, "set autocommit = 0"))
 			var modeProbeCount int
@@ -302,4 +390,45 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			).Scan(&optimisticBranchCount))
 			require.Equal(t, 1, optimisticBranchCount)
 		})
+}
+
+func waitForCatalogVisibility(
+	ctx context.Context,
+	probe func(context.Context) (bool, error),
+) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		visible, err := probe(ctx)
+		if err == nil && visible {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			cause := context.Cause(ctx)
+			if lastErr != nil {
+				return fmt.Errorf("%w; last catalog probe failed: %w", cause, lastErr)
+			}
+			return cause
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestWaitForCatalogVisibilityPreservesProbeError(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	probeErr := errors.New("catalog query failed")
+
+	err := waitForCatalogVisibility(ctx, func(context.Context) (bool, error) {
+		return false, probeErr
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, probeErr)
 }

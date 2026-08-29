@@ -141,6 +141,17 @@ func TestAdvanceAuthenticationSnapshot(t *testing.T) {
 	})
 }
 
+func TestLogtailReadBarrierSupportedProtocolBoundary(t *testing.T) {
+	ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)
+	rt := moruntime.ServiceRuntime(ses.GetService())
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+	require.False(t, logtailReadBarrierSupported(ses),
+		"v38 advertises temporary-table migration, not the logtail read barrier")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+	require.True(t, logtailReadBarrierSupported(ses))
+}
+
 func TestPrepareAuthenticationSnapshotFailsClosed(t *testing.T) {
 	t.Run("missing parameter unit", func(t *testing.T) {
 		ses := newAuthenticationSnapshotTestSession(t, 100, 20*time.Nanosecond)

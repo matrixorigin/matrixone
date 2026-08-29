@@ -83,7 +83,7 @@ func currentProtocolVersion(proc *process.Process) int64 {
 	return version
 }
 
-func authenticationLogtailReadBarrierSupported(ses *Session) bool {
+func logtailReadBarrierSupported(ses *Session) bool {
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	if rt == nil {
 		return false
@@ -94,6 +94,26 @@ func authenticationLogtailReadBarrierSupported(ses *Session) bool {
 	}
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion39
+}
+
+func (ses *Session) acquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing parameter unit for logtail read barrier")
+	}
+	if pu.StorageEngine == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing storage engine for logtail read barrier")
+	}
+	barrier, ok := pu.StorageEngine.(engine.LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "storage engine does not support logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
 // reusablePlanGenerationSupported reports whether every live service in the
@@ -2325,30 +2345,47 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 // the full clock uncertainty interval, so new clusters use the generic engine
 // barrier in prepareAuthenticationSnapshot instead.
 func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	minimum, err := ses.legacyLogtailReadFence(ctx)
+	if err != nil {
+		return err
+	}
+	ses.updateLastCommitTS(minimum)
+	return nil
+}
+
+// legacyLogtailReadFence returns a timestamp strictly beyond the local HLC
+// uncertainty window. It is the rolling-upgrade fallback for catalog reads
+// that require cross-CN freshness before the TN-ordered barrier is available.
+func (ses *Session) legacyLogtailReadFence(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	if rt == nil {
-		return moerr.NewInternalError(ctx, "missing service runtime for authentication snapshot")
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing service runtime for catalog read fence")
 	}
 	txnClock := rt.Clock()
 	if txnClock == nil {
-		return moerr.NewInternalError(ctx, "missing transaction clock for authentication snapshot")
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing transaction clock for catalog read fence")
 	}
 	if txnClock.MaxOffset() < 0 {
-		return moerr.NewInternalError(ctx, "negative transaction clock offset for authentication snapshot")
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "negative transaction clock offset for catalog read fence")
 	}
 
 	_, upperBound := txnClock.Now()
 	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
-		return moerr.NewInternalError(ctx, "authentication snapshot timestamp overflow")
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "catalog read fence timestamp overflow")
 	}
 
 	// HLC ordering compares the logical component when physical times are equal.
 	// Moving to the next physical tick dominates every logical timestamp at the
 	// uncertainty upper bound, including a remote commit at that exact tick.
-	ses.updateLastCommitTS(timestamp.Timestamp{
+	return timestamp.Timestamp{
 		PhysicalTime: upperBound.PhysicalTime + 1,
-	})
-	return nil
+	}, nil
 }
 
 // prepareAuthenticationSnapshot installs a session snapshot minimum only after
@@ -2362,15 +2399,8 @@ func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
 		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
 	}
 
-	if authenticationLogtailReadBarrierSupported(ses) {
-		if pu.StorageEngine == nil {
-			return moerr.NewInternalError(ctx, "missing storage engine for authentication snapshot")
-		}
-		barrier, ok := pu.StorageEngine.(engine.LogtailReadBarrier)
-		if !ok {
-			return moerr.NewInternalError(ctx, "storage engine does not support logtail read barrier")
-		}
-		frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+	if logtailReadBarrierSupported(ses) {
+		frontier, err := ses.acquireLogtailReadBarrier(ctx)
 		if err != nil {
 			return err
 		}
