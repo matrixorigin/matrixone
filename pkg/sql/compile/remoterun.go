@@ -1798,21 +1798,26 @@ func validateRemoteMORPCVersion30PipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	numericPrefix, jsonComparisonParam, err := plan.RequiredMORPCVersion30Features(p)
+	features, err := plan.RequiredMORPCVersion30Features(p)
 	if err != nil {
 		return err
 	}
-	if !numericPrefix && !jsonComparisonParam {
+	if !features.Any() {
 		return nil
 	}
 	if proc == nil || !supportsRemoteMORPCVersion30(proc.GetService()) {
-		if numericPrefix {
+		if features.NumericPrefix {
 			return moerr.NewNotSupportedNoCtx(
 				"prepared numeric-prefix casts require MORPC protocol version 30",
 			)
 		}
+		if features.JSONComparisonParam {
+			return moerr.NewNotSupportedNoCtx(
+				"prepared JSON comparison parameters require MORPC protocol version 30",
+			)
+		}
 		return moerr.NewNotSupportedNoCtx(
-			"prepared JSON comparison parameters require MORPC protocol version 30",
+			"mixed JSON/BOOL equality requires MORPC protocol version 30",
 		)
 	}
 	return nil

@@ -779,6 +779,15 @@ execute json_bool_category_stmt using @json_bool_category_param, @json_bool_cate
 prepared_eq    prepared_ne    prepared_null_safe    prepared_in    prepared_not_in
 0    1    0    0    1
 deallocate prepare json_bool_category_stmt;
+select cast(json_extract(json_array(cast(9007199254740993.9 as decimal(20,1))), '$[0]') as signed) as exact_decimal_cast;
+exact_decimal_cast
+9007199254740993
+prepare json_decimal_compare_stmt from 'select json_extract(json_array(cast(9007199254740992.1 as decimal(20,1))), ''$[0]'') = ? as exact_decimal_equal';
+set @json_decimal_compare_param = cast(9007199254740993.1 as decimal(20,1));
+execute json_decimal_compare_stmt using @json_decimal_compare_param;
+exact_decimal_equal
+0
+deallocate prepare json_decimal_compare_stmt;
 select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
 large_exponent    small_exponent    exponent_zero
 1    1    0

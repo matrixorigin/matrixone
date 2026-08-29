@@ -1009,6 +1009,27 @@ func TestMORPCVersion30RemoteProtocolValidation(t *testing.T) {
 			}},
 		}
 	}
+	mixedJSONBooleanEquality := func(functionID int32, jsonOnLeft bool) *planpb.Expr {
+		jsonOperand := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_json)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		}
+		booleanOperand := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+		}
+		args := []*planpb.Expr{jsonOperand, booleanOperand}
+		if !jsonOnLeft {
+			args[0], args[1] = args[1], args[0]
+		}
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(functionID) << 32},
+				Args: args,
+			}},
+		}
+	}
 	makeScope := func(expressions ...*planpb.Expr) *Scope {
 		return &Scope{
 			Magic:  Remote,
@@ -1028,6 +1049,20 @@ func TestMORPCVersion30RemoteProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
 		err := validateRemoteMORPCVersion30PipelineProtocol(proc, remotePipeline)
 		require.ErrorContains(t, err, "prepared JSON comparison parameters require MORPC protocol version 30")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
+		require.NoError(t, validateRemoteMORPCVersion30PipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("mixed equality instruction expression owner", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{
+				ProjectList: []*planpb.Expr{mixedJSONBooleanEquality(0, true)},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+		err := validateRemoteMORPCVersion30PipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "mixed JSON/BOOL equality requires MORPC protocol version 30")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion30)
@@ -1058,6 +1093,23 @@ func TestMORPCVersion30RemoteProtocolValidation(t *testing.T) {
 			expressions:      []*planpb.Expr{comparisonParam(0), cast(255)},
 			v29ErrorContains: "require MORPC protocol version 30",
 		},
+	}
+	for _, functionID := range []int32{0, 1, 406} {
+		for _, jsonOnLeft := range []bool{true, false} {
+			orientation := "json right"
+			if jsonOnLeft {
+				orientation = "json left"
+			}
+			tests = append(tests, struct {
+				name             string
+				expressions      []*planpb.Expr
+				v29ErrorContains string
+			}{
+				name:             fmt.Sprintf("mixed equality %d %s", functionID, orientation),
+				expressions:      []*planpb.Expr{mixedJSONBooleanEquality(functionID, jsonOnLeft)},
+				v29ErrorContains: "mixed JSON/BOOL equality requires MORPC protocol version 30",
+			})
+		}
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

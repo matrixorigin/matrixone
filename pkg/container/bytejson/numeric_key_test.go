@@ -44,6 +44,102 @@ func TestCanonicalNumberCommonPathDoesNotAllocate(t *testing.T) {
 	require.Zero(t, allocs)
 }
 
+func TestNumericTextIntegerConversionIsExact(t *testing.T) {
+	t.Run("signed", func(t *testing.T) {
+		tests := []struct {
+			text string
+			want int64
+			ok   bool
+		}{
+			{text: "9007199254740993.9", want: 9007199254740993, ok: true},
+			{text: "-9007199254740993.9", want: -9007199254740993, ok: true},
+			{text: "9.223372036854775807e18", want: math.MaxInt64, ok: true},
+			{text: "-9223372036854775808.99", want: math.MinInt64, ok: true},
+			{text: "9223372036854775808", ok: false},
+			{text: "-9223372036854775809", ok: false},
+			{text: "1e-2147483647", want: 0, ok: true},
+			{text: "1e2147483647", ok: false},
+			{text: "not-a-number", ok: false},
+		}
+		for _, test := range tests {
+			got, ok := NumericTextToInt64(test.text)
+			require.Equal(t, test.ok, ok, test.text)
+			if test.ok {
+				require.Equal(t, test.want, got, test.text)
+			}
+		}
+	})
+
+	t.Run("unsigned", func(t *testing.T) {
+		tests := []struct {
+			text string
+			want uint64
+			ok   bool
+		}{
+			{text: "18446744073709551615.99", want: math.MaxUint64, ok: true},
+			{text: "1.8446744073709551615e19", want: math.MaxUint64, ok: true},
+			{text: "18446744073709551616", ok: false},
+			{text: "+0e999", want: 0, ok: true},
+			{text: "-0.0", want: 0, ok: true},
+			{text: "-0.1", ok: false},
+		}
+		for _, test := range tests {
+			got, ok := NumericTextToUint64(test.text)
+			require.Equal(t, test.ok, ok, test.text)
+			if test.ok {
+				require.Equal(t, test.want, got, test.text)
+			}
+		}
+	})
+
+}
+
+func TestNumericByteJSONIntegerConversionPreservesSourceDomain(t *testing.T) {
+	signed, ok := NumericToInt64(makeDecimalJson("9007199254740993.9"))
+	require.True(t, ok)
+	require.Equal(t, int64(9007199254740993), signed)
+
+	unsigned, ok := NumericToUint64(makeDecimalJson("18446744073709551615.9"))
+	require.True(t, ok)
+	require.Equal(t, uint64(math.MaxUint64), unsigned)
+
+	_, ok = NumericToInt64(makeJsonWithoutParse(9223372036854775808.0))
+	require.False(t, ok)
+	_, ok = NumericToUint64(makeJsonWithoutParse(-0.5))
+	require.False(t, ok)
+	_, ok = NumericToInt64(ByteJson{Type: TpCodeInt64, Data: []byte{1}})
+	require.False(t, ok)
+}
+
+func TestCompareNumericFailsClosedForMalformedValues(t *testing.T) {
+	comparison, ok := CompareNumeric(
+		makeDecimalJson("9007199254740992.1"),
+		makeDecimalJson("9007199254740993.1"),
+	)
+	require.True(t, ok)
+	require.Less(t, comparison, 0)
+
+	_, ok = CompareNumeric(makeDecimalJson("1.25tail"), makeDecimalJson("1.25tail"))
+	require.False(t, ok, "identical malformed payloads must not compare equal")
+	_, ok = CompareNumeric(makeJsonWithoutParse(1), makeJson(t, `"1"`))
+	require.False(t, ok)
+	_, ok = CompareNumeric(
+		ByteJson{Type: TpCodeInt64, Data: []byte{1}},
+		ByteJson{Type: TpCodeInt64, Data: []byte{1}},
+	)
+	require.False(t, ok)
+
+	parsedLeft, ok := ParseNumeric(makeDecimalJson("9007199254740992.1"))
+	require.True(t, ok)
+	parsedRight, ok := ParseNumeric(makeDecimalJson("9007199254740993.1"))
+	require.True(t, ok)
+	comparison, ok = CompareParsedNumeric(parsedLeft, parsedRight)
+	require.True(t, ok)
+	require.Less(t, comparison, 0)
+	_, ok = CompareParsedNumeric(ParsedNumeric{}, parsedRight)
+	require.False(t, ok, "a zero-value parsed number must fail closed")
+}
+
 func makeJsonWithoutParse(value float64) ByteJson {
 	var data [8]byte
 	endian.PutUint64(data[:], math.Float64bits(value))

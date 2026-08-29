@@ -149,8 +149,8 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 // RequiresMORPCVersion30NumericPrefix reports whether an owner contains a
 // planner-injected CAST that uses the numeric-prefix sentinel.
 func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
-	numericPrefix, _, err := RequiredMORPCVersion30Features(owner)
-	return numericPrefix, err
+	features, err := RequiredMORPCVersion30Features(owner)
+	return features.NumericPrefix, err
 }
 
 // RequiresMORPCVersion30JSONComparisonParam reports whether an owner contains
@@ -158,36 +158,83 @@ func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an
 // implementation detail and the receiver dispatches it by ID after decoding.
 func RequiresMORPCVersion30JSONComparisonParam(owner any) (bool, error) {
-	_, jsonComparisonParam, err := RequiredMORPCVersion30Features(owner)
-	return jsonComparisonParam, err
+	features, err := RequiredMORPCVersion30Features(owner)
+	return features.JSONComparisonParam, err
 }
 
-const internalJSONComparisonParamFunctionID int32 = 577
+// RequiresMORPCVersion30MixedJSONBooleanEquality reports whether an owner
+// contains an equality operation whose physical operands are JSON and BOOL.
+// Pre-v30 workers dispatch such plans through varlena comparison overloads and
+// cannot safely execute the BOOL vector.
+func RequiresMORPCVersion30MixedJSONBooleanEquality(owner any) (bool, error) {
+	features, err := RequiredMORPCVersion30Features(owner)
+	return features.MixedJSONBooleanEquality, err
+}
+
+const (
+	equalFunctionID                  int32 = 0
+	notEqualFunctionID               int32 = 1
+	nullSafeEqualFunctionID          int32 = 406
+	internalJSONComparisonFunctionID int32 = 577
+	planBooleanTypeID                int32 = 10
+	planJSONTypeID                   int32 = 62
+)
+
+// MORPCVersion30Features is the complete set of independent expression
+// capabilities introduced in MORPC v30. A struct makes compatibility call
+// sites name every capability instead of relying on positional booleans that
+// become unsafe as the protocol evolves.
+type MORPCVersion30Features struct {
+	NumericPrefix            bool
+	JSONComparisonParam      bool
+	MixedJSONBooleanEquality bool
+}
+
+func (features MORPCVersion30Features) Any() bool {
+	return features.NumericPrefix ||
+		features.JSONComparisonParam ||
+		features.MixedJSONBooleanEquality
+}
 
 // RequiredMORPCVersion30Features reports the independent v30 expression
 // features present in owner. Keep the features separate so callers can retain
 // precise diagnostics, while sharing one owner walk so adding one v30 feature
 // cannot accidentally replace another feature's compatibility gate.
-func RequiredMORPCVersion30Features(owner any) (
-	numericPrefix bool,
-	jsonComparisonParam bool,
-	err error,
-) {
+func RequiredMORPCVersion30Features(owner any) (features MORPCVersion30Features, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			fn := current.GetF()
-			if !numericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
-				numericPrefix = true
+				features.NumericPrefix = true
 			}
-			if !jsonComparisonParam && fn != nil && fn.Func != nil &&
-				int32(fn.Func.Obj>>32) == internalJSONComparisonParamFunctionID {
-				jsonComparisonParam = true
+			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
+				features.JSONComparisonParam = true
+			}
+			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
+				features.MixedJSONBooleanEquality = true
 			}
 			return nil
 		})
 	})
 	return
+}
+
+func isMixedJSONBooleanEquality(function *Function) bool {
+	if function == nil || function.Func == nil || len(function.Args) != 2 {
+		return false
+	}
+	functionID := int32(function.Func.Obj >> 32)
+	switch functionID {
+	case equalFunctionID, notEqualFunctionID, nullSafeEqualFunctionID:
+	default:
+		return false
+	}
+	leftType := function.Args[0].Typ.Id
+	rightType := function.Args[1].Typ.Id
+	return leftType == planJSONTypeID && rightType == planBooleanTypeID ||
+		leftType == planBooleanTypeID && rightType == planJSONTypeID
 }
 
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {

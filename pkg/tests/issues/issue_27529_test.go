@@ -301,5 +301,23 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		_, err = db.ExecContext(ctx, "execute issue_27529_utinyint using @issue_27529_unsigned")
 		require.EqualError(t, err, directUnsignedTinyintErr.Error(),
 			"SQL EXECUTE must preserve the direct TINYINT UNSIGNED overflow behavior")
+
+		var exactDecimalCast int64
+		require.NoError(t, db.QueryRowContext(ctx, `select cast(
+			json_extract(json_array(cast(9007199254740993.9 as decimal(20,1))), '$[0]')
+			as signed)`).Scan(&exactDecimalCast))
+		require.Equal(t, int64(9007199254740993), exactDecimalCast,
+			"JSON DECIMAL integer casts must truncate exactly without FLOAT64 rounding")
+
+		execSQLRequire(t, ctx, db, `prepare issue_27529_decimal from "select
+			json_extract(json_array(cast(9007199254740992.1 as decimal(20,1))), '$[0]') = ?"`)
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_decimal")
+		execSQLRequire(t, ctx, db,
+			"set @issue_27529_decimal = cast(9007199254740993.1 as decimal(20,1))")
+		var decimalEqual bool
+		require.NoError(t, db.QueryRowContext(
+			ctx, "execute issue_27529_decimal using @issue_27529_decimal").Scan(&decimalEqual))
+		require.False(t, decimalEqual,
+			"prepared DECIMAL comparison must distinguish adjacent exact values above 2^53")
 	})
 }

@@ -354,14 +354,32 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](got))
 	})
 
-	t.Run("decimal category follows floating comparison coercion", func(t *testing.T) {
-		jsonValues := makeJSON([]any{float64(1.25), "1.25"})
-		decimal := newTypedByteJson(bytejson.TpCodeDecimal, "1.25")
-		params := makePreparedJSON([]any{decimal, decimal})
+	t.Run("decimal category uses exact numeric comparison", func(t *testing.T) {
+		jsonValues := makeJSON([]any{
+			float64(1.25),
+			"1.25",
+			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740992.1"),
+			newTypedByteJson(bytejson.TpCodeDecimal, "1e100"),
+		})
+		params := makePreparedJSON([]any{
+			newTypedByteJson(bytejson.TpCodeDecimal, "1.25"),
+			newTypedByteJson(bytejson.TpCodeDecimal, "1.2500"),
+			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.1"),
+			newTypedByteJson(bytejson.TpCodeDecimal, "10e99"),
+		})
 		params.SetPrepareParamKind(vector.PrepareParamDecimal)
-		result := makeResult(2)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 2, false, func(c int) bool { return c == 0 }, nil))
-		require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		result := makeResult(4)
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
+		require.Equal(t, []bool{true, true, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+	})
+
+	t.Run("decimal category rejects malformed numeric text", func(t *testing.T) {
+		jsonValues := makeJSON([]any{"1.25tail"})
+		params := makePreparedJSON([]any{newTypedByteJson(bytejson.TpCodeDecimal, "1.25")})
+		params.SetPrepareParamKind(vector.PrepareParamDecimal)
+		require.Error(t, comparePreparedJSON(
+			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1,
+			false, func(c int) bool { return c == 0 }, nil))
 	})
 
 	t.Run("ordinary comparison propagates null", func(t *testing.T) {
@@ -399,17 +417,21 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			int64(9007199254740992),
 			int64(math.MaxInt64 - 1),
 			uint64(math.MaxUint64 - 1),
+			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740992.9"),
+			"18446744073709551614.9",
 		})
 		params := makePreparedJSON([]any{
 			int64(9007199254740993),
 			int64(math.MaxInt64),
 			uint64(math.MaxUint64),
+			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.1"),
+			uint64(math.MaxUint64),
 		})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
-		result := makeResult(3)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, nil))
+		result := makeResult(5)
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 5, false, func(c int) bool { return c == 0 }, nil))
 		got := result.GetResultVector()
-		require.Equal(t, []bool{false, false, false}, vector.MustFixedColNoTypeCheck[bool](got))
+		require.Equal(t, []bool{false, false, false, false, false}, vector.MustFixedColNoTypeCheck[bool](got))
 		require.True(t, got.GetNulls().IsEmpty())
 	})
 
@@ -545,6 +567,52 @@ func BenchmarkPreparedJSONIntegerComparison(b *testing.B) {
 	defer param.Free(proc.Mp())
 	param.SetPrepareParamKind(vector.PrepareParamInteger)
 	param.SetPrepareParamType(types.T_int64)
+	param.SetPreparedJSONComparisonParam()
+
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp()).(*vector.FunctionResult[bool])
+	defer result.Free()
+	require.NoError(b, result.PreExtendAndReset(length))
+	b.ReportAllocs()
+	b.ReportMetric(length, "rows/op")
+	b.ResetTimer()
+	for b.Loop() {
+		if err := result.PreExtendAndReset(length); err != nil {
+			b.Fatal(err)
+		}
+		if err := comparePreparedJSON(
+			[]*vector.Vector{jsonValues, param}, result, proc, length,
+			false, func(c int) bool { return c == 0 }, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPreparedJSONDecimalComparison(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	defer proc.Free()
+	const length = 1024
+
+	encode := func(value bytejson.ByteJson) []byte {
+		data, err := types.EncodeJson(value)
+		require.NoError(b, err)
+		return data
+	}
+
+	leftValues := [2][]byte{
+		encode(newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740992.1")),
+		encode(newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.1")),
+	}
+	jsonValues := vector.NewVec(types.T_json.ToType())
+	defer jsonValues.Free(proc.Mp())
+	for row := 0; row < length; row++ {
+		require.NoError(b, vector.AppendBytes(
+			jsonValues, leftValues[row&1], false, proc.Mp()))
+	}
+	param, err := vector.NewConstBytes(
+		types.T_json.ToType(), leftValues[1], length, proc.Mp())
+	require.NoError(b, err)
+	defer param.Free(proc.Mp())
+	param.SetPrepareParamKind(vector.PrepareParamDecimal)
 	param.SetPreparedJSONComparisonParam()
 
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp()).(*vector.FunctionResult[bool])

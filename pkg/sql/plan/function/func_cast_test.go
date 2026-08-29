@@ -3808,6 +3808,31 @@ func TestCastJsonToNumeric(t *testing.T) {
 			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
 	})
 
+	t.Run("json_string_fractional_integer_cast_is_exact", func(t *testing.T) {
+		run(t, "string_int64_fraction", []string{`"9007199254740993.9"`, `"-9223372036854775808.9"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MinInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_fraction", []string{`"18446744073709551615.9"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{math.MaxUint64}, []bool{false}, false)
+	})
+
+	t.Run("json_decimal_integer_cast_is_exact", func(t *testing.T) {
+		encoded := []string{
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.9")),
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9223372036854775807.99")),
+		}
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{9007199254740993, math.MaxInt64}, nil)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		require.True(t, succeed, info)
+	})
+
 	t.Run("json_null_to_int64", func(t *testing.T) {
 		run(t, "null", []string{"null", "null"}, nil,
 			types.T_int64.ToType(),

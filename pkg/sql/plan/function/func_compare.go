@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
-	"strconv"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -76,12 +75,14 @@ func comparePreparedJSON(
 	}
 
 	var (
-		cachedJSON       bytejson.ByteJson
-		cachedJSONNull   bool
-		cachedJSONReady  bool
-		cachedParam      bytejson.ByteJson
-		cachedParamNull  bool
-		cachedParamReady bool
+		cachedJSON              bytejson.ByteJson
+		cachedJSONNull          bool
+		cachedJSONReady         bool
+		cachedParam             bytejson.ByteJson
+		cachedParamNull         bool
+		cachedParamReady        bool
+		cachedDecimalParam      bytejson.ParsedNumeric
+		cachedDecimalParamReady bool
 	)
 	if jsonVector.IsConst() {
 		var err error
@@ -98,6 +99,19 @@ func comparePreparedJSON(
 			return err
 		}
 		cachedParamReady = true
+	}
+	if cachedParamReady && !cachedParamNull && paramType == types.T_any &&
+		paramVector.GetPrepareParamKind() == vector.PrepareParamDecimal &&
+		!isJSONLiteralNull(cachedParam) {
+		numericParam, paramIsNull, ok := preparedJSONDecimal(cachedParam)
+		if !ok || paramIsNull {
+			return jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		cachedDecimalParam, ok = bytejson.ParseNumeric(numericParam)
+		if !ok {
+			return jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		cachedDecimalParamReady = true
 	}
 
 	for row := 0; row < length; row++ {
@@ -140,8 +154,14 @@ func comparePreparedJSON(
 		var coercedJSONNull, coercedParamNull bool
 		var err error
 		if paramType == types.T_any {
-			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalars(
-				proc, jsonValue, paramValue, paramVector.GetPrepareParamKindAt(row))
+			kind := paramVector.GetPrepareParamKindAt(row)
+			if kind == vector.PrepareParamDecimal && cachedDecimalParamReady {
+				comparison, coercedJSONNull, err = comparePreparedJSONDecimalWithParsedParam(
+					proc, jsonValue, cachedDecimalParam)
+			} else {
+				comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalars(
+					proc, jsonValue, paramValue, kind)
+			}
 		} else {
 			comparison, coercedJSONNull, coercedParamNull, err = comparePreparedJSONScalarsAsType(
 				proc, jsonValue, paramValue, paramType)
@@ -376,7 +396,7 @@ func comparePreparedJSONScalars(
 		}
 		return comparePreparedJSONIntegers(left, right), false, false, nil
 
-	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
+	case vector.PrepareParamFloat:
 		left, leftNull, leftOK := jsonToScalar(jsonValue)
 		right, rightNull, rightOK := jsonToScalar(paramValue)
 		if !leftOK || !rightOK {
@@ -386,6 +406,21 @@ func comparePreparedJSONScalars(
 			return 0, leftNull, rightNull, nil
 		}
 		return compareFloat64Total(left, right), false, false, nil
+
+	case vector.PrepareParamDecimal:
+		left, leftNull, leftOK := preparedJSONDecimal(jsonValue)
+		right, rightNull, rightOK := preparedJSONDecimal(paramValue)
+		if !leftOK || !rightOK {
+			return 0, false, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		comparison, ok := bytejson.CompareNumeric(left, right)
+		if !ok {
+			return 0, false, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+		}
+		return comparison, false, false, nil
 
 	case vector.PrepareParamNone:
 		left, leftErr := preparedJSONString(jsonValue)
@@ -401,6 +436,29 @@ func comparePreparedJSONScalars(
 	default:
 		return 0, false, false, moerr.NewInternalErrorf(proc.Ctx, "unsupported prepared parameter kind %d", kind)
 	}
+}
+
+func comparePreparedJSONDecimalWithParsedParam(
+	proc *process.Process,
+	jsonValue bytejson.ByteJson,
+	paramValue bytejson.ParsedNumeric,
+) (comparison int, jsonNull bool, err error) {
+	left, leftNull, leftOK := preparedJSONDecimal(jsonValue)
+	if !leftOK {
+		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+	}
+	if leftNull {
+		return 0, true, nil
+	}
+	parsedLeft, ok := bytejson.ParseNumeric(left)
+	if !ok {
+		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+	}
+	comparison, ok = bytejson.CompareParsedNumeric(parsedLeft, paramValue)
+	if !ok {
+		return 0, false, jsonCastErr(proc.Ctx, types.T_decimal256)
+	}
+	return comparison, false, nil
 }
 
 func comparePreparedJSONScalarsAsType(
@@ -524,49 +582,53 @@ type preparedJSONIntegerValue struct {
 }
 
 func preparedJSONInteger(value bytejson.ByteJson) (preparedJSONIntegerValue, bool, bool) {
-	switch value.Type {
-	case bytejson.TpCodeInt64:
-		return preparedJSONIntegerValue{signed: value.GetInt64(), isSigned: true}, false, true
-	case bytejson.TpCodeUint64:
-		return preparedJSONIntegerValue{unsigned: value.GetUint64()}, false, true
-	case bytejson.TpCodeFloat64:
-		integer, ok := preparedJSONIntegerFromFloat(value.GetFloat64())
-		return integer, false, ok
-	case bytejson.TpCodeString, bytejson.TpCodeDecimal:
-		text := string(value.GetString())
-		if signed, err := strconv.ParseInt(text, 10, 64); err == nil {
-			return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
-		}
-		if unsigned, err := strconv.ParseUint(text, 10, 64); err == nil {
-			return preparedJSONIntegerValue{unsigned: unsigned}, false, true
-		}
-		floating, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return preparedJSONIntegerValue{}, false, false
-		}
-		integer, ok := preparedJSONIntegerFromFloat(floating)
-		return integer, false, ok
-	case bytejson.TpCodeLiteral:
+	if value.Type == bytejson.TpCodeLiteral {
 		if len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull {
 			return preparedJSONIntegerValue{}, true, true
 		}
+		return preparedJSONIntegerValue{}, false, false
+	}
+	if value.Type == bytejson.TpCodeString {
+		text := string(value.GetString())
+		if signed, ok := bytejson.NumericTextToInt64(text); ok {
+			return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
+		}
+		if unsigned, ok := bytejson.NumericTextToUint64(text); ok {
+			return preparedJSONIntegerValue{unsigned: unsigned}, false, true
+		}
+		return preparedJSONIntegerValue{}, false, false
+	}
+	if signed, ok := bytejson.NumericToInt64(value); ok {
+		return preparedJSONIntegerValue{signed: signed, isSigned: true}, false, true
+	}
+	if unsigned, ok := bytejson.NumericToUint64(value); ok {
+		return preparedJSONIntegerValue{unsigned: unsigned}, false, true
 	}
 	return preparedJSONIntegerValue{}, false, false
 }
 
-func preparedJSONIntegerFromFloat(value float64) (preparedJSONIntegerValue, bool) {
-	const (
-		signedUpperExclusive   = 9223372036854775808.0
-		unsignedUpperExclusive = 18446744073709551616.0
-	)
-	if math.IsNaN(value) || math.IsInf(value, 0) || value < math.MinInt64 || value >= unsignedUpperExclusive {
-		return preparedJSONIntegerValue{}, false
+// preparedJSONDecimal maps numeric JSON scalars and numeric JSON strings into
+// the exact ByteJSON numeric domain. CompareNumeric then shares one equality
+// model with JSON containment and overlap instead of independently lowering
+// DECIMAL values to float64.
+func preparedJSONDecimal(value bytejson.ByteJson) (bytejson.ByteJson, bool, bool) {
+	switch value.Type {
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64:
+		return value, false, true
+	case bytejson.TpCodeDecimal:
+		return value, false, true
+	case bytejson.TpCodeString:
+		// STRING and DECIMAL share the same length-prefixed payload layout.
+		// Reclassify the local descriptor so a per-row numeric string does not
+		// allocate a duplicate payload solely for exact comparison.
+		value.Type = bytejson.TpCodeDecimal
+		return value, false, true
+	case bytejson.TpCodeLiteral:
+		if len(value.Data) > 0 && value.Data[0] == bytejson.LiteralNull {
+			return bytejson.ByteJson{}, true, true
+		}
 	}
-	value = math.Trunc(value)
-	if value < signedUpperExclusive {
-		return preparedJSONIntegerValue{signed: int64(value), isSigned: true}, true
-	}
-	return preparedJSONIntegerValue{unsigned: uint64(value)}, true
+	return bytejson.ByteJson{}, false, false
 }
 
 func comparePreparedJSONIntegers(left, right preparedJSONIntegerValue) int {

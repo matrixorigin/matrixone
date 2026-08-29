@@ -438,5 +438,10 @@ prepare json_bool_category_stmt from 'select
 set @json_bool_category_param = true;
 execute json_bool_category_stmt using @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param;
 deallocate prepare json_bool_category_stmt;
+select cast(json_extract(json_array(cast(9007199254740993.9 as decimal(20,1))), '$[0]') as signed) as exact_decimal_cast;
+prepare json_decimal_compare_stmt from 'select json_extract(json_array(cast(9007199254740992.1 as decimal(20,1))), ''$[0]'') = ? as exact_decimal_equal';
+set @json_decimal_compare_param = cast(9007199254740993.1 as decimal(20,1));
+execute json_decimal_compare_stmt using @json_decimal_compare_param;
+deallocate prepare json_decimal_compare_stmt;
 select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
 drop database test;

@@ -2907,81 +2907,33 @@ func jsonToScalar(bj bytejson.ByteJson) (float64, bool, bool) {
 }
 
 func jsonToInt64Scalar(bj bytejson.ByteJson) (int64, bool, bool) {
-	switch bj.Type {
-	case bytejson.TpCodeInt64:
-		return bj.GetInt64(), false, true
-	case bytejson.TpCodeUint64:
-		value := bj.GetUint64()
-		if value > math.MaxInt64 {
-			return 0, false, false
-		}
-		return int64(value), false, true
-	case bytejson.TpCodeFloat64:
-		return float64ToJSONInt64(bj.GetFloat64())
-	case bytejson.TpCodeString, bytejson.TpCodeDecimal:
-		text := string(bj.GetString())
-		if value, err := strconv.ParseInt(text, 10, 64); err == nil {
-			return value, false, true
-		}
-		value, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, false, false
-		}
-		return float64ToJSONInt64(value)
-	case bytejson.TpCodeLiteral:
+	if bj.Type == bytejson.TpCodeLiteral {
 		if len(bj.Data) > 0 && bj.Data[0] == bytejson.LiteralNull {
 			return 0, true, true
 		}
-	}
-	return 0, false, false
-}
-
-func float64ToJSONInt64(value float64) (int64, bool, bool) {
-	// float64(math.MaxInt64) rounds up to 2^63, so the upper bound must be
-	// exclusive. The lower endpoint (-2^63) is exactly representable.
-	const upperExclusive = 9223372036854775808.0
-	if math.IsNaN(value) || value < math.MinInt64 || value >= upperExclusive {
 		return 0, false, false
 	}
-	return int64(value), false, true
+	if bj.Type == bytejson.TpCodeString {
+		value, ok := bytejson.NumericTextToInt64(string(bj.GetString()))
+		return value, false, ok
+	}
+	value, ok := bytejson.NumericToInt64(bj)
+	return value, false, ok
 }
 
 func jsonToUint64Scalar(bj bytejson.ByteJson) (uint64, bool, bool) {
-	switch bj.Type {
-	case bytejson.TpCodeInt64:
-		value := bj.GetInt64()
-		if value < 0 {
-			return 0, false, false
-		}
-		return uint64(value), false, true
-	case bytejson.TpCodeUint64:
-		return bj.GetUint64(), false, true
-	case bytejson.TpCodeFloat64:
-		return float64ToJSONUint64(bj.GetFloat64())
-	case bytejson.TpCodeString, bytejson.TpCodeDecimal:
-		text := string(bj.GetString())
-		if value, err := strconv.ParseUint(text, 10, 64); err == nil {
-			return value, false, true
-		}
-		value, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, false, false
-		}
-		return float64ToJSONUint64(value)
-	case bytejson.TpCodeLiteral:
+	if bj.Type == bytejson.TpCodeLiteral {
 		if len(bj.Data) > 0 && bj.Data[0] == bytejson.LiteralNull {
 			return 0, true, true
 		}
-	}
-	return 0, false, false
-}
-
-func float64ToJSONUint64(value float64) (uint64, bool, bool) {
-	const upperExclusive = 18446744073709551616.0
-	if math.IsNaN(value) || value < 0 || value >= upperExclusive {
 		return 0, false, false
 	}
-	return uint64(value), false, true
+	if bj.Type == bytejson.TpCodeString {
+		value, ok := bytejson.NumericTextToUint64(string(bj.GetString()))
+		return value, false, ok
+	}
+	value, ok := bytejson.NumericToUint64(bj)
+	return value, false, ok
 }
 
 // jsonToNumeric implements JSON -> all numeric types in one loop; append per row via type switch.

@@ -56,6 +56,7 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2984,6 +2985,37 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseExecuteDataPreparedJSONDecimalComparisonIsExact(t *testing.T) {
+	const query = `select json_extract(
+		json_array(cast(9007199254740992.1 as decimal(20,1))), '$[0]') = ?`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildStringExecutePacket(
+			proto, defines.MYSQL_TYPE_NEWDECIMAL, "9007199254740993.1"), 0))
+	proc.SetPrepareParamsWithMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
+	require.NotEmpty(t, preparedPlan.Steps)
+	projectNode := preparedPlan.Nodes[preparedPlan.Steps[len(preparedPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0),
+		"COM_STMT_EXECUTE DECIMAL must not round adjacent exact values through FLOAT64")
 }
 
 func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
