@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -605,6 +606,38 @@ func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) 
 	root := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 	require.Equal(t, int32(types.T_text), root.ProjectList[0].Typ.Id,
 		"the direct VAR_STRING result must retain TEXT metadata")
+}
+
+func TestInitExecuteStmtParamDirectNumericPreservesTextSibling(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 214, "select ? as direct_number, ? as direct_text")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []int32{0, 1}, prepareStmt.directResultParamPositions)
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("text"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	originalRoot := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
+	require.Len(t, originalRoot.ProjectList, 2)
+	originalTextType := originalRoot.ProjectList[1].Typ
+
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	runtimeRoot := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_int64), runtimeRoot.ProjectList[0].Typ.Id)
+	require.Equal(t, originalTextType, runtimeRoot.ProjectList[1].Typ,
+		"a nonnumeric direct sibling must keep its prepare-time charset and type")
 }
 
 func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
@@ -1219,7 +1252,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, preparedRuntimeSpecializationNone)
+	}, false, preparedRuntimeSpecializationNone, nil)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
@@ -1343,6 +1376,124 @@ func TestBinaryDMLReusesRuntimeSpecializationForStableDomain(t *testing.T) {
 	require.Nil(t, retComp, "a changed runtime domain must not reuse the preceding compile")
 	require.NotSame(t, runtimePlan, switchedPlan)
 	require.NotEqual(t, oldKey, cw.runtimeCacheKey)
+}
+
+func TestBackgroundPreparedDMLDoesNotConsumeOrPublishClientRuntimeCompile(t *testing.T) {
+	ses, prepareStmt, clientCW, clientExecCtx := newPreparedExecuteEnvForSQL(t, 218, "select ?, ?")
+	backgroundSes := &backSession{feSessionImpl: feSessionImpl{
+		upstream:      ses,
+		txnCompileCtx: ses.GetTxnCompileCtx(),
+		respr:         ses.respr,
+		pool:          ses.pool,
+		service:       ses.service,
+		timeZone:      ses.timeZone,
+	}}
+	backgroundProc := process.NewTopProcess(
+		clientExecCtx.reqCtx, clientCW.proc.Mp(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	backgroundProc.Base.SessionInfo = clientCW.proc.Base.SessionInfo
+	backgroundProc.Session = backgroundSes
+	backgroundCW := InitTxnComputationWrapper(backgroundSes, prepareStmt.PrepareStmt, backgroundProc)
+	backgroundCW.binaryPrepare = true
+	backgroundCW.stmtBorrowed = true
+	backgroundExecCtx := *clientExecCtx
+	backgroundExecCtx.ses = backgroundSes
+	backgroundExecCtx.proc = backgroundProc
+
+	defer func() {
+		clientCW.proc.SetPrepareParams(nil)
+		backgroundProc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		backgroundProc.Free()
+	}()
+
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}},
+	})
+	require.NoError(t, err)
+	dmlPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_UPDATE,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+	prepared := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	prepared.Plan = dmlPlan
+	prepared.ParamTypes = []int32{int32(types.T_text), int32(types.T_text)}
+	prepareStmt.directResultParamPositions = nil
+	prepareStmt.directResultParamPositionsSet = true
+
+	installParams := func(left, right string, leftType defines.MysqlType) {
+		clientCW.proc.SetPrepareParams(nil)
+		backgroundProc.SetPrepareParams(nil)
+		if prepareStmt.params != nil {
+			prepareStmt.params.Free(clientCW.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(left), false, clientCW.proc.Mp()))
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(right), false, clientCW.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{
+			byte(leftType), 0,
+			byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		}
+	}
+	releaseStmt := func(stmt tree.Statement, owned bool) {
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+	}
+
+	installParams("1", "1.00", defines.MYSQL_TYPE_LONGLONG)
+	retComp, _, stmt, _, owned, err := initExecuteStmtParamInSession(
+		&backgroundExecCtx, ses, backgroundSes, backgroundCW, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	releaseStmt(stmt, owned)
+	require.Nil(t, retComp)
+	require.Nil(t, backgroundCW.runtimeCacheTarget,
+		"a background category miss must not stage a client-owned cache replacement")
+	require.Nil(t, prepareStmt.runtimeCompile)
+
+	retComp, clientRuntimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		clientExecCtx, ses, clientCW, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	releaseStmt(stmt, owned)
+	require.Nil(t, retComp)
+	require.Same(t, prepareStmt, clientCW.runtimeCacheTarget)
+	clientRuntimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		clientCW.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, clientCW.installRuntimeCacheCandidate(clientRuntimeCompile))
+	clientRuntimeKey := prepareStmt.runtimeSpecializationKey
+
+	retComp, backgroundSameDomainPlan, stmt, _, owned, err := initExecuteStmtParamInSession(
+		&backgroundExecCtx, ses, backgroundSes, backgroundCW, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	releaseStmt(stmt, owned)
+	require.Nil(t, retComp,
+		"a background execution must not consume the client-owned runtime Compile")
+	require.NotSame(t, clientRuntimePlan, backgroundSameDomainPlan)
+	require.Nil(t, backgroundCW.runtimeCacheTarget)
+
+	installParams("1.5", "1.50", defines.MYSQL_TYPE_DOUBLE)
+	retComp, _, stmt, _, owned, err = initExecuteStmtParamInSession(
+		&backgroundExecCtx, ses, backgroundSes, backgroundCW, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	releaseStmt(stmt, owned)
+	require.Nil(t, retComp)
+	require.Nil(t, backgroundCW.runtimeCacheTarget)
+	require.Equal(t, clientRuntimeKey, prepareStmt.runtimeSpecializationKey,
+		"a background type switch must not replace the client category")
+	require.Same(t, clientRuntimeCompile, prepareStmt.runtimeCompile)
+
+	installParams("2", "2.00", defines.MYSQL_TYPE_LONGLONG)
+	retComp, foregroundPlan, stmt, _, owned, err := initExecuteStmtParam(
+		clientExecCtx, ses, clientCW, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	releaseStmt(stmt, owned)
+	require.Same(t, clientRuntimeCompile, retComp)
+	require.Same(t, clientRuntimePlan, foregroundPlan)
 }
 
 func BenchmarkBinaryDMLRuntimeSpecializationCache(b *testing.B) {
