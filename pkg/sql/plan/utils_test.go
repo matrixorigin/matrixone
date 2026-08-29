@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -617,8 +618,15 @@ func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 		})
 	}
 
+	redundantTrailingZeros := "90071992547409920001000000000000000000000000000000000000000000000000000000000e-57"
+	normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(redundantTrailingZeros)
+	require.True(t, ok)
+	require.Equal(t, types.New(types.T_decimal128, 20, 0), normalized)
+	require.Equal(t, normalized, visible)
+	require.Equal(t, "90071992547409920001", canonical)
+
 	raw := strings.Repeat("0", 100) + "1.0"
-	_, visible, canonical, ok := PreparedDecimalRuntimeDomains(raw)
+	_, visible, canonical, ok = PreparedDecimalRuntimeDomains(raw)
 	require.True(t, ok)
 	planUnderTest := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 		StmtType: plan.Query_SELECT,
@@ -645,6 +653,25 @@ func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	require.Equal(t, int32(1), expr.Typ.Scale)
 	require.Equal(t, int64(10), expr.GetLit().GetDecimal64Val().A)
 	require.Equal(t, int32(0), expr.GetLit().GetSrc().GetP().Pos)
+}
+
+func TestPreparedDecimalRuntimeDomainsTrailingZerosHaveBoundedMaterialization(t *testing.T) {
+	const trailingZeroCount = 1 << 20
+	value := "1" + strings.Repeat("0", trailingZeroCount) + "e-" + strconv.Itoa(trailingZeroCount)
+	assertDomains := func() {
+		normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal64, 1, 0), normalized)
+		require.Equal(t, normalized, visible)
+		require.Equal(t, "1", canonical)
+	}
+	assertDomains()
+	require.LessOrEqual(t, testing.AllocsPerRun(10, func() {
+		_, _, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		if !ok || canonical != "1" {
+			panic("large exact DECIMAL lexeme rejected")
+		}
+	}), float64(1))
 }
 
 func TestPreparedDecimalRuntimeTypesLargeLexemeHasBoundedAllocations(t *testing.T) {
