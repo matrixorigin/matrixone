@@ -180,6 +180,7 @@ type ddlVisibilityWithdrawalHAKeeperClient struct {
 	queryClosedBeforeSend   bool
 	closeCalls              int
 	clusterDeployedProtocol int64
+	oldHAKeeperReplica      bool
 }
 
 func (c *ddlVisibilityWithdrawalHAKeeperClient) GetClusterDetails(
@@ -187,6 +188,9 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) GetClusterDetails(
 ) (logservicepb.ClusterDetails, error) {
 	return logservicepb.ClusterDetails{
 		DDLVisibilityDeployedProtocol: c.clusterDeployedProtocol,
+		LogStores: []logservicepb.LogStore{{
+			UUID: "log-1", DDLVisibilityDeployedProtocolSupported: !c.oldHAKeeperReplica,
+		}},
 	}, nil
 }
 
@@ -397,6 +401,21 @@ func TestDefaultV38StartupUsesLastDeployedProtocolUntilActivation(t *testing.T) 
 	require.True(t, gate.PublicDDLEnabled())
 	require.False(t, s.ddlVisibilityActivationPrepared.Load())
 	require.False(t, s.ddlVisibilityActivationFenced.Load())
+}
+
+func TestDDLVisibilityEpochHAKeeperCapabilityRejectsOldLeaderView(t *testing.T) {
+	client := &ddlVisibilityWithdrawalHAKeeperClient{}
+	s := &service{
+		cfg: &Config{}, _hakeeperClient: client,
+	}
+	s.cfg.HAKeeper.DiscoveryTimeout.Duration = time.Second
+	require.NoError(t, s.requireDDLVisibilityEpochHAKeeperCapability(context.Background()))
+
+	// A leader failover to an old RSM returns the additive field as false. The
+	// activation entry point must interpret that as unsupported, never epoch 0.
+	client.oldHAKeeperReplica = true
+	err := s.requireDDLVisibilityEpochHAKeeperCapability(context.Background())
+	require.ErrorContains(t, err, "does not support the durable DDL visibility deployment epoch")
 }
 
 func TestMarkerlessCNJoinsCommittedClusterFailClosed(t *testing.T) {

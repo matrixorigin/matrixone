@@ -1782,13 +1782,14 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.LogStore{
-			UUID:           uuid,
-			Tick:           info.Tick,
-			State:          state,
-			ServiceAddress: info.ServiceAddress,
-			Replicas:       info.Replicas,
-			ConfigData:     info.ConfigData,
-			Locality:       info.Locality,
+			UUID:                                   uuid,
+			Tick:                                   info.Tick,
+			State:                                  state,
+			ServiceAddress:                         info.ServiceAddress,
+			Replicas:                               info.Replicas,
+			ConfigData:                             info.ConfigData,
+			Locality:                               info.Locality,
+			DDLVisibilityDeployedProtocolSupported: info.DDLVisibilityDeployedProtocolSupported,
 		}
 		cd.LogStores = append(cd.LogStores, n)
 	}

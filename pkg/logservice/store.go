@@ -1523,14 +1523,15 @@ func (l *store) hakeeperTick() {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:                           l.id(),
-		RaftAddress:                    l.cfg.RaftServiceAddr(),
-		ServiceAddress:                 l.cfg.LogServiceServiceAddr(),
-		GossipAddress:                  l.cfg.GossipServiceAddr(),
-		Replicas:                       make([]pb.LogReplicaInfo, 0),
-		Locality:                       l.cfg.getLocality(),
-		CommandDeliverySupported:       true,
-		ViewMetadataAdmissionSupported: true,
+		UUID:                                   l.id(),
+		RaftAddress:                            l.cfg.RaftServiceAddr(),
+		ServiceAddress:                         l.cfg.LogServiceServiceAddr(),
+		GossipAddress:                          l.cfg.GossipServiceAddr(),
+		Replicas:                               make([]pb.LogReplicaInfo, 0),
+		Locality:                               l.cfg.getLocality(),
+		CommandDeliverySupported:               true,
+		ViewMetadataAdmissionSupported:         true,
+		DDLVisibilityDeployedProtocolSupported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

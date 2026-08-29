@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -262,6 +263,9 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	if err != nil {
 		return err
 	}
+	if err := s.requireDDLVisibilityEpochHAKeeperCapability(ctx); err != nil {
+		return err
+	}
 
 	barrierCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
 	defer cancel()
@@ -349,6 +353,25 @@ func (s *service) persistDDLVisibilityDeployedProtocol(version int64) error {
 	if err := file.WriteFile(s.metadataFS, getMetadataFile(s.cfg.UUID), protoc.MustMarshal(&s.metadata)); err != nil {
 		s.metadata.DDLVisibilityDeployedProtocol = previous
 		return err
+	}
+	return nil
+}
+
+func (s *service) requireDDLVisibilityEpochHAKeeperCapability(ctx context.Context) error {
+	queryCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
+	defer cancel()
+	details, err := s._hakeeperClient.GetClusterDetails(queryCtx)
+	if err != nil {
+		return moerr.AttachCause(queryCtx, err)
+	}
+	if len(details.LogStores) == 0 {
+		return moerr.NewInvalidStateNoCtx("DDL visibility activation requires HAKeeper capability inventory")
+	}
+	for _, store := range details.LogStores {
+		if !store.DDLVisibilityDeployedProtocolSupported {
+			return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+				"LogStore %s does not support the durable DDL visibility deployment epoch", store.UUID))
+		}
 	}
 	return nil
 }

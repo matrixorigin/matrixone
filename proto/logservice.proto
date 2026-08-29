@@ -98,6 +98,9 @@ message LogStore {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   ConfigData ConfigData = 6;
   Locality Locality = 7 [(gogoproto.nullable) = false];
+  // DDLVisibilityDeployedProtocolSupported proves the hosted HAKeeper RSM can
+  // persist and return the cluster-wide DDL deployment epoch.
+  bool DDLVisibilityDeployedProtocolSupported = 8;
 }
 
 // LogShardInfo contains information a log shard.
@@ -211,6 +214,9 @@ message LogStoreHeartbeat {
   // ViewMetadataAdmissionSupported proves that every HAKeeper RSM hosted by
   // this LogStore can decode the durable admission update and snapshot fields.
   bool ViewMetadataAdmissionSupported = 10;
+  // This gates the HAKeeper RSM schema used by the durable DDL deployment
+  // epoch across both voting and non-voting replicas.
+  bool DDLVisibilityDeployedProtocolSupported = 11;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -814,6 +820,7 @@ message LogStoreInfo {
   Locality Locality = 8 [(gogoproto.nullable) = false];
   bool CommandDeliverySupported = 9;
   bool ViewMetadataAdmissionSupported = 10;
+  bool DDLVisibilityDeployedProtocolSupported = 11;
 }
 
 message LogState {
