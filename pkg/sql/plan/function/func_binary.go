@@ -8773,12 +8773,21 @@ func secToTimeFromFloat64(seconds float64) (types.Time, bool, bool) {
 // secToTimeFromExactDecimal converts the numeric prefix of a textual value to
 // microseconds without routing DECIMAL input through float64. The bounded
 // calculation also handles arbitrarily large exponents without allocating a
-// proportional big integer.
-func secToTimeFromExactDecimal(value string) (types.Time, bool) {
-	value = strings.TrimSpace(value)
+// proportional big integer. The final result reports the separate conversion
+// warning state so SEC_TO_TIME can retain MySQL's DECIMAL diagnostic in
+// addition to its own TIME range diagnostic.
+func secToTimeFromExactDecimal(value string) (types.Time, bool, bool) {
+	value = trimASCIISpace(value)
 	if len(value) == 0 {
-		return 0, false
+		return 0, false, false
 	}
+
+	prefix, _, validPrefix := scanDecimalFloatPrefix(value)
+	conversionTruncated := !validPrefix || prefix != value
+	if !validPrefix {
+		return 0, false, true
+	}
+	value = prefix
 
 	end := 0
 	negative := false
@@ -8820,7 +8829,7 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool) {
 		fractionEnd = end
 	}
 	if totalDigits == 0 || firstNonzeroDigit == -1 {
-		return 0, false
+		return 0, false, conversionTruncated
 	}
 
 	exponent := 0
@@ -8849,13 +8858,13 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool) {
 		if end != exponentStart {
 			if exponentOverflow {
 				if negativeExponent {
-					return 0, false
+					return 0, false, true
 				}
 				clampTime := types.MySQLTimeFunctionMaxForScale(0)
 				if negative {
-					return -clampTime, true
+					return -clampTime, true, conversionTruncated
 				}
-				return clampTime, true
+				return clampTime, true, conversionTruncated
 			}
 			if negativeExponent {
 				exponent = -exponentMagnitude
@@ -8882,20 +8891,20 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool) {
 	if integerValueDigits > 7 {
 		clampTime := types.MySQLTimeFunctionMaxForScale(0)
 		if negative {
-			return -clampTime, true
+			return -clampTime, true, conversionTruncated
 		}
-		return clampTime, true
+		return clampTime, true, conversionTruncated
 	}
 
 	scaledDigits := integerValueDigits + 6
 	if scaledDigits <= 0 {
 		if scaledDigits == 0 && significantDigitAt(0) >= '5' {
 			if negative {
-				return -1, false
+				return -1, false, conversionTruncated
 			}
-			return 1, false
+			return 1, false, conversionTruncated
 		}
-		return 0, false
+		return 0, false, conversionTruncated
 	}
 
 	var totalMicroseconds int64
@@ -8916,56 +8925,74 @@ func secToTimeFromExactDecimal(value string) (types.Time, bool) {
 		result = types.MySQLTimeFunctionMaxForScale(0)
 	}
 	if negative {
-		return -result, truncated
+		return -result, truncated, conversionTruncated
 	}
-	return result, truncated
+	return result, truncated, conversionTruncated
 }
 
 // SecToTime: SEC_TO_TIME(seconds) - Returns the seconds argument, converted to hours, minutes, and seconds, as a TIME value.
 func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
-	var getTimeValue func(uint64) (types.Time, bool, bool)
+	var getTimeValue func(uint64) (types.Time, bool, bool, bool)
+	var renderWarningValue func(uint64) string
 
 	switch ivecs[0].GetType().Oid {
 	case types.T_int64:
 		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getTimeValue = func(i uint64) (types.Time, bool, bool) {
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
 			value, null := param.GetValue(i)
 			result, truncated := secToTimeFromInt64(value)
-			return result, null, truncated
+			return result, null, truncated, false
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetValue(i)
+			return fmt.Sprintf("%d", value)
 		}
 	case types.T_uint64:
 		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getTimeValue = func(i uint64) (types.Time, bool, bool) {
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
 			value, null := param.GetValue(i)
 			result, truncated := secToTimeFromUint64(value)
-			return result, null, truncated
+			return result, null, truncated, false
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetValue(i)
+			return fmt.Sprintf("%d", value)
 		}
 	case types.T_float64:
 		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getTimeValue = func(i uint64) (types.Time, bool, bool) {
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
 			value, null := param.GetValue(i)
 			if null {
-				return 0, true, false
+				return 0, true, false, false
 			}
-			return secToTimeFromFloat64(value)
+			result, null, truncated := secToTimeFromFloat64(value)
+			return result, null, truncated, false
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetValue(i)
+			return fmt.Sprintf("%g", value)
 		}
 	case types.T_varchar:
 		param := vector.GenerateFunctionStrParameter(ivecs[0])
-		getTimeValue = func(i uint64) (types.Time, bool, bool) {
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
 			value, null := param.GetStrValue(i)
 			if null {
-				return 0, true, false
+				return 0, true, false, false
 			}
-			result, truncated := secToTimeFromExactDecimal(functionUtil.QuickBytesToStr(value))
-			return result, false, truncated
+			result, truncated, conversionTruncated := secToTimeFromExactDecimal(functionUtil.QuickBytesToStr(value))
+			return result, false, truncated, conversionTruncated
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetStrValue(i)
+			return fmt.Sprintf("%-.128s", value)
 		}
 	default:
 		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", ivecs[0].GetType().Oid)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		value, null, truncated := getTimeValue(i)
+		value, null, truncated, conversionTruncated := getTimeValue(i)
 		if !null {
 			value = value.TruncateToScale(rs.GetType().Scale)
 			value = types.ClampMySQLTimeFunctionForScale(value, rs.GetType().Scale)
@@ -8973,10 +9000,17 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err := rs.Append(value, null); err != nil {
 			return err
 		}
-		if truncated && proc != nil {
+		if (truncated || conversionTruncated) && proc != nil {
 			if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
-				appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
-					fmt.Sprintf("Truncated incorrect time value: '%s'", ivecs[0].RowToString(int(i))))
+				renderedValue := renderWarningValue(i)
+				if conversionTruncated {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect DECIMAL value: '%s'", renderedValue))
+				}
+				if truncated {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect time value: '%s'", renderedValue))
+				}
 			}
 		}
 	}

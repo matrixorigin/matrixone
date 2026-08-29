@@ -10230,6 +10230,33 @@ func TestSecToTimeOutOfRangeWarning(t *testing.T) {
 	}
 }
 
+func TestSecToTimeVarcharConversionWarningsAreBounded(t *testing.T) {
+	longInvalid := strings.Repeat("x", 65535)
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"foo", "1foo", "1e+", "1e-999999999", "3020400x", longInvalid}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{0, types.MicroSecsPerSec, types.MicroSecsPerSec, 0, types.MySQLTimeFunctionMaxForScale(0), 0}, nil),
+		SecToTime)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// Each invalid conversion remains visible. A value that is both partially
+	// converted and outside TIME's range retains both diagnostics.
+	require.Len(t, session.warnings, 7)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.LessOrEqual(t, len(warning.msg), len("Truncated incorrect DECIMAL value: ''")+128)
+	}
+	require.Contains(t, session.warnings[0].msg, "DECIMAL")
+	require.Contains(t, session.warnings[4].msg, "DECIMAL")
+	require.Contains(t, session.warnings[5].msg, "time")
+	require.Len(t, session.warnings[6].msg, len("Truncated incorrect DECIMAL value: ''")+128)
+}
+
 func TestMakeTimeFractionAndSign(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)
