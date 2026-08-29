@@ -97,14 +97,17 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 					require.NoError(t, prepareErr)
 					defer stmt.Close()
 
-					rows, queryErr := stmt.QueryContext(ctx, "9007199254740993")
-					assertIDs(t, rows, queryErr, 2)
-					rows, queryErr = stmt.QueryContext(ctx, uint64(9007199254740993))
-					assertIDs(t, rows, queryErr, 2)
-					rows, queryErr = stmt.QueryContext(ctx, nil)
-					assertIDs(t, rows, queryErr)
-					rows, queryErr = stmt.QueryContext(ctx, "9007199254740993")
-					assertIDs(t, rows, queryErr, 2)
+					queryAndAssert := func(value any, want ...int) {
+						rows, queryErr := stmt.QueryContext(ctx, value)
+						require.NoError(t, queryErr)
+						defer rows.Close()
+						assertIDs(t, rows, nil, want...)
+						require.NoError(t, rows.Err())
+					}
+					queryAndAssert("9007199254740993", 2)
+					queryAndAssert(uint64(9007199254740993), 2)
+					queryAndAssert(nil)
+					queryAndAssert("9007199254740993", 2)
 				})
 			}
 		})
@@ -118,19 +121,21 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				defer func() {
 					_, _ = conn.ExecContext(context.Background(), "deallocate prepare "+statementName)
 				}()
+				querySQLAndAssert := func(want ...int) {
+					rows, queryErr := conn.QueryContext(ctx,
+						"execute "+statementName+" using @issue27492_value")
+					require.NoError(t, queryErr)
+					defer rows.Close()
+					assertIDs(t, rows, nil, want...)
+					require.NoError(t, rows.Err())
+				}
 
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
-				rows, queryErr := conn.QueryContext(ctx,
-					"execute "+statementName+" using @issue27492_value")
-				assertIDs(t, rows, queryErr, 2)
+				querySQLAndAssert(2)
 				mustExec(t, ctx, conn, "set @issue27492_value = null")
-				rows, queryErr = conn.QueryContext(ctx,
-					"execute "+statementName+" using @issue27492_value")
-				assertIDs(t, rows, queryErr)
+				querySQLAndAssert()
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
-				rows, queryErr = conn.QueryContext(ctx,
-					"execute "+statementName+" using @issue27492_value")
-				assertIDs(t, rows, queryErr, 2)
+				querySQLAndAssert(2)
 			}
 		})
 

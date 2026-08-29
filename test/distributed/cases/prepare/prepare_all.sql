@@ -650,6 +650,17 @@ set @issue25408_runtime_value = 3.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
 deallocate prepare issue25408_runtime_divide;
 
+set @issue25408_runtime_value = 9007199254740993.5;
+prepare issue25408_nested_add from 'select (? / 2) + 1 as result';
+execute issue25408_nested_add using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_add;
+prepare issue25408_nested_abs from 'select abs(? / 2) as result';
+execute issue25408_nested_abs using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_abs;
+prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
+execute issue25408_nested_multiply using @issue25408_runtime_value;
+deallocate prepare issue25408_nested_multiply;
+
 -- @case
 -- @desc:Prepared exact integer comparisons do not pass BIGINT/BIT text through DOUBLE
 -- @label:bvt

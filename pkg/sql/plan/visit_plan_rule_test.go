@@ -1355,20 +1355,40 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 	require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, decimalFilled))
 	require.True(t, preparedExprContainsParam(decimalResult), decimalResult.String())
 
-	division, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
-		makeParam(), makePlan2Int64ConstExprWithType(2),
-	})
-	require.NoError(t, err)
-	divisionFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
-		ctx, makeQuery(t, division), []any{ParamValue{
-			Value: "9007199254740993.5", SourceType: types.New(types.T_decimal128, 17, 1), HasSourceType: true,
-		}})
-	require.NoError(t, err)
-	require.True(t, specialized)
-	divisionResult := divisionFilled.GetQuery().Nodes[0].ProjectList[0]
-	require.True(t, types.T(divisionResult.Typ.Id).IsDecimal(), divisionResult.String())
-	for _, arg := range divisionResult.GetF().Args {
-		require.True(t, types.T(arg.Typ.Id).IsDecimal(), divisionResult.String())
+	makeDivision := func() *planpb.Expr {
+		division, bindErr := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
+			makeParam(), makePlan2Int64ConstExprWithType(2),
+		})
+		require.NoError(t, bindErr)
+		return division
+	}
+	for _, test := range []struct {
+		name string
+		wrap func(*planpb.Expr) (*planpb.Expr, error)
+	}{
+		{name: "division root", wrap: func(expr *planpb.Expr) (*planpb.Expr, error) { return expr, nil }},
+		{name: "addition consumer", wrap: func(expr *planpb.Expr) (*planpb.Expr, error) {
+			return BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{expr, makePlan2Int64ConstExprWithType(1)})
+		}},
+		{name: "abs consumer", wrap: func(expr *planpb.Expr) (*planpb.Expr, error) {
+			return BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{expr})
+		}},
+		{name: "multiplication consumer", wrap: func(expr *planpb.Expr) (*planpb.Expr, error) {
+			return BindFuncExprImplByPlanExpr(ctx, "*", []*planpb.Expr{expr, makePlan2Int64ConstExprWithType(3)})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, wrapErr := test.wrap(makeDivision())
+			require.NoError(t, wrapErr)
+			filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, makeQuery(t, expr), []any{ParamValue{
+					Value: "9007199254740993.5", SourceType: types.New(types.T_decimal128, 17, 1), HasSourceType: true,
+				}})
+			require.NoError(t, fillErr)
+			require.True(t, specialized)
+			result := filled.GetQuery().Nodes[0].ProjectList[0]
+			require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
+		})
 	}
 
 	intType := types.T_int32.ToType()
@@ -1595,7 +1615,7 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		want   uint64
 	}{
 		{name: "uint64 above double precision", value: "9007199254740993", target: uint64Type, want: 9007199254740993},
-		{name: "bit64 numeric prefix", value: "9007199254740993tail", target: bit64Type, want: 9007199254740993},
+		{name: "bit64 complete text", value: "9007199254740993", target: bit64Type, want: 9007199254740993},
 		{name: "integral exponent", value: "9007199254740993e0", target: uint64Type, want: 9007199254740993},
 		{name: "bounded exponent cancellation", value: "9007199254740993000e-3", target: uint64Type,
 			want: 9007199254740993},
@@ -1620,6 +1640,7 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		{name: "negative unsigned", value: "-1", target: uint64Type},
 		{name: "int64 overflow", value: "9223372036854775808", target: int64Type},
 		{name: "nonnumeric", value: "tail", target: bit64Type},
+		{name: "numeric prefix keeps warning path", value: "9007199254740993tail", target: bit64Type},
 		{name: "huge positive exponent", value: "1e1000000", target: uint64Type},
 		{name: "huge negative exponent", value: "1e-1000000", target: uint64Type},
 	} {

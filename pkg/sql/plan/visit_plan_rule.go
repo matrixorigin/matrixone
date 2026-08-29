@@ -465,7 +465,12 @@ type ResetParamRefRule struct {
 	// was selected from an execute-time numeric-prefix parameter. The dependency
 	// propagates through binder-inserted casts so enclosing consumers can remove
 	// provisional prepare-time coercions and bind against the runtime domain.
-	numericPrefixDependent      map[*plan.Expr]bool
+	numericPrefixDependent map[*plan.Expr]bool
+	// sqlExecuteNumericDependent tracks expressions whose numeric result domain
+	// was selected from a SQL EXECUTE user variable's source type. Unlike a
+	// direct marker, a dependent child must propagate through enclosing numeric
+	// consumers so their provisional prepare-time envelopes are rebound too.
+	sqlExecuteNumericDependent  map[*plan.Expr]bool
 	serializedDecimalParamTypes map[*plan.Expr]types.Type
 	// preparedPlan is used only to synchronize a flattened scalar-subquery
 	// ColRef with the rebound type of its inner projection.  The explicit
@@ -1612,6 +1617,21 @@ func (rule *ResetParamRefRule) isNumericPrefixDependent(expr *plan.Expr) bool {
 	return expr != nil && rule.numericPrefixDependent[expr]
 }
 
+func (rule *ResetParamRefRule) markSQLExecuteNumericDependent(exprs ...*plan.Expr) {
+	if rule.sqlExecuteNumericDependent == nil {
+		rule.sqlExecuteNumericDependent = make(map[*plan.Expr]bool)
+	}
+	for _, expr := range exprs {
+		if expr != nil {
+			rule.sqlExecuteNumericDependent[expr] = true
+		}
+	}
+}
+
+func (rule *ResetParamRefRule) isSQLExecuteNumericDependent(expr *plan.Expr) bool {
+	return expr != nil && rule.sqlExecuteNumericDependent[expr]
+}
+
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
@@ -1657,6 +1677,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		compareArgTypes := false
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
+		sqlExecuteNumericNestedDependent := false
 		numericComparisonFallback := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
 		functionName = strings.ToLower(functionName)
@@ -1764,6 +1785,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					compareArgTypes = true
 				}
 			}
+			if rule.isSQLExecuteNumericDependent(rewrittenArg) &&
+				((functionName == "cast" && !isExplicitPreparedCast(e)) ||
+					preparedFunctionArgUsesSQLExecuteNumericSource(e, functionName, i, len(exprImpl.F.Args))) {
+				sqlExecuteNumericSourceDependent = true
+				sqlExecuteNumericNestedDependent = true
+				sqlExecuteNumericSourceArgs[i] = true
+			}
 			if preparedExprBindingChanged(originalArgTyp, originalArgFuncObj, rewrittenArg) {
 				// A nested typed function may have changed overload/result domain
 				// after its parameter was rebound.  The enclosing function was
@@ -1853,7 +1881,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rule.specialized = true
 			return explicit, nil
 		}
-		sqlExecuteNumericPeerDependent := sqlExecuteNumericSourceDependent && functionName == "/"
+		sqlExecuteNumericPeerDependent := sqlExecuteNumericNestedDependent ||
+			(sqlExecuteNumericSourceDependent && functionName == "/")
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
 			for i, arg := range boundArgs {
 				// A nested runtime common-type result invalidates provisional
@@ -1877,6 +1906,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					boundArgs[i] = unwrapped
 					needResetFunction = true
 					compareArgTypes = true
+				} else if sqlExecuteNumericNestedDependent && !sqlExecuteNumericSourceArgs[i] {
+					// SQL binding represents an integer literal beside a provisional
+					// DOUBLE child as Dval without source provenance. Once the child
+					// rebinds to DECIMAL, recover that exact literal in the same domain.
+					decimal, decimalOK, decimalErr := provisionalDecimalFloatLiteral(rule.ctx, candidate)
+					if decimalErr != nil {
+						return nil, decimalErr
+					}
+					if decimalOK {
+						boundArgs[i] = decimal
+						needResetFunction = true
+						compareArgTypes = true
+					}
 				}
 			}
 		}
@@ -1974,10 +2016,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if numericPrefixDependent && !isExplicitPreparedCast(e) {
 				rule.markNumericPrefixDependent(e, rewritten)
 			}
+			if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
+				rule.markSQLExecuteNumericDependent(e, rewritten)
+			}
 			return rewritten, nil
 		}
 		if numericPrefixDependent && !isExplicitPreparedCast(e) {
 			rule.markNumericPrefixDependent(e)
+		}
+		if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
+			rule.markSQLExecuteNumericDependent(e)
 		}
 		return e, nil
 	case *plan.Expr_W:
@@ -2062,22 +2110,18 @@ func preparedComparisonExactIntegerExpr(
 	if !ok {
 		return nil, false, nil
 	}
+	if strings.Trim(value, " \t\n\v\f\r") != prefix {
+		// A numeric prefix with trailing non-space text must retain the engine's
+		// ordinary DOUBLE conversion so it emits the existing truncation warning.
+		return nil, false, nil
+	}
 	integerText, ok := preparedBoundedExactIntegerPrefix(prefix)
 	if !ok {
 		return nil, false, nil
 	}
 	targetType := makeTypeByPlan2Type(target)
 	bits := 0
-	signed := false
 	switch targetType.Oid {
-	case types.T_int8:
-		bits, signed = 8, true
-	case types.T_int16:
-		bits, signed = 16, true
-	case types.T_int32:
-		bits, signed = 32, true
-	case types.T_int64:
-		bits, signed = 64, true
 	case types.T_uint8:
 		bits = 8
 	case types.T_uint16:
@@ -2094,17 +2138,11 @@ func preparedComparisonExactIntegerExpr(
 	default:
 		return nil, false, nil
 	}
-	if signed {
-		if _, err := strconv.ParseInt(integerText, 10, bits); err != nil {
-			return nil, false, nil
-		}
-	} else {
-		if strings.HasPrefix(integerText, "-") {
-			return nil, false, nil
-		}
-		if _, err := strconv.ParseUint(integerText, 10, bits); err != nil {
-			return nil, false, nil
-		}
+	if strings.HasPrefix(integerText, "-") {
+		return nil, false, nil
+	}
+	if _, err := strconv.ParseUint(integerText, 10, bits); err != nil {
+		return nil, false, nil
 	}
 	expr, err := preparedRuntimeParamExpr(ctx, integerText, false, targetType)
 	return expr, err == nil, err
