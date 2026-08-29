@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,24 +29,43 @@ import (
 )
 
 const (
-	dataBranchLineageGCTimeout         = 4 * time.Minute
-	dataBranchLineageGCLockWaitTimeout = time.Second
+	// Bound the complete transaction because it owns the foreground lifecycle
+	// gate from its first statement through commit or rollback. This is also the
+	// maximum time a restore arriving just after GC admission can wait on GC.
+	dataBranchLineageGCCriticalSectionTimeout = 5 * time.Second
+	dataBranchLineageGCLockWaitTimeout        = time.Second
+)
+
+var errDataBranchLineageGCCriticalSectionTimeout = errors.New(
+	"data branch lineage GC critical section timeout",
 )
 
 func DataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
 ) taskservice.TaskExecutor {
+	return dataBranchLineageGCExecutor(
+		sqlExecutor, dataBranchLineageGCCriticalSectionTimeout,
+	)
+}
+
+func dataBranchLineageGCExecutor(
+	sqlExecutor executor.SQLExecutor,
+	criticalSectionTimeout time.Duration,
+) taskservice.TaskExecutor {
 	return func(ctx context.Context, _ task.Task) error {
 		ctx, cancel := context.WithTimeoutCause(
-			ctx, dataBranchLineageGCTimeout, context.DeadlineExceeded,
+			ctx, criticalSectionTimeout,
+			errDataBranchLineageGCCriticalSectionTimeout,
 		)
 		defer cancel()
 		err := compactExpiredAlterDataBranchLineageWithExecutor(
 			ctx, sqlExecutor, time.Now().UTC(),
 		)
-		if isDataBranchLineageGCContention(err) {
+		if isDataBranchLineageGCContention(err) ||
+			isDataBranchLineageGCCriticalSectionTimeout(ctx, err) {
 			// Background maintenance yields to foreground owner publication and
-			// restore. ExecTxn has already rolled back the complete GC attempt.
+			// restore. ExecTxn has already rolled back the complete GC attempt;
+			// the next scheduled run will recompute it from catalog state.
 			return nil
 		}
 		return moerr.AttachCause(ctx, err)
@@ -55,6 +75,18 @@ func DataBranchLineageGCExecutor(
 func isDataBranchLineageGCContention(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout)
+}
+
+func isDataBranchLineageGCCriticalSectionTimeout(ctx context.Context, err error) bool {
+	if !errors.Is(context.Cause(ctx), errDataBranchLineageGCCriticalSectionTimeout) {
+		return false
+	}
+	// Do not hide a substantive execution failure merely because it raced with
+	// the maintenance budget. Only cancellation-shaped results caused by this
+	// executor's own deadline are a safe, retryable deferral.
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errDataBranchLineageGCCriticalSectionTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
 }
 
 func compactExpiredAlterDataBranchLineageWithExecutor(

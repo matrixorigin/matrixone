@@ -4169,6 +4169,13 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			defer func() {
 				rtnErr = finishTxn(ctx, bh, rtnErr)
 			}()
+			// Standalone DROP ACCOUNT owns this transaction and must enter the
+			// lineage-owner lifecycle before locking mo_account or deleting any
+			// snapshot/PITR/branch rows. Restore already owns the same boundary
+			// in its outer transaction and must not acquire it again here.
+			if rtnErr = lockDataBranchLineageOwnerLifecycle(ctx, bh); rtnErr != nil {
+				return rtnErr
+			}
 		}
 
 		// step 0: lock account name first

@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -11747,6 +11748,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			bh.sql2result["rollback;"] = nil
 
 			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			accountLockSQL := sql
 			bh.sql2result[sql] = nil
 
 			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
@@ -11785,8 +11787,11 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}, false) // inTransaction=false
 
 			convey.So(err, convey.ShouldBeNil)
-			// Verify that "begin;" was executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeTrue)
+			require.GreaterOrEqual(t, len(bh.executedSqls), 3)
+			require.Equal(t, "begin;", bh.executedSqls[0])
+			require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), bh.executedSqls[1])
+			require.Equal(t, accountLockSQL, bh.executedSqls[2])
 			requireAccountOwnedMetadataCleanup(t, bh, 1)
 		})
 
@@ -11856,9 +11861,38 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}, true) // inTransaction=true
 
 			convey.So(err, convey.ShouldBeNil)
-			// Verify that "begin;" was NOT executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
+			convey.So(
+				bh.hasExecuted(databranchutils.LineageOwnerLifecycleLockSQL()),
+				convey.ShouldBeFalse,
+			)
 			requireAccountOwnedMetadataCleanup(t, bh, 1)
+		})
+
+		convey.Convey("standalone lifecycle admission failure rolls back before account lock", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+			wantErr := errors.New("lifecycle gate failed")
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["rollback;"] = nil
+			bh.sql2err[gateSQL] = wantErr
+
+			stmt := &tree.DropAccount{Name: boxExprStr("test_acc")}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+			ses.rm = newTestRoutineManager(t, ctx)
+
+			err := doDropAccount(ctx, bh, ses, &dropAccount{Name: "test_acc"}, false)
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{"begin;", gateSQL, "rollback;"}, bh.executedSqls)
 		})
 	})
 }

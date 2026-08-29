@@ -120,6 +120,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	// DROP DATABASE changes PITR ownership and can reclaim branch metadata
+	// through its nested table drops. Enter the shared lifecycle before any
+	// account, database, or relation lookup/lock.
+	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -3689,6 +3695,13 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 	}
+	if !isTemp {
+		// A plain DROP TABLE updates PITR state and may reclaim branch-owner
+		// rows. The gate must precede mo_database/mo_tables locks.
+		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+			return err
+		}
+	}
 
 	if !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -5634,6 +5647,9 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 
 	dropPitr := s.Plan.GetDdl().GetDropPitr()
 	pitrName := dropPitr.GetName()

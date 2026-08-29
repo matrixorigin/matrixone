@@ -482,6 +482,24 @@ func handleDataBranch(
 	}
 }
 
+func getDataBranchMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	bh, deferred, err := getBackExecutor(ctx, ses, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		// The lifecycle boundary is transaction admission for every data-branch
+		// create/delete path. A failure must end the owned transaction here so no
+		// target-account, table, metadata, snapshot, or PITR lock can follow it.
+		return nil, nil, deferred(err)
+	}
+	return bh, deferred, nil
+}
+
 func dataBranchCreateTable(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -494,7 +512,7 @@ func dataBranchCreateTable(
 		cloneStmt *tree.CloneTable
 	)
 
-	if bh, deferred, err = getBackExecutor(
+	if bh, deferred, err = getDataBranchMutationExecutor(
 		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {
 		return
@@ -505,7 +523,6 @@ func dataBranchCreateTable(
 			err = deferred(err)
 		}
 	}()
-
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
@@ -573,7 +590,7 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
-	if bh, deferred, err = getBackExecutor(
+	if bh, deferred, err = getDataBranchMutationExecutor(
 		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {
 		return
@@ -584,7 +601,6 @@ func dataBranchCreateDatabase(
 			err = deferred(err)
 		}
 	}()
-
 	execCtx.reqCtx = context.WithValue(
 		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
 	)
@@ -716,7 +732,7 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses); err != nil {
 		return
 	}
 
@@ -725,7 +741,6 @@ func dataBranchDeleteTable(
 			err = deferred(err)
 		}
 	}()
-
 	var (
 		dbName  string
 		tblName string
@@ -782,7 +797,7 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses); err != nil {
 		return
 	}
 
@@ -791,7 +806,6 @@ func dataBranchDeleteDatabase(
 			err = deferred(err)
 		}
 	}()
-
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32

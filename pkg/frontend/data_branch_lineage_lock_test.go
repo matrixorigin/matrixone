@@ -19,11 +19,15 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -90,4 +94,52 @@ func TestLockDataBranchLineageOwnerLifecycleUsesSystemAccount(t *testing.T) {
 		[]string{databranchutils.LineageOwnerLifecycleLockSQL()},
 		bh.executedSQLs,
 	)
+}
+
+func TestGetDataBranchMutationExecutorAdmitsBeforeMutation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	ses.proc.Base.TxnOperator = txnOp
+
+	bh := &backgroundExecTestWithHistory{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+
+	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses)
+	require.NoError(t, err)
+	require.Same(t, bh, returned)
+	require.NotNil(t, cleanup)
+	require.Equal(t, []string{
+		"begin",
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+	}, bh.executedSqls)
+	require.NoError(t, cleanup(nil))
+	require.Equal(t, "commit;", bh.executedSqls[len(bh.executedSqls)-1])
+}
+
+func TestGetDataBranchMutationExecutorRollsBackOnAdmissionFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	ses.proc.Base.TxnOperator = txnOp
+
+	bh := &backgroundExecTestWithHistory{}
+	bh.init()
+	wantErr := errors.New("lifecycle gate failed")
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	bh.sql2err[gateSQL] = wantErr
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+
+	returned, cleanup, err := getDataBranchMutationExecutor(context.Background(), ses)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
+	require.Equal(t, []string{"begin", gateSQL, "rollback;"}, bh.executedSqls)
 }

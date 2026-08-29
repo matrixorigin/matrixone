@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -2409,17 +2410,114 @@ func TestDataBranchLineageGCExecutorSetsDeadline(t *testing.T) {
 	started := time.Now()
 	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(context.Background(), nil))
 	require.False(t, spyExec.deadline.IsZero())
-	require.WithinDuration(t, started.Add(dataBranchLineageGCTimeout), spyExec.deadline, time.Second)
+	require.WithinDuration(t, started.Add(dataBranchLineageGCCriticalSectionTimeout), spyExec.deadline, time.Second)
 	require.True(t, spyExec.opts.HasLockWaitTimeout())
 	require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts.LockWaitTimeout())
 	require.NotEmpty(t, spyExec.stmtOpts)
 	require.Equal(t, lock.WaitPolicy_FastFail, spyExec.stmtOpts[0].WaitPolicy())
 
-	parentDeadline := time.Now().Add(time.Minute)
+	parentDeadline := time.Now().Add(time.Second)
 	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
 	defer cancel()
 	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(ctx, nil))
 	require.WithinDuration(t, parentDeadline, spyExec.deadline, time.Second)
+}
+
+type lineageGCBoundedExecutor struct {
+	gate        sync.Mutex
+	gateOwned   chan struct{}
+	scanStarted chan struct{}
+	ctx         context.Context
+	rolledBack  bool
+}
+
+type lineageGCBoundedTxnExecutor struct {
+	owner    *lineageGCBoundedExecutor
+	ownsGate bool
+}
+
+func (e *lineageGCBoundedTxnExecutor) Use(string) {}
+
+func (e *lineageGCBoundedTxnExecutor) LockTable(string) error { return nil }
+
+func (e *lineageGCBoundedTxnExecutor) Txn() client.TxnOperator { return nil }
+
+func (e *lineageGCBoundedTxnExecutor) Exec(
+	sql string,
+	_ executor.StatementOption,
+) (executor.Result, error) {
+	if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
+		e.owner.gate.Lock()
+		e.ownsGate = true
+		close(e.owner.gateOwned)
+		return executor.Result{}, nil
+	}
+	select {
+	case <-e.owner.scanStarted:
+	default:
+		close(e.owner.scanStarted)
+	}
+	<-e.owner.ctx.Done()
+	return executor.Result{}, context.Cause(e.owner.ctx)
+}
+
+func (e *lineageGCBoundedExecutor) Exec(
+	context.Context, string, executor.Options,
+) (executor.Result, error) {
+	return executor.Result{}, nil
+}
+
+func (e *lineageGCBoundedExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	_ executor.Options,
+) error {
+	e.ctx = ctx
+	txn := &lineageGCBoundedTxnExecutor{owner: e}
+	err := execFunc(txn)
+	if err != nil {
+		e.rolledBack = true
+	}
+	if txn.ownsGate {
+		e.gate.Unlock()
+	}
+	return err
+}
+
+func TestDataBranchLineageGCExecutorBoundsGCFirstRestoreWait(t *testing.T) {
+	spyExec := &lineageGCBoundedExecutor{
+		gateOwned:   make(chan struct{}),
+		scanStarted: make(chan struct{}),
+	}
+	const criticalSectionTimeout = 100 * time.Millisecond
+	gcDone := make(chan error, 1)
+	go func() {
+		gcDone <- dataBranchLineageGCExecutor(
+			spyExec, criticalSectionTimeout,
+		)(context.Background(), nil)
+	}()
+
+	<-spyExec.gateOwned
+	<-spyExec.scanStarted
+	restoreAdmitted := make(chan struct{})
+	go func() {
+		spyExec.gate.Lock()
+		close(restoreAdmitted)
+		spyExec.gate.Unlock()
+	}()
+	select {
+	case <-restoreAdmitted:
+		t.Fatal("restore crossed the lifecycle gate while GC still owned it")
+	default:
+	}
+
+	require.NoError(t, <-gcDone)
+	require.True(t, spyExec.rolledBack)
+	select {
+	case <-restoreAdmitted:
+	case <-time.After(time.Second):
+		t.Fatal("restore remained blocked after the bounded GC transaction rolled back")
+	}
 }
 
 func TestDataBranchLineageGCExecutorDefersAfterContentionRollback(t *testing.T) {
@@ -2463,6 +2561,57 @@ func TestDataBranchLineageGCExecutorDoesNotSuppressCancellationOrOtherErrors(t *
 				[]string{databranchutils.LineageOwnerLifecycleLockSQL()},
 				spyExec.executed,
 			)
+		})
+	}
+}
+
+func TestOwnerCatalogDropEntryPointsStopAtLifecycleAdmissionFailure(t *testing.T) {
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	wantErr := errors.New("lifecycle gate failed")
+	for _, tc := range []struct {
+		name string
+		run  func(*Scope, *Compile) error
+	}{
+		{
+			name: "drop database",
+			run: func(s *Scope, c *Compile) error {
+				s.Plan = &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+					Definition: &plan2.DataDefinition_DropDatabase{
+						DropDatabase: &plan2.DropDatabase{Database: "db"},
+					},
+				}}}
+				return s.DropDatabase(c)
+			},
+		},
+		{
+			name: "drop table",
+			run: func(s *Scope, c *Compile) error {
+				return s.dropTableSingle(c, &plan2.DropTable{
+					Database: "db",
+					Table:    "tbl",
+					TableDef: &plan2.TableDef{},
+				})
+			},
+		},
+		{
+			name: "drop pitr",
+			run: func(s *Scope, c *Compile) error {
+				s.Plan = &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+					Definition: &plan2.DataDefinition_DropPitr{
+						DropPitr: &plan2.DropPitr{Name: "pitr"},
+					},
+				}}}
+				return s.DropPitr(c)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{errs: map[string]error{gateSQL: wantErr}}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			err := tc.run(&Scope{}, c)
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{gateSQL}, spyExec.executedSQLs)
 		})
 	}
 }
