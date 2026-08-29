@@ -276,8 +276,8 @@ White-box tests must establish:
   timestamps;
 - authentication preserves a later existing session minimum and fails closed
   on every missing/error capability;
-- protocol 38 uses the correct legacy fallback and protocol 39 uses the new
-  primitive.
+- protocol v38 and below use the correct legacy fallback, while protocol v39
+  uses the new primitive.
 
 Black-box validation must cover at least two CNs and both mutation directions:
 

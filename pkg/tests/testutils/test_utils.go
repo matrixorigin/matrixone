@@ -390,6 +390,20 @@ func DBExistsWithAccount(
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseDBExists)
 	defer cancel()
 
+	exists, err := DBExistsWithAccountE(ctx, account, name, cn)
+	require.NoError(t, err)
+	return exists
+}
+
+// DBExistsWithAccountE is the non-asserting form of DBExistsWithAccount. It is
+// safe to use from bounded polling code that must preserve query errors instead
+// of calling testing.T from a polling goroutine.
+func DBExistsWithAccountE(
+	ctx context.Context,
+	account int32,
+	name string,
+	cn embed.ServiceOperator,
+) (bool, error) {
 	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
@@ -398,9 +412,11 @@ func DBExistsWithAccount(
 		"show databases",
 		executor.Options{}.WithAccountID(uint32(account)),
 	)
-	require.NoError(t, moerr.AttachCause(ctx, err))
-
-	return HasName(name, res)
+	if err != nil {
+		res.Close()
+		return false, moerr.AttachCause(ctx, err)
+	}
+	return HasName(name, res), nil
 }
 
 func TableExists(
@@ -428,6 +444,20 @@ func TableExistsWithAccount(
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseTableExists)
 	defer cancel()
 
+	exists, err := TableExistsWithAccountE(ctx, account, db, name, cn)
+	require.NoError(t, err)
+	return exists
+}
+
+// TableExistsWithAccountE is the non-asserting form of
+// TableExistsWithAccount. The caller owns the query deadline and error policy.
+func TableExistsWithAccountE(
+	ctx context.Context,
+	account int32,
+	db string,
+	name string,
+	cn embed.ServiceOperator,
+) (bool, error) {
 	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
@@ -436,9 +466,11 @@ func TableExistsWithAccount(
 		"show tables",
 		executor.Options{}.WithDatabase(db).WithAccountID(uint32(account)),
 	)
-	require.NoError(t, moerr.AttachCause(ctx, err))
-
-	return HasName(name, res)
+	if err != nil {
+		res.Close()
+		return false, moerr.AttachCause(ctx, err)
+	}
+	return HasName(name, res), nil
 }
 
 func WaitClusterAppliedTo(
