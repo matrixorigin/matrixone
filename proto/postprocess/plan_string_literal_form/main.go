@@ -24,15 +24,20 @@ func main() {
 	if len(os.Args) != 2 {
 		panic("usage: plan_string_literal_form <plan.pb.go>")
 	}
-	path := os.Args[1]
+	if err := patch(os.Args[1]); err != nil {
+		panic(err)
+	}
+}
+
+func patch(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	start := bytes.Index(data, []byte("func (m *Expr) Unmarshal(dAtA []byte) error {"))
 	next := bytes.Index(data, []byte("func (m *FoldVal) Unmarshal(dAtA []byte) error {"))
 	if start < 0 || next <= start {
-		panic("generated Expr.Unmarshal boundary not found")
+		return fmt.Errorf("generated Expr.Unmarshal boundary not found")
 	}
 	body := data[start:next]
 	old := []byte("\treturn nil\n}\n")
@@ -40,7 +45,7 @@ func main() {
 	if !bytes.Contains(body, replacement) {
 		position := bytes.LastIndex(body, old)
 		if position < 0 {
-			panic("generated Expr.Unmarshal return not found")
+			return fmt.Errorf("generated Expr.Unmarshal return not found")
 		}
 		absolute := start + position
 		patched := make([]byte, 0, len(data)-len(old)+len(replacement))
@@ -48,7 +53,7 @@ func main() {
 		patched = append(patched, replacement...)
 		patched = append(patched, data[absolute+len(old):]...)
 		if err := os.WriteFile(path, patched, 0o644); err != nil {
-			panic(fmt.Errorf("write generated plan: %w", err))
+			return fmt.Errorf("write generated plan: %w", err)
 		}
 		data = patched
 	}
@@ -59,17 +64,18 @@ func main() {
 	generatedName := []byte(`proto.RegisterFile("proto/plan.proto", fileDescriptor_`)
 	legacyName := []byte(`proto.RegisterFile("plan.proto", fileDescriptor_`)
 	if bytes.Contains(data, legacyName) {
-		return
+		return nil
 	}
 	position := bytes.Index(data, generatedName)
 	if position < 0 {
-		panic("generated plan descriptor registration not found")
+		return fmt.Errorf("generated plan descriptor registration not found")
 	}
 	patched := make([]byte, 0, len(data)-len(generatedName)+len(legacyName))
 	patched = append(patched, data[:position]...)
 	patched = append(patched, legacyName...)
 	patched = append(patched, data[position+len(generatedName):]...)
 	if err := os.WriteFile(path, patched, 0o644); err != nil {
-		panic(fmt.Errorf("write generated plan descriptor registration: %w", err))
+		return fmt.Errorf("write generated plan descriptor registration: %w", err)
 	}
+	return nil
 }
