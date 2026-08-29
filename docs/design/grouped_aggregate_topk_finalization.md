@@ -1,9 +1,9 @@
 # Grouped-aggregate finalization into bounded TopK
 
-- Status: mandatory design review pending (cross-operator lifecycle and hot path)
+- Status: in progress (design review passed; implementation must remain aligned)
 - Tracking issue: [matrixorigin/matrixone#27730](https://github.com/matrixorigin/matrixone/issues/27730)
 - Parent performance issue: [matrixorigin/matrixone#27685](https://github.com/matrixorigin/matrixone/issues/27685)
-- Implementation PR: pending design approval
+- Design and implementation PR: [matrixorigin/matrixone#27850](https://github.com/matrixorigin/matrixone/pull/27850)
 - Last updated: 2026-08-30
 
 ## 1. Decision summary
@@ -184,7 +184,7 @@ execution error.
 | Complete groups | Child is `Group` with `NeedEval=true` or `MergeGroup`. Partial `Group(NeedEval=false)` is rejected. |
 | Grouped shape | At least one active grouping key exists. Scalar H0 aggregation is rejected because it has at most one row and no materialization problem. |
 | Grouping sets | Any inactive `GroupingFlag` rejects fusion. |
-| Aggregate capability | Every aggregate is non-DISTINCT and its concrete executor advertises exact chunk finalization. Initial coverage is COUNT, SUM, MIN, and MAX for their supported input types. A mixed aggregate list is all-or-nothing. |
+| Aggregate capability | Every aggregate is non-DISTINCT and its concrete executor advertises exact chunk finalization. Initial coverage is COUNT, SUM, MIN, and MAX for their supported input types. A mixed aggregate list is all-or-nothing. A zero-aggregate grouped DISTINCT shape is eligible because it has no aggregate result vector to finalize. |
 | Ordered/configured state | Ordered aggregates and aggregate configurations without the chunk contract reject fusion. |
 | HAVING/filter | A physical Filter between final group and Top prevents the direct handshake. No filter is crossed. |
 | Projection | An embedded Group projection is allowed only when every expression is non-volatile and non-real-time. It is evaluated exactly once per finalized chunk before admission. |
@@ -198,8 +198,18 @@ execution error.
 The aggregate-executor capability must be queried from the constructed executor,
 not inferred from a function name alone. This prevents a newly added type-
 specific implementation from accidentally inheriting unsupported activation.
-`AggFuncExecExpression` may provide an early rejection for DISTINCT/configured
-families, but the prepare-time concrete capability check is authoritative.
+`AggFuncExecExpression` provides only an early rejection for
+DISTINCT/configured/unsupported families.
+
+`Group` constructs its aggregate executors during Prepare and can complete the
+concrete check before attachment. `MergeGroup` cannot: its concrete executors
+depend on metadata decoded from the first partial batch. Its initial handshake
+is therefore provisional. Immediately before the first finalization chunk, it
+checks every constructed executor. If any capability is absent, and before any
+chunk or Top candidate has been consumed, it disables the provisional path and
+returns batches through the unchanged pull path. Late fallback after one fused
+admission is forbidden. This two-stage rule makes capability drift a safe
+fallback instead of an execution error.
 
 ## 7. Interfaces and data flow
 
@@ -255,9 +265,11 @@ type FinalizedBatchSource interface {
 The concrete token is generation-specific and comparable. A detach for a stale
 token is a no-op and cannot detach a newer execution generation.
 
-`Top.Prepare` runs after its child has prepared. It evaluates the runtime limit,
-checks its own ordering/limit requirements, asks the direct child to attach, and
-stores the returned token. No compile-time pointer is serialized or copied.
+`Top.Prepare` runs after its child has prepared. It first completes every
+fallible Top initialization step, evaluates the runtime limit, and checks its
+own ordering/limit requirements. Attachment is the last Prepare step: Top asks
+the direct child to attach and stores the returned token, after which Prepare
+cannot fail. No compile-time pointer is serialized or copied.
 This ordering has four benefits:
 
 - prepared executions re-evaluate dynamic limits per generation;
@@ -428,6 +440,7 @@ eligible physical source/Top edge and is removed every generation.
 | Failure point | Required behavior |
 | --- | --- |
 | capability/eligibility missing | no attachment; execute unchanged pull path |
+| provisional MergeGroup concrete capability missing | before the first admission, disable fusion and return the ordinary first batch to Top; no late fallback is permitted |
 | chunk finalizer allocation/capacity error | clean any provisional output, return typed error, leave remaining chunks for Reset/Free |
 | chunk finalizer cancellation | stop before next chunk, clean current provisional output, preserve caller cancellation |
 | projection error | clean finalized source batch; Top has no ownership from that chunk |
@@ -525,7 +538,8 @@ oracles.
 | legal ties | Use all-equal and boundary-tie data; compare result cardinality and allowed multiset/boundary rather than incidental row identity unless a tie-breaker is specified. |
 | K/offset | 0, 1, 10, 16,384, 16,385 fallback, checked non-zero offset TopN, and prepared execution whose runtime limit crosses the activation cap. |
 | projection | direct aggregate, deterministic arithmetic projection, multiple aggregate outputs, and volatile/real-time projection fallback. Assert one evaluation per finalized row with an injected deterministic counting executor where available. |
-| shape fallback | partial Group, Filter/HAVING boundary, explicit Projection operator, grouping sets, DISTINCT, ordered/configured/unsupported aggregate, scalar aggregate, and non-direct consumer. Assert unchanged tree behavior and result. |
+| shape fallback | partial Group, Filter/HAVING boundary, explicit Projection operator, grouping sets, DISTINCT, ordered/configured/unsupported aggregate, scalar aggregate, and non-direct consumer. Cover provisional MergeGroup concrete rejection before first admission. Assert unchanged tree behavior and result. |
+| zero aggregates | Grouped DISTINCT with only grouping keys uses the same chunk ownership path without aggregate finalizers and remains equivalent to unfused execution. |
 | ownership | Clean each source chunk immediately after synchronous consumption, then evaluate Top output to prove winners own fixed and variable payloads. Allocation ledger must return to terminal zero. |
 | unhappy paths | Inject failure/cancel at first/middle/last chunk, second aggregate column, projection, and Top comparison/copy. Keep the existing unfused Top-spill error tests as the large-limit fallback control. Assert one cleanup, no retained vector, and typed error/cancel. |
 | lifecycle | success/error/cancel followed by Reset, second Prepare, and reuse with different K/input. Assert fresh token, cursor, expressions, heap, and no prior winner. |
