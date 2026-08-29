@@ -73,7 +73,8 @@ const (
 	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
 	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
 	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
-	MORPCLatestVersion       = MORPCVersion37
+	MORPCVersion38     int64 = 38 // session temporary-table connection migration
+	MORPCLatestVersion       = MORPCVersion38
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

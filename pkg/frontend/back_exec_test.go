@@ -53,6 +53,13 @@ func TestBindBackExecSession(t *testing.T) {
 	realName, ok := clientSession.GetTempTable("db1", "tmp1")
 	require.True(t, ok)
 	require.Equal(t, "real_tmp1", realName)
+	cleaner, ok := proc.GetSession().(interface {
+		RemoveTempTablesByDatabase(string)
+	})
+	require.True(t, ok)
+	cleaner.RemoveTempTablesByDatabase("db1")
+	_, ok = clientSession.GetTempTable("db1", "tmp1")
+	require.False(t, ok)
 }
 
 func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
