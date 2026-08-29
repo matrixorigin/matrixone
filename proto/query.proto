@@ -555,6 +555,12 @@ message PrepareStmt {
   bytes ParamTypes = 3;
 }
 
+message MigrateTempTable {
+  string Database = 1;
+  string Alias = 2;
+  string PhysicalName = 3;
+}
+
 enum MigrateConnFromAction {
   // Default: export session state for connection migration.
   MigrateConnFromExport = 0;
@@ -568,6 +574,9 @@ message MigrateConnFromRequest {
   uint32 ConnID = 1;
   MigrateConnFromAction Action = 2;
   reserved 3;
+  // True when Proxy understands MigrateTempTable snapshots. A current CN must
+  // reject migration of a session with temporary tables when this is false.
+  bool TempTableMigrationSupported = 4;
 }
 
 message MigrateConnFromResponse {
@@ -596,6 +605,10 @@ message MigrateConnFromResponse {
   // COM_STMT_SEND_LONG_DATA buffers omitted from the migration payload.
   bool PreparedStmtLongDataChecked = 14;
   uint64 FoundRows = 15;
+  repeated MigrateTempTable TempTables = 16;
+  // Distinguishes an empty snapshot from an older CN that cannot report
+  // temporary-table state.
+  bool TempTableStateExported = 17;
 }
 
 message MigrateConnToRequest {
@@ -615,6 +628,7 @@ message MigrateConnToRequest {
   bool UserDefinedVarsReplayable = 11;
   bool SystemVariablesReplayable = 12;
   uint64 FoundRows = 13;
+  repeated MigrateTempTable TempTables = 14;
 }
 
 message MigrateUserDefinedVar {

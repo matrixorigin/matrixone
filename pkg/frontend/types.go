@@ -351,6 +351,16 @@ type PrepareStmt struct {
 	hasLagLeadParams              bool
 	paramKinds                    []vector.PrepareParamKind
 	paramMetadata                 []bool
+	// jsonComparisonParamPositions is computed once per prepared-plan
+	// generation. Only these parameters need an exact SQL type in Process
+	// metadata; paramConcreteTypes is a reusable execution buffer.
+	jsonComparisonParamPositions []int32
+	paramConcreteTypes           []types.T
+	// numericOverloadParamPositions is computed from explicit plan metadata
+	// once per prepared-plan generation.  It identifies ABS arguments whose
+	// runtime integer/decimal domain may require overload rebinding without
+	// rescanning the full plan for every EXECUTE.
+	numericOverloadParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -2058,4 +2068,10 @@ type ServerLevelVariables struct {
 	Aicm            atomic.Value
 	moServerStarted atomic.Bool
 	sessionAlloc    atomic.Value
+
+	optimizerStatsMu       sync.RWMutex
+	optimizerStatsClock    uint64
+	optimizerStatsReset    uint64
+	optimizerStatsVersions map[optimizerStatsTableKey]uint64
+	optimizerStatsPublish  [optimizerStatsPublisherStripes]chan struct{}
 }

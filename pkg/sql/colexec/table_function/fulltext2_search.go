@@ -334,6 +334,19 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	}
 	u.batch.CleanOnlyData()
 
+	// Optional 6th argument: the zero-relevance guard for a MATCH score threshold that
+	// was only known at EXECUTE (a prepared '?'). See checkFulltextZeroRelevanceGuard.
+	//
+	// This runs before EVERY path that can return, including the NULL-pattern bail
+	// below. The guard restates a plan-time refusal that does not depend on the
+	// pattern: for a literal threshold the planner rejects the rewrite outright, so a
+	// prepared threshold must raise the same error whatever the search term binds to.
+	// Evaluating it after the bail let `AGAINST(NULL) > ?` with an unsafe `?` return
+	// an empty result where the identical literal is refused.
+	if err := checkFulltextZeroRelevanceGuard(proc, tf.ctr.argVecs, 5, 0); err != nil {
+		return err
+	}
+
 	patVec := tf.ctr.argVecs[1]
 	if patVec.IsNull(uint64(nthRow)) {
 		return nil

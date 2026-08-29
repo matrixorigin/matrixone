@@ -544,6 +544,168 @@ func TestRewriteForeignKeyReferencesForAlterCopy(t *testing.T) {
 	require.ErrorContains(t, err, "nil foreign key definition")
 }
 
+func TestRemapAlterCopyForeignKeyState(t *testing.T) {
+	source := []*plan2.ForeignKeyDef{
+		{Name: "fk_parent", Cols: []uint64{1}, ForeignTbl: 20, ForeignCols: []uint64{7}},
+		{Name: "fk_self", Cols: []uint64{2}, ForeignTbl: 0, ForeignCols: []uint64{1}},
+		{Name: "fk_legacy_self", Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{2}},
+	}
+	remapped, refChildTbls, err := remapAlterCopyForeignKeyState(
+		context.Background(),
+		source,
+		[]uint64{30, 10, 0, 30},
+		map[uint64]*plan2.ColDef{1: {ColId: 101}, 2: {ColId: 102}},
+		10,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{101}, remapped[0].Cols)
+	require.Equal(t, uint64(20), remapped[0].ForeignTbl)
+	require.Equal(t, []uint64{7}, remapped[0].ForeignCols)
+	require.Equal(t, []uint64{102}, remapped[1].Cols)
+	require.Equal(t, uint64(0), remapped[1].ForeignTbl)
+	require.Equal(t, []uint64{101}, remapped[1].ForeignCols)
+	require.Equal(t, uint64(0), remapped[2].ForeignTbl)
+	require.Equal(t, []uint64{102}, remapped[2].ForeignCols)
+	require.Equal(t, []uint64{30, 0}, refChildTbls)
+
+	// The source relation constraint is still needed until the replacement is
+	// published, so remapping must not mutate it in place.
+	require.Equal(t, []uint64{1}, source[0].Cols)
+	require.Equal(t, []uint64{1}, source[1].ForeignCols)
+	require.Equal(t, uint64(10), source[2].ForeignTbl)
+
+	_, _, err = remapAlterCopyForeignKeyState(
+		context.Background(), source[:1], nil, map[uint64]*plan2.ColDef{}, 10,
+	)
+	require.ErrorContains(t, err, "was not retained")
+}
+
+func TestSnapshotAlterCopyForeignKeyState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	sourceForeignKey1 := &plan2.ForeignKeyDef{
+		Name: "fk_parent", Cols: []uint64{1}, ForeignTbl: 20, ForeignCols: []uint64{7},
+	}
+	sourceForeignKey2 := &plan2.ForeignKeyDef{
+		Name: "fk_other_parent", Cols: []uint64{2}, ForeignTbl: 21, ForeignCols: []uint64{8},
+	}
+	relation.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		&engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{sourceForeignKey1}},
+			&engine.RefChildTableDef{Tables: []uint64{30, 31}},
+			&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{sourceForeignKey2}},
+			&engine.RefChildTableDef{Tables: []uint64{31, 32}},
+		}},
+	}, nil)
+
+	foreignKeys, refChildTbls, err := snapshotAlterCopyForeignKeyState(context.Background(), relation)
+	require.NoError(t, err)
+	require.Equal(t, []*plan2.ForeignKeyDef{sourceForeignKey1, sourceForeignKey2}, foreignKeys)
+	require.Equal(t, []uint64{30, 31, 32}, refChildTbls)
+
+	foreignKeys[0].Cols[0] = 101
+	refChildTbls[0] = 130
+	require.Equal(t, []uint64{1}, sourceForeignKey1.Cols)
+}
+
+func TestRestoreAlterCopyForeignKeyStateUsesExactLiveSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.IndexDef{},
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{{
+			Name: "stale_fk", ForeignTbl: 20,
+		}}},
+		&engine.RefChildTableDef{Tables: []uint64{0, 30}},
+	}}
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(
+		_ context.Context, got engine.Relation,
+	) (*engine.ConstraintDef, error) {
+		require.Same(t, relation, got)
+		return constraintDef, nil
+	})
+	defer getConstraintDef.Reset()
+	relation.EXPECT().UpdateConstraint(gomock.Any(), constraintDef).Return(nil).Times(1)
+
+	// The live source has no foreign keys. Restoring that exact empty set must
+	// remove a stale planned FK installed by the temporary CREATE.
+	require.NoError(t, restoreAlterCopyForeignKeyState(proc.Ctx, relation, nil, nil))
+	require.Len(t, constraintDef.Cts, 3)
+	var foreignKeyDef *engine.ForeignKeyDef
+	hasIndexDef := false
+	for _, constraint := range constraintDef.Cts {
+		switch definition := constraint.(type) {
+		case *engine.ForeignKeyDef:
+			foreignKeyDef = definition
+		case *engine.IndexDef:
+			hasIndexDef = true
+		}
+	}
+	require.True(t, hasIndexDef)
+	require.NotNil(t, foreignKeyDef)
+	require.Empty(t, foreignKeyDef.Fkeys)
+
+	require.Empty(t, canonicalRefChildTableIDs(constraintDef))
+}
+
+func TestApplyAlterCopyForeignKeyStateCanonicalizesLegacySelfReference(t *testing.T) {
+	for _, reverseMarker := range []uint64{0, 10} {
+		t.Run(fmt.Sprintf("reverse marker %d", reverseMarker), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			replacement := mock_frontend.NewMockRelation(ctrl)
+			constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+				&engine.ForeignKeyDef{},
+				&engine.RefChildTableDef{},
+			}}
+			sourceForeignKey := &plan2.ForeignKeyDef{
+				Name: "fk_self", Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{1},
+			}
+
+			getConstraintDef := gostub.Stub(&GetConstraintDef, func(
+				_ context.Context, got engine.Relation,
+			) (*engine.ConstraintDef, error) {
+				require.Same(t, replacement, got)
+				return constraintDef, nil
+			})
+			defer getConstraintDef.Reset()
+			replacement.EXPECT().UpdateConstraint(gomock.Any(), constraintDef).DoAndReturn(
+				func(_ context.Context, _ *engine.ConstraintDef) error {
+					var restored []*plan2.ForeignKeyDef
+					for _, constraint := range constraintDef.Cts {
+						if definition, ok := constraint.(*engine.ForeignKeyDef); ok {
+							restored = definition.Fkeys
+						}
+					}
+					require.Len(t, restored, 1)
+					require.Equal(t, uint64(0), restored[0].ForeignTbl)
+					require.Equal(t, []uint64{101}, restored[0].Cols)
+					require.Equal(t, []uint64{101}, restored[0].ForeignCols)
+					require.Equal(t, []uint64{0}, canonicalRefChildTableIDs(constraintDef))
+					return nil
+				},
+			)
+
+			// A self-only state must not resolve either the dropped old generation
+			// or the replacement generation as an external relation.
+			eng := mock_frontend.NewMockEngine(ctrl)
+			c := NewCompile("test", "test", "alter table self_ref add column v int", "", "", eng, proc, nil, false, nil, time.Now())
+			require.NoError(t, applyAlterCopyForeignKeyState(
+				c,
+				replacement,
+				[]*plan2.ForeignKeyDef{sourceForeignKey},
+				[]uint64{reverseMarker},
+				map[uint64]*plan2.ColDef{1: {ColId: 101}},
+				10,
+				11,
+			))
+			require.Equal(t, uint64(10), sourceForeignKey.ForeignTbl)
+		})
+	}
+}
+
 func TestReconcileRefChildTableIDForAlterCopy(t *testing.T) {
 	t.Run("replace child in existing reverse reference", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
@@ -1535,6 +1697,7 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 
 			originRel := mock_frontend.NewMockRelation(ctrl)
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+			originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
 			if tc.nilCtxBeforeInsert {
@@ -1803,6 +1966,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 
 	originRel := mock_frontend.NewMockRelation(ctrl)
 	originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+	originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()

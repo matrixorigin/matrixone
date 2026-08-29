@@ -9,7 +9,7 @@ append currently removes only the writer CN's entry, so another CN can continue
 to serve the old `(base timestamp, tail chunk)` generation until the periodic
 pull notices it.
 
-After the tail transaction commits generation `G`, every live v36 CN must install
+After the tail transaction commits generation `G`, every live v40 CN must install
 `required(identity) >= G` before acknowledging the notification.  After a CN
 claims eviction for `G`, no new MATCH load or search may publish or acquire an
 object whose durable generation is lower than `required(identity)`.  Searches
@@ -81,12 +81,12 @@ retry contract.
 
 ## Push protocol and ownership
 
-MORPC v36 adds method 40 and request/response fields 42/43.  The request carries
+MORPC v40 adds method 40 and request/response fields 42/43.  The request carries
 the four identity components and two generation components.  A receiver first
 installs the monotonic requirement, then claims eviction.  It responds with its
 current required generation and `EvictionClaimed`.  The sender records ACK only
 when the returned generation is not lower than the request and the claim flag is
-true.  Unsupported v35 receivers and unknown methods are failures, never ACKs.
+true.  Unsupported v39 receivers and unknown methods are failures, never ACKs.
 
 Each CN service owns one publisher and injects it into the ISCP executor
 factory.  The publisher has a 1024-identity coalescing queue, four broadcast
@@ -116,10 +116,10 @@ transaction-local invalidation and are repaired remotely by pull; adding a
 cross-transaction DDL notification is outside this issue unless a safe
 post-commit hook already exists.
 
-During a rolling upgrade, v36 senders treat v35 as unsupported.  New CNs retain
+During a rolling upgrade, v40 senders treat v39 as unsupported.  New CNs retain
 the pull fallback, but old serving CN binaries cannot provide the new guarantee.
 Strict multi-CN QA and issue closure therefore require every serving CN to run
-v36.
+v40.
 
 ## Alternatives and non-goals
 

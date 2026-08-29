@@ -330,6 +330,16 @@ func ivfCentroidPrefixFilter(
 			return nil, err
 		}
 	}
+	// prefix_in values must be sorted before they leave this function.
+	// centroidIDs arrives ranked by distance to the query, never by value, and
+	// zone-map pruning binary-searches this list (ZM.PrefixIn, reached through
+	// colexec.EvaluateFilterByZoneMap), so an unsorted list makes the search
+	// probe the wrong element and skip blocks holding matching entries.
+	// InplaceSortAndCompact marks the vector sorted itself; setting the flag here
+	// as well would claim sortedness even for an element type its switch does not
+	// handle, which is the assumption this fix exists to remove. Compaction is why
+	// Len below is taken from the vector, not from centroidIDs.
+	prefixVec.InplaceSortAndCompact()
 	data, err := prefixVec.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -349,7 +359,7 @@ func ivfCentroidPrefixFilter(
 	right := &plan.Expr{
 		Typ: cpkeyPlanType,
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(len(centroidIDs)),
+			Len:  int32(prefixVec.Length()),
 			Data: data,
 		}},
 	}
@@ -402,13 +412,24 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	if distRange == nil || res == nil {
 		return nil
 	}
-	lower, hasLower, err := vectorDistanceBound(distRange.LowerBoundType, distRange.LowerBound)
+	lower, hasLower, lowerNull, err := vectorDistanceBound(distRange.LowerBoundType, distRange.LowerBound)
 	if err != nil {
 		return err
 	}
-	upper, hasUpper, err := vectorDistanceBound(distRange.UpperBoundType, distRange.UpperBound)
+	upper, hasUpper, upperNull, err := vectorDistanceBound(distRange.UpperBoundType, distRange.UpperBound)
 	if err != nil {
 		return err
+	}
+	if lowerNull || upperNull {
+		// `distance < NULL` is UNKNOWN for every row, so the predicate selects nothing.
+		// The range is the sole consumer of the peeled predicate, so the empty set has
+		// to be produced here; before the bound was pushed, the residual filter did it.
+		for _, bat := range res.Batches {
+			if bat != nil {
+				bat.CleanOnlyData()
+			}
+		}
+		return nil
 	}
 	if !hasLower && !hasUpper {
 		return nil
@@ -441,18 +462,26 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	return nil
 }
 
-func vectorDistanceBound(boundType plan.BoundType, expr *plan.Expr) (float64, bool, error) {
+// vectorDistanceBound reads one folded bound. isNull separates "the bound evaluated to
+// NULL" from "the bound is not a number at all": a prepared parameter may legally bind
+// NULL, which makes the comparison UNKNOWN for every row and selects nothing -- an
+// empty result, not an error. It mirrors how a NULL query vector is handled one layer
+// up, where vectorscan's RequestAt returns no request rather than failing.
+func vectorDistanceBound(boundType plan.BoundType, expr *plan.Expr) (value float64, has bool, isNull bool, err error) {
 	switch boundType {
 	case plan.BoundType_UNBOUNDED:
-		return 0, false, nil
+		return 0, false, false, nil
 	case plan.BoundType_INCLUSIVE, plan.BoundType_EXCLUSIVE:
-		value, ok := plan.GetLiteralFloat64(expr)
-		if !ok {
-			return 0, false, moerr.NewInvalidInputNoCtx("IVF distance bound did not fold to a numeric literal")
+		if lit := expr.GetLit(); lit != nil && lit.Isnull {
+			return 0, false, true, nil
 		}
-		return value, true, nil
+		v, ok := plan.GetLiteralFloat64(expr)
+		if !ok {
+			return 0, false, false, moerr.NewInvalidInputNoCtx("IVF distance bound did not fold to a numeric literal")
+		}
+		return v, true, false, nil
 	default:
-		return 0, false, moerr.NewInvalidInputNoCtxf("invalid IVF distance bound type %d", boundType)
+		return 0, false, false, moerr.NewInvalidInputNoCtxf("invalid IVF distance bound type %d", boundType)
 	}
 }
 

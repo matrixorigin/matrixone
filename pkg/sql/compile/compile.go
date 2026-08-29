@@ -6572,17 +6572,17 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
-func supportsRemotePreparedNumericPrefix(service string) bool {
+func remoteMORPCProtocolVersion(service string) (int64, bool) {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return false
+		return 0, false
 	}
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return false
+		return 0, false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion30
+	return protocolVersion, ok
 }
 
 func supportsRemoteStatementLastInsertID(service string) bool {

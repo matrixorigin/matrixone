@@ -110,6 +110,21 @@ func decimalLiteralPrecision(v string) int32 {
 	return width
 }
 
+// makePlan2ExactDecimalStringExprWithType constructs the narrowest DECIMAL
+// that exactly represents a numeric string. Keep this separate from
+// makePlan2DecimalExprWithType because ordinary unquoted numeric literals have
+// longstanding arithmetic type and overflow semantics.
+func makePlan2ExactDecimalStringExprWithType(ctx context.Context, value string) (*plan.Expr, bool, error) {
+	typ, _, canonical, ok := PreparedDecimalRuntimeDomains(value)
+	if !ok {
+		return nil, false, nil
+	}
+	planType := makePlan2Type(&typ)
+	planType.NotNullable = true
+	expr, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(canonical), planType)
+	return expr, err == nil, err
+}
+
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
 	return makePlan2DateConstNullExprWithScale(t, 0)
 }

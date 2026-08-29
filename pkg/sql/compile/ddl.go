@@ -334,6 +334,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if session, ok := c.proc.GetSession().(interface {
+		RemoveTempTablesByDatabase(string)
+	}); ok {
+		// The catalog removal has completed, so these aliases now refer to
+		// relations that cannot be cloned during connection migration. The
+		// session implementation journals this cleanup with the DDL statement.
+		session.RemoveTempTablesByDatabase(dbName)
+	}
 
 	c.setAffectedRows(uint64(len(deleteTables)))
 	return nil
@@ -708,7 +716,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if qry.TableDef.Indexes != nil {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
-					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+					if err = lockIndexTableForAlter(
+						c.proc.Ctx,
+						dbSource,
+						c.e,
+						c.proc,
+						tblName,
+						qry.TableDef.TblId,
+						indexdef,
+						retryErr != nil,
+					); err != nil {
 						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
@@ -827,7 +844,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 						//1. drop index table
 						if indexdef.TableExist {
 							if err := c.runSqlWithOptions(
-								"DROP TABLE `"+indexdef.IndexTableName+"`", executor.StatementOption{}.WithDisableLog(),
+								"DROP TABLE "+sqlquote.QualifiedIdent(dbName, indexdef.IndexTableName),
+								executor.StatementOption{}.WithDisableLog(),
 							); err != nil {
 								return err
 							}
@@ -2684,7 +2702,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		for alias, realName := range tempIndexNameMap {
 			// Register temp index aliases after DDL succeeds, so failed
 			// CREATE INDEX does not leave stale session mappings.
-			tempTableSession.AddTempTable(qry.Database, alias, realName)
+			if indexSession, ok := tempTableSession.(interface {
+				AddTempIndexTable(dbName, alias, realName string)
+			}); ok {
+				indexSession.AddTempIndexTable(qry.Database, alias, realName)
+			} else {
+				tempTableSession.AddTempTable(qry.Database, alias, realName)
+			}
 		}
 	}
 	{
@@ -4905,6 +4929,75 @@ var lockIndexTable = func(ctx context.Context, dbSource engine.Database, eng eng
 		return err
 	}
 	return doLockTable(eng, proc, rel, defChanged)
+}
+
+func lockIndexTableForAlter(
+	ctx context.Context,
+	dbSource engine.Database,
+	eng engine.Engine,
+	proc *process.Process,
+	parentTableName string,
+	plannedParentTableID uint64,
+	plannedIndex *plan.IndexDef,
+	parentDefinitionChanged bool,
+) error {
+	if plannedIndex == nil {
+		return moerr.NewInternalError(ctx, "nil index definition while locking ALTER TABLE index")
+	}
+	err := lockIndexTable(ctx, dbSource, eng, proc, plannedIndex.IndexTableName, true)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return err
+	}
+
+	// A definition-change result from the parent lock already proves that the
+	// planned hidden-table generation is stale. Otherwise, distinguish that
+	// race from persistent catalog corruption before asking the RC loop to
+	// replan: retrying an unchanged missing generation would never converge.
+	if parentDefinitionChanged {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	changed, checkErr := alterIndexGenerationChanged(
+		ctx, dbSource, parentTableName, plannedParentTableID, plannedIndex,
+	)
+	if checkErr != nil {
+		return checkErr
+	}
+	if changed {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return err
+}
+
+func alterIndexGenerationChanged(
+	ctx context.Context,
+	dbSource engine.Database,
+	parentTableName string,
+	plannedParentTableID uint64,
+	plannedIndex *plan.IndexDef,
+) (bool, error) {
+	currentParent, err := dbSource.Relation(ctx, parentTableName, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return true, nil
+		}
+		return false, err
+	}
+	if currentParent.GetTableID(ctx) != plannedParentTableID {
+		return true, nil
+	}
+	currentTableDef := currentParent.CopyTableDef(ctx)
+	if currentTableDef == nil {
+		return false, moerr.NewInternalErrorf(ctx,
+			"missing table definition for ALTER TABLE parent %s", parentTableName)
+	}
+	for _, currentIndex := range currentTableDef.Indexes {
+		if currentIndex == nil || !strings.EqualFold(currentIndex.IndexName, plannedIndex.IndexName) {
+			continue
+		}
+		return currentIndex.TableExist != plannedIndex.TableExist ||
+			currentIndex.IndexTableName != plannedIndex.IndexTableName, nil
+	}
+	return true, nil
 }
 
 func lockRows(
