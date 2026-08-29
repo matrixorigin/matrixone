@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -156,6 +157,44 @@ func TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath(t *testing.T) {
 	require.Equal(t, int32(4), localPair.Stats.Dop)
 	require.Equal(t, int32(4), finalPair.Stats.Dop,
 		"the shuffled pair merge must expose multiple physical owners")
+}
+
+func TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV(t *testing.T) {
+	newBuilder := func(secondNDV float64) (*QueryBuilder, *planpb.Node) {
+		key := distinctAggTestCol(types.T_int64, 1, 2, 1_000_000)
+		countDistinct := distinctAggTestExpr(
+			function.COUNT, true,
+			planpb.Type{Id: int32(types.T_int64), NotNullable: true}, key)
+		builder, outer := newDistinctAggTestBuilder(
+			1_000_000, 10, 1_000_000, []*planpb.Expr{countDistinct})
+		outer.GroupBy = append(outer.GroupBy,
+			distinctAggTestCol(types.T_int32, 1, 1, secondNDV))
+		return builder, outer
+	}
+
+	for _, tc := range []struct {
+		name string
+		ndv  float64
+	}{
+		{name: "missing component", ndv: -1},
+		{name: "NaN component", ndv: math.NaN()},
+		{name: "infinite component", ndv: math.Inf(1)},
+	} {
+		t.Run(tc.name+" disables path", func(t *testing.T) {
+			builder, _ := newBuilder(tc.ndv)
+			builder.optimizeDistinctAgg(1)
+
+			require.Len(t, builder.qry.Nodes, 3,
+				"one known low-NDV key cannot stand in for an unreliable composite key")
+		})
+	}
+
+	t.Run("known low-NDV components enable path", func(t *testing.T) {
+		builder, _ := newBuilder(5)
+		builder.optimizeDistinctAgg(1)
+
+		require.Len(t, builder.qry.Nodes, 4)
+	})
 }
 
 func TestOptimizeSingleCountDistinctPathSelectionAndFallbacks(t *testing.T) {

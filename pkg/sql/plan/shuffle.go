@@ -1374,17 +1374,20 @@ func shouldUseDistinctKeyPreAggregation(node *plan.Node, builder *QueryBuilder) 
 		return true
 	}
 	highestGroupNDV := float64(-1)
+	activeGroupKeys := 0
 	for i, groupBy := range node.GroupBy {
 		if i < len(node.GroupingFlag) && !node.GroupingFlag[i] {
 			continue
 		}
+		activeGroupKeys++
 		ndv := max(groupBy.Ndv, getExprNdv(groupBy, builder))
-		highestGroupNDV = max(
-			highestGroupNDV,
-			estimateNDVAfterSelection(ndv, child.Stats),
-		)
+		estimatedNDV := estimateNDVAfterSelection(ndv, child.Stats)
+		if estimatedNDV <= 0 {
+			return false
+		}
+		highestGroupNDV = max(highestGroupNDV, estimatedNDV)
 	}
-	return highestGroupNDV > 0 && highestGroupNDV < shuffleDistinctGroupMinNDV
+	return activeGroupKeys > 0 && highestGroupNDV < shuffleDistinctGroupMinNDV
 }
 
 func estimateNDVAfterSelection(ndv float64, stats *plan.Stats) float64 {
