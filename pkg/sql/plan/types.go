@@ -367,6 +367,14 @@ type QueryBuilder struct {
 	userWindowNodes          map[int32]struct{}
 	internalTopNWindows      map[int32]struct{}
 	partitionTopNWindowNodes map[int32]struct{}
+	// distinctKeyLocalPreAggs marks the first (group keys, DISTINCT key)
+	// Group in Path B. It must retain local ownership so duplicate rows are
+	// removed before any exchange.
+	distinctKeyLocalPreAggs map[*plan.Node]struct{}
+	// distinctKeyShuffleCols marks the second pair Group and the DISTINCT-key
+	// column that owns its exchange. Both maps are planner-local; HashMapStats
+	// carries the final physical decision after shuffle planning.
+	distinctKeyShuffleCols map[*plan.Node]int32
 
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children

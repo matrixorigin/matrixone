@@ -1808,11 +1808,17 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		childNodeID := node.Children[0]
+		childNode := nodes[childNodeID]
+		if isLocalPreAggregationGroup(node, childNode) {
+			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
+		} else {
+			ss, err = c.compilePlanScope(step, childNodeID, nodes)
+		}
 		if err != nil {
 			return nil, err
 		}
-		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+		groupInfo := constructGroup(c.proc.Ctx, node, childNode, false, 0, c.proc)
 		defer groupInfo.Release()
 		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
@@ -6340,6 +6346,95 @@ func (c *Compile) compileGroupWithoutShuffle(
 	}
 	return c.compileMergeGroup(
 		node, ss, ns, distinctRequiresSingleStage)
+}
+
+func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
+	if parent == nil || child == nil ||
+		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
+		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
+		!parent.Stats.HashmapStats.Shuffle ||
+		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
+		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
+		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
+		len(child.Children) != 1 ||
+		child.Limit != nil || child.Offset != nil ||
+		len(child.FilterList) != 0 || !isIdentityGroupByProjection(child) {
+		return false
+	}
+	for i, expr := range parent.GroupBy {
+		col := expr.GetCol()
+		if col == nil {
+			return false
+		}
+		if len(child.BindingTags) > 0 &&
+			col.RelPos == child.BindingTags[0] && col.ColPos == int32(i) {
+			continue
+		}
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		projectCol := child.ProjectList[col.ColPos].GetCol()
+		if projectCol == nil || projectCol.RelPos != -1 || projectCol.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdentityGroupByProjection(node *plan.Node) bool {
+	if len(node.ProjectList) == 0 {
+		return true
+	}
+	if len(node.ProjectList) != len(node.GroupBy) {
+		return false
+	}
+	for i, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != -1 || col.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) compileLocalPreAggregationScope(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	node := nodes[nodeID]
+	ss, err := c.compilePlanScope(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+	defer groupInfo.Release()
+
+	c.setAnalyzeCurrent(ss, int(nodeID))
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	ss = c.compileLocalGroupBy(node, ss, nodes)
+	ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+	return ss, nil
+}
+
+// compileLocalGroupBy performs only the duplicate-reduction half of a logical
+// GROUP BY. The planner emits this contract only when a downstream GROUP BY
+// completes the same key after exchange, so merging here would defeat the
+// pre-exchange reduction without adding correctness.
+func (c *Compile) compileLocalGroupBy(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(op)
+		ss[i].HasPartialResults = false
+	}
+	c.anal.isFirst = false
+	return ss
 }
 
 func (c *Compile) compileMergeGroup(
