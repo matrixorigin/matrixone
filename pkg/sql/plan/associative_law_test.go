@@ -78,6 +78,79 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	})
 }
 
+func TestOuterJoinNullableSideAssociativity(t *testing.T) {
+	t.Run("moves null rejecting inner join below left join", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(3), root)
+		require.Equal(t, planpb.Node_INNER, builder.qry.Nodes[3].JoinType)
+		require.Equal(t, []int32{0, 4}, builder.qry.Nodes[3].Children)
+		require.Equal(t, []int32{1, 2}, builder.qry.Nodes[4].Children)
+	})
+
+	t.Run("handles commuted upper inner join", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, true)
+		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(3), root)
+		require.Equal(t, planpb.Node_INNER, builder.qry.Nodes[3].JoinType)
+		require.Equal(t, []int32{0, 4}, builder.qry.Nodes[3].Children)
+		require.Equal(t, []int32{1, 2}, builder.qry.Nodes[4].Children)
+	})
+
+	t.Run("keeps condition that references preserved side", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, false)
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(4), root)
+		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
+		require.Equal(t, []int32{3, 2}, builder.qry.Nodes[4].Children)
+	})
+
+	t.Run("keeps mixed nullable and preserved-side conditions", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder.qry.Nodes[4].OnList = []*planpb.Expr{
+			associativityEqExpr(2, 3),
+			associativityEqExpr(1, 3),
+		}
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(4), root)
+		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
+	})
+
+	t.Run("keeps upper join without null rejecting nullable column", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(3, 3)}
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(4), root)
+		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
+	})
+
+	t.Run("keeps local limit boundary", func(t *testing.T) {
+		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+		builder.qry.Nodes[3].Limit = &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_uint64)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}}},
+		}
+
+		root := builder.applyOuterJoinNullableSideRule(4)
+
+		require.Equal(t, int32(4), root)
+		require.Equal(t, planpb.Node_LEFT, builder.qry.Nodes[3].JoinType)
+	})
+}
+
 func newOuterJoinAssociativityBuilder(uniqueInner, commuteUpper bool) *QueryBuilder {
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	scan := func(id, tag int32, name string) *planpb.Node {

@@ -152,6 +152,106 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) int32
 	return outer.NodeId
 }
 
+// applyOuterJoinNullableSideRule rewrites
+//
+//	(A LEFT JOIN B ON p) INNER JOIN C ON q(B, C)
+//
+// to
+//
+//	A INNER JOIN (B INNER JOIN C ON q(B, C)) ON p
+//
+// when q contains an ordinary equality on a bare B column.  Such an equality
+// rejects the NULL-extended row produced by the LEFT JOIN, so the upper INNER
+// JOIN already makes B mandatory.  Joining B to C first is therefore
+// equivalent and lets selective C predicates shrink B before it meets A.
+// Keep the proof independent of stats and fail closed for local/volatile
+// semantics or any upper condition that also references A.
+func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	for i, child := range node.Children {
+		node.Children[i] = builder.applyOuterJoinNullableSideRule(child)
+	}
+
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
+		joinNodeHasLocalSemantics(node) {
+		return nodeID
+	}
+
+	outerPos := -1
+	for i, childID := range node.Children {
+		child := builder.qry.Nodes[childID]
+		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_LEFT &&
+			!joinNodeHasLocalSemantics(child) {
+			outerPos = i
+			break
+		}
+	}
+	if outerPos == -1 {
+		return nodeID
+	}
+
+	outer := builder.qry.Nodes[node.Children[outerPos]]
+	preservedID := outer.Children[0]
+	nullableID := outer.Children[1]
+	otherID := node.Children[1-outerPos]
+
+	nullableTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(nullableID) {
+		nullableTags[tag] = true
+	}
+	allowedTags := make(map[int32]bool)
+	for tag := range nullableTags {
+		allowedTags[tag] = true
+	}
+	for _, tag := range builder.enumerateTags(otherID) {
+		allowedTags[tag] = true
+	}
+
+	nullExtendedRowRejected := false
+	for _, cond := range node.OnList {
+		if !containsOnlyTags(cond, allowedTags) || ContainsVolatileFunction(cond) {
+			return nodeID
+		}
+		if equalityHasBareColumnFromTags(cond, nullableTags) {
+			nullExtendedRowRejected = true
+		}
+	}
+	if !nullExtendedRowRejected {
+		return nodeID
+	}
+	for _, cond := range outer.OnList {
+		if ContainsVolatileFunction(cond) {
+			return nodeID
+		}
+	}
+
+	node.Children[0] = nullableID
+	node.Children[1] = otherID
+	node.IsRightJoin = false
+	outer.Children[0] = preservedID
+	outer.Children[1] = node.NodeId
+	outer.JoinType = plan.Node_INNER
+	outer.IsRightJoin = false
+	ReCalcNodeStats(node.NodeId, builder, true, false, true)
+	ReCalcNodeStats(outer.NodeId, builder, true, false, true)
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("outer-nullable-side: inner=%d outer=%d", node.NodeId, outer.NodeId))
+	return outer.NodeId
+}
+
+func equalityHasBareColumnFromTags(expr *plan.Expr, tags map[int32]bool) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if col := arg.GetCol(); col != nil && tags[col.RelPos] {
+			return true
+		}
+	}
+	return false
+}
+
 func joinNodeHasLocalSemantics(node *plan.Node) bool {
 	return node.Limit != nil || node.Offset != nil || len(node.OrderBy) != 0 ||
 		len(node.ProjectList) != 0 || len(node.FilterList) != 0 ||
@@ -327,6 +427,8 @@ func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 		return nodeID
 	}
 	nodeID = builder.applyOuterJoinPreservedSideRule(nodeID)
+	builder.determineBuildAndProbeSide(nodeID, true)
+	nodeID = builder.applyOuterJoinNullableSideRule(nodeID)
 	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
 	builder.determineBuildAndProbeSide(nodeID, true)
