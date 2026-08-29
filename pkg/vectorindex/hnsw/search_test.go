@@ -314,11 +314,11 @@ func makeIndexBatch(proc *process.Process) *batch.Batch {
 }
 
 func TestFallocate(t *testing.T) {
-
-	f, err := os.Create("apple")
-	require.Nil(t, err)
-	fallocate.Fallocate(f, 0, 10000)
-	f.Close()
+	f, err := os.CreateTemp(t.TempDir(), "fallocate-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+	require.NoError(t, fallocate.Fallocate(f, 0, 10000))
+	require.NoError(t, f.Close())
 }
 
 func makeMetaBatch2Files(proc *process.Process) *batch.Batch {
