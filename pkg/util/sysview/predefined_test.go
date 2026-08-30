@@ -454,7 +454,9 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	// equivalent to [^/*] for the regexp engine while remaining literal-safe.
 	assert.Contains(t, InformationSchemaViewsDDL, `[^/\\*]`)
 	assert.NotContains(t, informationSchemaViewPrefixSpanPattern, `[^/*]`)
-	assert.Contains(t, InformationSchemaViewsDDL, "regexp_replace(tbl.view_definition, '[*]/', '', 1, 1)")
+	assert.Contains(t, InformationSchemaViewsDDL, "view_definition_wrapper_prefix_length")
+	assert.Contains(t, InformationSchemaViewsDDL, "regexp_substr(definitions.view_definition")
+	assert.NotContains(t, InformationSchemaViewsDDL, "regexp_replace(tbl.view_definition, '[*]/', '', 1, 1)")
 	// System-view definitions are replayed by database clone. Use the same IF
 	// form as other persisted information_schema views for the wrapper-only
 	// suffix adjustment, and preserve the public TEXT metadata type.
@@ -468,6 +470,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
 
 	prefix := regexp.MustCompile(informationSchemaViewDefinitionPrefixPattern)
+	executableCommentPrefix := regexp.MustCompile(informationSchemaViewExecutableCommentPrefixPattern)
 	tests := []struct {
 		name       string
 		createSQL  string
@@ -560,6 +563,16 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "SELECT 1  /* application */",
 		},
 		{
+			name:       "executable comment preserves string terminator text",
+			createSQL:  "/*!50001 CREATE VIEW v AS SELECT 'x*/y' AS s */;",
+			definition: "SELECT 'x*/y' AS s",
+		},
+		{
+			name:       "definer string cannot supply view as",
+			createSQL:  "CREATE DEFINER=' view fake as select 0'@'%' VIEW v AS SELECT 1;",
+			definition: "SELECT 1",
+		},
+		{
 			name:       "unrecognized metadata remains visible",
 			createSQL:  "select 1",
 			definition: "select 1",
@@ -571,7 +584,10 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			statement := strings.TrimSpace(terminator.ReplaceAllString(strings.TrimSpace(test.createSQL), ""))
 			definition := strings.TrimSpace(prefix.ReplaceAllString(statement, ""))
 			if strings.HasPrefix(statement, "/*!") {
-				definition = strings.TrimSpace(strings.Replace(definition, "*/", "", 1))
+				wrapperPrefix := executableCommentPrefix.FindString(definition)
+				if wrapperPrefix != "" {
+					definition = strings.TrimSpace(definition[:len(wrapperPrefix)-2] + definition[len(wrapperPrefix):])
+				}
 			}
 			assert.Equal(t, test.definition, definition)
 		})
@@ -586,6 +602,8 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 		"create view long_repeated_star_comment_v /*****/ as select 1;",
 		"/*! CREATE VIEW executable_without_version_v AS SELECT 1 */;",
 		"/*!50001 CREATE VIEW executable_trailing_comment_v AS SELECT 1 */ /* application */;",
+		"/*!50001 CREATE VIEW executable_string_terminator_v AS SELECT 'x*/y' AS s */;",
+		"CREATE DEFINER=' view fake as select 0'@'%' VIEW quoted_definer_v AS SELECT 1;",
 	} {
 		statements, err := mysql.Parse(context.Background(), createSQL, 1)
 		assert.NoError(t, err)
