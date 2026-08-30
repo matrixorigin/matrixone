@@ -615,6 +615,124 @@ func TestLocalE2EWaitForLifecycleFaultWaiters(t *testing.T) {
 	}
 }
 
+func TestLocalE2ELifecycleFaultHelpersInstallAndCleanup(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	mock.ExpectExec("select enable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("select add_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	if err := installLifecycleFaults(context.Background(), db); err != nil {
+		t.Fatalf("install lifecycle faults: %v", err)
+	}
+
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+	} {
+		mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	cleanupLifecycleFaults(db)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("lifecycle fault helper statements: %v", err)
+	}
+}
+
+func TestLocalE2ELifecycleFaultInstallFailureCleansUp(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	mock.ExpectExec("select enable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("select add_fault_point").WillReturnError(errors.New("fault point rejected"))
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+	} {
+		mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := installLifecycleFaults(context.Background(), db); err == nil || !strings.Contains(err.Error(), "fault point rejected") {
+		t.Fatalf("expected fault installation failure, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("cleanup after lifecycle fault installation failure: %v", err)
+	}
+}
+
+func TestLocalE2EWaitForLifecycleFaultWaitersRejectsInvalidResponses(t *testing.T) {
+	tests := []struct {
+		name string
+		rows *sqlmock.Rows
+		err  error
+		want string
+	}{
+		{name: "query failure", err: errors.New("fault service unavailable"), want: "fault service unavailable"},
+		{name: "empty response", rows: sqlmock.NewRows([]string{"waiters"}), want: "returned 0 rows"},
+		{name: "invalid count", rows: sqlmock.NewRows([]string{"waiters"}).AddRow("not-a-count"), want: "parse waiter count"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			expectation := mock.ExpectQuery("select trigger_fault_point")
+			if tt.err != nil {
+				expectation.WillReturnError(tt.err)
+			} else {
+				expectation.WillReturnRows(tt.rows)
+			}
+			err := waitForLifecycleFaultWaiters(context.Background(), db, icebergCreateAfterCatalogLockWaitersFault, 1)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q, got %v", tt.want, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("lifecycle waiter failure expectation: %v", err)
+			}
+		})
+	}
+}
+
 func TestLocalE2EConcurrentCreateMappingAndDropCaseReportsCleanupFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
