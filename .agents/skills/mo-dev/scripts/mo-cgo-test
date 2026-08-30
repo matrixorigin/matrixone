@@ -35,10 +35,7 @@ case "$repo_root" in
         exit 1
         ;;
 esac
-cgo_dir="$repo_root/cgo"
-thirdparty_dir="$repo_root/thirdparties/install"
-lib_dir="$thirdparty_dir/lib"
-include_dir="$thirdparty_dir/include"
+source_cgo_dir="$repo_root/cgo"
 
 goos=$(go env GOOS)
 gohostos=$(go env GOHOSTOS)
@@ -57,12 +54,12 @@ fi
 
 case "$goos" in
     darwin)
-        libmo="$cgo_dir/libmo.dylib"
+        libmo_name=libmo.dylib
         runtime_path_var=DYLD_LIBRARY_PATH
         platform_link_flags=
         ;;
     linux)
-        libmo="$cgo_dir/libmo.so"
+        libmo_name=libmo.so
         runtime_path_var=LD_LIBRARY_PATH
         platform_link_flags=-fopenmp
         ;;
@@ -71,6 +68,59 @@ case "$goos" in
         exit 1
         ;;
 esac
+
+# Build artifacts are intentionally untracked, so a linked git worktree normally has
+# neither libmo nor thirdparties/install even when the primary worktree already has a
+# usable build. Reuse that build only when the tracked and untracked native inputs are
+# clean and identical. This keeps worktree tests cheap without letting a branch-specific
+# C/C++ or Makefile change link against a stale library.
+native_inputs_match() {
+    candidate_root=$1
+    native_paths="Makefile cgo thirdparties"
+    if [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- $native_paths)" ] ||
+       [ -n "$(git -C "$candidate_root" status --porcelain --untracked-files=all -- $native_paths)" ]; then
+        return 1
+    fi
+    repo_head=$(git -C "$repo_root" rev-parse HEAD)
+    candidate_head=$(git -C "$candidate_root" rev-parse HEAD)
+    git -C "$repo_root" diff --quiet "$repo_head" "$candidate_head" -- $native_paths
+}
+
+artifact_root="$repo_root"
+artifact_cgo_dir="$artifact_root/cgo"
+thirdparty_dir="$artifact_root/thirdparties/install"
+lib_dir="$thirdparty_dir/lib"
+include_dir="$thirdparty_dir/include"
+libmo="$artifact_cgo_dir/$libmo_name"
+reuse_rejection=
+
+if [ ! -e "$libmo" ] || [ ! -d "$include_dir" ] || [ ! -d "$lib_dir" ]; then
+    common_git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
+    primary_root=$(dirname "$common_git_dir")
+    candidate_lib="$primary_root/cgo/$libmo_name"
+    candidate_thirdparty="$primary_root/thirdparties/install"
+    case "$primary_root" in
+        *[[:space:]]*) reuse_rejection="primary worktree path contains whitespace" ;;
+        "$repo_root") reuse_rejection="current checkout is the primary worktree" ;;
+        *)
+            if [ ! -e "$candidate_lib" ] ||
+               [ ! -d "$candidate_thirdparty/include" ] ||
+               [ ! -d "$candidate_thirdparty/lib" ]; then
+                reuse_rejection="primary worktree lacks $libmo_name or thirdparties/install"
+            elif ! native_inputs_match "$primary_root"; then
+                reuse_rejection="native inputs differ from or are dirty in the primary worktree"
+            else
+                artifact_root="$primary_root"
+                artifact_cgo_dir="$artifact_root/cgo"
+                thirdparty_dir="$artifact_root/thirdparties/install"
+                lib_dir="$thirdparty_dir/lib"
+                include_dir="$thirdparty_dir/include"
+                libmo="$artifact_cgo_dir/$libmo_name"
+                echo "using platform-matched CGo artifacts ($libmo_name) from primary worktree: $artifact_root" >&2
+            fi
+            ;;
+    esac
+fi
 
 # MO_CL_CUDA=1 selects the GPU build, exactly as it does for `make`. It is required
 # whenever libmo was built with CUDA -- not only for `-tags gpu` packages -- because a
@@ -151,9 +201,12 @@ if [ "${MO_CL_CUDA:-}" = "1" ]; then
     fi
 fi
 
-for required in "$libmo" "$include_dir"; do
+for required in "$libmo" "$include_dir" "$lib_dir"; do
     if [ ! -e "$required" ]; then
         echo "missing MatrixOne CGo prerequisite: $required" >&2
+        if [ -n "$reuse_rejection" ]; then
+            echo "primary-worktree reuse rejected: $reuse_rejection" >&2
+        fi
         echo "build the repository thirdparties and CGo libraries before testing" >&2
         exit 1
     fi
@@ -174,7 +227,7 @@ fi
 # Match the repository build contract and remove ambient module/CGo flag
 # drift. CC/CXX and other standard toolchain selectors remain caller-owned.
 export GOWORK=off
-export CGO_CFLAGS="'-I$cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}"
+export CGO_CFLAGS="'-I$source_cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}"
 export CGO_LDFLAGS="'-L$lib_dir'"
 
 # cgo/lib.go owns libmo's native dependency declaration. Query that metadata
@@ -188,7 +241,7 @@ if [ -z "$cgo_link_flags" ]; then
     exit 1
 fi
 
-runtime_paths="$cgo_dir:$lib_dir$cuda_runtime_paths"
+runtime_paths="$artifact_cgo_dir:$lib_dir$cuda_runtime_paths"
 if [ "$runtime_path_var" = DYLD_LIBRARY_PATH ]; then
     export DYLD_LIBRARY_PATH="$runtime_paths"
 else
@@ -201,7 +254,7 @@ fi
 # The wrapper injects libmo even when the requested package does not import
 # cgo/lib.go, so it must also close libmo's dependency graph. Keep the queried
 # flags after -lmo: archive resolution is order-sensitive on common linkers.
-external_flags="$platform_link_flags${cuda_ldflags:+ $cuda_ldflags} -L$cgo_dir -lmo $cgo_link_flags -Wl,-rpath,$cgo_dir -Wl,-rpath,$lib_dir${cuda_rpaths:+ $cuda_rpaths}"
+external_flags="$platform_link_flags${cuda_ldflags:+ $cuda_ldflags} -L$artifact_cgo_dir -lmo -L$lib_dir $cgo_link_flags -Wl,-rpath,$artifact_cgo_dir -Wl,-rpath,$lib_dir${cuda_rpaths:+ $cuda_rpaths}"
 ldflags="-extldflags '$external_flags'"
 
 cd "$repo_root"

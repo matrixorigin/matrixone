@@ -82,6 +82,15 @@ Prefer the repository wrapper for arbitrary packages and test flags:
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
 ```
 
+Linked worktrees do not contain ignored build artifacts. When the current
+worktree lacks `cgo/libmo.dylib` on macOS or `cgo/libmo.so` on Linux (or lacks
+`thirdparties/install`), the wrapper automatically considers the primary
+worktree's platform-matched artifacts. It reuses them only when `Makefile`,
+`cgo/`, and `thirdparties/` are clean and identical at both revisions; otherwise
+it rejects reuse and asks for a local rebuild. Do not manually create symlinks
+before trying the wrapper, because that bypasses its provenance guard and leaves
+untracked setup residue in the review worktree.
+
 It verifies host/target and CGo prerequisites, enforces the repository's
 `GOWORK=off` and `-mod=readonly` contract, removes ambient CGo flag drift,
 chooses the supported OS library/loader form, and gives temporary test
@@ -410,4 +419,3 @@ predates it ignores `MO_CL_CUDA` entirely and fails to link a GPU-built `libmo` 
 `grep -c MO_CL_CUDA .agents/skills/mo-dev/scripts/mo-cgo-test` before concluding the tree is
 broken; borrow a newer copy into the repo root if needed (it derives the repo from its own
 location, so it must sit inside the worktree).
-

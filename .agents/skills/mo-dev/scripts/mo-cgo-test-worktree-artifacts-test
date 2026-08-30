@@ -1,0 +1,148 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Verifies that mo-cgo-test can safely reuse untracked native artifacts from a
+# primary checkout when invoked in a linked worktree. Both supported platforms
+# are simulated; no compiler, libmo build, CUDA toolkit, or third-party library
+# is required.
+
+set -eu
+
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+wrapper="$script_dir/mo-cgo-test"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+work=$(CDPATH= cd -P "$work" && pwd)
+
+primary="$work/primary"
+linked="$work/linked"
+mkdir -p "$primary/.agents/skills/mo-dev/scripts" "$primary/cgo" \
+    "$primary/thirdparties" "$work/bin"
+git -C "$primary" init --quiet
+cp "$wrapper" "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
+chmod +x "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
+
+cat > "$primary/.gitignore" <<'EOF'
+cgo/libmo.so
+cgo/libmo.dylib
+thirdparties/install/
+EOF
+cat > "$primary/Makefile" <<'EOF'
+cgo:
+	@true
+EOF
+printf 'native source\n' > "$primary/cgo/native.c"
+printf 'third-party source\n' > "$primary/thirdparties/source.txt"
+git -C "$primary" add .
+git -C "$primary" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m fixture
+
+mkdir -p "$primary/thirdparties/install/include" \
+    "$primary/thirdparties/install/lib"
+: > "$primary/cgo/libmo.so"
+: > "$primary/cgo/libmo.dylib"
+git -C "$primary" worktree add --quiet -b linked-test "$linked"
+
+cat > "$work/bin/go" <<'EOF'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -C) shift 2 ;;
+        env)
+            case "$2" in
+                GOOS|GOHOSTOS) echo "$FAKE_GOOS" ;;
+                GOARCH|GOHOSTARCH) echo amd64 ;;
+                CGO_ENABLED) echo 1 ;;
+                *) echo "" ;;
+            esac
+            exit 0 ;;
+        list) echo "-lusearch_c -lroaring"; exit 0 ;;
+        test)
+            shift
+            echo "GO_TEST_ARGS: $*"
+            echo "DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-}"
+            echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+            exit 0 ;;
+        *) shift ;;
+    esac
+done
+EOF
+chmod +x "$work/bin/go"
+cat > "$work/bin/readelf" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$work/bin/readelf"
+
+linked_wrapper="$linked/.agents/skills/mo-dev/scripts/mo-cgo-test"
+failures=0
+
+check_platform() {
+    platform=$1
+    artifact_name=$2
+    set +e
+    output=$(env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        sh "$linked_wrapper" -count=1 ./pkg/x/ 2>&1)
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        printf 'FAIL %-7s wrapper exited %d: %s\n' "$platform" "$status" "$output"
+        failures=$((failures + 1))
+        return
+    fi
+    case "$output" in
+        *"using platform-matched CGo artifacts ($artifact_name) from primary worktree: $primary"*) ;;
+        *)
+            printf 'FAIL %-7s did not report primary-worktree reuse\n' "$platform"
+            failures=$((failures + 1))
+            return ;;
+    esac
+    case "$output" in
+        *"-Wl,-rpath,$primary/cgo"*)
+            printf 'ok   %-7s uses %s and the primary artifact rpath\n' "$platform" "$artifact_name" ;;
+        *)
+            printf 'FAIL %-7s wrong artifact rpath: %s\n' "$platform" "$output"
+            failures=$((failures + 1)) ;;
+    esac
+}
+
+check_platform darwin libmo.dylib
+check_platform linux libmo.so
+
+printf 'branch-specific native change\n' >> "$linked/cgo/native.c"
+set +e
+drift_output=$(env FAKE_GOOS=darwin PATH="$work/bin:$PATH" \
+    sh "$linked_wrapper" ./pkg/x/ 2>&1)
+drift_status=$?
+set -e
+if [ "$drift_status" -eq 0 ]; then
+    echo "FAIL native-input drift reused a primary artifact"
+    failures=$((failures + 1))
+else
+    case "$drift_output" in
+        *"primary-worktree reuse rejected: native inputs differ from or are dirty"*)
+            echo "ok   native-input drift rejects primary artifacts" ;;
+        *)
+            printf 'FAIL native-input drift had the wrong error: %s\n' "$drift_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+if [ "$failures" -ne 0 ]; then
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+printf '\nall checks passed\n'
