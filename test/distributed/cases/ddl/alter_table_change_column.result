@@ -2021,7 +2021,7 @@ col2    col3    col4
 null    2020-01-01 23:23:59    23:23:59
 2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
 alter table time02 change col2 decimal(20,10) first, change col3 decimal(38,0) after col2, change col4 decimal(38,0);
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 39 near "(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 39 near "(20,10) first, change col3 decimal(38,0) after col2, change col4 decimal(38,0);";
 show create table time02;
 Table    Create Table
 time02    CREATE TABLE `time02` (\n  `col2` datetime DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` time DEFAULT NULL\n)
