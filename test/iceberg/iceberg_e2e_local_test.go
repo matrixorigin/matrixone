@@ -615,6 +615,32 @@ func TestLocalE2EWaitForLifecycleFaultWaiters(t *testing.T) {
 	}
 }
 
+func TestLocalE2EWaitForCatalogLockWaiter(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks").
+		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
+	if err := waitForCatalogLockWaiter(context.Background(), db); err != nil {
+		t.Fatalf("wait for catalog lock waiter: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet catalog lock waiter expectations: %v", err)
+	}
+}
+
+func TestLocalE2EReleaseLifecycleFaultHonorsCancellation(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := releaseLifecycleFault(ctx, db, icebergCreateAfterCatalogLockFault); !errors.Is(err, context.Canceled) {
+		t.Fatalf("release ignored cancellation: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected SQL after cancelled release: %v", err)
+	}
+}
+
 func TestLocalE2ELifecycleFaultHelpersInstallAndCleanup(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -658,7 +684,9 @@ func TestLocalE2ELifecycleFaultHelpersInstallAndCleanup(t *testing.T) {
 		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
-	cleanupLifecycleFaults(db)
+	if err := cleanupLifecycleFaults(db); err != nil {
+		t.Fatalf("cleanup lifecycle faults: %v", err)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("lifecycle fault helper statements: %v", err)

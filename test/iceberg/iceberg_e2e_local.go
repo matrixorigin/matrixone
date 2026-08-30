@@ -472,7 +472,20 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	if err := installLifecycleFaults(ctx, r.db); err != nil {
 		return fail(nil, nil, fmt.Sprintf("install lifecycle synchronization points: %v", err))
 	}
-	defer cleanupLifecycleFaults(r.db)
+	defer func() {
+		if cleanupErr := cleanupLifecycleFaults(r.db); cleanupErr != nil {
+			if result.Details == nil {
+				result.Details = make(map[string]string)
+			}
+			result.Details["fault_cleanup_error"] = cleanupErr.Error()
+			if result.Error == "" {
+				result.Error = "fault cleanup: " + cleanupErr.Error()
+			} else {
+				result.Error += "; fault cleanup: " + cleanupErr.Error()
+			}
+			result.Status = "failed"
+		}
+	}()
 
 	createSQL := fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
   order_id BIGINT,
@@ -491,13 +504,39 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	var workers sync.WaitGroup
 	caseCtx, cancelCase := context.WithCancel(ctx)
 	defer cancelCase()
-	stopWorkers := func() {
+	stopWorkers := func() error {
 		cancelCase()
-		releaseLifecycleFault(r.db, icebergCreateAfterCatalogLockFault)
-		releaseLifecycleFault(r.db, icebergDropBeforeCatalogLockFault)
-		releaseLifecycleFault(r.db, icebergDropAfterCatalogLockFault)
+		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelRelease()
+		var errs []error
+		for _, point := range []string{
+			icebergCreateAfterCatalogLockFault,
+			icebergDropBeforeCatalogLockFault,
+			icebergDropAfterCatalogLockFault,
+		} {
+			if err := releaseLifecycleFault(releaseCtx, r.db, point); err != nil {
+				errs = append(errs, err)
+			}
+		}
 		workers.Wait()
+		return errors.Join(errs...)
 	}
+	stopAndFail := func(expected, actual []string, msg string) caseResult {
+		if stopErr := stopWorkers(); stopErr != nil {
+			msg += "; release lifecycle workers: " + stopErr.Error()
+		}
+		return fail(expected, actual, msg)
+	}
+	collectWorkers := func() map[string]error {
+		workers.Wait()
+		close(results)
+		resultByName := make(map[string]error, 2)
+		for ddlResult := range results {
+			resultByName[ddlResult.name] = ddlResult.err
+		}
+		return resultByName
+	}
+	stateSQL := fmt.Sprintf("select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d)", catalogID, catalogID)
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
@@ -507,8 +546,7 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	barrierCtx, cancelBarrier := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelBarrier()
 	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergCreateAfterCatalogLockWaitersFault, 1); err != nil {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("CREATE did not pause after catalog lifecycle lock: %v", err))
+		return stopAndFail(nil, nil, fmt.Sprintf("CREATE did not pause after catalog lifecycle lock: %v", err))
 	}
 	workers.Add(1)
 	go func() {
@@ -517,51 +555,34 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		results <- ddlResult{name: "drop", err: err}
 	}()
 	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropBeforeCatalogLockWaitersFault, 1); err != nil {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("DROP did not reach the pre-lock phase: %v", err))
+		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not reach the pre-lock phase: %v", err))
 	}
-	if err := releaseLifecycleFault(r.db, icebergDropBeforeCatalogLockFault); err != nil {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("release DROP pre-lock phase: %v", err))
+	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropBeforeCatalogLockFault); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("release DROP pre-lock phase: %v", err))
 	}
-	// With the fixed CREATE lock, DROP is now queued on the catalog row and
-	// cannot reach its post-lock point while CREATE remains paused. An unlocked
-	// lookup reaches that point, lets DROP commit, and exposes the 0/1 orphan.
-	lockedCtx, cancelLocked := context.WithTimeout(ctx, time.Second)
-	err = waitForLifecycleFaultWaiters(lockedCtx, r.db, icebergDropAfterCatalogLockWaitersFault, 1)
-	cancelLocked()
-	if err == nil {
-		stopWorkers()
-		return fail([]string{"DROP blocked on CREATE catalog lock"}, nil, "DROP acquired the catalog lifecycle lock before CREATE published its mapping")
+	// The system lock view supplies the positive phase observation that the
+	// earlier timeout-only oracle lacked: DROP has attempted the catalog-row
+	// lock and is waiting behind CREATE. With an unlocked CREATE lookup, DROP
+	// instead owns the row and reaches its post-lock fault, so this condition
+	// cannot be satisfied.
+	if err := waitForCatalogLockWaiter(barrierCtx, r.db); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not enter the catalog lifecycle lock wait: %v", err))
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("observe DROP while CREATE holds catalog lock: %v", err))
-	}
-	if err := releaseLifecycleFault(r.db, icebergCreateAfterCatalogLockFault); err != nil {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("release CREATE post-lock phase: %v", err))
+	if err := releaseLifecycleFault(barrierCtx, r.db, icebergCreateAfterCatalogLockFault); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("release CREATE post-lock phase: %v", err))
 	}
 	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropAfterCatalogLockWaitersFault, 1); err != nil {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("DROP did not acquire the catalog lock after CREATE publication: %v", err))
+		return stopAndFail(nil, nil, fmt.Sprintf("DROP did not acquire the catalog lock after CREATE publication: %v", err))
 	}
-	if err := releaseLifecycleFault(r.db, icebergDropAfterCatalogLockFault); err != nil {
-		stopWorkers()
-		return fail(nil, nil, fmt.Sprintf("release DROP post-lock phase: %v", err))
+	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropAfterCatalogLockFault); err != nil {
+		return stopAndFail(nil, nil, fmt.Sprintf("release DROP post-lock phase: %v", err))
 	}
-	workers.Wait()
-	close(results)
-	resultByName := make(map[string]error, 2)
-	for ddlResult := range results {
-		resultByName[ddlResult.name] = ddlResult.err
-	}
+	resultByName := collectWorkers()
 	createErr, dropErr := resultByName["create"], resultByName["drop"]
 	if (createErr == nil) == (dropErr == nil) {
 		return fail([]string{"exactly one DDL commits"}, []string{fmt.Sprintf("create=%v", createErr), fmt.Sprintf("drop=%v", dropErr)}, "catalog lock did not choose exactly one winner")
 	}
 
-	stateSQL := fmt.Sprintf("select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d)", catalogID, catalogID)
 	sqls = append(sqls, stateSQL)
 	state, err := queryLines(ctx, r.db, stateSQL)
 	if err != nil {
@@ -616,37 +637,73 @@ func installLifecycleFaults(ctx context.Context, db *sql.DB) error {
 	}
 	for _, point := range points {
 		if _, err := db.ExecContext(ctx, fmt.Sprintf("select add_fault_point(%s, ':::', %s, 0, %s)", sqlString(point.name), sqlString(point.action), sqlString(point.target))); err != nil {
-			cleanupLifecycleFaults(db)
+			if cleanupErr := cleanupLifecycleFaults(db); cleanupErr != nil {
+				return fmt.Errorf("add lifecycle fault %s: %w; cleanup: %v", point.name, err, cleanupErr)
+			}
 			return err
 		}
 	}
 	return nil
 }
 
-func cleanupLifecycleFaults(db *sql.DB) {
+func cleanupLifecycleFaults(db *sql.DB) error {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	var errs []error
 	for _, name := range []string{icebergCreateAfterCatalogLockFault, icebergDropBeforeCatalogLockFault, icebergDropAfterCatalogLockFault} {
-		_ = releaseLifecycleFault(db, name)
+		if err := releaseLifecycleFault(cleanupCtx, db, name); err != nil {
+			errs = append(errs, fmt.Errorf("release %s: %w", name, err))
+		}
 	}
 	for _, name := range []string{
 		icebergCreateAfterCatalogLockFault, icebergDropBeforeCatalogLockFault, icebergDropAfterCatalogLockFault,
 		icebergCreateAfterCatalogLockWaitersFault, icebergDropBeforeCatalogLockWaitersFault, icebergDropAfterCatalogLockWaitersFault,
 		icebergCreateAfterCatalogLockNotifyFault, icebergDropBeforeCatalogLockNotifyFault, icebergDropAfterCatalogLockNotifyFault,
 	} {
-		_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("select fault_inject('all.', 'REMOVE_FAULT_POINT', %s)", sqlString(name)))
+		if _, err := db.ExecContext(cleanupCtx, fmt.Sprintf("select fault_inject('all.', 'REMOVE_FAULT_POINT', %s)", sqlString(name))); err != nil {
+			errs = append(errs, fmt.Errorf("remove %s: %w", name, err))
+		}
 	}
-	_, _ = db.ExecContext(cleanupCtx, "select disable_fault_injection()")
+	if _, err := db.ExecContext(cleanupCtx, "select disable_fault_injection()"); err != nil {
+		errs = append(errs, fmt.Errorf("disable fault injection: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
-func releaseLifecycleFault(db *sql.DB, waitPoint string) error {
+func releaseLifecycleFault(ctx context.Context, db *sql.DB, waitPoint string) error {
 	notifyPoint := map[string]string{
 		icebergCreateAfterCatalogLockFault: icebergCreateAfterCatalogLockNotifyFault,
 		icebergDropBeforeCatalogLockFault:  icebergDropBeforeCatalogLockNotifyFault,
 		icebergDropAfterCatalogLockFault:   icebergDropAfterCatalogLockNotifyFault,
 	}[waitPoint]
-	_, err := db.ExecContext(context.Background(), fmt.Sprintf("select trigger_fault_point(%s)", sqlString(notifyPoint)))
+	_, err := db.ExecContext(ctx, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(notifyPoint)))
 	return err
+}
+
+func waitForCatalogLockWaiter(ctx context.Context, db *sql.DB) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		rows, err := queryLines(ctx, db, "select count(*) from mo_catalog.mo_locks where lock_wait is not null and lock_wait <> ''")
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			return fmt.Errorf("catalog lock view returned %d rows", len(rows))
+		}
+		waiters, err := strconv.ParseUint(rows[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse catalog lock waiter count: %w", err)
+		}
+		if waiters > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint string, want uint64) error {
