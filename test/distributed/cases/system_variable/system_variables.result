@@ -262,7 +262,7 @@ table_name  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 view_definition  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 check_option  ¦  varchar(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-definer  ¦  varchar(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+definer  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  varchar(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  varchar(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  varchar(18)  ¦  NO  ¦    ¦  null  ¦    ¦  
