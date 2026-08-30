@@ -437,12 +437,14 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
-		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt')))")
+		"char_length(coalesce(regexp_substr(normalized.view_statement")
 	// rel_createsql preserves adjacent block comments while ViewData.Stmt is
 	// normalized by cleanHint. Its precedence keeps `v/* comment */as` from
 	// becoming the ambiguous identifier `vas` before structural AS extraction.
 	assert.Contains(t, InformationSchemaViewsDDL,
 		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))")
+	assert.Equal(t, 1, strings.Count(InformationSchemaViewsDDL, "regexp_replace(trim(coalesce(tbl.rel_createsql"))
+	assert.Equal(t, 1, strings.Count(InformationSchemaViewsDDL, "regexp_substr(normalized.view_statement"))
 	// The regular expression is embedded in a SQL string literal. Keep its
 	// line-break escapes doubled so SQL passes them through to regexp_substr
 	// instead of turning them into physical newlines.
@@ -452,17 +454,17 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	// equivalent to [^/*] for the regexp engine while remaining literal-safe.
 	assert.Contains(t, InformationSchemaViewsDDL, `[^/\\*]`)
 	assert.NotContains(t, informationSchemaViewPrefixSpanPattern, `[^/*]`)
-	assert.Contains(t, InformationSchemaViewsDDL, "2 * if(left(trim(regexp_replace(")
+	assert.Contains(t, InformationSchemaViewsDDL, "regexp_replace(tbl.view_definition, '[*]/', '', 1, 1)")
 	// System-view definitions are replayed by database clone. Use the same IF
 	// form as other persisted information_schema views for the wrapper-only
 	// suffix adjustment, and preserve the public TEXT metadata type.
-	assert.Contains(t, InformationSchemaViewsDDL, "cast(trim(substr(")
+	assert.Contains(t, InformationSchemaViewsDDL, "trim(substr(extracted.view_statement")
 	assert.NotContains(t, InformationSchemaViewsDDL, "concat('', trim(substr(")
 	assert.Contains(t, InformationSchemaViewsDDL, ")) as text) AS `VIEW_DEFINITION`")
 	assert.NotContains(t, InformationSchemaViewsDDL, "case when")
 	assert.NotContains(t, InformationSchemaViewsDDL, "sign(")
 	assert.NotContains(t, InformationSchemaViewsDDL, "least(")
-	assert.Contains(t, InformationSchemaViewsDDL, "'NO' AS `IS_UPDATABLE`")
+	assert.Contains(t, InformationSchemaViewsDDL, "cast('NO' as varchar(3)) AS `IS_UPDATABLE`")
 	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
 
 	prefix := regexp.MustCompile(informationSchemaViewDefinitionPrefixPattern)
@@ -538,6 +540,26 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			definition: "select 1",
 		},
 		{
+			name:       "block comment ending in repeated stars",
+			createSQL:  "create view v /***/ as select 1;",
+			definition: "select 1",
+		},
+		{
+			name:       "block comment ending in longer repeated stars",
+			createSQL:  "create view v /*****/ as select 1;",
+			definition: "select 1",
+		},
+		{
+			name:       "executable comment without version digits",
+			createSQL:  "/*! CREATE VIEW v AS SELECT 1 */;",
+			definition: "SELECT 1",
+		},
+		{
+			name:       "executable comment preserves trailing application comment",
+			createSQL:  "/*!50001 CREATE VIEW v AS SELECT 1 */ /* application */;",
+			definition: "SELECT 1  /* application */",
+		},
+		{
 			name:       "unrecognized metadata remains visible",
 			createSQL:  "select 1",
 			definition: "select 1",
@@ -549,7 +571,7 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 			statement := strings.TrimSpace(terminator.ReplaceAllString(strings.TrimSpace(test.createSQL), ""))
 			definition := strings.TrimSpace(prefix.ReplaceAllString(statement, ""))
 			if strings.HasPrefix(statement, "/*!") {
-				definition = strings.TrimSpace(strings.TrimSuffix(definition, "*/"))
+				definition = strings.TrimSpace(strings.Replace(definition, "*/", "", 1))
 			}
 			assert.Equal(t, test.definition, definition)
 		})
@@ -560,10 +582,17 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 		"create view block_comment_v /* migration */ as select 1;",
 		"create view adjacent_block_comment_v/* migration */as select 1;",
 		"create /* migration view fake as */ view block_before_view_v as select 1;",
+		"create view repeated_star_comment_v /***/ as select 1;",
+		"create view long_repeated_star_comment_v /*****/ as select 1;",
+		"/*! CREATE VIEW executable_without_version_v AS SELECT 1 */;",
+		"/*!50001 CREATE VIEW executable_trailing_comment_v AS SELECT 1 */ /* application */;",
 	} {
 		statements, err := mysql.Parse(context.Background(), createSQL, 1)
 		assert.NoError(t, err)
+		assert.Len(t, statements, 1)
 		for _, statement := range statements {
+			_, ok := statement.(*tree.CreateView)
+			assert.True(t, ok, createSQL)
 			statement.Free()
 		}
 	}

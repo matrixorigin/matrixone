@@ -27,8 +27,10 @@ const (
 	// accept every lexer-supported form wherever valid SQL permits whitespace
 	// between view tokens. Keep ordinary block comments whole while scanning to
 	// the structural VIEW token: words in a comment must not be parsed as DDL.
-	informationSchemaViewLineCommentPattern       = "(?:(?:--|#|//)[^\\r\\n]*(?:\\r?\\n|$))"
-	informationSchemaViewBlockCommentPattern      = "/[*](?:[^*]|[*][^/])*[*]/"
+	informationSchemaViewLineCommentPattern = "(?:(?:--|#|//)[^\\r\\n]*(?:\\r?\\n|$))"
+	// The scanner closes at the first */, including when the comment body ends
+	// with a run of stars (for example /***/ or /*****/).
+	informationSchemaViewBlockCommentPattern      = "/[*](?:[^*]|[*]+[^*/])*[*]+/"
 	informationSchemaViewOptionalSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + "|" + informationSchemaViewBlockCommentPattern + ")*"
 	informationSchemaViewRequiredSeparatorPattern = "(?:[[:space:]]|" + informationSchemaViewLineCommentPattern + "|" + informationSchemaViewBlockCommentPattern + ")+"
 	// The character alternatives exclude every ordinary-comment introducer, so
@@ -42,7 +44,7 @@ const (
 	// DEFINER, and SQL SECURITY clauses. mysqldump executable comments carry SQL
 	// themselves, so retain their existing wrapper-aware path separately.
 	informationSchemaViewDefinitionPrefixPattern = "(?is)^(?:" +
-		"[[:space:]]*/[*]![0-9]+[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter).*?" + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
+		"[[:space:]]*/[*]![0-9]*[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter).*?" + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
 		"|[[:space:]]*(?:create(?:" + informationSchemaViewRequiredSeparatorPattern + "or" + informationSchemaViewRequiredSeparatorPattern + "replace)?|alter)" + informationSchemaViewPrefixSpanPattern + informationSchemaViewRequiredSeparatorPattern + "view" + informationSchemaViewRequiredSeparatorPattern +
 		")" +
 		"(?:if" + informationSchemaViewRequiredSeparatorPattern + "(?:not" + informationSchemaViewRequiredSeparatorPattern + ")?exists" + informationSchemaViewRequiredSeparatorPattern + ")?" +
@@ -55,26 +57,33 @@ const (
 	// normalized ViewData.Stmt, retains a separator when a block comment is
 	// adjacent to a structural token (for example, `v/* note */as`). Use it
 	// first so the lexer-accepted statement remains distinguishable here.
-	informationSchemaViewStatementSQL                  = "coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))"
-	informationSchemaViewStatementWithoutTerminatorSQL = "trim(regexp_replace(trim(" +
-		informationSchemaViewStatementSQL + "), '[;][[:space:]]*$', '', 1, 1))"
+	informationSchemaViewStatementSQL                  = "tbl.view_statement"
+	informationSchemaViewStatementWithoutTerminatorSQL = "tbl.view_statement"
 )
 
 var (
 	informationSchemaViewDefinitionPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
 		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + strings.ReplaceAll(informationSchemaViewDefinitionPrefixPattern, "\\", "\\\\") + "'), ''))"
-	// IF is already used by persisted information_schema definitions. It keeps
-	// the wrapper adjustment numeric, while avoiding the unsupported SIGN/LEAST
-	// calls and preserving an ordinary trailing application comment.
+	// IF is already used by persisted information_schema definitions. Only an
+	// executable-comment wrapper removes its first closing */; an ordinary
+	// application comment after that wrapper remains part of the definition.
 	// Prefix lengths are counted in characters so they match substr even for
-	// multibyte view identifiers. Only a mysqldump executable-comment wrapper
-	// loses its final */.
+	// multibyte view identifiers.
 	// The extraction helpers return VARCHAR, but VIEWS has historically exposed
 	// VIEW_DEFINITION as TEXT. Keep that public metadata type stable.
-	informationSchemaViewDefinitionSQL = "cast(trim(substr(" + informationSchemaViewStatementWithoutTerminatorSQL +
-		", " + informationSchemaViewDefinitionPrefixLengthSQL + " + 1, char_length(" +
-		informationSchemaViewStatementWithoutTerminatorSQL + ") - " + informationSchemaViewDefinitionPrefixLengthSQL + " - " +
-		"2 * if(left(" + informationSchemaViewStatementWithoutTerminatorSQL + ", 3) = '/*!', 1, 0))) as text)"
+	informationSchemaViewDefinitionSQL = "cast(trim(if(left(" + informationSchemaViewStatementWithoutTerminatorSQL +
+		", 3) = '/*!', regexp_replace(tbl.view_definition, '[*]/', '', 1, 1), tbl.view_definition)) as text)"
+	informationSchemaViewsSourceSQL = "FROM (SELECT extracted.*, trim(substr(extracted.view_statement, " +
+		"extracted.view_definition_prefix_length + 1, char_length(extracted.view_statement) - " +
+		"extracted.view_definition_prefix_length)) AS view_definition FROM (SELECT normalized.*, " +
+		"char_length(coalesce(regexp_substr(normalized.view_statement, '" +
+		strings.ReplaceAll(informationSchemaViewDefinitionPrefixPattern, "\\", "\\\\") +
+		"'), '')) AS view_definition_prefix_length FROM (SELECT tbl.*, trim(regexp_replace(trim(" +
+		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))), '[;][[:space:]]*$', '', 1, 1)) " +
+		"AS view_statement FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
+		"tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id WHERE tbl.account_id = current_account_id() " +
+		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema') normalized) extracted) tbl " +
+		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id"
 )
 
 // `mysql` database system tables
@@ -623,15 +632,12 @@ var (
 		"tbl.relname AS `TABLE_NAME`," +
 		informationSchemaViewDefinitionSQL + " AS `VIEW_DEFINITION`," +
 		"'NONE' AS `CHECK_OPTION`," +
-		"'NO' AS `IS_UPDATABLE`," +
+		"cast('NO' as varchar(3)) AS `IS_UPDATABLE`," +
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
-		"FROM mo_catalog.mo_tables tbl " +
-		"JOIN __mo_visible_tables visible_tbl ON tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id " +
-		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
-		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
+		informationSchemaViewsSourceSQL
 
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+

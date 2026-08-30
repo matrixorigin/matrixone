@@ -15,6 +15,10 @@ as select a from t;
 create view block_comment_v /* migration-generated view */ as select a from t;
 create view adjacent_block_comment_v/* migration-generated view */as select a from t;
 create /* migration view fake as */ view block_before_view_v as select a from t;
+create view repeated_star_comment_v /***/ as select a from t;
+create view long_repeated_star_comment_v /*****/ as select a from t;
+/*! CREATE VIEW executable_without_version_v AS select a from t */;
+/*!50001 CREATE VIEW executable_trailing_comment_v AS select a from t */ /* application */;
 select table_name, view_definition, is_updatable
 from information_schema.views
 where table_schema = 'information_schema_views_metadata'
@@ -26,8 +30,12 @@ block_before_view_v  ¦  select a from t  ¦  NO  𝄀
 block_comment_v  ¦  select a from t  ¦  NO  𝄀
 direct_v  ¦  select a, b from t  ¦  NO  𝄀
 dump_v  ¦  select a from t  ¦  NO  𝄀
+executable_trailing_comment_v  ¦  select a from t  /* application */  ¦  NO  𝄀
+executable_without_version_v  ¦  select a from t  ¦  NO  𝄀
 hash_comment_v  ¦  select a from t  ¦  NO  𝄀
 line_comment_v  ¦  select a from t  ¦  NO  𝄀
+long_repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
+repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
 slash_comment_v  ¦  select a from t  ¦  NO
 update agg_v set cnt = 1;
 invalid input: cannot insert/update/delete from view
