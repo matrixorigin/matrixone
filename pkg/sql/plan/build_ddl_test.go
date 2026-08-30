@@ -5089,6 +5089,76 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCTASAggregateNullabilityAndDefaults(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create table aggregate_metadata as
+		select count(n_name) as cnt,
+			bit_and(n_nationkey) as band,
+			bit_or(n_nationkey) as bor,
+			bit_xor(n_nationkey) as bxor,
+			min(n_nationkey) as minimum,
+			max(n_nationkey) as maximum
+		from nation`)
+	require.NoError(t, err)
+
+	var visible []*plan.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 6)
+
+	for _, idx := range []int{0, 1, 2, 3} {
+		col := visible[idx]
+		require.True(t, col.Typ.NotNullable, col.Name)
+		require.NotNil(t, col.Default, col.Name)
+		require.False(t, col.Default.NullAbility, col.Name)
+		require.Equal(t, "0", col.Default.OriginString, col.Name)
+		require.NotNil(t, col.Default.Expr, col.Name)
+	}
+	require.Equal(t, int32(types.T_int64), visible[0].Typ.Id)
+	for _, idx := range []int{1, 2, 3} {
+		require.Equal(t, int32(types.T_uint64), visible[idx].Typ.Id, visible[idx].Name)
+	}
+
+	for _, idx := range []int{4, 5} {
+		col := visible[idx]
+		require.False(t, col.Typ.NotNullable, col.Name)
+		require.NotNil(t, col.Default, col.Name)
+		require.True(t, col.Default.NullAbility, col.Name)
+		require.Empty(t, col.Default.OriginString, col.Name)
+		require.Nil(t, col.Default.Expr, col.Name)
+	}
+}
+
+func TestBuildCTASHLLAggregatesHaveNoExecutableDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create table hll_metadata as
+		select hll_add_agg(n_nationkey) as added,
+			hll_merge_agg(cast(n_name as varbinary)) as merged
+		from nation`)
+	require.NoError(t, err)
+
+	var visible []*plan.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 2)
+	for _, col := range visible {
+		require.Equal(t, int32(types.T_varbinary), col.Typ.Id, col.Name)
+		require.True(t, col.Typ.NotNullable, col.Name)
+		require.NotNil(t, col.Default, col.Name)
+		require.False(t, col.Default.NullAbility, col.Name)
+		require.Empty(t, col.Default.OriginString, col.Name)
+		require.Nil(t, col.Default.Expr, col.Name)
+	}
+}
+
 func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := &mock.ctxt
