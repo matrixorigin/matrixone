@@ -280,6 +280,35 @@ func TestBroadcastAllFailureIsBoundedAndCancelable(t *testing.T) {
 	}
 }
 
+func TestBroadcastCancellationStopsPendingTargets(t *testing.T) {
+	p := testPublisher()
+	p.delays = []time.Duration{0}
+	p.rpcSem = make(chan struct{}, 1)
+	p.nodesFn = func(context.Context) ([]metadata.CNService, error) {
+		return []metadata.CNService{{ServiceID: "a"}, {ServiceID: "b"}}, nil
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	p.sendFn = func(pendingFence, metadata.CNService) bool {
+		if calls.Add(1) == 1 {
+			p.cancel()
+			close(started)
+			<-release
+		}
+		return false
+	}
+	done := make(chan struct{})
+	go func() {
+		p.broadcast(pendingFence{identity: testIdentity("cancel"), generation: fulltext2.Generation{BaseTimestamp: 1}})
+		close(done)
+	}()
+	<-started
+	close(release)
+	<-done
+	require.Equal(t, int32(1), calls.Load())
+}
+
 func TestAckRequiresClaimAndSufficientGeneration(t *testing.T) {
 	want := fulltext2.Generation{BaseTimestamp: 4, TailChunk: 8}
 	require.False(t, ackAccepts(querypb.Fulltext2CacheFenceResponse{
