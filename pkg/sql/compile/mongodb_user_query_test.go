@@ -69,6 +69,22 @@ func mongoQueryTestFunction(name string, functionID int64, args ...*plan.Expr) *
 	}
 }
 
+func newMongoUserQueryTestCompiler(t *testing.T) *Compile {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	return &Compile{proc: proc}
+}
+
 func TestConfigureMongoUserQuerySeparatesSelectorAndResidual(t *testing.T) {
 	node := mongoUserQueryNode()
 	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
@@ -83,7 +99,7 @@ func TestConfigureMongoUserQuerySeparatesSelectorAndResidual(t *testing.T) {
 	})
 	node.FilterList = []*plan.Expr{selector, ordinary}
 	node.ProjectList = []*plan.Expr{valueColumn}
-	compiler := &Compile{proc: testutil.NewProcess(t)}
+	compiler := newMongoUserQueryTestCompiler(t)
 
 	require.NoError(t, compiler.configureMongoUserQuery(node))
 	require.Len(t, node.FilterList, 1)
@@ -104,7 +120,7 @@ func TestConfigureMongoUserQueryReconstructsSourceForExplicitProjection(t *testi
 		mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(source)),
 	}
 	node.ProjectList = []*plan.Expr{queryColumn}
-	compiler := &Compile{proc: testutil.NewProcess(t)}
+	compiler := newMongoUserQueryTestCompiler(t)
 
 	require.NoError(t, compiler.configureMongoUserQuery(node))
 	require.Empty(t, node.FilterList)
@@ -122,7 +138,7 @@ func TestConfigureMongoUserQueryPipelineKeepsHiddenCarrierForResidualFilter(t *t
 	node.FilterList = []*plan.Expr{
 		mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"pipeline":[{"$count":"value"}]}`)),
 	}
-	compiler := &Compile{proc: testutil.NewProcess(t)}
+	compiler := newMongoUserQueryTestCompiler(t)
 
 	require.NoError(t, compiler.configureMongoUserQuery(node))
 	require.True(t, node.ExternScan.MongodbScan.IncludeQueryColumn)
