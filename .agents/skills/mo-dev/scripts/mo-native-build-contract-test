@@ -211,17 +211,19 @@ else
     fail "CPU release compilation preserves -O3"
 fi
 if printf '%s\n' "$cpu_debug" | grep -q -- ' -O0 ' &&
-   ! printf '%s\n' "$cpu_debug" | grep -q -- ' -O3 '; then
-    pass "CPU debug compilation contains -O0 and no -O3"
+   ! printf '%s\n' "$cpu_debug" | grep -Eq -- \
+       ' -O[^0]| -ffast-math| -ftree-vectorize| -funroll-loops'; then
+    pass "CPU debug compilation contains -O0 and no release optimization flags"
 else
-    fail "CPU debug compilation contains -O0 and no -O3"
+    fail "CPU debug compilation contains -O0 and no release optimization flags"
 fi
 
 cpu_debug_override=$(make -C "$repo_root/cgo" -Bn \
     CFLAGS='-O3 -DPROFILE_A' debug 2>&1)
 if printf '%s\n' "$cpu_debug_override" | grep -q -- ' -O0 ' &&
    printf '%s\n' "$cpu_debug_override" | grep -q -- ' -DPROFILE_A ' &&
-   ! printf '%s\n' "$cpu_debug_override" | grep -q -- ' -O3 '; then
+   ! printf '%s\n' "$cpu_debug_override" | grep -Eq -- \
+       ' -O[^0]| -ffast-math| -ftree-vectorize| -funroll-loops'; then
     pass "CPU debug semantics override conflicting custom optimization flags"
 else
     fail "CPU debug semantics override conflicting custom optimization flags"
