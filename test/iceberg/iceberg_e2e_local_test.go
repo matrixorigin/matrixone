@@ -629,6 +629,90 @@ func TestLocalE2EWaitForCatalogLockWaiter(t *testing.T) {
 	}
 }
 
+func TestLocalE2EWaitForCatalogLockWaiterRejectsInvalidResponses(t *testing.T) {
+	tests := []struct {
+		name string
+		rows *sqlmock.Rows
+		err  error
+		want string
+	}{
+		{name: "query failure", err: errors.New("lock view unavailable"), want: "lock view unavailable"},
+		{name: "empty response", rows: sqlmock.NewRows([]string{"waiters"}), want: "returned 0 rows"},
+		{name: "invalid count", rows: sqlmock.NewRows([]string{"waiters"}).AddRow("not-a-count"), want: "parse catalog lock waiter count"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			expectation := mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks")
+			if tt.err != nil {
+				expectation.WillReturnError(tt.err)
+			} else {
+				expectation.WillReturnRows(tt.rows)
+			}
+			err := waitForCatalogLockWaiter(context.Background(), db)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q, got %v", tt.want, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("catalog-lock waiter failure expectation: %v", err)
+			}
+		})
+	}
+}
+
+func TestLocalE2EWaitForCatalogLockWaiterHonorsDeadline(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectQuery("select count\\(\\*\\) from mo_catalog\\.mo_locks").
+		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(0)))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
+	defer cancel()
+	if err := waitForCatalogLockWaiter(ctx, db); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("catalog-lock waiter ignored deadline: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("catalog-lock waiter deadline expectation: %v", err)
+	}
+}
+
+func TestLocalE2ECleanupLifecycleFaultsReportsEveryFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+	} {
+		mock.ExpectExec("select trigger_fault_point").WillReturnError(errors.New("release unavailable"))
+	}
+	mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnError(errors.New("remove unavailable"))
+	for range []string{
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("select disable_fault_injection").WillReturnError(errors.New("disable unavailable"))
+
+	err := cleanupLifecycleFaults(db)
+	for _, want := range []string{"release iceberg-create-mapping-after-catalog-lock", "remove iceberg-create-mapping-after-catalog-lock", "disable fault injection"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("cleanup error did not preserve %q: %v", want, err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("cleanup lifecycle fault failure expectations: %v", err)
+	}
+}
+
 func TestLocalE2EReleaseLifecycleFaultHonorsCancellation(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -780,6 +864,21 @@ func TestLocalE2EWaitForLifecycleFaultWaitersRejectsInvalidResponses(t *testing.
 				t.Fatalf("lifecycle waiter failure expectation: %v", err)
 			}
 		})
+	}
+}
+
+func TestLocalE2EWaitForLifecycleFaultWaitersHonorsDeadline(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectQuery("select trigger_fault_point").
+		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(0)))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
+	defer cancel()
+	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lifecycle fault waiter ignored deadline: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("lifecycle-fault waiter deadline expectation: %v", err)
 	}
 }
 
