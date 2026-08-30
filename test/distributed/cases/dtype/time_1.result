@@ -23,9 +23,9 @@ create table time_02(t1 time);
 insert into time_02 values("200:60:60");
 invalid input: invalid time value 200:60:60
 insert into time_02 values("2562047788:00:00");
-invalid input: invalid time value 2562047788:00:00
+Data truncation: data out of range: data type time, value '2562047788:00:00'
 insert into time_02 values("-2562047788:00:00");
-invalid input: invalid time value -2562047788:00:00
+Data truncation: data out of range: data type time, value '-2562047788:00:00'
 insert into time_02 values("abc");
 invalid input: invalid time value abc
 insert into time_02 values("中文");
