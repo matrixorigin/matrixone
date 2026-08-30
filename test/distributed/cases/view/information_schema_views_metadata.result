@@ -31,10 +31,12 @@ block_comment_v  ¦  select a from t  ¦  NO  𝄀
 direct_v  ¦  select a, b from t  ¦  NO  𝄀
 dump_v  ¦  select a from t  ¦  NO  𝄀
 executable_trailing_comment_v  ¦  select a from t  /* application */  ¦  NO  𝄀
+executable_string_terminator_v  ¦  select 'x*/y' as s  ¦  NO  𝄀
 executable_without_version_v  ¦  select a from t  ¦  NO  𝄀
 hash_comment_v  ¦  select a from t  ¦  NO  𝄀
 line_comment_v  ¦  select a from t  ¦  NO  𝄀
 long_repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
+quoted_definer_v  ¦  select a from t  ¦  NO  𝄀
 repeated_star_comment_v  ¦  select a from t  ¦  NO  𝄀
 slash_comment_v  ¦  select a from t  ¦  NO
 update agg_v set cnt = 1;
