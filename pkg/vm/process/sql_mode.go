@@ -46,6 +46,37 @@ func IsStrictNoZeroDateMode(mode any) bool {
 	return strict && noZeroDate
 }
 
+func IsPadCharToFullLengthMode(mode any) bool {
+	modeStr, ok := mode.(string)
+	if !ok {
+		return false
+	}
+
+	for token := range strings.SplitSeq(modeStr, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "PAD_CHAR_TO_FULL_LENGTH") {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolvePadCharToFullLength reports the current PAD_CHAR_TO_FULL_LENGTH mode.
+// A local process resolves the live session variable, while a remote process
+// uses the sql_mode snapshot carried in SessionInfo by the pipeline codec.
+func ResolvePadCharToFullLength(proc *Process) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
+		mode, err := resolveFunc("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		return IsPadCharToFullLengthMode(mode), nil
+	}
+	return IsPadCharToFullLengthMode(proc.GetSessionInfo().SqlMode), nil
+}
+
 func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {
 	if proc == nil {
 		return false, nil
