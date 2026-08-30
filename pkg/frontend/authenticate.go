@@ -5259,33 +5259,47 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	return err
 }
 
-// getDatabaseOrTableId gets the id of the database or the table
+// getDatabaseOrTableId gets the id of the database or the table.
 func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbName, tableName string) (int64, error) {
+	return getDatabaseOrTableIdWithLock(ctx, bh, isDb, dbName, tableName, false)
+}
+
+func getDatabaseOrTableIdWithLock(
+	ctx context.Context,
+	bh BackgroundExec,
+	isDb bool,
+	dbName string,
+	tableName string,
+	lockObject bool,
+) (int64, error) {
 	var err error
 	var sql string
-	var erArray []ExecResult
-	var id int64
 	if isDb {
-		sql, err = getSqlForCheckDatabase(ctx, dbName)
+		if lockObject {
+			sql, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
+		} else {
+			sql, err = getSqlForCheckDatabase(ctx, dbName)
+		}
 	} else {
 		sql, err = getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 	}
 	if err != nil {
 		return 0, err
 	}
+	if lockObject {
+		sql = strings.TrimSuffix(sql, ";") + " for share;"
+	}
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
+	if err = bh.Exec(ctx, sql); err != nil {
 		return 0, err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
+	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
 		return 0, err
 	}
-
 	if execResultArrayHasData(erArray) {
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return 0, err
 		}
@@ -5293,9 +5307,8 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	}
 	if isDb {
 		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
-	} else {
-		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 	}
+	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 }
 
 func copyTablePrivileges(
@@ -5431,10 +5444,19 @@ func getTableIdWithSnapshot(
 	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 }
 
-func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {
+func getViewIdWithLock(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	viewName string,
+	lockObject bool,
+) (int64, error) {
 	sql, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
 	if err != nil {
 		return 0, err
+	}
+	if lockObject {
+		sql = strings.TrimSuffix(sql, ";") + " for share;"
 	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -5660,10 +5682,65 @@ func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (
 // it returns the converted object type, the privilege level and the object id.
 func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
+	return checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, false)
+}
+
+var grantPrivilegeObjectLockedHook atomic.Pointer[func()]
+
+// SetGrantPrivilegeObjectLockedHookForTest installs a process-local barrier
+// after GRANT has acquired its object lifecycle locks and before publication.
+// It is intended only for deterministic cross-session protocol tests.
+func SetGrantPrivilegeObjectLockedHookForTest(hook func()) func() {
+	previous := grantPrivilegeObjectLockedHook.Load()
+	if hook == nil {
+		grantPrivilegeObjectLockedHook.Store(nil)
+	} else {
+		grantPrivilegeObjectLockedHook.Store(&hook)
+	}
+	return func() { grantPrivilegeObjectLockedHook.Store(previous) }
+}
+
+func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses FeSession, bh BackgroundExec,
+	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
+	if ot == tree.OBJECT_TYPE_TABLE &&
+		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) &&
+		isIndexTable(pl.TabName) {
+		// Hidden index relations are implementation details whose lifecycle is
+		// owned by their base table/index definition. They cannot be independent
+		// authorization objects.
+		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
+	}
+	return checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
+}
+
+func checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(
+	ctx context.Context,
+	ses FeSession,
+	bh BackgroundExec,
+	ot tree.ObjectType,
+	pl tree.PrivilegeLevel,
+	lockObject bool,
+) (privilegeLevelType, int64, error) {
+	getDatabaseID := func(dbName string) (int64, error) {
+		return getDatabaseOrTableIdWithLock(ctx, bh, true, dbName, "", lockObject)
+	}
+	getRelationID := func(dbName, relationName string, isView bool) (int64, error) {
+		if lockObject {
+			// Match DROP's database-before-relation lock order. Both catalog row
+			// locks remain owned by the GRANT transaction through publication.
+			if _, err := getDatabaseID(dbName); err != nil {
+				return 0, err
+			}
+		}
+		if isView {
+			return getViewIdWithLock(ctx, bh, dbName, relationName, lockObject)
+		}
+		return getDatabaseOrTableIdWithLock(ctx, bh, false, dbName, relationName, lockObject)
+	}
+
 	var privLevel privilegeLevelType
-	var objId int64
+	var objID int64
 	var err error
-	var dbName string
 
 	switch ot {
 	case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
@@ -5671,85 +5748,56 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
-			objId, err = getDatabaseOrTableId(ctx, bh, true, ses.GetDatabaseName(), "")
-			if err != nil {
-				return 0, 0, err
-			}
+			objID, err = getDatabaseID(ses.GetDatabaseName())
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			privLevel = privilegeLevelStarStar
-			objId = objectIDAll
+			objID = objectIDAll
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
 			privLevel = privilegeLevelDatabaseStar
-			objId, err = getDatabaseOrTableId(ctx, bh, true, pl.DbName, "")
-			if err != nil {
-				return 0, 0, err
-			}
+			objID, err = getDatabaseID(pl.DbName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
 			privLevel = privilegeLevelDatabaseTable
-			if isView {
-				objId, err = getViewId(ctx, bh, pl.DbName, pl.TabName)
-			} else {
-				objId, err = getDatabaseOrTableId(ctx, bh, false, pl.DbName, pl.TabName)
-			}
-			if err != nil {
-				return 0, 0, err
-			}
+			objID, err = getRelationID(pl.DbName, pl.TabName, isView)
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			privLevel = privilegeLevelTable
-			if isView {
-				objId, err = getViewId(ctx, bh, ses.GetDatabaseName(), pl.TabName)
-			} else {
-				objId, err = getDatabaseOrTableId(ctx, bh, false, ses.GetDatabaseName(), pl.TabName)
-			}
-			if err != nil {
-				return 0, 0, err
-			}
+			objID, err = getRelationID(ses.GetDatabaseName(), pl.TabName, isView)
 		default:
-			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
-			return 0, 0, err
+			return 0, 0, moerr.NewInternalErrorf(ctx,
+				`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 		}
 	case tree.OBJECT_TYPE_DATABASE:
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
-			objId = objectIDAll
+			objID = objectIDAll
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			privLevel = privilegeLevelStarStar
-			objId = objectIDAll
+			objID = objectIDAll
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
-			// in the syntax, we can not distinguish the table name from the database name.
+			// In the syntax, we cannot distinguish the table name from the database name.
 			privLevel = privilegeLevelDatabase
-			dbName = pl.TabName
-			objId, err = getDatabaseOrTableId(ctx, bh, true, dbName, "")
-			if err != nil {
-				return 0, 0, err
-			}
+			objID, err = getDatabaseID(pl.TabName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			privLevel = privilegeLevelDatabase
-			dbName = pl.DbName
-			objId, err = getDatabaseOrTableId(ctx, bh, true, dbName, "")
-			if err != nil {
-				return 0, 0, err
-			}
+			objID, err = getDatabaseID(pl.DbName)
 		default:
-			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
-			return 0, 0, err
+			return 0, 0, moerr.NewInternalErrorf(ctx,
+				`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
-		switch pl.Level {
-		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-			privLevel = privilegeLevelStar
-			objId = objectIDAll
-		default:
-			err = moerr.NewInternalErrorf(ctx, `in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
-			return 0, 0, err
+		if pl.Level != tree.PRIVILEGE_LEVEL_TYPE_STAR {
+			return 0, 0, moerr.NewInternalErrorf(ctx,
+				`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
 		}
+		privLevel = privilegeLevelStar
+		objID = objectIDAll
 	default:
-		err = moerr.NewInternalErrorf(ctx, `the object type "%s" is unsupported`, ot.String())
+		return 0, 0, moerr.NewInternalErrorf(ctx, `the object type "%s" is unsupported`, ot.String())
+	}
+	if err != nil {
 		return 0, 0, err
 	}
-
-	return privLevel, objId, err
+	return privLevel, objID, nil
 }
 
 // matchPrivilegeTypeWithObjectType matches the privilege type with the object type
@@ -5865,9 +5913,12 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 
 	// step 2: get obj_type, privilege_level
 	// step 3: get obj_id
-	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, gp.ObjType, *gp.Level)
+	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx, ses, bh, gp.ObjType, *gp.Level)
 	if err != nil {
 		return err
+	}
+	if hook := grantPrivilegeObjectLockedHook.Load(); hook != nil {
+		(*hook)()
 	}
 
 	// step 4: get privilege_id
@@ -12310,6 +12361,7 @@ func doRevokePrivilegeImplicitly(
 	ses *Session,
 	stmt tree.Statement,
 	persistentDropTableTargets tree.TableNames,
+	defaultDatabase string,
 ) error {
 	var err error
 	if _, ok := stmt.(*tree.DropTable); ok && len(persistentDropTableTargets) == 0 {
@@ -12351,7 +12403,10 @@ func doRevokePrivilegeImplicitly(
 		for _, name := range persistentDropTableTargets {
 			dbName := string(name.SchemaName)
 			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
+				dbName = defaultDatabase
+				if dbName == "" {
+					dbName = ses.GetDatabaseName()
+				}
 			}
 			curRole, err := getTableOwnerRoleName(tenantCtx, bh, dbName, string(name.ObjectName))
 			if err != nil {
