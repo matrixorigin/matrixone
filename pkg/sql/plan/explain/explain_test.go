@@ -1098,6 +1098,7 @@ func TestExplainOrderedPercentile(t *testing.T) {
 	}{
 		{name: "ascending continuous", fn: "percentile_cont", want: "percentile_cont(0.95) WITHIN GROUP (ORDER BY tw.v ASC)"},
 		{name: "descending discrete", fn: "percentile_disc", desc: 1, want: "percentile_disc(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
+		{name: "descending approximate", fn: "approx_percentile", desc: 1, want: "approx_percentile(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registered, err := function.GetFunctionByName(ctx, tc.fn,
@@ -1123,6 +1124,24 @@ func TestExplainOrderedPercentile(t *testing.T) {
 			require.Equal(t, tc.want, buf.String())
 		})
 	}
+
+	t.Run("ordinary approximate remains ordinary", func(t *testing.T) {
+		registered, err := function.GetFunctionByName(ctx, "approx_percentile",
+			[]types.Type{types.T_int64.ToType(), types.T_float64.ToType()})
+		require.NoError(t, err)
+		expr := &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_float64)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{
+					Obj: registered.GetEncodedOverloadID(), ObjName: "approx_percentile",
+				},
+				Args: []*plan2.Expr{value, percentile},
+			}},
+		}
+		buf := bytes.NewBuffer(nil)
+		require.NoError(t, describeExpr(ctx, expr, &ExplainOptions{}, buf))
+		require.Equal(t, "approx_percentile(tw.v, 0.95)", buf.String())
+	})
 
 	t.Run("invalid argument count", func(t *testing.T) {
 		err := explainOrderedPercentile(ctx, &plan2.Function{
