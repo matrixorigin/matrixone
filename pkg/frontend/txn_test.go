@@ -2447,6 +2447,7 @@ func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
 	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
 
 	op.meta.Mode = txn.TxnMode_Pessimistic
 	err = handler.Create(&ExecCtx{
@@ -2456,6 +2457,7 @@ func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
 	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
 
 	op.meta.Isolation = txn.TxnIsolation_RC
 	require.NoError(t, handler.Create(&ExecCtx{
