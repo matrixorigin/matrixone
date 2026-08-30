@@ -482,26 +482,52 @@ The base table is identified by **table id**, not by name: `mo_iscp_log` lives
 in the system tenant, where resolving a normal tenant's table name would find
 the wrong table or nothing at all.
 
-### 10.1 Known limitation: the persisted watermark is coarse
+### 10.1 Persisting the index watermark
 
-The gate is correct but currently conservative to the point of rarely firing,
-and the reason is not in this design — it is the cadence at which ISCP persists
-the watermark:
+The watermark is only useful to a reader if it is persisted often enough to
+reflect reality. ISCP's general cadence is not:
 
 - While a table is being **written**, each iteration persists the watermark in
-  its own transaction, so the log is fresh. The gate still declines, and that
-  is *right*: changes may exist between the watermark and the read snapshot.
+  its own transaction, so the log is fresh.
 - While a table is **idle**, the executor advances the watermark only in memory
-  (`TableEntry.UpdateWatermark` on the clean-table path) and flushes it to
-  `mo_iscp_log` on a `FlushWatermarkInterval` ticker whose default is **one
-  hour**, and only once the in-memory watermark has moved a full interval past
-  the persisted one (`JobEntry.tryFlushWatermark`).
+  (the clean-table path in `TableEntry.UpdateWatermark`) and flushes it on a
+  `FlushWatermarkInterval` ticker whose default was **one hour**, and only once
+  the in-memory watermark had moved a full interval past the persisted one
+  (`JobEntry.tryFlushWatermark`).
 
-So for the workload this feature targets — bulk load, then query — the index is
-in fact fully current while the persisted watermark can sit up to an hour
-behind, and the probe stays off. Closing that gap is an ISCP-side decision, not
-a planner one; the candidates are: persist the clean-table advance on a much
-shorter interval for index jobs, expose the in-memory watermark through the
-query service, or ask "did this table change after W?" at plan time (one extra
-round trip per planned query). Until one is chosen, the protocol is in place and
-safe, and the probe is off in the common case.
+That cadence is right for the job class it was written for — a consumer whose
+watermark only bounds how much work a restart repeats. An index job's watermark
+is also **read**, so it now has its own threshold: `JobEntry` records whether it
+is a `ConsumerType_IndexSync` job, and `flushThreshold` gives that class
+`IndexFlushWatermarkInterval` (default 5s) instead of the general one. The flush
+ticker runs at the shortest threshold any class uses, since a slower tick would
+silently cap the faster class. Measured on a live cluster, an idle indexed
+table's persisted watermark now advances every ~10s (the executor's poll
+cadence) instead of hourly.
+
+### 10.2 Remaining gap: the comparison, not the cadence
+
+A fresh watermark is necessary but not sufficient, and the reason is structural
+rather than a tuning problem. The gate asks `watermark >= snapshot`, and an
+asynchronous consumer's watermark **trails** the present by construction: at any
+flush interval, a query reading at `now` sees a watermark from one poll cycle
+ago and declines. Shortening the interval moves the lag from an hour to seconds
+but never to zero, so the probe still stays off for a live query. (It does fire
+for a read whose snapshot is older than the watermark — an explicit past
+`AS OF TIMESTAMP`, or a long-running transaction.)
+
+What actually licenses the probe is weaker than what is currently asked:
+
+    covered  ⟺  no base-table change exists in (watermark, snapshot]
+
+and the clean-table watermark already means "verified no changes up to W", so
+the window left to check is only the last poll cycle. Answering it needs a
+per-table "did this change after W?" query. `disttae.GetChangedTableList` is
+exactly that primitive — it is what ISCP itself polls with — but calling it from
+the planner costs a round trip per planned query. The cheaper shape is to answer
+from the CN's own partition state, which is authoritative for what is visible at
+the read snapshot and needs no RPC; it has no ready-made "max change timestamp"
+accessor today.
+
+Until that half is built, the protocol is in place, the watermark it reads is
+fresh, and the gate is safe — it declines rather than dropping rows.
