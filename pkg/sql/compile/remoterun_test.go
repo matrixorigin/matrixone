@@ -4959,17 +4959,17 @@ func TestMongoScanRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, spec))
 	scope := &Scope{Proc: proc, RootOp: mongoscan.NewArgument().WithScan(spec)}
 
-	// A statement can compile while v40 is live, then encounter a rollback
+	// A statement can compile while v41 is live, then encounter a rollback
 	// before remote encoding. The sender must not serialize a payload that an
 	// older receiver would silently interpret as a legacy Find.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
 	data, err := encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
 	_, err = encodeRemoteScope(scope, proc)
-	require.ErrorContains(t, err, "MORPC protocol version 40")
+	require.ErrorContains(t, err, "MORPC protocol version 41")
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "MORPC protocol version 40")
+	require.ErrorContains(t, err, "MORPC protocol version 41")
 }
 
 func TestPartitionTopNPipelineRoundTrip(t *testing.T) {

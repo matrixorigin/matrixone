@@ -3003,7 +3003,7 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
 		return moerr.NewNotSupported(
 			c.proc.Ctx,
-			"MongoDB explicit queries require MORPC protocol version 40",
+			"MongoDB explicit queries require MORPC protocol version 41",
 		)
 	}
 	// The planner retains the selector as a local filter around an opaque
@@ -6798,7 +6798,7 @@ func supportsRemoteMongoUserQuery(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion40
+	return ok && protocolVersion >= defines.MORPCVersion41
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {

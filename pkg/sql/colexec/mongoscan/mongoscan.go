@@ -56,7 +56,7 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 		return moerr.NewNotSupported(proc.Ctx, "MongoDB local split execution is not enabled in the MVP")
 	}
 	if scan.Scan.UserQueryKind != int32(mongodb.UserQueryInvalid) && !supportsMongoUserQueryProtocol(proc) {
-		return moerr.NewNotSupported(proc.Ctx, "MongoDB explicit queries require MORPC protocol version 40")
+		return moerr.NewNotSupported(proc.Ctx, "MongoDB explicit queries require MORPC protocol version 41")
 	}
 	scan.ctr.userQuery, err = mongodb.UserQueryFromPlan(proc.Ctx, scan.Scan)
 	if err != nil {
@@ -204,7 +204,7 @@ func supportsMongoUserQueryProtocol(proc *process.Process) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion40
+	return ok && protocolVersion >= defines.MORPCVersion41
 }
 
 func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
