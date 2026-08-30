@@ -517,15 +517,21 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 // It streams rather than returning a []string because a range over a
 // high-cardinality key IS most of that key's vocabulary; the probe that uses it
 // keeps peak memory at one term and one posting cursor.
-func (s *Segment) forEachTermInRange(lo, hi string, fn func(term string) error) error {
+// fn reports whether to CONTINUE; returning false stops the walk without
+// inventing an error to unwind with.
+func (s *Segment) forEachTermInRange(lo, hi string, fn func(term string) (bool, error)) error {
 	if s.dict != nil {
 		return s.dict.forEachTermInRange(lo, hi, fn)
 	}
 	// Build-side: TermRange returns a sub-slice of the in-memory sortedTerms
 	// (no copy), so walking it allocates nothing.
 	for _, t := range s.TermRange(lo, hi) {
-		if err := fn(t); err != nil {
+		goOn, err := fn(t)
+		if err != nil {
 			return err
+		}
+		if !goOn {
+			return nil
 		}
 	}
 	return nil

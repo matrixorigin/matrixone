@@ -136,7 +136,7 @@ func (d *termDict) prefixTerms(prefix string) ([]string, error) {
 // WITHOUT materializing the range as a []string the way rangeTerms does. For a
 // high-cardinality key an inequality's range IS most of that key's vocabulary,
 // so the materializing form is only safe when the caller already bounds it.
-func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) error) error {
+func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) (bool, error)) error {
 	if lo > hi {
 		return nil
 	}
@@ -153,8 +153,12 @@ func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) error)
 	defer func() { _ = it.Close() }()
 	for {
 		term, _ := it.Current()
-		if err := fn(string(term)); err != nil {
+		goOn, err := fn(string(term))
+		if err != nil {
 			return err
+		}
+		if !goOn {
+			return nil
 		}
 		if err := it.Next(); err == vellum.ErrIteratorDone {
 			return nil

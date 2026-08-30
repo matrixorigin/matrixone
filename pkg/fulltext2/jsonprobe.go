@@ -16,7 +16,6 @@ package fulltext2
 
 import (
 	"encoding/binary"
-	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -141,23 +140,23 @@ const maxProbeTermExpansion = 4096
 func (idx *Index) resolveJSONProbeTerms(p JSONProbePayload) ([]string, error) {
 	seen := make(map[string]struct{}, len(p.Terms))
 	out := make([]string, 0, len(p.Terms))
-	add := func(t string) error {
+	add := func(t string) (bool, error) {
 		if t == "" {
-			return nil
+			return true, nil
 		}
 		if _, dup := seen[t]; dup {
-			return nil
+			return true, nil
 		}
 		if len(out) >= maxProbeTermExpansion {
-			return moerr.NewInternalErrorNoCtx(
+			return false, moerr.NewInternalErrorNoCtx(
 				"fulltext2: json probe range expands past the term cap; this probe must be streamed, not top-k'd")
 		}
 		seen[t] = struct{}{}
 		out = append(out, t)
-		return nil
+		return true, nil
 	}
 	for _, t := range p.Terms {
-		if err := add(t); err != nil {
+		if _, err := add(t); err != nil {
 			return nil, err
 		}
 	}
@@ -191,14 +190,16 @@ func (idx *Index) streamJSONProbeDocs(p JSONProbePayload, filter *prefilter, sin
 	for si, seg := range idx.segments {
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
 
-		// emit walks ONE term's postings a block at a time.
-		emit := func(term string) error {
+		// emit walks ONE term's postings a block at a time, and reports whether
+		// the walk should go on — the sink stops on cancellation or a full
+		// downstream, and that is an ordinary end, not an error to unwind with.
+		emit := func(term string) (bool, error) {
 			if sink.stopped {
-				return errProbeStopped
+				return false, nil
 			}
 			pl, ok := seg.lookup(term)
 			if !ok {
-				return nil
+				return true, sink.err
 			}
 			for b := range pl.nblk() {
 				n := pl.fillBlockDocs(b, docs[:])
@@ -210,38 +211,38 @@ func (idx *Index) streamJSONProbeDocs(p JSONProbePayload, filter *prefilter, sin
 					// reads the score column.
 					sink.pushPk(seg, ord, 0)
 					if sink.stopped {
-						return errProbeStopped
+						return false, nil
 					}
 				}
 			}
-			return sink.err
+			return true, sink.err
 		}
 
 		if err := probeWalk(seg, p, emit); err != nil {
-			if errors.Is(err, errProbeStopped) {
-				sink.flush()
-				return sink.err
-			}
 			return err
 		}
 		if sink.err != nil {
 			return sink.err
+		}
+		if sink.stopped {
+			break
 		}
 	}
 	sink.flush()
 	return sink.err
 }
 
-// errProbeStopped unwinds the term walk when the sink has stopped (a cancelled
-// query or a full downstream). It never escapes streamJSONProbeDocs.
-var errProbeStopped = errors.New("fulltext2: json probe stream stopped")
-
 // probeWalk visits every term the probe selects in one segment: its exact terms,
-// then each range streamed from the term dictionary.
-func probeWalk(seg *Segment, p JSONProbePayload, fn func(term string) error) error {
+// then each range streamed from the term dictionary. fn reports whether to keep
+// going, so an early stop needs no sentinel error.
+func probeWalk(seg *Segment, p JSONProbePayload, fn func(term string) (bool, error)) error {
 	for _, t := range p.Terms {
-		if err := fn(t); err != nil {
+		goOn, err := fn(t)
+		if err != nil {
 			return err
+		}
+		if !goOn {
+			return nil
 		}
 	}
 	for _, r := range p.Ranges {
