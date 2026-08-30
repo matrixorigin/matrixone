@@ -28,6 +28,10 @@ const (
 	// between view tokens. Keep ordinary block comments whole while scanning to
 	// the structural VIEW token: words in a comment must not be parsed as DDL.
 	informationSchemaViewLineCommentPattern = "(?:(?:--|#|//)[^\\r\\n]*(?:\\r?\\n|$))"
+	// The scanner accepts doubled single quotes and backslash escapes in string
+	// literals. Treat them as opaque while locating structural DDL tokens and an
+	// executable-comment terminator, just as identifiers and comments are.
+	informationSchemaViewSingleQuotedStringPattern = "'(?:''|\\\\\\\\.|[^'\\\\\\\\])*'"
 	// The scanner closes at the first */, including when the comment body ends
 	// with a run of stars (for example /***/ or /*****/).
 	informationSchemaViewBlockCommentPattern      = "/[*](?:[^*]|[*]+[^*/])*[*]+/"
@@ -38,6 +42,7 @@ const (
 	informationSchemaViewPrefixSpanPattern = "(?:" +
 		informationSchemaViewBlockCommentPattern + "|" +
 		informationSchemaViewLineCommentPattern + "|" +
+		informationSchemaViewSingleQuotedStringPattern + "|" +
 		"`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|" +
 		"/(?:[^/\\*]|$)|-(?:[^-]|$)|[^`\"/#-])*?"
 	// The non-greedy span before VIEW covers MatrixOne's supported ALGORITHM,
@@ -59,28 +64,48 @@ const (
 	// first so the lexer-accepted statement remains distinguishable here.
 	informationSchemaViewStatementSQL                  = "tbl.view_statement"
 	informationSchemaViewStatementWithoutTerminatorSQL = "tbl.view_statement"
+	// Match from a view definition's beginning through the first executable
+	// wrapper terminator while keeping comments and quoted SQL opaque. The
+	// terminator length is then used to remove exactly that marker, rather than
+	// the first textual */ (which may occur inside a string literal).
+	informationSchemaViewExecutableCommentTokenPattern = "(?:" +
+		informationSchemaViewBlockCommentPattern + "|" +
+		informationSchemaViewLineCommentPattern + "|" +
+		informationSchemaViewSingleQuotedStringPattern + "|" +
+		"`(?:``|[^`])*`|\"(?:\"\"|[^\"])*\"|" +
+		"[*](?:[^/]|$)|/(?:[^/\\*]|$)|-(?:[^-]|$)|[^*/`\"'#-])"
+	informationSchemaViewExecutableCommentPrefixPattern = "(?s)^(?:" +
+		informationSchemaViewExecutableCommentTokenPattern + ")*[*]/"
 )
+
+func informationSchemaViewRegexSQLLiteral(pattern string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(pattern, "\\", "\\\\"), "'", "''")
+}
 
 var (
 	// IF is already used by persisted information_schema definitions. Only an
-	// executable-comment wrapper removes its first closing */; an ordinary
-	// application comment after that wrapper remains part of the definition.
+	// executable-comment wrapper loses its closing */; an ordinary application
+	// comment after that wrapper remains part of the definition.
 	// Prefix lengths are counted in characters so they match substr even for
 	// multibyte view identifiers.
 	// The extraction helpers return VARCHAR, but VIEWS has historically exposed
 	// VIEW_DEFINITION as TEXT. Keep that public metadata type stable.
 	informationSchemaViewDefinitionSQL = "cast(trim(if(left(" + informationSchemaViewStatementWithoutTerminatorSQL +
-		", 3) = '/*!', regexp_replace(tbl.view_definition, '[*]/', '', 1, 1), tbl.view_definition)) as text)"
-	informationSchemaViewsSourceSQL = "FROM (SELECT extracted.*, trim(substr(extracted.view_statement, " +
+		", 3) = '/*!' and tbl.view_definition_wrapper_prefix_length > 0, concat(substr(tbl.view_definition, 1, " +
+		"tbl.view_definition_wrapper_prefix_length - 2), substr(tbl.view_definition, tbl.view_definition_wrapper_prefix_length + 1, " +
+		"char_length(tbl.view_definition) - tbl.view_definition_wrapper_prefix_length)), tbl.view_definition)) as text)"
+	informationSchemaViewsSourceSQL = "FROM (SELECT definitions.*, char_length(coalesce(regexp_substr(definitions.view_definition, '" +
+		informationSchemaViewRegexSQLLiteral(informationSchemaViewExecutableCommentPrefixPattern) + "'), '')) AS view_definition_wrapper_prefix_length FROM (SELECT extracted.*, trim(substr(extracted.view_statement, " +
 		"extracted.view_definition_prefix_length + 1, char_length(extracted.view_statement) - " +
 		"extracted.view_definition_prefix_length)) AS view_definition FROM (SELECT normalized.*, " +
 		"char_length(coalesce(regexp_substr(normalized.view_statement, '" +
-		strings.ReplaceAll(informationSchemaViewDefinitionPrefixPattern, "\\", "\\\\") +
+		informationSchemaViewRegexSQLLiteral(informationSchemaViewDefinitionPrefixPattern) +
 		"'), '')) AS view_definition_prefix_length FROM (SELECT tbl.*, trim(regexp_replace(trim(" +
 		"coalesce(tbl.rel_createsql, json_extract_string(tbl.viewdef, '$.Stmt'))), '[;][[:space:]]*$', '', 1, 1)) " +
+<<<<<<< HEAD
 		"AS view_statement FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
 		"tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id WHERE tbl.account_id = current_account_id() " +
-		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema') normalized) extracted) tbl " +
+		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema') normalized) extracted) definitions) tbl " +
 		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id"
 )
 
