@@ -396,6 +396,47 @@ func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 	}
 }
 
+func TestAvgDecimal256FinalizationPrecisionOverflow(t *testing.T) {
+	param := types.New(types.T_decimal256, 65, 10)
+	testCases := []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "positive",
+			value: "100000000000000000000000000000000000000000000000000000.0000000000",
+		},
+		{
+			name:  "negative",
+			value: "-100000000000000000000000000000000000000000000000000000.0000000000",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			value, err := types.ParseDecimal256(tc.value, param.Width, param.Scale)
+			require.NoError(t, err)
+
+			vec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{value})
+			defer vec.Free(mp)
+			exec := makeAvgExec(t, mp, param)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+
+			results, err := exec.Flush()
+			defer func() {
+				for _, result := range results {
+					result.Free(mp)
+				}
+			}()
+			require.Nil(t, results)
+			require.ErrorContains(t, err, "Decimal256(65,12)")
+		})
+	}
+}
+
 func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.New(types.T_decimal256, 76, 0)

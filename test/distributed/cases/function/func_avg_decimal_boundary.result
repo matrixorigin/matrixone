@@ -4,11 +4,17 @@ use avg_decimal_boundary;
 create table t_decimal128_avg_boundary(id int, d decimal(38,10));
 insert into t_decimal128_avg_boundary values
 (1, 9999999999999999999999999999.1234567890),
-(2, -9999999999999999999999999999.1234567890);
+(2, -9999999999999999999999999999.1234567890),
+(3, 100000000000000000000000000.0000000000),
+(4, -100000000000000000000000000.0000000000);
 select id, avg(d) from t_decimal128_avg_boundary where id = 1 group by id;
 invalid input: Decimal128 Div overflow: 9999999999999999999999999999.1234567890/1
 select id, avg(d) from t_decimal128_avg_boundary where id = 2 group by id limit 1;
 invalid input: Decimal128 Div overflow: -9999999999999999999999999999.1234567890/1
+select id, avg(d) from t_decimal128_avg_boundary where id = 3 group by id;
+invalid input: 100000000000000000000000000.000000000000 beyond the range, can't be converted to Decimal128(38,12).
+select id, avg(d) from t_decimal128_avg_boundary where id = 4 group by id;
+invalid input: -100000000000000000000000000.000000000000 beyond the range, can't be converted to Decimal128(38,12).
 truncate table t_decimal128_avg_boundary;
 insert into t_decimal128_avg_boundary values
 (1, 99999999999999999999999999.1234567890),

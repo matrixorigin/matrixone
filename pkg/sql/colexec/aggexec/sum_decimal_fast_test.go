@@ -736,11 +736,32 @@ func TestAvgDecimal128FastFinalizationOverflow(t *testing.T) {
 		name     string
 		value    string
 		distinct bool
+		wantErr  string
 	}{
-		{name: "positive", value: "9999999999999999999999999999.1234567890"},
-		{name: "negative", value: "-9999999999999999999999999999.1234567890"},
-		{name: "positive distinct", value: "9999999999999999999999999999.1234567890", distinct: true},
-		{name: "negative distinct", value: "-9999999999999999999999999999.1234567890", distinct: true},
+		{
+			name: "positive physical overflow", value: "9999999999999999999999999999.1234567890",
+			wantErr: "Decimal128 Div overflow",
+		},
+		{
+			name: "negative physical overflow", value: "-9999999999999999999999999999.1234567890",
+			wantErr: "Decimal128 Div overflow",
+		},
+		{
+			name: "positive physical overflow distinct", value: "9999999999999999999999999999.1234567890",
+			distinct: true, wantErr: "Decimal128 Div overflow",
+		},
+		{
+			name: "negative physical overflow distinct", value: "-9999999999999999999999999999.1234567890",
+			distinct: true, wantErr: "Decimal128 Div overflow",
+		},
+		{
+			name: "positive declared precision overflow", value: "100000000000000000000000000.0000000000",
+			wantErr: "Decimal128(38,12)",
+		},
+		{
+			name: "negative declared precision overflow", value: "-100000000000000000000000000.0000000000",
+			wantErr: "Decimal128(38,12)",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -765,7 +786,7 @@ func TestAvgDecimal128FastFinalizationOverflow(t *testing.T) {
 				}
 			}()
 			require.Nil(t, results)
-			require.ErrorContains(t, err, "Decimal128 Div overflow")
+			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 }
