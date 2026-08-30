@@ -98,8 +98,15 @@ native_accelerator_environment_hash() {
     {
         printf 'accelerator=%s\n' "$environment_accelerator"
         if [ "$environment_accelerator" = gpu ]; then
+            # Keep both GPU sub-build variable families explicit. cuda uses
+            # NVCCFLAGS while cuVS uses NVCC_FLAGS; treating them as aliases
+            # lets a real compiler-profile change reuse the previous objects.
             printf 'CONDA_PREFIX=%s\n' "${CONDA_PREFIX-}"
             printf 'CUDA_PATH=%s\n' "${CUDA_PATH-}"
+            printf 'CUDA_CFLAGS=%s\n' "${CUDA_CFLAGS-}"
+            printf 'CUDA_LDFLAGS=%s\n' "${CUDA_LDFLAGS-}"
+            printf 'CUVS_CFLAGS=%s\n' "${CUVS_CFLAGS-}"
+            printf 'CUVS_LDFLAGS=%s\n' "${CUVS_LDFLAGS-}"
             printf 'HOST_ARCH=%s\n' "${HOST_ARCH-}"
             printf 'TARGET_ARCH=%s\n' "${TARGET_ARCH-}"
             printf 'TARGET_OS=%s\n' "${TARGET_OS-}"
@@ -110,12 +117,20 @@ native_accelerator_environment_hash() {
             printf 'GENCODE_FLAGS=%s\n' "${GENCODE_FLAGS-}"
             printf 'HOST_COMPILER=%s\n' "${HOST_COMPILER-}"
             printf 'GCC=%s\n' "${GCC-}"
+            printf 'NVCC=%s\n' "${NVCC-}"
             printf 'NVCCFLAGS=%s\n' "${NVCCFLAGS-}"
+            printf 'NVCC_FLAGS=%s\n' "${NVCC_FLAGS-}"
             printf 'CCFLAGS=%s\n' "${CCFLAGS-}"
             printf 'CUDA_OPT_LEVEL=%s\n' "${CUDA_OPT_LEVEL-}"
             printf 'EXTRA_NVCCFLAGS=%s\n' "${EXTRA_NVCCFLAGS-}"
             printf 'EXTRA_CCFLAGS=%s\n' "${EXTRA_CCFLAGS-}"
             printf 'EXTRA_LDFLAGS=%s\n' "${EXTRA_LDFLAGS-}"
+            printf 'LIBS=%s\n' "${LIBS-}"
+            printf 'INCLUDES=%s\n' "${INCLUDES-}"
+            printf 'CUDALIB=%s\n' "${CUDALIB-}"
+            printf 'CUDA_SEARCH_PATH=%s\n' "${CUDA_SEARCH_PATH-}"
+            printf 'QNX_HOST=%s\n' "${QNX_HOST-}"
+            printf 'QNX_TARGET=%s\n' "${QNX_TARGET-}"
         fi
     } | git hash-object --stdin
 }
@@ -228,8 +243,10 @@ thirdparty_matches_stamp() {
 emit_artifact_metadata() {
     root=$1
     libmo=$2
-    printf 'libmo-hash=%s\n' "$(git hash-object --no-filters "$libmo")"
-    printf 'thirdparty-hash=%s\n' "$(thirdparty_hash "$root")"
+    libmo_hash=$(git hash-object --no-filters "$libmo") || return 1
+    installed_thirdparty_hash=$(thirdparty_hash "$root") || return 1
+    printf 'libmo-hash=%s\n' "$libmo_hash"
+    printf 'thirdparty-hash=%s\n' "$installed_thirdparty_hash"
 }
 
 newer_thirdparty_output() {
@@ -244,8 +261,12 @@ write_build_marker() {
     action=$2
     reusable=$3
     expected=${4:-}
-    temporary_marker="$marker.tmp"
-    rm -f "$temporary_marker"
+    marker_temporary="$marker.tmp"
+    rm -f "$marker_temporary"
+    trap 'rm -f "$marker_temporary"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     {
         printf 'pending-format=1\n'
         printf 'action=%s\n' "$action"
@@ -253,8 +274,10 @@ write_build_marker() {
         if [ "$reusable" = yes ]; then
             printf '%s\n' "$expected"
         fi
-    } >"$temporary_marker"
-    mv "$temporary_marker" "$marker"
+    } >"$marker_temporary"
+    mv "$marker_temporary" "$marker"
+    marker_temporary=
+    trap - EXIT HUP INT TERM
 }
 
 read_build_marker() {
@@ -319,6 +342,11 @@ case "$operation" in
         stamp="$root/cgo/.mo-native-provenance"
         pending="$stamp.pending"
         building="$stamp.building"
+        # A failed/signal-interrupted marker publication from an older
+        # generation is unpublished scratch, not a native source edit. Recycle
+        # it before Git status classification so it cannot force a local-only
+        # build followed by another full migration rebuild.
+        rm -f "$pending.tmp" "$building.tmp"
         action=local
         reusable=no
         expected=
@@ -358,7 +386,12 @@ case "$operation" in
                        [ "$(file_value goos "$stamp")" = "$expected_goos" ] &&
                        [ "$(file_value goarch "$stamp")" = "$expected_goarch" ] &&
                        [ "$(file_value simsimd "$stamp")" = "$expected_simsimd" ] &&
-                       [ "$(file_value common-environment "$stamp")" = "$expected_common_environment" ]; then
+                       [ "$(file_value common-environment "$stamp")" = "$expected_common_environment" ] &&
+                       [ -d "$root/thirdparties/install/include" ] &&
+                       [ -d "$root/thirdparties/install/lib" ] &&
+                       thirdparty_matches_stamp "$stamp" "$root" &&
+                       newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp") &&
+                       [ -z "$newer_thirdparty" ]; then
                         action=rebuild-cgo
                     fi
                 fi
@@ -376,16 +409,10 @@ case "$operation" in
         # prior full-rebuild requirement; otherwise at least clean CGo before
         # resuming, even when the old generation had been reusable.
         old_action=
-        old_reusable=
-        old_provenance=
         if read_build_marker "$pending"; then
             old_action=$marker_action
-            old_reusable=$marker_reusable
-            old_provenance=$marker_provenance
         elif read_build_marker "$building"; then
             old_action=$marker_action
-            old_reusable=$marker_reusable
-            old_provenance=$marker_provenance
         elif [ -e "$pending" ] || [ -e "$building" ]; then
             old_action=rebuild-all
         fi
@@ -393,18 +420,18 @@ case "$operation" in
             if [ "$old_action" = reuse ]; then
                 old_action=rebuild-cgo
             fi
-            if [ "$old_reusable" = yes ] && [ "$reusable" = yes ] &&
-               [ "$old_provenance" = "$expected" ]; then
-                action=$old_action
-            else
-                action=$(max_action "$action" "$old_action")
-            fi
+            # Recovery requirements are monotonic. The old incomplete
+            # generation can only strengthen the action diagnosed from current
+            # source/artifact state; matching provenance never makes current
+            # corruption safe to keep.
+            action=$(max_action "$action" "$old_action")
         fi
 
         rm -f "$pending" "$building"
-        if [ "$action" != reuse ]; then
-            rm -f "$stamp"
-        fi
+        # The old stamp remains the last committed generation. pending/building
+        # prevents its reuse while a replacement is incomplete; retaining it
+        # preserves the exact thirdparty baseline needed to recover a narrow
+        # CGo rebuild without hiding newly detected artifact corruption.
         write_build_marker "$pending" "$action" "$reusable" "$expected"
         printf '%s\n' "$action"
         ;;
@@ -471,13 +498,13 @@ case "$operation" in
                         exit 1
                     fi
                 done
-                if [ "$accelerator" = gpu ]; then
-                    leftover_gpu_object=$(find "$root/cgo/cuda" "$root/cgo/cuvs" \
-                        -type f -name '*.o' -print -quit 2>/dev/null || true)
-                    if [ -n "$leftover_gpu_object" ]; then
-                        echo "native GPU cleanup did not remove $leftover_gpu_object" >&2
-                        exit 1
-                    fi
+                leftover_gpu_output=$(find "$root/cgo/cuda" "$root/cgo/cuvs" \
+                    -type f \( -name '*.o' -o -name '*.a' -o -name '*.so' \
+                    -o -name '*.dylib' -o -name '*.fatbin' \) \
+                    -print -quit 2>/dev/null || true)
+                if [ -n "$leftover_gpu_output" ]; then
+                    echo "native GPU cleanup did not remove $leftover_gpu_output" >&2
+                    exit 1
                 fi
                 if [ "$marker_action" = rebuild-all ] &&
                    [ -e "$root/thirdparties/install" ]; then

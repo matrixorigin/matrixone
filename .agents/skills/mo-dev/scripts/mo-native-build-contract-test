@@ -254,6 +254,42 @@ else
     fail "cuVS debug compilation contains -O0 and no -O3"
 fi
 
+cuvs_profile=$(make -C "$repo_root/cgo/cuvs" -Bn \
+    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 \
+    NVCC_FLAGS=-DPROFILE_A all 2>&1)
+if printf '%s\n' "$cuvs_profile" | grep -q -- 'nvcc -DPROFILE_A -c'; then
+    pass "cuVS NVCC_FLAGS is an effective compiler-profile input"
+else
+    fail "cuVS NVCC_FLAGS is an effective compiler-profile input"
+fi
+
+# Cleaning is about the generation being left. A CPU invocation on the
+# supported GPU host following a GPU build must therefore remove GPU sub-build
+# outputs even though MO_CL_CUDA is no longer set. Override uname facts only to
+# exercise that Make DAG on non-GPU CI hosts; no recipe executes under -n.
+cgo_clean=$(make -C "$repo_root/cgo" -n \
+    MAKE=echo UNAME_S=Linux UNAME_M=x86_64 clean 2>&1)
+if printf '%s\n' "$cgo_clean" | grep -q -- '-C cuda clean' &&
+   printf '%s\n' "$cgo_clean" | grep -q -- '-C cuvs clean'; then
+    pass "GPU-capable CPU clean still owns CUDA and cuVS generation cleanup"
+else
+    fail "GPU-capable CPU clean still owns CUDA and cuVS generation cleanup"
+fi
+
+# Complete-generation consumers must not construct a standalone partial
+# thirdparty generation immediately before the top-level owner. That sequence
+# is intentionally discarded for correctness and would double native work.
+sca_workflow="$repo_root/.github/workflows/sca-go-module-cache.yaml"
+ut_runner="$repo_root/optools/run_ut.sh"
+if [ "$(grep -c '^[[:space:]]*make cgo$' "$sca_workflow")" -eq 1 ] &&
+   ! grep -q '^[[:space:]]*make thirdparties$' "$sca_workflow" &&
+   [ "$(grep -c '^[[:space:]]*make cgo$' "$ut_runner")" -eq 1 ] &&
+   ! grep -q '^[[:space:]]*make thirdparties$' "$ut_runner"; then
+    pass "repository CI consumers request one complete native generation"
+else
+    fail "repository CI consumers request one complete native generation"
+fi
+
 if [ "$failures" -ne 0 ]; then
     printf '\n%d check(s) failed\n' "$failures"
     exit 1

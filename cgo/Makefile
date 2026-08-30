@@ -99,7 +99,11 @@ debug: all
 
 clean:
 	rm -f *.o *.a *.so *.dylib
-ifeq ($(MO_CL_CUDA),1)
+# Accelerator transitions must clean the generation being left, not only the
+# mode requested by the next build. Select by the supported GPU host platform,
+# not MO_CL_CUDA: the CUDA Makefile rejects unsupported macOS/arm64 targets even
+# for clean, while a Linux/x86_64 CPU invocation may be leaving a GPU generation.
+ifeq ($(UNAME_S)_$(UNAME_M),Linux_x86_64)
 	$(MAKE) -C cuda clean
 	$(MAKE) -C cuvs clean
 endif

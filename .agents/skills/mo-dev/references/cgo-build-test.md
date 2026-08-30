@@ -115,6 +115,12 @@ create symlinks before trying the wrapper. The former is rejected without the
 build-generation marker, and the latter bypasses the guard and leaves untracked
 setup residue in the review worktree. Validate changes to this protocol with:
 
+Top-level `make cgo` already builds and stages thirdparties as the single
+complete-generation owner. Do not precede it with standalone `make
+thirdparties`: a partial generation has no complete stamp and is intentionally
+discarded by `make cgo`. Direct `make -C thirdparties` followed by `make -C
+cgo` remains the separate ordered contract used by Docker native stages.
+
 ```bash
 .agents/skills/mo-dev/scripts/mo-native-provenance-test
 .agents/skills/mo-dev/scripts/mo-native-build-contract-test

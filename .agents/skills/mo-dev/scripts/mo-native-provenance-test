@@ -39,6 +39,22 @@ esac
 EOF
 chmod +x "$work/bin/go"
 
+real_git=$(command -v git)
+cat >"$work/bin/git" <<'EOF'
+#!/bin/sh
+if [ "${FAIL_NATIVE_ARTIFACT_HASH:-}" = 1 ]; then
+    for argument in "$@"; do
+        if [ "$argument" = --no-filters ]; then
+            echo "injected native artifact hash failure" >&2
+            exit 86
+        fi
+    done
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$work/bin/git"
+export REAL_GIT="$real_git"
+
 cat >"$repo/.gitignore" <<'EOF'
 cgo/*.o
 cgo/*.a
@@ -137,14 +153,18 @@ clean_all() {
     rm -rf "$repo/thirdparties/install"
 }
 
+produce_cgo_outputs() {
+    printf 'object\n' >"$repo/cgo/native.o"
+    printf 'dynamic library\n' >"$repo/cgo/libmo.dylib"
+    printf 'static library\n' >"$repo/cgo/libmo.a"
+}
+
 produce_outputs() {
     mkdir -p "$repo/thirdparties/install/include" \
         "$repo/thirdparties/install/lib"
     printf 'installed header\n' >"$repo/thirdparties/install/include/native.h"
     printf 'installed library\n' >"$repo/thirdparties/install/lib/libnative.a"
-    printf 'object\n' >"$repo/cgo/native.o"
-    printf 'dynamic library\n' >"$repo/cgo/libmo.dylib"
-    printf 'static library\n' >"$repo/cgo/libmo.a"
+    produce_cgo_outputs
 }
 
 finish_build() {
@@ -164,6 +184,28 @@ clean_all
 finish_build cpu release 0
 native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
 echo "ok   a cleaned first build publishes a verifiable stamp"
+
+# Marker publication owns and recycles its temporary even when the atomic
+# rename itself fails. The last committed stamp remains reusable because no
+# replacement build was admitted.
+mkdir -p "$work/fail-marker-bin"
+cat >"$work/fail-marker-bin/mv" <<'EOF'
+#!/bin/sh
+exit 87
+EOF
+chmod +x "$work/fail-marker-bin/mv"
+expect_failure "failed marker publication returns non-zero" \
+    env PATH="$work/fail-marker-bin:$work/bin:$PATH" \
+    "$repo/cgo/mo-native-provenance" prepare "$repo" cpu release 0
+if [ ! -e "$repo/cgo/.mo-native-provenance.pending.tmp" ]; then
+    echo "ok   failed marker publication recycles unpublished temporary state"
+else
+    echo "FAIL failed marker publication retained pending temporary state"
+    failures=$((failures + 1))
+fi
+expect_action cpu release 0 reuse
+native begin "$repo" cpu release 0
+native record "$repo" cpu release 0
 
 printf 'corrupt stamp\n' >"$repo/cgo/.mo-native-provenance"
 expect_action cpu release 0 rebuild-all
@@ -217,6 +259,19 @@ clean_cgo
 finish_build cpu release 0
 echo "ok   interrupted incremental build resumes with CGo cleanup"
 
+# Current artifact diagnosis and retained generation state are independent
+# axes. An interrupted reuse requires CGo cleanup, but simultaneous thirdparty
+# corruption is stronger and must win even when source provenance is unchanged.
+expect_action cpu release 0 reuse
+printf 'CORRUPTED HEADER\n' >"$repo/thirdparties/install/include/native.h"
+touch -r "$repo/cgo/.mo-native-provenance" \
+    "$repo/thirdparties/install/include/native.h"
+expect_action cpu release 0 rebuild-all
+clean_all
+finish_build cpu release 0
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
+echo "ok   interrupted recovery cannot downgrade current thirdparty corruption"
+
 printf '#define VALUE 2\n' >"$repo/cgo/native.h"
 git -C "$repo" add cgo/native.h
 git -C "$repo" -c user.name=test -c user.email=test@example.com \
@@ -224,6 +279,15 @@ git -C "$repo" -c user.name=test -c user.email=test@example.com \
 expect_action cpu release 0 rebuild-cgo
 expect_failure "header-only source drift cannot relabel the old libmo" \
     native begin "$repo" cpu release 0
+clean_cgo
+native begin "$repo" cpu release 0
+produce_cgo_outputs
+expect_failure "artifact hashing failure cannot publish a malformed stamp" \
+    env PATH="$work/bin:$PATH" FAIL_NATIVE_ARTIFACT_HASH=1 \
+    "$repo/cgo/mo-native-provenance" record "$repo" cpu release 0
+expect_failure "failed artifact hashing leaves the generation incomplete" \
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
+expect_action cpu release 0 rebuild-cgo
 clean_cgo
 finish_build cpu release 0
 native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
@@ -285,6 +349,36 @@ clean_cgo
 (CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
 produce_outputs
 (CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
+
+gpu_cuvs_flags_action=$(CONDA_PREFIX="$work/gpu-b" \
+    NVCC_FLAGS=-DPROFILE_B native prepare "$repo" gpu debug 1)
+if [ "$gpu_cuvs_flags_action" = rebuild-cgo ]; then
+    echo "ok   cuVS NVCC_FLAGS switching invalidates the GPU generation"
+else
+    printf 'FAIL cuVS NVCC_FLAGS expected rebuild-cgo, got %s\n' \
+        "$gpu_cuvs_flags_action"
+    failures=$((failures + 1))
+fi
+clean_cgo
+(CONDA_PREFIX="$work/gpu-b" NVCC_FLAGS=-DPROFILE_B \
+    native begin "$repo" gpu debug 1)
+produce_outputs
+(CONDA_PREFIX="$work/gpu-b" NVCC_FLAGS=-DPROFILE_B \
+    native record "$repo" gpu debug 1)
+
+gpu_cuvs_flags_control=$(CONDA_PREFIX="$work/gpu-b" \
+    NVCC_FLAGS=-DPROFILE_B native prepare "$repo" gpu debug 1)
+if [ "$gpu_cuvs_flags_control" = reuse ]; then
+    echo "ok   an unchanged cuVS compiler profile remains reusable"
+else
+    printf 'FAIL unchanged cuVS profile expected reuse, got %s\n' \
+        "$gpu_cuvs_flags_control"
+    failures=$((failures + 1))
+fi
+(CONDA_PREFIX="$work/gpu-b" NVCC_FLAGS=-DPROFILE_B \
+    native begin "$repo" gpu debug 1)
+(CONDA_PREFIX="$work/gpu-b" NVCC_FLAGS=-DPROFILE_B \
+    native record "$repo" gpu debug 1)
 
 printf 'new thirdparty source\n' >>"$repo/thirdparties/source.txt"
 git -C "$repo" add thirdparties/source.txt
