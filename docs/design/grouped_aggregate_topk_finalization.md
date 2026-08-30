@@ -10,9 +10,11 @@
 
 Optimize grouped Top-K only when a logical proof removes work before execution.
 The first implementation recognizes a direct table scan grouped by its complete
-declared primary key. Every surviving row is then exactly one group, so supported
-aggregates can be rewritten as row expressions and the aggregate operator can be
-deleted. Existing LIMIT pushdown can subsequently stop the scan early.
+declared primary key, provided SQL grouping equality implies identical storage-key
+identity for every key component. Every surviving row is then exactly one group,
+so supported aggregates can be rewritten as row expressions and the aggregate
+operator can be deleted. Existing LIMIT pushdown can subsequently stop the scan
+early.
 
 Two execution-time callback designs were evaluated and rejected:
 
@@ -40,7 +42,7 @@ count. Approximate heavy hitters and distribution assumptions are outside scope.
 The implemented proof is relational uniqueness:
 
 ```text
-direct scan + complete declared primary key in GROUP BY
+direct scan + complete grouping-compatible declared primary key in GROUP BY
     => at most one input row per group
     => aggregate(single row) = proven row expression
     => hash/group operator is redundant
@@ -53,7 +55,7 @@ direct scan + complete declared primary key in GROUP BY
 | plain LIMIT | yes | no semantic barrier | existing machinery |
 | ordered index/storage Top-K | yes | exact order and filter coverage | existing machinery |
 | dynamic Top bound/zone maps | sometimes | monotone comparator bound | existing machinery |
-| unique grouping-key elimination | yes | complete declared PK | implemented |
+| unique grouping-key elimination | yes | complete declared PK for which grouping equality implies identical storage identity | implemented |
 | ordered streaming group prefix | yes | preserved key order and compatible ordering | future |
 | metadata aggregate pruning | sometimes | exact object bounds | future |
 | distributed local Top-K | not necessarily | exact local/global Top-K law | separate work |
@@ -75,6 +77,15 @@ The aggregate-bearing extension accepts only all of the following:
   synthetic/fake key);
 - every declared primary-key component occurs as a direct grouping column from
   that scan;
+- every primary-key type is on the explicit grouping-identity allowlist. FLOAT
+  and DOUBLE are excluded because storage preserves bit-distinct signed-zero
+  keys while GROUP BY identifies `+0` and `-0`; scaled FLOAT also admits broader
+  grouping canonicalization. CHAR is excluded because storage-key encoding
+  preserves trailing spaces while grouping uses pad-space equality. Thus storage
+  uniqueness alone cannot prove a singleton SQL group or a functional dependency
+  for those types. VARCHAR is accepted only in the raw, NO PAD legacy or opaque
+  binary domains; `utf8mb4_bin` is PAD SPACE and `utf8mb4_general_ci` also folds
+  case/weights, so their SQL equality can collapse byte-distinct storage keys;
 - no embedded aggregate projection/filter, inactive grouping-set key, DISTINCT
   aggregate or aggregate-specific configuration exists;
 - every grouping expression and aggregate argument whose evaluation can move
@@ -91,7 +102,8 @@ The aggregate-bearing extension accepts only all of the following:
   because valid JSON containers can fail scalar coercion. An arbitrary
   deterministic scalar is not assumed total;
 - every Filter predicate on the bounded-demand path to Aggregate, including
-  HAVING before the first filter-pushdown pass, satisfies the same proof;
+  HAVING before the first filter-pushdown pass, satisfies the same proof, and
+  the Filter is not terminal, a barrier, or a rollup filter;
 - every aggregate belongs to the proven single-row family below.
 
 An aggregate-bearing query without LIMIT deliberately keeps its established plan,
@@ -123,6 +135,14 @@ For a group containing one row:
   Aggregate because replacing a blocking consumer with a bounded streaming path
   could otherwise suppress an error or externally visible evaluation;
 - unsupported or mixed aggregate families reject the complete rewrite.
+
+The aggregate expression must also satisfy the planner IR contract: its encoded
+function ID must match its name, `COUNT`/`starcount` must return non-null INT64,
+and `starcount` must retain the one safe argument used by the binder
+(`starcount(1)` for `COUNT(*)`, or the preserved non-null column). For every
+value-returning aggregate, the argument-to-result cast must be total over the
+complete source domain; otherwise a scan LIMIT could hide a conversion failure
+that the former blocking Aggregate would have reached.
 
 The rewrite converts AGG to Project, appends the row expressions after the group
 columns, and remaps the aggregate output binding tag to those new project
@@ -164,8 +184,27 @@ OFFSET and any rank/tie semantics.
   crosses the enclosing Union.
 - A Join child is not a direct scan and cannot inherit outer bounded demand.
 - Correlated scalar aggregates retain their established decorrelation shape.
-- Missing, incomplete or malformed PK metadata, or a non-total single-row
-  aggregate conversion, fails closed.
+- Missing, incomplete or malformed PK metadata, a PK type without a proven
+  storage-to-grouping identity relation, or a non-total single-row aggregate
+  conversion, fails closed. One SQL-equality-compatible PK proof owner now also
+  protects physical group-hash-key reduction, HashOnPK join uniqueness,
+  aggregate pullup, cardinality estimates, and the ONLY_FULL_GROUP_BY primary-key
+  dependency exception. A FLOAT or CHAR PK therefore cannot establish
+  singleton grouping or join-side uniqueness, cause another grouping column to
+  be omitted, or permit an otherwise bare result column. The same fallback
+  applies to a VARCHAR PK with PAD SPACE or case-insensitive collation identity.
+- HashOnPK accepts only direct column equality. A cast or other wrapper can
+  collapse storage-distinct values, so it cannot inherit the underlying PK
+  proof. Both HashOnPK and aggregate pullup additionally require the two direct
+  join operands to use the same type identity domain. The direct
+  DATETIME/TIMESTAMP comparison converts through the session time zone and is
+  not an injective storage-key proof across DST gaps/folds; direct Decimal keys
+  must have the same scale, and VARCHAR operands must both use raw/NO PAD
+  equality. Aggregate pullup
+  checks the actual right-side join columns against the right-side PK positions;
+  aggregate-output ordinals are not table-column ordinals and cannot be used as
+  that proof. Its left aggregate outputs must also form a complete in-range
+  bijection to direct columns of the left scan.
 - Truncation safety covers aggregate arguments, extra grouping expressions,
   HAVING/other Filter predicates on the demand path, and every scan `FilterList`
   predicate. This prevents LIMIT/OFFSET pushdown from skipping errors or
@@ -174,7 +213,9 @@ OFFSET and any rank/tie semantics.
   predicate remains in `FilterList`, so it is not a second unproved evaluation
   owner. Predicate operators are proven against their resolved execution type
   domains rather than operand shape alone; registry-accepted combinations with
-  fallible coercion or no matching executor case fail closed.
+  fallible coercion or no matching executor case fail closed. Decimal256 BETWEEN
+  proves both value-to-bound scale alignments independently, rather than treating
+  valid decimal metadata alone as sufficient.
 - Binding remapping is performed only after every aggregate expression in the
   candidate has been proven, preventing partial rewrites.
 
@@ -224,12 +265,20 @@ requires service-level evidence.
 
 - focused planner tests: PK elimination, aggregate family, nullable COUNT, HAVING,
   missing PK, DISTINCT/configured aggregate, grouping family, unbounded fallback,
-  decimal domain containment, floating-point signed-zero fallback, fallible and
-  volatile expression plus WHERE/HAVING predicate fallback, Decimal256
+  decimal domain containment, floating-point aggregate and primary-key
+  signed-zero fallback, physical group-key retention for incompatible PKs,
+  CHAR pad-space and collated-VARCHAR fallback, SQL-equality-compatible HashOnPK and aggregate-pullup
+  gates, direct-column and same-type-domain join proof, DATETIME/TIMESTAMP
+  cross-domain fallback, mismatched left/right column ordinals, duplicate and
+  out-of-range aggregate-output pullup mappings,
+  ONLY_FULL_GROUP_BY dependency rejection, and malformed/duplicate PK metadata,
+  fallible and volatile expression plus WHERE/HAVING predicate fallback, Decimal256
   comparison scale-overflow and mixed JSON/BOOL counterexamples, resolved
-  operator totality boundaries, aggregate-free inactive ROLLUP/CUBE/GROUPING
-  SETS branches, safe comparison/boolean/range predicate controls, and total
-  comparison/cast controls;
+  operator totality boundaries, pairwise Decimal256 BETWEEN scale closure,
+  aggregate-free inactive ROLLUP/CUBE/GROUPING SETS branches, terminal/barrier/
+  rollup Filter boundaries, safe comparison/boolean/range predicate controls,
+  aggregate name/encoded-ID/result-type contracts, and total result-cast
+  controls;
 - exhaustive small-window LIMIT/OFFSET composition against sequential slice
   semantics, plus public nested-query plans, dynamic-expression fallback,
   overflow fallback and repeated-pass idempotence;
@@ -265,9 +314,11 @@ Acceptance for a new shape requires:
 | Reject generic cheap-aggregate callback | It removed no scan/hash work and regressed COUNT by 14.6%. |
 | Reject GROUP_CONCAT chunk finalizer | About 2% RSS reduction did not justify cross-operator complexity. |
 | Treat LIMIT as demand, not proof | Prevents invalid early group eviction. |
-| Start with declared PK uniqueness | Exact, stable and capable of O(N) to O(K). |
+| Start with grouping-compatible declared PK uniqueness | Exact, stable and capable of O(N) to O(K); grouping equality must imply identical storage identity. |
 | Require LIMIT for aggregate-bearing rollout | Bounds plan-shape impact and preserves unlimited controls. |
 | Stop demand at relational boundaries | Protects joins, CTEs and grouping-set families. |
 | Prove Filter-path and scan predicates before removing Aggregate | Closes both pre-pushdown HAVING and post-pushdown WHERE paths against hidden late errors or volatile evaluations. |
+| Centralize SQL-equality-compatible PK proof | Prevents storage uniqueness from being reused across grouping, joins, pullup, estimates, or binder dependency when SQL equality can collapse distinct keys. |
+| Require one join identity domain and a pullup output bijection | Prevents time-zone conversion or malformed/repeated aggregate ordinals from masquerading as right-key uniqueness. |
 | Compose existing pagination or retain both owners | Makes the required second pushdown pass semantic and idempotent for nested queries. |
 | Keep non-eligible execution byte-for-byte | Makes the no-regression guarantee structural, not heuristic. |

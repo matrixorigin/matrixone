@@ -413,6 +413,58 @@ func TestSingleRowCastIsTotal(t *testing.T) {
 	}
 }
 
+func TestSingleRowAggregateExprRequiresWellTypedReplacement(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	builder := &QueryBuilder{compCtx: optimizer.CurrentContext()}
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	varcharType := planpb.Type{Id: int32(types.T_varchar), Width: 8}
+	functionExpr := func(name string, resultType planpb.Type, args ...*planpb.Expr) *planpb.Expr {
+		functionID, ok := singleRowAggregateFunctionID(name)
+		require.True(t, ok)
+		return &planpb.Expr{
+			Typ: resultType,
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					ObjName: name,
+					Obj:     function.EncodeOverloadID(functionID, 0),
+				},
+				Args: args,
+			}},
+		}
+	}
+
+	starCountArg := &planpb.Expr{
+		Typ:  intType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}},
+	}
+	_, ok := builder.singleRowAggregateExpr(functionExpr("starcount", intType, starCountArg))
+	require.True(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr("starcount", intType))
+	require.False(t, ok)
+	nullableStarCountArg := DeepCopyExpr(starCountArg)
+	nullableStarCountArg.Typ.NotNullable = false
+	_, ok = builder.singleRowAggregateExpr(functionExpr("starcount", intType, nullableStarCountArg))
+	require.False(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr(
+		"starcount", planpb.Type{Id: int32(types.T_decimal128), Width: 38}, starCountArg))
+	require.False(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr(
+		"count", planpb.Type{Id: int32(types.T_decimal128), Width: 38},
+		GetColExpr(varcharType, 1, 0)))
+	require.False(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr(
+		"count", planpb.Type{Id: int32(types.T_int64)},
+		GetColExpr(varcharType, 1, 0)))
+	require.False(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr(
+		"min", intType, GetColExpr(varcharType, 1, 0)))
+	require.False(t, ok)
+	mismatchedID := functionExpr("starcount", intType, starCountArg)
+	mismatchedID.GetF().Func.Obj = function.EncodeOverloadID(int32(function.COUNT), 0)
+	_, ok = builder.singleRowAggregateExpr(mismatchedID)
+	require.False(t, ok)
+}
+
 func TestPredicateOperatorEvaluationTotality(t *testing.T) {
 	typ := func(oid types.T) planpb.Type {
 		return planpb.Type{Id: int32(oid)}
@@ -465,6 +517,12 @@ func TestPredicateOperatorEvaluationTotality(t *testing.T) {
 	}))
 	require.False(t, isTruncationSafeBetween([]*planpb.Expr{
 		value(typ(types.T_year)), value(typ(types.T_year)), value(typ(types.T_year)),
+	}))
+	require.True(t, isTruncationSafeBetween([]*planpb.Expr{
+		value(decimal(64, 0)), value(decimal(65, 12)), value(decimal(65, 12)),
+	}))
+	require.False(t, isTruncationSafeBetween([]*planpb.Expr{
+		value(decimal(65, 0)), value(decimal(65, 12)), value(decimal(65, 12)),
 	}))
 	inArgs := func(valueType planpb.Type) []*planpb.Expr {
 		return []*planpb.Expr{
@@ -554,6 +612,54 @@ func TestPrimaryKeyGroupEliminationDoesNotCrossJoin(t *testing.T) {
 	require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
 }
 
+func TestPrimaryKeyGroupEliminationDoesNotCrossSemanticFilters(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*planpb.Node)
+	}{
+		{name: "terminal filter", configure: func(node *planpb.Node) { node.IsEnd = true }},
+		{name: "barrier filter", configure: func(node *planpb.Node) { node.FilterIsBarrier = true }},
+		{name: "rollup filter", configure: func(node *planpb.Node) { node.RollupFilter = true }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			table := groupHashKeyTestTable("id", "id")
+			table.Cols[0].Typ.NotNullable = true
+			scan := &planpb.Node{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{1}, TableDef: table,
+			}
+			agg := &planpb.Node{
+				NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0},
+				BindingTags: []int32{2, 3},
+				GroupBy:     []*planpb.Expr{GetColExpr(table.Cols[0].Typ, 1, 0)},
+				AggList: []*planpb.Expr{{
+					Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &planpb.Expr_F{F: &planpb.Function{
+						Func: &planpb.ObjectRef{ObjName: "starcount"},
+					}},
+				}},
+			}
+			filter := &planpb.Node{
+				NodeId: 2, NodeType: planpb.Node_FILTER, Children: []int32{1},
+			}
+			test.configure(filter)
+			root := &planpb.Node{
+				NodeId: 3, NodeType: planpb.Node_PROJECT, Children: []int32{2},
+				Limit: makePlan2Uint64ConstExprWithType(1),
+			}
+			builder := &QueryBuilder{qry: &planpb.Query{
+				Nodes: []*planpb.Node{scan, agg, filter, root},
+			}}
+
+			builder.rewriteEffectlessAggToProject(3)
+
+			require.Equal(t, planpb.Node_AGG, agg.NodeType)
+		})
+	}
+}
+
 func TestPrimaryKeyGroupEliminationRequiresCompleteCompositeKey(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	partsupp := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("tpch", "partsupp")]
@@ -585,6 +691,128 @@ func TestPrimaryKeyGroupEliminationRequiresCompleteCompositeKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyGroupEliminationRequiresGroupingCompatiblePrimaryKey(t *testing.T) {
+	primaryKeyTypes := []struct {
+		name string
+		typ  planpb.Type
+	}{
+		{name: "float64 signed zero", typ: planpb.Type{Id: int32(types.T_float64)}},
+		{name: "scaled float32", typ: planpb.Type{Id: int32(types.T_float32), Width: 8, Scale: 2}},
+		{name: "char trailing spaces", typ: planpb.Type{Id: int32(types.T_char), Width: 8}},
+		{name: "collated varchar", typ: planpb.Type{
+			Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetUTF8),
+		}},
+	}
+	queries := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "aggregate-bearing rewrite",
+			sql:  "select empno, count(*) from constraint_test.emp group by empno limit 1",
+		},
+		{
+			name: "aggregate-free rewrite",
+			sql:  "select empno from constraint_test.emp group by empno limit 1",
+		},
+	}
+
+	for _, primaryKeyType := range primaryKeyTypes {
+		for _, query := range queries {
+			t.Run(primaryKeyType.name+"/"+query.name, func(t *testing.T) {
+				optimizer := NewMockOptimizer(false)
+				table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+				require.NotNil(t, table)
+				require.NotNil(t, table.Pkey)
+
+				var primaryKeyColumn *planpb.ColDef
+				for _, col := range table.Cols {
+					if col.Name == "empno" {
+						primaryKeyColumn = col
+						break
+					}
+				}
+				require.NotNil(t, primaryKeyColumn)
+				primaryKeyColumn.Typ = primaryKeyType.typ
+				table.Pkey.CompPkeyCol = primaryKeyColumn
+
+				logical, err := runOneStmt(optimizer, t, query.sql)
+				require.NoError(t, err)
+				queryPlan := logical.GetQuery()
+				require.True(t, reachableNodeType(queryPlan, planpb.Node_AGG),
+					"storage-distinct primary keys may still belong to one SQL group")
+
+				scan := firstReachableNode(queryPlan, planpb.Node_TABLE_SCAN)
+				require.NotNil(t, scan)
+				require.Nil(t, scan.Limit,
+					"bounded demand must not cross the retained aggregate")
+			})
+		}
+	}
+}
+
+func TestOnlyFullGroupByRequiresGroupingCompatiblePrimaryKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		typ     planpb.Type
+		wantErr bool
+	}{
+		{
+			name: "varchar control",
+			typ:  planpb.Type{Id: int32(types.T_varchar), Width: 8},
+		},
+		{
+			name:    "float64 signed zero",
+			typ:     planpb.Type{Id: int32(types.T_float64)},
+			wantErr: true,
+		},
+		{
+			name:    "char trailing spaces",
+			typ:     planpb.Type{Id: int32(types.T_char), Width: 8},
+			wantErr: true,
+		},
+		{
+			name: "collated varchar",
+			typ: planpb.Type{
+				Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetUTF8),
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			optimizer.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+			require.NotNil(t, table)
+			require.NotNil(t, table.Pkey)
+
+			var primaryKeyColumn *planpb.ColDef
+			for _, col := range table.Cols {
+				if col.Name == "empno" {
+					primaryKeyColumn = col
+					break
+				}
+			}
+			require.NotNil(t, primaryKeyColumn)
+			primaryKeyColumn.Typ = test.typ
+			table.Pkey.CompPkeyCol = primaryKeyColumn
+
+			_, err := runOneStmt(
+				optimizer,
+				t,
+				"select empno, ename, sum(sal) from constraint_test.emp group by empno",
+			)
+			if test.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregates(t *testing.T) {

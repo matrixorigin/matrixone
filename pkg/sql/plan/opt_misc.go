@@ -748,13 +748,14 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(node.TableDef)
+		if !ok || len(node.BindingTags) == 0 {
 			return nil
 		}
 		tag := uint64(node.BindingTags[0]) << 32
 		colMap := make(map[uint64][]uint64)
-		for _, name := range node.TableDef.Pkey.Names {
-			k := tag | uint64(node.TableDef.Name2ColIndex[name])
+		for _, pos := range pkPositions {
+			k := tag | uint64(pos)
 			colMap[k] = []uint64{k}
 		}
 		return colMap
@@ -793,25 +794,26 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	exprLeftCols := make([]uint64, len(exprs))
 	exprRightCols := make([]uint64, len(exprs))
 	for i, cond := range exprs {
-		switch condImpl := cond.Expr.(type) {
-		case *plan.Expr_F:
-			expr := condImpl.F.Args[0]
-			switch exprImpl := expr.Expr.(type) {
-			case *plan.Expr_Col:
-				exprLeftCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
-			}
-			expr = condImpl.F.Args[1]
-			switch exprImpl := expr.Expr.(type) {
-			case *plan.Expr_Col:
-				//the nullable column ref is not primary key.
-				//can not use the hashOnPk.
-				//it assume build hashamp on right side.
-				if !expr.Typ.NotNullable {
-					return nil
-				}
-				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
-			}
+		fn := cond.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return nil
 		}
+		leftCol := fn.Args[0].GetCol()
+		rightCol := fn.Args[1].GetCol()
+		if leftCol == nil || rightCol == nil {
+			// HashOnPK is an exact direct-column proof. A cast or other wrapper
+			// may collapse storage-distinct primary keys under join equality.
+			return nil
+		}
+		if !sqlEqualityJoinUsesOneIdentityDomain(fn.Args[0].Typ, fn.Args[1].Typ) {
+			return nil
+		}
+		exprLeftCols[i] = (uint64(leftCol.RelPos) << 32) | uint64(leftCol.ColPos)
+		// The build/right primary-key expression must remain non-nullable.
+		if !fn.Args[1].Typ.NotNullable {
+			return nil
+		}
+		exprRightCols[i] = (uint64(rightCol.RelPos) << 32) | uint64(rightCol.ColPos)
 	}
 
 	rightColKey := make([]uint64, len(exprs))
@@ -1008,7 +1010,8 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			// the scan before the second pass. Carry demand through only when the
 			// predicate is total and side-effect free; otherwise the rewrite can
 			// change which errors or volatile evaluations are reached.
-			childLimitDemand = boundedDemand &&
+			childLimitDemand = boundedDemand && !node.IsEnd &&
+				!node.FilterIsBarrier && !node.RollupFilter &&
 				areTruncationSafePredicates(node.FilterList)
 		}
 	}
@@ -1041,7 +1044,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
 		return
 	}
-	pkPositions, ok := primaryKeyColumnPositions(scan.TableDef)
+	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
 	if !ok || len(scan.BindingTags) != 1 {
 		return
 	}
@@ -1120,13 +1123,28 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		len(fn.AggConfig) != 0 || uint64(fn.Func.Obj)&function.Distinct != 0 {
 		return nil, false
 	}
+	expectedFunctionID, knownAggregate := singleRowAggregateFunctionID(fn.Func.ObjName)
+	actualFunctionID, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if !knownAggregate || actualFunctionID != expectedFunctionID {
+		return nil, false
+	}
 
 	switch fn.Func.ObjName {
 	case "starcount":
+		// The binder represents COUNT(*) as starcount(1), and the plan-level
+		// COUNT(non-null-column) rewrite preserves that column argument. Keep
+		// the real one-argument IR contract and reject an argument whose
+		// evaluation behavior could otherwise be hidden by a scan LIMIT.
+		if len(fn.Args) != 1 || types.T(agg.Typ.Id) != types.T_int64 || !agg.Typ.NotNullable ||
+			!fn.Args[0].Typ.NotNullable ||
+			!isTruncationSafeRowExpr(fn.Args[0]) {
+			return nil, false
+		}
 		return makePlan2Int64ConstExprWithType(1), true
 
 	case "count":
-		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
+		if len(fn.Args) != 1 || types.T(agg.Typ.Id) != types.T_int64 || !agg.Typ.NotNullable ||
+			!isTruncationSafeRowExpr(fn.Args[0]) {
 			return nil, false
 		}
 		// A direct non-null scan column has no evaluation behavior to retain.
@@ -1164,6 +1182,11 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
 			return nil, false
 		}
+		if !singleRowCastIsTotal(fn.Args[0].Typ, agg.Typ) {
+			// The blocking Aggregate used to reach this conversion for every
+			// singleton group. A scan LIMIT must not hide a later cast failure.
+			return nil, false
+		}
 		target := makeTypeByPlan2Type(agg.Typ)
 		rowValue, err := makePlan2CastExpr(
 			builder.GetContext(),
@@ -1176,6 +1199,27 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		return rowValue, true
 	}
 	return nil, false
+}
+
+func singleRowAggregateFunctionID(name string) (int32, bool) {
+	switch name {
+	case "starcount":
+		return function.STARCOUNT, true
+	case "count":
+		return function.COUNT, true
+	case "sum":
+		return function.SUM, true
+	case "avg":
+		return function.AVG, true
+	case "min":
+		return function.MIN, true
+	case "max":
+		return function.MAX, true
+	case "any_value":
+		return function.ANY_VALUE, true
+	default:
+		return 0, false
+	}
 }
 
 // isTruncationSafeRowExpr proves that moving an expression from below a
@@ -1386,7 +1430,9 @@ func isTruncationSafeBetween(args []*plan.Expr) bool {
 	if ids[0].IsDecimal() {
 		return validDecimalPlanType(args[0].Typ) &&
 			validDecimalPlanType(args[1].Typ) &&
-			validDecimalPlanType(args[2].Typ)
+			validDecimalPlanType(args[2].Typ) &&
+			comparisonEvaluationIsTotal(function.GREAT_EQUAL, args[0].Typ, args[1].Typ) &&
+			comparisonEvaluationIsTotal(function.LESS_EQUAL, args[0].Typ, args[2].Typ)
 	}
 
 	// This is the exact total domain implemented by betweenImpl.  The
