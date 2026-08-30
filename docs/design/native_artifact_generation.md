@@ -34,7 +34,7 @@ That split admitted concrete failures:
 - the deterministic state and wrapper tests were not selected by the native
   CI path filter.
 
-Revision 1 then exposed three cross-product and consumer gaps:
+Revision 1 then exposed five cross-product and consumer gaps:
 
 - an interrupted marker with the same source key could replace a newly
   diagnosed `rebuild-all` action with its older `rebuild-cgo` requirement,
@@ -43,7 +43,13 @@ Revision 1 then exposed three cross-product and consumer gaps:
   `NVCC_FLAGS` and other effective cuVS compiler/link selectors;
 - an existing cache-miss workflow built thirdparties first and then invoked
   the complete native owner, which correctly rejected the unstamped partial
-  generation but paid for a second full thirdparty build.
+  generation but paid for a second full thirdparty build;
+- the consumer contract read the SCA/UT entry points but the native workflow
+  path selector did not include them, so a future consumer-only regression
+  could skip the contract that was intended to catch it;
+- command-line CPU/CUDA/cuVS optimization overrides had higher Make precedence
+  than ordinary debug target assignments, so a custom profile could still
+  stamp optimized native code as debug.
 
 The design does not attempt a remote artifact cache, cross-host binary
 portability, or concurrent builds from independent shell processes. Those are
@@ -179,18 +185,27 @@ requirement, `prepare` takes their maximum. Matching source/key provenance may
 narrow what changed, but must never downgrade the cleanup currently required.
 In particular, an interrupted `reuse` escalates to `rebuild-cgo`; if current
 thirdparty inspection simultaneously requires `rebuild-all`, the full rebuild
-wins.
+wins. An interrupted `local` generation also escalates to `rebuild-cgo` because
+local means provenance could not be established, not that no object was
+written; a transient Git inspection failure must not let unknown objects join a
+later reusable relink.
 
 Stamp format 6 records the structured key. Older formats fail closed and cause
 one full rebuild instead of guessing compatibility.
 
-### I5 — advertised debug semantics reach every GPU compiler
+### I5 — advertised debug semantics reach every native compiler
 
-Top-level GPU debug propagates to both sub-builds:
+Top-level debug reaches every native compiler:
 
+- `cgo`: `-O0` with no `-O3` in CPU compile commands;
 - `cgo/cuda`: `dbg=1`, `-g -G`, and `-O0` with no later `-O3`;
 - `cgo/cuvs`: the `debug` target, `-O0 -g`, and no `-O3` in compile/link
   commands.
+
+These semantic assignments override conflicting command-line optimization
+values while retaining custom non-optimization flags. Provenance still binds
+the requested profile, but profile identity is not allowed to weaken the
+meaning of the structured `optimization=debug` field.
 
 If a future GPU component cannot implement debug semantics, the build must
 reject GPU debug before stamping it. Silently compiling an optimized component
@@ -249,7 +264,8 @@ Repository consumers request a complete generation once. Cache warming and UT
 setup call top-level `make cgo` directly instead of first constructing a
 partial standalone thirdparty generation. This removes one deterministic full
 duplicate build on a native-cache miss without weakening the missing-stamp
-guard.
+guard. The native contract workflow selects those consumer files as inputs, so
+changing either entry point cannot silently skip its ownership regression.
 
 No locks, goroutines, polling loops, background processes, or unbounded caches
 are added. The staging scan is linear in the small top-level library set and
@@ -285,8 +301,9 @@ and distribution concerns. Out of scope.
 
 ## 7. Validation and acceptance
 
-Native Dependency Checks must run on Linux and macOS when either native build
-code or the `mo-dev` CGo scripts change. Acceptance is:
+Native Dependency Checks must run on Linux and macOS when native build code,
+the `mo-dev` CGo scripts, or the complete-generation consumer entry points
+change. Acceptance is:
 
 1. shell syntax validation for provenance, staging, wrapper, and tests;
 2. deterministic provenance transitions, including interrupted generations,
@@ -294,19 +311,23 @@ code or the `mo-dev` CGo scripts change. Acceptance is:
    profiles;
 3. a combined interrupted-generation plus restored-mtime thirdparty corruption
    transition, proving current `rebuild-all` cannot be downgraded by old state;
-4. a real cuVS `NVCC_FLAGS` transition and same-profile control, proving the
+4. a transient Git-status failure plus interrupted local-only generation,
+   proving unknown CGo objects require cleanup before reusable recovery;
+5. a real cuVS `NVCC_FLAGS` transition and same-profile control, proving the
    effective compiler command and provenance key change together;
-5. staging fault injection for copy, rename, and signal failure, proving the
+6. staging fault injection for copy, rename, and signal failure, proving the
    old destination survives and temporary state is recycled;
-6. `make -n -j2 thirdparties cgo` and `thirdparties debug` each expose exactly
+7. `make -n -j2 thirdparties cgo` and `thirdparties debug` each expose exactly
    one thirdparty build owner;
-7. mixed release/debug root goals fail before build execution;
-8. GPU debug dry-runs propagate to CUDA and cuVS and contain `-O0` without
-   `-O3`;
-9. linked-worktree wrapper tests reject source, platform, accelerator, and
+8. mixed release/debug root goals fail before build execution;
+9. CPU and GPU debug dry-runs, including conflicting command-line optimization
+   overrides, contain `-O0` without `-O3`, and GPU mode propagates to CUDA and
+   cuVS;
+10. linked-worktree wrapper tests reject source, platform, accelerator, and
    SIMSIMD mismatches;
-10. repository cache/UT consumers invoke one complete top-level native owner;
-11. existing amd64/arm64 native container builds continue producing readable
+11. repository cache/UT consumers invoke one complete top-level native owner,
+    and changing either consumer selects this contract workflow;
+12. existing amd64/arm64 native container builds continue producing readable
    `libmo` and thirdparty libraries.
 
 Real GPU compilation remains dependent on a CUDA/cuVS runner. The hermetic
@@ -324,8 +345,10 @@ reuse.
 ## 9. Revision history
 
 - Revision 2: makes interrupted recovery severity monotonic; inventories the
-  effective CUDA and cuVS override profile; and removes sequential partial plus
-  complete native ownership from repository CI consumers.
+  effective CUDA and cuVS override profile; removes sequential partial plus
+  complete native ownership from repository CI consumers; and makes consumer
+  changes select the ownership contract. CPU/GPU debug semantics now also
+  dominate conflicting command-line optimization values.
 - Revision 1: replaces the composite variant with a structured key; establishes
   one Make owner; adds atomic staging and recovery; closes GPU debug semantics;
   and wires deterministic contracts into native CI.
