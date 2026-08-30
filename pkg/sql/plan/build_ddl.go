@@ -1410,11 +1410,16 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 						}
 					}
 				}
-			case CTASDefaultUseTypeDefault:
-				defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
-				if err != nil {
-					return nil, nil, err
-				}
+			}
+		}
+		// A derived expression that is guaranteed to be non-NULL needs an
+		// executable type default in the materialized CTAS schema. This covers
+		// neutral-value aggregates such as COUNT and the BIT_* family without
+		// copying defaults through semantic expression boundaries.
+		if provenance.CTASDefaultPolicy == CTASDefaultUseTypeDefault {
+			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 

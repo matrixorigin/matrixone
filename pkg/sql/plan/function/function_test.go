@@ -1088,11 +1088,24 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 
 func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
+	for _, fid := range []int32{COUNT, STARCOUNT, BIT_AND, BIT_OR, BIT_XOR} {
+		require.True(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
+			"aggregate %d has a non-NULL neutral result", fid)
+		require.True(t, HasExecutableCTASTypeDefault(EncodeOverloadID(fid, 0)),
+			"aggregate %d can use its SQL type default after CTAS", fid)
+	}
+	for _, fid := range []int32{HLL_ADD_AGG, HLL_MERGE_AGG} {
+		require.True(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
+			"aggregate %d always produces an encoded HLL sketch", fid)
+		require.False(t, HasExecutableCTASTypeDefault(EncodeOverloadID(fid, 0)),
+			"aggregate %d cannot use an empty byte string as an HLL sketch", fid)
+	}
 	for _, fid := range []int32{JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64} {
 		require.False(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
 			"STRICT only describes NULL-input propagation; JSON extractors can still return SQL NULL")
 	}
 	require.False(t, ProducesNoNull(-1))
+	require.False(t, HasExecutableCTASTypeDefault(-1))
 }
 
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
