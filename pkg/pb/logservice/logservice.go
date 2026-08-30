@@ -163,6 +163,12 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
 	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
+	if s.DDLVisibilityDeployedProtocol > 0 &&
+		hb.DDLVisibilityDeployedProtocol < s.DDLVisibilityDeployedProtocol {
+		// Linearize markerless joins with the committed cut. A stale producer may
+		// remain barrier-reachable, but it cannot become publicly routable.
+		storeInfo.ViewMetadataIngressReady = false
+	}
 	storeInfo.DDLVisibilityBarrierReady = hb.DDLVisibilityBarrierReady
 	storeInfo.DDLVisibilityDeployedProtocol = hb.DDLVisibilityDeployedProtocol
 	if hb.DDLVisibilityDeployedProtocol > s.DDLVisibilityDeployedProtocol {

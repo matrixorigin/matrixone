@@ -25,6 +25,7 @@ import (
 
 const (
 	authenticatedClusterHeartbeatTimeout = 15 * time.Second
+	authenticatedClusterBackendTimeout   = 20 * time.Second
 	authenticatedClusterStoreTimeout     = 60 * time.Second
 )
 
@@ -49,17 +50,24 @@ func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
 	var cnCount, tnCount, logCount int
 	authenticatedCluster.ForeachServices(func(svc embed.ServiceOperator) bool {
 		cfg := svc.GetServiceConfig()
+		require.Equal(t, authenticatedClusterBackendTimeout,
+			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
 			cnCount++
 			require.False(t, cfg.CN.Frontend.SkipCheckUser)
 			require.Equal(t, authenticatedClusterHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_TN:
 			tnCount++
 			require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
 			require.Equal(t, authenticatedClusterHeartbeatTimeout,
 				cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t,
+				cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_LOG:
 			logCount++
 			require.Equal(
@@ -76,6 +84,8 @@ func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 			require.Less(t, authenticatedClusterHeartbeatTimeout,
 				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration)
+			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
 		return true
 	})

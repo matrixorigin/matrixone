@@ -605,6 +605,9 @@ func (s *stateMachine) attachViewMetadataAdmission(
 		}
 	}
 	batch.ViewMetadataAdmission = s.viewMetadataAdmissionSnapshot(uuid, proxy)
+	if !proxy {
+		batch.DDLVisibilityDeployedProtocol = s.state.CNState.DDLVisibilityDeployedProtocol
+	}
 	data, err := batch.Marshal()
 	if err != nil {
 		panic(err)

@@ -230,6 +230,22 @@ func TestRewriteTableExpr_Subquery(t *testing.T) {
 	assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.lineitem')")
 }
 
+func TestRewriteSelectStmtNamedWindowSubquery(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"select 1 from tpch.nation window w as (partition by (select l_orderkey from tpch.lineitem limit 1))",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt := stmt.(*tree.Select)
+	rewriteSelectStmt(selectStmt.Select, "default_db", "http://mo:6060", nil)
+	result := tree.String(selectStmt, dialect.MYSQL)
+	assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.nation')")
+	assert.Contains(t, result, "tae_scan('http://mo:6060/debug/tae/manifest?table=tpch.lineitem')")
+}
+
 func TestRewriteTableExpr_WithAlias(t *testing.T) {
 	ctx := context.Background()
 	sql := "SELECT l.l_orderkey FROM tpch.lineitem AS l WHERE l.l_shipdate >= '1994-01-01'"

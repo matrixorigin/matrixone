@@ -73,8 +73,10 @@ const (
 	MORPCVersion35     int64 = 35 // scaled variance state with exact numeric origins
 	MORPCVersion36     int64 = 36 // prepared JSON comparison execution and exact parameter types
 	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
-	MORPCVersion38     int64 = 38 // cancellable cross-CN DDL visibility fence
-	MORPCLatestVersion       = MORPCVersion38
+	MORPCVersion38     int64 = 38 // session temporary-table connection migration
+	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
+	MORPCVersion40     int64 = 40 // cancellable cross-CN DDL visibility fence
+	MORPCLatestVersion       = MORPCVersion40
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -529,6 +529,16 @@ func TestCNWorkStateUpdate(t *testing.T) {
 	})
 }
 
+func TestCNStateRejectsMarkerlessIngressAfterCommittedDDLCut(t *testing.T) {
+	state := NewCNState()
+	state.DDLVisibilityDeployedProtocol = 40
+	state.Update(CNStoreHeartbeat{
+		UUID: "markerless-cn", ViewMetadataIngressReady: true,
+	}, 1)
+	assert.False(t, state.Stores["markerless-cn"].ViewMetadataIngressReady)
+	assert.Equal(t, int64(40), state.DDLVisibilityDeployedProtocol)
+}
+
 func TestCNStateLabelPatch(t *testing.T) {
 	state := CNState{Stores: map[string]CNStoreInfo{}}
 

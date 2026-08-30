@@ -113,7 +113,7 @@ func handleSetProtocolVersion(proc *process.Process,
 	}
 
 	if service == cn && targets != nil {
-		if version >= defines.MORPCVersion38 {
+		if version >= defines.MORPCVersion40 {
 			const maxDDLVisibilityActivationTargets = 1024
 			if len(targets) == 0 || len(targets) > maxDDLVisibilityActivationTargets {
 				return Result{}, moerr.NewInternalErrorNoCtxf(
@@ -132,7 +132,12 @@ func handleSetProtocolVersion(proc *process.Process,
 				seen[target] = struct{}{}
 			}
 		}
-		if version < defines.MORPCVersion38 {
+		if version >= defines.MORPCVersion40 {
+			if err := validateDDLVisibilityActivationMembership(qt, targets); err != nil {
+				return Result{}, err
+			}
+		}
+		if version < defines.MORPCVersion40 {
 			versions := make([]string, 0, len(targets))
 			for _, target := range targets {
 				resp, sendErr := transferToCN(qt, target, version, nil)
@@ -151,7 +156,7 @@ func handleSetProtocolVersion(proc *process.Process,
 			return Result{Method: SetProtocolVersionMethod, Data: strings.Join(versions, ", ")}, nil
 		}
 
-		// Live v38 activation is a distributed barrier. Dispatch every target
+		// Live v40 activation is a distributed barrier. Dispatch every target
 		// concurrently so each CN can block local DDL producers before any CN
 		// waits for the complete Prepared set.
 		type targetResult struct {
@@ -222,6 +227,50 @@ func checkProtocolParameter(param string) ([]string, int64, error) {
 	return nil, version, nil
 }
 
+func validateDDLVisibilityActivationMembership(qt qclient.QueryClient, targets []string) error {
+	cluster := clusterservice.GetMOCluster(qt.ServiceID())
+	refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"CN cluster service does not support authoritative DDL activation inventory")
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseTransferToCN)
+	defer cancel()
+	if err := refresher.Refresh(ctx); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	authoritative := make(map[string]metadata.CNService)
+	if err := clusterservice.GetCNServiceRawWithContext(
+		ctx, cluster, clusterservice.NewSelector(), func(cn metadata.CNService) bool {
+			if cn.QueryAddress != "" && cn.ViewMetadataAdmissionGeneration != 0 {
+				authoritative[cn.ServiceID] = cn
+			}
+			return true
+		}); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	requested := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		requested[target] = struct{}{}
+	}
+	if len(requested) != len(authoritative) {
+		return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+			"DDL visibility activation target set does not match authoritative CN membership: requested=%d authoritative=%d",
+			len(requested), len(authoritative)))
+	}
+	for serviceID, cn := range authoritative {
+		if _, ok := requested[serviceID]; !ok {
+			return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+				"DDL visibility activation omits authoritative CN %s", serviceID))
+		}
+		if !cn.DDLVisibilityBarrierReady {
+			return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+				"authoritative CN %s does not support the DDL visibility activation receiver", serviceID))
+		}
+	}
+	return nil
+}
+
 func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 	var addr string
 	var resp *querypb.Response
@@ -264,7 +313,7 @@ func transferToCN(
 ) (resp *querypb.Response, err error) {
 	cluster := clusterservice.GetMOCluster(qt.ServiceID())
 	var selected metadata.CNService
-	if version >= defines.MORPCVersion38 {
+	if version >= defines.MORPCVersion40 {
 		refresher, refreshOK := cluster.(clusterservice.AuthoritativeRefresher)
 		if !refreshOK {
 			return nil, moerr.NewInternalErrorNoCtx(

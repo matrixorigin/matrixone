@@ -487,7 +487,26 @@ func selectClauseHasStar(selectClause *tree.SelectClause) bool {
 	if whereHasStar(selectClause.Where) || whereHasStar(selectClause.Having) {
 		return true
 	}
-	return groupByHasStar(selectClause.GroupBy)
+	return groupByHasStar(selectClause.GroupBy) || windowDefinitionsHaveStar(selectClause.Windows)
+}
+
+func windowDefinitionsHaveStar(definitions tree.WindowDefinitions) bool {
+	for _, definition := range definitions {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		if exprsHasStar(definition.Spec.PartitionBy) || orderByHasStar(definition.Spec.OrderBy) {
+			return true
+		}
+		if definition.Spec.Frame != nil {
+			for _, bound := range []*tree.FrameBound{definition.Spec.Frame.Start, definition.Spec.Frame.End} {
+				if bound != nil && exprHasStar(bound.Expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func fromHasStar(from *tree.From) bool {
@@ -803,6 +822,10 @@ func viewSelectStatementWithExpandedStars(
 			stableClause.GroupBy = stableGroupBy
 			rewritten = true
 		}
+		if stableWindows, windowsRewritten := viewWindowDefinitionsWithExpandedStars(selectStmt.Windows, expandedSelectLists); windowsRewritten {
+			stableClause.Windows = stableWindows
+			rewritten = true
+		}
 		return &stableClause, rewritten
 	case *tree.Select:
 		stableSelect := *selectStmt
@@ -962,6 +985,53 @@ func viewGroupByWithExpandedStars(
 		rewritten = true
 	}
 	return &stableGroupBy, rewritten
+}
+
+func viewWindowDefinitionsWithExpandedStars(
+	definitions tree.WindowDefinitions,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.WindowDefinitions, bool) {
+	if len(definitions) == 0 {
+		return definitions, false
+	}
+	stableDefinitions := make(tree.WindowDefinitions, len(definitions))
+	rewritten := false
+	for i, definition := range definitions {
+		if definition == nil {
+			continue
+		}
+		stableDefinition := *definition
+		if definition.Name != nil {
+			stableDefinition.Name = tree.NewCStr(definition.Name.Origin(), 1)
+		}
+		if definition.Spec != nil {
+			stableSpec := *definition.Spec
+			var fieldRewritten bool
+			stableSpec.PartitionBy, fieldRewritten = viewExprsWithExpandedStars(definition.Spec.PartitionBy, expandedSelectLists)
+			rewritten = rewritten || fieldRewritten
+			stableSpec.OrderBy, fieldRewritten = viewOrderByWithExpandedStars(definition.Spec.OrderBy, expandedSelectLists)
+			rewritten = rewritten || fieldRewritten
+			if definition.Spec.Frame != nil {
+				stableFrame := *definition.Spec.Frame
+				if definition.Spec.Frame.Start != nil {
+					stableStart := *definition.Spec.Frame.Start
+					stableStart.Expr, fieldRewritten = viewExprWithExpandedStars(definition.Spec.Frame.Start.Expr, expandedSelectLists)
+					rewritten = rewritten || fieldRewritten
+					stableFrame.Start = &stableStart
+				}
+				if definition.Spec.Frame.End != nil {
+					stableEnd := *definition.Spec.Frame.End
+					stableEnd.Expr, fieldRewritten = viewExprWithExpandedStars(definition.Spec.Frame.End.Expr, expandedSelectLists)
+					rewritten = rewritten || fieldRewritten
+					stableFrame.End = &stableEnd
+				}
+				stableSpec.Frame = &stableFrame
+			}
+			stableDefinition.Spec = &stableSpec
+		}
+		stableDefinitions[i] = &stableDefinition
+	}
+	return stableDefinitions, rewritten
 }
 
 func viewExprsWithExpandedStars(
@@ -3436,36 +3506,47 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	skip := IsFkBannedDatabase(createTable.Database)
 	if !skip {
-		fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+		// Existing relations are handled by the execution-time RelationExists
+		// check. Their reverse foreign keys belong to the existing definition and
+		// must never be validated against the ignored replacement definition.
+		_, existingTableDef, err := ctx.Resolve(
+			createTable.Database, createTable.TableDef.Name, nil,
+		)
 		if err != nil {
 			return err
 		}
-		// for fk forward reference. the column id of the tableDef is not ready.
-		// setup fake column id to distinguish the columns
-		for i, def := range createTable.TableDef.Cols {
-			def.ColId = uint64(i)
-		}
-		for rkey, fkDefs := range fks {
-			for constraintName, defs := range fkDefs {
-				data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
-				if err != nil {
-					return err
+		if existingTableDef == nil {
+			fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+			if err != nil {
+				return err
+			}
+			// for fk forward reference. the column id of the tableDef is not ready.
+			// setup fake column id to distinguish the columns
+			for i, def := range createTable.TableDef.Cols {
+				def.ColId = uint64(i)
+			}
+			for rkey, fkDefs := range fks {
+				for constraintName, defs := range fkDefs {
+					data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
+					if err != nil {
+						return err
+					}
+					// The child was created while foreign_key_checks was disabled, so
+					// its catalog row has no parent key name. Persist the selected key
+					// when the metadata column exists; an old-layout row is reconciled
+					// by the tenant migration after the columns are committed.
+					if catalogLayout == foreignKeyCatalogExtended {
+						createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
+							getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
+					}
+					info := &plan.ForeignKeyInfo{
+						Db:           rkey.Db,
+						Table:        rkey.Tbl,
+						ColsReferred: data.ColsReferred,
+						Def:          data.Def,
+					}
+					createTable.FksReferToMe = append(createTable.FksReferToMe, info)
 				}
-				// The child was created while foreign_key_checks was disabled, so
-				// its catalog row has no parent key name. Persist the selected key
-				// when the metadata column exists; an old-layout row is reconciled
-				// by the tenant migration after the columns are committed.
-				if catalogLayout == foreignKeyCatalogExtended {
-					createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
-						getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
-				}
-				info := &plan.ForeignKeyInfo{
-					Db:           rkey.Db,
-					Table:        rkey.Tbl,
-					ColsReferred: data.ColsReferred,
-					Def:          data.Def,
-				}
-				createTable.FksReferToMe = append(createTable.FksReferToMe, info)
 			}
 		}
 	}

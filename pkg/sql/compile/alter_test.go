@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -542,6 +544,168 @@ func TestRewriteForeignKeyReferencesForAlterCopy(t *testing.T) {
 		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{nil}},
 	}}, nil, 10, 11)
 	require.ErrorContains(t, err, "nil foreign key definition")
+}
+
+func TestRemapAlterCopyForeignKeyState(t *testing.T) {
+	source := []*plan2.ForeignKeyDef{
+		{Name: "fk_parent", Cols: []uint64{1}, ForeignTbl: 20, ForeignCols: []uint64{7}},
+		{Name: "fk_self", Cols: []uint64{2}, ForeignTbl: 0, ForeignCols: []uint64{1}},
+		{Name: "fk_legacy_self", Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{2}},
+	}
+	remapped, refChildTbls, err := remapAlterCopyForeignKeyState(
+		context.Background(),
+		source,
+		[]uint64{30, 10, 0, 30},
+		map[uint64]*plan2.ColDef{1: {ColId: 101}, 2: {ColId: 102}},
+		10,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{101}, remapped[0].Cols)
+	require.Equal(t, uint64(20), remapped[0].ForeignTbl)
+	require.Equal(t, []uint64{7}, remapped[0].ForeignCols)
+	require.Equal(t, []uint64{102}, remapped[1].Cols)
+	require.Equal(t, uint64(0), remapped[1].ForeignTbl)
+	require.Equal(t, []uint64{101}, remapped[1].ForeignCols)
+	require.Equal(t, uint64(0), remapped[2].ForeignTbl)
+	require.Equal(t, []uint64{102}, remapped[2].ForeignCols)
+	require.Equal(t, []uint64{30, 0}, refChildTbls)
+
+	// The source relation constraint is still needed until the replacement is
+	// published, so remapping must not mutate it in place.
+	require.Equal(t, []uint64{1}, source[0].Cols)
+	require.Equal(t, []uint64{1}, source[1].ForeignCols)
+	require.Equal(t, uint64(10), source[2].ForeignTbl)
+
+	_, _, err = remapAlterCopyForeignKeyState(
+		context.Background(), source[:1], nil, map[uint64]*plan2.ColDef{}, 10,
+	)
+	require.ErrorContains(t, err, "was not retained")
+}
+
+func TestSnapshotAlterCopyForeignKeyState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	sourceForeignKey1 := &plan2.ForeignKeyDef{
+		Name: "fk_parent", Cols: []uint64{1}, ForeignTbl: 20, ForeignCols: []uint64{7},
+	}
+	sourceForeignKey2 := &plan2.ForeignKeyDef{
+		Name: "fk_other_parent", Cols: []uint64{2}, ForeignTbl: 21, ForeignCols: []uint64{8},
+	}
+	relation.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		&engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{sourceForeignKey1}},
+			&engine.RefChildTableDef{Tables: []uint64{30, 31}},
+			&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{sourceForeignKey2}},
+			&engine.RefChildTableDef{Tables: []uint64{31, 32}},
+		}},
+	}, nil)
+
+	foreignKeys, refChildTbls, err := snapshotAlterCopyForeignKeyState(context.Background(), relation)
+	require.NoError(t, err)
+	require.Equal(t, []*plan2.ForeignKeyDef{sourceForeignKey1, sourceForeignKey2}, foreignKeys)
+	require.Equal(t, []uint64{30, 31, 32}, refChildTbls)
+
+	foreignKeys[0].Cols[0] = 101
+	refChildTbls[0] = 130
+	require.Equal(t, []uint64{1}, sourceForeignKey1.Cols)
+}
+
+func TestRestoreAlterCopyForeignKeyStateUsesExactLiveSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.IndexDef{},
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{{
+			Name: "stale_fk", ForeignTbl: 20,
+		}}},
+		&engine.RefChildTableDef{Tables: []uint64{0, 30}},
+	}}
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(
+		_ context.Context, got engine.Relation,
+	) (*engine.ConstraintDef, error) {
+		require.Same(t, relation, got)
+		return constraintDef, nil
+	})
+	defer getConstraintDef.Reset()
+	relation.EXPECT().UpdateConstraint(gomock.Any(), constraintDef).Return(nil).Times(1)
+
+	// The live source has no foreign keys. Restoring that exact empty set must
+	// remove a stale planned FK installed by the temporary CREATE.
+	require.NoError(t, restoreAlterCopyForeignKeyState(proc.Ctx, relation, nil, nil))
+	require.Len(t, constraintDef.Cts, 3)
+	var foreignKeyDef *engine.ForeignKeyDef
+	hasIndexDef := false
+	for _, constraint := range constraintDef.Cts {
+		switch definition := constraint.(type) {
+		case *engine.ForeignKeyDef:
+			foreignKeyDef = definition
+		case *engine.IndexDef:
+			hasIndexDef = true
+		}
+	}
+	require.True(t, hasIndexDef)
+	require.NotNil(t, foreignKeyDef)
+	require.Empty(t, foreignKeyDef.Fkeys)
+
+	require.Empty(t, canonicalRefChildTableIDs(constraintDef))
+}
+
+func TestApplyAlterCopyForeignKeyStateCanonicalizesLegacySelfReference(t *testing.T) {
+	for _, reverseMarker := range []uint64{0, 10} {
+		t.Run(fmt.Sprintf("reverse marker %d", reverseMarker), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			replacement := mock_frontend.NewMockRelation(ctrl)
+			constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+				&engine.ForeignKeyDef{},
+				&engine.RefChildTableDef{},
+			}}
+			sourceForeignKey := &plan2.ForeignKeyDef{
+				Name: "fk_self", Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{1},
+			}
+
+			getConstraintDef := gostub.Stub(&GetConstraintDef, func(
+				_ context.Context, got engine.Relation,
+			) (*engine.ConstraintDef, error) {
+				require.Same(t, replacement, got)
+				return constraintDef, nil
+			})
+			defer getConstraintDef.Reset()
+			replacement.EXPECT().UpdateConstraint(gomock.Any(), constraintDef).DoAndReturn(
+				func(_ context.Context, _ *engine.ConstraintDef) error {
+					var restored []*plan2.ForeignKeyDef
+					for _, constraint := range constraintDef.Cts {
+						if definition, ok := constraint.(*engine.ForeignKeyDef); ok {
+							restored = definition.Fkeys
+						}
+					}
+					require.Len(t, restored, 1)
+					require.Equal(t, uint64(0), restored[0].ForeignTbl)
+					require.Equal(t, []uint64{101}, restored[0].Cols)
+					require.Equal(t, []uint64{101}, restored[0].ForeignCols)
+					require.Equal(t, []uint64{0}, canonicalRefChildTableIDs(constraintDef))
+					return nil
+				},
+			)
+
+			// A self-only state must not resolve either the dropped old generation
+			// or the replacement generation as an external relation.
+			eng := mock_frontend.NewMockEngine(ctrl)
+			c := NewCompile("test", "test", "alter table self_ref add column v int", "", "", eng, proc, nil, false, nil, time.Now())
+			require.NoError(t, applyAlterCopyForeignKeyState(
+				c,
+				replacement,
+				[]*plan2.ForeignKeyDef{sourceForeignKey},
+				[]uint64{reverseMarker},
+				map[uint64]*plan2.ColDef{1: {ColId: 101}},
+				10,
+				11,
+			))
+			require.Equal(t, uint64(10), sourceForeignKey.ForeignTbl)
+		})
+	}
 }
 
 func TestReconcileRefChildTableIDForAlterCopy(t *testing.T) {
@@ -1535,6 +1699,7 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 
 			originRel := mock_frontend.NewMockRelation(ctrl)
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+			originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
 			if tc.nilCtxBeforeInsert {
@@ -1803,6 +1968,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 
 	originRel := mock_frontend.NewMockRelation(ctrl)
 	originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+	originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
@@ -1835,7 +2001,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
-		databranchutils.LineageOwnerPublicationLockSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQL(),
 		alterDataBranchParticipationSQL(1),
 		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
 		alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1),
@@ -2134,10 +2300,11 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 	mp := c.proc.Mp()
 
 	metadataSQL := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	results := map[string]executor.Result{
+		databranchutils.LineageOwnerLifecycleLockSQL(): {},
 		metadataSQL: newAlterLineageMetadataResult(
 			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
 			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
@@ -2164,42 +2331,382 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 		alterDataBranchLineageEdgeSQL(),
 		alterDataBranchSnapshotSourceSQL(),
 		alterDataBranchPitrSourceSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQL(),
 		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
 		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
 	}, executed)
 }
 
-type lineageGCDeadlineExecutor struct {
-	deadline time.Time
+func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateError(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	wantErr := errors.New("lifecycle gate failed")
+	var executed []string
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
+			return executor.Result{}, wantErr
+		}
+		switch sql {
+		case metadataSQL:
+			return newAlterLineageMetadataResult(
+				t, mp, []uint64{2}, []uint64{1}, []int64{now.Add(-48 * time.Hour).UnixNano()},
+				[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{true},
+			), nil
+		case alterDataBranchLineageEdgeSQL():
+			return newAlterLineageEdgeResult(t, mp, nil, nil, nil, nil, nil, nil), nil
+		case alterDataBranchSnapshotSourceSQL():
+			return newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil), nil
+		case alterDataBranchPitrSourceSQL():
+			return newAlterLineagePitrSourceResult(t, mp, nil, nil, nil, nil, nil, nil, nil), nil
+		default:
+			return executor.Result{}, nil
+		}
+	})
+
+	err := compactExpiredAlterDataBranchLineageWithExecutor(
+		context.Background(), sqlExecutor, now,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, []string{
+		metadataSQL,
+		alterDataBranchLineageEdgeSQL(),
+		alterDataBranchSnapshotSourceSQL(),
+		alterDataBranchPitrSourceSQL(),
+		databranchutils.LineageOwnerLifecycleLockSQL(),
+	}, executed)
 }
 
-func (e *lineageGCDeadlineExecutor) Exec(
+type lineageGCTestExecutor struct {
+	t                   *testing.T
+	mp                  *mpool.MPool
+	remaining           []uint64
+	expectedBatchSize   int
+	gateErr             error
+	onGate              func()
+	opts                []executor.Options
+	transactions        [][]string
+	statementOpts       [][]executor.StatementOption
+	committedBatchSizes []int
+	rolledBack          int
+	execCtxs            []context.Context
+	waitForContextEnd   bool
+}
+
+type lineageGCTestTxnExecutor struct {
+	owner       *lineageGCTestExecutor
+	txnIndex    int
+	deleteCount int
+}
+
+func (e *lineageGCTestTxnExecutor) Use(string) {}
+
+func (e *lineageGCTestTxnExecutor) LockTable(string) error { return nil }
+
+func (e *lineageGCTestTxnExecutor) Txn() client.TxnOperator { return nil }
+
+func (e *lineageGCTestTxnExecutor) Exec(
+	sql string,
+	opts executor.StatementOption,
+) (executor.Result, error) {
+	e.owner.transactions[e.txnIndex] = append(e.owner.transactions[e.txnIndex], sql)
+	e.owner.statementOpts[e.txnIndex] = append(e.owner.statementOpts[e.txnIndex], opts)
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	switch sql {
+	case metadataSQL:
+		rowCount := len(e.owner.remaining)
+		parents := make([]uint64, rowCount)
+		cloneTSs := make([]int64, rowCount)
+		creators := make([]uint64, rowCount)
+		levels := make([]string, rowCount)
+		deleted := make([]bool, rowCount)
+		for i := range rowCount {
+			cloneTSs[i] = 1
+			creators[i] = uint64(catalog.System_Account)
+			levels[i] = databranchutils.AlterLineageLevel
+			deleted[i] = true
+		}
+		return newAlterLineageMetadataResult(
+			e.owner.t, e.owner.mp, e.owner.remaining, parents, cloneTSs, creators, levels, deleted,
+		), nil
+	case alterDataBranchLineageEdgeSQL():
+		return newAlterLineageEdgeResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil), nil
+	case alterDataBranchSnapshotSourceSQL():
+		return newAlterLineageSnapshotSourceResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil), nil
+	case alterDataBranchPitrSourceSQL():
+		return newAlterLineagePitrSourceResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil, nil), nil
+	case databranchutils.LineageOwnerLifecycleLockSQL():
+		if e.owner.onGate != nil {
+			e.owner.onGate()
+		}
+		return executor.Result{}, e.owner.gateErr
+	default:
+		if strings.HasPrefix(sql, "delete from mo_catalog.mo_branch_metadata") {
+			e.deleteCount = min(e.owner.expectedBatchSize, len(e.owner.remaining))
+		}
+		return executor.Result{}, nil
+	}
+}
+
+func (e *lineageGCTestExecutor) Exec(
 	context.Context, string, executor.Options,
 ) (executor.Result, error) {
 	return executor.Result{}, nil
 }
 
-func (e *lineageGCDeadlineExecutor) ExecTxn(
+func (e *lineageGCTestExecutor) ExecTxn(
 	ctx context.Context,
-	_ func(executor.TxnExecutor) error,
-	_ executor.Options,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
 ) error {
-	e.deadline, _ = ctx.Deadline()
+	e.execCtxs = append(e.execCtxs, ctx)
+	if e.waitForContextEnd {
+		<-ctx.Done()
+		e.rolledBack++
+		return ctx.Err()
+	}
+	txnIndex := len(e.transactions)
+	e.opts = append(e.opts, opts)
+	e.transactions = append(e.transactions, nil)
+	e.statementOpts = append(e.statementOpts, nil)
+	txn := &lineageGCTestTxnExecutor{owner: e, txnIndex: txnIndex}
+	err := execFunc(txn)
+	if err != nil {
+		e.rolledBack++
+		return err
+	}
+	if txn.deleteCount > 0 {
+		e.remaining = e.remaining[txn.deleteCount:]
+		e.committedBatchSizes = append(e.committedBatchSizes, txn.deleteCount)
+	}
 	return nil
 }
 
-func TestDataBranchLineageGCExecutorSetsDeadline(t *testing.T) {
-	spyExec := &lineageGCDeadlineExecutor{}
-	started := time.Now()
-	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(context.Background(), nil))
-	require.False(t, spyExec.deadline.IsZero())
-	require.WithinDuration(t, started.Add(dataBranchLineageGCTimeout), spyExec.deadline, time.Second)
+func newLineageGCTestExecutor(
+	t *testing.T,
+	remaining []uint64,
+	batchSize int,
+) *lineageGCTestExecutor {
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	return &lineageGCTestExecutor{
+		t:                 t,
+		mp:                c.proc.Mp(),
+		remaining:         append([]uint64(nil), remaining...),
+		expectedBatchSize: batchSize,
+	}
+}
 
-	parentDeadline := time.Now().Add(time.Minute)
-	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
-	defer cancel()
-	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(ctx, nil))
-	require.WithinDuration(t, parentDeadline, spyExec.deadline, time.Second)
+func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T) {
+	const batchSize = 2
+	spyExec := newLineageGCTestExecutor(t, []uint64{1, 2, 3, 4, 5}, batchSize)
+	run := dataBranchLineageGCExecutor(spyExec, batchSize)
+
+	require.NoError(t, run(context.Background(), nil))
+	require.Equal(t, []uint64{3, 4, 5}, spyExec.remaining)
+	require.Equal(t, []int{2}, spyExec.committedBatchSizes)
+	require.NoError(t, run(context.Background(), nil))
+	require.Equal(t, []uint64{5}, spyExec.remaining)
+	require.Equal(t, []int{2, 2}, spyExec.committedBatchSizes)
+	require.NoError(t, run(context.Background(), nil))
+	require.Empty(t, spyExec.remaining)
+	require.Equal(t, []int{2, 2, 1}, spyExec.committedBatchSizes)
+	require.Zero(t, spyExec.rolledBack)
+
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	metadataDeletes := make([]string, 0, len(spyExec.committedBatchSizes))
+	for txnIndex, sqls := range spyExec.transactions {
+		deadline, ok := spyExec.execCtxs[txnIndex].Deadline()
+		require.True(t, ok, "each invocation must have a hard task-work budget")
+		require.WithinDuration(t, time.Now().Add(dataBranchLineageGCTimeBudget), deadline, 5*time.Second)
+		require.True(t, spyExec.opts[txnIndex].HasLockWaitTimeout())
+		require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts[txnIndex].LockWaitTimeout())
+		require.True(t, spyExec.opts[txnIndex].HasTxnIsolation())
+		require.Equal(t, txn.TxnIsolation_SI, spyExec.opts[txnIndex].TxnIsolation())
+		gateIndex := slices.Index(sqls, gateSQL)
+		if gateIndex < 0 {
+			// The final empty discovery transaction performs no mutation.
+			require.Len(t, sqls, 1)
+			continue
+		}
+		require.Equal(t, 4, gateIndex, "unbounded discovery must precede lifecycle admission")
+		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[txnIndex][gateIndex].WaitPolicy())
+		require.Len(t, sqls[gateIndex+1:], 2, "only the bounded delete pair may execute while owning the gate")
+		metadataDeletes = append(metadataDeletes, sqls[gateIndex+2])
+	}
+	require.Equal(t, []string{
+		"delete from mo_catalog.mo_branch_metadata where table_id in (1,2) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (3,4) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (5) and (level = 'alter' or level like 'alter:%')",
+	}, metadataDeletes)
+}
+
+func TestDataBranchLineageGCExecutorScansOnceAndBoundsMutationAtScale(t *testing.T) {
+	const candidateCount = 2049
+	remaining := make([]uint64, candidateCount)
+	for i := range remaining {
+		remaining[i] = uint64(i + 1)
+	}
+	spyExec := newLineageGCTestExecutor(t, remaining, dataBranchLineageGCBatchSize)
+
+	require.NoError(t, dataBranchLineageGCExecutor(spyExec, dataBranchLineageGCBatchSize)(context.Background(), nil))
+	require.Len(t, spyExec.transactions, 1,
+		"one invocation must not amplify full-catalog discovery across batches")
+	require.Len(t, spyExec.transactions[0], 7,
+		"one fixed-SI discovery, one gate write, and one delete pair are the complete work unit")
+	require.Len(t, spyExec.committedBatchSizes, 1)
+	require.Equal(t, dataBranchLineageGCBatchSize, spyExec.committedBatchSizes[0])
+	require.Len(t, spyExec.remaining, candidateCount-dataBranchLineageGCBatchSize)
+}
+
+func TestDataBranchLineageGCExecutorDefersOnLocalTimeBudget(t *testing.T) {
+	spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+	spyExec.waitForContextEnd = true
+
+	require.NoError(t,
+		dataBranchLineageGCExecutorWithBudget(spyExec, 1, time.Millisecond)(context.Background(), nil))
+	require.Equal(t, 1, spyExec.rolledBack)
+	require.Equal(t, []uint64{1}, spyExec.remaining)
+}
+
+func TestDataBranchLineageGCExecutorDefersAfterContentionRollback(t *testing.T) {
+	for _, contentionErr := range []error{
+		moerr.NewLockConflictNoCtx(),
+		moerr.NewLockWaitTimeoutNoCtx(),
+		moerr.NewTxnNeedRetryNoCtx(),
+		moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+	} {
+		spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+		spyExec.gateErr = contentionErr
+		require.NoError(t, dataBranchLineageGCExecutor(spyExec, 1)(context.Background(), nil))
+		require.Equal(t, 1, spyExec.rolledBack)
+		require.Equal(t, []uint64{1}, spyExec.remaining)
+		require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), spyExec.transactions[0][4])
+		require.Len(t, spyExec.transactions[0], 5)
+		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[0][4].WaitPolicy())
+	}
+}
+
+func TestDataBranchLineageGCExecutorParentContextPrecedesContention(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		cause         error
+		contentionErr error
+	}{
+		{
+			name:          "canceled parent with lock conflict",
+			cause:         context.Canceled,
+			contentionErr: moerr.NewLockConflictNoCtx(),
+		},
+		{
+			name:          "expired parent with lock timeout",
+			cause:         context.DeadlineExceeded,
+			contentionErr: moerr.NewLockWaitTimeoutNoCtx(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+			spyExec.gateErr = tc.contentionErr
+			spyExec.onGate = func() { cancel(tc.cause) }
+			err := dataBranchLineageGCExecutor(spyExec, 1)(ctx, nil)
+			require.ErrorIs(t, err, tc.cause)
+			require.Equal(t, 1, spyExec.rolledBack)
+			require.Equal(t, []uint64{1}, spyExec.remaining)
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+	require.ErrorIs(t, dataBranchLineageGCExecutor(spyExec, 1)(ctx, nil), context.Canceled)
+	require.Empty(t, spyExec.transactions, "an ended parent must stop before transaction admission")
+}
+
+func TestDataBranchLineageGCExecutorDoesNotSuppressOtherErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "remote owner timeout", err: moerr.NewRemoteLockWaitTimeoutNoCtx()},
+		{name: "execution failure", err: errors.New("gc failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spyExec := newLineageGCTestExecutor(t, []uint64{1}, 1)
+			spyExec.gateErr = tc.err
+			err := dataBranchLineageGCExecutor(spyExec, 1)(context.Background(), nil)
+			require.Error(t, err)
+			if moerr.IsMoErrCode(tc.err, moerr.ErrRemoteLockWaitTimeout) {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout))
+			} else {
+				require.ErrorIs(t, err, tc.err)
+			}
+			require.Equal(t, 1, spyExec.rolledBack)
+			require.Equal(t, []uint64{1}, spyExec.remaining)
+		})
+	}
+}
+
+func TestOwnerCatalogDropEntryPointsStopAtLifecycleAdmissionFailure(t *testing.T) {
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	wantErr := errors.New("lifecycle gate failed")
+	for _, tc := range []struct {
+		name string
+		run  func(*Scope, *Compile) error
+	}{
+		{
+			name: "drop database",
+			run: func(s *Scope, c *Compile) error {
+				s.Plan = &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+					Definition: &plan2.DataDefinition_DropDatabase{
+						DropDatabase: &plan2.DropDatabase{Database: "db"},
+					},
+				}}}
+				return s.DropDatabase(c)
+			},
+		},
+		{
+			name: "drop table",
+			run: func(s *Scope, c *Compile) error {
+				return s.dropTableSingle(c, &plan2.DropTable{
+					Database: "db",
+					Table:    "tbl",
+					TableDef: &plan2.TableDef{},
+				})
+			},
+		},
+		{
+			name: "drop pitr",
+			run: func(s *Scope, c *Compile) error {
+				s.Plan = &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+					Definition: &plan2.DataDefinition_DropPitr{
+						DropPitr: &plan2.DropPitr{Name: "pitr"},
+					},
+				}}}
+				return s.DropPitr(c)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{errs: map[string]error{gateSQL: wantErr}}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			err := tc.run(&Scope{}, c)
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{gateSQL}, spyExec.executedSQLs)
+		})
+	}
 }
 
 func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t *testing.T) {
@@ -2209,10 +2716,11 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t
 	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
 	mp := c.proc.Mp()
 	metadataSQL := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	results := map[string]executor.Result{
+		databranchutils.LineageOwnerLifecycleLockSQL(): {},
 		metadataSQL: newAlterLineageMetadataResult(
 			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
 			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},

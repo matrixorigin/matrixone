@@ -645,6 +645,9 @@ message CommandBatch {
   // ViewMetadataAdmission is the authoritative snapshot for the heartbeat
   // sender. Old services ignore this additive field.
   ViewMetadataAdmission ViewMetadataAdmission = 5;
+  // DDLVisibilityDeployedProtocol is returned from the same replicated
+  // heartbeat transition that conditionally publishes CN ingress.
+  int64 DDLVisibilityDeployedProtocol = 6;
 }
 
 // ViewMetadataAdmission is the durable cluster admission snapshot. Generation

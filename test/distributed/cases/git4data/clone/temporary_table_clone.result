@@ -188,7 +188,7 @@ select * from auto_dst order by id;
 ➤ id[-5,64,0]  ¦  payload[12,15,0]  𝄀
 10  ¦  first  𝄀
 11  ¦  second  𝄀
-10010  ¦  third
+12  ¦  third
 drop temporary table auto_dst;
 create temporary table temp_src (id int primary key, v varchar(20));
 insert into temp_src values (9, 'temporary source');

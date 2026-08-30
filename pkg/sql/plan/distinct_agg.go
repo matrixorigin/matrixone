@@ -67,13 +67,19 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 		}
 
 		aggFunc := node.AggList[0].GetF()
-		if uint64(aggFunc.Func.Obj)&function.Distinct == 0 || (aggFunc.Func.ObjName != "count" && aggFunc.Func.ObjName != "sum") {
+		if aggFunc == nil || aggFunc.Func == nil ||
+			uint64(aggFunc.Func.Obj)&function.Distinct == 0 {
+			return
+		}
+		baseID := int64(uint64(aggFunc.Func.Obj) & function.DistinctMask)
+		functionID, _ := function.DecodeOverloadID(baseID)
+		if functionID != function.COUNT && functionID != function.SUM {
 			return
 		}
 
 		// Multi-arg COUNT(DISTINCT col1, col2, ...) cannot be optimized into a simple
 		// GROUP BY because the distinct combination spans multiple columns.
-		if len(aggFunc.Args) > 1 {
+		if len(aggFunc.Args) != 1 {
 			return
 		}
 
@@ -86,41 +92,99 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 		oldGroupLen := len(node.GroupBy)
 		oldGroupBy := node.GroupBy
 		toCount := aggFunc.Args[0]
+		useDistinctKeyPreAgg := functionID == function.COUNT &&
+			toCount.GetCol() != nil &&
+			isSupportedDistinctKeyShuffleType(toCount.Typ.Id) &&
+			shouldUseDistinctKeyPreAggregation(node, builder)
 
-		newGroupTag := builder.genNewBindTag()
-		newAggregateTag := builder.genNewBindTag()
-		aggNodeID := builder.appendNode(&plan.Node{
+		localGroupTag := builder.genNewBindTag()
+		localAggregateTag := builder.genNewBindTag()
+		localGroupBy := make([]*plan.Expr, 0, oldGroupLen+1)
+		localGroupBy = append(localGroupBy, oldGroupBy...)
+		localGroupBy = append(localGroupBy, toCount)
+		localNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{node.Children[0]},
-			GroupBy:     append(oldGroupBy, toCount),
-			BindingTags: []int32{newGroupTag, newAggregateTag},
+			GroupBy:     localGroupBy,
+			BindingTags: []int32{localGroupTag, localAggregateTag},
 			SpillMem:    builder.aggSpillMem,
 		}, builder.ctxByNode[node.Children[0]])
-		builder.determineGroupByHashKey(builder.qry.Nodes[aggNodeID])
+		localNode := builder.qry.Nodes[localNodeID]
+		builder.determineGroupByHashKey(localNode)
 
-		node.Children[0] = aggNodeID
+		resultNodeID := localNodeID
+		resultGroupTag := localGroupTag
+		if useDistinctKeyPreAgg {
+			builder.markDistinctKeyLocalPreAgg(localNode)
+
+			finalGroupTag := builder.genNewBindTag()
+			finalAggregateTag := builder.genNewBindTag()
+			finalGroupBy := make([]*plan.Expr, len(localGroupBy))
+			for i, expr := range localGroupBy {
+				finalGroupBy[i] = distinctPairGroupCol(
+					expr, localGroupTag, int32(i))
+			}
+			finalNodeID := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{localNodeID},
+				GroupBy:     finalGroupBy,
+				BindingTags: []int32{finalGroupTag, finalAggregateTag},
+				SpillMem:    builder.aggSpillMem,
+			}, builder.ctxByNode[localNodeID])
+			finalNode := builder.qry.Nodes[finalNodeID]
+			builder.determineGroupByHashKey(finalNode)
+			builder.markDistinctKeyShuffle(finalNode, int32(oldGroupLen))
+
+			resultNodeID = finalNodeID
+			resultGroupTag = finalGroupTag
+		}
+
+		node.Children[0] = resultNodeID
 		node.GroupBy = make([]*plan.Expr, oldGroupLen)
 		for i := range node.GroupBy {
-			node.GroupBy[i] = &plan.Expr{
-				Typ: oldGroupBy[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: newGroupTag,
-						ColPos: int32(i),
-					},
-				},
-			}
+			node.GroupBy[i] = distinctPairGroupCol(
+				oldGroupBy[i], resultGroupTag, int32(i))
 		}
 
 		aggFunc.Func.Obj &= function.DistinctMask
-		aggFunc.Args[0] = &plan.Expr{
-			Typ: toCount.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: newGroupTag,
-					ColPos: int32(oldGroupLen),
-				},
-			},
-		}
+		aggFunc.Args[0] = distinctPairGroupCol(
+			toCount, resultGroupTag, int32(oldGroupLen))
 	}
+}
+
+func distinctPairGroupCol(source *plan.Expr, tag, pos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ:         source.Typ,
+		Ndv:         source.Ndv,
+		Selectivity: source.Selectivity,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: tag,
+			ColPos: pos,
+		}},
+	}
+}
+
+func isSupportedDistinctKeyShuffleType(typ int32) bool {
+	switch types.T(typ) {
+	case types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+func (builder *QueryBuilder) markDistinctKeyLocalPreAgg(node *plan.Node) {
+	if builder.distinctKeyLocalPreAggs == nil {
+		builder.distinctKeyLocalPreAggs = make(map[*plan.Node]struct{})
+	}
+	builder.distinctKeyLocalPreAggs[node] = struct{}{}
+}
+
+func (builder *QueryBuilder) markDistinctKeyShuffle(node *plan.Node, col int32) {
+	if builder.distinctKeyShuffleCols == nil {
+		builder.distinctKeyShuffleCols = make(map[*plan.Node]int32)
+	}
+	builder.distinctKeyShuffleCols[node] = col
 }

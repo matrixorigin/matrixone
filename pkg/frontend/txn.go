@@ -290,6 +290,13 @@ type TxnHandler struct {
 	hasSessionTxnIsolation bool
 	nextTxnIsolation       pbtxn.TxnIsolation
 	hasNextTxnIsolation    bool
+
+	// lineageOwnerLifecycleValidation is set when an explicit user transaction
+	// mutates data-branch owner catalogs. Such a transaction cannot take the
+	// cluster-wide lifecycle row before doing its work: the client controls how
+	// long it remains open. Commit instead fast-fails on the row, performs the SI
+	// validation write, and immediately commits while holding the row.
+	lineageOwnerLifecycleValidation bool
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -325,6 +332,7 @@ func (th *TxnHandler) Close() {
 	th.optionBits = defaultOptionBits
 	th.hasSessionTxnIsolation = false
 	th.hasNextTxnIsolation = false
+	th.lineageOwnerLifecycleValidation = false
 }
 
 func txnIsolationFromSystemValue(ctx context.Context, value interface{}) (pbtxn.TxnIsolation, error) {
@@ -489,10 +497,17 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 // since they are session-level settings that should persist across transactions.
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
+	th.lineageOwnerLifecycleValidation = false
 	// Preserve SERVER_STATUS_AUTOCOMMIT flag, only clear SERVER_STATUS_IN_TRANS
 	clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
 	// Preserve autocommit option bits (OPTION_AUTOCOMMIT or OPTION_NOT_AUTOCOMMIT), only clear OPTION_BEGIN
 	clearBits(&th.optionBits, OPTION_BEGIN)
+}
+
+func (th *TxnHandler) requireLineageOwnerLifecycleValidation() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.lineageOwnerLifecycleValidation = true
 }
 
 func (th *TxnHandler) InActiveTxn() bool {
@@ -707,11 +722,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		if execCtx.reqCtx == nil {
 			return moerr.NewInternalErrorNoCtx("request context is required for cancellable transaction creation")
 		}
-		// Authentication owns a short-lived background transaction. Its handshake
-		// deadline is the single timeout owner of the freshness wait; applying the
-		// ordinary CreateTxnOpTimeout here would silently shorten a configuration
-		// that was validated against ConnectTimeout. The child still guarantees
-		// prompt cleanup when TxnClient.New returns before the handshake does.
+		// The request owns this short-lived frontend control-plane transaction.
+		// Its deadline is the single timeout owner of the freshness wait; applying
+		// the ordinary CreateTxnOpTimeout here would silently shorten that owning
+		// request. The child still guarantees prompt cleanup when TxnClient.New
+		// returns before the request does.
 		tempCtx, tempCancel = context.WithCancel(execCtx.reqCtx)
 	} else {
 		// Ordinary session transaction creation intentionally keeps the long-lived
@@ -788,6 +803,27 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	return nil
 }
 
+// validateLineageOwnerLifecycleBeforeCommitUnsafe is the single terminal
+// admission point for explicit transactions that mutated data-branch owner
+// catalogs. Callers hold th.mu and proceed directly to the physical commit, so
+// a successful validation write remains in the same transaction and cannot be
+// separated from commit by another frontend operation.
+func (th *TxnHandler) validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx *ExecCtx) error {
+	if !th.lineageOwnerLifecycleValidation {
+		return nil
+	}
+	err := validateDataBranchLineageOwnerLifecycleAtCommit(
+		execCtx.reqCtx, execCtx.ses, th.txnOp,
+	)
+	if err == nil {
+		return nil
+	}
+	// Validation failure is terminal. Use the transaction cleanup context so
+	// request cancellation cannot leave the transaction or its catalog locks
+	// alive after any implicit or explicit commit path returns the error.
+	return errors.Join(err, th.rollbackUnsafe(execCtx, nil))
+}
+
 func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPCommitUnsafe)
 	defer execCtx.ses.ExitFPrint(FPCommitUnsafe)
@@ -862,6 +898,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 	execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommit)
 	defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommit)
+	if err := th.validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx); err != nil {
+		return err
+	}
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
@@ -961,7 +1000,7 @@ type ddlVisibilityTarget struct {
 // DDL sender refreshes membership again after fan-out and repeats if any ready
 // generation changed. A failed target is retried only after authoritative
 // revalidation proves that exact generation/address tuple has departed.
-// Protocol v38 is a deployment gate: mixed-version
+// Protocol v40 is a deployment gate: mixed-version
 // clusters retain legacy behavior without invoking an old receiver's fatal
 // SyncCommit path.
 func syncDDLCommitToBarrierReadyCNs(
@@ -977,7 +1016,7 @@ func syncDDLCommitToBarrierReadyCNs(
 	qc := pu.QueryClient
 	protocol, ok := moruntime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	protocolVersion, valid := protocol.(int64)
-	if !ok || !valid || protocolVersion < defines.MORPCVersion38 {
+	if !ok || !valid || protocolVersion < defines.MORPCVersion40 {
 		return nil
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())

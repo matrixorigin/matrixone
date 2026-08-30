@@ -213,7 +213,7 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
 		DDLVisibilityBarrierReady:       s.ddlVisibilityBarrierReady.Load(),
 	}
-	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion38 {
+	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion40 {
 		hb.DDLVisibilityDeployedProtocol = deployed
 	}
 	if s.viewMetadataEpochFence != nil {
