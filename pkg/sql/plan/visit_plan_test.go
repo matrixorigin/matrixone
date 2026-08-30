@@ -131,9 +131,10 @@ func TestVisitMissingNodeExprsVisitsAllSupplementalFieldsOnce(t *testing.T) {
 	groupBy := param(1)
 	agg := param(2)
 	window := param(3)
+	physicalKey := param(4)
 	query := &planpb.Query{Nodes: []*planpb.Node{
 		{NodeId: 0, GroupBy: []*planpb.Expr{groupBy}},
-		{NodeId: 1, Children: []int32{0, 0}, AggList: []*planpb.Expr{agg}, WinSpecList: []*planpb.Expr{window}},
+		{NodeId: 1, Children: []int32{0, 0}, AggList: []*planpb.Expr{agg}, WinSpecList: []*planpb.Expr{window}, PhysicalEqualityKeyList: []*planpb.Expr{physicalKey}},
 	}}
 	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
 
@@ -141,6 +142,7 @@ func TestVisitMissingNodeExprsVisitsAllSupplementalFieldsOnce(t *testing.T) {
 	require.Equal(t, int32(0), groupBy.GetP().Pos)
 	require.Equal(t, int32(1), agg.GetP().Pos)
 	require.Equal(t, int32(2), window.GetP().Pos)
+	require.Equal(t, int32(3), physicalKey.GetP().Pos)
 
 	require.ErrorContains(t, visitMissingNodeExprs(query, []int32{-1}, []VisitPlanRule{rule}), "invalid query node id")
 }

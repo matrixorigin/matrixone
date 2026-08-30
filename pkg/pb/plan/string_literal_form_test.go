@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,31 @@ func TestValidateStringLiteralFormsTraversesSubqueryChild(t *testing.T) {
 		}},
 	}}}}
 	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "invalid string literal form 99")
+}
+
+func TestVisitExprTreeTraversesEveryNestedVariant(t *testing.T) {
+	param := &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 3}}}
+	literalSource := &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 4}}}
+	literal := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: literalSource}}}
+	subquery := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: param}}}
+	window := &Expr{Expr: &Expr_W{W: &WindowSpec{
+		WindowFunc:  &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{literal}}}},
+		PartitionBy: []*Expr{subquery},
+		OrderBy:     []*OrderBySpec{{Expr: &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 5}}}}},
+		Frame: &FrameClause{
+			Start: &FrameBound{Val: &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 6}}}},
+			End:   &FrameBound{Val: &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 7}}}},
+		},
+	}}}
+
+	var positions []int32
+	require.NoError(t, VisitExprTree(window, func(expr *Expr) error {
+		if param := expr.GetP(); param != nil {
+			positions = append(positions, param.Pos)
+		}
+		return nil
+	}))
+	require.Equal(t, []int32{4, 3, 5, 6, 7}, positions)
 }
 
 func TestValidateStringLiteralFormsSkipsBytePayloads(t *testing.T) {
@@ -119,6 +145,43 @@ func TestRequiresMORPCVersion23StringLiterals(t *testing.T) {
 	}
 }
 
+func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
+	prefixCast := &Expr{
+		Typ: Type{Id: 14, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{{
+				Typ:  Type{Id: 61},
+				Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "12.5tail"}}},
+			}},
+		}},
+	}
+	ordinaryCast := &Expr{
+		Typ: Type{Id: 14},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: prefixCast.GetF().Args,
+		}},
+	}
+
+	required, err := RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: prefixCast})
+	require.NoError(t, err)
+	require.True(t, required)
+	nested := &Expr{
+		Typ: Type{Id: 14},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "coalesce"},
+			Args: []*Expr{ordinaryCast, prefixCast},
+		}},
+	}
+	required, err = RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: nested})
+	require.NoError(t, err)
+	require.True(t, required)
+	required, err = RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: ordinaryCast})
+	require.NoError(t, err)
+	require.False(t, required)
+}
+
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}
@@ -190,5 +253,104 @@ func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.want, required)
 		})
+	}
+}
+
+func TestRequiresMORPCVersion36JSONComparisonParam(t *testing.T) {
+	param := func(typ Type, pos int32) *Expr {
+		return &Expr{Typ: typ, Expr: &Expr_P{P: &ParamRef{Pos: pos}}}
+	}
+	jsonComparison := func(arg *Expr) *Expr {
+		return &Expr{Typ: Type{Id: 10}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(internalJSONComparisonFunctionID) << 32},
+			Args: []*Expr{arg},
+		}}}
+	}
+
+	owner := struct{ Expressions []*Expr }{Expressions: []*Expr{
+		jsonComparison(param(Type{Id: 1}, 0)),
+		jsonComparison(param(Type{Id: 61}, 1)),
+	}}
+	required, err := RequiresMORPCVersion36JSONComparisonParam(&owner)
+	require.NoError(t, err)
+	require.True(t, required)
+
+	ordinary := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(21) << 32},
+		Args: []*Expr{param(Type{Id: 61}, 0)},
+	}}}
+	required, err = RequiresMORPCVersion36JSONComparisonParam(ordinary)
+	require.NoError(t, err)
+	require.False(t, required)
+
+	prefixCast := &Expr{
+		Typ: Type{Id: 14, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{ordinary},
+		}},
+	}
+	mixedOwner := &struct{ Expressions []*Expr }{Expressions: []*Expr{{
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "coalesce"},
+			Args: []*Expr{ordinary, prefixCast, jsonComparison(param(Type{Id: 1}, 0))},
+		}},
+	}}}
+	features, err := RequiredRemoteExpressionFeatures(mixedOwner)
+	require.NoError(t, err)
+	require.True(t, features.NumericPrefix)
+	require.True(t, features.JSONComparisonParam)
+	require.False(t, features.MixedJSONBooleanEquality)
+	require.True(t, features.Any())
+
+	features, err = RequiredRemoteExpressionFeatures(ordinary)
+	require.NoError(t, err)
+	require.False(t, features.Any())
+}
+
+func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
+	operand := func(typeID int32, position int32) *Expr {
+		return &Expr{
+			Typ:  Type{Id: typeID},
+			Expr: &Expr_Col{Col: &ColRef{ColPos: position}},
+		}
+	}
+	comparison := func(functionID int32, leftType, rightType int32) *Expr {
+		return &Expr{Typ: Type{Id: planBooleanTypeID}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(functionID) << 32},
+			Args: []*Expr{operand(leftType, 0), operand(rightType, 1)},
+		}}}
+	}
+
+	for _, functionID := range []int32{
+		equalFunctionID,
+		notEqualFunctionID,
+		nullSafeEqualFunctionID,
+	} {
+		for _, orientation := range []struct {
+			name      string
+			leftType  int32
+			rightType int32
+		}{
+			{name: "json_left", leftType: planJSONTypeID, rightType: planBooleanTypeID},
+			{name: "json_right", leftType: planBooleanTypeID, rightType: planJSONTypeID},
+		} {
+			t.Run(fmt.Sprintf("function_%d_%s", functionID, orientation.name), func(t *testing.T) {
+				required, err := RequiresMORPCVersion36MixedJSONBooleanEquality(
+					comparison(functionID, orientation.leftType, orientation.rightType))
+				require.NoError(t, err)
+				require.True(t, required)
+			})
+		}
+	}
+
+	for _, control := range []*Expr{
+		comparison(equalFunctionID, planJSONTypeID, planJSONTypeID),
+		comparison(equalFunctionID, planBooleanTypeID, planBooleanTypeID),
+		comparison(4, planJSONTypeID, planBooleanTypeID), // ordering is not a versioned equality overload
+	} {
+		required, err := RequiresMORPCVersion36MixedJSONBooleanEquality(control)
+		require.NoError(t, err)
+		require.False(t, required)
 	}
 }

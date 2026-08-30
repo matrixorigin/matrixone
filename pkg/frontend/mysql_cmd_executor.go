@@ -55,6 +55,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -1371,11 +1373,32 @@ func doSetVar(
 			captureSystemReplayability(assign.Name)
 		}
 	}
-	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+	var preparedItems []*plan.SetVariablesItem
+	if preparedExpression {
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.plan != nil {
+			if setVariables := cw.plan.GetDcl().GetSetVariables(); setVariables != nil {
+				preparedItems = setVariables.Items
+			}
+		}
+	}
+	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, valueType, evalErr := getExprValueWithPrepareMeta(
-			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+		var value interface{}
+		var valueType plan.Type
+		var evalErr error
+		if index < len(preparedItems) && preparedItems[index].Value != nil {
+			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
+				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
+					assign.Value, preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+			} else {
+				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
+					preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+			}
+		} else {
+			value, valueType, evalErr = getExprValueWithPrepareMeta(
+				assign.Value, ses, execCtx, preparedExpression, nil, &prepareParamKind, &isBin)
+		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -1559,6 +1582,14 @@ func doSetVar(
 					if cache != nil {
 						cache.invalidate()
 					}
+					// Clearing the cache is also the explicit synchronization point
+					// for externally changed role membership. Refresh it now, outside
+					// the caller's transaction snapshot, instead of allowing the next
+					// authorization check to repopulate the cache from stale state.
+					_, _, err = validateActiveRoleGrantForAuthorization(execCtx.reqCtx, ses)
+					if err != nil {
+						return err
+					}
 				}
 				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
@@ -1566,13 +1597,16 @@ func doSetVar(
 				}
 			}
 		} else if assign.System && name == "enable_privilege_cache" {
-			ok, err = valueIsBoolTrue(value)
+			_, err = valueIsBoolTrue(value)
 			if err != nil {
 				return err
 			}
 
-			//disable privilege cache. clean the cache.
-			if !ok {
+			// Every session cache-mode assignment is a synchronization boundary.
+			// In particular, enabling must discard decisions that may have been
+			// produced while caching was disabled before a concurrent REVOKE.
+			// SET GLOBAL does not change this session's cache mode.
+			if !assign.Global {
 				cache := ses.GetPrivilegeCache()
 				if cache != nil {
 					cache.invalidate()
@@ -1652,8 +1686,8 @@ func doSetVar(
 			}
 		}()
 
-		for _, assign := range sv.Assignments {
-			item, evalErr := evaluateAssignment(assign)
+		for index, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(index, assign)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -1666,8 +1700,8 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
-		item, evalErr := evaluateAssignment(assign)
+	for index, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(index, assign)
 		if evalErr != nil {
 			return evalErr
 		}
@@ -2052,9 +2086,122 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		if err != nil {
 			return err
 		}
+		if err := refreshAnalyzeTableStats(ses, execCtx, entry); err != nil {
+			return err
+		}
 		results = append(results, result)
 	}
 	execCtx.results = results
+	return nil
+}
+
+func refreshAnalyzeTableStats(ses *Session, execCtx *ExecCtx, entry *tree.AnalyzeTableEntry) error {
+	// The derived ANALYZE query observes the transaction workspace. The engine
+	// statistics cache is process-global and observes only committed catalog and
+	// object state, so publishing while a user transaction was already active
+	// would mix two visibility domains. Preserve the legacy derived result and
+	// leave global publication to an ANALYZE statement outside that transaction.
+	if !analyzeStatsPublicationAllowed(execCtx) {
+		return nil
+	}
+	ctx := execCtx.reqCtx
+	if entry == nil || entry.Table == nil || entry.Table.AtTsExpr != nil {
+		return nil
+	}
+
+	refresher, ok := getPu(ses.GetService()).StorageEngine.(engine.StatsRefresher)
+	if !ok {
+		// Engines without persistent optimizer statistics retain the legacy
+		// ANALYZE result behavior.
+		return nil
+	}
+
+	tcc := ses.GetTxnCompileCtx()
+	dbName := resolveAnalyzeDatabase(tcc, entry.Table)
+	if dbName == "" {
+		return moerr.NewNoDB(ctx)
+	}
+	obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
+	if err != nil {
+		return err
+	}
+	if obj == nil || tableDef == nil {
+		return moerr.NewNoSuchTable(ctx, dbName, string(entry.Table.Name()))
+	}
+	// Historical snapshots and publication-backed tables do not own the current
+	// local engine statistics generation. Non-physical relations keep the
+	// legacy derived-query result without asking disttae to subscribe to them.
+	if obj.PubInfo != nil || !analyzeTableOwnsPersistentStats(tableDef) {
+		return nil
+	}
+
+	accountID := tcc.resolvePhysicalObjectAccount(obj, tableDef, nil)
+	databaseID := tableDef.DbId
+	if databaseID == 0 {
+		databaseID, err = tcc.GetDatabaseId(obj.SchemaName, nil)
+		if err != nil {
+			return err
+		}
+	}
+	key := pbstats.StatsInfoKey{
+		AccId:      accountID,
+		DatabaseID: databaseID,
+		TableID:    uint64(obj.Obj),
+		DbName:     obj.SchemaName,
+		TableName:  obj.ObjName,
+	}
+	return publishAnalyzeTableStats(ses, ctx, key, refresher)
+}
+
+func analyzeStatsPublicationAllowed(execCtx *ExecCtx) bool {
+	return execCtx != nil &&
+		execCtx.txnOpt.activeTxnAtStartKnown &&
+		!execCtx.txnOpt.activeTxnAtStart
+}
+
+func analyzeTableOwnsPersistentStats(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.IsTemporary || tableDef.ViewSql != nil {
+		return false
+	}
+	switch tableDef.TableType {
+	case "",
+		catalog.SystemOrdinaryRel,
+		catalog.SystemIndexRel,
+		catalog.SystemMaterializedRel,
+		catalog.SystemClusterRel,
+		catalog.SystemPartitionRel:
+		return true
+	default:
+		return false
+	}
+}
+
+func publishAnalyzeTableStats(
+	ses *Session,
+	ctx context.Context,
+	key pbstats.StatsInfoKey,
+	refresher engine.StatsRefresher,
+) error {
+	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
+	release, err := acquireOptimizerStatsPublisher(ctx, ses.GetService(), tableKey)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	stats, err := refresher.RefreshTableStats(ctx, key)
+	if err != nil {
+		return err
+	}
+	if stats == nil {
+		return moerr.NewInternalErrorf(ctx, "ANALYZE TABLE did not publish statistics for %s.%s", key.DbName, key.TableName)
+	}
+
+	// The engine cache swap above is the data publication boundary. Advancing
+	// this table's version invalidates only dependent session entries; unrelated
+	// table statistics and plans remain reusable.
+	version := advanceOptimizerStatsVersion(ses.GetService(), tableKey)
+	ses.cachePublishedStats(tableKey, version, stats)
 	return nil
 }
 
@@ -2717,7 +2864,7 @@ func createPrepareStmtInSession(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, &prepareTs, false, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2732,23 +2879,36 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
+		Name:               preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                originSQL,
+		compile:            comp,
+		PreparePlan:        preparePlan,
+		PrepareStmt:        saveStmt,
+		NativeMode:         owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:    owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet: true,
+		remapDb:            maps.Clone(execCtx.remapDb),
+		defaultDatabase:    executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:   owner.GetTempTableVersion(),
+		ddlVersion:         owner.getDDLVersion(),
+		cloneSQL:           cloneSQL,
+		protocolVersion:    protocolVersion,
+		numericPrefixConsumer: preparedPlanHasNumericPrefixConsumer(
+			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
+			prepareControl.Plan),
+		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
+			prepareControl.Plan),
+		directResultParamPositionsSet: true,
+		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			prepareControl.Plan),
+		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
+	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
+	prepareStmt.directResultParamPositionsSet = true
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -2980,7 +3140,10 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -3191,7 +3354,10 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 // handleGrantRole grants the privilege to the role
 func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx)
+	// Object lifecycle locks are part of GRANT's correctness contract. Force the
+	// private transaction into the same pessimistic RC protocol as DROP even on
+	// optimistic deployments; LockOp intentionally skips optimistic txns.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3792,7 +3958,7 @@ func buildPlanWithPrepareMode(
 	// Default handling of various statements
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
 		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
@@ -3926,6 +4092,13 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
+	if !reusablePlanGenerationSupported(ses.proc) {
+		// Evict eagerly while the rollout gate is closed. Besides releasing the
+		// owned AST, this prevents an entry from surviving an observed protocol
+		// rollback and becoming eligible again after a later upgrade.
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
 	cached := ses.getCachedPlan(input.getHash())
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
@@ -3999,6 +4172,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// to the parser pool while the cache still owns or already freed it.
 			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
+			tcw.cachedPlanSQL = execCtx.input.getHash()
+			tcw.cachedPlanIndex = i
+			tcw.cachedPlanGeneration = cached.plans[i]
+			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
+			tcw.planGenerationReused = true
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
@@ -4459,10 +4637,31 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	return stats, nil
 }
 
+func bindSessionDatabaseForStatement(ses *Session, defaultDatabase string) func() {
+	if defaultDatabase == "" || defaultDatabase == ses.GetDatabaseName() {
+		return func() {}
+	}
+	currentDatabase := ses.GetDatabaseName()
+	ses.SetDatabaseName(defaultDatabase)
+	return func() { ses.SetDatabaseName(currentDatabase) }
+}
+
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+func authenticateUserCanExecutePrepareOrExecute(
+	reqCtx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	p *plan.Plan,
+	defaultDatabase string,
+) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
+
+	// Unqualified names in a prepared AST retain their PREPARE-time binding.
+	// Authorization must resolve that same object rather than the database that
+	// happens to be active when EXECUTE runs.
+	restoreDatabase := bindSessionDatabaseForStatement(ses, defaultDatabase)
+	defer restoreDatabase()
 
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
@@ -4791,15 +4990,13 @@ func executeStmtWithResponse(ses *Session,
 	// RespPostMeta below, so a commit error can never follow an advertised
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
-	// Deferred Kafka scan progress is OWNED BY THE TRANSACTION terminal
-	// (TxnHandler.Commit/Rollback): a successful statement inside BEGIN /
-	// autocommit=0 must not publish until the enclosing transaction commits,
-	// or BEGIN; INSERT..SELECT FROM kafka_t; ROLLBACK would advance the
-	// exactly-once chain past rows that were rolled back. A FAILED statement
-	// discards here as a belt (its rollback path also discards).
-	if err != nil {
-		ses.FinalizeKafkaProgress(false)
-	}
+	// The WHOLE-statement terminal for deferred Kafka scan progress: every
+	// pipeline (including downstream consumers on split scopes) has finished
+	// by the time executeStmtWithMaxExecutionTime returns. Kafka progress is
+	// deliberately statement/session state, not transaction state. Consumers
+	// that need atomic data+offset commits store LAST_KAFKA_MESSAGE_ID() in a
+	// separate MatrixOne table in the same explicit transaction.
+	ses.FinalizeKafkaProgress(err == nil)
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
@@ -4850,6 +5047,38 @@ func isStatementBoundaryManagedExternally(ses FeSession) bool {
 	return ok && backSes.statementBoundaryManagedExternally
 }
 
+func effectiveStatementForTxn(
+	ctx context.Context,
+	ses FeSession,
+	stmt tree.Statement,
+) (tree.Statement, string, error) {
+	seen := make(map[string]struct{})
+	defaultDatabase := ""
+	for {
+		execute, ok := stmt.(*tree.Execute)
+		if !ok {
+			return stmt, defaultDatabase, nil
+		}
+		name := strings.ToLower(string(execute.Name))
+		if _, ok = seen[name]; ok {
+			return nil, "", moerr.NewInternalError(ctx, "cyclic prepared EXECUTE reference")
+		}
+		seen[name] = struct{}{}
+		prepared, err := ses.GetPrepareStmt(ctx, name)
+		if err != nil {
+			return nil, "", err
+		}
+		if prepared == nil || prepared.PrepareStmt == nil {
+			return nil, "", moerr.NewInternalError(ctx, "prepared statement has no executable statement")
+		}
+		stmt = prepared.PrepareStmt
+		// Unqualified names in the saved AST were bound against this database.
+		// Admission must resolve them exactly like the prepared plan, regardless
+		// of the session database when EXECUTE runs.
+		defaultDatabase = prepared.defaultDatabase
+	}
+}
+
 func executeStmtWithWorkspace(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
@@ -4864,7 +5093,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	//it only executes select statements.
 
 	//7. pass or commit or rollback txn
-	// defer transaction state management.
+	// Admission errors occur before StartStatement and must not roll back the
+	// previous workspace statement. Enable transaction finalization only for an
+	// explicit COMMIT/ROLLBACK or after transaction admission succeeds.
+	finishTxnOnReturn := false
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
@@ -4876,7 +5108,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
-		err = finishTxnFunc(ses, err, execCtx)
+		if finishTxnOnReturn {
+			err = finishTxnFunc(ses, err, execCtx)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -4885,6 +5119,21 @@ func executeStmtWithWorkspace(ses FeSession,
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
 	execCtx.txnOpt.Close()
+	effectiveStmt, effectiveDefaultDatabase, err := effectiveStatementForTxn(
+		execCtx.reqCtx, ses, execCtx.stmt,
+	)
+	if err != nil {
+		return err
+	}
+	if effectiveDefaultDatabase == "" {
+		// Binary execution and wrappers may already expose the prepared inner AST;
+		// initExecuteStmtParam recorded its binding database before authorization.
+		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
+	}
+	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
+	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
@@ -4893,9 +5142,11 @@ func executeStmtWithWorkspace(ses FeSession,
 		beginStmt = true
 	case *tree.CommitTransaction:
 		execCtx.txnOpt.byCommit = true
+		finishTxnOnReturn = true
 		return nil
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
+		finishTxnOnReturn = true
 		return nil
 	case *tree.SavePoint, *tree.ReleaseSavePoint:
 		return nil
@@ -4919,6 +5170,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	if err != nil {
 		return err
 	}
+	finishTxnOnReturn = true
 
 	//skip BEGIN stmt
 	if beginStmt {
@@ -5224,9 +5476,8 @@ func executeStmt(ses *Session,
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
 
-			// Sync the latest plan after Run (it may have changed due to retry)
 			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				txnCw.plan = c.GetPlan()
+				txnCw.completeCompileExecution(c, err)
 			}
 
 			// Serialize the execution plan as json
@@ -5294,6 +5545,35 @@ func countUpdateChangedRows(ses *Session) bool {
 	}
 	resper, ok := ses.GetResponser().(*MysqlResp)
 	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
+}
+
+// rollbackWholeTxnOnPreExecutionError applies mo_rollback_txn_on_error to a
+// failure that never reached the executor.
+//
+// A parse error or a privilege rejection returns from doComQuery long before
+// finishTxnFunc, which is where the setting is otherwise honoured. Without this
+// the setting would quietly mean "any error the executor produced", exempting
+// the ones that never got that far: with it on,
+// `BEGIN; INSERT ...; selec 1; COMMIT;` would still COMMIT the row.
+//
+// It is called from the defer every COM_QUERY error path converges on. A
+// statement that already rolled back has left no active transaction, so the
+// guard below makes this a no-op for the errors finishTxnFunc handled, rather
+// than rolling back twice.
+func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr error) {
+	if !sessionRollsBackTxnOnError(ses, retErr) {
+		return
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
+		return
+	}
+	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
+		// The statement's own error is what the client asked about; a failure
+		// to roll back is logged, not substituted for it.
+		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
+			zap.Error(rbErr), zap.Error(retErr))
+	}
 }
 
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
@@ -5390,9 +5670,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// is reseeded from the session on the next query, so the session value drives
 	// the next statement; the proc is updated too for completeness.
 	defer func() {
-		if retErr != nil {
-			markRowCountFailed(ses, proc)
+		if retErr == nil {
+			return
 		}
+		markRowCountFailed(ses, proc)
+
+		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
 	}()
 
 	if ses.GetTenantInfo() != nil {
@@ -5497,7 +5780,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := !stagedSQLMode && input.canUsePlanCache()
+	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
@@ -5546,6 +5830,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		} else {
 			currentSQLRecord = sqlRecord[i]
 		}
+		// ExecCtx spans the whole request, while these fields belong to one
+		// statement generation. Reset before authorization/admission, then inject
+		// binary PREPARE metadata captured before doComQuery.
+		execCtx.beginStatementGeneration(currentInput)
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
 		installStatementRemap(execCtx, cw)
@@ -5587,10 +5875,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			ses.ClearDDLOwnerRoleID()
-			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
-			if err != nil {
-				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
-				return err
+			authStats, authErr := func() (statistic.StatsArray, error) {
+				restoreDatabase := bindSessionDatabaseForStatement(
+					ses, execCtx.effectiveTxnDefaultDatabase,
+				)
+				defer restoreDatabase()
+				return authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
+			}()
+			if authErr != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, authErr)
+				return authErr
 			}
 			statsInfo.PermissionAuth.Add(&authStats)
 		}
@@ -5687,31 +5981,53 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	if !canCache {
+		return nil
+	}
+	cacheKey := input.getHash()
+	if ses.isCached(cacheKey) {
+		return nil
+	}
+	for _, cw := range cws {
+		if tcw, ok := cw.(*TxnComputationWrapper); ok && tcw.cachedPlanSQL == cacheKey {
+			// A publication or failed generation replacement made the entry stale
+			// while these wrappers still borrowed its AST. Do not republish the
+			// just-executed old plan without rebuilding its statistics dependencies.
+			// Wrapper cleanup runs first; the next lookup then evicts the stale owner.
+			return nil
+		}
+	}
+
 	cacheProtocolVersion := currentProtocolVersion(proc)
-	if canCache && !ses.isCached(input.getHash()) {
-		for _, cw := range cws {
-			tcw, ok := cw.(*TxnComputationWrapper)
-			if !ok || tcw.protocolVersion != cacheProtocolVersion {
-				canCache = false
-				break
-			}
+	planStatsVersions := make([]map[optimizerStatsTableKey]uint64, len(cws))
+	planSnapshotTS := make([]timestamp.Timestamp, len(cws))
+	for i, cw := range cws {
+		tcw, ok := cw.(*TxnComputationWrapper)
+		if !ok || tcw.protocolVersion != cacheProtocolVersion {
+			return nil
 		}
-	}
-	if canCache && !ses.isCached(input.getHash()) {
-		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]tree.Statement, len(cws))
-		for i, cw := range cws {
-			if checkNodeCanCache(cw.Plan()) {
-				plans[i] = cw.Plan()
-				stmts[i] = cw.GetAst()
-			} else {
-				return nil
-			}
-			cw.Clear()
+		var hasPlanSnapshotTS bool
+		planSnapshotTS[i], hasPlanSnapshotTS = tcw.PlanSnapshotTS()
+		if !hasPlanSnapshotTS {
+			return nil
 		}
-		Cached = true
-		ses.cachePlan(input.getHash(), stmts, plans, cacheProtocolVersion)
+		planStatsVersions[i] = tcw.optimizerStatsVersions
 	}
+
+	plans := make([]*plan.Plan, len(cws))
+	stmts := make([]tree.Statement, len(cws))
+	for i, cw := range cws {
+		if checkNodeCanCache(cw.Plan()) {
+			plans[i] = cw.Plan()
+			stmts[i] = cw.GetAst()
+		} else {
+			return nil
+		}
+		cw.Clear()
+	}
+	Cached = true
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
 }
@@ -5842,6 +6158,16 @@ func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string,
 		rest = strings.TrimLeft(rest[end+2:], " \t\r\n\f")
 	}
 	return nil
+}
+
+func newBinaryExecuteUserInput(sql string, prepareStmt *PrepareStmt, cursorRequested bool) *UserInput {
+	return &UserInput{
+		sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt,
+		preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true,
+		preparedDefaultDatabase: prepareStmt.defaultDatabase,
+		isCursorExecute:         cursorRequested,
+		remapDb:                 prepareStmt.remapDb,
+	}
 }
 
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
@@ -6014,7 +6340,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, isCursorExecute: cursorRequested, remapDb: prepareStmt.remapDb})
+		err = doComQuery(ses, execCtx, newBinaryExecuteUserInput(sql, prepareStmt, cursorRequested))
 		if err != nil {
 			prepareStmt.closeCursor()
 			markRowCountFailed(ses, ses.GetProc())

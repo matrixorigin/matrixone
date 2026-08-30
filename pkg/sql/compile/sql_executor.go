@@ -20,6 +20,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -60,6 +62,23 @@ type sqlExecutor struct {
 	us          udf.Service
 	buf         *buffer.Buffer
 	taskservice taskservice.TaskService
+}
+
+func markMoColumnsUpdatePlan(pn *planpb.Plan) {
+	query := pn.GetQuery()
+	if query == nil {
+		return
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == catalog.MO_COLUMNS_ID {
+				updateCtx.TableDef.Name = catalog.MO_COLUMNS_UPDATE
+			}
+		}
+	}
 }
 
 func ensureExecutorContext(ctx context.Context) context.Context {
@@ -468,6 +487,9 @@ func (exec *txnExecutor) Exec(
 
 	if err != nil {
 		return executor.Result{}, err
+	}
+	if statementOption.AllowMoColumnsUpdate() {
+		markMoColumnsUpdatePlan(pn)
 	}
 
 	if prepared {

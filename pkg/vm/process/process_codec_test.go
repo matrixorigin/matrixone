@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -107,6 +108,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetPrepareParamsWithMetadata(vec, []bool{true, false}, []bool{false, true})
 	proc.SetAffectedRows(42)
 	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
+	proc.SetPlanGenerationReused(true)
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashComplete)
 	return proc, txnOp
 }
 
@@ -307,6 +310,94 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	require.Error(t, err, "invalid packed kind bits must be rejected")
 }
 
+func TestTypedPrepareParamMetadataRequiresVersion36AndRoundTrips(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	concreteTypes := []types.T{
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32,
+	}
+	params := proc.GetPrepareParams()
+	for params.Length() < len(concreteTypes) {
+		require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	}
+	kinds := make([]vector.PrepareParamKind, len(concreteTypes))
+	for i := range kinds {
+		kinds[i] = vector.PrepareParamInteger
+	}
+	kinds[len(kinds)-1] = vector.PrepareParamFloat
+	binaryString := make([]bool, len(concreteTypes))
+	binaryString[1] = true
+	proc.SetPrepareParamsWithTypedMeta(
+		params,
+		make([]bool, len(concreteTypes)),
+		kinds,
+		concreteTypes,
+		binaryString,
+	)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
+	_, err := PrepareParamMetadataForRemote(
+		"", proc.GetPrepareParams().Length(), proc.Base.prepareParamsIsBin)
+	require.ErrorContains(t, err, "protocol version 36",
+		"the previous latest protocol must not accept the new typed extension")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	validationParams := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(validationParams, []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(validationParams, []byte("2"), false, proc.Mp()))
+	defer validationParams.Free(proc.Mp())
+	mismatchedMetadata := prepareParamMetadataWithTypes(
+		validationParams, nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone},
+		[]types.T{types.T_int64, types.T_any})
+	_, err = PrepareParamMetadataForRemote("", 2, mismatchedMetadata)
+	require.ErrorContains(t, err, "does not match kind")
+
+	invalidTypeMetadata := prepareParamMetadataWithTypes(
+		validationParams, nil, nil, []types.T{types.T(255), types.T_any})
+	_, err = PrepareParamMetadataForRemote("", 2, invalidTypeMetadata)
+	require.ErrorContains(t, err, "invalid prepare parameter type")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
+	_, err = proc.BuildProcessInfo("select ?, ?")
+	require.ErrorContains(t, err, "protocol version 36")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	info, err := proc.BuildProcessInfo("select ?, ?")
+	require.NoError(t, err)
+	require.Len(t, info.PrepareParams.IsBin, len(concreteTypes)*12)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion35)
+	_, err = svc.Decode(context.Background(), info)
+	require.ErrorContains(t, err, "protocol version 36")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	decoded, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	defer decoded.Free()
+	for i, concreteType := range concreteTypes {
+		require.Equal(t, concreteType, decoded.GetPrepareParamType(i))
+		require.Equal(t, kinds[i], decoded.GetPrepareParamKind(i))
+	}
+	require.True(t, decoded.GetPrepareParamIsBinaryString(1))
+}
+
 func TestBinaryStringPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
@@ -332,6 +423,38 @@ func TestBinaryStringPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 
 	_, err = BinaryStringPrepareParamMetadataForRemote("", 2, []bool{true})
 	require.Error(t, err)
+}
+
+func TestStringSourcePrepareParamMetadataForRemoteCompatibility(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
+	metadata, err := StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
+	require.NoError(t, err)
+	require.Nil(t, metadata, "old peers must receive a source-free compatible payload")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion37)
+	metadata, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{0, 4}, metadata)
+	for _, rawSource := range []uint32{255, 256, 257, ^uint32(0)} {
+		_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, rawSource})
+		require.ErrorContains(t, err, "invalid string source")
+	}
+	_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{4})
+	require.ErrorContains(t, err, "metadata length")
+
+	metadata, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 0})
+	require.NoError(t, err)
+	require.Nil(t, metadata, "source-free metadata must not change the payload")
 }
 
 func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
@@ -405,6 +528,52 @@ func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
 	require.True(t, decoded.GetPrepareParamIsBinaryString(0))
 }
 
+func TestCodecServiceRejectsMalformedStringSourceMetadata(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	for _, test := range []struct {
+		name    string
+		length  int64
+		sources []uint32
+		wantErr string
+	}{
+		{
+			name:    "zero count with metadata",
+			sources: []uint32{uint32(types.StringSourceCOMStmt)},
+			wantErr: "invalid string source prepare parameter metadata length",
+		},
+		{
+			name:    "count mismatch",
+			length:  2,
+			sources: []uint32{uint32(types.StringSourceCOMStmt)},
+			wantErr: "invalid string source prepare parameter metadata length",
+		},
+		{
+			name:    "invalid enum",
+			length:  2,
+			sources: []uint32{uint32(types.StringSourceExpression), 999},
+			wantErr: "invalid string source",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := info
+			malformed.PrepareParams = pipeline.PrepareParamInfo{
+				Length:        test.length,
+				StringSources: test.sources,
+			}
+			_, err := svc.Decode(context.Background(), malformed)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	info, err := proc.BuildProcessInfo("select 1")
@@ -419,6 +588,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, info.PlanSnapshotTs)
+	require.True(t, info.PlanGenerationReused)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
@@ -584,17 +754,33 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	decodedPlanSnapshot, ok := decodedProc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, decodedPlanSnapshot)
+	require.True(t, decodedProc.PlanGenerationReused())
+	require.Equal(t, StringShuffleHashComplete, decodedProc.StringShuffleHashAlgorithm())
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())
 	require.Nil(t, decodedParams.GetArea())
 
-	info.PlanSnapshotTs = nil // simulate a sender from before the field existed
+	info.PlanSnapshotTs = nil // simulate a sender from before the fields existed
+	info.PlanGenerationReused = false
+	info.StringShuffleHashAlgorithm = 0
 	legacyProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	_, ok = legacyProc.GetPlanSnapshotTS()
 	require.False(t, ok)
+	require.False(t, legacyProc.PlanGenerationReused())
+	require.Equal(t, StringShuffleHashLegacy, legacyProc.StringShuffleHashAlgorithm())
 	require.NotPanics(t, legacyProc.Free)
+
+	for _, invalid := range []uint32{2, 99, 257} {
+		info.StringShuffleHashAlgorithm = invalid
+		_, err = svc.Decode(context.Background(), info)
+		require.ErrorContains(t, err,
+			fmt.Sprintf("string shuffle hash algorithm %d is not supported", invalid))
+	}
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashAlgorithm(99))
+	_, err = proc.BuildProcessInfo("select invalid hash algorithm")
+	require.ErrorContains(t, err, "string shuffle hash algorithm 99 is not supported")
 
 	rtSvc := "codec-test-svc"
 	runtime := rt.DefaultRuntime()
@@ -608,11 +794,13 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	firstSnapshot := timestamp.Timestamp{PhysicalTime: 10}
 	secondSnapshot := timestamp.Timestamp{PhysicalTime: 20}
 	proc.SetPlanSnapshotTS(firstSnapshot)
+	proc.SetPlanGenerationReused(true)
 
 	child := proc.NewNoContextChildProc(0)
 	got, ok := child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, firstSnapshot, got)
+	require.True(t, child.PlanGenerationReused())
 	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
 	got, ok = channelChild.GetPlanSnapshotTS()
 	require.True(t, ok)
@@ -622,15 +810,37 @@ func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
 	// pipeline generation because setting a generation installs a new immutable
 	// binding rather than mutating the prior one.
 	proc.SetPlanSnapshotTS(secondSnapshot)
+	require.False(t, proc.PlanGenerationReused())
 	got, ok = child.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, firstSnapshot, got)
+	require.True(t, child.PlanGenerationReused())
 
 	proc.ClearPlanSnapshotTS()
 	legacyChild := proc.NewNoContextChildProc(0)
 	_, ok = legacyChild.GetPlanSnapshotTS()
 	require.False(t, ok)
+	require.False(t, legacyChild.PlanGenerationReused())
 	proc.Free()
+}
+
+func TestStringShuffleHashAlgorithmIsCopiedPerPipelineProcess(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashComplete)
+
+	child := proc.NewNoContextChildProc(0)
+	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	require.Equal(t, StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashComplete, channelChild.StringShuffleHashAlgorithm())
+
+	// Selecting the next execution after rollback cannot mutate processes that
+	// already belong to the running execution.
+	proc.SetStringShuffleHashAlgorithm(StringShuffleHashLegacy)
+	require.Equal(t, StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashComplete, channelChild.StringShuffleHashAlgorithm())
+	require.Equal(t, StringShuffleHashLegacy,
+		proc.NewNoContextChildProc(0).StringShuffleHashAlgorithm())
 }
 
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
@@ -639,6 +849,11 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
+	require.NoError(t, frameParams.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceSQLPrepare,
+		types.StringSourceUserVariable,
+	}, proc.Mp()))
 	proc.SetPrepareParamsWithMeta(frameParams, []bool{true, false, false}, []vector.PrepareParamKind{
 		vector.PrepareParamNone,
 		vector.PrepareParamDecimal,
@@ -657,6 +872,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 		false, true, false,
 		false, false, true,
 	}, info.PrepareParams.IsBin)
+	require.Equal(t, []uint32{4, 3, 2}, info.PrepareParams.StringSources)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
@@ -675,6 +891,9 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
 	require.Equal(t, "true", decodedParams.GetStringAt(2))
+	require.Equal(t, types.StringSourceCOMStmt, decodedParams.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decodedParams.GetStringSourceAt(1))
+	require.Equal(t, types.StringSourceUserVariable, decodedParams.GetStringSourceAt(2))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {

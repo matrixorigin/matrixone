@@ -58,6 +58,8 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
+var _ engine.StatsRefresher = new(Engine)
+var _ engine.LogtailReadBarrier = new(Engine)
 
 const (
 	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
@@ -1279,6 +1281,20 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 	return e.globalStats.Get(ctx, key, sync)
 }
 
+// RefreshTableStats synchronously replaces the local optimizer statistics for
+// key. The cache swap is the publication boundary observed by later plans.
+func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error) {
+	return refreshTableStats(ctx, key, e.globalStats)
+}
+
+type optimizerStatsStore interface {
+	refreshStatsWithMode(context.Context, pb.StatsInfoKey, string) (*pb.StatsInfo, error)
+}
+
+func refreshTableStats(ctx context.Context, key pb.StatsInfoKey, store optimizerStatsStore) (*pb.StatsInfo, error) {
+	return store.refreshStatsWithMode(ctx, key, "auto")
+}
+
 // GetGlobalStats returns the GlobalStats instance
 func (e *Engine) GetGlobalStats() *GlobalStats {
 	return e.globalStats
@@ -1304,6 +1320,12 @@ func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 
 func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
+}
+
+func (e *Engine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
 // RunGCScheduler runs all GC tasks in a single goroutine with different intervals

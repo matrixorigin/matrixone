@@ -1268,9 +1268,7 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			// In the real service, an ordinary live txn is reported by the
 			// frontend iterator. Keep the late sharer visible while exercising the
 			// owner orphan check for the finished first replacement.
-			s2.cfg.TxnIterFunc = func(fn func([]byte) bool) {
-				fn(lateSharerTxn)
-			}
+			s2.cfg.TxnIterFunc = newTestTxnIterFunc(lateSharerTxn)
 			s1.activeTxnHolder.keepRemoteLockBindActive(s2.serviceID, owner.bind)
 			s1.events.checkOrphan(checkOrphan{
 				wait: waitTooLong,

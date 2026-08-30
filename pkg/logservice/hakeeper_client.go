@@ -1397,7 +1397,7 @@ func connectToHAKeeper(
 			c.respPool,
 			defaultMaxMessageSize,
 			cfg.EnableCompress,
-			defaultBackendReadTimeout,
+			cfg.backendReadTimeout(),
 			"connectToHAKeeper",
 		)
 		if err != nil {
@@ -1583,7 +1583,7 @@ func (c *hakeeperClient) getScheduleCommandClient(ctx context.Context) (morpc.RP
 		c.respPool,
 		defaultMaxMessageSize,
 		c.cfg.EnableCompress,
-		defaultBackendReadTimeout,
+		c.cfg.backendReadTimeout(),
 		"schedule-command-poll",
 	)
 	if err != nil {

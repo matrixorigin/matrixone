@@ -55,7 +55,23 @@ func NewCatalog() *CatalogCache {
 			end   types.TS
 		}{start: types.MaxTs()},
 	}
+	cc.tableQueryProbePool.New = func() any {
+		return new(TableItem)
+	}
+	cc.databaseQueryProbePool.New = func() any {
+		return new(DatabaseItem)
+	}
 	return cc
+}
+
+func releaseTableQueryProbe(pool *sync.Pool, probe *TableItem) {
+	*probe = TableItem{}
+	pool.Put(probe)
+}
+
+func releaseDatabaseQueryProbe(pool *sync.Pool, probe *DatabaseItem) {
+	*probe = DatabaseItem{}
+	pool.Put(probe)
 }
 
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
@@ -409,7 +425,8 @@ func (cc *CatalogCache) GetPreparedMetadataTS() timestamp.Timestamp {
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 	if qry.DatabaseName != "" {
-		key := &DatabaseItem{
+		key := cc.databaseQueryProbePool.Get().(*DatabaseItem)
+		*key = DatabaseItem{
 			AccountId: qry.AccountId,
 			Name:      qry.DatabaseName,
 			Ts:        types.MaxTs().ToTimestamp(),
@@ -423,6 +440,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 			}
 			return false
 		})
+		releaseDatabaseQueryProbe(&cc.databaseQueryProbePool, key)
 		if find {
 			return true
 		}
@@ -440,7 +458,8 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		return false
 	}
 
-	key := &TableItem{
+	key := cc.tableQueryProbePool.Get().(*TableItem)
+	*key = TableItem{
 		AccountId:  qry.AccountId,
 		DatabaseId: qry.DatabaseId,
 		Name:       qry.Name,
@@ -458,6 +477,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 		return false
 	})
+	releaseTableQueryProbe(&cc.tableQueryProbePool, key)
 	return find
 }
 
@@ -618,6 +638,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	names := bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF)
 	comments := bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF)
 	isHiddens := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
+	isUnsigneds := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX + MO_OFF))
 	isAutos := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
 	constraintTypes := bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF)
 	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
@@ -644,6 +665,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 			Name:            names.GetStringAt(i),
 			Comment:         comments.GetStringAt(i),
 			IsHidden:        isHiddens[i],
+			IsUnsigned:      isUnsigneds[i],
 			IsAutoIncrement: isAutos[i],
 			HasDef:          hasDefs[i],
 			HasUpdate:       hasUpdates[i],

@@ -313,7 +313,8 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		if funcExpr.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			return explainOrderedGroupConcat(ctx, funcExpr, options, buf)
 		}
-		if funcName == "percentile_cont" || funcName == "percentile_disc" {
+		if funcName == "percentile_cont" || funcName == "percentile_disc" ||
+			(funcName == "approx_percentile" && len(funcExpr.AggConfig) > 0) {
 			return explainOrderedPercentile(ctx, funcExpr, options, buf)
 		}
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")

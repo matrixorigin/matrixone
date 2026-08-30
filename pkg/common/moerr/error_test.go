@@ -257,6 +257,37 @@ func TestErrTooManyRowsContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestErrTooManyWindowsContract(t *testing.T) {
+	err := NewErrTooManyWindows(context.Background(), 128, 127)
+	require.Equal(t, ErrTooManyWindows, err.ErrorCode())
+	require.Equal(t, ER_TOO_MANY_WINDOWS, err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Too many windows in SELECT: 128. Maximum allowed is 127. Use named windows to share windows between window functions.", err.Error())
+}
+
+func TestNamedWindowErrorContracts(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		err  *Error
+		code uint16
+	}{
+		{"no such window", NewWindowNoSuchWindow(ctx, "missing"), ER_WINDOW_NO_SUCH_WINDOW},
+		{"circularity", NewWindowCircularityInWindowGraph(ctx), ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH},
+		{"child partitioning", NewWindowNoChildPartitioning(ctx), ER_WINDOW_NO_CHILD_PARTITIONING},
+		{"inherit frame", NewWindowNoInheritFrame(ctx, "base"), ER_WINDOW_NO_INHERIT_FRAME},
+		{"redefine order by", NewWindowNoRedefineOrderBy(ctx, "child", "base"), ER_WINDOW_NO_REDEFINE_ORDER_BY},
+		{"duplicate name", NewWindowDuplicateName(ctx, "w"), ER_WINDOW_DUPLICATE_NAME},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.code, test.err.MySQLCode())
+			require.Equal(t, MySQLDefaultSqlState, test.err.SqlState())
+		})
+	}
+}
+
 func TestErrCantChangeTxnCodeRemainsStable(t *testing.T) {
 	// This code is part of the client-visible compatibility contract. New
 	// MatrixOne errors must use a fresh code instead of renumbering it.

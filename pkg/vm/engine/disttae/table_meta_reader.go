@@ -452,7 +452,9 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 		objCnt, blkCnt, rowCnt int
 	)
 
-	s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
+	s3Writer = colexec.NewCNS3DataWriterForService(
+		r.table.getTxn().proc.GetService(), mp, r.fs, r.table.tableDef, -1, false,
+	)
 	defer func() {
 		if dataReader != nil {
 			dataReader.Close()
@@ -517,7 +519,9 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		objCnt, blkCnt, rowCnt int
 	)
 
-	s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
+	s3Writer = colexec.NewCNS3TombstoneWriterForService(
+		r.table.getTxn().proc.GetService(), mp, r.fs, colTypes[1], -1,
+	)
 
 	defer func() {
 		if iter != nil {

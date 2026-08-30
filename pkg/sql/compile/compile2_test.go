@@ -291,6 +291,41 @@ func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
 	require.Equal(t, uint64(9), proc.GetFoundRows())
 }
 
+func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
+	targetRef := &plan.ObjectRef{SchemaName: "db", ObjName: "target"}
+	sourceRef := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	targetScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef}
+	sourceScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef}
+	write := &plan.Node{
+		NodeType: plan.Node_MULTI_UPDATE,
+		UpdateCtxList: []*plan.UpdateCtx{{
+			ObjRef: targetRef,
+		}},
+	}
+	query := &plan.Query{Nodes: []*plan.Node{
+		targetScan,
+		sourceScan,
+		{NodeType: plan.Node_TABLE_SCAN},
+		write,
+	}}
+
+	markInsertTableScansNotLockMeta(query)
+
+	require.NotSame(t, targetRef, targetScan.ObjRef)
+	require.NotSame(t, sourceRef, sourceScan.ObjRef)
+	require.True(t, targetScan.ObjRef.NotLockMeta)
+	require.True(t, sourceScan.ObjRef.NotLockMeta)
+	require.False(t, targetRef.NotLockMeta)
+	require.False(t, sourceRef.NotLockMeta)
+	require.Same(t, targetRef, write.UpdateCtxList[0].ObjRef)
+
+	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
+	c.appendMetaTables(targetScan.ObjRef)
+	c.appendMetaTables(sourceScan.ObjRef)
+	c.appendMetaTables(write.UpdateCtxList[0].ObjRef)
+	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
+}
+
 // ============================================================================
 // Tests for rewriteAutoModeToPre
 // ============================================================================
@@ -455,6 +490,29 @@ func TestRewriteAutoModeToPre_Insert(t *testing.T) {
 	result := rewriteAutoModeToPre(insertStmt)
 	assert.True(t, result)
 	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
+}
+
+func TestRewriteAutoModeToPre_MultiInsert(t *testing.T) {
+	// Test INSERT ALL ... SELECT with mode=auto: the rewrite reaches the source query.
+	innerSelect := &tree.Select{
+		RankOption: &tree.RankOption{
+			Option: map[string]string{"mode": "auto"},
+		},
+	}
+	multiInsert := &tree.MultiInsert{
+		Targets: []*tree.MultiInsertTarget{{Table: tree.NewTableName("t", tree.ObjectNamePrefix{}, nil)}},
+		Source:  innerSelect,
+	}
+
+	result := rewriteAutoModeToPre(multiInsert)
+	assert.True(t, result)
+	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
+
+	forced := &tree.Select{}
+	multiInsert.Source = forced
+	assert.True(t, forceModePre(multiInsert))
+	assert.NotNil(t, forced.RankOption)
+	assert.Equal(t, "pre", forced.RankOption.Option["mode"])
 }
 
 func TestRewriteAutoModeToPre_Replace(t *testing.T) {

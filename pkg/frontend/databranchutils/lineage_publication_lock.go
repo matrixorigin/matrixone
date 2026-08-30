@@ -20,23 +20,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
-// LineageOwnerPublicationLockSQL writes the bootstrap-created SNAPSHOT feature
+// LineageOwnerLifecycleLockSQL writes the bootstrap-created SNAPSHOT feature
 // registry row, which exists before any snapshot, PITR, or data-branch lineage
 // row can be created. Pessimistic transactions serialize on its row lock;
 // optimistic transactions serialize through a write-write conflict and retry.
 // A SELECT FOR UPDATE is insufficient here because optimistic transactions do
 // not take that locking path. updated_at is assigned explicitly so crossing the
 // barrier does not change the feature registry's observable metadata.
-func LineageOwnerPublicationLockSQL() string {
+func LineageOwnerLifecycleLockSQL() string {
 	return fmt.Sprintf(
 		"update %s.%s set scope_spec = scope_spec, updated_at = updated_at where feature_code = 'SNAPSHOT'",
 		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY,
 	)
 }
 
-// LockLineageOwnerPublication crosses the stable write barrier through the
-// caller's transaction. The caller must keep that transaction open through the
-// owner publication or ALTER decision that the barrier protects.
-func LockLineageOwnerPublication(exec func(string) error) error {
-	return exec(LineageOwnerPublicationLockSQL())
+// LockLineageOwnerLifecycle crosses the stable write barrier through the
+// caller's transaction. The caller must keep that transaction open through
+// the owner mutation, restore, or lineage-GC decision that it protects.
+func LockLineageOwnerLifecycle(exec func(string) error) error {
+	return exec(LineageOwnerLifecycleLockSQL())
 }

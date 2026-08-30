@@ -504,6 +504,7 @@ func TestDiskCacheCurrentReaderReindexesUntrackedPath(t *testing.T) {
 		FilePath: "foo",
 		Entries:  []IOEntry{{Offset: 1, Size: 1}},
 	}
+	defer vector.Release()
 	require.NoError(t, cache.Read(ctx, vector))
 	require.True(t, vector.Entries[0].done)
 	require.Equal(t, []byte("b"), vector.Entries[0].Data)
@@ -715,16 +716,17 @@ func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("async callback did not start")
 	}
-	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
-	defer cancel()
-	cache.Flush(flushCtx)
-	require.NoError(t, flushCtx.Err())
+	// Flush completes when all writes drain; callbacks remain deliberately
+	// outside that barrier. Do not turn scheduler latency into the oracle by
+	// applying a lifecycle-test deadline to this contract.
+	cache.Flush(context.Background())
 
 	require.NoError(t, cache.Update(ctx, &IOVector{
 		FilePath: "overflow",
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
 	}, true))
 	cache.async.mu.Lock()
+	require.Empty(t, cache.async.mu.pending)
 	require.Len(t, cache.async.slots, cap(cache.async.slots))
 	require.Equal(t, int64(cap(cache.async.slots)), cache.async.mu.pendingBytes)
 	require.Equal(t, int64(1), cache.async.mu.dropped)
@@ -890,11 +892,17 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	// Canceling a queued finalizer only cleans its temporary artifact; it must
 	// not claim that a previous disk-write failure recovered.
 	cache.writeFailures.failed.Store(true)
+	locker := installNotifyingDiskCacheLocker(cache)
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	cache.Close(closeCtx)
 	require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
+	// A timed-out Close starts the background drain but does not join it. Wait
+	// for the queued finalizer to release its path explicitly before inspecting
+	// the cleanup result; the first finalizer is still blocked in file.Sync, so
+	// this unlock can only come from the queued finalizer's doneUpdate path.
+	requireDiskCacheUnlock(t, locker)
 	require.False(t, cache.isUpdating(queuedPath))
 	require.True(t, cache.writeFailures.failed.Load())
 	_, err := os.Stat(queuedPath)
@@ -1008,6 +1016,79 @@ func TestDiskCacheCloseOwnsAsyncLoaderGeneration(t *testing.T) {
 	data, err := os.ReadFile(diskPath)
 	require.NoError(t, err)
 	require.Equal(t, []byte("new"), data)
+}
+
+func TestDiskCacheLoadCacheKeepsForegroundDirectory(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	foregroundDir := filepath.Dir(cache.pathForFile("foo/bar"))
+
+	writerReachedTempFileCreate := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	unblockWriter := sync.OnceFunc(func() { close(releaseWriter) })
+	cache.beforeCacheTempFileCreate = func() {
+		close(writerReachedTempFileCreate)
+		<-releaseWriter
+	}
+	writerDone := make(chan struct{})
+	writerResult := make(chan struct {
+		file *os.File
+		err  error
+	}, 1)
+	go func() {
+		defer close(writerDone)
+		file, err := cache.createCacheTempFile(foregroundDir)
+		writerResult <- struct {
+			file *os.File
+			err  error
+		}{file: file, err: err}
+	}()
+	t.Cleanup(func() {
+		unblockWriter()
+		<-writerDone
+	})
+	select {
+	case <-writerReachedTempFileCreate:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("foreground cache write did not reach temporary file creation")
+	}
+
+	loaderReachedDirectoryCleanup := make(chan struct{})
+	cache.beforeLoadDirectoryCleanup = func(path string) {
+		if path == foregroundDir {
+			close(loaderReachedDirectoryCleanup)
+		}
+	}
+	loadDone := make(chan struct{})
+	go func() {
+		cache.loadCache(context.Background())
+		close(loadDone)
+	}()
+	t.Cleanup(func() {
+		unblockWriter()
+		<-loadDone
+	})
+	select {
+	case <-loaderReachedDirectoryCleanup:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("disk-cache loader did not process the foreground directory")
+	}
+
+	unblockWriter()
+	result := <-writerResult
+	if result.file != nil {
+		t.Cleanup(func() { _ = result.file.Close() })
+	}
+	require.NoError(t, result.err)
+	require.NoError(t, result.file.Close())
+	<-loadDone
+	require.DirExists(t, foregroundDir)
+
+	cache.beforeLoadDirectoryCleanup = nil
+	staleDir := filepath.Join(cache.path, "stale")
+	require.NoError(t, os.MkdirAll(staleDir, 0o755))
+	cache.loadCache(context.Background())
+	_, err := os.Stat(staleDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestDiskCacheCloseCancelsActiveFileFinalizeBeforePublish(t *testing.T) {

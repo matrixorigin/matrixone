@@ -133,6 +133,16 @@ func TestApplyRemapDb(t *testing.T) {
 		require.NotContains(t, tree.String(insert, dialect.MYSQL), "dbxxx")
 	})
 
+	t.Run("multi-table insert targets, values, conditions and source", func(t *testing.T) {
+		out := applyRemapDbToSQL(t,
+			"insert first when dbxxx.u.k > 1 then into dbxxx.t (id) values (dbxxx.u.k)"+
+				" else into dbxxx.t2 (dbxxx.t2.id) values (k) select k from dbxxx.u", remap)
+		require.Contains(t, out, "dbyyy.t ")
+		require.Contains(t, out, "dbyyy.t2")
+		require.Contains(t, out, "dbyyy.u")
+		require.NotContains(t, out, "dbxxx")
+	})
+
 	t.Run("replace logical target and qualified columns", func(t *testing.T) {
 		ctx := context.Background()
 		stmts, err := parsers.Parse(ctx, dialect.MYSQL,
@@ -174,6 +184,13 @@ func TestApplyRemapDb(t *testing.T) {
 
 	t.Run("having subquery", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select id from dbxxx.a group by id having count(*) > (select count(*) from dbxxx.b)", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("named window subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select 1 from dbxxx.a window w as (partition by (select id from dbxxx.b))", remap)
 		require.Contains(t, out, "dbyyy.a")
 		require.Contains(t, out, "dbyyy.b")
 		require.NotContains(t, out, "dbxxx")

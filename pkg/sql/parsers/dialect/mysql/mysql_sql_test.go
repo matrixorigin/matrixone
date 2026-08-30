@@ -763,6 +763,75 @@ func TestVarianceWindowSpec(t *testing.T) {
 	require.Len(t, window.PartitionBy, 1)
 }
 
+func TestBitXorWindowSpec(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select bit_xor(v) over (partition by grp order by id rows between unbounded preceding and current row) from t",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	fn, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "bit_xor", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+	require.NotNil(t, fn.WindowSpec)
+	require.Len(t, fn.WindowSpec.PartitionBy, 1)
+	require.Len(t, fn.WindowSpec.OrderBy, 1)
+	require.True(t, fn.WindowSpec.HasFrame)
+
+	identifierStmt, err := ParseOne(context.Background(), "select bit_xor from t", 1)
+	require.NoError(t, err)
+	defer identifierStmt.Free()
+
+	identifier, ok := firstSelectExpr(t, identifierStmt).(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "bit_xor", identifier.ColName())
+}
+
+func TestNamedWindowClause(t *testing.T) {
+	sql := "select sum(v) over win, rank() over (base_win order by v) from t " +
+		"window win as (partition by g order by v), base_win as (partition by g)"
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Windows, 2)
+	require.Equal(t, "win", clause.Windows[0].Name.Compare())
+	require.Nil(t, clause.Windows[0].Spec.RefName)
+	require.Equal(t, "base_win", clause.Windows[1].Name.Compare())
+
+	first, ok := clause.Exprs[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "win", first.WindowSpec.RefName.Compare())
+	require.True(t, first.WindowSpec.ReferencedOnly)
+	second, ok := clause.Exprs[1].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "base_win", second.WindowSpec.RefName.Compare())
+	require.False(t, second.WindowSpec.ReferencedOnly)
+	require.Len(t, second.WindowSpec.OrderBy, 1)
+
+	require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+}
+
+func TestRangeRemainsNonReservedWithWindowClauses(t *testing.T) {
+	tests := []string{
+		"select 1 as query, 1 as query_result, 1 as random, 1 as range, 1 as read, 1 as real, 1 as redundant, 1 as reference, 1 as release, 1 as reload",
+		"select sum(v) over (order by v range between unbounded preceding and current row) from t",
+		"select sum(v) over win from t window win as (order by v range between unbounded preceding and current row)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
@@ -5061,6 +5130,8 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
+		"select approx_percentile(0.95) within group (order by v desc) from t",
+		"select median() within group (order by v desc) from t",
 	} {
 		ast, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

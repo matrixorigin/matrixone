@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -220,6 +221,17 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+// WithMoColumnsUpdate allows an internal metadata upgrade to rewrite the
+// redundant columns-table fields without opening mo_columns to ordinary DML.
+func (opts StatementOption) WithMoColumnsUpdate() StatementOption {
+	opts.allowMoColumnsUpdate = true
+	return opts
+}
+
+func (opts StatementOption) AllowMoColumnsUpdate() bool {
+	return opts.allowMoColumnsUpdate
+}
+
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
 }
@@ -241,6 +253,26 @@ func (opts Options) WithUserTxn() Options {
 
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
+}
+
+// WithTxnIsolation overrides the runtime default for a newly created
+// internal transaction.
+func (opts Options) WithTxnIsolation(isolation txn.TxnIsolation) Options {
+	opts.txnIsolation = isolation
+	opts.txnIsolationSet = true
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnIsolation(isolation))
+	return opts
+}
+
+// HasTxnIsolation reports whether this execution explicitly supplied an
+// isolation level for a newly created internal transaction.
+func (opts Options) HasTxnIsolation() bool {
+	return opts.txnIsolationSet
+}
+
+// TxnIsolation returns the explicitly supplied transaction isolation level.
+func (opts Options) TxnIsolation() txn.TxnIsolation {
+	return opts.txnIsolation
 }
 
 // WithLockWaitTimeout sets a per-execution lock wait budget. It is propagated

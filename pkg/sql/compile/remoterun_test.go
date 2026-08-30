@@ -350,6 +350,97 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestStringShuffleHashRemoteWireContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	arg := shuffle.NewArgument()
+	t.Cleanup(arg.Release)
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = true
+
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashLegacy)
+	_, legacyInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), legacyInstruction.Op)
+
+	proc.SetStringShuffleHashAlgorithm(process.StringShuffleHashComplete)
+	_, stableInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.ShuffleStable), stableInstruction.Op)
+	require.NotEqual(t, legacyInstruction.Op, stableInstruction.Op)
+
+	// Range ownership is unchanged by the complete string hash contract and
+	// must not reject an older receiver unnecessarily.
+	arg.ShuffleType = int32(planpb.ShuffleType_Range)
+	_, rangeInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), rangeInstruction.Op)
+
+	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
+	arg.StringHashKey = false
+	_, numericHashInstruction, err := convertToPipelineInstruction(
+		arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(vm.Shuffle), numericHashInstruction.Op)
+
+	encodePipeline := func(t *testing.T, instruction *pipeline.Instruction) []byte {
+		t.Helper()
+		data, err := (&pipeline.Pipeline{
+			PipelineType:    pipeline.Pipeline_Normal,
+			InstructionList: []*pipeline.Instruction{instruction},
+		}).Marshal()
+		require.NoError(t, err)
+		return data
+	}
+	legacyData := encodePipeline(t, legacyInstruction)
+	stableData := encodePipeline(t, stableInstruction)
+	rangeData := encodePipeline(t, rangeInstruction)
+	numericHashData := encodePipeline(t, numericHashInstruction)
+
+	decode := func(algorithm process.StringShuffleHashAlgorithm, data []byte) (*Scope, error) {
+		receiverProc := testutil.NewProcess(t)
+		t.Cleanup(receiverProc.Free)
+		receiverProc.SetStringShuffleHashAlgorithm(algorithm)
+		return decodeScope(data, receiverProc, true, nil)
+	}
+
+	legacyScope, err := decode(process.StringShuffleHashLegacy, legacyData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, legacyScope.RootOp)
+	legacyScope.release()
+
+	stableScope, err := decode(process.StringShuffleHashComplete, stableData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, stableScope.RootOp)
+	require.True(t, stableScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	stableScope.release()
+	rangeScope, err := decode(process.StringShuffleHashComplete, rangeData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, rangeScope.RootOp)
+	rangeScope.release()
+	numericHashScope, err := decode(process.StringShuffleHashComplete, numericHashData)
+	require.NoError(t, err)
+	require.IsType(t, &shuffle.Shuffle{}, numericHashScope.RootOp)
+	require.False(t, numericHashScope.RootOp.(*shuffle.Shuffle).StringHashKey)
+	numericHashScope.release()
+
+	_, err = decode(process.StringShuffleHashLegacy, stableData)
+	require.ErrorContains(t, err,
+		"string shuffle hash algorithm mismatch: pipeline=1 process=0")
+	_, err = decode(process.StringShuffleHashComplete, legacyData)
+	require.ErrorContains(t, err,
+		"string shuffle hash algorithm mismatch: pipeline=0 process=1")
+	invalidStableRange := *rangeInstruction
+	invalidStableRange.Op = int32(vm.ShuffleStable)
+	_, err = decode(process.StringShuffleHashComplete,
+		encodePipeline(t, &invalidStableRange))
+	require.ErrorContains(t, err,
+		"complete string shuffle hash marker requires a string-key hash shuffle")
+}
+
 func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -415,10 +506,13 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	})
 
 	t.Run("IntersectAll", func(t *testing.T) {
-		restored := roundTrip(t, &intersectall.IntersectAll{})
+		keyExpr := plan.MakePlan2Int64ConstExprWithType(7)
+		original := &intersectall.IntersectAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
 		require.Equal(t, vm.IntersectAll, restored.OpType())
+		require.Equal(t, original.KeyExprs, restored.(*intersectall.IntersectAll).KeyExprs)
 	})
 
 	t.Run("Order", func(t *testing.T) {
@@ -873,6 +967,297 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 	_, err = decodeScope(dynamicData, proc, true, nil)
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+}
+
+func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
+	newProc := func(sqlMode string) *process.Process {
+		proc := newResolveVariableProcess(t, sqlMode)
+		proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+		proc.Base.TxnOperator = fakeTxnOperator{}
+		proc.Base.SessionInfo.TimeZone = time.UTC
+		return proc
+	}
+	makeScope := func(proc *process.Process, expression *planpb.Expr) *Scope {
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{expression}}},
+			}}},
+		}
+	}
+	padSpaceCast := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     planfunction.EncodeOverloadID(planfunction.CAST, 3),
+				ObjName: "cast",
+			},
+			Args: []*planpb.Expr{plan.MakePlan2StringConstExprWithType("MO", false)},
+		}},
+	}
+	ordinaryValue := plan.MakePlan2StringConstExprWithType("MO", false)
+
+	for _, tc := range []struct {
+		name       string
+		sqlMode    string
+		expression *planpb.Expr
+	}{
+		{
+			name:       "PAD SPACE cast",
+			expression: padSpaceCast,
+		},
+		{
+			name:       "enabled mode",
+			sqlMode:    "PAD_CHAR_TO_FULL_LENGTH",
+			expression: ordinaryValue,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newProc(tc.sqlMode)
+			scope := makeScope(proc, tc.expression)
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			t.Cleanup(func() {
+				if hadVersion {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+				} else {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				}
+			})
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+			_, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+			require.ErrorContains(t, err, "PAD SPACE remote execution requires MORPC protocol version 40")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+			_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRemoteExpressionProtocolValidation(t *testing.T) {
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
+		"the v36 remote-expression capability must remain available after later protocol increments")
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	cast := func(charset uint32) *planpb.Expr {
+		text := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "12.5tail"}}},
+		}
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 4, Scale: 2, Charset: charset},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "cast"},
+				Args: []*planpb.Expr{text},
+			}},
+		}
+	}
+	comparisonParam := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_json)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     int64(577) << 32,
+					ObjName: "__mo_json_comparison_param",
+				},
+				Args: []*planpb.Expr{{
+					Typ:  planpb.Type{Id: int32(types.T_text)},
+					Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+				}},
+			}},
+		}
+	}
+	mixedJSONBooleanEquality := func(functionID int32, jsonOnLeft bool) *planpb.Expr {
+		jsonOperand := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_json)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		}
+		booleanOperand := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+		}
+		args := []*planpb.Expr{jsonOperand, booleanOperand}
+		if !jsonOnLeft {
+			args[0], args[1] = args[1], args[0]
+		}
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(functionID) << 32},
+				Args: args,
+			}},
+		}
+	}
+	makeScope := func(expressions ...*planpb.Expr) *Scope {
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: expressions}},
+			}}},
+		}
+	}
+	t.Run("instruction expression owner", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{
+				ProjectList: []*planpb.Expr{comparisonParam(0), comparisonParam(1)},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
+		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "prepared JSON comparison parameters require MORPC protocol version 36")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("mixed equality instruction expression owner", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{
+				ProjectList: []*planpb.Expr{mixedJSONBooleanEquality(0, true)},
+			}},
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
+		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "mixed JSON/BOOL equality requires MORPC protocol version 36")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+
+	tests := []struct {
+		name                string
+		expressions         []*planpb.Expr
+		incompatibleVersion int64
+		compatibleVersion   int64
+		errorContains       string
+	}{
+		{
+			name:                "ordinary cast",
+			expressions:         []*planpb.Expr{cast(0)},
+			incompatibleVersion: defines.MORPCVersion29,
+			compatibleVersion:   defines.MORPCVersion36,
+		},
+		{
+			name:                "numeric prefix only",
+			expressions:         []*planpb.Expr{cast(255)},
+			incompatibleVersion: defines.MORPCVersion29,
+			compatibleVersion:   defines.MORPCVersion30,
+			errorContains:       "prepared numeric-prefix casts require MORPC protocol version 30",
+		},
+		{
+			name:                "JSON comparison only",
+			expressions:         []*planpb.Expr{comparisonParam(0), comparisonParam(1)},
+			incompatibleVersion: defines.MORPCVersion35,
+			compatibleVersion:   defines.MORPCVersion36,
+			errorContains:       "prepared JSON comparison parameters require MORPC protocol version 36",
+		},
+		{
+			name:                "numeric prefix and JSON comparison",
+			expressions:         []*planpb.Expr{comparisonParam(0), cast(255)},
+			incompatibleVersion: defines.MORPCVersion35,
+			compatibleVersion:   defines.MORPCVersion36,
+			errorContains:       "prepared JSON comparison parameters require MORPC protocol version 36",
+		},
+	}
+	for _, functionID := range []int32{0, 1, 406} {
+		for _, jsonOnLeft := range []bool{true, false} {
+			orientation := "json right"
+			if jsonOnLeft {
+				orientation = "json left"
+			}
+			tests = append(tests, struct {
+				name                string
+				expressions         []*planpb.Expr
+				incompatibleVersion int64
+				compatibleVersion   int64
+				errorContains       string
+			}{
+				name:                fmt.Sprintf("mixed equality %d %s", functionID, orientation),
+				expressions:         []*planpb.Expr{mixedJSONBooleanEquality(functionID, jsonOnLeft)},
+				incompatibleVersion: defines.MORPCVersion35,
+				compatibleVersion:   defines.MORPCVersion36,
+				errorContains:       "mixed JSON/BOOL equality requires MORPC protocol version 36",
+			})
+		}
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.incompatibleVersion)
+			incompatibleData, _, _, _, err := prepareRemoteRunSendingData(
+				"", makeScope(test.expressions...), proc, nil, uuid.Nil)
+			if test.errorContains != "" {
+				require.ErrorContains(t, err, test.errorContains)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			} else {
+				require.NoError(t, err)
+				decoded, decodeErr := decodeScope(incompatibleData, proc, true, nil)
+				require.NoError(t, decodeErr)
+				decoded.release()
+			}
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.compatibleVersion)
+			compatibleData, _, _, _, err := prepareRemoteRunSendingData(
+				"", makeScope(test.expressions...), proc, nil, uuid.Nil)
+			require.NoError(t, err)
+			decoded, err := decodeScope(compatibleData, proc, true, nil)
+			require.NoError(t, err)
+			decoded.release()
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.incompatibleVersion)
+			decoded, err = decodeScope(compatibleData, proc, true, nil)
+			if test.errorContains != "" {
+				require.ErrorContains(t, err, test.errorContains)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Nil(t, decoded)
+
+				decoded, err = decodeScope(compatibleData, nil, true, nil)
+				require.Error(t, err, "a versioned expression requires a process to resolve protocol support")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Nil(t, decoded)
+			} else {
+				require.NoError(t, err)
+				decoded.release()
+			}
+		})
+	}
+
+	t.Run("combined features enforce each minimum", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			Qry: makeScope(comparisonParam(0), cast(255)).Plan,
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
+		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "prepared numeric-prefix casts require MORPC protocol version 30")
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
+		err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "prepared JSON comparison parameters require MORPC protocol version 36")
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

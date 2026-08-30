@@ -201,6 +201,45 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	require.Zero(t, proc.GetMPool().CurrNB())
 }
 
+func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
+	proc := testutil.NewProc(t)
+	intType := types.T_int32.ToType()
+	charType := types.New(types.T_char, lateMaterializationMinVarlenWidth, 0)
+	scan := &TableScan{
+		Attrs: []string{"filter_col", "late_char"},
+		Types: []pbplan.Type{
+			plan.MakePlan2Type(&intType),
+			plan.MakePlan2Type(&charType),
+		},
+		FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 0, 1)},
+	}
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
+		return "PAD_CHAR_TO_FULL_LENGTH", nil
+	})
+	require.NoError(t, scan.Prepare(proc))
+	require.Equal(t, []int{0}, scan.ctr.earlyColumns)
+	require.Equal(t, []int{1}, scan.ctr.lateColumns)
+
+	bat := batch.NewOffHeapWithSize(2)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(intType)
+	bat.Vecs[1] = vector.NewOffHeapVecWithType(charType)
+	for i := int32(0); i < 4; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, proc.Mp()))
+	}
+	bat.SetRowCount(4)
+
+	result, err := scan.applyReaderFilter(proc, bat, []int{0})
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3}, result.Sels)
+	require.Equal(t, 2, bat.RowCount())
+	require.Zero(t, bat.Vecs[1].Length(), "late CHAR vector must remain unloaded during filtering")
+
+	bat.Clean(proc.Mp())
+	scan.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.GetMPool().CurrNB())
+}
+
 func TestTableScanUsesLateMaterializationReader(t *testing.T) {
 	proc := testutil.NewProc(t)
 	intType := types.T_int32.ToType()

@@ -316,6 +316,25 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	borrowed.Free(proc.Mp())
 }
 
+func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+
+	metadata := proc.SetPrepareParamsWithReusableTypedMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger},
+		[]types.T{types.T_int64}, nil)
+	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_int64, proc.GetPrepareParamType(0))
+	first := &metadata[0]
+	metadata = proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
+	require.Same(t, first, &metadata[0])
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_any, proc.GetPrepareParamType(0))
+}
+
 func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
 	params := vector.NewVec(types.T_text.ToType())

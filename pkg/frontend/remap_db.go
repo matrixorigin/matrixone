@@ -202,6 +202,19 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 			remapDbInSelect(s.Rows, remap)
 		}
 		remapDbInUpdateExprs(s.OnDuplicateUpdate, remap)
+	case *tree.MultiInsert:
+		remapDbInWith(s.With, remap)
+		for _, target := range s.AllTargets() {
+			remapDbInTableExpr(target.Table, remap)
+			remapInsertTarget(target.ColumnNames, nil, remap)
+			remapDbInExprs(target.Values, remap)
+		}
+		for _, when := range s.Whens {
+			remapDbInExpr(when.Cond, remap)
+		}
+		if s.Source != nil {
+			remapDbInSelect(s.Source, remap)
+		}
 	case *tree.Replace:
 		remapDbInTableExpr(s.Table, remap)
 		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, remap)
@@ -539,6 +552,11 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
 				remapDbInExprs(exprs, remap)
 			}
 			remapDbInExprs(c.GroupBy.GroupingSet, remap)
+		}
+		for _, definition := range c.Windows {
+			if definition != nil {
+				remapDbInWindowSpec(definition.Spec, remap)
+			}
 		}
 	case *tree.UnionClause:
 		remapDbInSelectStatement(c.Left, remap)

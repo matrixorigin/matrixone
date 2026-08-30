@@ -96,6 +96,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
+	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
 	pb.Method_GetLockHolder:                defines.MORPCVersion2,
 	pb.Method_GetWaitingList:               defines.MORPCVersion1,
@@ -127,6 +128,19 @@ func supportsLockProtocolV28(serviceID string) bool {
 	}
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion28
+}
+
+func supportsLockProtocolV31(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion31
 }
 
 func (s *service) initRemote() {
@@ -324,6 +338,8 @@ func (s *service) initRemoteHandler() {
 		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
 		s.handleRemoteUnlock)
+	s.remote.server.RegisterMethodHandler(pb.Method_BatchUnlock,
+		s.handleRemoteBatchUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
 		s.handleRemoteGetLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetLockHolder,
@@ -444,11 +460,7 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) &&
-		bind.ServiceID == s.serviceID &&
-		!admission.consume(bind) {
-		s.incRef(bind.Group, bind.Table)
-	}
+	s.acquireTxnBindRef(txn, bind, &admission)
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -492,6 +504,8 @@ func (s *service) handleRemoteLock(
 			resp.Lock.Result = result
 			resp.Lock.TxnWaitingListOnLockTableSupported =
 				err == nil && supportsLockProtocolV28(s.cfg.ServiceID)
+			resp.Lock.BatchUnlockSupported =
+				err == nil && supportsLockProtocolV31(s.cfg.ServiceID)
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
 	handlerOwnsAdmission = !completion.transferToCallbackIfPending()
@@ -503,8 +517,17 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
+	// Discovery routes ForwardLock by the stable CN UUID, so an in-flight
+	// request can reach a newer process after the forwarding CN restarts. Only
+	// the exact incarnation named by the mirror transaction may own its locks.
+	// Reject a stale target before admitting the operation or creating any txn
+	// and bind state; the caller will roll back the now-ownerless transaction.
+	if req.Lock.Options.ForwardTo != s.serviceID {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
 		return
@@ -565,10 +588,13 @@ func (s *service) handleForwardLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
-	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
+	// ForwardTo is the transaction's lock service. The forwarding CN only
+	// executes a mirror of that transaction, so bind lifetime belongs here, not
+	// to the RPC caller. Treat the transaction as local: local owner binds need
+	// no remote heartbeat, while a third-party owner is covered by this service's
+	// ordinary remoteBindRefs and released by Unlock on ForwardTo.
 	txn, txnGeneration := s.activeTxnHolder.getActiveTxnWithGeneration(
-		req.Lock.TxnID, true, req.Lock.ServiceID)
+		req.Lock.TxnID, true, "")
 	txn.Lock()
 	if txn.generation != txnGeneration || !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
@@ -595,11 +621,7 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) &&
-		bind.ServiceID == s.serviceID &&
-		!admission.consume(bind) {
-		s.incRef(bind.Group, bind.Table)
-	}
+	s.acquireTxnBindRef(txn, bind, &admission)
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -672,6 +694,22 @@ func (s *service) handleRemoteUnlock(
 		req.Unlock.TxnID,
 		req.Unlock.CommitTS,
 		req.Unlock.Mutations...,
+	)
+	writeResponse(s.logger, cancel, resp, err, cs)
+}
+
+func (s *service) handleRemoteBatchUnlock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	err := s.unlockRemoteLockTables(
+		ctx,
+		req.BatchUnlock.LockTables,
+		req.BatchUnlock.TxnID,
+		req.BatchUnlock.CommitTS,
 	)
 	writeResponse(s.logger, cancel, resp, err, cs)
 }

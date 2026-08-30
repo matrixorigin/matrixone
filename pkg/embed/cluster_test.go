@@ -78,43 +78,13 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
 	op := new(operator)
 	op.serviceType = metadata.ServiceType_CN
+	op.cfg.ServiceType = metadata.ServiceType_CN.String()
 	op.cfg.CN.Sirius.Enabled = true
 	op.cfg.CN.Sirius.BenchmarkNoGC = true
 	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
 	op.cfg.TN_please_use_getTNServiceConfig.GCCfg.DisableGC = true
 	require.ErrorContains(t, op.Start(), "launcher-verified")
 	require.False(t, op.needsCleanup())
-}
-
-func TestBasicCluster(t *testing.T) {
-	c, err := StartTestCluster(
-		WithCNCount(3),
-		WithPreStart(
-			func(svc ServiceOperator) {
-				if svc.ServiceType() == metadata.ServiceType_CN {
-					svc.Adjust(
-						func(config *ServiceConfig) {
-							config.CN.AutomaticUpgrade = true
-						},
-					)
-				}
-			},
-		),
-	)
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
-	require.NoError(t, err)
-
-	validCNCanWork(t, c, 0)
-	validCNCanWork(t, c, 1)
-	validCNCanWork(t, c, 2)
-
-	cn, err := c.GetCNService(0)
-	require.NoError(t, err)
-	v, err := c.GetService(cn.ServiceID())
-	require.NoError(t, err)
-	require.Equal(t, cn, v)
 }
 
 func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
@@ -154,8 +124,18 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 	require.Equal(t, timeout, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
 }
 
-func TestSingleCNCluster(t *testing.T) {
-	c, err := NewCluster(WithTesting())
+func TestClusterLifecycleAndCNExpansion(t *testing.T) {
+	c, err := NewCluster(
+		WithTesting(),
+		WithPreStart(func(svc ServiceOperator) {
+			adjustClusterStartupRetryIntervals(svc)
+			if svc.ServiceType() == metadata.ServiceType_CN {
+				svc.Adjust(func(config *ServiceConfig) {
+					config.CN.AutomaticUpgrade = true
+				})
+			}
+		}),
+	)
 	if c != nil {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
@@ -170,65 +150,51 @@ func TestSingleCNCluster(t *testing.T) {
 
 	_, err = c.GetCNService(1)
 	require.Error(t, err)
-}
 
-func TestClusterCanStartNewCNServices(t *testing.T) {
-	c, err := StartTestCluster(
-		WithCNCount(3),
-		WithPreStart(adjustClusterStartupRetryIntervals),
-	)
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
+	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
+	v, err := c.GetService(cn.ServiceID())
+	require.NoError(t, err)
+	require.Equal(t, cn, v)
 
-	validCNCanWork(t, c, 0)
+	require.NoError(t, c.StartNewCNService(2))
 	validCNCanWork(t, c, 1)
 	validCNCanWork(t, c, 2)
 
+	// Preserve the original dynamic-expansion coverage with the generated CN
+	// defaults after the first three CNs have exercised automatic upgrade.
+	c.(*cluster).options.preStart = adjustClusterStartupRetryIntervals
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
+	cn, err = c.GetCNService(3)
+	require.NoError(t, err)
+	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
 }
 
-func TestMultiClusterCanWork(t *testing.T) {
-	new := func() *cluster {
-		value, err := StartTestCluster(
-			WithCNCount(1),
-			WithConcurrentTestClusters(),
-		)
-		if value != nil {
-			t.Cleanup(func() { require.NoError(t, value.Close()) })
-		}
-		require.NoError(t, err)
-		return value.(*cluster)
-	}
-
-	first := new()
-	second := new()
-	require.NotEqual(t, first.ID(), second.ID())
-	require.NotEqual(t, first.options.dataPath, second.options.dataPath)
-	require.NotEqual(t, first.portLease.base, second.portLease.base)
-	validCNCanWork(t, first, 0)
-	validCNCanWork(t, second, 0)
-}
-
-func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
+func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
+	var first Cluster
 	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
-			validCNCanWork(t, c, 0)
+			first = c
 		},
 	)
 
-	c, err := StartTestCluster(
+	second, err := StartTestCluster(
 		WithCNCount(1),
 		WithConcurrentTestClusters(),
 	)
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	if second != nil {
+		t.Cleanup(func() { require.NoError(t, second.Close()) })
 	}
 	require.NoError(t, err)
 
-	validCNCanWork(t, c, 0)
+	firstCluster := first.(*cluster)
+	secondCluster := second.(*cluster)
+	require.NotEqual(t, firstCluster.ID(), secondCluster.ID())
+	require.NotEqual(t, firstCluster.options.dataPath, secondCluster.options.dataPath)
+	require.NotEqual(t, firstCluster.portLease.base, secondCluster.portLease.base)
+	validCNCanWork(t, firstCluster, 0)
+	validCNCanWork(t, secondCluster, 0)
 }
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
@@ -552,32 +518,65 @@ func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
 	require.Nil(t, c.testAdmission)
 }
 
-func TestWithTestingExtendsStoreLivenessWithoutExtendingHeartbeatDeadline(t *testing.T) {
+func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 	clusterValue, err := NewCluster(WithTesting())
 	if clusterValue != nil {
 		t.Cleanup(func() { require.NoError(t, clusterValue.Close()) })
 	}
 	require.NoError(t, err)
 	c := clusterValue.(*cluster)
-	// The heartbeat loop performs RPCs serially. A test mode must allow
-	// temporarily missing stores without turning a failed heartbeat into a
-	// long-lived blocked request that prevents the next scheduling command from
-	// being observed.
-	require.Zero(t, c.options.heartbeatTimeout)
+	require.Equal(t, testHAKeeperHeartbeatTimeout, c.options.heartbeatTimeout)
+	require.Less(t, c.options.heartbeatTimeout, c.options.storeTimeout)
 
 	for _, svc := range c.services {
 		cfg := svc.GetServiceConfig()
+		require.Equal(t, testHAKeeperBackendReadTimeout,
+			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
-			require.Zero(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Equal(t, testHAKeeperHeartbeatTimeout,
+				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_TN:
-			require.Zero(t, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+			require.Equal(t, testHAKeeperHeartbeatTimeout,
+				cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+			require.Less(t, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration,
+				cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		case metadata.ServiceType_LOG:
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration)
+			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
+	}
+}
+
+func TestTestingHAKeeperBackendReadTimeoutPreservesExplicitValue(t *testing.T) {
+	const explicit = 7 * time.Second
+	cfg := newServiceConfig()
+	cfg.HAKeeperClient.BackendReadTimeout.Duration = explicit
+
+	applyTestingHAKeeperBackendReadTimeout(&cfg)
+	require.Equal(t, explicit, cfg.HAKeeperClient.BackendReadTimeout.Duration)
+}
+
+func TestWithTestingPreservesExplicitHeartbeatTimeout(t *testing.T) {
+	const explicit = 7 * time.Second
+	for name, options := range map[string][]Option{
+		"before testing mode": {WithHAKeeperHeartbeatTimeout(explicit), WithTesting()},
+		"after testing mode":  {WithTesting(), WithHAKeeperHeartbeatTimeout(explicit)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := new(cluster)
+			for _, option := range options {
+				option(c)
+			}
+			require.Equal(t, explicit, c.options.heartbeatTimeout)
+			require.Equal(t, testHAKeeperStoreTimeout, c.options.storeTimeout)
+		})
 	}
 }
 

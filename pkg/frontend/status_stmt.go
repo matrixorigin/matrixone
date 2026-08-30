@@ -15,12 +15,16 @@
 package frontend
 
 import (
+	"context"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -29,6 +33,22 @@ import (
 func isPerformStatement(stmt tree.Statement) bool {
 	selectStmt, ok := stmt.(*tree.Select)
 	return ok && selectStmt.IsPerform
+}
+
+func databaseWasCreated(runResult *util.RunResult) bool {
+	return runResult != nil && runResult.AffectRows != 0
+}
+
+func grantDatabaseOwnershipAfterCreate(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	runResult *util.RunResult,
+) error {
+	if !databaseWasCreated(runResult) {
+		return nil
+	}
+	return doGrantPrivilegeImplicitly(ctx, ses, stmt)
 }
 
 // executeStatusStmt run the statement that responses status t
@@ -54,6 +74,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.rs = &plan.ResultColDef{
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
+			freezeResultMetadata(execCtx.runner)
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
@@ -103,6 +124,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				mysqlc := c.(Column)
 				mrs.AddColumn(mysqlc)
 			}
+			freezeResultMetadata(execCtx.runner)
 
 			// open new file
 			ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
@@ -168,17 +190,22 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		//change privilege
 		switch st := execCtx.stmt.(type) {
 		case *tree.DropTable:
-			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(ses, st)
+			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(
+				ses, st, execCtx.effectiveTxnDefaultDatabase,
+			)
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets); err != nil {
+			if err = doRevokePrivilegeImplicitly(
+				execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets,
+				execCtx.effectiveTxnDefaultDatabase,
+			); err != nil {
 				return
 			}
 
 		case *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil); err != nil {
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil, ""); err != nil {
 				return
 			}
 
@@ -230,7 +257,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
 			// must execute after run to get database id
-			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			err = grantDatabaseOwnershipAfterCreate(execCtx.reqCtx, ses, st, execCtx.runResult)
 			if err != nil {
 				return
 			}
@@ -244,9 +271,16 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 // the session's temporary aliases still exist. Both the pre-execution
 // ownership revoke and the post-execution dynamic-table cleanup must consume
 // this same snapshot: dropTableSingle removes temporary aliases as it runs.
-func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.TableNames {
+func capturePersistentDropTableTargets(
+	ses FeSession,
+	st *tree.DropTable,
+	defaultDatabase string,
+) tree.TableNames {
 	if st == nil || st.Temporary {
 		return nil
+	}
+	if ses == nil {
+		return st.Names
 	}
 
 	targets := make(tree.TableNames, 0, len(st.Names))
@@ -256,7 +290,10 @@ func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.Ta
 		}
 		dbName := string(name.SchemaName)
 		if dbName == "" {
-			dbName = ses.GetDatabaseName()
+			dbName = defaultDatabase
+			if dbName == "" {
+				dbName = ses.GetDatabaseName()
+			}
 		}
 		if _, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName)); isTemporary {
 			continue
@@ -353,8 +390,40 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if res.lastInsertId != 0 {
 				ses.SetLastInsertID(res.lastInsertId)
 			}
+		case *tree.MultiInsert:
+			// A multi-table INSERT has one PRE_INSERT per target, each publishing
+			// its generated key through the same statement-wide coordinator, which
+			// keeps the numerically smallest non-zero value. That rule is correct
+			// for the parallel scopes of ONE table, where the smallest really is
+			// the first generated; across targets the counters are unrelated, so
+			// the smallest identifies neither the first target nor the first
+			// generated row and would change meaning with the targets' counters
+			// rather than with the statement. Report an insert id only when a
+			// single target can generate one; otherwise the statement is
+			// ambiguous and reports none.
+			if multiInsertHasUniqueAutoIncrTarget(execCtx) {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				// Declining to report the ambiguous value is not enough. The
+				// targets' PRE_INSERTs published through
+				// SetStatementLastInsertIDIfEarlier, which writes the
+				// session-visible LastInsertID as well as the statement one,
+				// and doComQuery reuses this process for the next statement of
+				// the same COM_QUERY while resetting only the statement value.
+				// Left alone, the suppressed cross-table minimum would answer
+				// that statement's LAST_INSERT_ID(). Put the session's value
+				// back, which is what this statement left visible.
+				execCtx.proc.SetLastInsertID(ses.GetLastInsertID())
+			}
 		case *tree.CreateDatabase:
-			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			// CREATE DATABASE publishes one affected row only after the engine
+			// creates the database; IF NOT EXISTS no-ops stay at zero.
+			if databaseWasCreated(execCtx.runResult) {
+				_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			}
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
@@ -388,4 +457,41 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		}
 	}
 	return
+}
+
+// multiInsertHasUniqueAutoIncrTarget reports whether exactly one target of a
+// multi-table INSERT can generate AUTO_INCREMENT values. Only then does
+// LAST_INSERT_ID() have the single-insert meaning: the first value generated by
+// that target.
+func multiInsertHasUniqueAutoIncrTarget(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.cw == nil {
+		return false
+	}
+	p := execCtx.cw.Plan()
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	targets := 0
+	for _, node := range p.GetQuery().Nodes {
+		if node.GetNodeType() != plan.Node_PRE_INSERT || node.PreInsertCtx == nil {
+			continue
+		}
+		def := node.PreInsertCtx.TableDef
+		if def == nil {
+			continue
+		}
+		for _, col := range def.Cols {
+			// The fake primary key a PK-less table carries is itself
+			// auto-increment, but it is hidden and never surfaces through
+			// LAST_INSERT_ID(); counting it would make every PK-less target look
+			// like an auto-increment one.
+			if col == nil || !col.Typ.AutoIncr || col.Hidden ||
+				col.Name == catalog.FakePrimaryKeyColName {
+				continue
+			}
+			targets++
+			break
+		}
+	}
+	return targets == 1
 }

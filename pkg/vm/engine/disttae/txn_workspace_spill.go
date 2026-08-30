@@ -360,12 +360,14 @@ func (txn *Transaction) stageWorkspaceSpillGroup(
 ) {
 	var writer *colexec.CNS3Writer
 	if typ == INSERT {
-		writer = colexec.NewCNS3DataWriter(
-			txn.proc.GetMPool(), fs, table.GetTableDef(txn.proc.Ctx), -1, false)
+		writer = colexec.NewCNS3DataWriterForService(
+			txn.proc.GetService(), txn.proc.GetMPool(), fs,
+			table.GetTableDef(txn.proc.Ctx), -1, false)
 	} else {
 		var pkCol *plan.ColDef = plan2.PkColByTableDef(table.GetTableDef(txn.proc.Ctx))
-		writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1)
+		writer = colexec.NewCNS3TombstoneWriterForService(
+			txn.proc.GetService(), txn.proc.GetMPool(), fs,
+			plan2.ExprType2Type(&pkCol.Typ), -1)
 	}
 	writerClosed := false
 	defer func() {

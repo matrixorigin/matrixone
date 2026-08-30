@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -263,6 +264,51 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(planConfig, 5), config)
 }
 
+func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.25)
+	for _, tc := range []struct {
+		name       string
+		planConfig []byte
+		want       string
+	}{
+		{name: "ordinary form", want: "0.25"},
+		{name: "ordered ascending", planConfig: []byte{0}, want: "0.25"},
+		{name: "ordered descending", planConfig: []byte{1}, want: "0.75"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, config := constructAggregateConfig(&plan.Function{
+				Func:      &plan.ObjectRef{ObjName: plan2.NameApproxPercentile},
+				Args:      []*plan.Expr{value, percentile},
+				AggConfig: tc.planConfig,
+			}, proc)
+			require.Equal(t, []*plan.Expr{value}, args)
+			require.Equal(t, tc.want, string(config))
+		})
+	}
+}
+
+func TestComplementPercentileConfigPreservesDecimalScale(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "0", want: "1"},
+		{input: "1", want: "0"},
+		{input: "0.95", want: "0.05"},
+		{input: "0.500", want: "0.500"},
+	} {
+		actual, err := complementPercentileConfig([]byte(tc.input))
+		require.NoError(t, err)
+		require.Equal(t, tc.want, string(actual))
+	}
+	_, err := complementPercentileConfig([]byte("invalid"))
+	require.Error(t, err)
+}
+
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -333,6 +379,16 @@ func TestDupHashBuildPreservesNullTracking(t *testing.T) {
 	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
 	defer duplicated.Release()
 	require.True(t, duplicated.TrackNullKeys)
+}
+
+func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
+	source := intersectall.NewArgument()
+	defer source.Release()
+	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(7)}
+
+	duplicated := dupOperator(source, 0, 1).(*intersectall.IntersectAll)
+	defer duplicated.Release()
+	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
 }
 
 func TestDupOperatorMergeTop(t *testing.T) {
@@ -800,6 +856,7 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	op := shuffle.NewArgument()
 	op.BucketNum = 4
 	op.DrainAllBuckets = true
+	op.StringHashKey = true
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*shuffle.Shuffle)
@@ -813,6 +870,8 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.Equal(t, int32(1), dup2.CurrentShuffleIdx)
 	require.True(t, dup1.DrainAllBuckets)
 	require.True(t, dup2.DrainAllBuckets)
+	require.True(t, dup1.StringHashKey)
+	require.True(t, dup2.StringHashKey)
 }
 
 func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {

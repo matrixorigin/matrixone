@@ -565,6 +565,17 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	action query.MigrateConnFromAction,
 	resp *query.MigrateConnFromResponse,
 ) error {
+	return rt.migrateConnectionFromActionWithCapabilities(
+		ctx, action, true, resp,
+	)
+}
+
+func (rt *Routine) migrateConnectionFromActionWithCapabilities(
+	ctx context.Context,
+	action query.MigrateConnFromAction,
+	tempTableMigrationSupported bool,
+	resp *query.MigrateConnFromResponse,
+) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
 	if !ok {
 		if ctx != nil {
@@ -601,6 +612,26 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	// the client can disconnect its handles and retry.
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	tempTables, err := ses.snapshotTempTablesForMigration(operationCtx)
+	if err != nil {
+		if isMigrationSnapshotSizeLimitError(err) {
+			// Do not send an impossible clone batch to a target CN. The current
+			// session remains usable on the source and a later transfer can be
+			// admitted after the client reduces its temporary-table state.
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+		return err
+	}
+	if len(tempTables) > 0 && !tempTableMigrationSupported {
+		// An older Proxy would silently omit the alias map and let source-session
+		// cleanup delete the physical tables after handoff. Keep the connection
+		// on this CN until a capable Proxy performs a lossless migration.
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if tempTableMigrationSupported {
+		resp.TempTables = tempTables
+		resp.TempTableStateExported = true
 	}
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()

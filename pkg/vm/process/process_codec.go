@@ -71,6 +71,14 @@ func (proc *Process) BuildProcessInfo(
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
+		procInfo.PlanGenerationReused = proc.PlanGenerationReused()
+		stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+			uint32(proc.StringShuffleHashAlgorithm()),
+		)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.StringShuffleHashAlgorithm = uint32(stringShuffleHashAlgorithm)
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -79,6 +87,18 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			var stringSources []uint32
+			if vec.HasStringSourceMetadata() {
+				stringSources = make([]uint32, vec.Length())
+				for i := range stringSources {
+					stringSources[i] = uint32(vec.GetStringSourceAt(i))
+				}
+			}
+			stringSources, err = StringSourcePrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), stringSources)
+			if err != nil {
+				return procInfo, err
+			}
 			binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
 				proc.GetService(), vec.Length(), proc.Base.prepareParamsBinaryString)
 			if err != nil {
@@ -105,6 +125,7 @@ func (proc *Process) BuildProcessInfo(
 			if binaryStringMetadata != nil {
 				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
 			}
+			procInfo.PrepareParams.StringSources = stringSources
 		}
 	}
 	{ // session info
@@ -224,6 +245,12 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+		value.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return nil, err
+	}
 	service := ""
 	if c.lockService != nil {
 		service = c.lockService.GetConfig().ServiceID
@@ -240,6 +267,14 @@ func (c *codecService) Decode(
 		service,
 		int(value.PrepareParams.Length),
 		value.PrepareParams.IsBinaryString,
+	)
+	if err != nil {
+		return nil, err
+	}
+	stringSources, err := StringSourcePrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.StringSources,
 	)
 	if err != nil {
 		return nil, err
@@ -274,8 +309,10 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	proc.SetStringShuffleHashAlgorithm(stringShuffleHashAlgorithm)
 	if value.PlanSnapshotTs != nil {
 		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+		proc.SetPlanGenerationReused(value.PlanGenerationReused)
 	}
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
@@ -296,6 +333,17 @@ func (c *codecService) Decode(
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
 				prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+		if len(stringSources) > 0 {
+			sources := make([]types.StringSource, len(stringSources))
+			for i, source := range stringSources {
+				sources[i] = types.StringSource(source)
+			}
+			if err = prepareParams.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				return nil, err
 			}
 		}
 		proc.SetOwnedPrepareParamsWithMetadata(

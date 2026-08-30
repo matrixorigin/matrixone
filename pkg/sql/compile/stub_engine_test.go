@@ -59,6 +59,7 @@ type stubDatabase struct {
 	name         string
 	rels         map[string]*stubRelation
 	createErr    error
+	createCtx    context.Context
 	relExistsErr error
 }
 
@@ -82,10 +83,16 @@ func (db *stubDatabase) RelationExists(ctx context.Context, name string, op any)
 }
 
 func (db *stubDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+	db.createCtx = ctx
 	if db.createErr != nil {
 		return db.createErr
 	}
 	db.rels[name] = newStubRelation(name)
+	return nil
+}
+
+func (db *stubDatabase) Delete(_ context.Context, name string) error {
+	delete(db.rels, name)
 	return nil
 }
 
@@ -99,6 +106,8 @@ type stubRelation struct {
 	tombstones            engine.Tombstoner
 	collectTombstonesErr  error
 	collectTombstonesCall int
+	tableID               uint64
+	tableDef              *plan.TableDef
 }
 
 func newStubRelation(name string) *stubRelation {
@@ -106,6 +115,9 @@ func newStubRelation(name string) *stubRelation {
 }
 
 func (r *stubRelation) GetTableID(ctx context.Context) uint64 {
+	if r.tableID != 0 {
+		return r.tableID
+	}
 	return 1
 }
 
@@ -118,6 +130,9 @@ func (r *stubRelation) TableDefs(ctx context.Context) ([]engine.TableDef, error)
 }
 
 func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
+	if r.tableDef != nil {
+		return r.tableDef
+	}
 	return &plan.TableDef{}
 }
 

@@ -55,8 +55,16 @@ const (
 )
 
 func wyhash(p unsafe.Pointer, seed, s uint64) uint64 {
+	return wyhashWithSecret(p, seed, s, hashkey[0])
+}
+
+// wyhashWithSecret contains the common mixer used by both process-local hash
+// tables and stable distributed ownership hashes. The caller controls the
+// secret; process-local callers use the randomized hashkey while distributed
+// callers use a protocol-versioned constant.
+func wyhashWithSecret(p unsafe.Pointer, seed, s, secret uint64) uint64 {
 	var a, b uint64
-	seed ^= hashkey[0] ^ m1
+	seed ^= secret ^ m1
 	switch {
 	case s == 0:
 		return seed

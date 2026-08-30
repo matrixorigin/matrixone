@@ -450,6 +450,9 @@ func (c *cluster) createServiceOperators(from int) error {
 				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration = c.options.storeTimeout
 			})
 		}
+		if c.options.testing {
+			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
+		}
 
 		if c.options.preStart != nil {
 			c.options.preStart(s)
@@ -457,6 +460,15 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
+}
+
+func applyTestingHAKeeperBackendReadTimeout(cfg *ServiceConfig) {
+	// The race detector can stall the embedded HAKeeper longer than its
+	// production transport budget. Do not let that transport deadline preempt
+	// the test heartbeat recovery window. Explicit service configuration wins.
+	if cfg.HAKeeperClient.BackendReadTimeout.Duration == 0 {
+		cfg.HAKeeperClient.BackendReadTimeout.Duration = testHAKeeperBackendReadTimeout
+	}
 }
 
 func applyHAKeeperHeartbeatTimeout(

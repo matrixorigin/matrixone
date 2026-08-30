@@ -608,6 +608,71 @@ func TestValueWindowExec_FreeWithResultVec(t *testing.T) {
 	exec.Free()
 }
 
+func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
+	for _, window := range []struct {
+		name string
+		id   int64
+		want []types.StringSource
+	}{
+		{
+			name: "lag",
+			id:   WinIdOfLag,
+			want: []types.StringSource{
+				types.StringSourceExpression,
+				types.StringSourceExpression,
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceSQLPrepare,
+			},
+		},
+		{
+			name: "lead",
+			id:   WinIdOfLead,
+			want: []types.StringSource{
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceSQLPrepare,
+				types.StringSourceCOMStmt,
+				types.StringSourceExpression,
+			},
+		},
+	} {
+		t.Run(window.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(types.T_text.ToType())
+			sources := []types.StringSource{
+				types.StringSourceExpression,
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceSQLPrepare,
+				types.StringSourceCOMStmt,
+			}
+			for i := range sources {
+				require.NoError(t, vector.AppendBytes(input, []byte{byte('a' + i)}, false, mp))
+			}
+			require.NoError(t, input.SetStringSourcesWithMP(sources, mp))
+			exec, err := makeValueWindowExec(mp, window.id, false, []types.Type{types.T_text.ToType()})
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(len(sources)))
+			for group := range sources {
+				for row := range sources {
+					require.NoError(t, exec.Fill(group, row, []*vector.Vector{input}))
+				}
+			}
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			for row, source := range window.want {
+				require.Equal(t, source, results[0].GetStringSourceAt(row))
+			}
+			results[0].Free(mp)
+			exec.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 // TestValueWindowExec_VariousTypes tests different data types for appendValueToVector
 func TestValueWindowExec_VariousTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -1622,6 +1687,45 @@ func TestPercentRank(t *testing.T) {
 	})
 }
 
+func TestRankingWindowUnsignedResults(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	osVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(osVec, []int64{0, 2, 3, 5}, nil, mp))
+	defer osVec.Free(mp)
+
+	tests := []struct {
+		name string
+		id   int64
+		want []uint64
+	}{
+		{name: "rank", id: WinIdOfRank, want: []uint64{1, 1, 3, 4, 4}},
+		{name: "dense_rank", id: WinIdOfDenseRank, want: []uint64{1, 1, 2, 3, 3}},
+		{name: "row_number", id: WinIdOfRowNumber, want: []uint64{1, 2, 3, 4, 5}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exec, err := makeWindowExec(mp, test.id, false)
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(len(test.want)))
+			for row := 0; row < osVec.Length(); row++ {
+				require.NoError(t, exec.Fill(0, row, []*vector.Vector{osVec}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, types.T_uint64, results[0].GetType().Oid)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](results[0]))
+
+			results[0].Free(mp)
+			exec.Free()
+		})
+	}
+}
+
 // TestNtileExec_ParameterValidation tests parameter validation for makeNtileExec
 func TestNtileExec_ParameterValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -2507,7 +2611,7 @@ func TestSingleWindowFailedUnmarshalPreservesOwnedState(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	info := singleAggInfo{
 		aggID:     WinIdOfRowNumber,
-		retType:   types.T_int64.ToType(),
+		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
 	input := vector.NewVec(types.T_int64.ToType())

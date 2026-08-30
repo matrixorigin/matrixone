@@ -2098,6 +2098,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				PrimaryColIdxInBat: colName2Idx[tableDef.Name+"."+col.Name],
 				PrimaryColRelPos:   selectTag,
 				PrimaryColTyp:      col.Typ,
+				// LOAD owns the target table for the whole statement. Mark only
+				// the base-table target so compile can acquire it once before the
+				// pipeline; unique-index targets keep their row-level checks.
+				LockTable: builder.qry.LoadTag,
 			}
 			lockTargets = append(lockTargets, lockTarget)
 			break
@@ -3378,6 +3382,35 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, err
 	}
 
+	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
+}
+
+// castInsertSourceColumn casts one bound source column to its target column
+// type with INSERT assignment semantics (ENUM/SET/GEOMETRY aware). sourceExpr is
+// the projection the column came from, used to recognize display-value
+// projections of MySQL special types.
+func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
+	typ := colDef.Typ
+	switch {
+	case isEnumPlanType(&typ):
+		return funcCastForEnumType(builder.GetContext(), projExpr, typ)
+	case isSetPlanType(&typ):
+		return funcCastForSetType(builder.GetContext(), projExpr, typ)
+	case isGeometryPlanType(&typ):
+		return funcCastForGeometryType(builder.GetContext(), projExpr, typ)
+	default:
+		return builder.forceProjectedAssignmentCastExpr(projExpr, sourceExpr, typ, builder.isInsertIgnore)
+	}
+}
+
+// appendInsertReplaceSourceCasts takes the bound source of an INSERT/REPLACE
+// (a node whose projection yields one column per entry of insertColumns, in
+// order), casts every column to its target column type and appends the
+// pre-insert nodes (defaults, auto-increment, composite keys, ...) plus the
+// per-table dedup/write nodes. It is shared by single-table INSERT/REPLACE and
+// by every target of a multi-table INSERT.
+func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
+	var err error
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
 		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
@@ -3397,27 +3430,9 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				},
 			},
 		}
-		if isEnumPlanType(&tableDef.Cols[colIdx].Typ) {
-			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-		} else if isSetPlanType(&tableDef.Cols[colIdx].Typ) {
-			projExpr, err = funcCastForSetType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-		} else if isGeometryPlanType(&tableDef.Cols[colIdx].Typ) {
-			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-		} else {
-			projExpr, err = builder.forceProjectedAssignmentCastExpr(
-				projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
-			if err != nil {
-				return 0, nil, nil, err
-			}
+		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx])
+		if err != nil {
+			return 0, nil, nil, err
 		}
 		insertColToExpr[column] = projExpr
 	}

@@ -24,6 +24,10 @@ import (
 )
 
 func SingleWindowReturnType(_ []types.Type) types.Type {
+	return types.T_uint64.ToType()
+}
+
+func NtileReturnType(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
 
@@ -52,7 +56,7 @@ func readI64Slice(reader io.Reader, state string) (i64Slice, error) {
 // special structure for a single column window function.
 type singleWindowExec struct {
 	singleAggInfo
-	ret aggResultWithFixedType[int64]
+	ret aggResultWithFixedType[uint64]
 
 	// groups [][]int64
 	groups []i64Slice
@@ -61,7 +65,7 @@ type singleWindowExec struct {
 func makeRankDenseRankRowNumber(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &singleWindowExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mp, info.retType, info.emptyNull, 0, false),
+		ret:           initAggResultWithFixedTypeResult[uint64](mp, info.retType, info.emptyNull, 0, false),
 	}
 }
 
@@ -381,7 +385,7 @@ func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 			continue
 		}
 
-		sn := int64(1)
+		sn := uint64(1)
 		for i := 1; i < len(group); i++ {
 			m := int(group[i] - group[i-1])
 
@@ -390,7 +394,7 @@ func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 
 				values[x][y] = sn
 			}
-			sn += int64(m)
+			sn += uint64(m)
 		}
 	}
 	return exec.ret.flushAll(), nil
@@ -405,7 +409,7 @@ func (exec *singleWindowExec) flushDenseRank() ([]*vector.Vector, error) {
 			continue
 		}
 
-		sn := int64(1)
+		sn := uint64(1)
 		for i := 1; i < len(group); i++ {
 			m := int(group[i] - group[i-1])
 
@@ -433,7 +437,7 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 		for j := int64(1); j <= n; j++ {
 			x, y := exec.ret.updateNextAccessIdx(idx)
 
-			values[x][y] = j
+			values[x][y] = uint64(j)
 			idx++
 		}
 	}
@@ -874,6 +878,7 @@ type valueWindowExec struct {
 type valueEntry struct {
 	isNull       bool
 	stringDomain types.RuntimeStringDomain
+	stringSource types.StringSource
 	data         []byte
 	kind         vector.PrepareParamKind
 }
@@ -905,7 +910,8 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 	vec := vectors[0]
 	entry := &valueEntry{
-		isNull: vec.IsNull(uint64(row)),
+		isNull:       vec.IsNull(uint64(row)),
+		stringSource: vec.GetStringSourceAt(row),
 	}
 
 	if !entry.isNull {
@@ -1053,7 +1059,7 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 		} else {
 			entry := frame[lagPos]
 			if entry.isNull {
-				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				if err := exec.appendNullEntry(result, entry); err != nil {
 					return nil, err
 				}
 			} else {
@@ -1106,7 +1112,7 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 		} else {
 			entry := frame[leadPos]
 			if entry.isNull {
-				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				if err := exec.appendNullEntry(result, entry); err != nil {
 					return nil, err
 				}
 			} else {
@@ -1141,7 +1147,7 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 		// Get the first value in the frame
 		entry := frame[0]
 		if entry.isNull {
-			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+			if err := exec.appendNullEntry(result, entry); err != nil {
 				return nil, err
 			}
 		} else {
@@ -1175,7 +1181,7 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 		// Get the last value in the frame
 		entry := frame[len(frame)-1]
 		if entry.isNull {
-			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+			if err := exec.appendNullEntry(result, entry); err != nil {
 				return nil, err
 			}
 		} else {
@@ -1203,7 +1209,18 @@ func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valu
 	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 		return err
 	}
-	return result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp)
+	if err := result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp); err != nil {
+		return err
+	}
+	return result.SetStringSourceAtWithMP(row, entry.stringSource, exec.mp)
+}
+
+func (exec *valueWindowExec) appendNullEntry(result *vector.Vector, entry *valueEntry) error {
+	row := result.Length()
+	if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+		return err
+	}
+	return result.SetStringSourceAtWithMP(row, entry.stringSource, exec.mp)
 }
 
 // appendValueToVector appends a value to the result vector based on the type

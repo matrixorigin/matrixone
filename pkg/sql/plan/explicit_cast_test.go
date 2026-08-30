@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
+func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 	ctx := context.Background()
 	source := makePlan2StringConstExprWithType("1")
 	targetType := types.T_int64.ToType()
@@ -35,15 +35,133 @@ func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
 	require.NoError(t, err)
 	explicit, err := appendExplicitCastBeforeExpr(ctx, DeepCopyExpr(source), target)
 	require.NoError(t, err)
+	syntaxExplicit, err := appendSyntaxExplicitCastBeforeExpr(ctx, DeepCopyExpr(source), target)
+	require.NoError(t, err)
 
 	ordinaryFunction := ordinary.GetF().GetFunc()
 	explicitFunction := explicit.GetF().GetFunc()
+	syntaxExplicitFunction := syntaxExplicit.GetF().GetFunc()
 	require.Equal(t, "cast", ordinaryFunction.GetObjName())
 	require.Equal(t, "cast", explicitFunction.GetObjName())
+	require.Equal(t, "cast", syntaxExplicitFunction.GetObjName())
 	_, ordinaryOverload := function.DecodeOverloadID(ordinaryFunction.GetObj())
 	_, explicitOverload := function.DecodeOverloadID(explicitFunction.GetObj())
+	_, syntaxExplicitOverload := function.DecodeOverloadID(syntaxExplicitFunction.GetObj())
 	require.Equal(t, int32(0), ordinaryOverload)
 	require.Equal(t, int32(1), explicitOverload)
+	require.Equal(t, int32(0), syntaxExplicitOverload,
+		"syntax provenance must not allocate a wire-visible function overload")
+	require.True(t, syntaxExplicit.GetF().GetSyntaxExplicitCast())
+	_, err = function.GetFunctionById(ctx, syntaxExplicitFunction.GetObj())
+	require.NoError(t, err, "the expression must execute on the legacy CAST registry")
+
+	wire, err := syntaxExplicit.Marshal()
+	require.NoError(t, err)
+	roundTrip := &Expr{}
+	require.NoError(t, roundTrip.Unmarshal(wire))
+	require.True(t, roundTrip.GetF().GetSyntaxExplicitCast())
+	_, roundTripOverload := function.DecodeOverloadID(roundTrip.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(0), roundTripOverload)
+	require.True(t, DeepCopyExpr(roundTrip).GetF().GetSyntaxExplicitCast())
+}
+
+func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+	}{
+		{name: "="},
+		{name: "<=>"},
+		{name: "!="},
+		{name: "<>"},
+		{name: "<"},
+		{name: "<="},
+		{name: ">"},
+		{name: ">="},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := makePlan2StringConstExprWithType("MO      ")
+			leftType := types.New(types.T_char, 8, 0)
+			left.Typ = makePlan2Type(&leftType)
+			args := []*Expr{left, makePlan2StringConstExprWithType("MO")}
+			comparison, err := BindFuncExprImplByPlanExpr(ctx, test.name, args)
+			require.NoError(t, err)
+			leftCast := comparison.GetF().GetArgs()[0].GetF()
+			require.NotNil(t, leftCast)
+			require.Equal(t, "cast", leftCast.GetFunc().GetObjName())
+			_, overload := function.DecodeOverloadID(leftCast.GetFunc().GetObj())
+			require.Equal(t, int32(2), overload)
+		})
+	}
+}
+
+func TestPromotedCharComparisonUsesDedicatedCastOverload(t *testing.T) {
+	ctx := context.Background()
+	charType := types.New(types.T_char, 8, 0)
+	varcharType := types.New(types.T_varchar, 8, 0)
+	charValue := makePlan2StringConstExprWithType("MO      ")
+	charValue.Typ = makePlan2Type(&charType)
+	varcharValue := makePlan2StringConstExprWithType("MO")
+	varcharValue.Typ = makePlan2Type(&varcharType)
+
+	promoted, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{charValue, varcharValue})
+	require.NoError(t, err)
+	require.True(t, hasPadSpaceStringProvenance(promoted), promoted.String())
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{promoted, makePlan2StringConstExprWithType("MO")})
+	require.NoError(t, err)
+
+	leftCast := comparison.GetF().GetArgs()[0].GetF()
+	require.NotNil(t, leftCast)
+	require.Equal(t, "cast", leftCast.GetFunc().GetObjName())
+	_, overload := function.DecodeOverloadID(leftCast.GetFunc().GetObj())
+	require.Equal(t, int32(2), overload)
+}
+
+func TestValueSelectingPromotedCharComparisonUsesDedicatedCastOverload(t *testing.T) {
+	ctx := context.Background()
+	charType := types.New(types.T_char, 8, 0)
+	varcharType := types.New(types.T_varchar, 8, 0)
+
+	for _, tc := range []struct {
+		name string
+		fn   string
+	}{
+		{name: "case", fn: "case"},
+		{name: "if", fn: "if"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			charValue := makePlan2StringConstExprWithType("MO      ")
+			charValue.Typ = makePlan2Type(&charType)
+			varcharValue := makePlan2StringConstExprWithType("MO")
+			varcharValue.Typ = makePlan2Type(&varcharType)
+			promoted, err := BindFuncExprImplByPlanExpr(ctx, tc.fn, []*Expr{
+				makePlan2BoolConstExprWithType(true), charValue, varcharValue,
+			})
+			require.NoError(t, err)
+			require.True(t, hasPadSpaceStringProvenance(promoted), promoted.String())
+			comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{promoted, makePlan2StringConstExprWithType("MO")})
+			require.NoError(t, err)
+
+			leftCast := comparison.GetF().GetArgs()[0].GetF()
+			require.NotNil(t, leftCast)
+			_, overload := function.DecodeOverloadID(leftCast.GetFunc().GetObj())
+			require.Equal(t, int32(2), overload)
+		})
+	}
+}
+
+func TestSetOperationCharCastUsesDedicatedOverload(t *testing.T) {
+	ctx := context.Background()
+	sourceType := types.New(types.T_char, 4, 0)
+	targetType := types.New(types.T_char, 8, 0)
+	source := makePlan2StringConstExprWithType("MO")
+	source.Typ = makePlan2Type(&sourceType)
+
+	cast, err := appendSetOperationCastBeforeExpr(ctx, source, makePlan2TypeValue(&targetType))
+	require.NoError(t, err)
+	require.Equal(t, "cast", cast.GetF().GetFunc().GetObjName())
+	_, overload := function.DecodeOverloadID(cast.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(3), overload)
 }
 
 func TestUseExplicitCastOverload(t *testing.T) {
@@ -55,6 +173,8 @@ func TestUseExplicitCastOverload(t *testing.T) {
 		{name: "signed", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "signed"}, want: true},
 		{name: "signed integer", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "integer"}, want: true},
 		{name: "unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), Unsigned: true}, want: true},
+		{name: "float", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_FLOAT), FamilyString: "float"}, want: true},
+		{name: "double", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_DOUBLE), FamilyString: "double"}, want: true},
 		{name: "decimal", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL), FamilyString: "decimal"}, want: true},
 		{name: "char", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_STRING), FamilyString: "char"}, want: true},
 		{name: "varchar", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VARCHAR), FamilyString: "varchar"}, want: true},

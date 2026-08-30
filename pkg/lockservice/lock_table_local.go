@@ -1119,16 +1119,18 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 	return nil
 }
 
-// setTableDefChangedAtLocked only sends the retained fence to transactions
-// that could have resolved a plan before it committed. SnapShotTs is the
-// transaction creation timestamp; it is a conservative lower bound for every
-// statement snapshot in that transaction. Fresh transactions therefore keep
-// the ordinary remote lock response allocation- and wire-free, while older
-// transactions still receive the marker for the precise statement-snapshot
-// check on CN.
+// setTableDefChangedAtLocked only sends the retained fence to callers whose
+// compiled plan predates it. Callers without an older cross-transaction plan
+// binding (including older senders during rolling upgrade) fall back to the
+// transaction creation time. SnapShotTs itself retains its separate
+// rolling-restart admission semantics.
 func (l *localLockTable) setTableDefChangedAtLocked(c *lockContext) {
 	changedAt := l.mu.tableDefChangedAt
-	if changedAt != nil && c.opts.SnapShotTs.Less(*changedAt) {
+	planSnapshotTS := c.opts.SnapShotTs
+	if c.opts.PlanSnapshotTs != nil {
+		planSnapshotTS = *c.opts.PlanSnapshotTs
+	}
+	if changedAt != nil && planSnapshotTS.Less(*changedAt) {
 		c.result.TableDefChangedAt = changedAt
 	}
 }
@@ -1208,6 +1210,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so
 	// waiter_events.check() won't remove it (check removes only non-blocking).
 	c.txn.setBlocked(c.w, l.logger)
+	notifyWaiterEnqueuedForTest(l.bind.Table, c.w.txn.TxnID, c.w.waitFor)
 	l.addOwnerLocalWaitEdgeLocked(c, conflictWith)
 	l.events.add(c)
 
@@ -1659,6 +1662,10 @@ func (l *localLockTable) addRangeLockLocked(
 		mc.rollback()
 		return nil, Lock{}, err
 	}
+	firstBudgetCoarsening := false
+	if c.opts.replaceTxnLocks {
+		firstBudgetCoarsening = prepared.prepareMarkCoarsened()
+	}
 	defer prepared.close()
 
 	startLock, endLock := newRangeLock(l.logger, c)
@@ -1684,16 +1691,31 @@ func (l *localLockTable) addRangeLockLocked(
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 
-	if n := len(mc.mergedLocks); n > 0 {
+	if n := len(mc.mergedLocks); n > 0 || firstBudgetCoarsening {
 		h := c.txn.getHoldLocksLocked(l.bind.Group)
 		v, ok := h.tableKeys[l.bind.Table]
 		if ok {
-			l.logger.Info("range lock merged",
-				zap.Uint64("table", l.bind.OriginTable),
-				zap.String("txn", c.txn.txnKey),
-				zap.Int("merged", n),
-				zap.Int("current", v.mustGet().len()),
-			)
+			if firstBudgetCoarsening || (!c.opts.replaceTxnLocks && n > 0) {
+				// Keep one production-visible signal for capacity diagnosis. Later
+				// budget extensions are routine and stay at Debug to avoid bulk-DML
+				// log amplification proportional to the number of execution batches.
+				// Explicit user ranges retain their existing Info observability.
+				l.logger.Info("range lock merged",
+					zap.Uint64("table", l.bind.OriginTable),
+					zap.String("txn", c.txn.txnKey),
+					zap.Bool("budget-coarsening", c.opts.replaceTxnLocks),
+					zap.Int("merged", n),
+					zap.Int("current", v.mustGet().len()),
+				)
+			} else if l.logger.Enabled(zap.DebugLevel) {
+				l.logger.Debug("range lock merged",
+					zap.Uint64("table", l.bind.OriginTable),
+					zap.String("txn", c.txn.txnKey),
+					zap.Bool("budget-coarsening", c.opts.replaceTxnLocks),
+					zap.Int("merged", n),
+					zap.Int("current", v.mustGet().len()),
+				)
+			}
 		}
 	}
 

@@ -340,11 +340,12 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode            []*BindContext
-	nameByColRef         map[[2]int32]string
-	protectedScans       map[int32]int
-	updateTargetScans    map[int32]struct{}
-	projectSpecialGuards map[int32]*specialIndexGuard
+	ctxByNode             []*BindContext
+	windowValidationScans []*plan.Node
+	nameByColRef          map[[2]int32]string
+	protectedScans        map[int32]int
+	updateTargetScans     map[int32]struct{}
+	projectSpecialGuards  map[int32]*specialIndexGuard
 	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
 	// will anchor the vector rewrite on. applyIndices walks children first, so without
 	// this the SORT-anchored entry point would claim the classic
@@ -365,7 +366,16 @@ type QueryBuilder struct {
 	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
 	// LIMIT and DML deduplication must stay on their dedicated paths.
 	userWindowNodes          map[int32]struct{}
+	internalTopNWindows      map[int32]struct{}
 	partitionTopNWindowNodes map[int32]struct{}
+	// distinctKeyLocalPreAggs marks the first (group keys, DISTINCT key)
+	// Group in Path B. It must retain local ownership so duplicate rows are
+	// removed before any exchange.
+	distinctKeyLocalPreAggs map[*plan.Node]struct{}
+	// distinctKeyShuffleCols marks the second pair Group and the DISTINCT-key
+	// column that owns its exchange. Both maps are planner-local; HashMapStats
+	// carries the final physical decision after shuffle planning.
+	distinctKeyShuffleCols map[*plan.Node]int32
 
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children

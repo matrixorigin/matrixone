@@ -740,14 +740,16 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId                 uuid.UUID
-	statementRuntimeIgnore bool
-	planSnapshotTS         timestamp.Timestamp
-	hasPlanSnapshotTS      bool
-	prepareParams          pipeline.PrepareParamInfo
-	affectedRows           int64
-	remoteFragmentCounts   map[string]uint32
-	remoteExecutionID      uuid.UUID
+	StmtId                     uuid.UUID
+	statementRuntimeIgnore     bool
+	planSnapshotTS             timestamp.Timestamp
+	hasPlanSnapshotTS          bool
+	planGenerationReused       bool
+	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	prepareParams              pipeline.PrepareParamInfo
+	affectedRows               int64
+	remoteFragmentCounts       map[string]uint32
+	remoteExecutionID          uuid.UUID
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -920,7 +922,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
+		proc.SetPlanGenerationReused(pHelper.planGenerationReused)
 	}
+	proc.SetStringShuffleHashAlgorithm(pHelper.stringShuffleHashAlgorithm)
 	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
 		proc.GetService(),
 		int(pHelper.prepareParams.Length),
@@ -1088,12 +1092,13 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote results")
 	}
-	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
+	if b.HasPrepareParamKindMetadataWithoutStringSources() && version < defines.MORPCVersion12 {
 		return moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote results")
 	}
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithPrepareParamKinds(&transport, false)
+	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
+		&transport, false, version >= defines.MORPCVersion37)
 	if err != nil {
 		return err
 	}
@@ -1211,20 +1216,28 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
+		procInfo.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return processHelper{}, err
+	}
 
 	result := processHelper{
-		id:                     procInfo.Id,
-		lim:                    process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:               procInfo.UnixTime,
-		accountId:              procInfo.AccountId,
-		txnClient:              cli,
-		affectedRows:           procInfo.AffectedRows,
-		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
-		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
+		id:                         procInfo.Id,
+		lim:                        process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:                   procInfo.UnixTime,
+		accountId:                  procInfo.AccountId,
+		txnClient:                  cli,
+		affectedRows:               procInfo.AffectedRows,
+		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
+		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {
 		result.planSnapshotTS = *procInfo.PlanSnapshotTs
 		result.hasPlanSnapshotTS = true
+		result.planGenerationReused = procInfo.PlanGenerationReused
 	}
 	if len(procInfo.RemoteExecutionId) > 0 {
 		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)

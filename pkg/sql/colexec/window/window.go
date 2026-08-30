@@ -260,6 +260,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
+			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
 			for i := range window.Aggs {
 				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
 					arg := ctr.aggVecs[i].Vec[0]
@@ -488,24 +491,39 @@ func (ctr *container) processAggregateFuncRange(
 			partitionStart, partitionEnd = buildPartitionInterval(ctr.ps, j, n)
 		}
 
-		left, right, err := ctr.buildInterval(
-			j, partitionStart, partitionEnd, frame)
+		left, right, selection, err := ctr.buildIntervalRows(
+			proc, j, partitionStart, partitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
-		if right < partitionStart || left > partitionEnd || left >= right {
+		if selection == nil && (right < partitionStart || left > partitionEnd || left >= right) {
 			continue
 		}
 		left = max(left, partitionStart)
 		right = min(right, partitionEnd)
 
 		group := j - outputStart
-		for k := left; k < right; k++ {
-			if err = checkCanceled(proc, k-left); err != nil {
-				return nil, err
+		if selection == nil {
+			for k := left; k < right; k++ {
+				if err = checkCanceled(proc, k-left); err != nil {
+					return nil, err
+				}
+				if err = ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
 			}
-			if err = ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
-				return nil, err
+		} else {
+			iteration := 0
+			for _, span := range selection.spans {
+				for frameRow := span.start; frameRow < span.end; frameRow++ {
+					if err = checkCanceled(proc, iteration); err != nil {
+						return nil, err
+					}
+					iteration++
+					if err = ctr.batAggs[idx].Fill(group, frameRow, ctr.aggVecs[idx].Vec); err != nil {
+						return nil, err
+					}
+				}
 			}
 		}
 	}
@@ -727,7 +745,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			ctr.runningRight = partitionStart
 		}
 
-		left, right, err := ctr.buildInterval(j, partitionStart, currentPartitionEnd, frame)
+		left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
@@ -810,9 +828,9 @@ func (ctr *container) processOrderFuncRange(
 		}
 		return vec, nil
 	}
-	values := make([]int64, outputEnd-outputStart)
 	switch funcName {
 	case "row_number":
+		values := make([]uint64, outputEnd-outputStart)
 		for j := outputStart; j < outputEnd; j++ {
 			if err := checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
@@ -821,9 +839,16 @@ func (ctr *container) processOrderFuncRange(
 			if ctr.ps != nil {
 				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
 			}
-			values[j-outputStart] = int64(j - partitionStart + 1)
+			values[j-outputStart] = uint64(j - partitionStart + 1)
 		}
+		vec := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	case "ntile":
+		values := make([]int64, outputEnd-outputStart)
 		bucketCount, err := ctr.ntileBucketCount(idx)
 		if err != nil {
 			return nil, err
@@ -834,7 +859,14 @@ func (ctr *container) processOrderFuncRange(
 			}
 			values[j-outputStart] = ntileBucket(int64(j), int64(n), bucketCount)
 		}
+		vec := vector.NewVec(types.T_int64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	case "rank", "dense_rank":
+		values := make([]uint64, outputEnd-outputStart)
 		peerIndex, peerStart, peerEnd := peerInterval(ctr.os, outputStart, n)
 		for j := outputStart; j < outputEnd; j++ {
 			if err := checkCanceled(proc, j-outputStart); err != nil {
@@ -849,20 +881,20 @@ func (ctr *container) processOrderFuncRange(
 				}
 			}
 			if funcName == "rank" {
-				values[j-outputStart] = int64(peerStart + 1)
+				values[j-outputStart] = uint64(peerStart + 1)
 			} else {
-				values[j-outputStart] = int64(peerIndex + 1)
+				values[j-outputStart] = uint64(peerIndex + 1)
 			}
 		}
+		vec := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("unsupported order window function: %s", funcName)
 	}
-	vec := vector.NewVec(types.T_int64.ToType())
-	if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
-		return nil, err
-	}
-	return vec, nil
 }
 
 func peerInterval(boundaries []int64, row int, rowCount int) (index, start, end int) {
@@ -927,6 +959,32 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	return ctr.processValueFuncRange(idx, ap, proc, 0, ctr.bat.RowCount())
 }
 
+// validateLagLeadOffsets checks the complete evaluated offset vector before
+// the first output chunk is emitted. Literal offsets are rejected by the
+// binder; this pass covers prepared parameters and row-dependent expressions.
+func (ctr *container) validateLagLeadOffsets(idx int, ap *Window, proc *process.Process) error {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if (w.Name != "lag" && w.Name != "lead") ||
+		idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) < 2 {
+		return nil
+	}
+
+	offsetVec := ctr.aggVecs[idx].Vec[1]
+	rows := offsetVec.Length()
+	if offsetVec.IsConst() && rows > 1 {
+		rows = 1
+	}
+	for row := 0; row < rows; row++ {
+		if err := checkCanceled(proc, row); err != nil {
+			return err
+		}
+		if _, err := getLagLeadOffsetFromVec(proc.Ctx, w.Name, offsetVec, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ctr *container) processValueFuncRange(
 	idx int,
 	ap *Window,
@@ -955,11 +1013,14 @@ func (ctr *container) processValueFuncRange(
 	switch funcName {
 	case "lag":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -970,15 +1031,12 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			offset, ok := constOffset, constOK
+			offset := constOffset
 			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
-			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			start, _ := 0, n
 			if ctr.ps != nil {
@@ -998,11 +1056,14 @@ func (ctr *container) processValueFuncRange(
 
 	case "lead":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -1013,15 +1074,12 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			offset, ok := constOffset, constOK
+			offset := constOffset
 			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
-			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			_, end := 0, n
 			if ctr.ps != nil {
@@ -1048,7 +1106,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1057,6 +1115,16 @@ func (ctr *container) processValueFuncRange(
 			}
 			if right > end {
 				right = end
+			}
+			if selection != nil {
+				if len(selection.spans) == 0 {
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[0].start), proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if left >= right {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -1078,7 +1146,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1087,6 +1155,16 @@ func (ctr *container) processValueFuncRange(
 			}
 			if right > end {
 				right = end
+			}
+			if selection != nil {
+				if len(selection.spans) == 0 {
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[len(selection.spans)-1].end-1), proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if left >= right {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -1133,7 +1211,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1142,6 +1220,17 @@ func (ctr *container) processValueFuncRange(
 			}
 			if right > end {
 				right = end
+			}
+			if selection != nil {
+				frameRow, ok := selection.nth(int(nthVal))
+				if !ok {
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+				} else if err := localResult.UnionOne(srcVec, int64(frameRow), proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			if left >= right || nthVal > int64(right-left) {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -1215,6 +1304,17 @@ func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
 	}
 }
 
+func getLagLeadOffsetFromVec(ctx context.Context, name string, vec *vector.Vector, row int) (int64, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	offset, ok := getInt64FromVec(vec, row)
+	if !ok || offset < 0 {
+		return 0, moerr.NewWrongArguments(ctx, name)
+	}
+	return offset, nil
+}
+
 // appendDefaultOrNull appends the default value (if provided) or NULL to the result vector.
 func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowIdx int, mp *mpool.MPool) error {
 	if defaultVec == nil {
@@ -1225,13 +1325,10 @@ func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowId
 	if !defaultVec.IsConst() {
 		srcRow = int64(rowIdx)
 	}
-	if defaultVec.IsNull(uint64(srcRow)) {
-		return vector.AppendAny(result, nil, true, mp)
-	}
 	return result.UnionOne(defaultVec, srcRow, mp)
 }
 
-func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
+func (ctr *container) buildInterval(proc *process.Process, rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
 	// FrameClause_ROWS
 	if frame.Type == plan.FrameClause_ROWS {
 		start, end = ctr.buildRowsInterval(rowIdx, start, end, frame)
@@ -1243,7 +1340,404 @@ func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameCla
 	}
 
 	// FrameClause_Range
-	return ctr.buildRangeInterval(rowIdx, start, end, frame)
+	return ctr.buildRangeIntervalWithLocation(windowSessionLocation(proc), rowIdx, start, end, frame)
+}
+
+// buildIntervalRows retains the fast contiguous interval representation for
+// ordinary RANGE frames. A TIMESTAMP frame whose session-civil bounds cross a
+// fall-back fold instead returns its qualifying spans in window order: local
+// civil membership can then be split into multiple instant-sorted spans.
+func (ctr *container) buildIntervalRows(
+	proc *process.Process,
+	rowIdx, start, end int,
+	frame *plan.FrameClause,
+) (left, right int, selection *timestampRangeSelection, err error) {
+	left, right, err = ctr.buildInterval(proc, rowIdx, start, end, frame)
+	if err != nil || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) != 1 {
+		return left, right, nil, err
+	}
+
+	vec := ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0]
+	loc := windowSessionLocation(proc)
+	selection, err = ctr.timestampRangeSelection(proc, loc, rowIdx, start, end, vec, frame)
+	return left, right, selection, err
+}
+
+func (ctr *container) timestampRangeSelection(
+	proc *process.Process,
+	loc *time.Location,
+	rowIdx, start, end int,
+	vec *vector.Vector,
+	frame *plan.FrameClause,
+) (*timestampRangeSelection, error) {
+	// A const vector stores one physical value for all logical rows. It cannot
+	// cross a timezone transition, so the ordinary RANGE path already has the
+	// complete peer interval and fold indexing must not address it by logical
+	// row position.
+	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) {
+		return nil, nil
+	}
+	index, err := ctr.timestampCivilOrderIndex(proc, loc, start, end, vec, ctr.rangeDescending())
+	if err != nil || !index.hasFold {
+		return nil, err
+	}
+
+	desc := ctr.rangeDescending()
+	startBoundary, hasStart, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.Start, desc)
+	if err != nil {
+		return nil, err
+	}
+	endBoundary, hasEnd, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.End, desc)
+	if err != nil {
+		return nil, err
+	}
+
+	// RANGE bounds are expressed in ORDER BY direction. Convert finite bounds
+	// into the natural civil-time order used for membership; an unbounded side
+	// remains open. This matters at a fall-back fold, where (for example)
+	// UNBOUNDED PRECEDING ... CURRENT ROW is not necessarily an instant prefix.
+	var low, high types.Datetime
+	hasLow, hasHigh := false, false
+	if hasStart && hasEnd {
+		low, high = startBoundary, endBoundary
+		if low > high {
+			low, high = high, low
+		}
+		hasLow, hasHigh = true, true
+	} else if hasStart {
+		if desc {
+			high, hasHigh = startBoundary, true
+		} else {
+			low, hasLow = startBoundary, true
+		}
+	} else if hasEnd {
+		if desc {
+			low, hasLow = endBoundary, true
+		} else {
+			high, hasHigh = endBoundary, true
+		}
+	}
+
+	if !hasLow && !hasHigh {
+		return nil, nil
+	}
+
+	selection := &timestampRangeSelection{}
+	// The civil spans deliberately omit NULL order keys. A NULL peer can still
+	// belong to a frame with an unbounded side: it is included only when that
+	// side reaches the NULL end of the already sorted window order.
+	nullsLast := ctr.rangeNullsLast()
+	if frame.Start.UnBounded && !nullsLast && index.nullPrefixEnd > start {
+		selection.spans = append(selection.spans, timestampCivilOrderSpan{start: start, end: index.nullPrefixEnd})
+	}
+	for _, span := range index.spans {
+		left, right := timestampCivilSpanBounds(vec, loc, span, desc, low, hasLow, high, hasHigh)
+		if left < right {
+			selection.spans = append(selection.spans, timestampCivilOrderSpan{start: left, end: right})
+		}
+	}
+	if frame.End.UnBounded && nullsLast && index.nullSuffixStart < end {
+		selection.spans = append(selection.spans, timestampCivilOrderSpan{start: index.nullSuffixStart, end: end})
+	}
+	return selection, nil
+}
+
+func (ctr *container) rangeDescending() bool {
+	return len(ctr.desc) > 0 && ctr.desc[len(ctr.desc)-1]
+}
+
+func (ctr *container) rangeNullsLast() bool {
+	return len(ctr.nullsLast) > 0 && ctr.nullsLast[len(ctr.nullsLast)-1]
+}
+
+func (ctr *container) timestampCivilOrderIndex(
+	proc *process.Process,
+	loc *time.Location,
+	start, end int,
+	vec *vector.Vector,
+	desc bool,
+) (*timestampCivilOrderIndex, error) {
+	key := timestampCivilOrderKey{vec: vec, loc: loc, start: start, end: end, desc: desc}
+	if index, ok := ctr.timestampCivilOrder[key]; ok {
+		return index, nil
+	}
+	if ctr.timestampCivilOrder == nil {
+		ctr.timestampCivilOrder = make(map[timestampCivilOrderKey]*timestampCivilOrderIndex)
+	}
+
+	index := &timestampCivilOrderIndex{nullPrefixEnd: start, nullSuffixStart: end}
+	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+	// A sparse vector can cross a fall-back transition without its sampled
+	// civil values reversing (01:00 EDT followed by 01:30 EST, for example).
+	// Find transitions from the instant range itself rather than inferring them
+	// solely from adjacent samples.
+	var firstTimestamp, lastTimestamp types.Timestamp
+	haveFirst, haveLast := false, false
+	for i := start; i < end; i++ {
+		if err := checkCanceled(proc, i-start); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		index.nullPrefixEnd = i
+		if col[i] == types.ZeroTimestamp {
+			continue
+		}
+		firstTimestamp, haveFirst = col[i], true
+		break
+	}
+	for i := end - 1; i >= start; i-- {
+		if err := checkCanceled(proc, end-1-i); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		index.nullSuffixStart = i + 1
+		if col[i] == types.ZeroTimestamp {
+			continue
+		}
+		lastTimestamp, haveLast = col[i], true
+		break
+	}
+	foldTransitions, err := timestampCivilFoldTransitions(proc, loc, firstTimestamp, lastTimestamp, haveFirst && haveLast)
+	if err != nil {
+		return nil, err
+	}
+	index.hasFold = len(foldTransitions) != 0
+
+	var previous types.Datetime
+	var previousTimestamp types.Timestamp
+	var previousOffset types.Datetime
+	havePrevious := false
+	spanStart := -1
+	transition := 0
+	if desc {
+		transition = len(foldTransitions) - 1
+	}
+	for i := start; i < end; i++ {
+		if err := checkCanceled(proc, i-start); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) {
+			if spanStart >= 0 {
+				index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+				spanStart = -1
+			}
+			havePrevious = false
+			continue
+		}
+		civil := col[i].ToDatetime(loc)
+		if spanStart < 0 {
+			spanStart = i
+		}
+		// Keep a sampled offset proof alongside the ZoneBounds-derived
+		// transition list. ZoneBounds handles sparse and recurring transitions,
+		// while an actual offset decrease between adjacent materialized rows is
+		// an independent, no-extra-scan confirmation that this input crosses a
+		// fold. In particular, it must not be lost when the civil samples happen
+		// to increase or compare equal on opposite sides of the repeated hour.
+		offset := civil - types.Datetime(col[i])
+		crossedFold := false
+		if havePrevious {
+			if !desc {
+				for transition < len(foldTransitions) && previousTimestamp < foldTransitions[transition] && col[i] >= foldTransitions[transition] {
+					crossedFold = true
+					transition++
+				}
+			} else {
+				for transition >= 0 && previousTimestamp >= foldTransitions[transition] && col[i] < foldTransitions[transition] {
+					crossedFold = true
+					transition--
+				}
+			}
+			if (!desc && offset < previousOffset) || (desc && offset > previousOffset) {
+				crossedFold = true
+				index.hasFold = true
+			}
+		}
+		civilReversed := havePrevious && ((!desc && civil < previous) || (desc && civil > previous))
+		if civilReversed {
+			index.hasFold = true
+		}
+		if havePrevious && (crossedFold || civilReversed) {
+			index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+			spanStart = i
+		}
+		previous, previousTimestamp, previousOffset, havePrevious = civil, col[i], offset, true
+	}
+	if spanStart >= 0 {
+		index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: end})
+	}
+	ctr.timestampCivilOrder[key] = index
+	return index, nil
+}
+
+// timestampCivilFoldTransitions returns every UTC-offset decrease in the
+// instant range. ZoneBounds follows a location's recurring rules, so this
+// remains correct for sparse inputs and for ranges beyond its explicit zone
+// transition table.
+func timestampCivilFoldTransitions(
+	proc *process.Process,
+	loc *time.Location,
+	minTimestamp, maxTimestamp types.Timestamp,
+	haveTimestamp bool,
+) ([]types.Timestamp, error) {
+	if !haveTimestamp || loc == nil || minTimestamp == types.ZeroTimestamp || maxTimestamp == types.ZeroTimestamp {
+		return nil, nil
+	}
+	if minTimestamp > maxTimestamp {
+		minTimestamp, maxTimestamp = maxTimestamp, minTimestamp
+	}
+	probe := time.UnixMicro(int64(minTimestamp) - int64(types.UnixToTimestamp(0))).In(loc)
+	maxInstant := time.UnixMicro(int64(maxTimestamp) - int64(types.UnixToTimestamp(0)))
+	var transitions []types.Timestamp
+	for i := 0; ; i++ {
+		if err := checkCanceled(proc, i); err != nil {
+			return nil, err
+		}
+		_, next := probe.ZoneBounds()
+		if next.IsZero() || next.After(maxInstant) {
+			break
+		}
+		_, beforeOffset := time.UnixMicro(next.UnixMicro() - 1).In(loc).Zone()
+		_, afterOffset := next.In(loc).Zone()
+		if afterOffset < beforeOffset {
+			transitions = append(transitions, types.UnixMicroToTimestamp(next.UnixMicro()))
+		}
+		if !next.After(probe) {
+			break
+		}
+		probe = next.In(loc)
+	}
+	return transitions, nil
+}
+
+func (selection *timestampRangeSelection) nth(n int) (int, bool) {
+	for _, span := range selection.spans {
+		if n <= span.end-span.start {
+			return span.start + n - 1, true
+		}
+		n -= span.end - span.start
+	}
+	return 0, false
+}
+
+func timestampCivilSpanBounds(
+	vec *vector.Vector,
+	loc *time.Location,
+	span timestampCivilOrderSpan,
+	desc bool,
+	low types.Datetime,
+	hasLow bool,
+	high types.Datetime,
+	hasHigh bool,
+) (int, int) {
+	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+	left, right := span.start, span.end
+	if !desc {
+		if hasLow {
+			left = timestampCivilLowerBound(col, loc, span.start, span.end, low)
+		}
+		if hasHigh {
+			right = timestampCivilUpperBound(col, loc, left, span.end, high)
+		}
+		return left, right
+	}
+	if hasHigh {
+		left = timestampCivilDescendingLowerBound(col, loc, span.start, span.end, high)
+	}
+	if hasLow {
+		right = timestampCivilDescendingUpperBound(col, loc, left, span.end, low)
+	}
+	return left, right
+}
+
+func timestampCivilLowerBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) < target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilUpperBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) <= target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilDescendingLowerBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) > target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilDescendingUpperBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) >= target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampRangeCivilBoundary(
+	loc *time.Location,
+	vec *vector.Vector,
+	rowIdx int,
+	bound *plan.FrameBound,
+	desc bool,
+) (types.Datetime, bool, error) {
+	if bound.UnBounded {
+		return 0, false, nil
+	}
+	current := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[rowIdx].ToDatetime(loc)
+	if bound.Type == plan.FrameBound_CURRENT_ROW {
+		return current, true, nil
+	}
+
+	diff := bound.Val.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+	unit := bound.Val.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+	add := bound.Type == plan.FrameBound_FOLLOWING
+	if desc {
+		add = !add
+	}
+	if add {
+		result, err := doDatetimeAdd(current, diff, unit)
+		return result, true, err
+	}
+	result, err := doDatetimeSub(current, diff, unit)
+	return result, true, err
+}
+
+func windowSessionLocation(proc *process.Process) *time.Location {
+	if proc != nil {
+		if sessionInfo := proc.GetSessionInfo(); sessionInfo != nil && sessionInfo.TimeZone != nil {
+			return sessionInfo.TimeZone
+		}
+	}
+	return time.Local
 }
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
@@ -1293,6 +1787,10 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 }
 
 func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+	return ctr.buildRangeIntervalWithLocation(time.Local, rowIdx, start, end, frame)
+}
+
+func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
 	var err error
 	var desc bool
 	if len(ctr.desc) > 0 {
@@ -1303,20 +1801,20 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 		if len(ctr.os) > 0 || end-start <= 1 {
 			start, _ = buildPeerInterval(ctr.os, rowIdx, start, end)
 		} else {
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
+			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_FOLLOWING:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
+		start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
 		if err != nil {
 			return start, end, err
 		}
@@ -1327,19 +1825,19 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 		if len(ctr.os) > 0 || end-start <= 1 {
 			_, end = buildPeerInterval(ctr.os, rowIdx, start, end)
 		} else {
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_PRECEDING:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
+		end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
 		if err != nil {
 			return start, end, err
 		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
+			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
 			if err != nil {
 				return start, end, err
 			}
@@ -1454,6 +1952,10 @@ func makePartitionTopNOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 }
 
 func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
+	// Eval reuses ctr.orderVecs' backing vectors by replacing their data below.
+	// Fold detection is derived from that data, so entries keyed by a vector
+	// pointer must never survive into the next materialized input batch.
+	ctr.timestampCivilOrder = nil
 	input := []*batch.Batch{bat}
 
 	for i := range ctr.orderVecs {
@@ -1612,6 +2114,10 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 }
 
 func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	return searchLeftWithLocation(time.Local, start, end, rowIdx, vec, expr, plus, desc)
+}
+
+func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the start of the NULL peer group
 		left := rowIdx
@@ -1629,6 +2135,16 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 	}
 	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
 		end--
+	}
+	// A const vector stores one physical value, while the search bounds are
+	// logical rows. Evaluate the one physical row and project its boundary back
+	// to this logical interval instead of indexing the scalar column by mid.
+	if vec.IsConst() && end-start > 1 {
+		boundary, err := searchLeftWithLocation(loc, 0, 1, 0, vec, expr, plus, desc)
+		if err != nil || boundary == 0 {
+			return start, err
+		}
+		return end, nil
 	}
 
 	// For DESC, swap the arithmetic direction.
@@ -1885,12 +2401,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -1910,12 +2432,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -1935,12 +2463,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -1958,14 +2492,20 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			if plus {
-				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
-				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -1982,6 +2522,19 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, true, types.DateType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("date", "")
+		}
+		return dt.ToDate(), nil
+	}
 	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
 	if success {
 		return dt.ToDate(), nil
@@ -1994,6 +2547,16 @@ func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		t, ok := checkedTimeMicrosecondInterval(start, diff, true)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("time", "")
+		}
+		return t, nil
 	}
 	t, success := start.AddInterval(-diff, types.IntervalType(unit))
 	if success {
@@ -2008,6 +2571,19 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, true, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		}
+		return dt, nil
+	}
 	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
 		return dt, nil
@@ -2021,15 +2597,55 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), true) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, true, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		}
+		return timestampRangeBoundary(dt, loc), nil
+	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 }
 
+// timestampRangeBoundary resolves a session-civil frame boundary back to a
+// timestamp instant. Go maps nonexistent civil times in a DST gap to one side
+// of the transition; clamp that result to the transition instant so RANGE uses
+// the first valid local time after the gap, matching MySQL semantics.
+func timestampRangeBoundary(civil types.Datetime, loc *time.Location) types.Timestamp {
+	boundary := civil.ToTimestamp(loc)
+	roundTrip := boundary.ToDatetime(loc)
+	if roundTrip == civil {
+		return boundary
+	}
+
+	instant := time.UnixMicro(
+		int64(boundary) - int64(types.UnixToTimestamp(0))).In(loc)
+	transitionStart, transitionEnd := instant.ZoneBounds()
+	if roundTrip < civil && !transitionEnd.IsZero() {
+		return types.UnixMicroToTimestamp(transitionEnd.UnixMicro())
+	}
+	if roundTrip > civil && !transitionStart.IsZero() {
+		return types.UnixMicroToTimestamp(transitionStart.UnixMicro())
+	}
+	return boundary
+}
+
 func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
+	return searchRightWithLocation(time.Local, start, end, rowIdx, vec, expr, sub, desc)
+}
+
+func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the end of the NULL peer group (exclusive)
 		right := rowIdx + 1
@@ -2047,6 +2663,15 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	}
 	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
 		end--
+	}
+	// See searchLeftWithLocation: resolve scalar storage against one physical
+	// row, then preserve the result's logical interval boundary.
+	if vec.IsConst() && end-start > 1 {
+		boundary, err := searchRightWithLocation(loc, 0, 1, 0, vec, expr, sub, desc)
+		if err != nil || boundary == 0 {
+			return start, err
+		}
+		return end, nil
 	}
 
 	// For DESC, swap the arithmetic direction.
@@ -2303,12 +2928,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -2337,12 +2968,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -2362,12 +2999,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -2385,14 +3028,20 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			if sub {
-				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
-				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -2454,10 +3103,156 @@ func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
 	return start
 }
 
+// temporalRangeOverflowBoundary maps a temporal search key outside the type
+// domain to the insertion point it would have if that key were representable.
+// A key above the domain sorts after every ASC value and before every DESC
+// value; a key below the domain does the opposite.
+func temporalRangeOverflowBoundary(start, end int, aboveDomain, desc bool) int {
+	if aboveDomain != desc {
+		return end
+	}
+	return start
+}
+
+// temporalRangeIntervalOverflowBoundary derives the side of a temporal-domain
+// overflow from the effective signed arithmetic. A negative interval reverses
+// the operation, so add/sub alone cannot identify the insertion point.
+func temporalRangeIntervalOverflowBoundary(start, end int, add bool, diff int64, desc bool) int {
+	aboveDomain := add
+	if diff < 0 {
+		aboveDomain = !aboveDomain
+	}
+	return temporalRangeOverflowBoundary(start, end, aboveDomain, desc)
+}
+
+// checkedMicrosecondArithmetic performs signed microsecond arithmetic without
+// allowing an int64 wrap to masquerade as an in-domain temporal value.
+func checkedMicrosecondArithmetic(start, diff int64, subtract bool) (int64, bool) {
+	if subtract {
+		if (diff > 0 && start < math.MinInt64+diff) || (diff < 0 && start > math.MaxInt64+diff) {
+			return 0, false
+		}
+		return start - diff, true
+	}
+	if (diff > 0 && start > math.MaxInt64-diff) || (diff < 0 && start < math.MinInt64-diff) {
+		return 0, false
+	}
+	return start + diff, true
+}
+
+// temporalRangeIntervalConversionOK prevents fixed-duration units from
+// wrapping while AddInterval converts them to microseconds. The magnitude
+// check accepts values that fit in an int64, but their later conversion can
+// still overflow before AddInterval validates the temporal domain.
+func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool {
+	var multiplier int64
+	switch unit {
+	case types.Second:
+		multiplier = types.MicroSecsPerSec
+	case types.Minute:
+		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+	case types.Day:
+		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+	case types.Week:
+		multiplier = types.MicroSecsPerSec * types.SecsPerWeek
+	default:
+		return true
+	}
+	return diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier
+}
+
+// temporalRangeCalendarIntervalInDomain evaluates calendar arithmetic in the
+// wide representation used by AddDateTime before that function narrows the
+// result year to int32. A wrapped year is a valid-looking but incorrect RANGE
+// search key, so calendar bounds outside the temporal domain must follow the
+// same out-of-domain path as fixed-duration bounds.
+func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, unit types.IntervalType, subtract bool) bool {
+	if subtract {
+		if diff == math.MinInt64 {
+			return false
+		}
+		diff = -diff
+	}
+
+	year, month, _, _ := start.ToDate().Calendar(true)
+	boundaryYear := int64(year)
+	boundaryMonth := int64(month)
+	var yearDelta, monthDelta int64
+	switch unit {
+	case types.Month, types.Year_Month:
+		yearDelta = diff / 12
+		monthDelta = diff % 12
+	case types.Quarter:
+		if diff > math.MaxInt64/3 || diff < math.MinInt64/3 {
+			return false
+		}
+		months := diff * 3
+		yearDelta = months / 12
+		monthDelta = months % 12
+	case types.Year:
+		yearDelta = diff
+	default:
+		return true
+	}
+	if (yearDelta > 0 && boundaryYear > math.MaxInt64-yearDelta) ||
+		(yearDelta < 0 && boundaryYear < math.MinInt64-yearDelta) {
+		return false
+	}
+	boundaryYear += yearDelta
+	boundaryMonth += monthDelta
+
+	if boundaryMonth <= 0 {
+		boundaryYear--
+	} else if boundaryMonth > 12 {
+		boundaryYear++
+	}
+	return boundaryYear >= int64(types.MinDatetimeYear) && boundaryYear <= int64(types.MaxDatetimeYear)
+}
+
+// checkedDatetimeMicrosecondInterval validates both the signed arithmetic and
+// the resulting DATE/DATETIME domain. Datetime.AddInterval intentionally
+// fast-paths MICROSECOND without a calendar validation, so RANGE bounds must
+// validate it before using the result as a binary-search key.
+func checkedDatetimeMicrosecondInterval(start types.Datetime, diff int64, subtract bool, timeType types.TimeType) (types.Datetime, bool) {
+	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
+	if !ok {
+		return 0, false
+	}
+	dt := types.Datetime(result)
+	year, month, day, _ := dt.ToDate().Calendar(true)
+	if timeType == types.DateType {
+		return dt, types.ValidDate(year, month, day)
+	}
+	return dt, types.ValidDatetime(year, month, day)
+}
+
+func checkedTimeMicrosecondInterval(start types.Time, diff int64, subtract bool) (types.Time, bool) {
+	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
+	if !ok {
+		return 0, false
+	}
+	return types.Time(result).AddInterval(0, types.MicroSecond)
+}
+
 func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, false, types.DateType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("date", "")
+		}
+		return dt.ToDate(), nil
 	}
 	dt, success := start.ToDatetime().AddInterval(diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -2472,6 +3267,16 @@ func doTimeAdd(start types.Time, diff int64, unit int64) (types.Time, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		t, ok := checkedTimeMicrosecondInterval(start, diff, false)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("time", "")
+		}
+		return t, nil
+	}
 	t, success := start.AddInterval(diff, types.IntervalType(unit))
 	if success {
 		return t, nil
@@ -2484,6 +3289,19 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
 	if err != nil {
 		return 0, err
+	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, false, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		}
+		return dt, nil
 	}
 	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -2498,9 +3316,22 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if err != nil {
 		return 0, err
 	}
+	if !temporalRangeIntervalConversionOK(diff, types.IntervalType(unit)) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), false) {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+	}
+	if types.IntervalType(unit) == types.MicroSecond {
+		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, false, types.DateTimeType)
+		if !ok {
+			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		}
+		return timestampRangeBoundary(dt, loc), nil
+	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}

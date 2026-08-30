@@ -16,12 +16,12 @@ package ivfflat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -191,7 +191,7 @@ func (r *planReader) initialize() error {
 		return nil
 	}
 	param := vectorindex.IvfParam{}
-	if err := sonic.Unmarshal([]byte(r.spec.Index.IndexAlgoParams), &param); err != nil {
+	if err := json.Unmarshal([]byte(r.spec.Index.IndexAlgoParams), &param); err != nil {
 		return err
 	}
 	lists, err := strconv.Atoi(param.Lists)

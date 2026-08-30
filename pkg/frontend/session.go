@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +46,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -56,6 +60,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -76,6 +81,48 @@ func currentProtocolVersion(proc *process.Process) int64 {
 		return defines.MORPCVersion4
 	}
 	return version
+}
+
+func logtailReadBarrierSupported(ses *Session) bool {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion39
+}
+
+func (ses *Session) acquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing parameter unit for logtail read barrier")
+	}
+	if pu.StorageEngine == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing storage engine for logtail read barrier")
+	}
+	barrier, ok := pu.StorageEngine.(engine.LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "storage engine does not support logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
+}
+
+// reusablePlanGenerationSupported reports whether every live service in the
+// rollout understands the logical-plan generation snapshot carried by remote
+// pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest
+// live service, so cross-transaction plan reuse must remain disabled until the
+// version 32 wire contract is active cluster-wide.
+func reusablePlanGenerationSupported(proc *process.Process) bool {
+	return currentProtocolVersion(proc) >= defines.MORPCVersion32
 }
 
 func init() {
@@ -163,6 +210,12 @@ type Session struct {
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
 	tempTablesRev map[string]string
+	// tempTableIdentities preserves the database and alias as separate values.
+	// The legacy tempTables key is intentionally kept for lookup compatibility,
+	// but it cannot be split safely when quoted identifiers contain dots. Index
+	// table aliases are marked internal so connection migration clones only the
+	// user-visible table; cloning that table recreates its hidden index tables.
+	tempTableIdentities map[string]tempTableIdentity
 	// tempTableVersion changes whenever the session's temporary-table name
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
@@ -284,8 +337,10 @@ type Session struct {
 
 	planCache *planCache
 
-	statsCache   *plan2.StatsCache
-	seqCurValues map[uint64]string
+	statsCacheMu       sync.Mutex
+	statsCache         *plan2.StatsCache
+	statsCacheVersions map[uint64]optimizerStatsCacheTag
+	seqCurValues       map[uint64]string
 
 	/*
 		CORNER CASE:
@@ -354,8 +409,20 @@ type Session struct {
 
 type tempTableAliasState struct {
 	realName string
+	identity tempTableIdentity
 	exists   bool
 }
+
+type tempTableIdentity struct {
+	dbName   string
+	alias    string
+	internal bool
+}
+
+// A migration snapshot carries identifiers only, not table data. Keep its
+// count bounded nevertheless: every entry becomes a CREATE ... CLONE statement
+// on the target and all entries share the fixed connection-transfer deadline.
+const maxMigrateTempTableCount = 1024
 
 type tempTableTxnJournal struct {
 	before     map[string]tempTableAliasState
@@ -610,15 +677,45 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 // AddTempTable adds the temporary table to the session
 func (ses *Session) AddTempTable(dbName, alias, realName string) {
 	txnKey, stmtKey := tempTableMutationKeys(ses)
-	ses.addTempTable(dbName, alias, realName, txnKey, stmtKey)
+	ses.addTempTableWithIdentity(dbName, alias, realName, false, txnKey, stmtKey)
 }
 
 func (ses *Session) addTempTable(dbName, alias, realName, txnKey, stmtKey string) {
+	ses.addTempTableWithIdentity(dbName, alias, realName, false, txnKey, stmtKey)
+}
+
+// AddTempIndexTable records a hidden physical index table owned by a temporary
+// table. It remains resolvable and participates in session cleanup, but the
+// parent table's CLONE recreates it during connection migration.
+func (ses *Session) AddTempIndexTable(dbName, alias, realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.addTempTableWithIdentity(dbName, alias, realName, true, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempIndexTable(dbName, alias, realName, txnKey, stmtKey string) {
+	ses.addTempTableWithIdentity(dbName, alias, realName, true, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempTableWithIdentity(
+	dbName, alias, realName string,
+	internal bool,
+	txnKey, stmtKey string,
+) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
+	if ses.tempTableIdentities == nil {
+		ses.tempTableIdentities = make(map[string]tempTableIdentity)
+	}
+	identity := tempTableIdentity{
+		dbName: dbName, alias: alias, internal: internal,
+	}
 	if oldRealName, ok := ses.tempTables[key]; ok {
 		if oldRealName == realName {
+			if ses.tempTableIdentityLocked(key) != identity {
+				ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+				ses.tempTableIdentities[key] = identity
+			}
 			return
 		}
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
@@ -628,7 +725,60 @@ func (ses *Session) addTempTable(dbName, alias, realName, txnKey, stmtKey string
 	}
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
+	ses.tempTableIdentities[key] = identity
 	ses.tempTableVersion++
+}
+
+func (ses *Session) tempTableIdentityLocked(key string) tempTableIdentity {
+	if identity, ok := ses.tempTableIdentities[key]; ok {
+		return identity
+	}
+	dbName, alias, ok := strings.Cut(key, ".")
+	if !ok {
+		return tempTableIdentity{alias: key}
+	}
+	return tempTableIdentity{dbName: dbName, alias: alias}
+}
+
+func (ses *Session) snapshotTempTables() []*query.MigrateTempTable {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	keys := make([]string, 0, len(ses.tempTables))
+	for key := range ses.tempTables {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]*query.MigrateTempTable, 0, len(keys))
+	for _, key := range keys {
+		identity := ses.tempTableIdentityLocked(key)
+		if identity.internal {
+			continue
+		}
+		result = append(result, &query.MigrateTempTable{
+			Database:     identity.dbName,
+			Alias:        identity.alias,
+			PhysicalName: ses.tempTables[key],
+		})
+	}
+	return result
+}
+
+// snapshotTempTablesForMigration applies the same wire-size limit used by the
+// typed variable snapshots. The source must reject an oversized snapshot before
+// proxy starts a handoff: the old session remains authoritative and no target
+// clone can be left behind by a transfer that cannot complete in one attempt.
+func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*query.MigrateTempTable, error) {
+	result := ses.snapshotTempTables()
+	if len(result) > maxMigrateTempTableCount {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"temporary tables exceed the connection migration size limit (table limit %d)",
+			maxMigrateTempTableCount)
+	}
+	if (&query.MigrateConnToRequest{TempTables: result}).ProtoSize() > maxMigrateUserDefinedVarsSize {
+		return nil, moerr.NewInternalError(ctx,
+			"temporary tables exceed the connection migration size limit")
+	}
+	return result, nil
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -661,6 +811,39 @@ func (ses *Session) RemoveTempTable(dbName, alias string) {
 	ses.removeTempTable(dbName, alias, txnKey, stmtKey)
 }
 
+// RemoveTempTablesByDatabase removes every temporary-table alias owned by a
+// database that has been dropped. The mutation is journaled so a failed
+// statement or rolled-back transaction restores the aliases with their
+// original physical identities.
+func (ses *Session) RemoveTempTablesByDatabase(dbName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
+}
+
+func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	changed := false
+	for key, realName := range ses.tempTables {
+		identity, tracked := ses.tempTableIdentities[key]
+		if tracked {
+			if identity.dbName != dbName {
+				continue
+			}
+		} else if !strings.HasPrefix(key, dbName+".") {
+			continue
+		}
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		delete(ses.tempTables, key)
+		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, key)
+		changed = true
+	}
+	if changed {
+		ses.tempTableVersion++
+	}
+}
+
 func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -669,6 +852,7 @@ func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, key)
 		ses.tempTableVersion++
 	}
 }
@@ -686,6 +870,7 @@ func (ses *Session) removeTempTableByRealName(realName, txnKey, stmtKey string) 
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, alias)
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
+		delete(ses.tempTableIdentities, alias)
 		ses.tempTableVersion++
 	}
 }
@@ -707,7 +892,11 @@ func (ses *Session) recordTempTableMutationLocked(txnKey, stmtKey, alias string)
 	}
 	state := tempTableAliasState{}
 	if realName, ok := ses.tempTables[alias]; ok {
-		state = tempTableAliasState{realName: realName, exists: true}
+		state = tempTableAliasState{
+			realName: realName,
+			identity: ses.tempTableIdentityLocked(alias),
+			exists:   true,
+		}
 	}
 	if _, ok := journal.before[alias]; !ok {
 		journal.before[alias] = state
@@ -770,7 +959,9 @@ func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAli
 	changed := false
 	for alias, state := range before {
 		current, exists := ses.tempTables[alias]
-		if exists == state.exists && (!exists || current == state.realName) {
+		currentIdentity := ses.tempTableIdentityLocked(alias)
+		if exists == state.exists && (!exists ||
+			(current == state.realName && currentIdentity == state.identity)) {
 			continue
 		}
 		changed = true
@@ -778,9 +969,14 @@ func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAli
 			delete(ses.tempTablesRev, current)
 		}
 		delete(ses.tempTables, alias)
+		delete(ses.tempTableIdentities, alias)
 		if state.exists {
+			if ses.tempTableIdentities == nil {
+				ses.tempTableIdentities = make(map[string]tempTableIdentity)
+			}
 			ses.tempTables[alias] = state.realName
 			ses.tempTablesRev[state.realName] = alias
+			ses.tempTableIdentities[alias] = state.identity
 		}
 	}
 	if changed {
@@ -797,7 +993,83 @@ func (ses *Session) GetProc() *process.Process {
 }
 
 func (ses *Session) GetStatsCache() *plan2.StatsCache {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
 	return ses.statsCache
+}
+
+func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
+	return optimizerStatsTableKey{
+		accountID: ses.GetAccountId(),
+		tableID:   tableID,
+	}
+}
+
+type optimizerStatsCacheTag struct {
+	key     optimizerStatsTableKey
+	version uint64
+}
+
+func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	version := currentOptimizerStatsVersion(ses.GetService(), key)
+	wrapper := ses.statsCache.Get(key.tableID)
+	tag, tagged := ses.statsCacheVersions[key.tableID]
+	if !wrapper.Exists() {
+		delete(ses.statsCacheVersions, key.tableID)
+	} else if !tagged && version == 0 {
+		// Accept caches created before version tracking only in the initial
+		// generation. Once any publication has happened, an untagged entry is
+		// conservatively stale.
+		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	} else if tag.key != key || tag.version != version {
+		ses.statsCache.Delete(key.tableID)
+		delete(ses.statsCacheVersions, key.tableID)
+	}
+	return ses.statsCache, version
+}
+
+func (ses *Session) cacheStatsIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) bool {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
+		return false
+	}
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	return true
+}
+
+func (ses *Session) cachePublishedStats(
+	key optimizerStatsTableKey,
+	version uint64,
+	stats *pbstats.StatsInfo,
+) {
+	ses.statsCacheMu.Lock()
+	defer ses.statsCacheMu.Unlock()
+	ses.initStatsCacheLocked()
+	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
+		clear(ses.statsCacheVersions)
+	}
+	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+}
+
+func (ses *Session) initStatsCacheLocked() {
+	if ses.statsCache == nil {
+		ses.statsCache = plan2.NewStatsCache()
+	}
+	if ses.statsCacheVersions == nil {
+		ses.statsCacheVersions = make(map[uint64]optimizerStatsCacheTag)
+	}
 }
 
 func (ses *Session) GetSessionStart() time.Time {
@@ -1161,7 +1433,6 @@ func NewSession(
 	var txnOp TxnOperator
 	var err error
 	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
-
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
@@ -1184,8 +1455,9 @@ func NewSession(
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
 
-		timestampMap: map[TS]time.Time{},
-		statsCache:   plan2.NewStatsCache(),
+		timestampMap:       map[TS]time.Time{},
+		statsCache:         plan2.NewStatsCache(),
+		statsCacheVersions: make(map[uint64]optimizerStatsCacheTag),
 	}
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
@@ -1193,6 +1465,7 @@ func NewSession(
 	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
+	ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -1260,18 +1533,18 @@ func (ses *Session) Close() {
 		dbName   string
 		realName string
 	}
-	var tempTables []tempTableEntry
 	var tenant *TenantInfo
 	ses.mu.Lock()
+	tempTables := make([]tempTableEntry, 0, len(ses.tempTables))
 	for key, realName := range ses.tempTables {
-		if db, _, ok := strings.Cut(key, "."); ok {
-			tempTables = append(tempTables, tempTableEntry{dbName: db, realName: realName})
-		} else {
-			tempTables = append(tempTables, tempTableEntry{realName: realName})
-		}
+		identity := ses.tempTableIdentityLocked(key)
+		tempTables = append(tempTables, tempTableEntry{
+			dbName: identity.dbName, realName: realName,
+		})
 	}
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
+	ses.tempTableIdentities = nil
 	ses.tempTableTxnJournals = nil
 	tenant = ses.tenant
 	ses.mu.Unlock()
@@ -1428,7 +1701,51 @@ func (ses *Session) IsBackgroundSession() bool {
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	statsVersions map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, make([]timestamp.Timestamp, len(plans)),
+		planStatsVersionsFromAggregate(len(plans), statsVersions), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshots(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	versions ...int64,
+) {
+	ses.cachePlanWithSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS,
+		make([]map[optimizerStatsTableKey]uint64, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
+		return
+	}
+	statsVersions, versionsConsistent := aggregatePlanStatsVersions(planStatsVersions)
+	if !versionsConsistent || !optimizerStatsVersionsCurrent(ses.GetService(), statsVersions) {
+		// The plan crossed a statistics publication boundary while compiling.
+		// It may execute, but must not enter the cache with stale dependencies.
+		freeStmts(stmts)
 		return
 	}
 	ses.mu.Lock()
@@ -1441,7 +1758,8 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cache(sql, stmts, plans, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -1454,7 +1772,8 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 		return nil
 	}
 	cached := ses.planCache.get(sql)
-	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+	if cached != nil && (cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions)) {
 		ses.planCache.remove(sql)
 		return nil
 	}
@@ -1470,7 +1789,18 @@ func (ses *Session) isCached(sql string) bool {
 	if ses.planCache == nil {
 		return false
 	}
-	return ses.planCache.isCached(sql)
+	if !ses.planCache.isCached(sql) {
+		return false
+	}
+	cached := ses.planCache.cachePool[sql].Value.(*cachedPlan)
+	if cached.protocolVersion != currentProtocolVersion(ses.proc) ||
+		!optimizerStatsVersionsCurrent(ses.GetService(), cached.statsVersions) {
+		// isCached is also queried while wrappers still borrow the cached AST at
+		// the end of execution. Report staleness without releasing that owner;
+		// the next getCachedPlan lookup removes it after all borrowers are gone.
+		return false
+	}
+	return true
 }
 
 func (ses *Session) removeCachedPlan(sql string) {
@@ -1481,6 +1811,41 @@ func (ses *Session) removeCachedPlan(sql string) {
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.remove(sql)
+	}
+}
+
+func (ses *Session) updateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+	newPlan *plan.Plan,
+	planSnapshotTS timestamp.Timestamp,
+	statsVersions map[optimizerStatsTableKey]uint64,
+) bool {
+	if len(sql) == 0 {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
+	return ses.planCache.updatePlanGeneration(
+		sql, index, expectedPlan, newPlan, planSnapshotTS, statsVersions)
+}
+
+func (ses *Session) invalidateCachedPlanGeneration(
+	sql string,
+	index int,
+	expectedPlan *plan.Plan,
+) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidatePlanGeneration(sql, index, expectedPlan)
 	}
 }
 
@@ -1594,6 +1959,8 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
+		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 	}
 	return be
 }
@@ -1974,6 +2341,86 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
+// advanceAuthenticationSnapshot is the rolling-upgrade fallback for services
+// predating the TN-ordered logtail read barrier. It is correct but may wait for
+// the full clock uncertainty interval, so new clusters use the generic engine
+// barrier in prepareAuthenticationSnapshot instead.
+func (ses *Session) advanceAuthenticationSnapshot(ctx context.Context) error {
+	minimum, err := ses.legacyLogtailReadFence(ctx)
+	if err != nil {
+		return err
+	}
+	ses.updateLastCommitTS(minimum)
+	return nil
+}
+
+// legacyLogtailReadFence returns a timestamp strictly beyond the local HLC
+// uncertainty window. It is the rolling-upgrade fallback for catalog reads
+// that require cross-CN freshness before the TN-ordered barrier is available.
+func (ses *Session) legacyLogtailReadFence(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing service runtime for catalog read fence")
+	}
+	txnClock := rt.Clock()
+	if txnClock == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "missing transaction clock for catalog read fence")
+	}
+	if txnClock.MaxOffset() < 0 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "negative transaction clock offset for catalog read fence")
+	}
+
+	_, upperBound := txnClock.Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(
+			ctx, "catalog read fence timestamp overflow")
+	}
+
+	// HLC ordering compares the logical component when physical times are equal.
+	// Moving to the next physical tick dominates every logical timestamp at the
+	// uncertainty upper bound, including a remote commit at that exact tick.
+	return timestamp.Timestamp{
+		PhysicalTime: upperBound.PhysicalTime + 1,
+	}, nil
+}
+
+// prepareAuthenticationSnapshot installs a session snapshot minimum only after
+// a generic TN publication barrier has reached this CN's normal apply pipeline.
+// The protocol gate preserves correctness during rolling upgrades by falling
+// back to the legacy HLC uncertainty fence until every service supports the
+// barrier wire contract.
+func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "missing transaction client for authentication snapshot")
+	}
+
+	if logtailReadBarrierSupported(ses) {
+		frontier, err := ses.acquireLogtailReadBarrier(ctx)
+		if err != nil {
+			return err
+		}
+		ses.updateLastCommitTS(frontier)
+	} else if err := ses.advanceAuthenticationSnapshot(ctx); err != nil {
+		return err
+	}
+
+	minimum := ses.getLastCommitTS()
+	applied, err := pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+	if err != nil {
+		return err
+	}
+	if applied.Less(minimum) {
+		return moerr.NewInternalError(ctx, "authentication snapshot did not reach the required timestamp")
+	}
+	return nil
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2020,8 +2467,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
+	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+		return nil, err
+	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
+		fromRealUser:               true,
+		cancelTxnCreateWithRequest: true,
+	})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
@@ -2118,21 +2571,21 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//the default_role in the mo_user table.
-	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
+	// The catalog value may be NULL or stale after a prior REVOKE. Do not use
+	// it as an active role until the implicit-login path validates the grant.
+	defaultRoleID, defaultRoleIDValid, err := readStoredDefaultRoleID(tenantCtx, userRsset[0])
 	if err != nil {
 		return nil, err
 	}
 
 	tenant.SetUserID(uint32(userID))
-	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	ses.timestampMap[TSCheckUserEnd] = time.Now()
 	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
 		1.get the default_role of the user in mo_user
+		2.validate that the role is still granted, otherwise use the public grant
 
 		login case 2: tenant:user:role
 		1.check the role has been granted to the user
@@ -2182,21 +2635,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
-		//the get name of default_role from mo_role
-		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
+		ses.Debugf(tenantCtx, "validate implicit default role of user %s.", tenant)
+		defaultRoleID, defaultRole, err = resolveImplicitDefaultRole(
+			tenantCtx, bh, userID, defaultRoleID, defaultRoleIDValid)
 		if err != nil {
 			return nil, err
 		}
-		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
-		}
-
-		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 		tenant.SetDefaultRole(defaultRole)
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
@@ -2358,6 +2803,72 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
+}
+
+func readStoredDefaultRoleID(ctx context.Context, userResult ExecResult) (int64, bool, error) {
+	isNull, err := userResult.ColumnIsNull(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if isNull {
+		return 0, false, nil
+	}
+
+	roleID, err := userResult.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	if roleID < 0 || roleID > int64(^uint32(0)) {
+		return 0, false, nil
+	}
+	return roleID, true, nil
+}
+
+// resolveImplicitDefaultRole returns a role that is currently granted to the
+// user. A stale, NULL, invalid, or missing catalog default falls back to the
+// user's public grant; it is never activated directly from mo_user metadata.
+func resolveImplicitDefaultRole(
+	ctx context.Context,
+	bh BackgroundExec,
+	userID int64,
+	storedRoleID int64,
+	storedRoleIDValid bool,
+) (int64, string, error) {
+	roleID := storedRoleID
+	if !storedRoleIDValid {
+		roleID = publicRoleID
+	}
+
+	for {
+		sql := getSqlForRoleNameOfUserRole(userID, roleID)
+		rsset, err := executeSQLInBackgroundSession(ctx, bh, sql)
+		if err != nil {
+			return 0, "", err
+		}
+		if execResultArrayHasData(rsset) {
+			roleNameIsNull, err := rsset[0].ColumnIsNull(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleName, err := rsset[0].GetString(ctx, 0, 0)
+			if err != nil {
+				return 0, "", err
+			}
+			roleNameValid := !roleNameIsNull && roleName != ""
+			if roleID == publicRoleID {
+				roleNameValid = roleNameValid && isPublicRole(roleName)
+			}
+			if roleNameValid {
+				return roleID, roleName, nil
+			}
+		}
+
+		if roleID == publicRoleID {
+			return 0, "", moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID)
+		}
+		roleID = publicRoleID
+	}
 }
 
 func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
@@ -2799,6 +3310,105 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
+type migrateTempTableExec func(sql string) error
+
+// isStaleTempTableMigrationError identifies only catalog errors that prove a
+// migration entry cannot be cloned: the database was dropped, or its source
+// physical relation was dropped and the database was subsequently recreated.
+// Other clone errors remain fatal so a target problem is never mistaken for
+// stale source state.
+func isStaleTempTableMigrationError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
+}
+
+func migrateTempTables(
+	ctx context.Context,
+	ses *Session,
+	tables []*query.MigrateTempTable,
+	exec migrateTempTableExec,
+) error {
+	seen := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if table == nil || table.Database == "" || table.Alias == "" ||
+			table.PhysicalName == "" || !defines.IsTempTableName(table.PhysicalName) {
+			return moerr.NewInternalError(ctx, "invalid temporary-table migration snapshot")
+		}
+		key := table.Database + "\x00" + table.Alias
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorf(ctx,
+				"duplicate temporary-table migration entry for %s.%s",
+				table.Database, table.Alias)
+		}
+		seen[key] = struct{}{}
+	}
+
+	for i, table := range tables {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		// Resolve the source physical relation through a short, internal alias.
+		// The destination uses its original logical alias and therefore receives
+		// a physical name owned by the target session. The temporary source alias
+		// is always removed before this function returns, so a failed migration
+		// can close the target without dropping the source session's table.
+		sourceAlias := fmt.Sprintf("__mo_migrate_source_%d", i)
+		for suffix := 0; ; suffix++ {
+			_, exists := ses.GetTempTable(table.Database, sourceAlias)
+			if !exists && sourceAlias != table.Alias {
+				break
+			}
+			sourceAlias = fmt.Sprintf("__mo_migrate_source_%d_%d", i, suffix+1)
+		}
+		ses.addTempTableWithIdentity(
+			table.Database, sourceAlias, table.PhysicalName, true, "", "")
+		sql := "CREATE TEMPORARY TABLE " +
+			sqlquote.QualifiedIdent(table.Database, table.Alias) + " CLONE " +
+			sqlquote.QualifiedIdent(table.Database, sourceAlias)
+		err := func() error {
+			defer ses.removeTempTable(table.Database, sourceAlias, "", "")
+			return exec(sql)
+		}()
+		if err != nil {
+			if isStaleTempTableMigrationError(err) {
+				// DROP DATABASE can originate from a different session, leaving
+				// this session's local alias map stale. The catalog error proves
+				// that this entry has no source relation to preserve; discard just
+				// this entry and continue migrating the usable session state.
+				continue
+			}
+			return moerr.AttachCause(ctx, err)
+		}
+		targetName, ok := ses.GetTempTable(table.Database, table.Alias)
+		if !ok || targetName == table.PhysicalName {
+			if ok {
+				// Never let target-session cleanup claim the source physical
+				// relation, even if a faulty clone path registered it directly.
+				ses.removeTempTable(table.Database, table.Alias, "", "")
+			}
+			return moerr.NewInternalErrorf(ctx,
+				"temporary table %s.%s was not cloned into the target session",
+				table.Database, table.Alias)
+		}
+	}
+	if len(tables) > 0 {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		// Raw compatibility replay may already have restored autocommit=0 on
+		// the target. Migration is admitted only at a client transaction
+		// boundary, so commit the internal clone batch and leave the restored
+		// autocommit mode with no target-only transaction in progress.
+		if err := exec("COMMIT"); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+	}
+	return nil
+}
+
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
@@ -2883,6 +3493,29 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		var err error
 		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
 		if err != nil {
+			return err
+		}
+	}
+	if len(req.TempTables) > 0 {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion38 {
+			return moerr.NewInternalError(ctx,
+				"temporary-table migration requires protocol version 38")
+		}
+		// Clone before typed system-variable restoration. migrateTempTables also
+		// commits explicitly because Proxy compatibility replay may already have
+		// restored autocommit=0 on the target.
+		if err := migrateTempTables(
+			migrationCtx,
+			ses,
+			req.TempTables,
+			func(sql string) error {
+				tempExecCtx := &ExecCtx{
+					reqCtx: migrationCtx, inMigration: true, ses: ses,
+				}
+				defer tempExecCtx.Close()
+				return doComQuery(ses, tempExecCtx, &UserInput{sql: sql})
+			},
+		); err != nil {
 			return err
 		}
 	}

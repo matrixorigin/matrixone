@@ -64,8 +64,10 @@ var initConnectionID uint32 = 1000
 var ConnIDAllocKey = "____server_conn_id"
 
 const (
-	clientDisconnectProbeInterval = 5 * time.Second
-	clientDisconnectProbeGrace    = 30 * time.Second
+	// The request handler owns the connection read loop while a statement is
+	// executing, so probe every active request from the first monitor tick.
+	clientDisconnectProbeInterval = time.Second
+	clientDisconnectProbeGrace    = 0
 )
 
 // MOServer MatrixOne Server
@@ -551,6 +553,16 @@ func nextConnectionID() uint32 {
 
 var serverVarsMap sync.Map
 
+const (
+	optimizerStatsPublisherStripes = 64
+	optimizerStatsVersionEntries   = 64 * 1024
+)
+
+type optimizerStatsTableKey struct {
+	accountID uint32
+	tableID   uint64
+}
+
 func init() {
 	InitServerLevelVars("")
 }
@@ -565,8 +577,23 @@ func getServerLevelVars(service string) *ServerLevelVariables {
 }
 
 func InitServerLevelVars(service string) {
-	serverVarsMap.LoadOrStore(service, &ServerLevelVariables{})
+	vars := &ServerLevelVariables{
+		optimizerStatsVersions: make(map[optimizerStatsTableKey]uint64),
+	}
+	for i := range vars.optimizerStatsPublish {
+		vars.optimizerStatsPublish[i] = make(chan struct{}, 1)
+	}
+	serverVarsMap.LoadOrStore(service, vars)
 	getServerLevelVars(service)
+}
+
+func getOptimizerStatsVars(service string) *ServerLevelVariables {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		InitServerLevelVars(service)
+		vars = getServerLevelVars(service)
+	}
+	return vars
 }
 
 func getSessionAlloc(service string) Allocator {
@@ -629,6 +656,89 @@ func getPu(service string) *config.ParameterUnit {
 		panic("parameter unit is not initialized")
 	}
 	return pu
+}
+
+func currentOptimizerStatsClock(service string) uint64 {
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.RLock()
+	defer vars.optimizerStatsMu.RUnlock()
+	return vars.optimizerStatsClock
+}
+
+func currentOptimizerStatsVersion(service string, key optimizerStatsTableKey) uint64 {
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.RLock()
+	defer vars.optimizerStatsMu.RUnlock()
+	return currentOptimizerStatsVersionLocked(vars, key)
+}
+
+func advanceOptimizerStatsVersion(service string, key optimizerStatsTableKey) uint64 {
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.Lock()
+	defer vars.optimizerStatsMu.Unlock()
+	return advanceOptimizerStatsVersionLocked(vars, key, optimizerStatsVersionEntries)
+}
+
+func currentOptimizerStatsVersionLocked(vars *ServerLevelVariables, key optimizerStatsTableKey) uint64 {
+	if version, ok := vars.optimizerStatsVersions[key]; ok {
+		return version
+	}
+	return vars.optimizerStatsReset
+}
+
+func advanceOptimizerStatsVersionLocked(
+	vars *ServerLevelVariables,
+	key optimizerStatsTableKey,
+	maxEntries int,
+) uint64 {
+	if _, exists := vars.optimizerStatsVersions[key]; !exists && len(vars.optimizerStatsVersions) >= maxEntries {
+		// Explicit ANALYZE of many short-lived tables must not grow process
+		// metadata forever. A rare compaction advances the missing-key token,
+		// making every older cache label conservatively stale before reuse.
+		vars.optimizerStatsClock++
+		vars.optimizerStatsReset = vars.optimizerStatsClock
+		clear(vars.optimizerStatsVersions)
+	}
+	vars.optimizerStatsClock++
+	vars.optimizerStatsVersions[key] = vars.optimizerStatsClock
+	return vars.optimizerStatsClock
+}
+
+func optimizerStatsVersionsCurrent(
+	service string,
+	versions map[optimizerStatsTableKey]uint64,
+) bool {
+	if len(versions) == 0 {
+		return true
+	}
+	vars := getOptimizerStatsVars(service)
+	vars.optimizerStatsMu.RLock()
+	defer vars.optimizerStatsMu.RUnlock()
+	for key, version := range versions {
+		if currentOptimizerStatsVersionLocked(vars, key) != version {
+			return false
+		}
+	}
+	return true
+}
+
+func optimizerStatsPublisherStripe(key optimizerStatsTableKey) int {
+	mixed := key.tableID ^ uint64(key.accountID)*0x9e3779b97f4a7c15
+	return int(mixed % optimizerStatsPublisherStripes)
+}
+
+func acquireOptimizerStatsPublisher(
+	ctx context.Context,
+	service string,
+	key optimizerStatsTableKey,
+) (func(), error) {
+	admission := getOptimizerStatsVars(service).optimizerStatsPublish[optimizerStatsPublisherStripe(key)]
+	select {
+	case admission <- struct{}{}:
+		return func() { <-admission }, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
 }
 
 func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
