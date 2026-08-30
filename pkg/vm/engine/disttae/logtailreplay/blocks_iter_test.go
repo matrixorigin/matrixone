@@ -129,7 +129,6 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 
 		require.Equal(t, inserted,
 			[]objectio.ObjectStats{
-				obj1.ObjectStats,
 				obj2.ObjectStats,
 				obj3.ObjectStats,
 			})
@@ -138,7 +137,9 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 	// check 2
 	{
 		inserted, deleted := pState.CollectObjectsBetween(t1, t4)
-		require.Nil(t, deleted)
+		// obj1 is visible at the start boundary and is deleted in the
+		// transfer window, so tombstones created at t1 can reference it.
+		require.Equal(t, deleted, []objectio.ObjectStats{obj1.ObjectStats})
 		require.Equal(t, inserted,
 			[]objectio.ObjectStats{obj2.ObjectStats, obj3.ObjectStats, obj4.ObjectStats})
 	}
@@ -148,7 +149,23 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		inserted, deleted := pState.CollectObjectsBetween(t2, t4)
 		require.Equal(t, deleted, []objectio.ObjectStats{obj1.ObjectStats})
 		require.Equal(t, inserted,
-			[]objectio.ObjectStats{obj2.ObjectStats, obj3.ObjectStats, obj4.ObjectStats})
+			[]objectio.ObjectStats{obj3.ObjectStats, obj4.ObjectStats})
+	}
+
+	// The in-memory and persisted tombstone transfer paths must use the same
+	// (start, end] boundary. obj1 is visible at t1, while obj2-4 are created
+	// after it; the create event for obj1 at the boundary must not cancel its
+	// later delete event.
+	{
+		deleted, inserted := pState.GetChangedObjsBetween(t1, t4)
+		require.Equal(t, map[objectio.ObjectNameShort]struct{}{
+			*obj1.ObjectShortName(): {},
+		}, deleted)
+		require.Equal(t, map[objectio.ObjectNameShort]struct{}{
+			*obj2.ObjectShortName(): {},
+			*obj3.ObjectShortName(): {},
+			*obj4.ObjectShortName(): {},
+		}, inserted)
 	}
 
 	// t5: delete obj2, insert obj5
@@ -218,10 +235,10 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 				require.True(t, ok)
 
 				if obj.DeleteTime.IsEmpty() {
-					ok = obj.CreateTime.GE(&tx) && obj.CreateTime.LE(&ty)
+					ok = obj.CreateTime.GT(&tx) && obj.CreateTime.LE(&ty)
 					require.True(t, ok)
 				} else {
-					ok = obj.CreateTime.GE(&tx) && obj.CreateTime.LE(&ty) && obj.DeleteTime.GT(&ty)
+					ok = obj.CreateTime.GT(&tx) && obj.CreateTime.LE(&ty) && obj.DeleteTime.GT(&ty)
 					require.True(t, ok)
 				}
 			}
@@ -232,7 +249,7 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 
 				require.False(t, obj.DeleteTime.IsEmpty())
 
-				ok = obj.CreateTime.LT(&tx) && obj.DeleteTime.GE(&tx) && obj.DeleteTime.LE(&ty)
+				ok = obj.CreateTime.LE(&tx) && obj.DeleteTime.GT(&tx) && obj.DeleteTime.LE(&ty)
 				require.True(t, ok)
 			}
 
@@ -240,6 +257,107 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 
 		}
 	}
+}
+
+func TestPartitionState_TransferObjectWindowBoundaries(t *testing.T) {
+	state := NewPartitionState("", false, 0x3fff, false)
+	start := types.BuildTS(10, 0)
+	end := types.BuildTS(20, 0)
+
+	type objectLifecycle struct {
+		name       string
+		createTime types.TS
+		deleteTime types.TS
+	}
+	lifecycles := []objectLifecycle{
+		// Already invisible at start: not a transfer source.
+		{name: "deleted-at-start", createTime: types.BuildTS(5, 0), deleteTime: start},
+		// Visible at start, including the equality boundary: transfer sources.
+		{name: "created-before-start", createTime: types.BuildTS(5, 0), deleteTime: types.BuildTS(15, 0)},
+		{name: "created-at-start", createTime: start, deleteTime: types.BuildTS(15, 0)},
+		// Created after the snapshot and gone before end: neither source nor target.
+		{name: "transient-in-window", createTime: types.BuildTS(11, 0), deleteTime: types.BuildTS(15, 0)},
+		// New objects that survive through end: transfer targets.
+		{name: "created-after-start", createTime: types.BuildTS(11, 0)},
+		{name: "deleted-after-end", createTime: types.BuildTS(12, 0), deleteTime: types.BuildTS(21, 0)},
+		{name: "created-at-end", createTime: end},
+		// Existing live state and future state are outside the change window.
+		{name: "live-at-start", createTime: start},
+		{name: "created-after-end", createTime: types.BuildTS(21, 0)},
+	}
+
+	entries := make(map[string]objectio.ObjectEntry, len(lifecycles))
+	for _, lifecycle := range lifecycles {
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsObjectName(
+			&stats, objectio.ObjectName(lifecycle.name)))
+		entry := objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  lifecycle.createTime,
+			DeleteTime:  lifecycle.deleteTime,
+		}
+		entries[lifecycle.name] = entry
+		state.dataObjectsNameIndex.Set(entry)
+		state.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+			Time:         entry.CreateTime,
+			ShortObjName: *entry.ObjectShortName(),
+		})
+		if !entry.DeleteTime.IsEmpty() {
+			state.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+				Time:         entry.DeleteTime,
+				ShortObjName: *entry.ObjectShortName(),
+				IsDelete:     true,
+			})
+		}
+	}
+
+	toNameSet := func(stats []objectio.ObjectStats) map[objectio.ObjectNameShort]struct{} {
+		result := make(map[objectio.ObjectNameShort]struct{}, len(stats))
+		for i := range stats {
+			result[*stats[i].ObjectShortName()] = struct{}{}
+		}
+		return result
+	}
+	shortName := func(name string) objectio.ObjectNameShort {
+		entry := entries[name]
+		return *entry.ObjectShortName()
+	}
+	objectID := func(name string) *types.Objectid {
+		entry := entries[name]
+		return entry.ObjectName().ObjectId()
+	}
+	// Prove the reachability behind the equality case rather than treating it
+	// as a theoretical timestamp permutation.
+	require.True(t, state.IsDataObjectVisible(objectID("created-at-start"), start))
+	require.False(t, state.IsDataObjectVisible(objectID("deleted-at-start"), start))
+	require.False(t, state.IsDataObjectVisible(objectID("transient-in-window"), start))
+
+	wantDeleted := map[objectio.ObjectNameShort]struct{}{
+		shortName("created-before-start"): {},
+		shortName("created-at-start"):     {},
+	}
+	wantInserted := map[objectio.ObjectNameShort]struct{}{
+		shortName("created-after-start"): {},
+		shortName("deleted-after-end"):   {},
+		shortName("created-at-end"):      {},
+	}
+
+	insertedStats, deletedStats := state.CollectObjectsBetween(start, end)
+	require.Equal(t, wantInserted, toNameSet(insertedStats))
+	require.Equal(t, wantDeleted, toNameSet(deletedStats))
+
+	deletedNames, insertedNames := state.GetChangedObjsBetween(start, end)
+	require.Equal(t, wantInserted, insertedNames)
+	require.Equal(t, wantDeleted, deletedNames)
+
+	// A zero-width snapshot interval contains no transitions: objects at the
+	// boundary already belong to the observed snapshot state.
+	insertedStats, deletedStats = state.CollectObjectsBetween(start, start)
+	require.Empty(t, insertedStats)
+	require.Empty(t, deletedStats)
+	deletedNames, insertedNames = state.GetChangedObjsBetween(start, start)
+	require.Empty(t, insertedNames)
+	require.Empty(t, deletedNames)
 }
 
 func TestPartitionState_NewBlocksIter(t *testing.T) {

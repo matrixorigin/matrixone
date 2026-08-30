@@ -36,6 +36,19 @@ type UT_ForceTransCheck struct{}
 
 type TransferOption func(*TransferFlow)
 
+func newDeletedObjectFilter(
+	deletedObjects []objectio.ObjectStats,
+) func(*objectio.ObjectId) bool {
+	deletedObjectIDs := make(map[types.Objectid]struct{}, len(deletedObjects))
+	for i := range deletedObjects {
+		deletedObjectIDs[*deletedObjects[i].ObjectName().ObjectId()] = struct{}{}
+	}
+	return func(objID *objectio.ObjectId) bool {
+		_, deleted := deletedObjectIDs[*objID]
+		return deleted
+	}
+}
+
 func ConstructCNTombstoneObjectsTransferFlow(
 	ctx context.Context,
 	start, end types.TS,
@@ -51,10 +64,6 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		return nil, nil, err
 	}
 
-	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
-		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
-	}
-
 	var logs []zap.Field
 
 	newDataObjects, deletedObjects := state.CollectObjectsBetween(start, end)
@@ -67,13 +76,14 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		return nil, logs, nil
 	}
 
+	deletedObjectPos := 0
 	deletedObjectsIter := func() *types.Objectid {
-		if len(deletedObjects) == 0 {
+		if deletedObjectPos == len(deletedObjects) {
 			return nil
 		}
 
-		id := deletedObjects[0].ObjectName().ObjectId()
-		deletedObjects = deletedObjects[1:]
+		id := deletedObjects[deletedObjectPos].ObjectName().ObjectId()
+		deletedObjectPos++
 		return id
 	}
 
@@ -102,6 +112,12 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	}
 
 	logs = append(logs, zap.Int("coarse-tombstoneObjects", len(tombstoneObjects)))
+
+	// Only tombstones that point at an object deleted in this exact transfer
+	// window need to move. Live appendable objects are intentionally absent
+	// from PartitionState's persisted-object index, so treating an unknown
+	// object as deleted would incorrectly stage their tombstones.
+	isObjectDeletedFn := newDeletedObjectFilter(deletedObjects)
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
