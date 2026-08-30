@@ -1609,13 +1609,15 @@ func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (
 	target := int(tgtLen)
 	var bytes int64
 	switch {
-	case target <= srcRunes:
+	case target < srcRunes:
 		bytes = encodedRunePrefixBytes(src, target)
+	case target == srcRunes:
+		bytes = int64(len(src))
 	case padRunes == 0:
 		bytes = 0
 	default:
-		srcBytes := encodedRunePrefixBytes(src, srcRunes)
-		padBytes := encodedRunePrefixBytes(pad, padRunes)
+		srcBytes := int64(len(src))
+		padBytes := int64(len(pad))
 		if srcBytes > maxBytes {
 			return 0, true
 		}
@@ -1640,6 +1642,45 @@ func encodedRunePrefixBytes(value string, runes int) int64 {
 		offset += size
 	}
 	return bytes
+}
+
+func writeRunePrefix(dst []byte, value string, count int) int {
+	written := 0
+	for offset, seen := 0, 0; offset < len(value) && seen < count; seen++ {
+		r, size := utf8.DecodeRuneInString(value[offset:])
+		written += utf8.EncodeRune(dst[written:], r)
+		offset += size
+	}
+	return written
+}
+
+func writePadResult(dst []byte, src string, target int, pad string, left bool) {
+	srcRunes, padRunes := utf8.RuneCountInString(src), utf8.RuneCountInString(pad)
+	if target < srcRunes {
+		writeRunePrefix(dst, src, target)
+		return
+	}
+	if target == srcRunes {
+		copy(dst, src)
+		return
+	}
+	missing := target - srcRunes
+	full, partial := missing/padRunes, missing%padRunes
+	writePad := func(out []byte) int {
+		at := 0
+		for i := 0; i < full; i++ {
+			at += copy(out[at:], pad)
+		}
+		at += writeRunePrefix(out[at:], pad, partial)
+		return at
+	}
+	if left {
+		at := writePad(dst)
+		copy(dst[at:], src)
+	} else {
+		at := copy(dst, src)
+		writePad(dst[at:])
+	}
 }
 
 func doLpad(src string, tgtLen int64, pad string) (string, bool) {
@@ -1689,26 +1730,8 @@ func maxStringFunctionResultLength(result vector.FunctionResultWrapper) int64 {
 	}
 }
 
-func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	maxResultLen := maxStringFunctionResultLength(result)
-	// repeat the string n times.
-	repeatNTimes := func(base string, n int64) (r string, null bool) {
-		if n <= 0 {
-			return "", false
-		}
-
-		// Keep the runtime domain aligned with the planner's BLOB promotion.
-		// The division check avoids integer overflow before strings.Repeat and
-		// bounds one scalar result by MatrixOne's existing BLOB payload limit.
-		sourceLen := int64(len(base))
-		if sourceLen == 0 {
-			return "", false
-		}
-		if n > maxResultLen/sourceLen {
-			return "", true
-		}
-		return strings.Repeat(base, int(n)), false
-	}
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
@@ -1721,19 +1744,18 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
 			err = rs.AppendMustNullForBytesResult()
+		} else if v2 <= 0 || len(v1) == 0 {
+			err = rs.AppendBytes(nil, false)
+		} else if v2 > maxResultLen/int64(len(v1)) {
+			err = rs.AppendMustNullForBytesResult()
 		} else {
-			if v2 > 0 && len(v1) > 0 && v2 <= maxResultLen/int64(len(v1)) {
-				resultBytes := int64(len(v1)) * v2
-				if err = rs.GetResultVector().PreExtendWithArea(1, int(resultBytes), proc.Mp()); err != nil {
-					return err
+			resultBytes := int64(len(v1)) * v2
+			err = rs.AppendBytesWithWriter(int(resultBytes), func(dst []byte) error {
+				for at := 0; at < len(dst); at += len(v1) {
+					copy(dst[at:], v1)
 				}
-			}
-			r, null := repeatNTimes(functionUtil.QuickBytesToStr(v1), v2)
-			if null {
-				err = rs.AppendMustNullForBytesResult()
-			} else {
-				err = rs.AppendBytes([]byte(r), false)
-			}
+				return nil
+			})
 		}
 		if err != nil {
 			return err
@@ -1742,7 +1764,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1756,16 +1778,13 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		if !(null1 || null2 || null3) {
 			resultBytes, shouldNull := padResultByteLength(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
-				if err := rs.GetResultVector().PreExtendWithArea(1, resultBytes, proc.Mp()); err != nil {
+				if err := rs.AppendBytesWithWriter(resultBytes, func(dst []byte) error {
+					writePadResult(dst, string(v1), int(v2), string(v3), true)
+					return nil
+				}); err != nil {
 					return err
 				}
-				rval, runtimeNull := doLpad(string(v1), v2, string(v3))
-				if !runtimeNull {
-					if err := rs.AppendBytes([]byte(rval), false); err != nil {
-						return err
-					}
-					continue
-				}
+				continue
 			}
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {
@@ -1775,7 +1794,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1789,16 +1808,13 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		if !(null1 || null2 || null3) {
 			resultBytes, shouldNull := padResultByteLength(string(v1), v2, string(v3), maxResultLen)
 			if !shouldNull {
-				if err := rs.GetResultVector().PreExtendWithArea(1, resultBytes, proc.Mp()); err != nil {
+				if err := rs.AppendBytesWithWriter(resultBytes, func(dst []byte) error {
+					writePadResult(dst, string(v1), int(v2), string(v3), false)
+					return nil
+				}); err != nil {
 					return err
 				}
-				rval, runtimeNull := doRpad(string(v1), v2, string(v3))
-				if !runtimeNull {
-					if err := rs.AppendBytes([]byte(rval), false); err != nil {
-						return err
-					}
-					continue
-				}
+				continue
 			}
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {

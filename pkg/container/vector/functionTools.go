@@ -688,6 +688,13 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	return nil
 }
 
+func (fr *FunctionResult[T]) AppendBytesWithWriter(size int, writer func([]byte) error) error {
+	if fr.vec.IsConst() {
+		return fmt.Errorf("direct varlena writer does not support const result")
+	}
+	return AppendBytesWithWriter(fr.vec, size, fr.mp, writer)
+}
+
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	if !fr.vec.IsConst() {
 		return AppendBytes(fr.vec, val, isnull, fr.mp)

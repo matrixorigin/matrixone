@@ -5090,7 +5090,40 @@ func refineBinaryPadLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	if !ok || target < 0 {
 		return
 	}
-	refineKnownBinaryResultType(returnType, uint64(target))
+	sourceRuneBytes, sourceKnown := binaryExprMaxRuntimeRuneBytes(args[0])
+	padRuneBytes, padKnown := binaryExprMaxRuntimeRuneBytes(args[2])
+	if !sourceKnown || !padKnown {
+		return
+	}
+	maxRuneBytes := max(sourceRuneBytes, padRuneBytes)
+	if maxRuneBytes != 0 && uint64(target) > math.MaxUint64/maxRuneBytes {
+		return
+	}
+	refineKnownBinaryResultType(returnType, uint64(target)*maxRuneBytes)
+}
+
+func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			var bound uint64
+			for input := value.Sval; len(input) > 0; {
+				r, size := utf8.DecodeRuneInString(input)
+				encoded := uint64(size)
+				if r == utf8.RuneError && size == 1 {
+					encoded = uint64(utf8.RuneLen(utf8.RuneError))
+				}
+				bound = max(bound, encoded)
+				input = input[size:]
+			}
+			return bound, true
+		}
+	}
+	if expr.Typ.Width <= 0 || types.T(expr.Typ.Id) == types.T_blob {
+		return 0, false
+	}
+	// Invalid UTF-8 bytes become the three-byte RuneError on partial-rune
+	// paths; valid UTF-8 can consume up to four declared bytes per rune.
+	return min(max(uint64(expr.Typ.Width), uint64(utf8.RuneLen(utf8.RuneError))), uint64(utf8.UTFMax)), true
 }
 
 func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {

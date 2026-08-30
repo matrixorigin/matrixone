@@ -1132,6 +1132,23 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 	}
 }
 
+func TestPadAndInsertSizingMatchesRuntimePaths(t *testing.T) {
+	invalid := string([]byte{0xff})
+	size, null := padResultByteLength(invalid, 1, invalid, int64(types.MaxBlobLen))
+	require.False(t, null)
+	require.Equal(t, 1, size, "the exact-source path preserves invalid UTF-8 bytes")
+
+	source := []byte("source")
+	size, _, _, raw := insertResultLayout(source, 0, 100, []byte("x"))
+	require.True(t, raw)
+	require.Equal(t, len(source), size)
+	size, start, end, raw := insertResultLayout(source, 1, math.MaxInt64, []byte("x"))
+	require.False(t, raw)
+	require.Equal(t, 1, size)
+	require.Equal(t, 0, start)
+	require.Equal(t, len(source), end)
+}
+
 func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
 	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)

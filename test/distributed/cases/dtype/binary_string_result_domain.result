@@ -16,6 +16,12 @@ aa
 select lpad(X'61', 2, X'62') as bounded_lpad;
 ➤ bounded_lpad[-3,2,0]  𝄀
 ba
+select lpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_lpad;
+➤ multibyte_lpad[-3,8,0]  𝄀
+ðð
+select rpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_rpad;
+➤ multibyte_rpad[-3,8,0]  𝄀
+ðð
 select repeat(X'61', cast(2 as signed)) as dynamic_repeat;
 ➤ dynamic_repeat[-4,2147483647,0]  𝄀
 aa

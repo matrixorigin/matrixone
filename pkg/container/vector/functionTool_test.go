@@ -27,6 +27,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_blob.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+
+	require.NoError(t, AppendBytesWithWriter(vec, 64, mp, func(dst []byte) error {
+		for i := range dst {
+			dst[i] = byte(i)
+		}
+		return nil
+	}))
+	require.Equal(t, byte(63), vec.GetBytesAt(0)[63])
+	beforeLength, beforeArea := vec.Length(), len(vec.GetArea())
+	require.Error(t, AppendBytesWithWriter(vec, 128, mp, func([]byte) error { return errors.New("reject") }))
+	require.Equal(t, beforeLength, vec.Length())
+	require.Equal(t, beforeArea, len(vec.GetArea()))
+}
+
 func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)

@@ -1056,12 +1056,72 @@ func QuoteString(str string) string {
 	return result.String()
 }
 
-func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
-		str := functionUtil.QuickBytesToStr(v)
-		quoted := QuoteString(str)
-		return functionUtil.QuickStrToBytes(quoted)
-	}, selectList)
+func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		value, null := parameter.GetStrValue(row)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		resultBytes := 2
+		for _, b := range value {
+			switch b {
+			case '\'', '\\', '\n', '\r', '\t', 0, 0x1a:
+				resultBytes += 2
+			default:
+				resultBytes++
+			}
+		}
+		if int64(resultBytes) > maxStringFunctionResultLength(result) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytesWithWriter(resultBytes, func(dst []byte) error { writeQuotedBytes(dst, value); return nil }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeQuotedBytes(dst, value []byte) {
+	at := 0
+	dst[at] = '\''
+	at++
+	for _, b := range value {
+		switch b {
+		case '\'':
+			dst[at], dst[at+1] = '\'', '\''
+			at += 2
+		case '\\':
+			dst[at], dst[at+1] = '\\', '\\'
+			at += 2
+		case '\n':
+			dst[at], dst[at+1] = '\\', 'n'
+			at += 2
+		case '\r':
+			dst[at], dst[at+1] = '\\', 'r'
+			at += 2
+		case '\t':
+			dst[at], dst[at+1] = '\\', 't'
+			at += 2
+		case 0:
+			dst[at], dst[at+1] = '\\', '0'
+			at += 2
+		case 0x1a:
+			dst[at], dst[at+1] = '\\', 'Z'
+			at += 2
+		default:
+			dst[at] = b
+			at++
+		}
+	}
+	dst[at] = '\''
 }
 
 func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

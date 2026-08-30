@@ -16,6 +16,8 @@ select char(65 using utf8mb4) as explicit_text_char;
 select convert(cast(-9223372036854775808 as signed) using binary) as converted_integer;
 select repeat(X'61', 2) as bounded_repeat;
 select lpad(X'61', 2, X'62') as bounded_lpad;
+select lpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_lpad;
+select rpad(cast('😀' as varbinary(4)), 2, '😀') as multibyte_rpad;
 select repeat(X'61', cast(2 as signed)) as dynamic_repeat;
 select make_set(7, 'a', 'b', 'c') as bounded_make_set;
 select export_set(7, 'a', 'b', ',', 3) as bounded_export_set;
