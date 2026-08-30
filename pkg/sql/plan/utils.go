@@ -3539,6 +3539,215 @@ func PreparedPlanRuntimeTextComparisonParamPositions(
 	return positions
 }
 
+// PreparedRuntimeResultParam records a parameter whose runtime domain can
+// change the return type of an enclosing polymorphic function. PreparedType
+// is the argument domain selected while PREPARE built the cached plan; EXECUTE
+// can compare packet metadata with it without walking the plan again.
+type PreparedRuntimeResultParam struct {
+	Position     int32
+	PreparedType types.Type
+}
+
+// PreparedPlanRuntimeResultParams returns bounded admission metadata for
+// parameters that own the result domain of a polymorphic expression. The
+// metadata is computed once per prepared-plan generation. Explicit casts and
+// fixed-result functions stop ownership propagation, so LENGTH(?) does not
+// make an outer max_by result depend on the marker while max_by(?, ...) does.
+func PreparedPlanRuntimeResultParams(preparePlan *Plan) []PreparedRuntimeResultParam {
+	if preparePlan == nil || preparePlan.GetQuery() == nil ||
+		preparePlan.GetQuery().StmtType != plan.Query_SELECT {
+		return nil
+	}
+
+	metadata := make(map[preparedRuntimeResultParamKey]PreparedRuntimeResultParam)
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedRuntimeResultParams(expr, metadata, seen)
+		return nil
+	})
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	result := make([]PreparedRuntimeResultParam, 0, len(metadata))
+	for _, item := range metadata {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Position != result[j].Position {
+			return result[i].Position < result[j].Position
+		}
+		if result[i].PreparedType.Oid != result[j].PreparedType.Oid {
+			return result[i].PreparedType.Oid < result[j].PreparedType.Oid
+		}
+		if result[i].PreparedType.Width != result[j].PreparedType.Width {
+			return result[i].PreparedType.Width < result[j].PreparedType.Width
+		}
+		return result[i].PreparedType.Scale < result[j].PreparedType.Scale
+	})
+	return result
+}
+
+// PreparedPlanRuntimeResultParamPositions is the position-only form used by
+// diagnostics and focused planner tests.
+func PreparedPlanRuntimeResultParamPositions(preparePlan *Plan) []int32 {
+	metadata := PreparedPlanRuntimeResultParams(preparePlan)
+	if len(metadata) == 0 {
+		return nil
+	}
+	positions := make([]int32, 0, len(metadata))
+	for _, item := range metadata {
+		if len(positions) == 0 || positions[len(positions)-1] != item.Position {
+			positions = append(positions, item.Position)
+		}
+	}
+	return positions
+}
+
+type preparedRuntimeResultParamKey struct {
+	position int32
+	oid      types.T
+	width    int32
+	scale    int32
+}
+
+func collectPreparedRuntimeResultParams(
+	expr *plan.Expr,
+	metadata map[preparedRuntimeResultParamKey]PreparedRuntimeResultParam,
+	seen map[*plan.Expr]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if _, ok := seen[expr]; ok {
+		return
+	}
+	seen[expr] = struct{}{}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if impl.F == nil {
+			return
+		}
+		for argIndex, arg := range impl.F.Args {
+			if preparedFunctionReturnTypeDependsOnRuntimeParamAt(expr, argIndex) {
+				collectPreparedRuntimeResultOwners(arg, metadata)
+			}
+			collectPreparedRuntimeResultParams(arg, metadata, seen)
+		}
+	case *plan.Expr_W:
+		if impl.W == nil {
+			return
+		}
+		collectPreparedRuntimeResultParams(impl.W.WindowFunc, metadata, seen)
+		for _, arg := range impl.W.PartitionBy {
+			collectPreparedRuntimeResultParams(arg, metadata, seen)
+		}
+		for _, order := range impl.W.OrderBy {
+			if order != nil {
+				collectPreparedRuntimeResultParams(order.Expr, metadata, seen)
+			}
+		}
+	case *plan.Expr_List:
+		if impl.List != nil {
+			for _, item := range impl.List.List {
+				collectPreparedRuntimeResultParams(item, metadata, seen)
+			}
+		}
+	case *plan.Expr_Sub:
+		if impl.Sub != nil {
+			collectPreparedRuntimeResultParams(impl.Sub.Child, metadata, seen)
+		}
+	}
+}
+
+func preparedFunctionReturnTypeDependsOnRuntimeParamAt(expr *plan.Expr, argIndex int) bool {
+	functionExpr := expr.GetF()
+	if functionExpr == nil || functionExpr.Func == nil ||
+		argIndex < 0 || argIndex >= len(functionExpr.Args) {
+		return false
+	}
+	arg := functionExpr.Args[argIndex]
+	if !preparedExprContainsParam(arg) || isExplicitPreparedCast(arg) {
+		return false
+	}
+
+	argTypes := make([]types.Type, len(functionExpr.Args))
+	for i, candidateArg := range functionExpr.Args {
+		if candidateArg == nil {
+			return false
+		}
+		argTypes[i] = makeTypeByPlan2Expr(candidateArg)
+	}
+	preparedReturnType := makeTypeByPlan2Expr(expr)
+	for _, candidateType := range preparedRuntimeParamTypeCandidates() {
+		candidateArgs := append([]types.Type(nil), argTypes...)
+		candidateArgs[argIndex] = candidateType
+		resolved, err := function.GetFunctionByName(
+			context.Background(), functionExpr.Func.GetObjName(), candidateArgs)
+		if err == nil && !resolved.GetReturnType().Eq(preparedReturnType) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPreparedRuntimeResultOwners(
+	expr *plan.Expr,
+	metadata map[preparedRuntimeResultParamKey]PreparedRuntimeResultParam,
+) {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		preparedType := makeTypeByPlan2Expr(expr)
+		if preparedType.Oid == types.T_any {
+			preparedType = types.T_text.ToType()
+		}
+		key := preparedRuntimeResultParamKey{
+			position: param.Pos,
+			oid:      preparedType.Oid,
+			width:    preparedType.Width,
+			scale:    preparedType.Scale,
+		}
+		metadata[key] = PreparedRuntimeResultParam{
+			Position:     param.Pos,
+			PreparedType: preparedType,
+		}
+		return
+	}
+	if isImplicitPreparedParamCast(expr) {
+		functionExpr := expr.GetF()
+		if functionExpr != nil && len(functionExpr.Args) > 0 {
+			child := functionExpr.Args[0]
+			if param := child.GetP(); param != nil {
+				preparedType := makeTypeByPlan2Expr(expr)
+				key := preparedRuntimeResultParamKey{
+					position: param.Pos,
+					oid:      preparedType.Oid,
+					width:    preparedType.Width,
+					scale:    preparedType.Scale,
+				}
+				metadata[key] = PreparedRuntimeResultParam{
+					Position:     param.Pos,
+					PreparedType: preparedType,
+				}
+				return
+			}
+		}
+	}
+
+	functionExpr := expr.GetF()
+	if functionExpr == nil {
+		return
+	}
+	for argIndex, arg := range functionExpr.Args {
+		if preparedFunctionReturnTypeDependsOnRuntimeParamAt(expr, argIndex) {
+			collectPreparedRuntimeResultOwners(arg, metadata)
+		}
+	}
+}
+
 func preparedNumericComparisonTextParamPositions(
 	preparePlan *Plan,
 	runtimeParamTypes []types.Type,

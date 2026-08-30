@@ -302,6 +302,7 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	executionPlan := prepareControl.Plan
 	paramCount := len(prepareControl.ParamTypes)
+	runtimeResultParams := plan2.PreparedPlanRuntimeResultParams(executionPlan)
 
 	prepareStmt := &PrepareStmt{
 		Name:                  stmtName,
@@ -318,6 +319,8 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 			executionPlan),
 		runtimeTextComparisonParamPositions: plan2.PreparedPlanRuntimeTextComparisonParamPositions(
 			executionPlan, paramCount),
+		runtimeResultParams:           runtimeResultParams,
+		runtimeResultParamPositions:   preparedRuntimeResultParamPositions(runtimeResultParams),
 		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(executionPlan),
 		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions:  plan2.PreparedJSONComparisonParamPositions(executionPlan),
@@ -589,6 +592,166 @@ func BenchmarkPreparedRuntimeTextComparisonAdmission(b *testing.B) {
 			if !preparedRuntimeTextComparisonSpecializationNeeded(
 				executionPlan, positions, runtimeTypes) {
 				b.Fatal("mixed domains must enter execute-time rebinding")
+			}
+		}
+	})
+}
+
+func TestInitExecuteStmtParamCachesNestedResultDomain(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 218, "select max_by(?, 1, 1)")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []int32{0}, prepareStmt.runtimeResultParamPositions)
+	require.Empty(t, prepareStmt.directResultParamPositions)
+
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	ordinaryCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = ordinaryCompile
+	ordinaryColDef := [][]byte{[]byte("prepare-time-text")}
+	prepareStmt.ColDefData = ordinaryColDef
+
+	var metadataTypes []plan.Type
+	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+		require.Len(t, columns, 1)
+		metadataTypes = append(metadataTypes, columns[0].Typ)
+		return [][]byte{[]byte(fmt.Sprintf("%d", columns[0].Typ.Id))}, nil
+	}
+
+	install := func(value string, mysqlType defines.MysqlType) {
+		t.Helper()
+		cw.proc.SetPrepareParams(nil)
+		if prepareStmt.params != nil {
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(
+			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+		execCtx.prepareColDef = ordinaryColDef
+	}
+
+	install("7", defines.MYSQL_TYPE_LONGLONG)
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, ordinaryPlan, runtimePlan)
+	require.True(t, cw.runtimeResultDomainSpecialization)
+	require.Equal(t, int32(types.T_int64),
+		plan2.GetResultColumnsFromPlan(runtimePlan)[0].Typ.Id)
+	require.Equal(t, int32(types.T_int64), metadataTypes[len(metadataTypes)-1].Id)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+
+	install("8", defines.MYSQL_TYPE_LONGLONG)
+	retComp, reusedPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, runtimePlan, reusedPlan)
+
+	// A text packet matches the original polymorphic argument domain and can
+	// return to the immutable prepare-time plan and metadata.
+	install("text", defines.MYSQL_TYPE_VAR_STRING)
+	retComp, textPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, ordinaryCompile, retComp)
+	require.Same(t, ordinaryPlan, textPlan)
+	require.Equal(t, ordinaryColDef, execCtx.prepareColDef)
+
+	// The one-entry runtime cache remains available when the packet switches
+	// back to the preceding stable INT64 result domain.
+	install("9", defines.MYSQL_TYPE_LONGLONG)
+	retComp, reusedPlan, _, _, _, err = initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, runtimePlan, reusedPlan)
+}
+
+func BenchmarkPreparedNestedResultExecuteAdmission(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		b, 219, "select max_by(?, 1, 1)")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	ordinaryCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = ordinaryCompile
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(
+		prepareStmt.params, []byte("7"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(b, err)
+	if owned && stmt != nil {
+		stmt.Free()
+	}
+	require.Nil(b, retComp)
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(b, cw.installRuntimeCacheCandidate(runtimeCompile))
+
+	run := func(wantCompile *compile.Compile, wantPlan *plan.Plan) {
+		b.Helper()
+		retComp, executionPlan, stmt, _, owned, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+		if retComp != wantCompile || executionPlan != wantPlan {
+			b.Fatal("prepared execution did not reuse the expected plan and Compile")
+		}
+	}
+
+	b.Run("stable-int64", func(b *testing.B) {
+		prepareStmt.ParamTypes[0] = byte(defines.MYSQL_TYPE_LONGLONG)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			run(runtimeCompile, runtimePlan)
+		}
+	})
+
+	b.Run("stable-text-control", func(b *testing.B) {
+		prepareStmt.ParamTypes[0] = byte(defines.MYSQL_TYPE_VAR_STRING)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			run(ordinaryCompile, ordinaryPlan)
+		}
+	})
+
+	b.Run("int64-text-switch", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; b.Loop(); i++ {
+			if i&1 == 0 {
+				prepareStmt.ParamTypes[0] = byte(defines.MYSQL_TYPE_LONGLONG)
+				run(runtimeCompile, runtimePlan)
+			} else {
+				prepareStmt.ParamTypes[0] = byte(defines.MYSQL_TYPE_VAR_STRING)
+				run(ordinaryCompile, ordinaryPlan)
 			}
 		}
 	})
@@ -1373,7 +1536,7 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, false, false, false, nil)
+	}, false, false, false, false, false, nil, nil)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)

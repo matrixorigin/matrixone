@@ -2857,6 +2857,7 @@ func createPrepareStmtInSession(
 		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
+	runtimeResultParams := plan2.PreparedPlanRuntimeResultParams(prepareControl.Plan)
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
@@ -2899,6 +2900,8 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		runtimeTextComparisonParamPositions: plan2.PreparedPlanRuntimeTextComparisonParamPositions(
 			prepareControl.Plan, len(prepareControl.ParamTypes)),
+		runtimeResultParams:         runtimeResultParams,
+		runtimeResultParamPositions: preparedRuntimeResultParamPositions(runtimeResultParams),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,

@@ -380,6 +380,7 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
 			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+			require.Equal(t, []int32{0}, PreparedPlanRuntimeResultParamPositions(prepare.Plan))
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(),
 				prepare.Plan,
@@ -398,6 +399,20 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 			require.Equal(t, int32(types.T_int64), columns[0].Typ.Id)
 		})
 	}
+}
+
+func TestPreparedRuntimeResultParamsStopAtFixedDomains(t *testing.T) {
+	fixed := buildPreparedAggregatePlan(t, "select max_by(length(?), 1, 1) from nation")
+	require.Empty(t, PreparedPlanRuntimeResultParams(fixed.Plan))
+
+	explicit := buildPreparedAggregatePlan(t,
+		"select max_by(cast(? as varchar), 1, 1) from nation")
+	require.Empty(t, PreparedPlanRuntimeResultParams(explicit.Plan))
+
+	stableDML := buildPreparedAggregatePlan(t,
+		"update nation set n_nationkey = n_nationkey + ? where n_nationkey = ?")
+	require.Empty(t, PreparedPlanRuntimeResultParams(stableDML.Plan),
+		"write expressions do not expose client result metadata")
 }
 
 func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {

@@ -366,6 +366,11 @@ type PrepareStmt struct {
 	// domain-sensitive comparison rebind; stable numeric DML remains on the
 	// cached compile path without an execute-time plan walk.
 	runtimeTextComparisonParamPositions []int32
+	// runtimeResultParams identifies nested parameters whose packet domain owns
+	// a polymorphic result type. The prepared argument domain is retained with
+	// each position so stable packets can stay on the cached Compile path.
+	runtimeResultParams         []plan2.PreparedRuntimeResultParam
+	runtimeResultParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -829,6 +834,8 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ColDefData = nil
 	}
 	prepareStmt.runtimeTextComparisonParamPositions = nil
+	prepareStmt.runtimeResultParams = nil
+	prepareStmt.runtimeResultParamPositions = nil
 	prepareStmt.remapDb = nil
 }
 

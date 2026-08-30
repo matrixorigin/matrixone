@@ -536,9 +536,34 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			defer func() {
 				require.NoError(t, stmt.Close())
 			}()
-			var value int64
-			require.NoError(t, stmt.QueryRowContext(ctx, int64(7)).Scan(&value))
-			require.Equal(t, int64(7), value)
+
+			assertResult := func(argument any, databaseType string, target any) {
+				t.Helper()
+				rows, queryErr := stmt.QueryContext(ctx, argument)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.Equal(t, databaseType, columnTypes[0].DatabaseTypeName())
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(target))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}
+
+			var first, stable, switchedBack int64
+			assertResult(int64(7), "BIGINT", &first)
+			assertResult(int64(8), "BIGINT", &stable)
+			require.Equal(t, int64(7), first)
+			require.Equal(t, int64(8), stable)
+
+			var text string
+			assertResult("text", "TEXT", &text)
+			require.Equal(t, "text", text)
+
+			assertResult(int64(9), "BIGINT", &switchedBack)
+			require.Equal(t, int64(9), switchedBack)
 		}
 	})
 }
