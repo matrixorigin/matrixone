@@ -1466,19 +1466,19 @@ func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 		{
 			name:       "json then varchar",
 			inputs:     []types.Type{types.T_json.ToType(), types.T_varchar.ToType()},
-			wantReturn: types.T_varchar,
+			wantReturn: types.T_text,
 			wantCast:   true,
 		},
 		{
 			name:       "varchar then json",
 			inputs:     []types.Type{types.T_varchar.ToType(), types.T_json.ToType()},
-			wantReturn: types.T_varchar,
+			wantReturn: types.T_text,
 			wantCast:   true,
 		},
 		{
 			name:       "json and char",
 			inputs:     []types.Type{types.T_json.ToType(), types.T_char.ToType()},
-			wantReturn: types.T_varchar,
+			wantReturn: types.T_text,
 			wantCast:   true,
 		},
 		{
@@ -1488,9 +1488,9 @@ func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 			wantCast:   true,
 		},
 		{
-			name:       "null does not change varchar result",
+			name:       "null does not change text result",
 			inputs:     []types.Type{types.T_json.ToType(), types.T_any.ToType(), types.T_varchar.ToType()},
-			wantReturn: types.T_varchar,
+			wantReturn: types.T_text,
 			wantCast:   true,
 		},
 		{

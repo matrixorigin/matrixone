@@ -939,7 +939,6 @@ func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkR
 func coalesceJSONTextResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
 	hasJSON := false
 	hasCharacter := false
-	targetOID := types.T_varchar
 	for i := range inputs {
 		switch inputs[i].Oid {
 		case types.T_any:
@@ -949,7 +948,6 @@ func coalesceJSONTextResult(overloads []overload, inputs []types.Type) (checkRes
 			hasCharacter = true
 		case types.T_text:
 			hasCharacter = true
-			targetOID = types.T_text
 		default:
 			return checkResult{}, false
 		}
@@ -958,7 +956,7 @@ func coalesceJSONTextResult(overloads []overload, inputs []types.Type) (checkRes
 		return checkResult{}, false
 	}
 
-	target := commonConditionalStringType(targetOID.ToType(), inputs)
+	target := commonConditionalStringType(types.T_text.ToType(), inputs)
 	for i, over := range overloads {
 		if len(over.args) != 1 || over.args[0] != target.Oid {
 			continue
