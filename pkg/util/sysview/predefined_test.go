@@ -442,6 +442,11 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 	// line-break escapes doubled so SQL passes them through to regexp_substr
 	// instead of turning them into physical newlines.
 	assert.Contains(t, InformationSchemaViewsDDL, `[^\\r\\n]`)
+	// Do not embed a raw /* sequence in the SQL string: cleanHint scans SQL
+	// text before regexp_substr sees it. The escaped character class is
+	// equivalent to [^/*] for the regexp engine while remaining literal-safe.
+	assert.Contains(t, InformationSchemaViewsDDL, `[^/\\*]`)
+	assert.NotContains(t, informationSchemaViewPrefixSpanPattern, `[^/*]`)
 	assert.Contains(t, InformationSchemaViewsDDL, "2 * if(left(trim(regexp_replace(")
 	// System-view definitions are replayed by database clone. Use the same IF
 	// form as other persisted information_schema views for the wrapper-only
