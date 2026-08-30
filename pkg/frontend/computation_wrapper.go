@@ -1357,11 +1357,8 @@ func initExecuteStmtParamWithResolverInSession(
 		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
-		runtimeResultDomainSpecialization = preparedRuntimeResultDomainSpecializationNeeded(
-			prepareStmt.runtimeResultParams, runtimeParamTypes)
-		runtimeTextComparisonSpecialization = preparedRuntimeTextComparisonSpecializationNeeded(
-			executionPlan, prepareStmt.runtimeTextComparisonParamPositions, runtimeParamTypes)
+		runtimeResultDomainSpecialization = preparedBinaryRuntimeResultDomainSpecializationNeeded(
+			prepareStmt.runtimeResultParams, prepareStmt.ParamTypes, prepareStmt.params)
 		if cap(prepareStmt.paramKinds) < paramCount {
 			prepareStmt.paramKinds = make([]vector.PrepareParamKind, paramCount)
 		} else {
@@ -1370,25 +1367,45 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		hasParamKind := false
 		hasConcreteType := false
-		if cap(prepareStmt.paramConcreteTypes) < paramCount {
-			prepareStmt.paramConcreteTypes = make([]types.T, paramCount)
-		} else {
-			prepareStmt.paramConcreteTypes = prepareStmt.paramConcreteTypes[:paramCount]
-			clear(prepareStmt.paramConcreteTypes)
+		if len(prepareStmt.jsonComparisonParamPositions) > 0 {
+			if cap(prepareStmt.paramConcreteTypes) < paramCount {
+				prepareStmt.paramConcreteTypes = make([]types.T, paramCount)
+			} else {
+				prepareStmt.paramConcreteTypes = prepareStmt.paramConcreteTypes[:paramCount]
+				clear(prepareStmt.paramConcreteTypes)
+			}
 		}
 		directPositionIndex := 0
+		textComparisonPositionIndex := 0
+		runtimeTextComparisonPacketCandidate := false
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
 			prepareStmt.paramKinds[i] = kind
-			if _, relevant := slices.BinarySearch(
-				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
-				concreteType := runtimeParamTypes[i].Oid
-				if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported && expectedKind == kind {
-					prepareStmt.paramConcreteTypes[i] = concreteType
-					hasConcreteType = true
+			if len(prepareStmt.jsonComparisonParamPositions) > 0 {
+				if _, relevant := slices.BinarySearch(
+					prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
+					concreteType := binaryProtocolRuntimeParamTypeAt(
+						prepareStmt.ParamTypes, prepareStmt.params, i).Oid
+					if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported && expectedKind == kind {
+						prepareStmt.paramConcreteTypes[i] = concreteType
+						hasConcreteType = true
+					}
+				}
+			}
+			for textComparisonPositionIndex < len(prepareStmt.runtimeTextComparisonParamPositions) &&
+				prepareStmt.runtimeTextComparisonParamPositions[textComparisonPositionIndex] < int32(i) {
+				textComparisonPositionIndex++
+			}
+			if textComparisonPositionIndex < len(prepareStmt.runtimeTextComparisonParamPositions) &&
+				prepareStmt.runtimeTextComparisonParamPositions[textComparisonPositionIndex] == int32(i) &&
+				!prepareStmt.params.IsNull(uint64(i)) {
+				runtimeType, _ := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned)
+				switch runtimeType.Oid {
+				case types.T_char, types.T_varchar, types.T_text:
+					runtimeTextComparisonPacketCandidate = true
 				}
 			}
 			for directPositionIndex < len(directResultPositions) &&
@@ -1407,6 +1424,9 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
 		}
+		runtimeTextComparisonSpecialization = preparedBinaryRuntimeTextComparisonSpecializationNeeded(
+			executionPlan, runtimeTextComparisonPacketCandidate,
+			prepareStmt.ParamTypes, prepareStmt.params)
 		if hasNumericPrefixPacket && !runtimeNumericPrefixCandidate {
 			// Older/rebuilt plan shapes can hide the candidate behind generated
 			// index expressions. This fallback scans only DECIMAL/text/NULL packets;
@@ -2170,27 +2190,36 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 	}
 	runtimeTypes := make([]types.Type, params.Length())
 	for i := range runtimeTypes {
-		if params.IsNull(uint64(i)) || i*2+1 >= len(paramTypes) {
-			continue
-		}
-		mysqlType := defines.MysqlType(paramTypes[i*2])
-		isUnsigned := paramTypes[i*2+1]&0x80 != 0
-		if runtimeType, ok := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned); ok {
-			runtimeTypes[i] = runtimeType
-		}
+		runtimeTypes[i] = binaryProtocolRuntimeParamTypeAt(paramTypes, params, i)
 	}
 	return runtimeTypes
 }
 
-func preparedRuntimeResultDomainSpecializationNeeded(
+func binaryProtocolRuntimeParamTypeAt(
+	paramTypes []byte,
+	params *vector.Vector,
+	position int,
+) types.Type {
+	if params == nil || position < 0 || position >= params.Length() ||
+		params.IsNull(uint64(position)) || position*2+1 >= len(paramTypes) {
+		return types.Type{}
+	}
+	mysqlType := defines.MysqlType(paramTypes[position*2])
+	isUnsigned := paramTypes[position*2+1]&0x80 != 0
+	runtimeType, _ := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned)
+	return runtimeType
+}
+
+func preparedBinaryRuntimeResultDomainSpecializationNeeded(
 	metadata []plan2.PreparedRuntimeResultParam,
-	runtimeParamTypes []types.Type,
+	paramTypes []byte,
+	params *vector.Vector,
 ) bool {
 	for _, item := range metadata {
-		if item.Position < 0 || int(item.Position) >= len(runtimeParamTypes) {
+		if item.Position < 0 {
 			continue
 		}
-		runtimeType := runtimeParamTypes[item.Position]
+		runtimeType := binaryProtocolRuntimeParamTypeAt(paramTypes, params, int(item.Position))
 		if runtimeType.Oid == types.T_any {
 			continue
 		}
@@ -2229,22 +2258,21 @@ func preparedResultDomainsEquivalent(preparedType, runtimeType types.Type) bool 
 	return preparedType.Eq(runtimeType)
 }
 
-func preparedRuntimeTextComparisonSpecializationNeeded(
+func preparedBinaryRuntimeTextComparisonSpecializationNeeded(
 	executionPlan *plan2.Plan,
-	candidatePositions []int32,
-	runtimeParamTypes []types.Type,
+	textPacketCandidate bool,
+	paramTypes []byte,
+	params *vector.Vector,
 ) bool {
-	for _, position := range candidatePositions {
-		if position < 0 || int(position) >= len(runtimeParamTypes) {
-			continue
-		}
-		switch runtimeParamTypes[position].Oid {
-		case types.T_char, types.T_varchar, types.T_text:
-			return plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
-				executionPlan, runtimeParamTypes)
-		}
+	if !textPacketCandidate {
+		return false
 	}
-	return false
+	// Stable numeric packets never allocate a complete runtime-type slice.
+	// Materialize it only after the main parameter loop proves that an uncommon
+	// text packet occupies a precomputed comparison-candidate position.
+	runtimeParamTypes := binaryProtocolRuntimeParamTypes(paramTypes, params)
+	return plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		executionPlan, runtimeParamTypes)
 }
 
 // executeUserParamConcreteType returns the assignment-time SQL type carried by

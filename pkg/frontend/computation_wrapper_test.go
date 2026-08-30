@@ -526,6 +526,8 @@ func TestInitExecuteStmtParamRebindsOnlyDomainSensitiveComparison(t *testing.T) 
 	require.Same(t, ordinaryCompile, retComp)
 	require.Same(t, ordinaryPlan, stablePlan)
 	require.Empty(t, cw.paramVals)
+	require.Empty(t, prepareStmt.paramConcreteTypes,
+		"non-JSON stable admission must not allocate exact-type metadata")
 	require.False(t, cw.runtimeTextComparisonSpecialization)
 
 	// The mixed INT64/TEXT category requires a specialized plan.
@@ -573,28 +575,82 @@ func BenchmarkPreparedRuntimeTextComparisonAdmission(b *testing.B) {
 		prepareStmt.Close()
 	}()
 	executionPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
-	positions := prepareStmt.runtimeTextComparisonParamPositions
+	require.Equal(b, []int32{0, 1}, prepareStmt.runtimeTextComparisonParamPositions)
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
 
 	b.Run("stable-numeric", func(b *testing.B) {
-		runtimeTypes := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+		prepareStmt.ParamTypes = []byte{
+			byte(defines.MYSQL_TYPE_LONGLONG), 0,
+			byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		}
 		b.ReportAllocs()
 		for b.Loop() {
-			if preparedRuntimeTextComparisonSpecializationNeeded(
-				executionPlan, positions, runtimeTypes) {
+			if preparedBinaryRuntimeTextComparisonSpecializationNeeded(
+				executionPlan, false, prepareStmt.ParamTypes, prepareStmt.params) {
 				b.Fatal("stable numeric domains must retain the cached compile")
 			}
 		}
 	})
 	b.Run("mixed-numeric-text", func(b *testing.B) {
-		runtimeTypes := []types.Type{types.T_int64.ToType(), types.T_text.ToType()}
+		prepareStmt.ParamTypes = []byte{
+			byte(defines.MYSQL_TYPE_LONGLONG), 0,
+			byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		}
 		b.ReportAllocs()
 		for b.Loop() {
-			if !preparedRuntimeTextComparisonSpecializationNeeded(
-				executionPlan, positions, runtimeTypes) {
+			if !preparedBinaryRuntimeTextComparisonSpecializationNeeded(
+				executionPlan, true, prepareStmt.ParamTypes, prepareStmt.params) {
 				b.Fatal("mixed domains must enter execute-time rebinding")
 			}
 		}
 	})
+}
+
+func BenchmarkInitExecuteStmtParamStableNumericComparisonAdmission(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 220, "select ? = ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(b, []int32{0, 1}, prepareStmt.runtimeTextComparisonParamPositions)
+
+	ordinaryPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	ordinaryCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = ordinaryCompile
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+	}
+
+	run := func() {
+		retComp, executionPlan, stmt, _, owned, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if err != nil || retComp != ordinaryCompile || executionPlan != ordinaryPlan ||
+			len(cw.paramVals) != 0 || cw.runtimeTextComparisonSpecialization {
+			b.Fatalf(
+				"stable admission changed: comp=%p plan=%p values=%d specialized=%v err=%v",
+				retComp, executionPlan, len(cw.paramVals),
+				cw.runtimeTextComparisonSpecialization, err)
+		}
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+	}
+
+	// Allocate reusable parameter metadata before the measured steady-state path.
+	run()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		run()
+	}
 }
 
 func TestInitExecuteStmtParamCachesNestedResultDomain(t *testing.T) {
