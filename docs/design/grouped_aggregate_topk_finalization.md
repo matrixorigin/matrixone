@@ -124,8 +124,10 @@ OFFSET and any rank/tie semantics.
 
 - A WHERE predicate remains on the scan before uniqueness reasoning; a subset of
   a primary key is still unique.
-- HAVING remains a Filter above the row projection. LIMIT is not pushed below it,
-  so rows rejected by HAVING cannot consume the result demand.
+- HAVING remains semantically before bounded demand. After aggregate elimination,
+  filter optimization may keep it above the row projection or push the rewritten
+  predicate into the scan; in the latter plan the scan evaluates its filter before
+  its LIMIT, so rejected rows still cannot consume the result demand.
 - Any inactive GroupingFlag rejects the branch. The all-active sibling of a
   ROLLUP/CUBE/GROUPING SETS expansion is protected because LIMIT demand never
   crosses the enclosing Union.

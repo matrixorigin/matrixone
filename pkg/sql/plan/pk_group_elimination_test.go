@@ -128,7 +128,11 @@ func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
 		{"decimal128 exact boundary", "avg", decimal(types.T_decimal128, 37, 11), decimal(types.T_decimal128, 38, 12), true},
 		{"decimal256 loses integer digits", "avg", decimal(types.T_decimal256, 65, 0), decimal(types.T_decimal256, 65, 6), false},
 		{"decimal256 exact boundary", "avg", decimal(types.T_decimal256, 65, 12), decimal(types.T_decimal256, 65, 12), true},
+		{"decimal sum preserves scale", "sum", decimal(types.T_decimal128, 38, 10), decimal(types.T_decimal128, 38, 10), true},
+		{"decimal avg narrows scale", "avg", decimal(types.T_decimal128, 20, 8), decimal(types.T_decimal128, 38, 7), false},
 		{"missing source precision", "avg", decimal(types.T_decimal128, 0, 0), decimal(types.T_decimal128, 38, 12), false},
+		{"source scale exceeds precision", "avg", decimal(types.T_decimal128, 20, 21), decimal(types.T_decimal128, 38, 21), false},
+		{"target scale exceeds precision", "avg", decimal(types.T_decimal128, 20, 2), decimal(types.T_decimal128, 38, 39), false},
 		{"non-decimal target", "avg", decimal(types.T_decimal128, 20, 2), planpb.Type{Id: int32(types.T_float64)}, false},
 	}
 
@@ -278,7 +282,7 @@ func TestPrimaryKeyGroupEliminationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPrimaryKeyGroupEliminationPreservesHavingAboveProject(t *testing.T) {
+func TestPrimaryKeyGroupEliminationPreservesHavingSemantics(t *testing.T) {
 	logical, err := runOneStmt(
 		NewMockOptimizer(false),
 		t,
