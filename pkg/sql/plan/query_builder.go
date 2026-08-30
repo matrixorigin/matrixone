@@ -3970,11 +3970,25 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
+		hasDecimalInput := false
+		for branchIdx, typ := range argsType {
+			if !setBranchPureNull[branchIdx][columnIdx] && typ.Oid.IsDecimal() {
+				hasDecimalInput = true
+				break
+			}
+		}
 		for branchIdx, typ := range argsType {
 			// A top-level NULL is carried as legacy T_text only so the binder has
 			// a concrete container. It has no collation or width of its own and
 			// must not change the common type chosen from real values.
 			if typ.Oid != types.T_any && !setBranchPureNull[branchIdx][columnIdx] {
+				if hasDecimalInput && columnIdx < len(subCtxList[branchIdx].results) {
+					if exact, ok := setOperationIntegerLiteralDecimalType(
+						subCtxList[branchIdx].results[columnIdx],
+					); ok {
+						typ = exact
+					}
+				}
 				tmpArgsType = append(tmpArgsType, typ)
 			}
 		}
@@ -4526,6 +4540,69 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	return lastNodeID, nil
+}
+
+// setOperationIntegerLiteralDecimalType returns the value domain of a direct
+// integer literal when a set-operation column also contains DECIMAL values.
+// MySQL joins literal precision, not the full BIGINT/UNSIGNED BIGINT domain:
+// for example, 1 UNION 2.5 is DECIMAL(2,1), while an integer column or an
+// explicit CAST(... AS SIGNED) continues to contribute its complete domain.
+func setOperationIntegerLiteralDecimalType(expr *plan.Expr) (types.Type, bool) {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc() == nil || len(fn.Args) != 1 {
+			break
+		}
+		switch fn.GetFunc().GetObjName() {
+		case "unary_minus", "unary_plus":
+			expr = fn.Args[0]
+		default:
+			return types.Type{}, false
+		}
+	}
+	if expr == nil {
+		return types.Type{}, false
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return types.Type{}, false
+	}
+
+	var digits int
+	switch value := literal.Value.(type) {
+	case *plan.Literal_I8Val:
+		digits = signedIntegerLiteralDigits(int64(value.I8Val))
+	case *plan.Literal_I16Val:
+		digits = signedIntegerLiteralDigits(int64(value.I16Val))
+	case *plan.Literal_I32Val:
+		digits = signedIntegerLiteralDigits(int64(value.I32Val))
+	case *plan.Literal_I64Val:
+		digits = signedIntegerLiteralDigits(value.I64Val)
+	case *plan.Literal_U8Val:
+		digits = len(strconv.FormatUint(uint64(value.U8Val), 10))
+	case *plan.Literal_U16Val:
+		digits = len(strconv.FormatUint(uint64(value.U16Val), 10))
+	case *plan.Literal_U32Val:
+		digits = len(strconv.FormatUint(uint64(value.U32Val), 10))
+	case *plan.Literal_U64Val:
+		digits = len(strconv.FormatUint(value.U64Val, 10))
+	default:
+		return types.Type{}, false
+	}
+
+	oid := types.T_decimal64
+	if digits > 18 {
+		oid = types.T_decimal128
+	}
+	return types.New(oid, int32(digits), 0), true
+}
+
+func signedIntegerLiteralDigits(value int64) int {
+	formatted := strconv.FormatInt(value, 10)
+	if formatted[0] == '-' {
+		return len(formatted) - 1
+	}
+	return len(formatted)
 }
 
 func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts []tree.Statement) []Type {
