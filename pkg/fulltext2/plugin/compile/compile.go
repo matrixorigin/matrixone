@@ -46,22 +46,20 @@ func parserFromParams(params string) string {
 	return p.Parser
 }
 
-// jsonTermShapeFromParams reads the json word breaker's persisted options. The
-// ISCP writer reads the SAME two params, so the CREATE build and the
-// incremental build emit identical terms; absent means the defaults (keys on,
-// no full path).
-func jsonTermShapeFromParams(params string) (noKeys, fullPath bool) {
+// jsonTermShapeFromParams reads the json word breaker's persisted option. The
+// ISCP writer reads the SAME param, so the CREATE build and the incremental
+// build emit identical terms; absent means the default (keys on).
+func jsonTermShapeFromParams(params string) (noKeys bool) {
 	if len(params) == 0 {
-		return false, false
+		return false
 	}
 	var p struct {
-		IncludeKeys     string `json:"include_keys"`
-		IncludeFullPath string `json:"include_full_path"`
+		IncludeKeys string `json:"include_keys"`
 	}
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
-		return false, false
+		return false
 	}
-	return p.IncludeKeys == "false", p.IncludeFullPath == "true"
+	return p.IncludeKeys == "false"
 }
 
 var _ compileplugin.Hooks = Hooks{}
@@ -251,7 +249,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 	if err != nil {
 		return "", err
 	}
-	jsonNoKeys, jsonFullPath := jsonTermShapeFromParams(storeDef.IndexAlgoParams)
+	jsonNoKeys := jsonTermShapeFromParams(storeDef.IndexAlgoParams)
 	cfg := fulltext2.TableConfig{
 		DbName:          db,
 		SrcTable:        origTable.Name,
@@ -263,7 +261,6 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		PostingCapacity: postingCap,
 		PositionFree:    positionFree,
 		JSONNoKeys:      jsonNoKeys,
-		JSONFullPath:    jsonFullPath,
 		FromSource:      true,
 	}
 	cols := make([]string, 0, len(storeDef.Parts))

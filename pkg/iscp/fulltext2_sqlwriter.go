@@ -225,10 +225,9 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 			DbName: info.DBName, IndexTable: storage, MetadataTable: meta,
 			Parser:       flat["parser"],
 			PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true",
-			// json term shape, from the same persisted algo params the CREATE
+			// json term shape, from the same persisted algo param the CREATE
 			// build reads, so both halves of the index emit identical terms.
-			JSONNoKeys:   flat[catalog.IndexAlgoParamJSONIncludeKeys] == "false",
-			JSONFullPath: flat[catalog.IndexAlgoParamJSONIncludeFullPath] == "true",
+			JSONNoKeys: flat[catalog.IndexAlgoParamJSONIncludeKeys] == "false",
 		},
 		pkType:       int32(pkTyp.Id),
 		pkPos:        pkPos,

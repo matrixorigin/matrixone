@@ -66,15 +66,12 @@ type jsonTermRange struct {
 //
 // and returns the probe it implies. ok=false means "no probe" — always a safe
 // answer, since the original predicate stands on its own.
-//
-// withPath says whether the target index carries ancestor paths. It changes the
-// term shape, so it must come from the index being probed, never be assumed.
-func jsonExtractProbeFromExpr(expr *plan.Expr, withPath bool) (jsonProbe, bool) {
+func jsonExtractProbeFromExpr(expr *plan.Expr) (jsonProbe, bool) {
 	c, ok := jsonExtractComparison(expr)
 	if !ok {
 		return jsonProbe{}, false
 	}
-	return c.probe(withPath)
+	return c.probe()
 }
 
 // jsonComparison is a recognized `json_extract_*(col,path) <op> const`, split out
@@ -88,11 +85,11 @@ type jsonComparison struct {
 	lit      *plan.Literal
 }
 
-func (c jsonComparison) probe(withPath bool) (jsonProbe, bool) {
+func (c jsonComparison) probe() (jsonProbe, bool) {
 	if c.op == "=" {
-		return jsonEqualProbe(c.col, c.tag, c.lit, c.isString, withPath)
+		return jsonEqualProbe(c.col, c.tag, c.lit, c.isString)
 	}
-	return jsonRangeProbe(c.col, c.tag, c.lit, c.op, c.isString, withPath)
+	return jsonRangeProbe(c.col, c.tag, c.lit, c.op, c.isString)
 }
 
 func jsonExtractComparison(expr *plan.Expr) (jsonComparison, bool) {
@@ -133,7 +130,7 @@ func jsonExtractComparison(expr *plan.Expr) (jsonComparison, bool) {
 // `json_extract_string(...) = '3.14'` can only be true for the STRING "3.14",
 // and probing the float encoding as well would add a term that no qualifying
 // document can hold.
-func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString, withPath bool) (jsonProbe, bool) {
+func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString bool) (jsonProbe, bool) {
 	if isString {
 		s, ok := lit.Value.(*plan.Literal_Sval)
 		if !ok {
@@ -141,7 +138,7 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString, withPath
 		}
 		return jsonProbe{
 			ColPos: col, Tag: tag,
-			Terms: fulltext2.JSONEqualProbeTerms(tag, s.Sval, "", withPath),
+			Terms: fulltext2.JSONEqualProbeTerms(tag, s.Sval),
 		}, true
 	}
 	f, ok := litAsFloat(lit)
@@ -150,7 +147,7 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString, withPath
 	}
 	return jsonProbe{
 		ColPos: col, Tag: tag,
-		Terms: []string{fulltext2.JSONFloatTerm(tag, f, "", withPath)},
+		Terms: []string{fulltext2.JSONFloatTerm(tag, f)},
 	}, true
 }
 
@@ -167,12 +164,7 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString, withPath
 // not just redundant: expanding [-Inf,+Inf] materializes the whole numeric
 // vocabulary of the tag, so a selective string predicate turned into a near-full
 // term scan.
-func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isString, withPath bool) (jsonProbe, bool) {
-	if withPath {
-		// the ancestor path sorts AFTER the value, so a value range is not a
-		// contiguous term range; that needs the path-aware range form
-		return jsonProbe{}, false
-	}
+func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isString bool) (jsonProbe, bool) {
 	p := jsonProbe{ColPos: col, Tag: tag}
 
 	if isString {
@@ -181,7 +173,7 @@ func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isStrin
 			return jsonProbe{}, false
 		}
 		slo, shi := fulltext2.JSONStringTermBounds(tag)
-		r, ok := boundedRange(fulltext2.JSONStringTerm(tag, s.Sval, "", false), op, slo, shi)
+		r, ok := boundedRange(fulltext2.JSONStringTerm(tag, s.Sval), op, slo, shi)
 		if !ok {
 			return jsonProbe{}, false
 		}
@@ -194,7 +186,7 @@ func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isStrin
 		return jsonProbe{}, false
 	}
 	nlo, nhi := fulltext2.JSONNumericTermBounds(tag)
-	r, ok := boundedRange(fulltext2.JSONFloatTerm(tag, f, "", false), op, nlo, nhi)
+	r, ok := boundedRange(fulltext2.JSONFloatTerm(tag, f), op, nlo, nhi)
 	if !ok {
 		return jsonProbe{}, false
 	}
@@ -359,7 +351,7 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if idxDef == nil {
 			continue
 		}
-		probe, ok := c.probe(jsonIndexFullPath(idxDef))
+		probe, ok := c.probe()
 		if !ok {
 			continue
 		}
@@ -408,15 +400,11 @@ func (builder *QueryBuilder) findJSONTupleIndex(scanNode *plan.Node, colPos int3
 	return nil
 }
 
-// jsonIndexIncludeKeys / jsonIndexFullPath read the persisted term shape. Both
-// must come from the index, never be assumed: an index built one way and probed
-// the other way silently returns nothing.
+// jsonIndexIncludeKeys reads the persisted term shape. It must come from the
+// index, never be assumed: an index built without tuple terms and probed for
+// them silently returns nothing.
 func jsonIndexIncludeKeys(idx *plan.IndexDef) bool {
 	return jsonIndexParam(idx, catalog.IndexAlgoParamJSONIncludeKeys) != "false"
-}
-
-func jsonIndexFullPath(idx *plan.IndexDef) bool {
-	return jsonIndexParam(idx, catalog.IndexAlgoParamJSONIncludeFullPath) == "true"
 }
 
 func jsonIndexParam(idx *plan.IndexDef, key string) string {

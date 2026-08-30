@@ -55,8 +55,8 @@ Two more constraints worth naming up front:
    searchable term.
 2. Encode terms with the **order-preserving tuple encoding** (`types.Packer`)
    so numeric comparisons become lexicographic range scans.
-3. Two options, both persisted on the index: **`includeKeys`** (reusing the
-   existing dormant `includeKey` hook) and **`includeFullPath`**.
+3. One option, persisted on the index: **`includeKeys`** (reusing the existing
+   dormant `includeKey` hook).
 4. Let the optimizer turn `json_extract_*(col, '$.path') <op> const` into an
    index probe, keeping the original predicate for correctness.
 
@@ -74,8 +74,7 @@ type-code prefixed, strings are `0x00`-terminated and escaped.
 For a leaf at path `a.b.….y.z` with value `V`, encode the tuple:
 
 ```
-( z , V , "a.b.….y" )        -- includeFullPath = true
-( z , V )                    -- includeFullPath = false (default)
+( z , V )
 ```
 
 The element order is the useful part, and it is the issue's proposal:
@@ -87,9 +86,13 @@ The element order is the useful part, and it is the issue's proposal:
 | `$..z > 3.14` | prefix `(z)` + **range** on the value element |
 | `$.a.*.z = V` | prefix `(z, V)` + residual path filter |
 
-Leaf-only mode is a strict prefix of full-path mode, so a full-path index
-answers every leaf-only query too. That is why full path is an *addition*, not
-a different encoding.
+The term deliberately does NOT carry the ancestor path. A probe is therefore
+path-agnostic — it matches that key/value wherever it appears — and a predicate
+on a specific path gets a superset that the retained predicate narrows. An
+earlier draft had an `includeFullPath` mode appending the ancestor path; it was
+removed because the benefit was unclear and it added a second term shape that
+every probe had to agree with (an index built one way and probed the other way
+silently returns nothing).
 
 **The value is encoded under its JSON type**, not stringified: a JSON number
 becomes `EncodeFloat64`, a string becomes `EncodeStringType`. This is the whole
@@ -159,20 +162,6 @@ to "emit the `(tag, value)` tuple".
 Making `true` the default means a plain `WITH PARSER json` index becomes
 structure-aware by default, which is the point of the fix.
 
-### 4.2 `includeFullPath` — default **false**
-
-Only meaningful when `includeKeys = true`.
-
-| Value | Term |
-|---|---|
-| `false` (default) | `(tag, value)` |
-| `true` | `(tag, value, ancestorPath)` |
-
-Because `(tag, value)` is a strict prefix of `(tag, value, ancestorPath)`, a
-full-path index answers leaf-only probes too — via prefix rather than exact
-match. Setting `includeFullPath = true` when `includeKeys = false` is a
-contradiction and should be rejected at DDL time, not silently ignored.
-
 ### 4.3 Surface
 
 **Implemented today** — the defaults, with no way to change them from SQL:
@@ -181,14 +170,13 @@ contradiction and should be rejected at DDL time, not silently ignored.
 CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json;   -- keys on, leaf-only
 ```
 
-**Proposed, NOT yet implemented.** The grammar has no `INCLUDE_KEYS` /
-`INCLUDE_FULL_PATH` index option (only `POSITION_FREE` exists), so the two
-params below can currently only be set by writing `IndexAlgoParams` directly.
-Both are read end to end — build, incremental build, and the optimizer probe —
-so wiring the DDL is the only missing piece:
+**Proposed, NOT yet implemented.** The grammar has no `INCLUDE_KEYS` index
+option (only `POSITION_FREE` exists), so the param below can currently only be
+set by writing `IndexAlgoParams` directly. It is read end to end — build,
+incremental build, and the optimizer probe — so wiring the DDL is the only
+missing piece:
 
 ```sql
-CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json, INCLUDE_FULL_PATH = TRUE;
 CREATE FULLTEXT2 INDEX idx ON t(j) WITH PARSER json, INCLUDE_KEYS = FALSE;
 ```
 
@@ -314,9 +302,8 @@ is excluded — and no term exists. Consistent, no special case.
 
 **No matching index.** Rewrite only when a `json`-parser fulltext2 index exists
 on exactly that column **and** its persisted `includeKeys` is true. The probe
-shape must be derived from that index's recorded `includeFullPath`, never
-assumed: probing a leaf-only index with a full-path term (or the reverse as an
-exact rather than prefix match) finds nothing and drops rows.
+term shape must be derived from that index's recorded options, never assumed:
+probing an index that holds no tuple terms finds nothing and drops rows.
 
 ### 5.3 Placement
 
@@ -349,17 +336,10 @@ non-numeric leaf, so the numeric range is exactly implied.
 
 **How the two options change the search shape:**
 
-- `includeFullPath = false` (default): the term is `(tag, value)`. Equality is
-  an **exact single-term lookup**; inequality is a range over the value element
-  under a fixed `tag` prefix.
-- `includeFullPath = true`: the term is `(tag, value, ancestorPath)`. Because
-  the path sorts *after* the value, a value range spans every path, so far more
-  queries become range scans — including equality on a path-agnostic probe,
-  which becomes a prefix scan over `(tag, value, *)`. Extra paths come back as
-  false positives and the retained predicate removes them.
-
-That asymmetry is the real cost of `includeFullPath = true`, and it is why
-leaf-only is the default: it keeps the common equality probe exact.
+Equality is an **exact single-term lookup** and an inequality is a range over
+the value element under a fixed `tag` prefix. Because the term carries no
+ancestor path, both are path-agnostic: they match the key/value at any depth,
+and the retained predicate narrows to the requested path.
 
 ## 7. Work breakdown
 
@@ -384,14 +364,14 @@ decodes them verbatim — no text intermediate, so the keys are never discarded.
 
 1. `bytejson`: replace the value-only walk with a path-aware tuple tokenizer.
    The existing `includeKey` bool becomes `includeKeys` and gains a companion
-   `includeFullPath`; the current "key as its own adjacent token" behaviour is
+   the current "key as its own adjacent token" behaviour is
    **removed**, since it is the half-measure this change supersedes and nothing
    in the tree calls it.
 2. `pkg/fulltext2`: fix the `json` parser path — one shared encoder called from
    **both** `DocTokenizer`/CREATE and `CdcTokenizer`/CDC (§1), reading the two
    options.
 3. `pkg/catalog` + DDL + `SHOW CREATE`: persist and round-trip `includeKeys` /
-   `includeFullPath`, reject the contradictory combination, and read a missing
+   and read a missing
    value as `includeKeys = false` for pre-existing indexes (§4.4).
 4. `pkg/sql/plan`: the predicate → probe rewrite with the §5.2 rules, keyed off
    the index's persisted options.
@@ -403,9 +383,9 @@ decodes them verbatim — no text intermediate, so the keys are never discarded.
 
 **Later**
 
-7. DDL: an `INCLUDE_KEYS` / `INCLUDE_FULL_PATH` index option so §4.3's proposed
-   surface is reachable from SQL, plus its `SHOW CREATE` round-trip. Everything
-   below the grammar already reads both params.
+7. DDL: an `INCLUDE_KEYS` index option so §4.3's proposed surface is reachable
+   from SQL, plus its `SHOW CREATE` round-trip. Everything below the grammar
+   already reads the param.
 8. `$.a.*.z` wildcard paths via prefix + residual filter.
 8. Cross-type acceleration (`json_extract_string` against a numeric leaf gets
    an exact probe rather than the §5.2 `OR`-of-encodings widening).
@@ -422,8 +402,10 @@ Settled in review:
    also what MO's `varchar` `=` already does. My earlier concern was wrong and
    the restriction it implied is dropped (§5.2).
 3. **Replace the old `json` parser in place** and keep the name `json`.
-4. **Search shape follows `includeFullPath`** (§6): leaf-only keeps equality an
-   exact lookup; full path turns most probes into range/prefix scans.
+4. **No ancestor path in the term** (§6): equality stays an exact lookup and
+   probes are path-agnostic. The `includeFullPath` mode an earlier draft
+   proposed was removed — unclear benefit, and a second term shape every probe
+   would have to agree with.
 5. **v1 scope is `=`, `>`, `>=`, `<`, `<=`** — ranges are in, not deferred.
    Cross-type acceleration (`json_extract_string` on a numeric leaf) is a later
    task.
@@ -452,8 +434,8 @@ rejects**. A generator that builds random JSON docs, indexes them, and asserts
 that `WHERE pred` and `WHERE pred AND probe` return identical row sets is the
 primary oracle — it tests implication directly rather than a plan shape.
 
-The generator must cover all five operators, both `includeFullPath` settings,
-and values chosen to sit on range boundaries — `>` vs `>=` on a value that
+The generator must cover all five operators and values chosen to sit on range
+boundaries — `>` vs `>=` on a value that
 exists in the index is exactly where an off-by-one in the term bounds shows up
 as a dropped row.
 

@@ -58,13 +58,14 @@ func jpExtractFloat(col int32, path string) *plan.Expr {
 
 // The headline rewrite from the issue.
 func TestJSONProbeStringEquality(t *testing.T) {
-	p, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(3, "$.foo"), jpStrLit("bar")), false)
+	p, ok := jsonExtractProbeFromExpr(
+		jpCallExpr("=", jpExtractStr(3, "$.foo"), jpStrLit("bar")))
 	require.True(t, ok)
 	require.Equal(t, int32(3), p.ColPos)
 	require.Equal(t, "foo", p.Tag)
 	require.Empty(t, p.Ranges)
 	// 'bar' is not numeric, so exactly one term: an exact lookup
-	require.Equal(t, []string{fulltext2.JSONStringTerm("foo", "bar", "", false)}, p.Terms)
+	require.Equal(t, []string{fulltext2.JSONStringTerm("foo", "bar")}, p.Terms)
 }
 
 // THE correctness property: the probe must be implied by the predicate. For a
@@ -92,7 +93,7 @@ func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
 	}
 
 	// string equality against a string leaf
-	p, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.foo"), jpStrLit("bar")), false)
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.foo"), jpStrLit("bar")))
 	require.True(t, ok)
 	require.True(t, intersects(p, `{"foo":"bar"}`))
 	require.True(t, intersects(p, `{"a":{"foo":"bar"}}`), "leaf-only probe is path agnostic")
@@ -101,14 +102,14 @@ func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
 
 	// json_extract_string is NULL for a numeric leaf, so `= '3.14'` is true only
 	// for the STRING "3.14": one term, and the numeric document must NOT match
-	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.n"), jpStrLit("3.14")), false)
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.n"), jpStrLit("3.14")))
 	require.True(t, ok)
 	require.Len(t, p.Terms, 1, "the two extractors are disjoint on leaf type")
 	require.True(t, intersects(p, `{"n":"3.14"}`), "string leaf is reachable")
 	require.False(t, intersects(p, `{"n":3.14}`), "numeric leaf is NULL for json_extract_string")
 
 	// float equality reaches an integer leaf, since all numbers normalize
-	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractFloat(0, "$.n"), jpIntLit(3)), false)
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractFloat(0, "$.n"), jpIntLit(3)))
 	require.True(t, ok)
 	require.True(t, intersects(p, `{"n":3}`))
 	require.True(t, intersects(p, `{"n":3.0}`))
@@ -119,7 +120,7 @@ func TestJSONProbeTermsArePresentInMatchingDocuments(t *testing.T) {
 // > and >= produce the SAME range (and < and <=) — the strict form just returns
 // the boundary term too, which the retained predicate removes.
 func TestJSONProbeRanges(t *testing.T) {
-	at := fulltext2.JSONFloatTerm("n", 3.14, "", false)
+	at := fulltext2.JSONFloatTerm("n", 3.14)
 	lo, hi := fulltext2.JSONNumericTermBounds("n")
 
 	for _, tc := range []struct {
@@ -132,7 +133,7 @@ func TestJSONProbeRanges(t *testing.T) {
 		{"<=", lo, at},
 	} {
 		p, ok := jsonExtractProbeFromExpr(
-			jpCallExpr(tc.op, jpExtractFloat(1, "$.n"), jpFltLit(3.14)), false)
+			jpCallExpr(tc.op, jpExtractFloat(1, "$.n"), jpFltLit(3.14)))
 		require.True(t, ok, tc.op)
 		require.Empty(t, p.Terms, tc.op)
 		require.Len(t, p.Ranges, 1, "a float range needs only the numeric encoding")
@@ -147,12 +148,12 @@ func TestJSONProbeRanges(t *testing.T) {
 // selective predicate into a near-full term scan.
 func TestJSONProbeStringRangeIsStringOnly(t *testing.T) {
 	p, ok := jsonExtractProbeFromExpr(
-		jpCallExpr(">", jpExtractStr(0, "$.n"), jpStrLit("m")), false)
+		jpCallExpr(">", jpExtractStr(0, "$.n"), jpStrLit("m")))
 	require.True(t, ok)
 	require.Len(t, p.Ranges, 1, "string side only")
 
 	slo, shi := fulltext2.JSONStringTermBounds("n")
-	require.Equal(t, fulltext2.JSONStringTerm("n", "m", "", false), p.Ranges[0].Lo)
+	require.Equal(t, fulltext2.JSONStringTerm("n", "m"), p.Ranges[0].Lo)
 	require.Equal(t, shi, p.Ranges[0].Hi)
 	require.Less(t, slo, shi)
 	// the whole range stays inside the string encoding
@@ -198,7 +199,7 @@ func TestJSONProbeRangeBracketsMatchingDocuments(t *testing.T) {
 		return inTermRange(p.Ranges[0], term)
 	}
 
-	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(3.0)), false)
+	p, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(3.0)))
 	require.True(t, ok)
 	require.True(t, inRange(p, termOf(`{"n":3.5}`)))
 	require.True(t, inRange(p, termOf(`{"n":1e9}`)))
@@ -206,7 +207,7 @@ func TestJSONProbeRangeBracketsMatchingDocuments(t *testing.T) {
 		"the bound itself is returned: a superset the retained predicate filters")
 	require.False(t, inRange(p, termOf(`{"n":-5}`)), "below the bound is still excluded")
 
-	p, ok = jsonExtractProbeFromExpr(jpCallExpr(">=", jpExtractFloat(0, "$.n"), jpFltLit(3.0)), false)
+	p, ok = jsonExtractProbeFromExpr(jpCallExpr(">=", jpExtractFloat(0, "$.n"), jpFltLit(3.0)))
 	require.True(t, ok)
 	require.True(t, inRange(p, termOf(`{"n":3.0}`)), ">= includes the bound")
 	require.True(t, inRange(p, termOf(`{"n":3}`)), "integer leaf normalizes into the same range")
@@ -214,9 +215,9 @@ func TestJSONProbeRangeBracketsMatchingDocuments(t *testing.T) {
 
 // Reversed operand order is the same predicate with the operator flipped.
 func TestJSONProbeFlipsReversedOperands(t *testing.T) {
-	fwd, ok := jsonExtractProbeFromExpr(jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(7)), false)
+	fwd, ok := jsonExtractProbeFromExpr(jpCallExpr("<", jpExtractFloat(0, "$.n"), jpFltLit(7)))
 	require.True(t, ok)
-	rev, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpFltLit(7), jpExtractFloat(0, "$.n")), false)
+	rev, ok := jsonExtractProbeFromExpr(jpCallExpr(">", jpFltLit(7), jpExtractFloat(0, "$.n")))
 	require.True(t, ok)
 	require.Equal(t, fwd, rev, "7 > x must probe the same range as x < 7")
 }
@@ -244,22 +245,9 @@ func TestJSONProbeDeclines(t *testing.T) {
 		// probe reaches
 		{"float compared to a string constant", jpCallExpr("=", jpExtractFloat(0, "$.n"), jpStrLit("3"))},
 	} {
-		_, ok := jsonExtractProbeFromExpr(tc.expr, false)
+		_, ok := jsonExtractProbeFromExpr(tc.expr)
 		require.False(t, ok, tc.name)
 	}
-}
-
-// A full-path index changes the term shape, so the probe must follow it — and
-// ranges are declined there because the path sorts after the value.
-func TestJSONProbeRespectsIndexTermShape(t *testing.T) {
-	leaf, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.foo"), jpStrLit("bar")), false)
-	require.True(t, ok)
-	full, ok := jsonExtractProbeFromExpr(jpCallExpr("=", jpExtractStr(0, "$.foo"), jpStrLit("bar")), true)
-	require.True(t, ok)
-	require.NotEqual(t, leaf.Terms, full.Terms, "term shape must follow the index")
-
-	_, ok = jsonExtractProbeFromExpr(jpCallExpr(">", jpExtractFloat(0, "$.n"), jpFltLit(1)), true)
-	require.False(t, ok, "a value range is not contiguous once the path is appended")
 }
 
 func TestJSONPathTag(t *testing.T) {
@@ -360,10 +348,6 @@ func TestJSONIndexTermShapeParams(t *testing.T) {
 	require.True(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{"include_keys":"true"}`)))
 	require.False(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{"include_keys":"false"}`)))
 	require.True(t, jsonIndexIncludeKeys(jpJSONIndex("j", `{bad json`)), "malformed => default on")
-
-	require.False(t, jsonIndexFullPath(jpJSONIndex("j", `{"parser":"json"}`)), "absent => off")
-	require.True(t, jsonIndexFullPath(jpJSONIndex("j", `{"include_full_path":"true"}`)))
-	require.False(t, jsonIndexFullPath(jpJSONIndex("j", `{"include_full_path":"false"}`)))
 
 	require.Equal(t, "", jsonIndexParam(nil, "include_keys"))
 	require.Equal(t, "", jsonIndexParam(jpJSONIndex("j", ""), "include_keys"))

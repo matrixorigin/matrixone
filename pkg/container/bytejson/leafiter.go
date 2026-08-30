@@ -45,70 +45,39 @@ const (
 // retained predicate removes). Tag is empty only for a document that is itself
 // a scalar.
 //
-// AncestorPath is everything above Tag, dot-joined ("a.b"), and is empty for a
-// top-level member. Array subscripts are NOT part of it: the elements of
-// {"a":[{"b":1},{"b":2}]} both report Tag "b" and AncestorPath "a", so a probe
-// derived from '$.a[0].b' also matches the '$.a[1].b' document. That is a false
-// positive, which the retained predicate removes; keeping subscripts would make
-// the term depend on element order and buy nothing the predicate does not
-// already decide.
-//
 // Str/I64/U64/F64 carry the value; exactly one is meaningful, selected by Kind.
 // Str aliases the document buffer and is only valid until the next iteration
 // step — copy it if it must outlive that.
 type Leaf struct {
-	Tag          []byte
-	AncestorPath []byte
-	Kind         LeafKind
-	Str          []byte
-	I64          int64
-	U64          uint64
-	F64          float64
+	Tag  []byte
+	Kind LeafKind
+	Str  []byte
+	I64  int64
+	U64  uint64
+	F64  float64
 }
 
-// TokenizeLeaves yields every scalar leaf of the document with its Tag and
-// AncestorPath. It is the structure-aware counterpart of TokenizeValue, which
-// reports values only and so cannot distinguish {"b":"X"} from {"c":"X"}.
-//
-// withPath controls whether AncestorPath is materialized. Building it costs a
-// per-leaf append into a reused buffer, so a caller that does not need the path
-// (the common leaf-only index) passes false and pays nothing.
-func (bj ByteJson) TokenizeLeaves(withPath bool) iter.Seq[Leaf] {
+// TokenizeLeaves yields every scalar leaf of the document with its Tag. It is
+// the structure-aware counterpart of TokenizeValue, which reports values only
+// and so cannot distinguish {"b":"X"} from {"c":"X"}.
+func (bj ByteJson) TokenizeLeaves() iter.Seq[Leaf] {
 	return func(yield func(Leaf) bool) {
-		w := leafWalker{yield: yield, withPath: withPath}
-		w.walk(bj, nil, 0)
+		w := leafWalker{yield: yield}
+		w.walk(bj, nil)
 	}
 }
 
 type leafWalker struct {
-	yield    func(Leaf) bool
-	withPath bool
-	// path is the dotted ancestor path built in place; children append and
-	// truncate back, so one buffer serves the whole walk.
-	path []byte
+	yield func(Leaf) bool
 }
 
-// walk descends bj. tag is the nearest enclosing object key. pathLen is the
-// length of w.path that is the ancestor path *of tag* — children restore to it.
-func (w *leafWalker) walk(bj ByteJson, tag []byte, pathLen int) bool {
+// walk descends bj. tag is the nearest enclosing object key.
+func (w *leafWalker) walk(bj ByteJson, tag []byte) bool {
 	switch bj.Type {
 	case TpCodeObject:
 		cnt := bj.GetElemCnt()
 		for i := 0; i < cnt; i++ {
-			key := bj.getObjectKey(i)
-			childPathLen := pathLen
-			if w.withPath {
-				// the ancestor path of key is (ancestors of tag) + tag
-				w.path = w.path[:pathLen]
-				if len(tag) > 0 {
-					if pathLen > 0 {
-						w.path = append(w.path, '.')
-					}
-					w.path = append(w.path, tag...)
-				}
-				childPathLen = len(w.path)
-			}
-			if !w.walk(bj.getObjectVal(i), key, childPathLen) {
+			if !w.walk(bj.getObjectVal(i), bj.getObjectKey(i)) {
 				return false
 			}
 		}
@@ -117,10 +86,9 @@ func (w *leafWalker) walk(bj ByteJson, tag []byte, pathLen int) bool {
 	case TpCodeArray:
 		cnt := bj.GetElemCnt()
 		for i := 0; i < cnt; i++ {
-			// Array elements keep the enclosing key as their tag and its
-			// ancestor path unchanged: the subscript is BELOW the tag, so it is
-			// part of neither (see Leaf.AncestorPath).
-			if !w.walk(bj.getArrayElem(i), tag, pathLen) {
+			// Array elements keep the enclosing key as their tag: the subscript
+			// is BELOW the tag, so {"a":[1,2]} yields Tag "a" twice.
+			if !w.walk(bj.getArrayElem(i), tag) {
 				return false
 			}
 		}
@@ -131,29 +99,22 @@ func (w *leafWalker) walk(bj ByteJson, tag []byte, pathLen int) bool {
 	// reason), so they index as strings. Leaving them out would make
 	// json_extract_string(...) = '2024-01-02' miss a document that satisfies it.
 	case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
-		return w.emit(Leaf{Tag: tag, Kind: LeafString, Str: bj.GetString()}, pathLen)
+		return w.yield(Leaf{Tag: tag, Kind: LeafString, Str: bj.GetString()})
 	case TpCodeInt64:
-		return w.emit(Leaf{Tag: tag, Kind: LeafInt64, I64: bj.GetInt64()}, pathLen)
+		return w.yield(Leaf{Tag: tag, Kind: LeafInt64, I64: bj.GetInt64()})
 	case TpCodeUint64:
-		return w.emit(Leaf{Tag: tag, Kind: LeafUint64, U64: bj.GetUint64()}, pathLen)
+		return w.yield(Leaf{Tag: tag, Kind: LeafUint64, U64: bj.GetUint64()})
 	case TpCodeFloat64:
-		return w.emit(Leaf{Tag: tag, Kind: LeafFloat64, F64: bj.GetFloat64()}, pathLen)
+		return w.yield(Leaf{Tag: tag, Kind: LeafFloat64, F64: bj.GetFloat64()})
 	case TpCodeDecimal:
 		// Numeric to both extractors: json_extract_float64 returns it as a
 		// number, json_extract_string returns NULL for it. Str carries the
 		// decimal text; the encoder parses it into the numeric form.
-		return w.emit(Leaf{Tag: tag, Kind: LeafDecimal, Str: bj.GetString()}, pathLen)
+		return w.yield(Leaf{Tag: tag, Kind: LeafDecimal, Str: bj.GetString()})
 	default:
 		// TpCodeLiteral (true/false/null), Blob, Opaque and Bit are not indexed.
 		// json_extract_string can still render some of those, so a probe must not
 		// be synthesized for a column that may hold them — see the caller's gate.
 		return true
 	}
-}
-
-func (w *leafWalker) emit(l Leaf, pathLen int) bool {
-	if w.withPath {
-		l.AncestorPath = w.path[:pathLen]
-	}
-	return w.yield(l)
 }

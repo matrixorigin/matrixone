@@ -150,12 +150,6 @@ const (
 	// searchable term.
 	IndexAlgoParamJSONIncludeKeys = "include_keys"
 
-	// IndexAlgoParamJSONIncludeFullPath (fulltext2, parser=json): "true" ⇒ append
-	// the leaf's ancestor path to the tuple, making an exact-path probe exact
-	// instead of a prefix scan. Absent ⇒ "false". Meaningless without
-	// include_keys.
-	IndexAlgoParamJSONIncludeFullPath = "include_full_path"
-
 	// IndexAlgoParamPositionFree (fulltext2): "true" ⇒ build a position-free index
 	// (bag-of-words retrieval only, ~half the footprint; the FST term dict is kept).
 	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).

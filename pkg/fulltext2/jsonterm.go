@@ -25,29 +25,56 @@ import (
 
 // JSON tuple terms.
 //
-// A leaf at path a.b.….y.z with value V is indexed as the order-preserving
-// tuple ( z , V [, "a.b.….y"] ). types.Packer is byte-order preserving, so
+// A leaf whose nearest object key is z and whose value is V is indexed as the
+// order-preserving tuple ( z , V ). types.Packer is byte-order preserving, so
 // lexicographic order over terms IS value order within a type — which is what
 // turns `json_extract_float64(j,'$.a.b') > 3.14` into a term-range scan.
 //
-// The element order is deliberate: tag first, then value, then the ancestor
-// path. That makes
+// Tag first, then value, so prefix(tag) is every value under that key
+// (range-scannable) and (tag, value) is an exact lookup.
 //
-//	prefix(tag)        -> every value under that key, range-scannable
-//	prefix(tag, value) -> that key/value at ANY path
-//	full tuple         -> that key/value at ONE path
-//
-// so the leaf-only index answers equality with an exact lookup, and the
-// full-path index answers path-agnostic queries by prefix.
+// The term deliberately does NOT carry the ancestor path: a probe is
+// path-agnostic, matching that key/value wherever it appears. A predicate on a
+// specific path therefore gets a superset, which the retained predicate
+// narrows.
 //
 // The terms are RAW packed bytes, not hex: they contain 0x00 and bytes that are
 // BOOLEAN-mode pattern syntax, so they must never be routed through a pattern
 // parser or a SQL string literal. The probe carries them as a varbinary
 // function argument instead.
 
-// maxTermBytes bounds a term. It is bytejson.MAX_TOKEN_SIZE so a tuple term and
-// a value token share one limit.
+// maxTermBytes bounds a whole packed term. It is bytejson.MAX_TOKEN_SIZE so a
+// tuple term and a value token share one limit. It is only a backstop now that
+// the value element is capped separately.
 const maxTermBytes = bytejson.MAX_TOKEN_SIZE
+
+// maxTermValueBytes caps the VALUE element of a tuple term.
+//
+// Capping the value rather than the finished term is what keeps the term
+// well-formed: an over-long value would otherwise consume the whole budget and
+// crowd out the ancestor path, leaving a term that is not the tuple it claims
+// to be. With the value bounded, tag and path always survive.
+//
+// Both the build side and the probe side truncate through truncValue, so the
+// two agree. Equality on an over-long value therefore degrades to equality on
+// its first maxTermValueBytes bytes — a PREFIX match. That returns every
+// document sharing the prefix, a superset of the true equality, and the
+// retained predicate removes the extras. Ranges keep the same property because
+// their bounds are inclusive: a value greater than the bound either differs
+// inside the prefix (so its term sorts above) or shares it (so its term equals
+// the bound and the inclusive end keeps it).
+//
+// Truncation is by BYTES and may split a UTF-8 rune. That is harmless: terms
+// are compared as bytes, and both sides cut at the same offset.
+const maxTermValueBytes = 100
+
+// truncValue bounds a string value element. The ONE place either side cuts.
+func truncValue(v []byte) []byte {
+	if len(v) > maxTermValueBytes {
+		return v[:maxTermValueBytes]
+	}
+	return v
+}
 
 // JSONTermOptions is the per-index term shape, persisted in IndexAlgoParams.
 // Both the CREATE build and the CDC build must read the same options, or the
@@ -56,9 +83,6 @@ type JSONTermOptions struct {
 	// IncludeKeys indexes the (tag, value) tuple. Default true. When false the
 	// index keeps the historical value-only tokenization.
 	IncludeKeys bool
-	// IncludeFullPath appends the ancestor path, making an exact-path probe
-	// exact instead of a prefix scan. Only meaningful with IncludeKeys.
-	IncludeFullPath bool
 }
 
 // DefaultJSONTermOptions is what a plain `WITH PARSER json` means for a NEW
@@ -85,12 +109,9 @@ func JSONTupleTerms(bj bytejson.ByteJson, opt JSONTermOptions) []string {
 		p.Reset()
 		p.EncodeStringType(l.Tag)
 		value(p)
-		if opt.IncludeFullPath {
-			p.EncodeStringType(l.AncestorPath)
-		}
 		terms = append(terms, truncateTerm(p.Bytes()))
 	}
-	for l := range bj.TokenizeLeaves(opt.IncludeFullPath) {
+	for l := range bj.TokenizeLeaves() {
 		if l.Kind == bytejson.LeafDecimal {
 			// A decimal is NUMERIC to both extractors: json_extract_float64
 			// returns it as a number and json_extract_string returns NULL for it,
@@ -123,7 +144,7 @@ func JSONTupleTerms(bj bytejson.ByteJson, opt JSONTermOptions) []string {
 func packLeafValue(p *types.Packer, l bytejson.Leaf) {
 	switch l.Kind {
 	case bytejson.LeafString:
-		p.EncodeStringType(l.Str)
+		p.EncodeStringType(truncValue(l.Str))
 	case bytejson.LeafInt64:
 		p.EncodeFloat64(float64(l.I64))
 	case bytejson.LeafUint64:
@@ -146,33 +167,32 @@ func truncateTerm(b []byte) string {
 	return string(b)
 }
 
-// JSONStringTerm builds the probe term for a string constant at key tag.
 // path is used only when the index carries full paths; pass withPath=false for
 // a leaf-only index.
-func JSONStringTerm(tag, value, path string, withPath bool) string {
+// JSONStringTerm builds the probe term for a string constant at key tag. The
+// value is truncated exactly as the build side truncates it, so an over-long
+// constant probes a prefix (a superset) rather than missing every document.
+func JSONStringTerm(tag, value string) string {
 	return packProbe(func(p *types.Packer) {
 		p.EncodeStringType([]byte(tag))
-		p.EncodeStringType([]byte(value))
-	}, path, withPath)
+		p.EncodeStringType(truncValue([]byte(value)))
+	})
 }
 
 // JSONFloatTerm builds the probe term for a numeric constant at key tag. It is
 // the ONLY numeric encoding: integer leaves are normalized to float64 at index
 // time (see packLeafValue), so this one probe reaches them all.
-func JSONFloatTerm(tag string, value float64, path string, withPath bool) string {
+func JSONFloatTerm(tag string, value float64) string {
 	return packProbe(func(p *types.Packer) {
 		p.EncodeStringType([]byte(tag))
 		p.EncodeFloat64(value)
-	}, path, withPath)
+	})
 }
 
-func packProbe(head func(*types.Packer), path string, withPath bool) string {
+func packProbe(head func(*types.Packer)) string {
 	p := types.NewPacker()
 	defer p.Close()
 	head(p)
-	if withPath {
-		p.EncodeStringType([]byte(path))
-	}
 	return truncateTerm(p.Bytes())
 }
 
@@ -184,8 +204,8 @@ func packProbe(head func(*types.Packer), path string, withPath bool) string {
 // document satisfying the comparison therefore always holds the string form,
 // and probing the float encoding too would add a term no qualifying document
 // can hold.
-func JSONEqualProbeTerms(tag, value, path string, withPath bool) []string {
-	return []string{JSONStringTerm(tag, value, path, withPath)}
+func JSONEqualProbeTerms(tag, value string) []string {
+	return []string{JSONStringTerm(tag, value)}
 }
 
 // JSONNumericTermBounds returns the term range covering EVERY numeric leaf
@@ -197,8 +217,8 @@ func JSONEqualProbeTerms(tag, value, path string, withPath bool) []string {
 // so no `<op> const` predicate this rule rewrites can be true for a NaN leaf,
 // and excluding it drops no row.
 func JSONNumericTermBounds(tag string) (loTerm, hiTerm string) {
-	return JSONFloatTerm(tag, math.Inf(-1), "", false),
-		JSONFloatTerm(tag, math.Inf(1), "", false)
+	return JSONFloatTerm(tag, math.Inf(-1)),
+		JSONFloatTerm(tag, math.Inf(1))
 }
 
 // JSONStringTermBounds returns the term range covering EVERY string leaf under
@@ -208,11 +228,11 @@ func JSONStringTermBounds(tag string) (loTerm, hiTerm string) {
 	lo := packProbe(func(p *types.Packer) {
 		p.EncodeStringType([]byte(tag))
 		p.EncodeStringType(nil)
-	}, "", false)
+	})
 	hi := packProbe(func(p *types.Packer) {
 		p.EncodeStringType([]byte(tag))
 		p.EncodeStringTypeMax()
-	}, "", false)
+	})
 	return lo, hi
 }
 
@@ -222,7 +242,7 @@ func (c TableConfig) JSONTermOptions() JSONTermOptions {
 	if c.JSONNoKeys {
 		return JSONTermOptions{}
 	}
-	return JSONTermOptions{IncludeKeys: true, IncludeFullPath: c.JSONFullPath}
+	return JSONTermOptions{IncludeKeys: true}
 }
 
 // UsesJSONTupleTerms reports whether this config indexes json as (tag, value)
@@ -273,17 +293,10 @@ func JSONTupleColumn(v any, opt JSONTermOptions) ([]string, error) {
 // JSONTermOptionsFrom builds the options from their IndexAlgoParams string
 // values. Absent ("") takes the default, so a plain `WITH PARSER json` index
 // gets DefaultJSONTermOptions.
-func JSONTermOptionsFrom(includeKeys, includeFullPath string) JSONTermOptions {
+func JSONTermOptionsFrom(includeKeys string) JSONTermOptions {
 	opt := DefaultJSONTermOptions()
 	if includeKeys != "" {
 		opt.IncludeKeys = includeKeys == "true"
-	}
-	if includeFullPath != "" {
-		opt.IncludeFullPath = includeFullPath == "true"
-	}
-	if !opt.IncludeKeys {
-		// a path with no key to attach it to is meaningless
-		opt.IncludeFullPath = false
 	}
 	return opt
 }

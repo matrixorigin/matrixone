@@ -44,17 +44,16 @@ func TestBuildAndProbeTermsAgree(t *testing.T) {
 
 	got := termsOf(t, `{"a":{"b":"XXX"}}`, leafOnly)
 	require.Len(t, got, 1)
-	require.Equal(t, JSONStringTerm("b", "XXX", "", false), got[0])
+	require.Equal(t, JSONStringTerm("b", "XXX"), got[0])
 
 	got = termsOf(t, `{"a":{"b":3.5}}`, leafOnly)
 	require.Len(t, got, 1)
-	require.Equal(t, JSONFloatTerm("b", 3.5, "", false), got[0])
+	require.Equal(t, JSONFloatTerm("b", 3.5), got[0])
 
-	// ...and with the ancestor path carried
-	full := JSONTermOptions{IncludeKeys: true, IncludeFullPath: true}
-	got = termsOf(t, `{"a":{"b":"XXX"}}`, full)
-	require.Len(t, got, 1)
-	require.Equal(t, JSONStringTerm("b", "XXX", "a", true), got[0])
+	// a nested leaf produces the same term as a top-level one: the probe is
+	// path-agnostic by design
+	require.Equal(t, termsOf(t, `{"b":"XXX"}`, leafOnly),
+		termsOf(t, `{"a":{"b":"XXX"}}`, leafOnly))
 }
 
 // The defect being fixed: the same value under different keys must not collide.
@@ -71,37 +70,27 @@ func TestTermOrderFollowsValueOrder(t *testing.T) {
 	vals := []float64{-1e9, -3.5, -1, 0, 1, 3.14159, 3.1416, 1e9}
 	terms := make([]string, len(vals))
 	for i, v := range vals {
-		terms[i] = JSONFloatTerm("k", v, "", false)
+		terms[i] = JSONFloatTerm("k", v)
 	}
 	require.True(t, sort.StringsAreSorted(terms), "float terms must sort in value order: %q", terms)
 
 	strs := []string{"", "a", "aa", "ab", "b", "zzz"}
 	sterms := make([]string, len(strs))
 	for i, s := range strs {
-		sterms[i] = JSONStringTerm("k", s, "", false)
+		sterms[i] = JSONStringTerm("k", s)
 	}
 	require.True(t, sort.StringsAreSorted(sterms), "string terms must sort in value order: %q", sterms)
-}
-
-// A leaf-only term must be a strict prefix of the full-path term for the same
-// leaf — that is what lets a full-path index answer path-agnostic probes.
-func TestLeafOnlyTermIsPrefixOfFullPathTerm(t *testing.T) {
-	leaf := JSONStringTerm("b", "XXX", "", false)
-	full := JSONStringTerm("b", "XXX", "a.c", true)
-	require.True(t, strings.HasPrefix(full, leaf),
-		"full-path term %q must extend leaf-only term %q", full, leaf)
-	require.Greater(t, len(full), len(leaf))
 }
 
 // json_extract_string and json_extract_float64 are DISJOINT on leaf type:
 // json_extract_string('{"v":3.14}','$.v') IS NULL. So an equality probe needs
 // exactly ONE encoding — the string form — even for a numeric-looking constant.
 func TestEqualProbeUsesOnlyTheStringEncoding(t *testing.T) {
-	require.Len(t, JSONEqualProbeTerms("b", "XXX", "", false), 1)
+	require.Len(t, JSONEqualProbeTerms("b", "XXX"), 1)
 
-	probes := JSONEqualProbeTerms("b", "3.14", "", false)
+	probes := JSONEqualProbeTerms("b", "3.14")
 	require.Len(t, probes, 1, "a numeric-looking constant must NOT add a float term")
-	require.Equal(t, JSONStringTerm("b", "3.14", "", false), probes[0])
+	require.Equal(t, JSONStringTerm("b", "3.14"), probes[0])
 
 	opt := JSONTermOptions{IncludeKeys: true}
 	// the STRING document is reachable...
@@ -119,16 +108,16 @@ func TestIntegerAndFloatLeavesShareOneEncoding(t *testing.T) {
 	intTerm := termsOf(t, `{"b":3}`, opt)[0]
 	floatTerm := termsOf(t, `{"b":3.0}`, opt)[0]
 	require.Equal(t, intTerm, floatTerm, "the same JSON number must encode identically")
-	require.Equal(t, JSONFloatTerm("b", 3, "", false), intTerm)
+	require.Equal(t, JSONFloatTerm("b", 3), intTerm)
 
 	// reachable from the NUMERIC probe (json_extract_float64), which is the only
 	// extractor that returns a value for it
-	require.Equal(t, JSONFloatTerm("b", 3, "", false), intTerm)
+	require.Equal(t, JSONFloatTerm("b", 3), intTerm)
 
 	// large integers still round-trip through the SAME normalization on both
 	// sides, so they match each other even where float64 loses precision
 	big := `{"b":9007199254740993}` // 2^53+1
-	require.Equal(t, JSONFloatTerm("b", 9007199254740993, "", false),
+	require.Equal(t, JSONFloatTerm("b", 9007199254740993),
 		termsOf(t, big, opt)[0])
 }
 
@@ -141,13 +130,39 @@ func TestNumericTermOrderingAcrossSignBoundary(t *testing.T) {
 	require.True(t, neg < zero && zero < pos, "negative < zero < positive must hold in term order")
 }
 
-// Truncation must be symmetric or long values silently stop matching.
-func TestTruncationIsSymmetric(t *testing.T) {
-	long := strings.Repeat("x", 400)
-	docTerm := termsOf(t, `{"b":"`+long+`"}`, JSONTermOptions{IncludeKeys: true})[0]
-	probe := JSONStringTerm("b", long, "", false)
-	require.Equal(t, docTerm, probe)
+// The value element is capped at maxTermValueBytes on BOTH sides, so equality on
+// an over-long value degrades to a PREFIX match: a superset, which the retained
+// predicate narrows. Truncating on only one side would drop the row instead.
+func TestValueTruncationIsSymmetricAndPrefixMatching(t *testing.T) {
+	opt := JSONTermOptions{IncludeKeys: true}
+	long := strings.Repeat("x", maxTermValueBytes+300)
+
+	docTerm := termsOf(t, `{"b":"`+long+`"}`, opt)[0]
+	require.Equal(t, docTerm, JSONStringTerm("b", long), "both sides cut identically")
 	require.LessOrEqual(t, len(docTerm), maxTermBytes)
+
+	// two values agreeing only on the first maxTermValueBytes collapse to ONE
+	// term — the superset the prefix match returns
+	a := strings.Repeat("x", maxTermValueBytes) + "AAA"
+	b := strings.Repeat("x", maxTermValueBytes) + "BBB"
+	require.Equal(t, termsOf(t, `{"b":"`+a+`"}`, opt), termsOf(t, `{"b":"`+b+`"}`, opt))
+	// ...and a probe for either reaches both, so no row is dropped
+	require.Equal(t, termsOf(t, `{"b":"`+a+`"}`, opt)[0], JSONStringTerm("b", b))
+
+	// At the boundary the collapse is expected, not a defect: a value of exactly
+	// maxTermValueBytes and a longer one sharing that prefix are the same term.
+	// The retained predicate is what separates them.
+	exact := strings.Repeat("y", maxTermValueBytes)
+	require.Equal(t, termsOf(t, `{"b":"`+exact+`"}`, opt)[0],
+		termsOf(t, `{"b":"`+exact+`z"}`, opt)[0])
+	// one byte under the cap is untouched, so it stays distinct
+	short := strings.Repeat("y", maxTermValueBytes-1)
+	require.NotEqual(t, termsOf(t, `{"b":"`+short+`"}`, opt)[0],
+		termsOf(t, `{"b":"`+short+`z"}`, opt)[0],
+		"values below the cap must remain exactly matched")
+
+	// the tag still survives an over-long value: it is encoded before it
+	require.NotEqual(t, JSONStringTerm("b", long), JSONStringTerm("c", long))
 }
 
 // IncludeKeys=false keeps the historical value-only index: no tuple terms.
@@ -157,14 +172,13 @@ func TestIncludeKeysFalseEmitsNoTupleTerms(t *testing.T) {
 
 func TestDefaultOptionsIncludeKeys(t *testing.T) {
 	require.True(t, DefaultJSONTermOptions().IncludeKeys)
-	require.False(t, DefaultJSONTermOptions().IncludeFullPath)
 }
 
 // Terms are raw packed bytes, not text: they legitimately contain 0x00 and
 // BOOLEAN-mode syntax bytes. This is the evidence that they must never be
 // routed through a pattern parser or a SQL literal.
 func TestTermsAreBinaryNotText(t *testing.T) {
-	term := JSONStringTerm("b", "XXX", "", false)
+	term := JSONStringTerm("b", "XXX")
 	require.Contains(t, term, "\x00", "packed terms carry NUL; the path must be binary-clean")
 
 	// a value made of pattern metacharacters round-trips unharmed
@@ -172,15 +186,15 @@ func TestTermsAreBinaryNotText(t *testing.T) {
 	doc, err := json.Marshal(map[string]string{"b": meta})
 	require.NoError(t, err)
 	docTerm := termsOf(t, string(doc), JSONTermOptions{IncludeKeys: true})[0]
-	require.Equal(t, JSONStringTerm("b", meta, "", false), docTerm)
+	require.Equal(t, JSONStringTerm("b", meta), docTerm)
 }
 
 // Arrays: every element is reachable under the enclosing key.
 func TestArrayElementsProduceTermsUnderTheKey(t *testing.T) {
 	terms := termsOf(t, `{"a":[1,2]}`, JSONTermOptions{IncludeKeys: true})
 	require.Len(t, terms, 2)
-	require.Contains(t, terms, JSONFloatTerm("a", 1, "", false))
-	require.Contains(t, terms, JSONFloatTerm("a", 2, "", false))
+	require.Contains(t, terms, JSONFloatTerm("a", 1))
+	require.Contains(t, terms, JSONFloatTerm("a", 2))
 }
 
 // --- CREATE / ISCP parity --------------------------------------------------
@@ -193,7 +207,6 @@ func TestCreateAndIscpAgreeOnTerms(t *testing.T) {
 
 	for _, opt := range []JSONTermOptions{
 		{IncludeKeys: true},
-		{IncludeKeys: true, IncludeFullPath: true},
 	} {
 		// CREATE side: raw text/varchar json bytes off the source vector
 		createTerms, err := JSONTupleColumnTerms([]byte(doc), false, opt)
@@ -223,7 +236,7 @@ func TestCreateAndIscpAgreeForBinaryJSONColumn(t *testing.T) {
 	raw, err := bj.Marshal()
 	require.NoError(t, err)
 
-	opt := JSONTermOptions{IncludeKeys: true, IncludeFullPath: true}
+	opt := JSONTermOptions{IncludeKeys: true}
 	fromRaw, err := JSONTupleColumnTerms(raw, true, opt) // CREATE: T_json raw bytes
 	require.NoError(t, err)
 	fromParsed, err := JSONTupleColumn(bj, opt) // ISCP: already-parsed
@@ -243,35 +256,6 @@ func TestTermCarrierRoundTripsBinary(t *testing.T) {
 		require.Equal(t, int32(i), w.Pos)
 	}
 	require.Empty(t, DecodeJSONTermCarrier(""))
-}
-
-// A TableConfig that never set the json fields must still index keys: the
-// default is ON, so the zero value has to mean ON or a forgotten field would
-// silently produce an index with no tuple terms.
-func TestZeroTableConfigStillIndexesKeys(t *testing.T) {
-	var cfg TableConfig
-	require.True(t, cfg.JSONTermOptions().IncludeKeys)
-	require.False(t, cfg.JSONTermOptions().IncludeFullPath)
-
-	cfg.Parser = ParserJSON
-	require.True(t, cfg.UsesJSONTupleTerms())
-
-	// json_value keeps its own whole-value tokenization
-	cfg.Parser = ParserJSONValue
-	require.False(t, cfg.UsesJSONTupleTerms())
-
-	// explicit opt-out
-	cfg = TableConfig{Parser: ParserJSON, JSONNoKeys: true}
-	require.False(t, cfg.UsesJSONTupleTerms())
-}
-
-func TestJSONTermOptionsFromParams(t *testing.T) {
-	require.Equal(t, JSONTermOptions{IncludeKeys: true}, JSONTermOptionsFrom("", ""))
-	require.Equal(t, JSONTermOptions{IncludeKeys: true, IncludeFullPath: true},
-		JSONTermOptionsFrom("", "true"))
-	require.Equal(t, JSONTermOptions{}, JSONTermOptionsFrom("false", ""))
-	// a full path with no key to hang it on is meaningless, not a half-state
-	require.Equal(t, JSONTermOptions{}, JSONTermOptionsFrom("false", "true"))
 }
 
 // A non-tuple parser must be unaffected by the new code path.
@@ -328,20 +312,20 @@ func TestTermRangeSelectsNumericTerms(t *testing.T) {
 	vals := []float64{-10, -1, 0, 1, 3.14, 100}
 	terms := make([]string, 0, len(vals))
 	for _, v := range vals {
-		terms = append(terms, JSONFloatTerm("n", v, "", false))
+		terms = append(terms, JSONFloatTerm("n", v))
 	}
 	sort.Strings(terms)
 	seg := &Segment{sortedTerms: terms}
 
 	// n >= 1  ->  [term(1), +Inf]
 	_, hi := JSONNumericTermBounds("n")
-	got := seg.TermRange(JSONFloatTerm("n", 1, "", false), hi)
+	got := seg.TermRange(JSONFloatTerm("n", 1), hi)
 	require.Equal(t, 3, len(got), "1, 3.14 and 100 qualify")
 
 	// n < 0  ->  [-Inf, term(0)]  (inclusive, so 0 comes back too and the
 	// retained predicate drops it)
 	lo, _ := JSONNumericTermBounds("n")
-	got = seg.TermRange(lo, JSONFloatTerm("n", 0, "", false))
+	got = seg.TermRange(lo, JSONFloatTerm("n", 0))
 	require.Equal(t, 3, len(got), "-10, -1 and the boundary 0")
 }
 
@@ -394,13 +378,13 @@ func TestSearchJSONProbeExactTerms(t *testing.T) {
 	})
 	// the key is part of the term: doc 3 has "bar" under a DIFFERENT key
 	require.Equal(t, []int64{1},
-		probeHits(t, idx, []string{JSONStringTerm("foo", "bar", "", false)}, nil))
+		probeHits(t, idx, []string{JSONStringTerm("foo", "bar")}, nil))
 	// a term no document holds
-	require.Empty(t, probeHits(t, idx, []string{JSONStringTerm("foo", "nope", "", false)}, nil))
+	require.Empty(t, probeHits(t, idx, []string{JSONStringTerm("foo", "nope")}, nil))
 	// two terms are ORed
 	require.Equal(t, []int64{1, 2}, probeHits(t, idx, []string{
-		JSONStringTerm("foo", "bar", "", false),
-		JSONStringTerm("foo", "baz", "", false),
+		JSONStringTerm("foo", "bar"),
+		JSONStringTerm("foo", "baz"),
 	}, nil))
 }
 
@@ -415,15 +399,15 @@ func TestSearchJSONProbeRanges(t *testing.T) {
 
 	// n >= 20
 	require.Equal(t, []int64{2, 3},
-		probeHits(t, idx, nil, [][2]string{{JSONFloatTerm("n", 20, "", false), hi}}))
+		probeHits(t, idx, nil, [][2]string{{JSONFloatTerm("n", 20), hi}}))
 	// n <= 10  (includes the negative doc)
 	require.Equal(t, []int64{1, 4},
-		probeHits(t, idx, nil, [][2]string{{lo, JSONFloatTerm("n", 10, "", false)}}))
+		probeHits(t, idx, nil, [][2]string{{lo, JSONFloatTerm("n", 10)}}))
 	// full numeric sweep reaches every doc
 	require.Equal(t, []int64{1, 2, 3, 4}, probeHits(t, idx, nil, [][2]string{{lo, hi}}))
 	// an empty range selects nothing
 	require.Empty(t, probeHits(t, idx, nil, [][2]string{
-		{JSONFloatTerm("n", 100, "", false), JSONFloatTerm("n", 200, "", false)}}))
+		{JSONFloatTerm("n", 100), JSONFloatTerm("n", 200)}}))
 }
 
 // terms and ranges are a UNION, and duplicates across them collapse.
@@ -434,8 +418,8 @@ func TestSearchJSONProbeUnionsTermsAndRanges(t *testing.T) {
 	_, hi := JSONNumericTermBounds("n")
 	require.Equal(t, []int64{1, 2}, probeHits(t,
 		idx,
-		[]string{JSONStringTerm("foo", "bar", "", false)},
-		[][2]string{{JSONFloatTerm("n", 50, "", false), hi}}))
+		[]string{JSONStringTerm("foo", "bar")},
+		[][2]string{{JSONFloatTerm("n", 50), hi}}))
 }
 
 func TestSearchJSONProbeRejectsMalformedPayload(t *testing.T) {
@@ -465,7 +449,7 @@ func jsonProbeLoadedIndex(t *testing.T, docs map[int64]string) *Index {
 func TestSearchJSONProbeRangesOnLoadedSegment(t *testing.T) {
 	docs := map[int64]string{1: `{"n":10}`, 2: `{"n":20}`, 3: `{"n":30}`, 4: `{"n":-5}`}
 	lo, hi := JSONNumericTermBounds("n")
-	ge20 := [][2]string{{JSONFloatTerm("n", 20, "", false), hi}}
+	ge20 := [][2]string{{JSONFloatTerm("n", 20), hi}}
 
 	require.Equal(t, []int64{2, 3}, probeHits(t, jsonProbeLoadedIndex(t, docs), nil, ge20),
 		"a loaded segment must resolve ranges through its FST")
@@ -477,7 +461,7 @@ func TestSearchJSONProbeRangesOnLoadedSegment(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3, 4},
 		probeHits(t, jsonProbeLoadedIndex(t, docs), nil, [][2]string{{lo, hi}}))
 	require.Equal(t, []int64{3}, probeHits(t, jsonProbeLoadedIndex(t, docs),
-		[]string{JSONFloatTerm("n", 30, "", false)}, nil))
+		[]string{JSONFloatTerm("n", 30)}, nil))
 }
 
 // The streaming path (no pushed LIMIT) must return the same docs as the top-k
@@ -487,7 +471,7 @@ func TestStreamJSONProbeMatchesSearch(t *testing.T) {
 	idx := jsonProbeIndex(t, map[int64]string{
 		1: `{"foo":"bar","n":10}`, 2: `{"foo":"baz","n":20}`, 3: `{"foo":"bar","n":30}`,
 	})
-	term := JSONStringTerm("foo", "bar", "", false)
+	term := JSONStringTerm("foo", "bar")
 	payload := []byte(EncodeJSONProbePayload([]string{term}, nil))
 
 	out := vector.NewVec(types.T_int64.ToType())
@@ -512,19 +496,19 @@ func TestJSONStringTermBounds(t *testing.T) {
 	lo, hi := JSONStringTermBounds("k")
 	require.Less(t, lo, hi)
 	for _, v := range []string{"", "a", "zzz", "\xff"} {
-		term := JSONStringTerm("k", v, "", false)
+		term := JSONStringTerm("k", v)
 		require.GreaterOrEqual(t, term, lo, "%q below the low bound", v)
 		require.LessOrEqual(t, term, hi, "%q above the high bound", v)
 	}
 	// a numeric term for the same tag sits outside the string range
-	num := JSONFloatTerm("k", 1, "", false)
+	num := JSONFloatTerm("k", 1)
 	require.True(t, num < lo || num > hi, "numeric term must not fall inside the string range")
 }
 
 // JSONTupleColumn accepts the three shapes an indexed column arrives in.
 func TestJSONTupleColumnAcceptsEveryShape(t *testing.T) {
 	opt := JSONTermOptions{IncludeKeys: true}
-	want := []string{JSONStringTerm("b", "x", "", false)}
+	want := []string{JSONStringTerm("b", "x")}
 
 	fromStr, err := JSONTupleColumn(`{"b":"x"}`, opt)
 	require.NoError(t, err)
