@@ -75,8 +75,9 @@ const (
 	MORPCVersion37     int64 = 37 // independent prepared-parameter string source
 	MORPCVersion38     int64 = 38 // session temporary-table connection migration
 	MORPCVersion39     int64 = 39 // linearizable TN-ordered logtail read barrier
-	MORPCVersion40     int64 = 40 // cancellable cross-CN DDL visibility fence
-	MORPCLatestVersion       = MORPCVersion40
+	MORPCVersion40     int64 = 40 // PAD SPACE comparison casts and set-operation equality keys
+	MORPCVersion41     int64 = 41 // cancellable cross-CN DDL visibility fence
+	MORPCLatestVersion       = MORPCVersion41
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
