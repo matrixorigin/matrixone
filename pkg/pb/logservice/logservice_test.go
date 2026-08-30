@@ -35,28 +35,35 @@ func TestCNStateUpdate(t *testing.T) {
 	state := CNState{Stores: map[string]CNStoreInfo{}}
 
 	hb1 := CNStoreHeartbeat{
-		UUID:                          "cn-a",
-		ServiceAddress:                "addr-a",
-		Role:                          metadata.CNRole_AP,
-		CommandDeliveryAckSupported:   true,
-		DDLVisibilityBarrierReady:     true,
-		DDLVisibilityDeployedProtocol: 38,
-		ViewMetadataIngressReady:      true,
+		UUID:                            "cn-a",
+		ServiceAddress:                  "addr-a",
+		QueryAddress:                    "query-a",
+		Role:                            metadata.CNRole_AP,
+		CommandDeliveryAckSupported:     true,
+		DDLVisibilityBarrierReady:       true,
+		DDLVisibilityDeployedProtocol:   38,
+		ViewMetadataAdmissionGeneration: 1,
+		ViewMetadataIngressReady:        true,
+		DDLVisibilityEpochCommitTargets: []DDLVisibilityActivationTarget{{
+			ServiceID: "cn-a", Generation: 1, QueryAddress: "query-a",
+		}},
 	}
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
-		Tick:                          tick1,
-		ServiceAddress:                hb1.ServiceAddress,
-		Role:                          metadata.CNRole_AP,
-		WorkState:                     metadata.WorkState_Working,
-		Labels:                        map[string]metadata.LabelList{},
-		UpTime:                        state.Stores[hb1.UUID].UpTime,
-		CommandDeliveryAckSupported:   true,
-		DDLVisibilityBarrierReady:     true,
-		DDLVisibilityDeployedProtocol: 38,
-		ViewMetadataIngressReady:      true,
+		Tick:                            tick1,
+		ServiceAddress:                  hb1.ServiceAddress,
+		QueryAddress:                    hb1.QueryAddress,
+		Role:                            metadata.CNRole_AP,
+		WorkState:                       metadata.WorkState_Working,
+		Labels:                          map[string]metadata.LabelList{},
+		UpTime:                          state.Stores[hb1.UUID].UpTime,
+		CommandDeliveryAckSupported:     true,
+		DDLVisibilityBarrierReady:       true,
+		DDLVisibilityDeployedProtocol:   38,
+		ViewMetadataAdmissionGeneration: 1,
+		ViewMetadataIngressReady:        true,
 	})
 	assert.Equal(t, int64(38), state.DDLVisibilityDeployedProtocol)
 
@@ -529,14 +536,40 @@ func TestCNWorkStateUpdate(t *testing.T) {
 	})
 }
 
+func TestCNStateAtomicallyRejectsEpochCommitAfterMarkerlessJoin(t *testing.T) {
+	state := NewCNState()
+	state.Update(CNStoreHeartbeat{
+		UUID: "target-cn", QueryAddress: "target:6001", ViewMetadataAdmissionGeneration: 1,
+		DDLVisibilityBarrierReady: true,
+	}, 1)
+	commitTargets := []DDLVisibilityActivationTarget{{
+		ServiceID: "target-cn", Generation: 1, QueryAddress: "target:6001",
+	}}
+
+	// This join lands after the CN-side final scan but before the replicated
+	// epoch commit. The same RSM transition must see it and reject the stale set.
+	state.Update(CNStoreHeartbeat{
+		UUID: "joining-cn", QueryAddress: "joining:6001", ViewMetadataAdmissionGeneration: 2,
+		DDLVisibilityBarrierReady: true, ViewMetadataIngressReady: true,
+	}, 2)
+	state.Update(CNStoreHeartbeat{
+		UUID: "target-cn", QueryAddress: "target:6001", ViewMetadataAdmissionGeneration: 1,
+		DDLVisibilityBarrierReady: true, DDLVisibilityDeployedProtocol: 41,
+		DDLVisibilityEpochCommitTargets: commitTargets,
+	}, 3)
+
+	assert.Equal(t, int64(0), state.DDLVisibilityDeployedProtocol)
+	assert.True(t, state.Stores["joining-cn"].ViewMetadataIngressReady)
+}
+
 func TestCNStateRejectsMarkerlessIngressAfterCommittedDDLCut(t *testing.T) {
 	state := NewCNState()
-	state.DDLVisibilityDeployedProtocol = 40
+	state.DDLVisibilityDeployedProtocol = 41
 	state.Update(CNStoreHeartbeat{
 		UUID: "markerless-cn", ViewMetadataIngressReady: true,
 	}, 1)
 	assert.False(t, state.Stores["markerless-cn"].ViewMetadataIngressReady)
-	assert.Equal(t, int64(40), state.DDLVisibilityDeployedProtocol)
+	assert.Equal(t, int64(41), state.DDLVisibilityDeployedProtocol)
 }
 
 func TestCNStateLabelPatch(t *testing.T) {

@@ -171,10 +171,38 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.DDLVisibilityBarrierReady = hb.DDLVisibilityBarrierReady
 	storeInfo.DDLVisibilityDeployedProtocol = hb.DDLVisibilityDeployedProtocol
-	if hb.DDLVisibilityDeployedProtocol > s.DDLVisibilityDeployedProtocol {
+	s.Stores[hb.UUID] = storeInfo
+	if hb.DDLVisibilityDeployedProtocol > s.DDLVisibilityDeployedProtocol &&
+		len(hb.DDLVisibilityEpochCommitTargets) > 0 &&
+		s.matchesDDLVisibilityEpochCommitTargets(hb.DDLVisibilityEpochCommitTargets) {
 		s.DDLVisibilityDeployedProtocol = hb.DDLVisibilityDeployedProtocol
 	}
-	s.Stores[hb.UUID] = storeInfo
+}
+
+func (s *CNState) matchesDDLVisibilityEpochCommitTargets(targets []DDLVisibilityActivationTarget) bool {
+	expected := make(map[string]DDLVisibilityActivationTarget, len(targets))
+	for _, target := range targets {
+		if target.ServiceID == "" || target.Generation == 0 || target.QueryAddress == "" {
+			return false
+		}
+		if _, ok := expected[target.ServiceID]; ok {
+			return false
+		}
+		expected[target.ServiceID] = target
+	}
+	seen := 0
+	for serviceID, store := range s.Stores {
+		if store.QueryAddress == "" || store.ViewMetadataAdmissionGeneration == 0 {
+			continue
+		}
+		seen++
+		target, ok := expected[serviceID]
+		if !ok || target.Generation != store.ViewMetadataAdmissionGeneration ||
+			target.QueryAddress != store.QueryAddress || !store.DDLVisibilityBarrierReady {
+			return false
+		}
+	}
+	return seen == len(expected)
 }
 
 // UpdateLabel updates labels of CN store.

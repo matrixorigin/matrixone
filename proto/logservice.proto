@@ -142,6 +142,12 @@ message Resource {
 }
 
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
+message DDLVisibilityActivationTarget {
+  string ServiceID = 1;
+  uint64 Generation = 2;
+  string QueryAddress = 3;
+}
+
 message CNStoreHeartbeat {
   string          UUID               = 1;
   string          ServiceAddress     = 2;
@@ -177,6 +183,10 @@ message CNStoreHeartbeat {
   // DDLVisibilityDeployedProtocol reports only a locally committed deployment
   // marker. Provisional activation must never advance the cluster-wide epoch.
   int64           DDLVisibilityDeployedProtocol = 26;
+  // Non-empty only for the transition that atomically validates the complete
+  // CN membership tuple set and commits DDLVisibilityDeployedProtocol.
+  repeated DDLVisibilityActivationTarget DDLVisibilityEpochCommitTargets = 27
+      [(gogoproto.nullable) = false];
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.

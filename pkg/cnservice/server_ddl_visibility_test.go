@@ -232,6 +232,27 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 			}
 		}
 	}
+	if len(hb.DDLVisibilityEpochCommitTargets) > 0 {
+		targets := make(map[string]logservicepb.DDLVisibilityActivationTarget,
+			len(hb.DDLVisibilityEpochCommitTargets))
+		for _, target := range hb.DDLVisibilityEpochCommitTargets {
+			targets[target.ServiceID] = target
+		}
+		matched := 0
+		valid := len(targets) == len(hb.DDLVisibilityEpochCommitTargets)
+		for _, cn := range c.cluster.cnServices {
+			if cn.QueryAddress == "" || cn.ViewMetadataAdmissionGeneration == 0 {
+				continue
+			}
+			matched++
+			target, ok := targets[cn.ServiceID]
+			valid = valid && ok && target.Generation == cn.ViewMetadataAdmissionGeneration &&
+				target.QueryAddress == cn.QueryAddress && cn.DDLVisibilityBarrierReady
+		}
+		if valid && matched == len(targets) {
+			c.clusterDeployedProtocol = hb.DDLVisibilityDeployedProtocol
+		}
+	}
 	return logservicepb.CommandBatch{
 		DDLVisibilityDeployedProtocol: c.clusterDeployedProtocol,
 	}, nil
@@ -442,7 +463,7 @@ func TestActivationFinalMembershipScanRejectsConcurrentJoin(t *testing.T) {
 			DDLVisibilityBarrierReady: true},
 	}}
 	s := &service{_hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster}}
-	err := s.revalidateDDLVisibilityActivationMembership(
+	_, err := s.revalidateDDLVisibilityActivationMembership(
 		context.Background(), map[string]struct{}{"target-cn": {}})
 	require.ErrorContains(t, err, "authoritative CN joining-cn is not fenced")
 }
@@ -917,11 +938,13 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 		query.CmdMethod_GetProtocolVersion,
 	}, queryClient.methods)
 	require.Equal(t, 5, queryClient.releases)
-	require.Len(t, hakeeperClient.heartbeats, 2)
+	require.Len(t, hakeeperClient.heartbeats, 3)
 	require.True(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
 	require.False(t, hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
-	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityBarrierReady)
-	require.True(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
+	require.NotEmpty(t, hakeeperClient.heartbeats[1].DDLVisibilityEpochCommitTargets)
+	require.False(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
+	require.True(t, hakeeperClient.heartbeats[2].DDLVisibilityBarrierReady)
+	require.True(t, hakeeperClient.heartbeats[2].ViewMetadataIngressReady)
 	require.Equal(t, 5, cluster.refreshCalls)
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.True(t, s.viewMetadataIngressReady.Load())
@@ -930,7 +953,7 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 	resp = &query.Response{}
 	require.NoError(t, s.handleSetProtocolVersion(context.Background(), req, resp, nil))
 	require.Equal(t, defines.MORPCVersion41, resp.SetProtocolVersion.Version)
-	require.Len(t, hakeeperClient.heartbeats, 2)
+	require.Len(t, hakeeperClient.heartbeats, 3)
 	require.Equal(t, 5, cluster.refreshCalls)
 	require.Len(t, queryClient.requests, 5)
 }
@@ -977,9 +1000,11 @@ func TestHandleSetProtocolVersionPreservesPreStartIngress(t *testing.T) {
 	require.Equal(t, defines.MORPCVersion41, resp.SetProtocolVersion.Version)
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.False(t, cluster.cnServices[0].ViewMetadataIngressReady)
-	require.Len(t, hakeeperClient.heartbeats, 2)
+	require.Len(t, hakeeperClient.heartbeats, 3)
 	require.False(t, hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
+	require.NotEmpty(t, hakeeperClient.heartbeats[1].DDLVisibilityEpochCommitTargets)
 	require.False(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
+	require.False(t, hakeeperClient.heartbeats[2].ViewMetadataIngressReady)
 	release, err := s.ddlCommitGate.Enter(context.Background())
 	require.NoError(t, err)
 	release()
@@ -1134,7 +1159,7 @@ func TestHandleSetProtocolVersionWithdrawsAfterActivationPublishFails(t *testing
 	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
 	publishErr := errors.New("activation publication failed")
 	hakeeperClient := &ddlVisibilityWithdrawalHAKeeperClient{
-		cluster: cluster, sendErrors: map[int]error{2: publishErr},
+		cluster: cluster, sendErrors: map[int]error{3: publishErr},
 	}
 	s := &service{
 		cfg:                             cfg,
@@ -1166,10 +1191,11 @@ func TestHandleSetProtocolVersionWithdrawsAfterActivationPublishFails(t *testing
 	cancelBlocked()
 	_, gateErr := s.ddlCommitGate.Enter(blockedCtx)
 	require.ErrorIs(t, gateErr, context.Canceled)
-	require.Len(t, hakeeperClient.heartbeats, 3)
+	require.Len(t, hakeeperClient.heartbeats, 4)
 	require.True(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
-	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityBarrierReady)
-	require.True(t, hakeeperClient.heartbeats[2].DDLVisibilityBarrierReady)
+	require.NotEmpty(t, hakeeperClient.heartbeats[1].DDLVisibilityEpochCommitTargets)
+	require.True(t, hakeeperClient.heartbeats[2].ViewMetadataIngressReady)
+	require.False(t, hakeeperClient.heartbeats[3].ViewMetadataIngressReady)
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.True(t, cluster.cnServices[0].DDLVisibilityBarrierReady)
 	require.Equal(t, 4, cluster.refreshCalls)

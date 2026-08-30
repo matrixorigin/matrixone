@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -342,7 +343,11 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	// CN may have joined after dispatch; committing without it would reopen an
 	// un-fenced legacy producer. The join either appears here and aborts this cut,
 	// or its atomic ingress heartbeat observes the already committed epoch.
-	if err := s.revalidateDDLVisibilityActivationMembership(barrierCtx, activationTargets); err != nil {
+	commitTargets, err := s.revalidateDDLVisibilityActivationMembership(barrierCtx, activationTargets)
+	if err != nil {
+		return err
+	}
+	if err := s.commitDDLVisibilityClusterEpoch(barrierCtx, version, commitTargets); err != nil {
 		return err
 	}
 	// Commit the deployed cut before reopening ingress. A failure leaves the
@@ -374,7 +379,9 @@ func (s *service) loadDDLVisibilityDeployedProtocol() int64 {
 
 func (s *service) persistDDLVisibilityDeployedProtocol(version int64) error {
 	if s.metadataFS == nil {
-		// Focused service tests may omit the local metadata file service.
+		// Focused service tests may omit the local metadata file service, but the
+		// process-local state must still model the committed heartbeat that follows.
+		s.metadata.DDLVisibilityDeployedProtocol = version
 		return nil
 	}
 	previous := s.metadata.DDLVisibilityDeployedProtocol
@@ -389,11 +396,12 @@ func (s *service) persistDDLVisibilityDeployedProtocol(version int64) error {
 func (s *service) revalidateDDLVisibilityActivationMembership(
 	ctx context.Context,
 	targets map[string]struct{},
-) error {
+) ([]logservicepb.DDLVisibilityActivationTarget, error) {
 	details, err := s._hakeeperClient.GetClusterDetails(ctx)
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return nil, moerr.AttachCause(ctx, err)
 	}
+	commitTargets := make([]logservicepb.DDLVisibilityActivationTarget, 0, len(targets))
 	seen := 0
 	for _, cn := range details.CNStores {
 		if cn.QueryAddress == "" || cn.ViewMetadataAdmissionGeneration == 0 {
@@ -401,17 +409,40 @@ func (s *service) revalidateDDLVisibilityActivationMembership(
 		}
 		seen++
 		if _, ok := targets[cn.UUID]; !ok {
-			return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+			return nil, moerr.NewInvalidStateNoCtx(fmt.Sprintf(
 				"DDL visibility activation membership changed: authoritative CN %s is not fenced", cn.UUID))
 		}
 		if !cn.DDLVisibilityBarrierReady {
-			return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+			return nil, moerr.NewInvalidStateNoCtx(fmt.Sprintf(
 				"authoritative CN %s does not support the DDL visibility activation receiver", cn.UUID))
 		}
+		commitTargets = append(commitTargets, logservicepb.DDLVisibilityActivationTarget{
+			ServiceID: cn.UUID, Generation: cn.ViewMetadataAdmissionGeneration, QueryAddress: cn.QueryAddress,
+		})
 	}
 	if seen != len(targets) {
-		return moerr.NewInvalidStateNoCtx(fmt.Sprintf(
+		return nil, moerr.NewInvalidStateNoCtx(fmt.Sprintf(
 			"DDL visibility activation membership changed: targets=%d authoritative=%d", len(targets), seen))
+	}
+	return commitTargets, nil
+}
+
+func (s *service) commitDDLVisibilityClusterEpoch(
+	ctx context.Context,
+	version int64,
+	targets []logservicepb.DDLVisibilityActivationTarget,
+) error {
+	hb := s.newCNStoreHeartbeat()
+	hb.DDLVisibilityDeployedProtocol = version
+	hb.DDLVisibilityEpochCommitTargets = append(
+		[]logservicepb.DDLVisibilityActivationTarget(nil), targets...)
+	batch, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if batch.DDLVisibilityDeployedProtocol < version {
+		return moerr.NewInvalidStateNoCtx(
+			"DDL visibility activation membership changed before atomic cluster epoch commit")
 	}
 	return nil
 }
