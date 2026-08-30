@@ -124,6 +124,46 @@ func TestInternalSQLExecutorAdapterExecTxnUsesTransaction(t *testing.T) {
 	}
 }
 
+func TestInternalSQLExecutorAdapterExecTxnWriteAndFailurePaths(t *testing.T) {
+	ctx := context.Background()
+	if err := (InternalSQLExecutorAdapter{}).ExecTxn(ctx, func(SQLExecutor) error { return nil }); err == nil {
+		t.Fatalf("expected nil executor transaction error")
+	}
+
+	txn := &fakeInternalTxnExecutor{result: internalexecutor.Result{AffectedRows: 3}}
+	exec := &fakeInternalSQLExecutor{txn: txn}
+	err := (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(ctx, func(tx SQLExecutor) error {
+		affected, err := tx.Exec(ctx, "insert into mo_catalog.mo_iceberg_refs values (1)")
+		if err != nil {
+			return err
+		}
+		if affected != 3 {
+			t.Fatalf("unexpected transaction affected rows: %d", affected)
+		}
+		return nil
+	})
+	requireNoErr(t, err)
+	if len(txn.sqls) != 1 || !strings.Contains(txn.sqls[0], "insert into") {
+		t.Fatalf("transaction did not execute write: %v", txn.sqls)
+	}
+
+	txn.err = moerr.NewInternalError(ctx, "transaction executor unavailable")
+	err = (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(ctx, func(tx SQLExecutor) error {
+		_, err := tx.Query(ctx, "select catalog_id from mo_catalog.mo_iceberg_catalogs")
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "transaction executor unavailable") {
+		t.Fatalf("expected transaction query error, got %v", err)
+	}
+	err = (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(ctx, func(tx SQLExecutor) error {
+		_, err := tx.Exec(ctx, "insert into mo_catalog.mo_iceberg_refs values (2)")
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "transaction executor unavailable") {
+		t.Fatalf("expected transaction write error, got %v", err)
+	}
+}
+
 func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 	ctx := context.Background()
 	if _, err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {

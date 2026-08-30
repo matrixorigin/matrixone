@@ -750,6 +750,61 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseReportsCleanupFailure(t *test
 	}
 }
 
+func TestLocalE2EConcurrentCreateMappingAndDropCaseEarlyFailurePaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(sqlmock.Sqlmock)
+		want  string
+	}{
+		{
+			name: "catalog lookup failure",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").WillReturnError(errors.New("catalog lookup unavailable"))
+			},
+			want: "catalog lookup unavailable",
+		},
+		{
+			name: "invalid catalog id",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+					WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(0)))
+			},
+			want: "concurrent catalog id was invalid",
+		},
+		{
+			name: "fault injection setup failure",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+					WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+				mock.ExpectExec("select enable_fault_injection").WillReturnError(errors.New("fault injection unavailable"))
+			},
+			want: "install lifecycle synchronization points: fault injection unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			tt.setup(mock)
+			for range []string{"table", "access", "catalog"} {
+				mock.ExpectExec("DROP TABLE IF EXISTS|CALL iceberg_unregister_access|DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
+			}
+
+			result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
+			if result.Status != "failed" || !strings.Contains(result.Error, tt.want) {
+				t.Fatalf("expected %q failure, got %+v", tt.want, result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestLocalE2EAccessLifecycleCaseCleansUpAfterRegisterFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
