@@ -1,0 +1,21 @@
+# High-precision decimal AVG must reject an unrepresentable result instead of publishing wrapped bits.
+drop database if exists avg_decimal_boundary;
+create database avg_decimal_boundary;
+use avg_decimal_boundary;
+
+create table t_decimal128_avg_boundary(id int, d decimal(38,10));
+insert into t_decimal128_avg_boundary values
+  (1, 9999999999999999999999999999.1234567890),
+  (2, -9999999999999999999999999999.1234567890);
+select id, avg(d) from t_decimal128_avg_boundary where id = 1 group by id;
+select id, avg(d) from t_decimal128_avg_boundary where id = 2 group by id limit 1;
+
+truncate table t_decimal128_avg_boundary;
+insert into t_decimal128_avg_boundary values
+  (1, 99999999999999999999999999.1234567890),
+  (1, 99999999999999999999999999.1234567890),
+  (1, null),
+  (2, null);
+select id, avg(d) from t_decimal128_avg_boundary group by id order by id;
+
+drop database avg_decimal_boundary;

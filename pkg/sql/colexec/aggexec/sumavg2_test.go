@@ -166,25 +166,32 @@ func checkVecAll(vec *vector.Vector, expected []expectedResult) error {
 	return nil
 }
 
-func requireSingleAggResultEqual(t *testing.T, mp *mpool.MPool, left, right AggFuncExec) {
+func requireSingleAggResultEqual(t *testing.T, mp *mpool.MPool, left, right AggFuncExec, wantErr string) {
 	t.Helper()
 
-	leftResults, err := left.Flush()
-	require.NoError(t, err)
+	leftResults, leftErr := left.Flush()
 	defer func() {
 		for _, result := range leftResults {
 			result.Free(mp)
 		}
 	}()
-
-	rightResults, err := right.Flush()
-	require.NoError(t, err)
+	rightResults, rightErr := right.Flush()
 	defer func() {
 		for _, result := range rightResults {
 			result.Free(mp)
 		}
 	}()
 
+	if wantErr != "" {
+		require.Nil(t, leftResults)
+		require.Nil(t, rightResults)
+		require.ErrorContains(t, leftErr, wantErr)
+		require.ErrorContains(t, rightErr, wantErr)
+		return
+	}
+
+	require.NoError(t, leftErr)
+	require.NoError(t, rightErr)
 	require.Len(t, leftResults, 1)
 	require.Len(t, rightResults, 1)
 	require.Equal(t, leftResults[0].Length(), rightResults[0].Length())
@@ -384,7 +391,7 @@ func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 
 			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
 			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
-			requireSingleAggResultEqual(t, mp, batch, bulk)
+			requireSingleAggResultEqual(t, mp, batch, bulk, "")
 		})
 	}
 }
@@ -409,12 +416,13 @@ func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.
 	defer delta.Free(mp)
 
 	testCases := []struct {
-		name  string
-		isSum bool
-		aggID int64
+		name       string
+		isSum      bool
+		aggID      int64
+		flushError string
 	}{
-		{"sum", true, AggIdOfSum},
-		{"avg", false, AggIdOfAvg},
+		{name: "sum", isSum: true, aggID: AggIdOfSum},
+		{name: "avg", aggID: AggIdOfAvg, flushError: "Decimal256 Div overflow"},
 	}
 
 	for _, tc := range testCases {
@@ -431,7 +439,7 @@ func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.
 
 			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
 			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
-			requireSingleAggResultEqual(t, mp, batch, bulk)
+			requireSingleAggResultEqual(t, mp, batch, bulk, tc.flushError)
 		})
 	}
 }

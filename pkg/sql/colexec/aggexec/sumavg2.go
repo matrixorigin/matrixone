@@ -1200,18 +1200,31 @@ func (exec *sumAvgDecExec[A, S]) SetExtraInformation(partialResult any, _ int) e
 	return nil
 }
 
-func decAvg[S sumAvgDecimalState](sum S, count int64, argScale, resultScale int32) S {
+func decAvg[S sumAvgDecimalState](sum S, count int64, argScale, resultScale int32) (S, error) {
+	var zero S
 	switch value := any(sum).(type) {
 	case types.Decimal128:
 		cnt128 := types.Decimal128FromInt64(count)
-		avg, scale, _ := value.Div(cnt128, argScale, 0)
-		avg, _ = avg.Scale(resultScale - scale)
-		return any(avg).(S)
+		avg, scale, err := value.Div(cnt128, argScale, 0)
+		if err != nil {
+			return zero, err
+		}
+		avg, err = avg.Scale(resultScale - scale)
+		if err != nil {
+			return zero, err
+		}
+		return any(avg).(S), nil
 	case types.Decimal256:
 		cnt256 := types.Decimal256FromInt64(count)
-		avg, scale, _ := value.Div(cnt256, argScale, 0)
-		avg, _ = avg.Scale(resultScale - scale)
-		return any(avg).(S)
+		avg, scale, err := value.Div(cnt256, argScale, 0)
+		if err != nil {
+			return zero, err
+		}
+		avg, err = avg.Scale(resultScale - scale)
+		if err != nil {
+			return zero, err
+		}
+		return any(avg).(S), nil
 	}
 	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal avg state type %T", sum))
 }
@@ -1298,7 +1311,10 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 							return nil, err
 						}
 					} else {
-						avg := decAvg(sum, int64(exec.state[i].argCnt[j]), sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						avg, err := decAvg(sum, int64(exec.state[i].argCnt[j]), sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						if err != nil {
+							return nil, err
+						}
 						if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
 							return nil, err
 						}
@@ -1321,7 +1337,10 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
 					} else {
-						avg := decAvg(sums[j], cnt, sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						avg, err := decAvg(sums[j], cnt, sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						if err != nil {
+							return nil, err
+						}
 						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
 					}
 				}
