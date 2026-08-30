@@ -2961,7 +2961,8 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 		char(65 using utf8mb4) text_char,
 		repeat(X'61', 70000) repeated,
 		concat(cast(X'61' as binary(65535)), X'62') concatenated,
-		replace(cast(repeat('a', 40000) as text), 'a', 'bb') expanded_text`
+		replace(cast(repeat('a', 40000) as text), 'a', 'bb') expanded_text,
+		regexp_replace(cast(repeat('a', 40000) as text), 'a', 'bb') regexp_expanded_text`
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -2969,7 +2970,7 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 6)
+	require.GreaterOrEqual(t, len(cols), 7)
 
 	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
 	require.Equal(t, int32(20), cols[0].Typ.Width)
@@ -2980,6 +2981,36 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 	require.Equal(t, int32(types.T_blob), cols[3].Typ.Id)
 	require.Equal(t, int32(types.T_blob), cols[4].Typ.Id)
 	require.Equal(t, int32(types.T_text), cols[5].Typ.Id)
+	require.Equal(t, int32(types.T_text), cols[6].Typ.Id)
+}
+
+func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
+	const sql = `create table bounded as select
+		repeat('a', 2) repeated,
+		lpad('a', 2, 'b') left_padded,
+		rpad('a', 2, 'b') right_padded,
+		replace('a', 'a', 'b') replaced,
+		insert('a', 1, 0, 'b') inserted,
+		replace(X'61', X'61', X'62') binary_replaced,
+		insert(X'61', 1, 0, X'62') binary_inserted,
+		regexp_replace('aa', 'a', 'bb') regexp_replaced`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 8)
+	for _, index := range []int{0, 1, 2, 3, 4, 7} {
+		require.Equal(t, int32(types.T_varchar), cols[index].Typ.Id, cols[index].Name)
+		require.LessOrEqual(t, cols[index].Typ.Width, int32(types.MaxVarcharLen), cols[index].Name)
+	}
+	for _, index := range []int{5, 6} {
+		require.Equal(t, int32(types.T_varbinary), cols[index].Typ.Id, cols[index].Name)
+		require.LessOrEqual(t, cols[index].Typ.Width, int32(types.MaxVarBinaryLen), cols[index].Name)
+	}
+	require.GreaterOrEqual(t, cols[7].Typ.Width, int32(4))
 }
 
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {

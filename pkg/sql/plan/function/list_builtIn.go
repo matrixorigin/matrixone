@@ -85,14 +85,59 @@ func concatWsReturnType(parameters []types.Type) types.Type {
 	return textStringResultType(bound, types.MergeStringCharset(parameters, types.CharsetUTF8))
 }
 
-func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.Type {
+func stringResultTypeForDomain(parameters []types.Type, sourceIndex int, bound stringResultBound) types.Type {
 	if sourceIndex < 0 || sourceIndex >= len(parameters) {
 		return types.T_varchar.ToType()
 	}
 	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
-		return binaryStringResultType(unknownStringResultBound())
+		return binaryStringResultType(bound)
 	}
-	return textStringResultType(unknownStringResultBound(), parameters[sourceIndex].Charset)
+	return textStringResultType(bound, parameters[sourceIndex].Charset)
+}
+
+func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.Type {
+	return stringResultTypeForDomain(parameters, sourceIndex, unknownStringResultBound())
+}
+
+func replacementStringReturnType(parameters []types.Type, regexp bool) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary
+	boundFor := declaredTextCharacterBound
+	if binary {
+		boundFor = declaredStringByteBound
+	}
+	source := boundFor(parameters[0])
+	replacement := boundFor(parameters[2])
+	if regexp {
+		// An empty regexp can match before, between, and after every source
+		// character. Keep the untouched source plus every replacement.
+		bound := addStringResultBounds(source, multiplyStringResultBound(
+			addStringResultBounds(source, stringResultBound{bytes: 1}), replacement.bytes))
+		if replacement.unknown {
+			bound = unknownStringResultBound()
+		}
+		return stringResultTypeForDomain(parameters, 0, bound)
+	}
+	if replacement.unknown || source.unknown {
+		return stringResultTypeForDomain(parameters, 0, unknownStringResultBound())
+	}
+	factor := max(uint64(1), replacement.bytes)
+	return stringResultTypeForDomain(parameters, 0, multiplyStringResultBound(source, factor))
+}
+
+func insertStringReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 4 {
+		return types.T_varchar.ToType()
+	}
+	binary := types.StaticStringDomain(parameters[0]) == types.StringDomainBinary
+	boundFor := declaredTextCharacterBound
+	if binary {
+		boundFor = declaredStringByteBound
+	}
+	return stringResultTypeForDomain(parameters, 0,
+		addStringResultBounds(boundFor(parameters[0]), boundFor(parameters[3])))
 }
 
 // commonConditionalStringType keeps the common physical text type selected by
@@ -2834,7 +2879,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return expandingStringReturnType(parameters, 0)
+					return replacementStringReturnType(parameters, false)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Replace
@@ -2855,7 +2900,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return expandingStringReturnType(parameters, 0)
+					return insertStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Insert
@@ -2865,7 +2910,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return expandingStringReturnType(parameters, 0)
+					return insertStringReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Insert
@@ -2982,14 +3027,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_REPLACE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    textStringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return replacementStringReturnType(parameters, true)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -2999,7 +3044,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return replacementStringReturnType(parameters, true)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -3009,7 +3054,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
+					return replacementStringReturnType(parameters, true)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace

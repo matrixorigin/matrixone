@@ -4990,10 +4990,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "repeat":
-		refineBinaryRepeatLiteralReturnType(args, &returnType)
+		refineRepeatLiteralReturnType(args, &returnType)
 
 	case "lpad", "rpad":
-		refineBinaryPadLiteralReturnType(args, &returnType)
+		refinePadLiteralReturnType(args, &returnType)
 
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
@@ -5085,8 +5085,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	}, nil
 }
 
-func refineBinaryRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
-	if len(args) != 2 || returnType.Charset != types.CharsetBinary {
+func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
 		return
 	}
 	countLiteral := args[1].GetLit()
@@ -5097,18 +5097,19 @@ func refineBinaryRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Ty
 	if !ok || count < 0 {
 		return
 	}
-	sourceWidth, known := binaryExprByteBound(args[0])
+	binary := returnType.Charset == types.CharsetBinary
+	sourceWidth, known := stringExprBound(args[0], binary)
 	if !known {
 		return
 	}
 	if sourceWidth != 0 && uint64(count) > math.MaxUint64/sourceWidth {
 		return
 	}
-	refineKnownBinaryResultType(returnType, sourceWidth*uint64(count))
+	refineKnownStringResultType(returnType, sourceWidth*uint64(count), binary)
 }
 
-func refineBinaryPadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
-	if len(args) != 3 || returnType.Charset != types.CharsetBinary {
+func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 3 {
 		return
 	}
 	targetLiteral := args[1].GetLit()
@@ -5117,6 +5118,10 @@ func refineBinaryPadLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	}
 	target, ok := literalSignedValue(targetLiteral)
 	if !ok || target < 0 {
+		return
+	}
+	if returnType.Charset != types.CharsetBinary {
+		refineKnownStringResultType(returnType, uint64(target), false)
 		return
 	}
 	sourceRuneBytes, sourceKnown := binaryExprMaxRuntimeRuneBytes(args[0])
@@ -5128,7 +5133,7 @@ func refineBinaryPadLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	if maxRuneBytes != 0 && uint64(target) > math.MaxUint64/maxRuneBytes {
 		return
 	}
-	refineKnownBinaryResultType(returnType, uint64(target)*maxRuneBytes)
+	refineKnownStringResultType(returnType, uint64(target)*maxRuneBytes, true)
 }
 
 func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
@@ -5158,6 +5163,21 @@ func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
 	return min(max(uint64(expr.Typ.Width), uint64(utf8.RuneLen(utf8.RuneError))), uint64(utf8.UTFMax)), true
 }
 
+func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
+	if binary {
+		return binaryExprByteBound(expr)
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
+			return uint64(utf8.RuneCountInString(value.Sval)), true
+		}
+	}
+	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
+		return uint64(expr.Typ.Width), true
+	}
+	return 0, false
+}
+
 func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
 	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
 		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
@@ -5171,11 +5191,20 @@ func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
 	return 0, false
 }
 
-func refineKnownBinaryResultType(returnType *types.Type, width uint64) {
-	if width <= uint64(types.MaxVarBinaryLen) {
-		*returnType = types.T_varbinary.ToType()
+func refineKnownStringResultType(returnType *types.Type, width uint64, binary bool) {
+	if binary {
+		if width <= uint64(types.MaxVarBinaryLen) {
+			*returnType = types.T_varbinary.ToType()
+			returnType.Width = int32(width)
+			returnType.Charset = types.CharsetBinary
+		}
+		return
+	}
+	if width <= uint64(types.MaxVarcharLen) {
+		charset := returnType.Charset
+		*returnType = types.T_varchar.ToType()
 		returnType.Width = int32(width)
-		returnType.Charset = types.CharsetBinary
+		returnType.Charset = charset
 	}
 }
 

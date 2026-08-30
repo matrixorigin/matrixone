@@ -2731,19 +2731,28 @@ func TestPreparedBinaryStringResultMetadata(t *testing.T) {
 
 func TestPreparedExpandingTextResultMetadata(t *testing.T) {
 	ctx := context.TODO()
-	conn := &prepareResponseCaptureConn{}
-	proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t,
-		"select replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result", conn)
-	proto.capability &^= CLIENT_DEPRECATE_EOF
-	require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "replace", sql: "select replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result"},
+		{name: "regexp replace", sql: "select regexp_replace(cast(repeat('a', 40000) as text), 'a', 'bb') as result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
 
-	packets := splitProtocolPackets(t, conn.writes)
-	require.Len(t, packets, 3)
-	result := parsePrepareColumnDefinition(t, packets[1])
-	require.Equal(t, "result", result.name)
-	require.Equal(t, defines.MYSQL_TYPE_BLOB, result.typ)
-	require.Equal(t, uint16(Utf8mb4CollationID), result.charset)
-	require.Zero(t, result.flags&uint16(defines.BINARY_FLAG))
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, defines.MYSQL_TYPE_BLOB, result.typ)
+			require.Equal(t, uint16(Utf8mb4CollationID), result.charset)
+			require.Zero(t, result.flags&uint16(defines.BINARY_FLAG))
+		})
+	}
 }
 
 func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {

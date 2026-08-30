@@ -31,3 +31,11 @@
 3. 删除 exact-head SCA 报告的三个未使用 helper。
 4. 按 Proxy BVT 实际输出修正 system view VARCHAR(6) 与 DESC 末尾空列分隔符。
 5. 更新相关 UT，跑 focused/owning package、SCA 静态检查与 self-review，commit 并 push。
+
+# PR #27841 第八轮 review 与 CI 修复
+
+1. 为 REPEAT/PAD/REPLACE/INSERT 建立可证明 bound 的返回类型：类型级保守 bound + binder literal refinement，避免小表达式无条件 TEXT/BLOB。
+2. REGEXP_REPLACE 保留 TEXT 输入，按 source/replacement 推导可容纳扩张结果的静态域；其余 regexp 函数不扩张范围。
+3. 补普通/binary 小表达式、REGEXP_REPLACE 4-byte 与 80,000-byte TEXT、prepared/CTAS metadata focused tests。
+4. 拉取并分类 exact-head SCA、Proxy/Pessimistic BVT、Coverage 失败，修复所有 PR-caused golden/check 问题。
+5. 跑 owning package、targeted golangci-lint、相关 BVT/self-review，commit 并 push。

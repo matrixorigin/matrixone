@@ -16,6 +16,7 @@ package function
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -210,6 +211,52 @@ func TestDerivedTextFunctionsKeepVarcharMetadata(t *testing.T) {
 	}
 }
 
+func TestExpandingReplacementAndInsertBounds(t *testing.T) {
+	varchar := func(width int32) types.Type { return types.New(types.T_varchar, width, 0) }
+	varbinary := func(width int32) types.Type { return types.New(types.T_varbinary, width, 0) }
+
+	replaced := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varchar(2)}, false)
+	require.Equal(t, types.T_varchar, replaced.Oid)
+	require.Equal(t, int32(4), replaced.Width)
+
+	regexpReplaced := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varchar(2)}, true)
+	require.Equal(t, types.T_varchar, regexpReplaced.Oid)
+	require.GreaterOrEqual(t, regexpReplaced.Width, int32(4))
+
+	inserted := insertStringReturnType([]types.Type{varbinary(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
+	require.Equal(t, types.T_varbinary, inserted.Oid)
+	require.Equal(t, int32(2), inserted.Width)
+
+	largeRegexp := replacementStringReturnType([]types.Type{types.T_text.ToType(), varchar(1), varchar(2)}, true)
+	require.Equal(t, types.T_text, largeRegexp.Oid)
+}
+
+func TestRegexpReplacePreservesTextInputDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	resolved, err := GetFunctionByName(proc.Ctx, "regexp_replace", []types.Type{
+		types.T_text.ToType(), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_text, resolved.GetReturnType().Oid)
+	casts, needCast := resolved.ShouldDoImplicitTypeCast()
+	require.False(t, needCast)
+	require.Empty(t, casts)
+}
+
+func TestRegexpReplaceProducesLargeTextResult(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInRegexp()
+	source := strings.Repeat("a", 40000)
+	fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varchar, 1, 0), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.New(types.T_varchar, 2, 0), []string{"bb"}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil),
+		op.builtInRegexpReplace)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
 func TestConcatReturnTypePromotesWithoutCapping(t *testing.T) {
 	binary := func(width int32) types.Type {
 		return types.NewWithCharset(types.T_varbinary, width, 0, types.CharsetBinary)
@@ -248,7 +295,7 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 		{name: "repeat", inputs: []types.Type{types.T_blob.ToType(), types.T_int64.ToType()}, wantOID: types.T_blob},
 		{name: "replace", inputs: []types.Type{
 			types.New(types.T_varbinary, 8, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0),
-		}, wantOID: types.T_blob},
+		}, wantOID: types.T_varbinary},
 		{name: "quote varbinary", fn: "quote", inputs: []types.Type{types.New(types.T_varbinary, 1, 0)}, wantOID: types.T_varbinary},
 		{name: "quote blob", fn: "quote", inputs: []types.Type{types.T_blob.ToType()}, wantOID: types.T_blob},
 	} {
