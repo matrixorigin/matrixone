@@ -106,6 +106,20 @@ func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
 	}
 }
 
+func markInsertTableScansNotLockMeta(query *plan.Query) {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
+			continue
+		}
+
+		// INSERT plans can share an ObjectRef between a target-table scan and
+		// the write context. NotLockMeta is local to the scan: the write target
+		// must still contribute its shared metadata lock so concurrent DDL waits.
+		node.ObjRef = plan2.DeepCopyObjectRef(node.ObjRef)
+		node.ObjRef.NotLockMeta = true
+	}
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -181,11 +195,7 @@ func (c *Compile) Compile(
 					}
 				}
 			case plan.Query_INSERT:
-				for _, n := range qry.Query.Nodes {
-					if n.NodeType == plan.Node_TABLE_SCAN {
-						n.ObjRef.NotLockMeta = true
-					}
-				}
+				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
 			default:
 				c.needLockMeta = true
@@ -196,6 +206,7 @@ func (c *Compile) Compile(
 	// initialize some attributes for Compile.
 	c.fill = resultWriteBack
 	c.pn = queryPlan
+	c.prepareLoadUniqueIndexPromotion(queryPlan)
 
 	// combine top context with some values and replace.
 	topContext := context.WithValue(execTopContext, defines.EngineKey{}, c.e)
@@ -523,6 +534,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
+		c.onLoadUniqueIndexPromotionRetry(defChanged || forcePreMode)
 		if forcePreMode {
 			// NOTE: This in-place modification of the AST will persist if the statement
 			// is part of a prepared statement. This is generally desirable as it
@@ -957,13 +969,18 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // into the previous attempt's closing phase.
 func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	topContext := c.proc.GetTopContext()
+	// Invalidate a completed proof before a different logical generation can be
+	// built or observed.
+	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
+	c.bindLoadUniqueIndexPromotionSnapshot(runC, rebuildPlan)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	c.copyAllocationAccountLifecycleTo(runC)

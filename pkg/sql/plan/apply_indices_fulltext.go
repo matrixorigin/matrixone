@@ -499,6 +499,19 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			if scoreRangeJSON != "" {
 				exprs = append(exprs, makePlan2StringConstExprWithType(scoreRangeJSON))
 			}
+			// Optional 6th argument: the zero-relevance guard for a threshold only known
+			// at EXECUTE. Arguments are positional, so the two optional JSON slots are
+			// padded when only the guard is needed.
+			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+			if gerr != nil {
+				return -1, nil, nil, nil, gerr
+			}
+			if guard != nil {
+				for len(exprs) < 5 {
+					exprs = append(exprs, makePlan2StringConstExprWithType(""))
+				}
+				exprs = append(exprs, guard)
+			}
 			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
 			if err != nil {
 				return -1, nil, nil, nil, err
@@ -520,6 +533,15 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				makePlan2StringConstExprWithType(idxtblname),
 				DeepCopyExpr(fn.Args[0]),
 				DeepCopyExpr(fn.Args[1]),
+			}
+			// Optional 5th argument: the zero-relevance guard for a threshold only known
+			// at EXECUTE. See fulltextRuntimeScoreGuard.
+			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+			if gerr != nil {
+				return -1, nil, nil, nil, gerr
+			}
+			if guard != nil {
+				exprs = append(exprs, guard)
 			}
 			curr_ftnode_id, err = builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
 			if err != nil {
@@ -1699,6 +1721,134 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 }
 
 // nonNegativeConstValue returns the numeric value of a non-negative literal.
+// fulltextRuntimeScoreGuard rebuilds the score comparisons on matchFn that the planner
+// could not test, as a boolean the engine can.
+//
+// A threshold only known at EXECUTE -- a prepared '?' -- leaves the plan-time check in
+// collectDrivingFullTextMatches with nothing to read. Rather than invent a rule, this
+// takes the ACTUAL operator and the ACTUAL threshold off each predicate and asks the
+// same question about a relevance of 0: `0 <op> threshold`. True means a document this
+// index never returns would satisfy the predicate, so answering from the index would
+// drop exactly those rows -- the condition the planner rejects for a literal.
+//
+// This decides the VALUE only. The OPERATOR is decided at plan time by
+// collectDrivingFullTextMatches, which harvests `>` and `>=` alone, so the two paths
+// admit the same SHAPES and differ only in when the value is known.
+//
+// The conjuncts are ANDed, not ORed. `MATCH > ? AND MATCH < ?` is satisfied at
+// relevance 0 only when BOTH halves are, so ORing refuses a query the same literals
+// are accepted for (`> 0 AND < 5` returns rows). And a LITERAL conjunct counts:
+// one that already excludes relevance 0 makes the rewrite safe whatever the runtime
+// thresholds are, so no guard is emitted at all.
+//
+// Returns nil when the rewrite is safe by plan-time reasoning alone -- which includes
+// every all-literal query, so those carry no extra argument and no runtime cost.
+func (builder *QueryBuilder) fulltextRuntimeScoreGuard(
+	filters []*plan.Expr, matchFn *plan.Function) (*plan.Expr, error) {
+	var runtimeConds []*plan.Expr
+	literalExcludesZero := false
+	var walkErr error
+
+	var walk func(expr *plan.Expr)
+	walk = func(expr *plan.Expr) {
+		if expr == nil || walkErr != nil {
+			return
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return
+		}
+		if fn.Func.ObjName == "and" {
+			for _, arg := range fn.Args {
+				walk(arg)
+			}
+			return
+		}
+		op := fn.Func.ObjName
+		switch op {
+		case ">", ">=", "<", "<=":
+		default:
+			return
+		}
+		if len(fn.Args) != 2 {
+			return
+		}
+		matchSide, constSide := fn.Args[0], fn.Args[1]
+		if monotoneWrappedFullTextMatch(matchSide) == nil {
+			matchSide, constSide = fn.Args[1], fn.Args[0]
+			switch op { // mirror the operator when the threshold is on the left
+			case ">":
+				op = "<"
+			case ">=":
+				op = "<="
+			case "<":
+				op = ">"
+			case "<=":
+				op = ">="
+			}
+		}
+		inner := monotoneWrappedFullTextMatch(matchSide)
+		if inner == nil || !builder.equalsFullTextMatchFuncSameTable(inner.GetF(), matchFn) {
+			return
+		}
+		if v, ok := constValueAsFloat(constSide); ok {
+			// Decidable now: this is the test collectDrivingFullTextMatches ran.
+			if !zeroRelevanceSatisfies(op, v) {
+				literalExcludesZero = true
+			}
+			return
+		}
+		if !isExecutionConstantExpr(constSide) {
+			return // a per-row expression decides nothing about relevance 0
+		}
+		cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+			makePlan2Float64ConstExprWithType(0), DeepCopyExpr(constSide),
+		})
+		if err != nil {
+			walkErr = err
+			return
+		}
+		runtimeConds = append(runtimeConds, cond)
+	}
+
+	for _, f := range filters {
+		walk(f)
+	}
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	if literalExcludesZero || len(runtimeConds) == 0 {
+		return nil, nil
+	}
+	guard := runtimeConds[0]
+	for _, c := range runtimeConds[1:] {
+		var err error
+		guard, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{guard, c})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return guard, nil
+}
+
+// zeroRelevanceSatisfies reports whether a document with relevance 0 -- one the index
+// never returns -- satisfies `score <op> bound`. When it does, the index cannot answer
+// the predicate; this is the plan-time form of the guard above, and it must agree with
+// collectDrivingFullTextMatches, which harvests exactly the comparisons where it is false.
+func zeroRelevanceSatisfies(op string, bound float64) bool {
+	switch op {
+	case ">":
+		return 0 > bound
+	case ">=":
+		return 0 >= bound
+	case "<":
+		return 0 < bound
+	case "<=":
+		return 0 <= bound
+	}
+	return true
+}
+
 func nonNegativeConstValue(expr *plan.Expr) (float64, bool) {
 	lit := expr.GetLit()
 	if lit == nil {
@@ -1779,6 +1929,21 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 		matchExpr := monotoneWrappedFullTextMatch(matchSide)
 		if matchExpr == nil {
 			return out
+		}
+		// `>` and `>=` only, matching the operators the literal test below can accept.
+		// The VALUE is what a runtime threshold hides, and the engine guard re-checks
+		// it; the OPERATOR is known here on both paths. Harvesting `<` or `<=` -- which
+		// no literal value makes membership-implying -- would give the parameter form
+		// an evaluation path the literal form does not have: `MATCH < 0` raises 20105
+		// while `MATCH < ?` at 0 would execute and return rows.
+		if (op == ">" || op == ">=") && isExecutionConstantExpr(constSide) {
+			// The bound arrives at EXECUTE, so the plan-time test below cannot run.
+			// Refusing to harvest is not the safe choice it looks like: with no driving
+			// stream the MATCH has no evaluation path at all, and EXECUTE fails with
+			// 20105 even for an ordinary `> 0`. Harvest it; the same test is carried to
+			// the engine by fulltextRuntimeScoreGuard, which rebuilds this comparison
+			// against a relevance of 0 for the table function to check.
+			return append(out, matchExpr)
 		}
 		c, ok := nonNegativeConstValue(constSide)
 		if !ok {

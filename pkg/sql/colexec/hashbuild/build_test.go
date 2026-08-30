@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -40,6 +41,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1275,6 +1277,8 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 			require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 			require.Equal(t, test.typ.Oid, payload.GetType().Oid)
 			require.Equal(t, 3, payload.Length())
+			require.True(t, payload.GetSorted(),
+				"signed-zero closure must remain ordered without compaction")
 			var positiveZero, negativeZero bool
 			switch test.typ.Oid {
 			case types.T_float32:
@@ -1716,8 +1720,30 @@ func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 
 	payload := vector.NewVec(types.T_any.ToType())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+	require.True(t, payload.GetSorted(),
+		"the runtime-filter producer must publish comparator-ordered metadata")
 	require.Equal(t, []int32{11, 12},
 		vector.MustFixedColNoTypeCheck[int32](payload))
+
+	lo, hi := int32(100), int32(200)
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	zm := index.NewZM(types.T_int32, 0)
+	index.UpdateZM(zm, types.EncodeInt32(&lo))
+	index.UpdateZM(zm, types.EncodeInt32(&hi))
+	meta.MustGetColumn(0).SetZoneMap(zm)
+	inExpr := plan2.MakeInExpr(
+		tc.proc.Ctx, newExpr(0, typ), runtimeFilter.Card, runtimeFilter.Data, false)
+	auxIDCount := plan2.AssignAuxIdForExpr(inExpr, 0)
+	require.False(t, colexec.EvaluateFilterByZoneMap(
+		tc.proc.Ctx,
+		tc.proc,
+		inExpr,
+		meta,
+		map[int]int{0: 0},
+		make([]objectio.ZoneMap, auxIDCount),
+		make([]*vector.Vector, auxIDCount),
+	), "the sorted runtime filter must still prune a disjoint block")
 	payload.Free(tc.proc.Mp())
 	runtimeFilter.Destroy()
 	require.Zero(t, generation.Used())
@@ -2050,6 +2076,8 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	payload := vector.NewVec(types.T_any.ToType())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 	require.Equal(t, types.T_varchar, payload.GetType().Oid)
+	require.True(t, payload.GetSorted(),
+		"the serialized runtime-filter producer must publish sorted metadata")
 	require.Equal(t, rowCount, payload.Length())
 
 	expected := make(map[string]struct{}, 2)

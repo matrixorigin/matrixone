@@ -308,6 +308,69 @@ func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 	}
 }
 
+func TestStrHashMapCharKeysUsePadSpaceSemantics(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		typ        types.Type
+		wantValues []uint64
+		wantGroups uint64
+		wantProbe  uint64
+	}{
+		{
+			name:       "char",
+			typ:        types.New(types.T_char, 8, 0),
+			wantValues: []uint64{1, 1, 2, 3, 3},
+			wantGroups: 3,
+			wantProbe:  1,
+		},
+		{
+			name:       "varchar control",
+			typ:        types.New(types.T_varchar, 8, 0),
+			wantValues: []uint64{1, 2, 3, 4, 5},
+			wantGroups: 5,
+			wantProbe:  0,
+		},
+	} {
+		for _, hasNull := range []bool{false, true} {
+			t.Run(test.name+"/has_null="+strconv.FormatBool(hasNull), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+
+				build := vector.NewVec(test.typ)
+				defer build.Free(mp)
+				for _, value := range []string{"MO      ", "MO  ", "NO      ", "        ", ""} {
+					require.NoError(t, vector.AppendBytes(build, []byte(value), false, mp))
+				}
+				probe, err := vector.NewConstBytes(test.typ, []byte("MO"), 3, mp)
+				require.NoError(t, err)
+				defer probe.Free(mp)
+
+				hashMap, err := NewStrHashMap(hasNull, mp)
+				require.NoError(t, err)
+				defer hashMap.Free()
+
+				values, zValues, err := hashMap.NewIterator().Insert(
+					0, build.Length(), []*vector.Vector{build},
+				)
+				require.NoError(t, err)
+				require.Equal(t, test.wantValues, values)
+				require.Equal(t, []int64{1, 1, 1, 1, 1}, zValues)
+				require.Equal(t, test.wantGroups, hashMap.GroupCount())
+				require.Equal(t, "MO      ", build.GetStringAt(0))
+				require.Equal(t, "MO  ", build.GetStringAt(1))
+				require.Equal(t, "        ", build.GetStringAt(3))
+
+				values, zValues, err = hashMap.NewIterator().Find(
+					0, probe.Length(), []*vector.Vector{probe},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{test.wantProbe, test.wantProbe, test.wantProbe}, values)
+				require.Equal(t, []int64{1, 1, 1}, zValues)
+			})
+		}
+	}
+}
+
 func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	negativeZero64 := math.Copysign(0, -1)

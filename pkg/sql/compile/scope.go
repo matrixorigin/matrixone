@@ -926,6 +926,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 				return err
 			}
 		}
+		// Remote scope decoding intentionally does not carry relation handles.
+		// When this scope owns the complete scan, retain the relation opened on
+		// the executing CN so buildReaders can consume the in-memory sentinel
+		// returned by Policy_CollectAllData instead of stripping it.
+		if s.IsRemote {
+			s.DataSource.Rel = engine.NewRelationHandle(rel)
+		}
 		return nil
 	}
 
@@ -1598,8 +1605,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	switch {
-	// If this was a remote-run pipeline. Reader should be generated from Engine.
-	case s.IsRemote:
+	// A distributed remote scope only owns its assigned persisted blocks. Keep
+	// using the engine reader, which deliberately excludes the memory-block
+	// sentinel owned by the local scope. A single remote scope is different: it
+	// owns the complete scan, including committed rows in this CN's partition
+	// state, so it must use the relation reader below.
+	case s.IsRemote && (s.NodeInfo.CNCNT != 1 || s.DataSource.Rel == nil):
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
 		ctx := c.proc.Ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
@@ -1632,9 +1643,21 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if err != nil {
 			return
 		}
-	// Reader can be generated from local relation.
+	// Reader can be generated from the relation on the executing CN.
 	case s.DataSource.Rel != nil:
 		ctx := c.proc.Ctx
+		if s.IsRemote {
+			if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			}
+			account := s.DataSource.AccountId
+			if account == nil && s.DataSource.node != nil && s.DataSource.node.ObjRef != nil {
+				account = s.DataSource.node.ObjRef.PubInfo
+			}
+			if account != nil {
+				ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
+			}
+		}
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
@@ -1643,8 +1666,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+			if s.IsRemote {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			}
+			if len(hint.MembershipFilterBytes) == 0 {
+				if bf, ok := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte); ok {
 					hint.MembershipFilterBytes = bf
 				}
 			}

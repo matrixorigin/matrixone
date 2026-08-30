@@ -19,11 +19,12 @@ import "time"
 const (
 	// Test clusters run under the race detector and may lose several seconds to
 	// scheduler instrumentation while a catalog-heavy transaction is active.
-	// Keep the heartbeat request alive long enough for the managed HAKeeper
-	// client to observe and replace a stalled transport, while retaining several
-	// independent retry opportunities inside the store-liveness window.
-	testHAKeeperHeartbeatTimeout = 15 * time.Second
-	testHAKeeperStoreTimeout     = 60 * time.Second
+	// Keep the heartbeat request alive through a transient scheduler stall, and
+	// keep the shared transport alive longer than that request. Both remain
+	// bounded well inside the store-liveness window so real failures are retried.
+	testHAKeeperHeartbeatTimeout   = 15 * time.Second
+	testHAKeeperBackendReadTimeout = 20 * time.Second
+	testHAKeeperStoreTimeout       = 60 * time.Second
 )
 
 func WithConfigs(

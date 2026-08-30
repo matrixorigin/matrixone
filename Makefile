@@ -367,11 +367,19 @@ mo-tool: config cgo thirdparties
 # the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
 # jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
 MVN ?= ./mvnw
+JSTFU_MVN_FLAGS ?= -B --no-transfer-progress -Dmaven.wagon.http.retryHandler.count=3
 .PHONY: jstfu
 jstfu:
 	$(info [Build jstfu datastream server])
-	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) -DskipTests package
 	@echo "built xtool/jstfu/target/jstfu.jar"
+
+.PHONY: jstfu-test
+jstfu-test:
+	$(info [Test and build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) verify
+	@test -s xtool/jstfu/target/jstfu.jar
+	@echo "tested and built xtool/jstfu/target/jstfu.jar"
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -406,9 +414,10 @@ ut: $(UT_PREREQUISITES)
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	# The race suite is split into light, exclusive, heavy, and plan shards.
-	# Keep the outer budget above the per-package timeout so an expanded main
-	# branch cannot be killed while later shards are still making progress.
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress.
 	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
@@ -416,6 +425,8 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+UT_SHARD ?= all
+export UT_SHARD
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1315,11 +1326,13 @@ install-static-check-tools:
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
 static-check: config err-check
 	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

@@ -482,6 +482,45 @@ func handleDataBranch(
 	}
 }
 
+func getDataBranchMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	featureLimited bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	explicitTxn := ses.proc.GetTxnOperator().TxnOptions().ByBegin
+	bh, deferred, err := getBackExecutor(ctx, ses, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if explicitTxn {
+		// Preserve DATA BRANCH's transactional SQL contract without letting a
+		// client-controlled transaction own the global row after this statement.
+		// Successful owner-catalog work is validated with fast-fail admission at
+		// COMMIT; a competing restore makes this transaction abort and release its
+		// earlier catalog locks.
+		return bh, func(err error) error {
+			err = deferred(err)
+			if err == nil {
+				ses.GetTxnHandler().requireLineageOwnerLifecycleValidation()
+			}
+			return err
+		}, nil
+	}
+	if featureLimited {
+		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else {
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
+		// The lifecycle boundary is transaction admission for every data-branch
+		// create/delete path. A failure must end the owned transaction here so no
+		// target-account, table, metadata, snapshot, or PITR lock can follow it.
+		return nil, nil, deferred(err)
+	}
+	return bh, deferred, nil
+}
+
 func dataBranchCreateTable(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -494,8 +533,11 @@ func dataBranchCreateTable(
 		cloneStmt *tree.CloneTable
 	)
 
-	if bh, deferred, err = getBackExecutor(
-		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
+		},
 	); err != nil {
 		return
 	}
@@ -505,7 +547,6 @@ func dataBranchCreateTable(
 			err = deferred(err)
 		}
 	}()
-
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
@@ -573,8 +614,11 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
-	if bh, deferred, err = getBackExecutor(
-		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
+		},
 	); err != nil {
 		return
 	}
@@ -584,7 +628,6 @@ func dataBranchCreateDatabase(
 			err = deferred(err)
 		}
 	}()
-
 	execCtx.reqCtx = context.WithValue(
 		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
 	)
@@ -716,7 +759,9 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -725,7 +770,6 @@ func dataBranchDeleteTable(
 			err = deferred(err)
 		}
 	}()
-
 	var (
 		dbName  string
 		tblName string
@@ -782,7 +826,9 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -791,7 +837,6 @@ func dataBranchDeleteDatabase(
 			err = deferred(err)
 		}
 	}()
-
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
@@ -3118,7 +3163,10 @@ func getDatabaseCreatedTimeLowerBoundByPK(
 
 	attrs := []string{catalog.SystemDBAttr_ID, catalog.SystemDBAttr_CreateAt}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_timestamp.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+	if cerr != nil {
+		return types.TS{}, cerr
+	}
 
 	found := false
 	result := types.TS{}
@@ -3193,7 +3241,10 @@ func getTableCreationCommitTSByID(
 
 	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	if cerr != nil {
+		return types.TS{}, cerr
+	}
 
 	found := false
 	result := types.TS{}

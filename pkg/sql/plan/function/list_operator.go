@@ -51,12 +51,34 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	}
 	castLeft.Charset = charset
 	castRight.Charset = charset
-	return hasCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
+	// CHAR values may carry PAD_CHAR_TO_FULL_LENGTH representation padding.
+	// Compare them in the VARCHAR domain so the implicit cast removes that
+	// padding before scalar comparisons and hash-key construction.
+	charCast := false
+	if castLeft.Oid == types.T_char {
+		castLeft.Oid = types.T_varchar
+		charCast = true
+	}
+	if castRight.Oid == types.T_char {
+		castRight.Oid = types.T_varchar
+		charCast = true
+	}
+	return hasCast || charCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
 }
 
 func isDatetimeTimestampComparison(left, right types.Type) bool {
 	return left.Oid == types.T_datetime && right.Oid == types.T_timestamp ||
 		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
+}
+
+// isJSONBooleanComparison identifies equality predicates whose result depends
+// on the JSON scalar category. Letting the generic cast rule turn both operands
+// into BOOL would make a JSON string such as "true" indistinguishable from the
+// JSON boolean true. Equality evaluates this pair directly instead; explicit
+// JSON-to-BOOL casts retain their independent public conversion contract.
+func isJSONBooleanComparison(left, right types.Type) bool {
+	return left.Oid == types.T_json && right.Oid == types.T_bool ||
+		left.Oid == types.T_bool && right.Oid == types.T_json
 }
 
 var supportedOperators = []FuncNew{
@@ -68,6 +90,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
 				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
@@ -119,7 +144,10 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -374,6 +402,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isJSONBooleanComparison(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
 				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
@@ -2834,6 +2865,24 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return NewExplicitCast
+				},
+			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewComparisonCast
+				},
+			},
+			{
+				overloadId: 3,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewSetOperationCast
 				},
 			},
 		},

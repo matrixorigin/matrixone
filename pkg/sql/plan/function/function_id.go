@@ -838,13 +838,14 @@ const (
 	ESQL_TVF_DISCONNECT = 573
 	SQL_TVF_CONNECT     = 574
 	SQL_TVF_DISCONNECT  = 575
-
 	// Kafka external table (issue #27518).
 	LAST_KAFKA_MESSAGE_ID = 576
 
+	INTERNAL_JSON_COMPARISON_PARAM = 577
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 577
+	FUNCTION_END_NUMBER = 578
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1130,6 +1131,7 @@ var functionIdRegister = map[string]int32{
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
+	JsonComparisonParamFunctionName:  INTERNAL_JSON_COMPARISON_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,

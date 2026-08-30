@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -615,12 +616,12 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}))
 	require.ErrorContains(t, err, "runtime membership key set is empty")
 
-	_, hasBound, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
+	_, hasBound, _, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
 	require.NoError(t, err)
 	require.False(t, hasBound)
-	_, _, err = vectorDistanceBound(plan.BoundType_INCLUSIVE, nil)
+	_, _, _, err = vectorDistanceBound(plan.BoundType_INCLUSIVE, nil)
 	require.ErrorContains(t, err, "did not fold to a numeric literal")
-	_, _, err = vectorDistanceBound(plan.BoundType(99), nil)
+	_, _, _, err = vectorDistanceBound(plan.BoundType(99), nil)
 	require.ErrorContains(t, err, "invalid IVF distance bound type")
 
 	rangeExclusive := &plan.DistRange{
@@ -1635,4 +1636,113 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	snapshotPlanReader := snapshotReader.(*planReader)
 	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
+}
+
+// Centroid IDs reach ivfCentroidPrefixFilter ranked by distance to the query, not
+// by value. Block pruning reads the prefix list's first and last element as the
+// scan's lower and upper key bound (readutil/expr_filter.go), so publishing them
+// in probe order makes the reader seek past centroids sorting below the nearest
+// one and stop the scan at the last-listed one.
+func TestIvfCentroidPrefixFilterPublishesSortedPrefixes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	// Descending, so probe order is the exact reverse of value order.
+	centroidIDs := []int64{900, 512, 77, 4, 1}
+	filter, err := ivfCentroidPrefixFilter(context.Background(), mp, 3, centroidIDs, 4)
+	require.NoError(t, err)
+
+	fn := filter.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, function.PrefixInFunctionName, fn.Func.ObjName)
+	require.Len(t, fn.Args, 2)
+
+	literal := fn.Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// Every centroid must survive: the prefix set is the whole candidate set.
+	require.Equal(t, len(centroidIDs), published.Length())
+	require.Equal(t, int32(published.Length()), literal.Len)
+
+	col, area := vector.MustVarlenaRawData(published)
+	for i := 1; i < len(col); i++ {
+		prev, cur := col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)
+		require.Negative(t, bytes.Compare(prev, cur),
+			"prefix %d is not strictly greater than prefix %d", i, i-1)
+	}
+
+	// The pruning path never sorts, so the flag must state what is true.
+	require.True(t, published.GetSorted())
+}
+
+// Sorting the prefixes also compacts them, so the published Len must describe the
+// vector that was actually marshalled rather than the input slice. A Len that
+// over-claims rows disagrees with the payload it labels.
+func TestIvfCentroidPrefixFilterLenMatchesCompactedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	centroidIDs := []int64{7, 2, 7, 2, 5}
+	filter, err := ivfCentroidPrefixFilter(context.Background(), mp, 1, centroidIDs, 4)
+	require.NoError(t, err)
+
+	literal := filter.GetF().Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// {7,2,7,2,5} carries three distinct centroids.
+	require.Equal(t, 3, published.Length())
+	require.Equal(t, int32(3), literal.Len)
+	require.True(t, published.GetSorted())
+
+	col, area := vector.MustVarlenaRawData(published)
+	for i := 1; i < len(col); i++ {
+		require.Negative(t, bytes.Compare(
+			col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)))
+	}
+}
+
+// Storage Top-K is only chosen when a centroid restriction exists, so an empty
+// set is a caller error rather than an unrestricted scan.
+func TestIvfCentroidPrefixFilterRejectsEmptyCentroidSet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	filter, err := ivfCentroidPrefixFilter(context.Background(), mp, 1, nil, 4)
+	require.Error(t, err)
+	require.Nil(t, filter)
+}
+
+// The IN centroid filter is the sibling of ivfCentroidPrefixFilter and takes the
+// same distance-ranked input, so it must publish the same canonical membership
+// set: sorted, compacted, and with Len describing the payload.
+func TestIvfInInt64ExprPublishesSortedMembershipSet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	left := ivfColExpr(1, plan.Type{Id: int32(types.T_int64)})
+	expr, err := ivfInInt64Expr(context.Background(), mp, left, []int64{900, 7, 900, 42, 7})
+	require.NoError(t, err)
+
+	literal := expr.GetF().Args[1].GetVec()
+	require.NotNil(t, literal)
+
+	published := vector.NewVec(types.T_any.ToType())
+	defer published.Free(mp)
+	require.NoError(t, published.UnmarshalBinary(literal.Data))
+
+	// {900,7,900,42,7} holds three distinct centroids.
+	require.Equal(t, 3, published.Length())
+	require.Equal(t, int32(3), literal.Len)
+	require.True(t, published.GetSorted())
+
+	col := vector.MustFixedColWithTypeCheck[int64](published)
+	require.Equal(t, []int64{7, 42, 900}, col)
 }

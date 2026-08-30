@@ -91,6 +91,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -102,7 +105,10 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -169,7 +175,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
-		if err = validateRemoteNumericPrefixPipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
@@ -182,6 +188,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -758,9 +767,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
-	// we reused ANTI to store the information here because of the lack of related structure.
-	case *intersect.Intersect, *minus.Minus, *intersectall.IntersectAll:
-		in.SetOp = &pipeline.SetOp{}
+	case *intersect.Intersect:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *intersectall.IntersectAll:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
@@ -1338,11 +1350,23 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		op = intersect.NewArgument()
+		arg := intersect.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.IntersectAll:
-		op = intersectall.NewArgument()
+		arg := intersectall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Minus:
-		op = minus.NewArgument()
+		arg := minus.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -1794,20 +1818,37 @@ func validateRemoteStringProvenancePipelineProtocol(
 	return nil
 }
 
-func validateRemoteNumericPrefixPipelineProtocol(
+func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	requiresVersion30, err := plan.RequiresMORPCVersion30NumericPrefix(p)
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
-	if !requiresVersion30 {
+	if !features.Any() {
 		return nil
 	}
-	if proc == nil || !supportsRemotePreparedNumericPrefix(proc.GetService()) {
+	protocolVersion, hasProtocolVersion := int64(0), false
+	if proc != nil {
+		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.NumericPrefix &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
 		return moerr.NewNotSupportedNoCtx(
 			"prepared numeric-prefix casts require MORPC protocol version 30",
+		)
+	}
+	if features.JSONComparisonParam &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared JSON comparison parameters require MORPC protocol version 36",
+		)
+	}
+	if features.MixedJSONBooleanEquality &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
+		return moerr.NewNotSupportedNoCtx(
+			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
 	}
 	return nil
@@ -1929,6 +1970,32 @@ func validateRemoteUpdateChangedRowsPipelineProtocol(
 		}
 	}
 	return nil
+}
+
+func validateRemotePadSpacePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	// A current peer cannot reject this feature. Check its negotiated capability
+	// before inspecting the protobuf tree: this validator runs on both remote
+	// sender and receiver paths, and reflective feature discovery is needed only
+	// for a mixed-version peer.
+	if proc != nil && supportsRemotePadSpaceSemantics(proc.GetService()) {
+		return nil
+	}
+	if p == nil {
+		return nil
+	}
+	modeEnabled, err := process.ResolvePadCharToFullLength(proc)
+	if err != nil {
+		return err
+	}
+	if !modeEnabled && !pipelineContainsPadSpaceCast(p) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtx(
+		"PAD SPACE remote execution requires MORPC protocol version 40",
+	)
 }
 
 func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {

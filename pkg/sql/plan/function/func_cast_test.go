@@ -3178,7 +3178,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3259,7 +3259,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -3269,6 +3269,81 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			get, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tt.want, string(get))
+		})
+	}
+}
+
+func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	for _, test := range []struct {
+		name     string
+		fromType types.Type
+		toType   types.Type
+		mode     castMode
+		want     string
+	}{
+		{name: "ordinary varchar cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeNormal, want: "MO      "},
+		{name: "comparison varchar cast drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "comparison promoted varchar key drops padding", fromType: types.New(types.T_varchar, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "set-operation varchar key drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeSetOperation, want: "MO"},
+		{name: "comparison char cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_char, 8, 0), mode: castModeComparison, want: "MO      "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
+			input.SetType(test.fromType)
+			defer input.Free(mp)
+			from := vector.GenerateFunctionStrParameter(input)
+			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode))
+
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, test.want, string(got))
+		})
+	}
+}
+
+func TestSetOperationCharCastPadsToCommonWidthOnlyWhenEnabled(t *testing.T) {
+	char4 := types.New(types.T_char, 4, 0)
+	char8 := types.New(types.T_char, 8, 0)
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+		want    []string
+	}{
+		{
+			name:    "pad char to full length",
+			sqlMode: "PAD_CHAR_TO_FULL_LENGTH",
+			want:    []string{"MO      ", "你好      "},
+		},
+		{
+			name:    "default mode preserves physical width",
+			sqlMode: "",
+			want:    []string{"MO  ", "你好  "},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.sqlMode, nil
+			})
+
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(char4, []string{"MO  ", "你好  "}, nil),
+					NewFunctionTestInput(char8, []string{}, nil),
+				},
+				NewFunctionTestResult(char8, false, tc.want, nil),
+				NewSetOperationCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }
@@ -3358,7 +3433,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
@@ -3778,6 +3853,15 @@ func TestCastJsonToNumeric(t *testing.T) {
 			[]int64{1, 2, -3}, []bool{false, false, false}, false)
 	})
 
+	t.Run("json_integer_cast_preserves_values_above_float_precision", func(t *testing.T) {
+		run(t, "int64_precision", []string{"9007199254740993", "9223372036854775807"}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "uint64_precision", []string{"9007199254740993", "18446744073709551615"}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
 	t.Run("json_number_to_int8", func(t *testing.T) {
 		run(t, "int8", []string{"10", "20"}, nil,
 			types.T_int8.ToType(),
@@ -3788,6 +3872,40 @@ func TestCastJsonToNumeric(t *testing.T) {
 		run(t, "string_to_int64", []string{`"42"`, `"100"`}, nil,
 			types.T_int64.ToType(),
 			[]int64{42, 100}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_integer_cast_preserves_boundaries", func(t *testing.T) {
+		run(t, "string_int64_precision", []string{`"9007199254740993"`, `"9223372036854775807"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_precision", []string{`"9007199254740993"`, `"18446744073709551615"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_fractional_integer_cast_is_exact", func(t *testing.T) {
+		run(t, "string_int64_fraction", []string{`"9007199254740993.9"`, `"-9223372036854775808.9"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MinInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_fraction", []string{`"18446744073709551615.9"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{math.MaxUint64}, []bool{false}, false)
+	})
+
+	t.Run("json_decimal_integer_cast_is_exact", func(t *testing.T) {
+		encoded := []string{
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.9")),
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9223372036854775807.99")),
+		}
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{9007199254740993, math.MaxInt64}, nil)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		require.True(t, succeed, info)
 	})
 
 	t.Run("json_null_to_int64", func(t *testing.T) {
@@ -3993,12 +4111,14 @@ func TestCastJsonToBool(t *testing.T) {
 		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
 	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
 		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
-	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
+	run(t, "quoted_string_error", []string{`"\"true\""`}, nil,
+		nil, nil, true)
 	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
 		[]bool{false, false}, []bool{true, true}, false)
 	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
 	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
-	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+	run(t, "other_string_error", []string{`"not-a-bool"`}, nil,
+		nil, nil, true)
 
 	decimalEncoded := []string{
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),

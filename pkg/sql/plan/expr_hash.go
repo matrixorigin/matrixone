@@ -142,6 +142,7 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 		writeByte(h, tagVec)
 		if v.Vec != nil {
 			writeUint32(h, uint32(v.Vec.Len))
+			writeUint32(h, v.Vec.StringSource)
 			writeUint64(h, uint64(len(v.Vec.Data)))
 			_, _ = h.Write(v.Vec.Data)
 		}
@@ -185,11 +186,22 @@ func executableLiteralForm(typ plan.Type, form plan.StringLiteralForm) plan.Stri
 	return form
 }
 
+func executableLiteralStringSource(lit *plan.Literal) uint32 {
+	if lit == nil {
+		return 0
+	}
+	if lit.StringSource != 0 {
+		return lit.StringSource
+	}
+	return uint32(types.StringSourceLiteral) + 1
+}
+
 func hashLitInto(h writeByter, typ plan.Type, lit *plan.Literal) {
 	if lit == nil {
 		writeByte(h, 0)
 		return
 	}
+	writeUint32(h, executableLiteralStringSource(lit))
 	if lit.Isnull {
 		writeByte(h, 1)
 		return
@@ -351,7 +363,8 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		}
 		// IsSerialized is diagnostic provenance and must not affect execution
 		// identity, just like Literal.IsSerialized.
-		return av.Vec.Len == bv.Vec.Len && bytes.Equal(av.Vec.Data, bv.Vec.Data)
+		return av.Vec.Len == bv.Vec.Len &&
+			av.Vec.StringSource == bv.Vec.StringSource && bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
 		// Fallback: compare proto bytes.
 		ab, aerr := a.Marshal()
@@ -378,7 +391,7 @@ func literalEqual(typ plan.Type, a, b *plan.Literal) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Isnull != b.Isnull {
+	if a.Isnull != b.Isnull || executableLiteralStringSource(a) != executableLiteralStringSource(b) {
 		return false
 	}
 	if a.Isnull {

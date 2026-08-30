@@ -393,6 +393,18 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		return err
 	}
 
+	// Optional 5th argument: the zero-relevance guard for a MATCH score threshold that
+	// was only known at EXECUTE (a prepared '?'). See QueryBuilder.fulltextRuntimeScoreGuard.
+	//
+	// This runs before the pattern is validated, so the guard decides the outcome
+	// whatever the search term binds to. The refusal it restates is a plan-time
+	// property of the threshold alone; letting a NULL or empty pattern report its own
+	// error first would answer `AGAINST(NULL) > ?` differently from the identical
+	// literal, which the planner refuses outright.
+	if err := checkFulltextZeroRelevanceGuard(proc, tf.ctr.argVecs, 4, nthRow); err != nil {
+		return err
+	}
+
 	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
@@ -1059,4 +1071,44 @@ func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFi
 		return nil, err
 	}
 	return &fulltextMembershipFilterResult{membershipFilterBytes: payload}, nil
+}
+
+// checkFulltextZeroRelevanceGuard evaluates the optional zero-relevance guard argument
+// a driving fulltext table function carries when a MATCH score threshold is only known
+// at execution.
+//
+// The planner cannot test `MATCH(...) <op> ?` at plan time, so it emits `0 <op> ?` as a
+// boolean argument instead. True means a document with relevance 0 -- one this index
+// never returns -- would satisfy the predicate, so answering from the index would drop
+// exactly those rows. That is the same condition the planner rejects for a literal
+// threshold, and it raises the same error, so `> ?` and `>= ?` behave identically to
+// the literals they stand for at every bound value.
+//
+// A missing argument (the threshold was a literal, so the planner already checked it)
+// or a NULL bound is not a violation: a NULL threshold makes the comparison NULL and
+// the query returns no rows either way.
+func checkFulltextZeroRelevanceGuard(proc *process.Process, argVecs []*vector.Vector, pos int, nthRow int) error {
+	if pos >= len(argVecs) {
+		return nil
+	}
+	v := argVecs[pos]
+	if v == nil || v.Length() == 0 {
+		return nil
+	}
+	if v.GetType().Oid != types.T_bool {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf(
+			"fulltext score-threshold guard must be bool, but got %s", v.GetType().String()))
+	}
+	row := nthRow
+	if v.IsConst() {
+		row = 0
+	}
+	if v.IsConstNull() || v.GetNulls().Contains(uint64(row)) {
+		return nil
+	}
+	if vector.GetFixedAtNoTypeCheck[bool](v, row) {
+		return moerr.NewNotSupported(proc.Ctx,
+			"MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.")
+	}
+	return nil
 }

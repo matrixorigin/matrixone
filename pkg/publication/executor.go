@@ -29,11 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -1289,7 +1291,9 @@ func GCSnapshots(
 
 	// Delete each snapshot in separate transaction
 	for _, sname := range snapshotsToDelete {
-		deleteSnapshotInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, sname)
+		if err := deleteSnapshotInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, sname); err != nil {
+			return err
+		}
 	}
 
 	if len(snapshotsToDelete) > 0 {
@@ -1308,32 +1312,66 @@ func deleteSnapshotInSeparateTxn(
 	cnTxnClient client.TxnClient,
 	cnUUID string,
 	snapshotName string,
-) {
+) error {
 	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc delete snapshot")
 	if err != nil {
 		logutil.Error("Publication-Task GCSnapshots failed to create txn for deleting snapshot",
 			zap.String("sname", snapshotName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
-	defer txn.Commit(ctx)
+	return deleteSnapshotWithLifecycleGate(ctx, txn, cnUUID, snapshotName, ExecWithResult)
+}
+
+type snapshotGCExec func(
+	context.Context, string, string, client.TxnOperator,
+) (executor.Result, error)
+
+// deleteSnapshotWithLifecycleGate keeps CCPR cleanup in the same owner-catalog
+// order as snapshot publication, restore, and lineage GC. Every pre-commit
+// failure rolls the transaction back; a commit failure is returned verbatim
+// because the client operator owns unknown-commit finalization semantics.
+func deleteSnapshotWithLifecycleGate(
+	ctx context.Context,
+	txn client.TxnOperator,
+	cnUUID string,
+	snapshotName string,
+	exec snapshotGCExec,
+) (err error) {
+	commitAttempted := false
+	defer func() {
+		if err != nil && !commitAttempted {
+			err = errors.Join(err, txn.Rollback(ctx))
+		}
+	}()
+
+	gate, err := exec(ctx, databranchutils.LineageOwnerLifecycleLockSQL(), cnUUID, txn)
+	gate.Close()
+	if err != nil {
+		return err
+	}
 
 	// Use direct delete since GC doesn't have publication context
-	dropSQL := fmt.Sprintf("delete from mo_catalog.mo_snapshots where sname = '%s'", snapshotName)
-	result, err := ExecWithResult(ctx, dropSQL, cnUUID, txn)
+	dropSQL := fmt.Sprintf("delete from mo_catalog.mo_snapshots where sname = %s", sqlquote.String(snapshotName))
+	result, err := exec(ctx, dropSQL, cnUUID, txn)
+	result.Close()
 	if err != nil {
 		logutil.Error("Publication-Task GCSnapshots failed to drop snapshot",
 			zap.String("sname", snapshotName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
-	defer result.Close()
+	commitAttempted = true
+	if err = txn.Commit(ctx); err != nil {
+		return err
+	}
 
 	logutil.Info("Publication-Task GCSnapshots deleted snapshot",
 		zap.String("sname", snapshotName),
 	)
+	return nil
 }
 
 func deleteCcprLogRecordInSeparateTxn(

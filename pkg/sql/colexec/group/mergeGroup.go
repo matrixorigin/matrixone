@@ -270,22 +270,27 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					vals, more, insertErr := mergeGroup.ctr.commitGroupByChunk(
 						bat.Vecs, i, n, preview)
 					if insertErr != nil {
-						return false, insertErr
-					}
-					if more > 0 {
-						for _, agg := range mergeGroup.ctr.aggList {
-							if growErr := agg.GroupGrow(more); growErr != nil {
-								return false, growErr
+						if !isGroupPrePublicationError(insertErr) {
+							return false, insertErr
+						}
+						mergeGroup.ctr.cancelGroupByPreflights()
+						err = insertErr
+					} else {
+						if more > 0 {
+							for _, agg := range mergeGroup.ctr.aggList {
+								if growErr := agg.GroupGrow(more); growErr != nil {
+									return false, growErr
+								}
 							}
 						}
-					}
-					for j, agg := range mergeGroup.ctr.aggList {
-						if err = agg.BatchMerge(
-							mergeGroup.ctr.spillAggList[j], i, vals[:n]); err != nil {
-							return false, err
+						for j, agg := range mergeGroup.ctr.aggList {
+							if err = agg.BatchMerge(
+								mergeGroup.ctr.spillAggList[j], i, vals[:n]); err != nil {
+								return false, err
+							}
 						}
+						break
 					}
-					break
 				}
 
 				// The decoded partial borrows recovery capacity. Release it before
@@ -411,6 +416,11 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 				vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
 				return moerr.NewInvalidStateNoCtx(
 					"aggregate explicit-text metadata requires MORPCVersion23")
+			}
+			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+				vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
+				return moerr.NewInvalidStateNoCtx(
+					"aggregate string source metadata requires MORPCVersion37")
 			}
 			if err := validateDecodedAggregateGroupCount(
 				ctr.spillAggList[i], bat.RowCount()); err != nil {

@@ -351,6 +351,16 @@ type PrepareStmt struct {
 	hasLagLeadParams              bool
 	paramKinds                    []vector.PrepareParamKind
 	paramMetadata                 []bool
+	// jsonComparisonParamPositions is computed once per prepared-plan
+	// generation. Only these parameters need an exact SQL type in Process
+	// metadata; paramConcreteTypes is a reusable execution buffer.
+	jsonComparisonParamPositions []int32
+	paramConcreteTypes           []types.T
+	// numericOverloadParamPositions is computed from explicit plan metadata
+	// once per prepared-plan generation.  It identifies ABS arguments whose
+	// runtime integer/decimal domain may require overload rebinding without
+	// rescanning the full plan for every EXECUTE.
+	numericOverloadParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -703,8 +713,9 @@ func execResultArrayHasData(arr []ExecResult) bool {
 }
 
 type BackgroundExecOption struct {
-	fromRealUser       bool
-	forcePessimisticRC bool
+	fromRealUser                   bool
+	forcePessimisticRC             bool
+	cloneSnapshotUsesBackgroundTxn bool
 	// cancelTxnCreateWithRequest is reserved for short-lived background
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
@@ -1057,6 +1068,10 @@ type ExecCtx struct {
 	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
+	// effectiveTxnDefaultDatabase is the binding database of the effective
+	// prepared statement. Direct statements leave it empty and resolve against
+	// the current session database.
+	effectiveTxnDefaultDatabase string
 	// persistentDropTableTargets captures the per-target classification before
 	// DROP TABLE executes. Temporary aliases are removed during execution, so
 	// post-execution persistent side effects must consume this snapshot instead
@@ -1104,6 +1119,14 @@ type ExecCtx struct {
 	rewriteEnabled bool
 }
 
+func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.effectiveTxnDefaultDatabase = ""
+	if input != nil {
+		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
+	}
+	execCtx.persistentDropTableTargets = nil
+}
+
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 	previous := execCtx.rootSQLOverride
 	execCtx.rootSQLOverride = &rootSQL
@@ -1127,6 +1150,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
+	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
@@ -2058,4 +2082,10 @@ type ServerLevelVariables struct {
 	Aicm            atomic.Value
 	moServerStarted atomic.Bool
 	sessionAlloc    atomic.Value
+
+	optimizerStatsMu       sync.RWMutex
+	optimizerStatsClock    uint64
+	optimizerStatsReset    uint64
+	optimizerStatsVersions map[optimizerStatsTableKey]uint64
+	optimizerStatsPublish  [optimizerStatsPublisherStripes]chan struct{}
 }
