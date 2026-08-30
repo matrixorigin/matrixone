@@ -42,6 +42,19 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 		db1 := openIssue277xxDB(t, cn1.GetServiceConfig().CN.Frontend.Port)
 		defer db1.Close()
 
+		t.Run("27743 automatic cross-CN DDL visibility", func(t *testing.T) {
+			const database = "issue_27743_automatic_ddl_visibility"
+			resetIssue277xxDatabase(t, ctx, db0, database)
+			defer execSQLMaybe(t, ctx, db0, "drop database if exists `"+database+"`")
+
+			// Do not issue SYNCCOMMIT or retry the read. The v41 DDL commit contract
+			// must make the first fresh CN1 snapshot observe CN0's CREATE TABLE.
+			execSQLRequire(t, ctx, db0,
+				"create table `"+database+"`.`t` (id int primary key, payload varchar(32))")
+			require.Equal(t, 0, queryIssue277xxInt(t, ctx, db1,
+				"select count(*) from `"+database+"`.`t`"))
+		})
+
 		t.Run("27735 qualified alter drop index without default database", func(t *testing.T) {
 			const database = "issue_27735_qualified_drop"
 			resetIssue277xxDatabase(t, ctx, db0, database)

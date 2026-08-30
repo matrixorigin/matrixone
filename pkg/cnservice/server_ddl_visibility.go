@@ -46,7 +46,8 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 	// MORPCLatestVersion describes compiled capability, not deployment-wide
 	// activation. Restore the durable per-CN deployed protocol before deciding
 	// whether this restart can produce v41 DDL. A fresh upgraded process has no
-	// marker and starts on v37 until the complete-target cut persists v41.
+	// marker and preserves the already-deployed v40 baseline until the
+	// complete-target cut persists v41.
 	deployedVersion := s.loadDDLVisibilityDeployedProtocol()
 	if deployedVersion == 0 && s._hakeeperClient != nil {
 		ctx, cancel := s.newDDLVisibilityBarrierContext(context.Background())
@@ -75,7 +76,7 @@ func (s *service) prepareDDLVisibilityBarrier() error {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, -deployedVersion)
 	} else if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
 		if version, valid := value.(int64); valid && version >= defines.MORPCVersion41 {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
 		}
 	}
 
@@ -255,6 +256,24 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	if version < defines.MORPCVersion41 {
 		if pending {
 			return moerr.NewInvalidStateNoCtx("cannot downgrade during DDL visibility activation")
+		}
+		deployed := s.loadDDLVisibilityDeployedProtocol()
+		clusterCommitted := s.ddlVisibilityActivationComplete.Load() ||
+			deployed >= defines.MORPCVersion41 || deployed <= -defines.MORPCVersion41
+		if !clusterCommitted && s._hakeeperClient != nil {
+			queryCtx, cancel := s.newDDLVisibilityBarrierContext(ctx)
+			details, err := s._hakeeperClient.GetClusterDetails(queryCtx)
+			if err != nil {
+				err = moerr.AttachCause(queryCtx, err)
+				cancel()
+				return err
+			}
+			cancel()
+			clusterCommitted = details.DDLVisibilityDeployedProtocol >= defines.MORPCVersion41
+		}
+		if clusterCommitted {
+			return moerr.NewInvalidStateNoCtx(
+				"cannot downgrade after the DDL visibility cluster epoch is committed")
 		}
 		if err := s.persistDDLVisibilityDeployedProtocol(version); err != nil {
 			return err

@@ -432,7 +432,7 @@ func TestDefaultV41StartupUsesLastDeployedProtocolUntilActivation(t *testing.T) 
 	require.NoError(t, s.publishDDLVisibilityIngressAfterStart())
 	version, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
 	require.True(t, ok)
-	require.Equal(t, defines.MORPCVersion37, version)
+	require.Equal(t, defines.MORPCVersion40, version)
 	require.True(t, s.ddlVisibilityListenersReady.Load())
 	require.True(t, s.viewMetadataIngressReady.Load())
 	require.True(t, gate.PublicDDLEnabled())
@@ -593,7 +593,7 @@ func TestActivationDoesNotPublishFencedBeforeProvisionalPersistence(t *testing.T
 	const serviceID = "ddl-visibility-provisional-persist-failure-test"
 	const generation = uint64(7)
 	rt := moruntime.DefaultRuntime()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
 	moruntime.SetupServiceBasedRuntime(serviceID, rt)
 	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
 		ServiceID: serviceID, QueryAddress: "self:6001",
@@ -637,7 +637,7 @@ func TestCommittedPersistenceFailureRestartsFromProvisionalFailClosed(t *testing
 	const serviceID = "ddl-visibility-committed-persist-failure-test"
 	const generation = uint64(7)
 	rt := moruntime.DefaultRuntime()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion37)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
 	moruntime.SetupServiceBasedRuntime(serviceID, rt)
 	cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{{
 		ServiceID: serviceID, QueryAddress: "self:6001",
@@ -1307,7 +1307,7 @@ func TestValidateDDLVisibilityActivationTargets(t *testing.T) {
 	require.Equal(t, map[string]struct{}{"self": {}, "peer": {}}, targets)
 }
 
-func TestSetProtocolVersionDowngradeAndPendingGuard(t *testing.T) {
+func TestSetProtocolVersionDowngradeGuards(t *testing.T) {
 	const serviceID = "ddl-visibility-downgrade-test"
 	rt := moruntime.DefaultRuntime()
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
@@ -1316,17 +1316,32 @@ func TestSetProtocolVersionDowngradeAndPendingGuard(t *testing.T) {
 	s.ddlVisibilityBarrierPrepared.Store(true)
 	s.ddlVisibilityActivationPrepared.Store(true)
 	s.ddlVisibilityActivationFenced.Store(true)
+	s.ddlVisibilityActivationComplete.Store(true)
 
-	require.NoError(t, s.setProtocolVersion(context.Background(), defines.MORPCVersion34, nil))
+	err := s.setProtocolVersion(context.Background(), defines.MORPCVersion40, nil)
+	require.ErrorContains(t, err, "cannot downgrade after the DDL visibility cluster epoch is committed")
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	require.True(t, ok)
+	require.Equal(t, defines.MORPCVersion41, version)
+
+	s.ddlVisibilityActivationComplete.Store(false)
+	s._hakeeperClient = &ddlVisibilityWithdrawalHAKeeperClient{
+		clusterDeployedProtocol: defines.MORPCVersion41,
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+	err = s.setProtocolVersion(context.Background(), defines.MORPCVersion34, nil)
+	require.ErrorContains(t, err, "cannot downgrade after the DDL visibility cluster epoch is committed")
+
+	s._hakeeperClient = nil
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion40)
+	require.NoError(t, s.setProtocolVersion(context.Background(), defines.MORPCVersion34, nil))
+	version, ok = rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
 	require.Equal(t, defines.MORPCVersion34, version)
-	require.False(t, s.ddlVisibilityActivationPrepared.Load())
-	require.False(t, s.ddlVisibilityActivationFenced.Load())
 
 	s.ddlVisibilityActivationPending.Store(true)
-	err := s.setProtocolVersion(context.Background(), defines.MORPCVersion34, nil)
-	require.ErrorContains(t, err, "cannot downgrade")
+	err = s.setProtocolVersion(context.Background(), defines.MORPCVersion34, nil)
+	require.ErrorContains(t, err, "cannot downgrade during DDL visibility activation")
 }
 
 func TestWaitForDDLVisibilityActivationPhaseRejectsInvalidInventory(t *testing.T) {
