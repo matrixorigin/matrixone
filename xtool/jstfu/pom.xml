@@ -28,6 +28,12 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <grpc.version>1.68.1</grpc.version>
     <protobuf.version>3.25.5</protobuf.version>
+    <!-- Pin every plugin reached by the package lifecycle.  Leaving these
+         implicit makes a clean CI runner resolve today's latest plugin,
+         which can change the build without a source revision. -->
+    <maven.compiler.version>3.11.0</maven.compiler.version>
+    <maven.resources.version>3.3.1</maven.resources.version>
+    <maven.jar.version>3.3.0</maven.jar.version>
   </properties>
 
   <profiles>
@@ -97,6 +103,21 @@
       </extension>
     </extensions>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-resources-plugin</artifactId>
+        <version>${maven.resources.version}</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${maven.compiler.version}</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>${maven.jar.version}</version>
+      </plugin>
       <plugin>
         <groupId>org.xolstice.maven.plugins</groupId>
         <artifactId>protobuf-maven-plugin</artifactId>
