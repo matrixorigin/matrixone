@@ -296,15 +296,23 @@ func runSqlWithMode(
 
 	var exec executor.SQLExecutor
 	if !useBackExec {
-		rt := moruntime.ServiceRuntime(ses.service)
-		if rt == nil {
+		// The internal SQL fast path needs backSes below. Callers may supply a
+		// different BackgroundExec implementation (for example a test executor),
+		// so use its interface-level Exec/result-set path instead of asserting it
+		// is a *backExec.
+		if _, ok := bh.(*backExec); !ok {
 			useBackExec = true
 		} else {
-			val, exist := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-			if !exist {
+			rt := moruntime.ServiceRuntime(ses.service)
+			if rt == nil {
 				useBackExec = true
 			} else {
-				exec = val.(executor.SQLExecutor)
+				val, exist := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+				if !exist {
+					useBackExec = true
+				} else {
+					exec = val.(executor.SQLExecutor)
+				}
 			}
 		}
 	}

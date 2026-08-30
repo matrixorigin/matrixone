@@ -630,50 +630,86 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 }
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	db.EXPECT().Relation(gomock.Any(), "index_table", gomock.Any()).Return(
+		nil, moerr.NewNoSuchTableNoCtx("db1", "index_table"),
+	)
 
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	proc := testutil.NewProc(t)
-	proc.Base.TxnOperator = txnOperator
+	err := lockIndexTable(context.Background(), db, nil, nil, "index_table", false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "unexpected error: %v", err)
+}
 
-	mockEngine := mock_frontend.NewMockEngine(ctrl)
-	mockEngine.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), gomock.Any()).Return(uint64(272510), nil).AnyTimes()
-
-	mock_db1_database := mock_frontend.NewMockDatabase(ctrl)
-	mock_db1_database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewLockTableNotFound(context.Background())).AnyTimes()
-
-	type args struct {
-		ctx        context.Context
-		dbSource   engine.Database
-		eng        engine.Engine
-		proc       *process.Process
-		tableName  string
-		defChanged bool
+func TestLockIndexTableForAlterMissingGeneration(t *testing.T) {
+	plannedIndex := &plan2.IndexDef{
+		IndexName:      "idx_v",
+		IndexTableName: "__mo_index_idx_v_old",
+		TableExist:     true,
 	}
 	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
+		name                    string
+		parentDefinitionChanged bool
+		currentParentID         uint64
+		currentIndexes          []*plan2.IndexDef
+		currentParentErr        error
+		wantCode                uint16
 	}{
 		{
-			name: "test",
-			args: args{
-				ctx:        context.Background(),
-				dbSource:   mock_db1_database,
-				eng:        mockEngine,
-				proc:       proc,
-				tableName:  "__mo_index_unique_0192aea0-8e78-76a7-b3ea-10862b69c51c",
-				defChanged: true,
-			},
-			wantErr: true,
+			name:                    "parent lock already proved stale generation",
+			parentDefinitionChanged: true,
+			wantCode:                moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:            "replacement parent generation retries",
+			currentParentID: 11,
+			wantCode:        moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:            "replacement hidden index generation retries",
+			currentParentID: 10,
+			currentIndexes: []*plan2.IndexDef{{
+				IndexName:      "idx_v",
+				IndexTableName: "__mo_index_idx_v_new",
+				TableExist:     true,
+			}},
+			wantCode: moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:             "dropped parent retries",
+			currentParentErr: moerr.NewNoSuchTableNoCtx("db1", "parent"),
+			wantCode:         moerr.ErrTxnNeedRetryWithDefChanged,
+		},
+		{
+			name:            "persistent missing hidden relation returns no such table",
+			currentParentID: 10,
+			currentIndexes:  []*plan2.IndexDef{plannedIndex},
+			wantCode:        moerr.ErrNoSuchTable,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := lockIndexTable(tt.args.ctx, tt.args.dbSource, tt.args.eng, tt.args.proc, tt.args.tableName, tt.args.defChanged); (err != nil) != tt.wantErr {
-				t.Errorf("lockIndexTable() error = %v, wantErr %v", err, tt.wantErr)
+			ctrl := gomock.NewController(t)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			db.EXPECT().Relation(gomock.Any(), plannedIndex.IndexTableName, gomock.Any()).Return(
+				nil, moerr.NewNoSuchTableNoCtx("db1", plannedIndex.IndexTableName),
+			)
+			if !tt.parentDefinitionChanged {
+				if tt.currentParentErr != nil {
+					db.EXPECT().Relation(gomock.Any(), "parent", gomock.Any()).Return(nil, tt.currentParentErr)
+				} else {
+					parent := mock_frontend.NewMockRelation(ctrl)
+					db.EXPECT().Relation(gomock.Any(), "parent", gomock.Any()).Return(parent, nil)
+					parent.EXPECT().GetTableID(gomock.Any()).Return(tt.currentParentID)
+					if tt.currentParentID == 10 {
+						parent.EXPECT().CopyTableDef(gomock.Any()).Return(&plan2.TableDef{Indexes: tt.currentIndexes})
+					}
+				}
 			}
+
+			err := lockIndexTableForAlter(
+				context.Background(), db, nil, nil, "parent", 10, plannedIndex,
+				tt.parentDefinitionChanged,
+			)
+			require.True(t, moerr.IsMoErrCode(err, tt.wantCode), "unexpected error: %v", err)
 		})
 	}
 }

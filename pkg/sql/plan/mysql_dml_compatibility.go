@@ -419,9 +419,45 @@ func findMySQLDMLTargetInSelectWithQueryTargets(
 			}
 		}
 		if selectStmt.Having != nil {
-			return findMySQLDMLTargetInExprWithOuterTargets(
+			if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
 				ctx, selectStmt.Having.Expr, targets, visibleCTEs, outerTargetQualifiers,
-			)
+			); ok {
+				return target, true
+			}
+		}
+		for _, definition := range selectStmt.Windows {
+			if definition == nil || definition.Spec == nil {
+				continue
+			}
+			for _, expr := range definition.Spec.PartitionBy {
+				if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+					ctx, expr, targets, visibleCTEs, outerTargetQualifiers,
+				); ok {
+					return target, true
+				}
+			}
+			for _, order := range definition.Spec.OrderBy {
+				if order == nil {
+					continue
+				}
+				if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+					ctx, order.Expr, targets, visibleCTEs, outerTargetQualifiers,
+				); ok {
+					return target, true
+				}
+			}
+			if definition.Spec.Frame != nil {
+				for _, bound := range []*tree.FrameBound{definition.Spec.Frame.Start, definition.Spec.Frame.End} {
+					if bound == nil {
+						continue
+					}
+					if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+						ctx, bound.Expr, targets, visibleCTEs, outerTargetQualifiers,
+					); ok {
+						return target, true
+					}
+				}
+			}
 		}
 	case *tree.ValuesClause:
 		for _, row := range selectStmt.Rows {
@@ -613,6 +649,28 @@ func mysqlSelectClauseReferencesOuterQualifier(
 	}
 	if selectStmt.Having != nil && mysqlExprReferencesOuterQualifier(selectStmt.Having.Expr, qualifiers, localShadowed) {
 		return true
+	}
+	for _, definition := range selectStmt.Windows {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		for _, expr := range definition.Spec.PartitionBy {
+			if mysqlExprReferencesOuterQualifier(expr, qualifiers, localShadowed) {
+				return true
+			}
+		}
+		for _, order := range definition.Spec.OrderBy {
+			if order != nil && mysqlExprReferencesOuterQualifier(order.Expr, qualifiers, localShadowed) {
+				return true
+			}
+		}
+		if definition.Spec.Frame != nil {
+			for _, bound := range []*tree.FrameBound{definition.Spec.Frame.Start, definition.Spec.Frame.End} {
+				if bound != nil && mysqlExprReferencesOuterQualifier(bound.Expr, qualifiers, localShadowed) {
+					return true
+				}
+			}
+		}
 	}
 	if selectStmt.From != nil {
 		for _, tableExpr := range selectStmt.From.Tables {
