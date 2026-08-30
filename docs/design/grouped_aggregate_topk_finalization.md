@@ -77,6 +77,10 @@ The aggregate-bearing extension accepts only all of the following:
   that scan;
 - no embedded aggregate projection/filter, inactive grouping-set key, DISTINCT
   aggregate or aggregate-specific configuration exists;
+- every grouping expression and aggregate argument whose evaluation can move
+  past bounded demand is truncation-safe: a direct column/literal or a
+  structurally proven total, side-effect-free cast whose target range covers the
+  complete source domain;
 - every aggregate belongs to the proven single-row family below.
 
 An aggregate-bearing query without LIMIT deliberately keeps its established plan,
@@ -103,6 +107,10 @@ For a group containing one row:
   in the declared result precision and scale. Wider source domains retain
   Aggregate, preserving the established result/error behavior independently of
   fixes to the aggregate implementation;
+- deterministic metadata is not a totality proof. Text-to-number casts,
+  narrowing casts, arbitrary scalar functions and volatile expressions retain
+  Aggregate because replacing a blocking consumer with a bounded streaming path
+  could otherwise suppress an error or externally visible evaluation;
 - unsupported or mixed aggregate families reject the complete rewrite.
 
 The rewrite converts AGG to Project, appends the row expressions after the group
@@ -135,6 +143,9 @@ OFFSET and any rank/tie semantics.
 - Correlated scalar aggregates retain their established decorrelation shape.
 - Missing, incomplete or malformed PK metadata, or a non-total single-row
   aggregate conversion, fails closed.
+- Truncation safety covers both aggregate arguments and extra grouping
+  expressions. This prevents LIMIT/OFFSET pushdown from skipping evaluation that
+  the blocking Aggregate previously had to perform.
 - Binding remapping is performed only after every aggregate expression in the
   candidate has been proven, preventing partial rewrites.
 
@@ -177,7 +188,8 @@ execution changes were removed.
 
 - focused planner tests: PK elimination, aggregate family, nullable COUNT, HAVING,
   missing PK, DISTINCT/configured aggregate, grouping family, unbounded fallback,
-  decimal domain containment and floating-point signed-zero fallback;
+  decimal domain containment, floating-point signed-zero fallback, fallible and
+  volatile expression fallback, and a total widening-cast control;
 - pre-existing grouping-set, correlated-scalar-aggregate and physical-group-key
   regressions;
 - full `pkg/sql/plan` package suite;

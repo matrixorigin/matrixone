@@ -1052,6 +1052,13 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			return
 		}
 	}
+	if limitDemand {
+		for _, expr := range node.GroupBy {
+			if !isTruncationSafeRowExpr(expr) {
+				return
+			}
+		}
+	}
 
 	projectList := make([]*plan.Expr, 0, len(node.GroupBy)+len(node.AggList))
 	projectList = append(projectList, node.GroupBy...)
@@ -1105,7 +1112,7 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		return makePlan2Int64ConstExprWithType(1), true
 
 	case "count":
-		if len(fn.Args) != 1 {
+		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
 			return nil, false
 		}
 		// A direct non-null scan column has no evaluation behavior to retain.
@@ -1131,7 +1138,7 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		return rowCount, true
 
 	case "sum", "avg":
-		if len(fn.Args) != 1 {
+		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
 			return nil, false
 		}
 		if !singleRowSumOrAvgCastIsExact(fn.Func.ObjName, fn.Args[0].Typ, agg.Typ) {
@@ -1140,7 +1147,7 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		fallthrough
 
 	case "min", "max", "any_value":
-		if len(fn.Args) != 1 {
+		if len(fn.Args) != 1 || !isTruncationSafeRowExpr(fn.Args[0]) {
 			return nil, false
 		}
 		target := makeTypeByPlan2Type(agg.Typ)
@@ -1157,6 +1164,142 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 	return nil, false
 }
 
+// isTruncationSafeRowExpr proves that moving an expression from below a
+// blocking Aggregate to a streaming Project cannot suppress an error or an
+// externally visible evaluation. Keep this proof deliberately structural: an
+// arbitrary deterministic function may still fail for part of its input
+// domain, so volatility metadata alone is not sufficient.
+func isTruncationSafeRowExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() != nil || expr.GetLit() != nil {
+		return true
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+		fn.Args[1].GetT() == nil {
+		return false
+	}
+	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+		return false
+	}
+	return isTruncationSafeRowExpr(fn.Args[0]) &&
+		singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ)
+}
+
+func singleRowCastIsTotal(source, target plan.Type) bool {
+	sourceID := types.T(source.Id)
+	targetID := types.T(target.Id)
+	if isSameColumnType(source, target) {
+		return !sourceID.IsDecimal() || validDecimalPlanType(source)
+	}
+	if sourceID.IsDecimal() {
+		if !validDecimalPlanType(source) {
+			return false
+		}
+		if targetID == types.T_float64 {
+			// MatrixOne decimals have at most 76 integral digits, which is within
+			// the finite float64 exponent range. Precision loss is allowed here:
+			// the same cast is evaluated before the singleton aggregate.
+			return true
+		}
+		return decimalDomainContains(source, target)
+	}
+
+	if sourceID == types.T_float32 {
+		return targetID == types.T_float64
+	}
+	if !sourceID.IsInteger() {
+		return false
+	}
+	if targetID == types.T_float32 || targetID == types.T_float64 {
+		// Every supported integer domain is inside both floating-point exponent
+		// ranges. Rounding is part of the original cast and is unchanged.
+		return true
+	}
+	if targetID.IsDecimal() {
+		digits := integerDecimalDigits(sourceID)
+		return digits > 0 && validDecimalPlanType(target) &&
+			digits <= target.Width-target.Scale
+	}
+	if !targetID.IsInteger() {
+		return false
+	}
+
+	sourceBits, sourceSigned := integerTypeDomain(sourceID)
+	targetBits, targetSigned := integerTypeDomain(targetID)
+	if sourceBits == 0 || targetBits == 0 {
+		return false
+	}
+	if sourceSigned == targetSigned {
+		return targetBits >= sourceBits
+	}
+	return !sourceSigned && targetSigned && targetBits > sourceBits
+}
+
+func decimalDomainContains(source, target plan.Type) bool {
+	sourceID := types.T(source.Id)
+	targetID := types.T(target.Id)
+	if !sourceID.IsDecimal() || !targetID.IsDecimal() ||
+		!validDecimalPlanType(source) || !validDecimalPlanType(target) ||
+		target.Scale < source.Scale {
+		return false
+	}
+	return source.Width-source.Scale <= target.Width-target.Scale
+}
+
+func validDecimalPlanType(typ plan.Type) bool {
+	oid := types.T(typ.Id)
+	if !oid.IsDecimal() {
+		return false
+	}
+	return typ.Width > 0 && typ.Width <= oid.ToType().Width &&
+		typ.Scale >= 0 && typ.Scale <= typ.Width
+}
+
+func integerTypeDomain(oid types.T) (bits int, signed bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true
+	case types.T_int16:
+		return 16, true
+	case types.T_int32:
+		return 32, true
+	case types.T_int64:
+		return 64, true
+	case types.T_uint8:
+		return 8, false
+	case types.T_uint16:
+		return 16, false
+	case types.T_uint32:
+		return 32, false
+	case types.T_uint64:
+		return 64, false
+	default:
+		return 0, false
+	}
+}
+
+func integerDecimalDigits(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
+}
+
 func singleRowSumOrAvgCastIsExact(name string, source, target plan.Type) bool {
 	sourceID := types.T(source.Id)
 	if sourceID == types.T_float32 || sourceID == types.T_float64 {
@@ -1169,13 +1312,7 @@ func singleRowSumOrAvgCastIsExact(name string, source, target plan.Type) bool {
 		return true
 	}
 
-	targetID := types.T(target.Id)
-	if !targetID.IsDecimal() || source.Width <= 0 || target.Width <= 0 ||
-		source.Scale < 0 || target.Scale < source.Scale ||
-		source.Scale > source.Width || target.Scale > target.Width {
-		return false
-	}
-	return source.Width-source.Scale <= target.Width-target.Scale
+	return decimalDomainContains(source, target)
 }
 
 func (builder *QueryBuilder) applyEffectlessAggRemap(

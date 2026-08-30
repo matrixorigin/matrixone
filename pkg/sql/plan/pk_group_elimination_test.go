@@ -109,6 +109,54 @@ func TestPrimaryKeyGroupEliminationRequiresExactSingleRowAggregateLaw(t *testing
 	}
 }
 
+func TestPrimaryKeyGroupEliminationRequiresTruncationSafeExpressions(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantAgg bool
+	}{
+		{
+			name:    "fallible aggregate argument falls back",
+			sql:     "select empno, min(cast(ename as signed)) from constraint_test.emp group by empno limit 1 offset 1",
+			wantAgg: true,
+		},
+		{
+			name:    "volatile aggregate argument falls back",
+			sql:     "select empno, min(nextval('pk_group_limit_seq')) from constraint_test.emp group by empno limit 1",
+			wantAgg: true,
+		},
+		{
+			name:    "fallible extra grouping expression falls back",
+			sql:     "select empno, count(*) from constraint_test.emp group by empno, cast(ename as signed) limit 1 offset 1",
+			wantAgg: true,
+		},
+		{
+			name:    "total widening cast remains eligible",
+			sql:     "select empno, min(cast(sal as decimal(20, 2))) from constraint_test.emp group by empno limit 1 offset 1",
+			wantAgg: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
+
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			if test.wantAgg {
+				require.Nil(t, scan.Limit)
+				require.Nil(t, scan.Offset)
+			} else {
+				require.NotNil(t, scan.Limit)
+				require.NotNil(t, scan.Offset)
+			}
+		})
+	}
+}
+
 func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
 	decimal := func(oid types.T, width, scale int32) planpb.Type {
 		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
@@ -139,6 +187,48 @@ func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, singleRowSumOrAvgCastIsExact(test.fn, test.source, test.target))
+		})
+	}
+}
+
+func TestSingleRowCastIsTotal(t *testing.T) {
+	typ := func(oid types.T) planpb.Type {
+		return planpb.Type{Id: int32(oid)}
+	}
+	decimal := func(oid types.T, width, scale int32) planpb.Type {
+		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
+	}
+
+	tests := []struct {
+		name   string
+		source planpb.Type
+		target planpb.Type
+		want   bool
+	}{
+		{"same type", typ(types.T_varchar), typ(types.T_varchar), true},
+		{"decimal widening", decimal(types.T_decimal64, 7, 2), decimal(types.T_decimal128, 20, 2), true},
+		{"decimal integral narrowing", decimal(types.T_decimal128, 20, 2), decimal(types.T_decimal64, 7, 2), false},
+		{"decimal scale narrowing", decimal(types.T_decimal64, 7, 2), decimal(types.T_decimal64, 7, 1), false},
+		{"decimal to float64", decimal(types.T_decimal256, 76, 10), typ(types.T_float64), true},
+		{"malformed decimal source", decimal(types.T_decimal64, 19, 2), typ(types.T_float64), false},
+		{"malformed decimal target", decimal(types.T_decimal64, 7, 2), decimal(types.T_decimal64, 19, 2), false},
+		{"same malformed decimal", decimal(types.T_decimal64, 19, 2), decimal(types.T_decimal64, 19, 2), false},
+		{"text to integer", typ(types.T_varchar), typ(types.T_int64), false},
+		{"float widening", typ(types.T_float32), typ(types.T_float64), true},
+		{"float narrowing", typ(types.T_float64), typ(types.T_float32), false},
+		{"signed widening", typ(types.T_int32), typ(types.T_int64), true},
+		{"unsigned into wider signed", typ(types.T_uint32), typ(types.T_int64), true},
+		{"unsigned into same width signed", typ(types.T_uint64), typ(types.T_int64), false},
+		{"signed to unsigned", typ(types.T_int64), typ(types.T_uint64), false},
+		{"signed narrowing", typ(types.T_int64), typ(types.T_int32), false},
+		{"integer to float", typ(types.T_uint64), typ(types.T_float32), true},
+		{"integer fits decimal", typ(types.T_uint64), decimal(types.T_decimal128, 22, 2), true},
+		{"integer exceeds decimal", typ(types.T_uint64), decimal(types.T_decimal128, 21, 2), false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, singleRowCastIsTotal(test.source, test.target))
 		})
 	}
 }
