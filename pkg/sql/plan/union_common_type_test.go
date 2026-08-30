@@ -106,6 +106,123 @@ func TestCTASUnionDecimalLiteralMetadata(t *testing.T) {
 	require.False(t, visible[0].Default.NullAbility)
 }
 
+func TestSetOperationIntegerLiteralDecimalType(t *testing.T) {
+	literalExpr := func(literal *planpb.Literal) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: literal}}
+	}
+
+	for _, test := range []struct {
+		name  string
+		expr  *planpb.Expr
+		oid   types.T
+		width int32
+		ok    bool
+	}{
+		{
+			name:  "int8",
+			expr:  literalExpr(&planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: -12}}),
+			oid:   types.T_decimal64,
+			width: 2,
+			ok:    true,
+		},
+		{
+			name:  "int16",
+			expr:  literalExpr(&planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: -123}}),
+			oid:   types.T_decimal64,
+			width: 3,
+			ok:    true,
+		},
+		{
+			name:  "int32",
+			expr:  literalExpr(&planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 12345}}),
+			oid:   types.T_decimal64,
+			width: 5,
+			ok:    true,
+		},
+		{
+			name: "int64 minimum",
+			expr: literalExpr(&planpb.Literal{Value: &planpb.Literal_I64Val{
+				I64Val: int64(-9223372036854775807 - 1),
+			}}),
+			oid:   types.T_decimal128,
+			width: 19,
+			ok:    true,
+		},
+		{
+			name:  "uint8",
+			expr:  literalExpr(&planpb.Literal{Value: &planpb.Literal_U8Val{U8Val: 255}}),
+			oid:   types.T_decimal64,
+			width: 3,
+			ok:    true,
+		},
+		{
+			name:  "uint16",
+			expr:  literalExpr(&planpb.Literal{Value: &planpb.Literal_U16Val{U16Val: 65535}}),
+			oid:   types.T_decimal64,
+			width: 5,
+			ok:    true,
+		},
+		{
+			name:  "uint32",
+			expr:  literalExpr(&planpb.Literal{Value: &planpb.Literal_U32Val{U32Val: 4294967295}}),
+			oid:   types.T_decimal64,
+			width: 10,
+			ok:    true,
+		},
+		{
+			name: "uint64 maximum",
+			expr: literalExpr(&planpb.Literal{Value: &planpb.Literal_U64Val{
+				U64Val: uint64(18446744073709551615),
+			}}),
+			oid:   types.T_decimal128,
+			width: 20,
+			ok:    true,
+		},
+		{
+			name: "nested unary operators",
+			expr: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "unary_plus"},
+				Args: []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "unary_minus"},
+					Args: []*planpb.Expr{literalExpr(&planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 7}})},
+				}}}},
+			}}},
+			oid:   types.T_decimal64,
+			width: 1,
+			ok:    true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actual, ok := setOperationIntegerLiteralDecimalType(test.expr)
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, types.New(test.oid, test.width, 0), actual)
+		})
+	}
+
+	invalidExprs := []*planpb.Expr{
+		nil,
+		{},
+		literalExpr(nil),
+		literalExpr(&planpb.Literal{Isnull: true}),
+		literalExpr(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "1"}}),
+		{Expr: &planpb.Expr_F{F: &planpb.Function{}}},
+		{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "unary_plus"}}}},
+		{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "unary_plus"},
+			Args: []*planpb.Expr{nil},
+		}}},
+		{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "abs"},
+			Args: []*planpb.Expr{literalExpr(&planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 1}})},
+		}}},
+	}
+	for i, expr := range invalidExprs {
+		actual, ok := setOperationIntegerLiteralDecimalType(expr)
+		require.False(t, ok, "invalid expression %d", i)
+		require.Equal(t, types.Type{}, actual)
+	}
+}
+
 func buildFirstQueryResultType(t *testing.T, sql string) planpb.Type {
 	t.Helper()
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
