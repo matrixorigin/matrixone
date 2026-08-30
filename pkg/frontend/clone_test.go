@@ -658,19 +658,36 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	t.Cleanup(ses.Close)
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(2)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
 	backExec := &failingBeginBackgroundExec{err: beginErr}
-	stub := gostub.StubFunc(&NewBackgroundExec, backExec)
-	t.Cleanup(stub.Reset)
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return backExec
+	}
 
 	returned, cleanup, err := getBackExecutor(context.Background(), ses)
 	require.ErrorIs(t, err, beginErr)
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
+	require.False(t, forcedPessimisticRC)
 	require.Equal(t, 1, backExec.closeCalls)
+
+	returned, cleanup, err = getBackExecutor(
+		context.Background(), ses, &BackgroundExecOption{forcePessimisticRC: true},
+	)
+	require.ErrorIs(t, err, beginErr)
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, 2, backExec.closeCalls)
 }
 
 func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.T) {

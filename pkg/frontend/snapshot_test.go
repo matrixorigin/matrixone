@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -2623,6 +2624,30 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 // lookup used by CLONE, snapshot restore, and PITR restore. Legal quoted
 // identifiers must survive the SQL literal boundary and still produce the
 // dependency order consumed by the restore path (issue #26144).
+func TestRestoreSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	_, err := doRestoreSnapshot(ctx, ses, &tree.RestoreSnapShot{})
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
 func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
