@@ -291,6 +291,8 @@ endif
 .PHONY: cgo
 cgo: thirdparties
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
+		$(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)$(if $(filter debug,$(CGO_DEBUG_OPT)),-debug,)
 
 .PHONY: thirdparties
 thirdparties:

@@ -1,0 +1,164 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Records and verifies the small provenance tuple required to reuse MatrixOne's
+# ignored native artifacts from another linked worktree. It deliberately does
+# not turn libmo into a general build cache: only clean tracked inputs built by
+# the top-level `make cgo` target receive a reusable stamp.
+
+set -eu
+
+usage() {
+    echo "usage: $0 record <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
+    echo "       $0 verify <artifact-root> <libmo-path> <goos> <goarch> <variant>" >&2
+}
+
+native_paths="Makefile cgo thirdparties"
+
+validate_variant() {
+    case "$1" in
+        cpu | gpu | cpu-debug | gpu-debug) ;;
+        *)
+            echo "unsupported MatrixOne native build variant: $1" >&2
+            exit 2
+            ;;
+    esac
+}
+
+emit_provenance() {
+    root=$1
+    goos=$2
+    goarch=$3
+    variant=$4
+    head=$(git -C "$root" rev-parse HEAD) || return 1
+    makefile_hash=$(git -C "$root" rev-parse "$head:Makefile") || return 1
+    cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
+    thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
+
+    printf 'format=1\n'
+    printf 'makefile=%s\n' "$makefile_hash"
+    printf 'cgo=%s\n' "$cgo_hash"
+    printf 'thirdparties=%s\n' "$thirdparties_hash"
+    printf 'goos=%s\n' "$goos"
+    printf 'goarch=%s\n' "$goarch"
+    printf 'variant=%s\n' "$variant"
+}
+
+if [ "$#" -lt 1 ]; then
+    usage
+    exit 2
+fi
+
+operation=$1
+shift
+
+case "$operation" in
+    record)
+        if [ "$#" -ne 2 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        variant=$2
+        validate_variant "$variant"
+        stamp="$root/cgo/.mo-native-provenance"
+        # One fixed adjacent temporary keeps publication atomic and bounds
+        # residue across a killed prior invocation. Concurrent native builds in
+        # one worktree are unsupported because they already race on libmo.
+        temporary_stamp="$stamp.tmp"
+        rm -f "$temporary_stamp"
+        cleanup_temporary_stamp() {
+            rm -f "$temporary_stamp"
+        }
+        trap cleanup_temporary_stamp EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+
+        # A dirty native tree is valid for a local build, but another worktree
+        # cannot prove which local bytes produced it. Remove any older stamp so
+        # the artifact remains local-only instead of becoming falsely reusable.
+        if ! git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1 ||
+           ! native_status=$(git -C "$root" status \
+                --porcelain --untracked-files=all -- $native_paths) ||
+           [ -n "$native_status" ]; then
+            rm -f "$stamp"
+            echo "native artifacts are not reusable: tracked native inputs are dirty or unavailable" >&2
+            exit 0
+        fi
+
+        go_command=${GO:-go}
+        goos=$("$go_command" env GOHOSTOS)
+        goarch=$("$go_command" env GOHOSTARCH)
+        emit_provenance "$root" "$goos" "$goarch" "$variant" >"$temporary_stamp"
+        mv "$temporary_stamp" "$stamp"
+        trap - EXIT HUP INT TERM
+        ;;
+
+    verify)
+        if [ "$#" -ne 5 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        libmo=$2
+        goos=$3
+        goarch=$4
+        variant=$5
+        validate_variant "$variant"
+        stamp="$root/cgo/.mo-native-provenance"
+
+        if [ ! -f "$stamp" ]; then
+            echo "native artifact provenance stamp is missing" >&2
+            exit 1
+        fi
+        if ! native_status=$(git -C "$root" status \
+            --porcelain --untracked-files=all -- $native_paths); then
+            echo "cannot inspect native inputs" >&2
+            exit 1
+        fi
+        if [ -n "$native_status" ]; then
+            echo "native inputs are dirty" >&2
+            exit 1
+        fi
+
+        expected=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+        actual=$(sed -n '1,7p' "$stamp")
+        if [ "$actual" != "$expected" ] || [ "$(wc -l <"$stamp" | tr -d ' ')" -ne 7 ]; then
+            echo "native artifact provenance does not match source, platform, or build variant" >&2
+            exit 1
+        fi
+
+        # Direct `make -C cgo`, manual replacement, or a thirdparty rebuild can
+        # change ignored artifacts without changing Git state. The top-level
+        # build writes the stamp last, so anything newer invalidates reuse.
+        if ! newer_thirdparty_file=$(find \
+            "$root/thirdparties/install/include" "$root/thirdparties/install/lib" \
+            -type f -newer "$stamp" -print -quit); then
+            echo "cannot inspect native artifact freshness" >&2
+            exit 1
+        fi
+        if [ "$libmo" -nt "$stamp" ] || [ -n "$newer_thirdparty_file" ]; then
+            echo "native artifacts changed after provenance was recorded" >&2
+            exit 1
+        fi
+        ;;
+
+    *)
+        usage
+        exit 2
+        ;;
+esac

@@ -23,6 +23,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 wrapper="$script_dir/mo-cgo-test"
+provenance_writer="$script_dir/../../../../cgo/mo-native-provenance"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 work=$(CDPATH= cd -P "$work" && pwd)
@@ -34,10 +35,13 @@ mkdir -p "$primary/.agents/skills/mo-dev/scripts" "$primary/cgo" \
 git -C "$primary" init --quiet
 cp "$wrapper" "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
 chmod +x "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
+cp "$provenance_writer" "$primary/cgo/mo-native-provenance"
+chmod +x "$primary/cgo/mo-native-provenance"
 
 cat > "$primary/.gitignore" <<'EOF'
 cgo/libmo.so
 cgo/libmo.dylib
+cgo/.mo-native-provenance
 thirdparties/install/
 EOF
 cat > "$primary/Makefile" <<'EOF'
@@ -90,9 +94,34 @@ chmod +x "$work/bin/readelf"
 linked_wrapper="$linked/.agents/skills/mo-dev/scripts/mo-cgo-test"
 failures=0
 
+record_provenance() {
+    platform=$1
+    env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" record "$primary" cpu
+}
+
+set +e
+missing_output=$(env FAKE_GOOS=darwin PATH="$work/bin:$PATH" \
+    sh "$linked_wrapper" ./pkg/x/ 2>&1)
+missing_status=$?
+set -e
+if [ "$missing_status" -eq 0 ]; then
+    echo "FAIL an un-stamped primary artifact was reused"
+    failures=$((failures + 1))
+else
+    case "$missing_output" in
+        *"primary-worktree reuse rejected: native artifact provenance stamp is missing"*)
+            echo "ok   un-stamped primary artifacts require one rebuild" ;;
+        *)
+            printf 'FAIL missing provenance had the wrong error: %s\n' "$missing_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
 check_platform() {
     platform=$1
     artifact_name=$2
+    record_provenance "$platform"
     set +e
     output=$(env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
         sh "$linked_wrapper" -count=1 ./pkg/x/ 2>&1)
@@ -122,6 +151,24 @@ check_platform() {
 check_platform darwin libmo.dylib
 check_platform linux libmo.so
 
+set +e
+variant_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 CONDA_PREFIX="$work" \
+    PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
+variant_status=$?
+set -e
+if [ "$variant_status" -eq 0 ]; then
+    echo "FAIL a CPU primary artifact was reused for a GPU test"
+    failures=$((failures + 1))
+else
+    case "$variant_output" in
+        *"primary-worktree reuse rejected: native artifact provenance does not match source, platform, or build variant"*)
+            echo "ok   CPU/GPU artifact variant mismatch is rejected" ;;
+        *)
+            printf 'FAIL build-variant mismatch had the wrong error: %s\n' "$variant_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
 printf 'branch-specific native change\n' >> "$linked/cgo/native.c"
 set +e
 drift_output=$(env FAKE_GOOS=darwin PATH="$work/bin:$PATH" \
@@ -137,6 +184,33 @@ else
             echo "ok   native-input drift rejects primary artifacts" ;;
         *)
             printf 'FAIL native-input drift had the wrong error: %s\n' "$drift_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+# A clean primary checkout is not enough: ignored artifacts may have survived a
+# checkout/rebase that changed native source. A fresh linked worktree at that
+# same revision must reject the old stamp instead of testing stale native code.
+printf 'new committed native source\n' >> "$primary/cgo/native.c"
+git -C "$primary" add cgo/native.c
+git -C "$primary" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m 'change native source without rebuilding'
+stale_linked="$work/stale-linked"
+git -C "$primary" worktree add --quiet -b stale-test "$stale_linked"
+set +e
+stale_output=$(env FAKE_GOOS=linux PATH="$work/bin:$PATH" \
+    sh "$stale_linked/.agents/skills/mo-dev/scripts/mo-cgo-test" ./pkg/x/ 2>&1)
+stale_status=$?
+set -e
+if [ "$stale_status" -eq 0 ]; then
+    echo "FAIL clean source drift reused an artifact built from the previous revision"
+    failures=$((failures + 1))
+else
+    case "$stale_output" in
+        *"primary-worktree reuse rejected: native artifact provenance does not match source"*)
+            echo "ok   clean source drift rejects stale primary artifacts" ;;
+        *)
+            printf 'FAIL clean source drift had the wrong error: %s\n' "$stale_output"
             failures=$((failures + 1)) ;;
     esac
 fi

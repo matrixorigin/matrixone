@@ -86,6 +86,17 @@ native_inputs_match() {
     git -C "$repo_root" diff --quiet "$repo_head" "$candidate_head" -- $native_paths
 }
 
+native_artifact_provenance_matches() {
+    candidate_root=$1
+    candidate_lib=$2
+    build_variant=cpu
+    if [ "${MO_CL_CUDA:-}" = "1" ]; then
+        build_variant=gpu
+    fi
+    "$source_cgo_dir/mo-native-provenance" verify \
+        "$candidate_root" "$candidate_lib" "$goos" "$goarch" "$build_variant"
+}
+
 artifact_root="$repo_root"
 artifact_cgo_dir="$artifact_root/cgo"
 thirdparty_dir="$artifact_root/thirdparties/install"
@@ -109,6 +120,9 @@ if [ ! -e "$libmo" ] || [ ! -d "$include_dir" ] || [ ! -d "$lib_dir" ]; then
                 reuse_rejection="primary worktree lacks $libmo_name or thirdparties/install"
             elif ! native_inputs_match "$primary_root"; then
                 reuse_rejection="native inputs differ from or are dirty in the primary worktree"
+            elif ! provenance_error=$(native_artifact_provenance_matches \
+                "$primary_root" "$candidate_lib" 2>&1); then
+                reuse_rejection="${provenance_error:-native artifact provenance validation failed}"
             else
                 artifact_root="$primary_root"
                 artifact_cgo_dir="$artifact_root/cgo"

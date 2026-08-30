@@ -86,10 +86,14 @@ Linked worktrees do not contain ignored build artifacts. When the current
 worktree lacks `cgo/libmo.dylib` on macOS or `cgo/libmo.so` on Linux (or lacks
 `thirdparties/install`), the wrapper automatically considers the primary
 worktree's platform-matched artifacts. It reuses them only when `Makefile`,
-`cgo/`, and `thirdparties/` are clean and identical at both revisions; otherwise
-it rejects reuse and asks for a local rebuild. Do not manually create symlinks
-before trying the wrapper, because that bypasses its provenance guard and leaves
-untracked setup residue in the review worktree.
+`cgo/`, and `thirdparties/` are clean and identical at both revisions and the
+primary artifact carries a matching source/platform/build-variant provenance
+stamp written by the top-level `make cgo` target. Missing, stale, CPU/GPU-
+mismatched, or post-stamp-modified artifacts are rejected with a local rebuild
+request. After this guard is introduced, an existing un-stamped primary build
+needs one rebuild before it can be reused. Do not manually create symlinks before
+trying the wrapper, because that bypasses the guard and leaves untracked setup
+residue in the review worktree.
 
 It verifies host/target and CGo prerequisites, enforces the repository's
 `GOWORK=off` and `-mod=readonly` contract, removes ambient CGo flag drift,
