@@ -2,7 +2,7 @@
 
 Status: proposed for design approval
 
-Design version: 3
+Design version: 4
 
 Approval: pending distinct reviewer approval
 
@@ -26,9 +26,11 @@ This is an explicit, single-CN compatibility path selected by
 does not silently fall back to MatrixOne execution after the explicit stream
 mode has been selected.
 
-The protocol is version 6. It requires an exact capability-document match
-across MatrixOne, the sidecar, and Sirius. Mixed protocol revisions fail before
-result rows are exposed.
+The protocol is version 4. Versions 4 and 5 existed only on the unmerged
+StreamRead feature branches; version 4 is the single delivery revision after
+the merged direct-`TaeRead` version 3 baseline. It requires an exact
+capability-document match across MatrixOne, the sidecar, and Sirius. Mixed
+protocol revisions fail before result rows are exposed.
 
 After approval, any semantic change to this document increments the design
 version and requires fresh approval. Editorial corrections may retain the
@@ -57,13 +59,21 @@ byte-identical with two workers, and reduced Q9 fingerprints remained exact
 through `part`, `lineitem`, `partsupp`, and `orders`, isolating the failure to
 the large concurrent partition phase rather than Flight or the native codec.
 
-Version 3 keeps ordinary GPU task parallelism but admits only one `PARTITION`
+Version 3 kept ordinary GPU task parallelism but admitted only one `PARTITION`
 execution per GPU until that operator's CUDA stream is synchronized. It also
-replaces the false one-published-batch memory claim with a process-global,
-fail-closed 8 GiB StreamRead host-memory budget shared by every execution.
-Full barriers may retain multiple source-derived batches, but every live input
-frame, staging copy, and retained native host representation holds a lease from
-that budget.
+replaced the false one-published-batch memory claim with a process-global input
+budget. Review of the implementation found a more direct contract: version 4
+removes multi-frame `GPU_MO_SCAN` staging instead of budgeting it. One Sirius
+source task consumes one wire frame and produces one host representation. A
+second frame may occupy the sidecar's one-slot prefetch window, but no third
+frame can be sent until the prefetched frame is acknowledged.
+
+MatrixOne uses its ordinary synchronous output backpressure. If Sirius stops
+pulling, the sidecar withholds the input acknowledgement, `NativeInput.Send`
+blocks `Output.Call`, the existing bounded pipeline edge fills, the connector
+stops before `ChildrenCall`, and the engine reader stops. MatrixOne therefore
+retains the same DOP-proportional bounded read-ahead as a native query, never a
+table-sized wire queue.
 
 The primary correctness invariant is:
 
@@ -79,10 +89,10 @@ The supporting invariants are:
    capability set, and expiry. It is single-use within one execution ticket.
 3. Every input frame is acknowledged only after Sirius has copied the bytes it
    needs and the sidecar no longer retains that frame as the current input.
-4. Each `StreamRead` has at most one active Sirius source task; the source never
-   self-schedules and advances only when downstream asks for more input. A
-   blocking downstream barrier may retain multiple completed source batches,
-   each charged to the global StreamRead host budget.
+4. Each `StreamRead` has at most one active Sirius source task. One task calls
+   `next_batch` once, publishes one batch, never self-schedules, and releases its
+   claim only after the batch's synchronized H2D conversion. Downstream demand
+   alone admits the next task.
 5. Input, result, plan, ticket, and execution counts have hard bounds.
 6. Cancellation can interrupt a blocked input acknowledgement, blocked result
    receive, and Sirius worker independently of the data path.
@@ -114,9 +124,9 @@ downstream demand, executing on DuckDB CPU, or accepting a different wire ABI.
 - MatrixOne-native input and result batches over mutually authenticated Flight.
 - Success, prepare failure, producer failure, consumer failure, cancellation,
   timeout, disconnect, sidecar shutdown, and result-side early completion.
-- Bounded TPC-H execution where all live StreamRead input memory fits the
-  configured process-global budget. Budget exhaustion is an explicit terminal
-  resource error, never fallback or unbounded waiting.
+- Bounded TPC-H execution using MatrixOne's native reader backpressure, one
+  Flight frame, one sidecar prefetch slot, and one Sirius host representation
+  per active read.
 
 ### 3.2 Excluded
 
@@ -357,17 +367,23 @@ than the limit is rejected. The sidecar validates vector count, physical types,
 row lengths, attributes, null maps, areas, metadata, sequence, and trailing
 bytes before publishing the frame.
 
-The server has one input slot per read. It acknowledges a frame only after the
-Sirius scan copies all required bytes into bounded staging. Sirius has at most
-one active source task per read and does not call `next_batch` again until its
-existing downstream task-demand recursion reaches that source. A downstream
-`FULL` barrier may retain completed source batches after their source tasks
-finish; those batches remain charged to the global StreamRead host budget until
-conversion or destruction. A slow consumer may leave one unacknowledged frame
-in the sidecar slot and retained batches downstream; the following `DoPut`
-blocks or fails with resource exhaustion before memory can exceed the budget.
-The cumulative acknowledged batch, row, and byte counters must exactly match
-both endpoints.
+The server has one input slot per read. One Sirius source task calls
+`next_batch` once and copies that frame directly into one final host
+representation, capped at 64 MiB after constant-vector expansion. Construction
+of that owned representation is the acknowledgement point. MatrixOne may then
+send one subsequent frame into the sidecar slot, where its publisher blocks.
+The current Sirius source claim and host reservation remain owned by the
+published representation until synchronized H2D conversion succeeds. Releasing
+that claim does not schedule a continuation; existing downstream demand must
+reach the source before it can pull the prefetched frame.
+
+MatrixOne's `NativeInput.Send` is the synchronous output callback used in place
+of the ordinary result writer. A missing acknowledgement blocks the callback;
+the same bounded `PipelineEdge`, connector spool, and pre-`ChildrenCall`
+capacity check used by native queries then restrain the storage readers. Scan
+DOP may retain its ordinary bounded read-ahead, but only one unacknowledged
+Flight frame exists per input. The cumulative acknowledged batch, row, and byte
+counters must exactly match both endpoints.
 
 Producer EOF receives a final `complete` acknowledgement only after consumer
 EOF. If the plan prunes a read or result completion makes further input
@@ -452,12 +468,15 @@ paths release query-local resolved views and stream-source references. The
 actual backend is marked `SIRIUS_GPU` immediately before execution; successful
 completion without a backend mark is invalid.
 
-For each `StreamRead`, Sirius permits `idle -> active -> published -> idle` and
-`idle|active|published -> exhausted|cancelled|failed`. An atomic claim grants
-one source task the `active` state. Successful publication releases the claim
-without scheduling a continuation. Only downstream task demand may claim the
-next generation. EOF marks `exhausted`; failure and cancellation admit no new
-generation.
+For each `StreamRead`, Sirius permits
+`idle -> active -> published-await-H2D -> idle` and
+`idle|active|published-await-H2D -> exhausted|cancelled|failed`. An atomic claim
+grants one source task the `active` state. Construction of the final host
+representation acknowledges its one wire frame, but publication does not
+release the claim. Synchronized H2D conversion releases the representation's
+host reservation and source claim without scheduling a continuation. Only
+downstream task demand may claim the next generation. EOF marks `exhausted`;
+failure and cancellation admit no new generation.
 
 Each physical GPU owns one partition permit. A task whose remaining operator
 chain contains `PARTITION` must acquire that permit before reserving GPU memory
@@ -482,8 +501,8 @@ cannot be mistaken for completion while a task is being constructed.
 | MO stream identity and scan scope | MO compile | compile release after producer join |
 | Flight prepare/ticket/idempotency | sidecar registry | terminal callback after worker and handlers quiesce |
 | input frame slot | sidecar `stream_input` | consume/not-needed/cancel path |
-| StreamRead host-budget lease | sidecar frame / Sirius scan task | transferred with bytes; frame, staging, or representation destruction releases it |
-| Sirius staged/pinned host data | GPU scan task | task/representation destruction releases data and its lease |
+| Sirius input reservation | Sirius scan task | transferred to its single host representation and released after H2D or terminal destruction |
+| Sirius single-frame host data | GPU scan task | representation destruction after conversion or cancellation |
 | per-GPU partition permit | GPU executor | one task-scoped RAII permit; release or query drain admits next generation |
 | GPU pipeline data | Sirius repositories | existing pipeline/memory manager cleanup |
 | result frame slot | sidecar execution entry | `DoGet` read or cancellation |
@@ -508,35 +527,32 @@ request, lease-safe, and sidecar ticket deadlines.
 | --- | --- |
 | plan | 16 MiB |
 | stream inputs per execution | 16 |
-| sidecar slot per input | one frame, at most 4 MiB payload, charged to the global budget |
-| Sirius expanded input batch | 64 MiB |
-| Sirius staged input per active read task | 96 MiB encoded plus at most 96 MiB pinned copy during transfer, both charged while live |
-| Sirius source output | 32 MiB target and 96 MiB hard maximum per batch; any number retained by a barrier remains charged |
-| all live StreamRead input memory in one sidecar process | configurable global budget, default 8 GiB; non-blocking admission fails closed |
+| MatrixOne reader read-ahead | existing native pipeline-edge/spool bound, proportional to scan DOP rather than table size |
+| unacknowledged Flight input | one frame per read, at most 4 MiB payload |
+| sidecar prefetch slot | one frame per read, at most 4 MiB payload |
+| Sirius source task | one frame and one final host representation |
+| Sirius expanded input representation | 64 MiB, with its host reservation retained through H2D |
 | concurrent partition execution | one task per physical GPU; FIFO waiters retain no GPU reservation |
 | result slot | one frame, at most negotiated result limit (default 64 MiB) |
 | result schema | 1 MiB and 4096 columns |
 | active tickets | configured limit, default 128 |
 | reconciliation retry | one worker per retained execution, delay capped at 5 seconds, stopped by runtime close |
 
-The 4 MiB wire limit is not a memory-reservation estimate. The global budget
-charges each actual live allocation before it is created: the sidecar frame,
-per-column staging strings, the contiguous host representation, and any overlap
-during ownership transfer. Leases are move-only and transfer with ownership;
-replacement or destruction releases the corresponding bytes exactly once.
-The budget is process-global, so concurrent executions compete for the same
-fixed capacity rather than multiplying a per-query allowance. Admission never
-waits because a `FULL` barrier could otherwise deadlock while waiting for memory
-that only barrier completion can release. It terminates the execution with a
-resource-exhausted error and normal cancellation/quiescence cleanup.
+The 4 MiB wire limit is not a memory-reservation estimate because constant
+vectors can expand. Sirius reserves the 64 MiB worst case before reading a
+frame, moves that reservation into the published representation, and releases
+it only after synchronized H2D conversion or terminal destruction. There is no
+multi-frame staging vector and no StreamRead-specific table-sized host budget.
+The ordinary Sirius memory manager continues to own downstream GPU/operator
+state.
 
-The packaged SF10 configuration uses a 10 GiB Sirius host capacity and an 8
-GiB StreamRead budget, leaving 2 GiB for non-stream host work. Measured SF10 Q9
-input is 2,708,678,611 bytes and fits with headroom; SF10 Q1 transfers
+Measured SF10 Q9 input is 2,708,678,611 bytes, which is cumulative traffic and
+must not be simultaneously resident in the input path. SF10 Q1 transfers
 5,046,665,324 bytes cumulatively but continuously releases batches, proving why
 the bound applies to retained live memory rather than total traffic. Acceptance
-records configured capacity, peak charged bytes, rejected admissions, and a
-zero terminal balance.
+records the native-reader window, unacknowledged frames, prefetched frames,
+active source generations, retained host reservations, and terminal zero
+balances.
 
 This is the stream-specific host envelope, not the complete Sirius GPU budget.
 GPU operators remain subject to Sirius's independent reservation and usage
@@ -598,8 +614,8 @@ secrets:
 - GPU backend evidence showing `GPU_MO_SCAN` and `SIRIUS_GPU` actually started;
 - cancellation source and terminal outcome;
 - active tickets, active input handlers, retained reconciliation owners;
-- StreamRead host-budget capacity, current charge, peak charge, rejected bytes,
-  and terminal zero-balance result;
+- per-read received, acknowledged, H2D-completed, and active-source counts,
+  including the observed maximum deltas;
 - per-GPU active and queued partition tasks, including the observed maximum
   concurrent partition count;
 - MatrixOne allocation-account terminal snapshot;
@@ -622,7 +638,7 @@ and closes every row below.
 | early/pruned input | result EOF before first batch and `not_needed` after current/previous acknowledgement |
 | cancellation | cancel while input ack is blocked and while result receive/write is blocked; bounded termination |
 | injected failure | MO producer failure, sidecar input failure, Sirius consumer failure, disconnect, timeout, and retryable cleanup |
-| slow consumer and full barrier | deterministic barriers prove one active source task per read, all retained batches hold budget leases, resource exhaustion fails without waiting, and terminal charge returns to zero |
+| slow consumer and full barrier | deterministic barriers prove native MO readers stop at their bounded pipeline window, one Flight frame is unacknowledged, one sidecar frame is prefetched, and one Sirius source representation awaits H2D |
 | GPU execution | query-scoped evidence records `SIRIUS_GPU` and `GPU_MO_SCAN`; two configured workers never exceed one active `PARTITION` per GPU while non-partition tasks remain concurrent |
 | correctness | typed native-MO equality for all 22 TPC-H SF1 queries on one reused process |
 | SF10 correctness and decision data | typed equality for all 22 queries on one reused process; Q9 repeats ten times; record storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
@@ -657,10 +673,10 @@ body must link this design at its approved commit and the final evidence record.
 | strict explicit stream mode | never hides a protocol, security, or GPU failure behind native execution |
 | one local CN per sidecar | keeps snapshot and cancellation ownership local; multi-CN fan-in is a separate design |
 | attach all inputs before `DoGet` | prevents a pruned plan from retiring a ticket before its handler can attach |
-| one acknowledged slot per input | gives deterministic backpressure and ownership transfer |
-| one active Sirius source task per input | removes eager self-scheduling; blocking barriers may retain completed batches only while budgeted |
+| native MO output backpressure | synchronous `Send` reuses native output, pipeline-edge, connector, and reader flow control instead of adding a StreamRead-only controller |
+| one acknowledged sidecar prefetch slot | permits bounded transport overlap without a table-sized wire queue |
+| one frame per Sirius source task | removes multi-frame coalescing and eager self-scheduling; H2D completion releases the claim without scheduling |
 | one partition task per physical GPU | the old executor produced nondeterministic Q9 values and fatal CUDA errors when two partition launches overlapped; other GPU operators retain configured parallelism |
-| process-global 8 GiB StreamRead host budget | bounds all concurrent input slots, copies, and retained native representations together; fail-closed admission avoids barrier deadlock |
 | bounded TPC-H stabilization on the current fork | delivers the required workload without claiming general unbounded streaming; migration to upstream partial-barrier scheduling is a separate effort |
 | flat-only result vectors | prevents tiny compressed frames from expanding into unbounded MatrixOne result work |
 | exact capability equality | rejects mixed ABI revisions before execution rather than attempting unsafe compatibility |
