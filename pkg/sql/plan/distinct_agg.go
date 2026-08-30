@@ -118,10 +118,14 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 			innerGroupBy = append(innerGroupBy, physicalKeys[0])
 		}
 
-		// The pre-deduplication path shuffles one logical DISTINCT column. Keep
-		// it for byte-equality keys; PAD SPACE uses a separate physical key.
+		// The pre-deduplication path shuffles one DISTINCT equality key. PAD SPACE
+		// has a separate physical key, so retain the local pre-dedup topology and
+		// distribute that canonical key instead of the visible representation.
+		distinctKeyShuffleCol := int32(oldGroupLen)
+		if toCountNeedsPadSpaceKey {
+			distinctKeyShuffleCol = int32(len(innerGroupBy) - 1)
+		}
 		useDistinctKeyPreAgg := functionID == function.COUNT &&
-			!toCountNeedsPadSpaceKey &&
 			toCount.GetCol() != nil &&
 			isSupportedDistinctKeyShuffleType(toCount.Typ.Id) &&
 			shouldUseDistinctKeyPreAggregation(node, builder)
@@ -160,7 +164,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 			}, builder.ctxByNode[localNodeID])
 			finalNode := builder.qry.Nodes[finalNodeID]
 			builder.determineGroupByHashKey(finalNode)
-			builder.markDistinctKeyShuffle(finalNode, int32(oldGroupLen))
+			builder.markDistinctKeyShuffle(finalNode, distinctKeyShuffleCol)
 
 			resultNodeID = finalNodeID
 			resultGroupTag = finalGroupTag

@@ -589,6 +589,26 @@ func TestPadCharModeRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, p))
 }
 
+func TestPadSpaceRemoteProtocolValidationV40FastPathIsAllocationFree(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion40)
+
+	// A large ordinary pipeline makes an accidental reflective traversal visible.
+	ordinary := &pipeline.Pipeline{InstructionList: make([]*pipeline.Instruction, 1_000)}
+	for i := range ordinary.InstructionList {
+		ordinary.InstructionList[i] = &pipeline.Instruction{Op: int32(vm.Projection)}
+	}
+	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, ordinary))
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := validateRemotePadSpacePipelineProtocol(proc, ordinary); err != nil {
+			panic(err)
+		}
+	})
+	require.Equal(t, float64(0), allocs)
+}
+
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
 	scope := newScope(Normal)
 	op := group.NewArgument()

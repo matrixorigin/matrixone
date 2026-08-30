@@ -1,4 +1,4 @@
-- Status: draft
+- Status: in-progress
 - Start Date: 2026-08-26
 - Authors: MatrixOne maintainers
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27100
@@ -13,6 +13,16 @@ enabled, reading a `CHAR(N)` value returns its storage-width representation,
 including trailing padding. The option changes representation only. It must not
 change PAD SPACE equality, ordering, joins, `IN`, DISTINCT/GROUP BY, set
 membership, or value-producing expression semantics.
+
+## Design decision
+
+The independent design review of the exact `9a43222acfd9c7830453671f57f7adf4fbdec03c`
+revision concluded that visible-value/physical-key separation and the fail-closed
+MORPC v40 compatibility model are sound. The review also required the local
+COUNT(DISTINCT) pre-dedup topology to partition on the canonical physical key
+and the v40 sender/receiver protocol gate to avoid reflective steady-state
+work; those requirements are part of this implementation revision. Decision
+record: [review 5059969267](https://github.com/matrixorigin/matrixone/pull/27100#pullrequestreview-5059969267).
 
 ## Motivation
 
@@ -123,6 +133,5 @@ behavior for mode-off sessions and for strings with no CHAR origin.
 
 ## Open Questions
 
-No implementation decision is open. This RFC is draft pending independent
-design review; that review does not change the already specified compatibility
-contract or prevent delivery of the validated implementation.
+No implementation decision is open. The recorded independent design decision
+advanced this RFC to in-progress; its compatibility contract remains unchanged.

@@ -1976,6 +1976,13 @@ func validateRemotePadSpacePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
+	// A current peer cannot reject this feature. Check its negotiated capability
+	// before inspecting the protobuf tree: this validator runs on both remote
+	// sender and receiver paths, and reflective feature discovery is needed only
+	// for a mixed-version peer.
+	if proc != nil && supportsRemotePadSpaceSemantics(proc.GetService()) {
+		return nil
+	}
 	if p == nil {
 		return nil
 	}
@@ -1986,12 +1993,9 @@ func validateRemotePadSpacePipelineProtocol(
 	if !modeEnabled && !pipelineContainsPadSpaceCast(p) {
 		return nil
 	}
-	if proc == nil || !supportsRemotePadSpaceSemantics(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"PAD SPACE remote execution requires MORPC protocol version 40",
-		)
-	}
-	return nil
+	return moerr.NewNotSupportedNoCtx(
+		"PAD SPACE remote execution requires MORPC protocol version 40",
+	)
 }
 
 func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {
