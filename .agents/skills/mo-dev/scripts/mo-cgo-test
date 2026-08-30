@@ -106,15 +106,20 @@ libmo="$artifact_cgo_dir/$libmo_name"
 reuse_rejection=
 
 if [ ! -e "$libmo" ] || [ ! -d "$include_dir" ] || [ ! -d "$lib_dir" ]; then
-    common_git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
-    primary_root=$(dirname "$common_git_dir")
+    # Git documents the main worktree as the first porcelain entry. Do not
+    # derive it from git-common-dir: repositories created with
+    # --separate-git-dir keep that directory outside the primary checkout.
+    primary_root=$(git -C "$repo_root" worktree list --porcelain |
+        sed -n '1s/^worktree //p')
     candidate_lib="$primary_root/cgo/$libmo_name"
     candidate_thirdparty="$primary_root/thirdparties/install"
     case "$primary_root" in
         *[[:space:]]*) reuse_rejection="primary worktree path contains whitespace" ;;
         "$repo_root") reuse_rejection="current checkout is the primary worktree" ;;
         *)
-            if [ ! -e "$candidate_lib" ] ||
+            if [ "$(git -C "$primary_root" rev-parse --is-inside-work-tree 2>/dev/null || true)" != true ]; then
+                reuse_rejection="Git metadata does not expose a usable primary worktree"
+            elif [ ! -e "$candidate_lib" ] ||
                [ ! -d "$candidate_thirdparty/include" ] ||
                [ ! -d "$candidate_thirdparty/lib" ]; then
                 reuse_rejection="primary worktree lacks $libmo_name or thirdparties/install"

@@ -6,8 +6,11 @@ CC ?= gcc
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
 OPT_LV := -O3 -ffast-math -ftree-vectorize -funroll-loops
-COMMON_CFLAGS := -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
-CFLAGS := -std=c11 $(COMMON_CFLAGS)
+# Keep these recursive so the debug target's target-specific OPT_LV reaches
+# prerequisites. Immediate expansion here silently turned `make debug` back
+# into an optimized -O3 build while provenance advertised cpu-debug.
+COMMON_CFLAGS = -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
+CFLAGS = -std=c11 $(COMMON_CFLAGS)
 OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o croaring.o cbitmap.o sorted64.o
 CUDA_OBJS :=
 LDFLAGS := -L../thirdparties/install/lib -lusearch_c -lroaring

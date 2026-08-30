@@ -88,12 +88,37 @@ worktree lacks `cgo/libmo.dylib` on macOS or `cgo/libmo.so` on Linux (or lacks
 worktree's platform-matched artifacts. It reuses them only when `Makefile`,
 `cgo/`, and `thirdparties/` are clean and identical at both revisions and the
 primary artifact carries a matching source/platform/build-variant provenance
-stamp written by the top-level `make cgo` target. Missing, stale, CPU/GPU-
-mismatched, or post-stamp-modified artifacts are rejected with a local rebuild
-request. After this guard is introduced, an existing un-stamped primary build
-needs one rebuild before it can be reused. Do not manually create symlinks before
-trying the wrapper, because that bypasses the guard and leaves untracked setup
-residue in the review worktree.
+stamp written by the top-level `make cgo` target. The target owns a
+`prepare -> clean when required -> begin -> build -> record` protocol: CGo
+source/header and CPU/GPU or release/debug changes clean all CGo outputs;
+Makefile, thirdparty, platform, missing-stamp, or corrupt-stamp changes clean
+both thirdparties and CGo. An interrupted generation stays non-reusable and is
+cleaned again on the next build. This prevents an incremental no-op from simply
+relabeling an old library as current. Missing, stale, CPU/GPU-mismatched, or
+post-stamp-modified artifacts are rejected with a local rebuild request. The
+first top-level build after this guard is introduced intentionally performs one
+full native rebuild before reuse is possible.
+
+Cross-worktree reuse is best-effort, never required for correctness. Git
+layouts that do not expose a real primary checkout (for example, a linked
+worktree created from an unconfigured `--separate-git-dir` repository) are
+rejected instead of guessing a filesystem path; build the native artifacts in
+the current worktree in that environment.
+
+An exported/non-Git source tree keeps the historical incremental `make cgo`
+behavior and never publishes a reusable stamp. `make -n`, `make -t`, and
+`make -q` also remain non-mutating; they do not create generation markers or
+clean native outputs.
+
+Do not invoke the provenance helper's `record` operation directly or manually
+create symlinks before trying the wrapper. The former is rejected without the
+build-generation marker, and the latter bypasses the guard and leaves untracked
+setup residue in the review worktree. Validate changes to this protocol with:
+
+```bash
+.agents/skills/mo-dev/scripts/mo-native-provenance-test
+.agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test
+```
 
 It verifies host/target and CGo prerequisites, enforces the repository's
 `GOWORK=off` and `-mod=readonly` contract, removes ambient CGo flag drift,

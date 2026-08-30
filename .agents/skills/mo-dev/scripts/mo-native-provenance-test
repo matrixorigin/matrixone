@@ -1,0 +1,264 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Exercises the native provenance state machine without compiling libmo. It
+# proves that source/variant transitions and interrupted builds cannot publish
+# a reusable stamp until the build owner has performed the required cleanup.
+
+set -eu
+
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+provenance_source="$script_dir/../../../../cgo/mo-native-provenance"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+repo="$work/repo"
+mkdir -p "$repo/cgo/cuda" "$repo/cgo/cuvs" "$repo/thirdparties" "$work/bin"
+cp "$provenance_source" "$repo/cgo/mo-native-provenance"
+chmod +x "$repo/cgo/mo-native-provenance"
+
+cat >"$work/bin/go" <<'EOF'
+#!/bin/sh
+case "$1:$2" in
+    env:GOHOSTOS) echo darwin ;;
+    env:GOHOSTARCH) echo amd64 ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$work/bin/go"
+
+cat >"$repo/.gitignore" <<'EOF'
+cgo/*.o
+cgo/*.a
+cgo/*.so
+cgo/*.dylib
+cgo/cuda/*.o
+cgo/cuvs/*.o
+cgo/.mo-native-provenance
+cgo/.mo-native-provenance.pending
+cgo/.mo-native-provenance.building
+cgo/.mo-native-provenance.tmp
+thirdparties/install/
+EOF
+cat >"$repo/Makefile" <<'EOF'
+cgo:
+	@true
+EOF
+printf '#define VALUE 1\n' >"$repo/cgo/native.h"
+printf 'native source\n' >"$repo/cgo/native.c"
+printf 'thirdparty source\n' >"$repo/thirdparties/source.txt"
+git -C "$repo" init --quiet
+git -C "$repo" add .
+git -C "$repo" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m fixture
+
+native() {
+    PATH="$work/bin:$PATH" "$repo/cgo/mo-native-provenance" "$@"
+}
+
+failures=0
+
+# Exported source archives have no Git object identity. They must keep normal
+# incremental build behavior and must never receive a cross-worktree stamp.
+exported="$work/exported"
+mkdir -p "$exported/cgo" "$exported/thirdparties/install/include" \
+    "$exported/thirdparties/install/lib"
+cp "$repo/cgo/mo-native-provenance" "$exported/cgo/mo-native-provenance"
+printf 'existing library\n' >"$exported/cgo/libmo.dylib"
+exported_action=$(PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" \
+    prepare "$exported" cpu)
+if [ "$exported_action" = local ]; then
+    echo "ok   exported source keeps the local incremental path"
+else
+    printf 'FAIL exported source expected local, got %s\n' "$exported_action"
+    failures=$((failures + 1))
+fi
+PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" begin "$exported" cpu
+PATH="$work/bin:$PATH" "$exported/cgo/mo-native-provenance" record "$exported" cpu
+if [ -e "$exported/cgo/.mo-native-provenance" ]; then
+    echo "FAIL exported source published a reusable stamp"
+    failures=$((failures + 1))
+else
+    echo "ok   exported source remains local-only"
+fi
+
+expect_action() {
+    variant=$1
+    expected=$2
+    actual=$(native prepare "$repo" "$variant")
+    if [ "$actual" = "$expected" ]; then
+        printf 'ok   %-18s -> %s\n' "$variant" "$expected"
+    else
+        printf 'FAIL %-18s expected %s, got %s\n' "$variant" "$expected" "$actual"
+        failures=$((failures + 1))
+    fi
+}
+
+expect_failure() {
+    description=$1
+    shift
+    set +e
+    "$@" >"$work/failure.out" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        printf 'ok   %s\n' "$description"
+    else
+        printf 'FAIL %s\n' "$description"
+        failures=$((failures + 1))
+    fi
+}
+
+clean_cgo() {
+    rm -f "$repo"/cgo/*.o "$repo"/cgo/*.a "$repo"/cgo/*.so \
+        "$repo"/cgo/*.dylib "$repo"/cgo/cuda/*.o "$repo"/cgo/cuvs/*.o
+}
+
+clean_all() {
+    clean_cgo
+    rm -rf "$repo/thirdparties/install"
+}
+
+produce_outputs() {
+    mkdir -p "$repo/thirdparties/install/include" \
+        "$repo/thirdparties/install/lib"
+    printf 'installed header\n' >"$repo/thirdparties/install/include/native.h"
+    printf 'installed library\n' >"$repo/thirdparties/install/lib/libnative.a"
+    printf 'object\n' >"$repo/cgo/native.o"
+    printf 'dynamic library\n' >"$repo/cgo/libmo.dylib"
+    printf 'static library\n' >"$repo/cgo/libmo.a"
+}
+
+finish_build() {
+    variant=$1
+    native begin "$repo" "$variant"
+    produce_outputs
+    native record "$repo" "$variant"
+}
+
+produce_outputs
+expect_action cpu rebuild-all
+expect_failure "a stale no-op cannot begin the first stamped build" \
+    native begin "$repo" cpu
+clean_all
+finish_build cpu
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu
+echo "ok   a cleaned first build publishes a verifiable stamp"
+
+printf 'corrupt stamp\n' >"$repo/cgo/.mo-native-provenance"
+expect_action cpu rebuild-all
+clean_all
+finish_build cpu
+echo "ok   a corrupt stamp requires a full native rebuild"
+
+printf 'DYNAMIC LIBRARY\n' >"$repo/cgo/libmo.dylib"
+touch -r "$repo/cgo/.mo-native-provenance" "$repo/cgo/libmo.dylib"
+expect_action cpu rebuild-cgo
+clean_cgo
+finish_build cpu
+echo "ok   a same-size/mtime libmo change requires a CGo rebuild"
+
+printf 'INSTALLED HEADER\n' >"$repo/thirdparties/install/include/native.h"
+touch -r "$repo/cgo/.mo-native-provenance" \
+    "$repo/thirdparties/install/include/native.h"
+expect_action cpu rebuild-all
+clean_all
+finish_build cpu
+echo "ok   a same-size/mtime thirdparty change requires a full rebuild"
+
+expect_failure "record cannot publish without a build-generation marker" \
+    native record "$repo" cpu
+
+expect_action cpu reuse
+expect_failure "a prepared generation is not reusable before completion" \
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu
+native begin "$repo" cpu
+native record "$repo" cpu
+echo "ok   unchanged inputs keep the incremental no-clean path"
+
+# A nominally reusable generation must fail closed if an ordinary build step
+# changes an output after prepare. The incomplete generation then requires a
+# CGo cleanup before it can publish again.
+expect_action cpu reuse
+native begin "$repo" cpu
+printf 'changed while building\n' >>"$repo/cgo/libmo.dylib"
+expect_failure "reuse rejects an artifact changed during the build" \
+    native record "$repo" cpu
+expect_action cpu rebuild-cgo
+clean_cgo
+finish_build cpu
+echo "ok   a changed reuse generation recovers through CGo cleanup"
+
+# An interrupted incremental build must not trust its old stamp on the next
+# invocation. It escalates only to a CGo rebuild, not an expensive full rebuild.
+expect_action cpu reuse
+expect_action cpu rebuild-cgo
+clean_cgo
+finish_build cpu
+echo "ok   interrupted incremental build resumes with CGo cleanup"
+
+printf '#define VALUE 2\n' >"$repo/cgo/native.h"
+git -C "$repo" add cgo/native.h
+git -C "$repo" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m 'header-only native change'
+expect_action cpu rebuild-cgo
+expect_failure "header-only source drift cannot relabel the old libmo" \
+    native begin "$repo" cpu
+clean_cgo
+finish_build cpu
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu
+echo "ok   header-only drift requires and records a CGo rebuild"
+
+expect_action cpu-debug rebuild-cgo
+clean_cgo
+finish_build cpu-debug
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu-debug
+echo "ok   release/debug switching cannot reuse the previous objects"
+
+printf 'new thirdparty source\n' >>"$repo/thirdparties/source.txt"
+git -C "$repo" add thirdparties/source.txt
+git -C "$repo" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m 'thirdparty source change'
+expect_action cpu-debug rebuild-all
+clean_all
+finish_build cpu-debug
+echo "ok   thirdparty drift requires a full native rebuild"
+
+printf '#define VALUE 3\n' >"$repo/cgo/native.h"
+git -C "$repo" add cgo/native.h
+git -C "$repo" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m 'second header-only change'
+expect_action cpu-debug rebuild-cgo
+clean_cgo
+native begin "$repo" cpu-debug
+expect_failure "an interrupted build generation is rejected" \
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu-debug
+expect_action cpu-debug rebuild-cgo
+clean_cgo
+finish_build cpu-debug
+echo "ok   partial failure retains the narrow rebuild requirement"
+
+printf 'dirty edit\n' >>"$repo/cgo/native.c"
+expect_action cpu-debug rebuild-cgo
+clean_cgo
+finish_build cpu-debug
+expect_failure "dirty native builds remain local-only" \
+    native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu-debug
+
+if [ "$failures" -ne 0 ]; then
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+printf '\nall checks passed\n'

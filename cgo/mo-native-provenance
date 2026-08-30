@@ -14,16 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Records and verifies the small provenance tuple required to reuse MatrixOne's
-# ignored native artifacts from another linked worktree. It deliberately does
-# not turn libmo into a general build cache: only clean tracked inputs built by
-# the top-level `make cgo` target receive a reusable stamp.
+# Owns the small build-state protocol required to reuse MatrixOne's ignored
+# native artifacts from another linked worktree. A reusable stamp is published
+# only after the top-level build has prepared the generation, proved the
+# required cleanup happened, completed the build, and recorded that generation.
 
 set -eu
 
 usage() {
-    echo "usage: $0 record <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
-    echo "       $0 verify <artifact-root> <libmo-path> <goos> <goarch> <variant>" >&2
+    echo "usage: $0 prepare <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
+    echo "       $0 begin   <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
+    echo "       $0 record  <repository-root> <cpu|gpu|cpu-debug|gpu-debug>" >&2
+    echo "       $0 verify  <artifact-root> <libmo-path> <goos> <goarch> <variant>" >&2
 }
 
 native_paths="Makefile cgo thirdparties"
@@ -38,23 +40,173 @@ validate_variant() {
     esac
 }
 
+host_platform() {
+    go_command=${GO:-go}
+    goos=$("$go_command" env GOHOSTOS)
+    goarch=$("$go_command" env GOHOSTARCH)
+    case "$goos" in
+        darwin) libmo_name=libmo.dylib ;;
+        linux) libmo_name=libmo.so ;;
+        *)
+            echo "unsupported MatrixOne native build host: $goos/$goarch" >&2
+            return 1
+            ;;
+    esac
+}
+
 emit_provenance() {
     root=$1
-    goos=$2
-    goarch=$3
+    provenance_goos=$2
+    provenance_goarch=$3
     variant=$4
     head=$(git -C "$root" rev-parse HEAD) || return 1
     makefile_hash=$(git -C "$root" rev-parse "$head:Makefile") || return 1
     cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
     thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
 
-    printf 'format=1\n'
+    printf 'format=3\n'
     printf 'makefile=%s\n' "$makefile_hash"
     printf 'cgo=%s\n' "$cgo_hash"
     printf 'thirdparties=%s\n' "$thirdparties_hash"
-    printf 'goos=%s\n' "$goos"
-    printf 'goarch=%s\n' "$goarch"
+    printf 'goos=%s\n' "$provenance_goos"
+    printf 'goarch=%s\n' "$provenance_goarch"
     printf 'variant=%s\n' "$variant"
+}
+
+file_value() {
+    key=$1
+    file=$2
+    sed -n "s/^$key=//p" "$file"
+}
+
+stamp_is_well_formed() {
+    candidate_stamp=$1
+    [ -f "$candidate_stamp" ] || return 1
+    [ "$(wc -l <"$candidate_stamp" | tr -d ' ')" -eq 9 ] || return 1
+    [ "$(file_value format "$candidate_stamp")" = 3 ] || return 1
+    [ -n "$(file_value makefile "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value cgo "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value thirdparties "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value goos "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value goarch "$candidate_stamp")" ] || return 1
+    case "$(file_value variant "$candidate_stamp")" in
+        cpu | gpu | cpu-debug | gpu-debug) ;;
+        *) return 1 ;;
+    esac
+    [ -n "$(file_value libmo-hash "$candidate_stamp")" ] || return 1
+    [ -n "$(file_value thirdparty-hash "$candidate_stamp")" ] || return 1
+}
+
+stamp_matches() {
+    candidate_stamp=$1
+    expected=$2
+    stamp_is_well_formed "$candidate_stamp" || return 1
+    [ "$(sed -n '1,7p' "$candidate_stamp")" = "$expected" ]
+}
+
+libmo_matches_stamp() {
+    candidate_stamp=$1
+    libmo=$2
+    [ -f "$libmo" ] || return 1
+    [ "$(git hash-object --no-filters "$libmo")" = \
+        "$(file_value libmo-hash "$candidate_stamp")" ]
+}
+
+thirdparty_hash() {
+    metadata_root=$1
+    paths=$(CDPATH= cd "$metadata_root" &&
+        find thirdparties/install/include thirdparties/install/lib \
+            \( -type f -o -type l \) -print | LC_ALL=C sort) || return 1
+    [ -n "$paths" ] || return 1
+
+    # hash-object interprets --stdin-paths from the repository root and hashes
+    # all files in one process. Bind the sorted names and their ordered content
+    # hashes so additions, removals, renames, symlink changes, and byte changes
+    # all invalidate the aggregate without spawning one Git process per file.
+    hashes=$(CDPATH= cd "$metadata_root" &&
+        printf '%s\n' "$paths" |
+            git hash-object --no-filters --stdin-paths) || return 1
+    [ "$(printf '%s\n' "$paths" | wc -l | tr -d ' ')" = \
+        "$(printf '%s\n' "$hashes" | wc -l | tr -d ' ')" ] || return 1
+    printf 'paths\n%s\nhashes\n%s\n' "$paths" "$hashes" |
+        git hash-object --stdin
+}
+
+thirdparty_matches_stamp() {
+    candidate_stamp=$1
+    metadata_root=$2
+    [ "$(thirdparty_hash "$metadata_root")" = \
+        "$(file_value thirdparty-hash "$candidate_stamp")" ]
+}
+
+emit_artifact_metadata() {
+    root=$1
+    libmo=$2
+    printf 'libmo-hash=%s\n' "$(git hash-object --no-filters "$libmo")"
+    printf 'thirdparty-hash=%s\n' "$(thirdparty_hash "$root")"
+}
+
+newer_thirdparty_output() {
+    root=$1
+    reference=$2
+    find "$root/thirdparties/install/include" "$root/thirdparties/install/lib" \
+        \( -type f -o -type l \) -newer "$reference" -print -quit
+}
+
+write_build_marker() {
+    marker=$1
+    action=$2
+    reusable=$3
+    expected=${4:-}
+    temporary_marker="$marker.tmp"
+    rm -f "$temporary_marker"
+    {
+        printf 'pending-format=1\n'
+        printf 'action=%s\n' "$action"
+        printf 'reusable=%s\n' "$reusable"
+        if [ "$reusable" = yes ]; then
+            printf '%s\n' "$expected"
+        fi
+    } >"$temporary_marker"
+    mv "$temporary_marker" "$marker"
+}
+
+read_build_marker() {
+    marker=$1
+    [ -f "$marker" ] || return 1
+    marker_format=$(file_value pending-format "$marker")
+    marker_action=$(file_value action "$marker")
+    marker_reusable=$(file_value reusable "$marker")
+    [ "$marker_format" = 1 ] || return 1
+    case "$marker_action" in
+        local | reuse | rebuild-cgo | rebuild-all) ;;
+        *) return 1 ;;
+    esac
+    case "$marker_reusable" in
+        yes)
+            [ "$(wc -l <"$marker" | tr -d ' ')" -eq 10 ] || return 1
+            marker_provenance=$(sed -n '4,10p' "$marker")
+            ;;
+        no)
+            [ "$(wc -l <"$marker" | tr -d ' ')" -eq 3 ] || return 1
+            marker_provenance=
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+max_action() {
+    first=$1
+    second=$2
+    if [ "$first" = rebuild-all ] || [ "$second" = rebuild-all ]; then
+        printf 'rebuild-all\n'
+    elif [ "$first" = rebuild-cgo ] || [ "$second" = rebuild-cgo ]; then
+        printf 'rebuild-cgo\n'
+    elif [ "$first" = local ] || [ "$second" = local ]; then
+        printf 'local\n'
+    else
+        printf 'reuse\n'
+    fi
 }
 
 if [ "$#" -lt 1 ]; then
@@ -66,6 +218,183 @@ operation=$1
 shift
 
 case "$operation" in
+    prepare)
+        if [ "$#" -ne 2 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        variant=$2
+        validate_variant "$variant"
+        host_platform
+
+        stamp="$root/cgo/.mo-native-provenance"
+        pending="$stamp.pending"
+        building="$stamp.building"
+        action=local
+        reusable=no
+        expected=
+
+        if git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1 &&
+           native_status=$(git -C "$root" status \
+                --porcelain --untracked-files=all -- $native_paths); then
+            action=rebuild-all
+            if [ -z "$native_status" ]; then
+                reusable=yes
+                expected=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+                if stamp_matches "$stamp" "$expected" &&
+                   [ -d "$root/thirdparties/install/include" ] &&
+                   [ -d "$root/thirdparties/install/lib" ]; then
+                    if ! thirdparty_matches_stamp "$stamp" "$root"; then
+                        action=rebuild-all
+                    elif ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp"); then
+                        action=rebuild-all
+                    elif [ -n "$newer_thirdparty" ]; then
+                        action=rebuild-all
+                    elif ! libmo_matches_stamp "$stamp" "$root/cgo/$libmo_name" ||
+                         [ "$root/cgo/$libmo_name" -nt "$stamp" ]; then
+                        action=rebuild-cgo
+                    else
+                        action=reuse
+                    fi
+                elif stamp_is_well_formed "$stamp"; then
+                    expected_makefile=$(printf '%s\n' "$expected" | sed -n 's/^makefile=//p')
+                    expected_thirdparties=$(printf '%s\n' "$expected" | sed -n 's/^thirdparties=//p')
+                    expected_goos=$(printf '%s\n' "$expected" | sed -n 's/^goos=//p')
+                    expected_goarch=$(printf '%s\n' "$expected" | sed -n 's/^goarch=//p')
+                    if [ "$(file_value makefile "$stamp")" = "$expected_makefile" ] &&
+                       [ "$(file_value thirdparties "$stamp")" = "$expected_thirdparties" ] &&
+                       [ "$(file_value goos "$stamp")" = "$expected_goos" ] &&
+                       [ "$(file_value goarch "$stamp")" = "$expected_goarch" ]; then
+                        action=rebuild-cgo
+                    fi
+                fi
+            else
+                # Dirty CGo inputs cannot be shared, but a CGo-only edit does
+                # not need an expensive thirdparty rebuild on every iteration.
+                if [ -z "$(git -C "$root" status --porcelain \
+                    --untracked-files=all -- Makefile thirdparties)" ]; then
+                    action=rebuild-cgo
+                fi
+            fi
+        fi
+
+        # An interrupted generation is never considered complete. Preserve a
+        # prior full-rebuild requirement; otherwise at least clean CGo before
+        # resuming, even when the old generation had been reusable.
+        old_action=
+        old_reusable=
+        old_provenance=
+        if read_build_marker "$pending"; then
+            old_action=$marker_action
+            old_reusable=$marker_reusable
+            old_provenance=$marker_provenance
+        elif read_build_marker "$building"; then
+            old_action=$marker_action
+            old_reusable=$marker_reusable
+            old_provenance=$marker_provenance
+        elif [ -e "$pending" ] || [ -e "$building" ]; then
+            old_action=rebuild-all
+        fi
+        if [ -n "$old_action" ]; then
+            if [ "$old_action" = reuse ]; then
+                old_action=rebuild-cgo
+            fi
+            if [ "$old_reusable" = yes ] && [ "$reusable" = yes ] &&
+               [ "$old_provenance" = "$expected" ]; then
+                action=$old_action
+            else
+                action=$(max_action "$action" "$old_action")
+            fi
+        fi
+
+        rm -f "$pending" "$building"
+        if [ "$action" != reuse ]; then
+            rm -f "$stamp"
+        fi
+        write_build_marker "$pending" "$action" "$reusable" "$expected"
+        printf '%s\n' "$action"
+        ;;
+
+    begin)
+        if [ "$#" -ne 2 ]; then
+            usage
+            exit 2
+        fi
+        root=$1
+        variant=$2
+        validate_variant "$variant"
+        host_platform
+        stamp="$root/cgo/.mo-native-provenance"
+        pending="$stamp.pending"
+        building="$stamp.building"
+        read_build_marker "$pending" || {
+            echo "native build preparation marker is missing or invalid" >&2
+            exit 1
+        }
+
+        if [ "$marker_reusable" = yes ]; then
+            current=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+            if [ "$current" != "$marker_provenance" ] ||
+               [ -n "$(git -C "$root" status --porcelain \
+                    --untracked-files=all -- $native_paths)" ]; then
+                echo "native inputs changed after build preparation" >&2
+                exit 1
+            fi
+        fi
+
+        case "$marker_action" in
+            local)
+                # Source archives and exported trees have no Git identity to
+                # stamp. Preserve their historical incremental-build behavior
+                # while keeping the result local-only.
+                ;;
+            reuse)
+                stamp_matches "$stamp" "$marker_provenance" || {
+                    echo "reusable native generation changed after preparation" >&2
+                    exit 1
+                }
+                if [ ! -f "$root/cgo/$libmo_name" ] ||
+                   [ ! -d "$root/thirdparties/install/include" ] ||
+                   [ ! -d "$root/thirdparties/install/lib" ] ||
+                   [ "$root/cgo/$libmo_name" -nt "$stamp" ]; then
+                    echo "reusable native artifact set changed after preparation" >&2
+                    exit 1
+                fi
+                if ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp") ||
+                   [ -n "$newer_thirdparty" ]; then
+                    echo "reusable native thirdparty outputs changed after preparation" >&2
+                    exit 1
+                fi
+                ;;
+            rebuild-cgo | rebuild-all)
+                for output in "$root"/cgo/*.o "$root"/cgo/*.a \
+                    "$root"/cgo/*.so "$root"/cgo/*.dylib; do
+                    if [ -e "$output" ]; then
+                        echo "native CGo cleanup did not remove $output" >&2
+                        exit 1
+                    fi
+                done
+                if [ "${variant%%-*}" = gpu ]; then
+                    leftover_gpu_object=$(find "$root/cgo/cuda" "$root/cgo/cuvs" \
+                        -type f -name '*.o' -print -quit 2>/dev/null || true)
+                    if [ -n "$leftover_gpu_object" ]; then
+                        echo "native GPU cleanup did not remove $leftover_gpu_object" >&2
+                        exit 1
+                    fi
+                fi
+                if [ "$marker_action" = rebuild-all ] &&
+                   [ -e "$root/thirdparties/install" ]; then
+                    echo "native thirdparty cleanup did not remove thirdparties/install" >&2
+                    exit 1
+                fi
+                ;;
+        esac
+
+        rm -f "$building"
+        mv "$pending" "$building"
+        ;;
+
     record)
         if [ "$#" -ne 2 ]; then
             usage
@@ -74,37 +403,72 @@ case "$operation" in
         root=$1
         variant=$2
         validate_variant "$variant"
+        host_platform
         stamp="$root/cgo/.mo-native-provenance"
-        # One fixed adjacent temporary keeps publication atomic and bounds
-        # residue across a killed prior invocation. Concurrent native builds in
-        # one worktree are unsupported because they already race on libmo.
+        building="$stamp.building"
         temporary_stamp="$stamp.tmp"
         rm -f "$temporary_stamp"
-        cleanup_temporary_stamp() {
-            rm -f "$temporary_stamp"
-        }
-        trap cleanup_temporary_stamp EXIT
+        trap 'rm -f "$temporary_stamp"' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
 
-        # A dirty native tree is valid for a local build, but another worktree
-        # cannot prove which local bytes produced it. Remove any older stamp so
-        # the artifact remains local-only instead of becoming falsely reusable.
-        if ! git -C "$root" rev-parse --verify HEAD >/dev/null 2>&1 ||
-           ! native_status=$(git -C "$root" status \
-                --porcelain --untracked-files=all -- $native_paths) ||
-           [ -n "$native_status" ]; then
-            rm -f "$stamp"
+        read_build_marker "$building" || {
+            echo "native build completion marker is missing or invalid" >&2
+            exit 1
+        }
+        [ -f "$root/cgo/$libmo_name" ] || {
+            echo "native build did not produce cgo/$libmo_name" >&2
+            exit 1
+        }
+        [ -d "$root/thirdparties/install/include" ] &&
+            [ -d "$root/thirdparties/install/lib" ] || {
+            echo "native build did not produce thirdparties/install" >&2
+            exit 1
+        }
+
+        # Dirty or non-Git builds remain valid locally but are never advertised
+        # to another worktree as reproducible.
+        if [ "$marker_reusable" = no ]; then
+            rm -f "$stamp" "$building"
             echo "native artifacts are not reusable: tracked native inputs are dirty or unavailable" >&2
+            trap - EXIT HUP INT TERM
             exit 0
         fi
 
-        go_command=${GO:-go}
-        goos=$("$go_command" env GOHOSTOS)
-        goarch=$("$go_command" env GOHOSTARCH)
-        emit_provenance "$root" "$goos" "$goarch" "$variant" >"$temporary_stamp"
+        current=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
+        if [ "$current" != "$marker_provenance" ] ||
+           [ -n "$(git -C "$root" status --porcelain \
+                --untracked-files=all -- $native_paths)" ]; then
+            rm -f "$stamp"
+            echo "native inputs changed while the build was running" >&2
+            exit 1
+        fi
+
+        # prepare already proved the exact artifact hashes for a reuse
+        # generation. The intervening thirdparty and CGo makes must be no-ops;
+        # reject any ordinary output change and retain the existing stamp
+        # instead of reading the same large libraries two more times.
+        if [ "$marker_action" = reuse ]; then
+            if ! stamp_matches "$stamp" "$marker_provenance" ||
+               [ "$root/cgo/$libmo_name" -nt "$stamp" ]; then
+                echo "reusable native artifacts changed while the build was running" >&2
+                exit 1
+            fi
+            if ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp") ||
+               [ -n "$newer_thirdparty" ]; then
+                echo "reusable native thirdparty outputs changed while the build was running" >&2
+                exit 1
+            fi
+            rm -f "$building"
+            trap - EXIT HUP INT TERM
+            exit 0
+        fi
+
+        printf '%s\n' "$current" >"$temporary_stamp"
+        emit_artifact_metadata "$root" "$root/cgo/$libmo_name" >>"$temporary_stamp"
         mv "$temporary_stamp" "$stamp"
+        rm -f "$building"
         trap - EXIT HUP INT TERM
         ;;
 
@@ -115,12 +479,18 @@ case "$operation" in
         fi
         root=$1
         libmo=$2
-        goos=$3
-        goarch=$4
+        provenance_goos=$3
+        provenance_goarch=$4
         variant=$5
         validate_variant "$variant"
         stamp="$root/cgo/.mo-native-provenance"
+        pending="$stamp.pending"
+        building="$stamp.building"
 
+        if [ -e "$pending" ] || [ -e "$building" ]; then
+            echo "native artifact build is incomplete" >&2
+            exit 1
+        fi
         if [ ! -f "$stamp" ]; then
             echo "native artifact provenance stamp is missing" >&2
             exit 1
@@ -135,23 +505,31 @@ case "$operation" in
             exit 1
         fi
 
-        expected=$(emit_provenance "$root" "$goos" "$goarch" "$variant")
-        actual=$(sed -n '1,7p' "$stamp")
-        if [ "$actual" != "$expected" ] || [ "$(wc -l <"$stamp" | tr -d ' ')" -ne 7 ]; then
+        expected=$(emit_provenance "$root" "$provenance_goos" "$provenance_goarch" "$variant")
+        if ! stamp_matches "$stamp" "$expected"; then
             echo "native artifact provenance does not match source, platform, or build variant" >&2
+            exit 1
+        fi
+        if [ ! -f "$libmo" ] ||
+           [ ! -d "$root/thirdparties/install/include" ] ||
+           [ ! -d "$root/thirdparties/install/lib" ]; then
+            echo "native artifact set is incomplete" >&2
+            exit 1
+        fi
+        if ! libmo_matches_stamp "$stamp" "$libmo" ||
+           ! thirdparty_matches_stamp "$stamp" "$root"; then
+            echo "native artifact contents do not match provenance" >&2
             exit 1
         fi
 
         # Direct `make -C cgo`, manual replacement, or a thirdparty rebuild can
         # change ignored artifacts without changing Git state. The top-level
         # build writes the stamp last, so anything newer invalidates reuse.
-        if ! newer_thirdparty_file=$(find \
-            "$root/thirdparties/install/include" "$root/thirdparties/install/lib" \
-            -type f -newer "$stamp" -print -quit); then
+        if ! newer_thirdparty=$(newer_thirdparty_output "$root" "$stamp"); then
             echo "cannot inspect native artifact freshness" >&2
             exit 1
         fi
-        if [ "$libmo" -nt "$stamp" ] || [ -n "$newer_thirdparty_file" ]; then
+        if [ "$libmo" -nt "$stamp" ] || [ -n "$newer_thirdparty" ]; then
             echo "native artifacts changed after provenance was recorded" >&2
             exit 1
         fi

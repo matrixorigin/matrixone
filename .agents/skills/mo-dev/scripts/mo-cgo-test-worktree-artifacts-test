@@ -42,6 +42,9 @@ cat > "$primary/.gitignore" <<'EOF'
 cgo/libmo.so
 cgo/libmo.dylib
 cgo/.mo-native-provenance
+cgo/.mo-native-provenance.pending
+cgo/.mo-native-provenance.building
+cgo/.mo-native-provenance.tmp
 thirdparties/install/
 EOF
 cat > "$primary/Makefile" <<'EOF'
@@ -96,6 +99,27 @@ failures=0
 
 record_provenance() {
     platform=$1
+    action=$(env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" prepare "$primary" cpu)
+    case "$action" in
+        rebuild-all)
+            rm -rf "$primary/thirdparties/install"
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib"
+            ;;
+        rebuild-cgo)
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib"
+            ;;
+        reuse) ;;
+        *) printf 'unexpected build action: %s\n' "$action" >&2; exit 1 ;;
+    esac
+    env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" begin "$primary" cpu
+    mkdir -p "$primary/thirdparties/install/include" \
+        "$primary/thirdparties/install/lib"
+    printf 'header\n' > "$primary/thirdparties/install/include/native.h"
+    printf 'library\n' > "$primary/thirdparties/install/lib/libnative.a"
+    printf '%s library\n' "$platform" > "$primary/cgo/libmo.so"
+    printf '%s library\n' "$platform" > "$primary/cgo/libmo.dylib"
     env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
         "$primary/cgo/mo-native-provenance" record "$primary" cpu
 }

@@ -288,16 +288,66 @@ ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
 
-.PHONY: cgo
-cgo: thirdparties
+define BUILD_THIRDPARTIES
+@$(MAKE) -C thirdparties $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS))
+@mkdir -p "$(ROOT_DIR)/lib"
+@for source in "$(THIRDPARTIES_INSTALL_DIR)"/lib/*; do \
+	[ -e "$$source" ] || continue; \
+	destination="$(ROOT_DIR)/lib/$${source##*/}"; \
+	if [ -L "$$source" ]; then \
+		link_target=$$(readlink "$$source"); \
+		if [ ! -L "$$destination" ] || [ "$$(readlink "$$destination")" != "$$link_target" ]; then \
+			temporary="$$destination.tmp.$$$$"; \
+			ln -s "$$link_target" "$$temporary"; \
+			mv -f "$$temporary" "$$destination"; \
+		fi; \
+	elif [ -d "$$source" ]; then \
+		cp -R "$$source" "$(ROOT_DIR)/lib/"; \
+	elif [ ! -f "$$destination" ] || [ -L "$$destination" ] || ! cmp -s "$$source" "$$destination"; then \
+		temporary="$$destination.tmp.$$$$"; \
+		cp "$$source" "$$temporary"; \
+		mv -f "$$temporary" "$$destination"; \
+	fi; \
+done
+endef
+
+.PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
+cgo: NATIVE_PROVENANCE_VARIANT = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)$(if $(filter debug,$(CGO_DEBUG_OPT)),-debug,)
+cgo: cgo-native-thirdparties-internal
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
-	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
-		$(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)$(if $(filter debug,$(CGO_DEBUG_OPT)),-debug,)
+	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" "$(NATIVE_PROVENANCE_VARIANT)"
+
+cgo-native-thirdparties-internal: cgo-native-prepare-internal
+	$(BUILD_THIRDPARTIES)
+
+cgo-native-prepare-internal:
+	@set -eu; \
+		case "$(firstword $(MAKEFLAGS))" in \
+			-*) ;; \
+			*n*|*t*|*q*) exit 0 ;; \
+			esac; \
+		case " $(MAKEFLAGS) " in \
+			*" -n "*|*" -t "*|*" -q "*|*" --just-print "*|*" --dry-run "*|*" --recon "*|*" --touch "*|*" --question "*) exit 0 ;; \
+		esac; \
+		action=$$(GO="$(GO)" ./cgo/mo-native-provenance prepare \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_VARIANT)"); \
+		case "$$action" in \
+			local|reuse) ;; \
+			rebuild-cgo) \
+				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_VARIANT)"; \
+				$(MAKE) -C cgo clean ;; \
+			rebuild-all) \
+				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_VARIANT)"; \
+				$(MAKE) -C cgo clean; \
+				$(MAKE) -C thirdparties clean ;; \
+			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
+		esac; \
+		GO="$(GO)" ./cgo/mo-native-provenance begin \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_VARIANT)"
 
 .PHONY: thirdparties
 thirdparties:
-	@(cd thirdparties; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)))
-	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
+	$(BUILD_THIRDPARTIES)
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
 # is staged. jiebaDictPaths() in pkg/monlp/tokenizer/jieba_dict.go searches
@@ -312,7 +362,7 @@ jieba-dict:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo thirdparties jieba-dict
+build: config cgo jieba-dict
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
 
@@ -358,7 +408,7 @@ musl:
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config cgo thirdparties
+mo-tool: config cgo
 	$(info [Build mo-tool tool])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
@@ -396,7 +446,7 @@ build-typecheck: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-UT_PREREQUISITES := cgo thirdparties
+UT_PREREQUISITES := cgo
 # CI times config separately to monitor module-proxy health. Let that caller
 # attest that the exact checkout already passed config instead of verifying the
 # same package graph twice; direct developer invocations retain the prerequisite.
