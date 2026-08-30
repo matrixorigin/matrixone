@@ -125,7 +125,6 @@ PY
 
 ICEBERG_E2E_TMP_DIR=""
 ICEBERG_E2E_MO_PID=""
-ICEBERG_E2E_MAPPING_BARRIER_DIR=""
 ICEBERG_E2E_LAUNCH_CONFIG=""
 ICEBERG_E2E_BINARY=""
 
@@ -162,10 +161,6 @@ iceberg_e2e_cleanup() {
     wait "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
   fi
   iceberg_e2e_collect_logs
-  if [[ -n "$ICEBERG_E2E_MAPPING_BARRIER_DIR" ]]; then
-    rm -f "$ICEBERG_E2E_MAPPING_BARRIER_DIR/create-arm" "$ICEBERG_E2E_MAPPING_BARRIER_DIR/create-ready" "$ICEBERG_E2E_MAPPING_BARRIER_DIR/create-release"
-    rmdir "$ICEBERG_E2E_MAPPING_BARRIER_DIR" >/dev/null 2>&1 || true
-  fi
   (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || true
   return "$status"
 }
@@ -182,11 +177,10 @@ iceberg_e2e_local() {
   esac
 
   mkdir -p "$REPORT_DIR"
-  ICEBERG_E2E_TMP_DIR="$(mktemp -d "/private/tmp/mo-iceberg-e2e-local.XXXXXX")"
+  local tmp_root="${TMPDIR:-/tmp}"
+  [[ -d "$tmp_root" && -w "$tmp_root" ]] || die "temporary directory is not writable: $tmp_root"
+  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${tmp_root%/}/mo-iceberg-e2e-local.XXXXXX")"
   ICEBERG_E2E_BINARY="${ICEBERG_E2E_TMP_DIR}/mo-service"
-  ICEBERG_E2E_MAPPING_BARRIER_DIR="${ICEBERG_E2E_TMP_DIR}/create-mapping-barrier"
-  mkdir "$ICEBERG_E2E_MAPPING_BARRIER_DIR"
-  export MO_ICEBERG_E2E_MAPPING_BARRIER_DIR="$ICEBERG_E2E_MAPPING_BARRIER_DIR"
   trap iceberg_e2e_cleanup EXIT
   iceberg_e2e_prepare_launch_config
 

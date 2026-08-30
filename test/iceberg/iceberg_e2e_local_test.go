@@ -603,90 +603,16 @@ func TestLocalE2EAccessLifecycleCaseRejectsAmbiguousCatalog(t *testing.T) {
 	}
 }
 
-func TestLocalE2EConcurrentCreateMappingAndDropCase(t *testing.T) {
-	tests := []struct {
-		name       string
-		createErr  error
-		dropErr    error
-		state      []driver.Value
-		wantState  string
-		wantCreate bool
-	}{
-		{
-			name:       "create wins and publishes mapping with catalog",
-			dropErr:    errors.New("catalog has a newly created table mapping"),
-			state:      []driver.Value{1, 1},
-			wantState:  "1\t1",
-			wantCreate: true,
-		},
-		{
-			name:      "drop wins and leaves no mapping",
-			createErr: errors.New("iceberg catalog concurrent does not exist"),
-			state:     []driver.Value{0, 0},
-			wantState: "0\t0",
-		},
+func TestLocalE2EWaitForLifecycleFaultWaiters(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectQuery("select trigger_fault_point").WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(1)))
+	if err := waitForLifecycleFaultWaiters(context.Background(), db, icebergCreateAfterCatalogLockWaitersFault, 1); err != nil {
+		t.Fatalf("wait for lifecycle waiter: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, mock := newLocalE2ESQLMock(t)
-			defer db.Close()
-			mock.MatchExpectationsInOrder(false)
-			cfg := localE2ETestConfig()
-			armLocalE2EMappingBarrier(t, &cfg)
-
-			mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
-				WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
-			createExpectation := mock.ExpectExec("CREATE EXTERNAL TABLE")
-			if tt.createErr != nil {
-				createExpectation.WillReturnError(tt.createErr)
-			} else {
-				createExpectation.WillReturnResult(sqlmock.NewResult(0, 1))
-			}
-			dropExpectation := mock.ExpectExec("DROP ICEBERG CATALOG")
-			if tt.dropErr != nil {
-				dropExpectation.WillReturnError(tt.dropErr)
-			} else {
-				dropExpectation.WillReturnResult(sqlmock.NewResult(0, 1))
-			}
-			mock.ExpectQuery("select \\(select count\\(\\*\\) from mo_catalog\\.mo_iceberg_catalogs").
-				WillReturnRows(sqlmock.NewRows([]string{"catalogs", "tables"}).AddRow(tt.state...))
-			if tt.wantCreate {
-				mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
-				mock.ExpectExec("CALL iceberg_unregister_access").WillReturnResult(sqlmock.NewResult(0, 0))
-				mock.ExpectExec("DROP ICEBERG CATALOG IF EXISTS").WillReturnResult(sqlmock.NewResult(0, 0))
-			}
-
-			result := (&caseRunner{cfg: cfg, db: db}).concurrentCreateMappingAndDropCase(context.Background())
-			if result.Status != "passed" || !sameLines([]string{tt.wantState}, result.Actual) {
-				t.Fatalf("unexpected concurrent result: %+v", result)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatalf("unmet expectations: %v", err)
-			}
-		})
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet lifecycle waiter expectations: %v", err)
 	}
-}
-
-func armLocalE2EMappingBarrier(t *testing.T, cfg *localE2EConfig) {
-	t.Helper()
-	cfg.MappingBarrierDir = t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	t.Cleanup(cancel)
-	done := make(chan error, 1)
-	go func() {
-		if err := waitForMappingBarrier(ctx, filepath.Join(cfg.MappingBarrierDir, "create-arm")); err != nil {
-			done <- err
-			return
-		}
-		done <- os.WriteFile(filepath.Join(cfg.MappingBarrierDir, "create-ready"), []byte("locked\n"), 0o600)
-	}()
-	t.Cleanup(func() {
-		if err := <-done; err != nil && ctx.Err() == nil {
-			t.Errorf("signal local E2E mapping barrier: %v", err)
-		}
-	})
 }
 
 func TestLocalE2EConcurrentCreateMappingAndDropCaseReportsCleanupFailure(t *testing.T) {

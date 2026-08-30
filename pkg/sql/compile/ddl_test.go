@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -408,24 +406,6 @@ func TestIcebergTableMappingLocksCatalogBeforePublishingMapping(t *testing.T) {
 	require.Equal(t, lookupSQL, exec.sqls[0])
 	require.Contains(t, exec.sqls[1], "insert into mo_catalog."+sqliceberg.TableTables)
 	require.Contains(t, exec.sqls[1], "values (7,8,9,42")
-}
-
-func TestIcebergMappingE2EBarrierWaitsForRelease(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(icebergMappingE2EBarrierDirEnv, dir)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "create-arm"), []byte("armed\n"), 0o600))
-
-	done := make(chan error, 1)
-	go func() {
-		done <- waitForIcebergMappingE2EBarrier(context.Background())
-	}()
-	require.Eventually(t, func() bool {
-		_, err := os.Stat(filepath.Join(dir, "create-ready"))
-		return err == nil
-	}, time.Second, 10*time.Millisecond)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "create-release"), []byte("release\n"), 0o600))
-	require.NoError(t, <-done)
 }
 
 func icebergCatalogResult(t *testing.T, proc *process.Process, catalogID uint64) executor.Result {

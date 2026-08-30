@@ -20,8 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -67,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -2266,6 +2265,10 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 	if err != nil {
 		return err
 	}
+	// This is inert unless an operator explicitly enables the named fault point.
+	// The E2E race test uses it to pause CREATE after the lifecycle lock is held
+	// without adding file-system polling or an environment-controlled wait to DDL.
+	fault.TriggerFaultWithContext(c.proc.Ctx, icebergCreateMappingAfterCatalogLockFault)
 
 	mapping := model.TableMapping{
 		AccountID:            accountID,
@@ -2284,6 +2287,8 @@ func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel e
 		executor.StatementOption{}.WithDisableLog(),
 	)
 }
+
+const icebergCreateMappingAfterCatalogLockFault = "iceberg-create-mapping-after-catalog-lock"
 
 func (c *Compile) lookupIcebergCatalogIDForUpdate(accountID uint32, catalogName string) (uint64, error) {
 	res, err := c.runSqlWithResultAndOptions(
@@ -2310,48 +2315,7 @@ func (c *Compile) lookupIcebergCatalogIDForUpdate(accountID uint32, catalogName 
 	if catalogID == 0 {
 		return 0, moerr.NewInvalidInputf(c.proc.Ctx, "iceberg catalog %s does not exist", catalogName)
 	}
-	// The local Iceberg E2E runner can arm this test-only phase barrier.  It is
-	// deliberately after the FOR UPDATE lookup and before mapping publication,
-	// so the real-service regression proves that CREATE holds the lifecycle lock
-	// across that whole interval.  Normal deployments leave the environment
-	// variable unset and do no filesystem work.
-	if err := waitForIcebergMappingE2EBarrier(c.proc.Ctx); err != nil {
-		return 0, err
-	}
 	return catalogID, nil
-}
-
-const icebergMappingE2EBarrierDirEnv = "MO_ICEBERG_E2E_MAPPING_BARRIER_DIR"
-
-func waitForIcebergMappingE2EBarrier(ctx context.Context) error {
-	dir := os.Getenv(icebergMappingE2EBarrierDirEnv)
-	if dir == "" {
-		return nil
-	}
-	if _, err := os.Stat(filepath.Join(dir, "create-arm")); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return moerr.NewInternalErrorf(ctx, "inspect iceberg mapping E2E barrier: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "create-ready"), []byte("locked\n"), 0o600); err != nil {
-		return moerr.NewInternalErrorf(ctx, "signal iceberg mapping E2E barrier: %v", err)
-	}
-
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "create-release")); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return moerr.NewInternalErrorf(ctx, "wait for iceberg mapping E2E barrier: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
 }
 
 func (c *Compile) maybeDeleteIcebergTableMapping(dbSource engine.Database, rel engine.Relation, tableDef *plan.TableDef) error {

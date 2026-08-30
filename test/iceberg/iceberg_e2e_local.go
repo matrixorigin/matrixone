@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -42,14 +43,13 @@ import (
 )
 
 type localE2EConfig struct {
-	CatalogURI        string
-	Warehouse         string
-	DSN               string
-	ReportDir         string
-	MappingBarrierDir string
-	Namespace         string
-	Catalog           string
-	Database          string
+	CatalogURI string
+	Warehouse  string
+	DSN        string
+	ReportDir  string
+	Namespace  string
+	Catalog    string
+	Database   string
 }
 
 type caseResult struct {
@@ -79,7 +79,6 @@ func main() {
 	flag.StringVar(&cfg.Warehouse, "warehouse", envOr("MO_ICEBERG_E2E_WAREHOUSE", "s3://mo-iceberg/warehouse"), "Iceberg warehouse location")
 	flag.StringVar(&cfg.DSN, "dsn", envOr("MO_ICEBERG_E2E_DSN", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false"), "MatrixOne MySQL DSN")
 	flag.StringVar(&cfg.ReportDir, "report-dir", envOr("MO_ICEBERG_REPORT_DIR", "test/iceberg/reports/e2e-local"), "report output directory")
-	flag.StringVar(&cfg.MappingBarrierDir, "mapping-barrier-dir", envOr("MO_ICEBERG_E2E_MAPPING_BARRIER_DIR", ""), "test-only CREATE mapping phase barrier directory")
 	flag.StringVar(&cfg.Namespace, "namespace", envOr("MO_ICEBERG_E2E_NAMESPACE", ""), "Iceberg namespace to create")
 	flag.StringVar(&cfg.Catalog, "mo-catalog", envOr("MO_ICEBERG_E2E_MO_CATALOG", ""), "MatrixOne Iceberg catalog name")
 	flag.StringVar(&cfg.Database, "mo-db", envOr("MO_ICEBERG_E2E_MO_DB", ""), "MatrixOne database name")
@@ -470,16 +469,10 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	if err != nil || catalogID == 0 {
 		return fail([]string{"non-zero catalog id"}, catalogIDs, "concurrent catalog id was invalid")
 	}
-	if r.cfg.MappingBarrierDir == "" {
-		return fail([]string{"MO_ICEBERG_E2E_MAPPING_BARRIER_DIR"}, nil, "CREATE mapping phase barrier is not configured")
+	if err := installLifecycleFaults(ctx, r.db); err != nil {
+		return fail(nil, nil, fmt.Sprintf("install lifecycle synchronization points: %v", err))
 	}
-	if err := resetMappingBarrier(r.cfg.MappingBarrierDir); err != nil {
-		return fail(nil, nil, fmt.Sprintf("reset CREATE mapping phase barrier: %v", err))
-	}
-	defer func() { _ = resetMappingBarrier(r.cfg.MappingBarrierDir) }()
-	if err := os.WriteFile(filepath.Join(r.cfg.MappingBarrierDir, "create-arm"), []byte("armed\n"), 0o600); err != nil {
-		return fail(nil, nil, fmt.Sprintf("arm CREATE mapping phase barrier: %v", err))
-	}
+	defer cleanupLifecycleFaults(r.db)
 
 	createSQL := fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
   order_id BIGINT,
@@ -498,8 +491,12 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	var workers sync.WaitGroup
 	caseCtx, cancelCase := context.WithCancel(ctx)
 	defer cancelCase()
-	releaseCreate := func() error {
-		return os.WriteFile(filepath.Join(r.cfg.MappingBarrierDir, "create-release"), []byte("release\n"), 0o600)
+	stopWorkers := func() {
+		cancelCase()
+		releaseLifecycleFault(r.db, icebergCreateAfterCatalogLockFault)
+		releaseLifecycleFault(r.db, icebergDropBeforeCatalogLockFault)
+		releaseLifecycleFault(r.db, icebergDropAfterCatalogLockFault)
+		workers.Wait()
 	}
 	workers.Add(1)
 	go func() {
@@ -509,12 +506,9 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	}()
 	barrierCtx, cancelBarrier := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelBarrier()
-	if err := waitForMappingBarrier(barrierCtx, filepath.Join(r.cfg.MappingBarrierDir, "create-ready")); err != nil {
-		if releaseErr := releaseCreate(); releaseErr != nil {
-			cancelCase()
-		}
-		workers.Wait()
-		return fail(nil, nil, fmt.Sprintf("CREATE did not reach the locked mapping phase: %v", err))
+	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergCreateAfterCatalogLockWaitersFault, 1); err != nil {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("CREATE did not pause after catalog lifecycle lock: %v", err))
 	}
 	workers.Add(1)
 	go func() {
@@ -522,10 +516,39 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		_, err := r.db.ExecContext(caseCtx, dropSQL)
 		results <- ddlResult{name: "drop", err: err}
 	}()
-	if err := releaseCreate(); err != nil {
-		cancelCase()
-		workers.Wait()
-		return fail(nil, nil, fmt.Sprintf("release CREATE mapping phase barrier: %v", err))
+	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropBeforeCatalogLockWaitersFault, 1); err != nil {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("DROP did not reach the pre-lock phase: %v", err))
+	}
+	if err := releaseLifecycleFault(r.db, icebergDropBeforeCatalogLockFault); err != nil {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("release DROP pre-lock phase: %v", err))
+	}
+	// With the fixed CREATE lock, DROP is now queued on the catalog row and
+	// cannot reach its post-lock point while CREATE remains paused. An unlocked
+	// lookup reaches that point, lets DROP commit, and exposes the 0/1 orphan.
+	lockedCtx, cancelLocked := context.WithTimeout(ctx, time.Second)
+	err = waitForLifecycleFaultWaiters(lockedCtx, r.db, icebergDropAfterCatalogLockWaitersFault, 1)
+	cancelLocked()
+	if err == nil {
+		stopWorkers()
+		return fail([]string{"DROP blocked on CREATE catalog lock"}, nil, "DROP acquired the catalog lifecycle lock before CREATE published its mapping")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("observe DROP while CREATE holds catalog lock: %v", err))
+	}
+	if err := releaseLifecycleFault(r.db, icebergCreateAfterCatalogLockFault); err != nil {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("release CREATE post-lock phase: %v", err))
+	}
+	if err := waitForLifecycleFaultWaiters(barrierCtx, r.db, icebergDropAfterCatalogLockWaitersFault, 1); err != nil {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("DROP did not acquire the catalog lock after CREATE publication: %v", err))
+	}
+	if err := releaseLifecycleFault(r.db, icebergDropAfterCatalogLockFault); err != nil {
+		stopWorkers()
+		return fail(nil, nil, fmt.Sprintf("release DROP post-lock phase: %v", err))
 	}
 	workers.Wait()
 	close(results)
@@ -560,34 +583,89 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		sqls,
 		[]string{"exactly one DDL commits", "1\t1 or 0\t0"},
 		state,
-		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr), "phase_barrier": "CREATE paused after FOR UPDATE catalog lookup"},
+		map[string]string{"catalog_id": strconv.FormatUint(catalogID, 10), "create_error": fmt.Sprint(createErr), "drop_error": fmt.Sprint(dropErr), "phase_barrier": "fault injection: CREATE after catalog lock; DROP before and after lifecycle lock"},
 	)
 }
 
-func resetMappingBarrier(dir string) error {
-	info, err := os.Stat(dir)
-	if err != nil {
+const (
+	icebergCreateAfterCatalogLockFault        = "iceberg-create-mapping-after-catalog-lock"
+	icebergDropBeforeCatalogLockFault         = "iceberg-drop-catalog-before-lifecycle-lock"
+	icebergDropAfterCatalogLockFault          = "iceberg-drop-catalog-after-lifecycle-lock"
+	icebergCreateAfterCatalogLockWaitersFault = "iceberg-create-mapping-after-catalog-lock-waiters"
+	icebergDropBeforeCatalogLockWaitersFault  = "iceberg-drop-catalog-before-lifecycle-lock-waiters"
+	icebergDropAfterCatalogLockWaitersFault   = "iceberg-drop-catalog-after-lifecycle-lock-waiters"
+	icebergCreateAfterCatalogLockNotifyFault  = "iceberg-create-mapping-after-catalog-lock-notify"
+	icebergDropBeforeCatalogLockNotifyFault   = "iceberg-drop-catalog-before-lifecycle-lock-notify"
+	icebergDropAfterCatalogLockNotifyFault    = "iceberg-drop-catalog-after-lifecycle-lock-notify"
+)
+
+func installLifecycleFaults(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "select enable_fault_injection()"); err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", dir)
+	points := []struct{ name, action, target string }{
+		{icebergCreateAfterCatalogLockFault, "wait", ""},
+		{icebergDropBeforeCatalogLockFault, "wait", ""},
+		{icebergDropAfterCatalogLockFault, "wait", ""},
+		{icebergCreateAfterCatalogLockWaitersFault, "getwaiters", icebergCreateAfterCatalogLockFault},
+		{icebergDropBeforeCatalogLockWaitersFault, "getwaiters", icebergDropBeforeCatalogLockFault},
+		{icebergDropAfterCatalogLockWaitersFault, "getwaiters", icebergDropAfterCatalogLockFault},
+		{icebergCreateAfterCatalogLockNotifyFault, "notifyall", icebergCreateAfterCatalogLockFault},
+		{icebergDropBeforeCatalogLockNotifyFault, "notifyall", icebergDropBeforeCatalogLockFault},
+		{icebergDropAfterCatalogLockNotifyFault, "notifyall", icebergDropAfterCatalogLockFault},
 	}
-	for _, name := range []string{"create-arm", "create-ready", "create-release"} {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+	for _, point := range points {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("select add_fault_point(%s, ':::', %s, 0, %s)", sqlString(point.name), sqlString(point.action), sqlString(point.target))); err != nil {
+			cleanupLifecycleFaults(db)
 			return err
 		}
 	}
 	return nil
 }
 
-func waitForMappingBarrier(ctx context.Context, path string) error {
+func cleanupLifecycleFaults(db *sql.DB) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for _, name := range []string{icebergCreateAfterCatalogLockFault, icebergDropBeforeCatalogLockFault, icebergDropAfterCatalogLockFault} {
+		_ = releaseLifecycleFault(db, name)
+	}
+	for _, name := range []string{
+		icebergCreateAfterCatalogLockFault, icebergDropBeforeCatalogLockFault, icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault, icebergDropBeforeCatalogLockWaitersFault, icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault, icebergDropBeforeCatalogLockNotifyFault, icebergDropAfterCatalogLockNotifyFault,
+	} {
+		_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("select fault_inject('all.', 'REMOVE_FAULT_POINT', %s)", sqlString(name)))
+	}
+	_, _ = db.ExecContext(cleanupCtx, "select disable_fault_injection()")
+}
+
+func releaseLifecycleFault(db *sql.DB, waitPoint string) error {
+	notifyPoint := map[string]string{
+		icebergCreateAfterCatalogLockFault: icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockFault:  icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockFault:   icebergDropAfterCatalogLockNotifyFault,
+	}[waitPoint]
+	_, err := db.ExecContext(context.Background(), fmt.Sprintf("select trigger_fault_point(%s)", sqlString(notifyPoint)))
+	return err
+}
+
+func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint string, want uint64) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if _, err := os.Stat(path); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
+		rows, err := queryLines(ctx, db, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(waitersPoint)))
+		if err != nil {
 			return err
+		}
+		if len(rows) != 1 {
+			return fmt.Errorf("fault point %s returned %d rows", waitersPoint, len(rows))
+		}
+		waiters, err := strconv.ParseUint(rows[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse waiter count for %s: %w", waitersPoint, err)
+		}
+		if waiters >= want {
+			return nil
 		}
 		select {
 		case <-ctx.Done():
