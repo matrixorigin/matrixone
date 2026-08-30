@@ -148,10 +148,28 @@ func TestPrimaryKeyColumnPositionsFailClosedOnMalformedMetadata(t *testing.T) {
 			},
 		},
 		{
+			name: "empty current composite component",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "", Typ: intType}, {Name: "tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.CPrimaryKeyColName,
+					Names:       []string{"", "tenant"},
+				},
+			},
+		},
+		{
 			name: "conflicting name index",
 			table: &planpb.TableDef{
 				Cols:          []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "payload", Typ: intType}},
 				Name2ColIndex: map[string]int32{"id": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+		},
+		{
+			name: "indexed name cannot hide ambiguous columns",
+			table: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "ID", Typ: intType}},
+				Name2ColIndex: map[string]int32{"id": 0},
 				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
 			},
 		},

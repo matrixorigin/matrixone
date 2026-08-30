@@ -46,6 +46,15 @@ func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
 	groupedColumns := make(map[int32]map[int32]struct{})
 	for _, expr := range node.GroupBy {
 		if col := expr.GetCol(); col != nil {
+			tableDef := builder.tag2Table[col.RelPos]
+			if tableDef == nil || col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) ||
+				tableDef.Cols[col.ColPos] == nil ||
+				!sqlEqualityJoinUsesOneIdentityDomain(expr.Typ, tableDef.Cols[col.ColPos].Typ) {
+				// A direct column reference is a uniqueness proof only while its
+				// recorded type remains in the concrete table column's identity
+				// domain. Stale expression metadata must retain every hash key.
+				continue
+			}
 			columns := groupedColumns[col.RelPos]
 			if columns == nil {
 				columns = make(map[int32]struct{})

@@ -549,10 +549,35 @@ func TestPredicateOperatorEvaluationTotality(t *testing.T) {
 		}
 	}
 	require.True(t, isTruncationSafeIn(inArgs(typ(types.T_int64))))
+	mismatchedInArgs := inArgs(typ(types.T_int64))
+	mismatchedInArgs[1].GetList().List[0].Typ = typ(types.T_uint64)
+	require.False(t, isTruncationSafeIn(mismatchedInArgs))
+	require.False(t, isTruncationSafeIn([]*planpb.Expr{
+		value(typ(types.T_int64)),
+		{
+			Typ: typ(types.T_int64),
+			Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+				Len:  1,
+				Data: []byte("invalid literal vector"),
+			}},
+		},
+	}))
 	require.True(t, isTruncationSafeIn(inArgs(decimal(65, 12))))
 	require.False(t, isTruncationSafeIn(inArgs(decimal(77, 12))))
 	require.False(t, isTruncationSafeIn(inArgs(typ(types.T_json))))
 	require.False(t, isTruncationSafeIn(inArgs(typ(types.T_array_bf16))))
+	require.True(t, isTruncationSafePredicateValue(&planpb.Expr{
+		Typ:  typ(types.T_int64),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}))
+	require.False(t, isTruncationSafePredicateValue(&planpb.Expr{
+		Typ:  typ(types.T_int64),
+		Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "threshold"}},
+	}))
+	require.False(t, isTruncationSafePredicateValue(inArgs(typ(types.T_int64))[1]),
+		"a tuple constant is safe only through the IN/NOT IN contract")
+	require.False(t, isTruncationSafePredicateExpr(value(typ(types.T_int64))),
+		"a non-boolean Filter expression must fail closed")
 }
 
 func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
@@ -572,6 +597,11 @@ func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
 			name:      "scan filter precedes bounded demand",
 			sql:       "select empno, count(*) from constraint_test.emp where sal > 100 group by empno limit 6",
 			wantLimit: 6,
+		},
+		{
+			name:      "zero limit remains explicit bounded demand",
+			sql:       "select empno, count(*) from constraint_test.emp group by empno limit 0",
+			wantLimit: 0,
 		},
 	}
 
@@ -595,6 +625,54 @@ func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {
 	}
 }
 
+func TestPrimaryKeyGroupEliminationSupportsPreparedBoundedDemand(t *testing.T) {
+	prepared, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"prepare pk_group_page from 'select empno, count(*) from constraint_test.emp group by empno limit ? offset ?'",
+	)
+	require.NoError(t, err)
+	query := prepared.GetDcl().GetPrepare().GetPlan().GetQuery()
+	require.NotNil(t, query)
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.NotNil(t, scan.Limit)
+	require.Equal(t, "cast", scan.Limit.GetF().Func.ObjName)
+	require.Equal(t, int32(0), scan.Limit.GetF().Args[0].GetP().Pos)
+	require.NotNil(t, scan.Offset)
+	require.Equal(t, "cast", scan.Offset.GetF().Func.ObjName)
+	require.Equal(t, int32(1), scan.Offset.GetF().Args[0].GetP().Pos)
+
+	prepared, err = runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"prepare pk_group_filter from 'select empno, count(*) from constraint_test.emp where empno in (?, ?) group by empno limit ?'",
+	)
+	require.NoError(t, err)
+	query = prepared.GetDcl().GetPrepare().GetPlan().GetQuery()
+	require.NotNil(t, query)
+	require.True(t, reachableNodeType(query, planpb.Node_AGG),
+		"runtime casts around untyped predicate parameters remain fallible")
+	scan = firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.Len(t, scan.FilterList, 1)
+	require.Nil(t, scan.Limit,
+		"bounded demand must not suppress a predicate-parameter conversion error")
+}
+
+func TestPrimaryKeyGroupEliminationKeepsAggregateFreeLegacyPathUnbounded(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select empno from constraint_test.emp group by empno",
+	)
+	require.NoError(t, err)
+	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG),
+		"the bounded-demand gate applies only to aggregate-bearing rewrites")
+}
+
 func TestPrimaryKeyGroupEliminationWithOrderRemovesHashButNotScan(t *testing.T) {
 	logical, err := runOneStmt(
 		NewMockOptimizer(false),
@@ -611,6 +689,24 @@ func TestPrimaryKeyGroupEliminationWithOrderRemovesHashButNotScan(t *testing.T) 
 	require.Nil(t, scan.Limit, "Sort remains a semantic barrier to scan LIMIT")
 }
 
+func TestPrimaryKeyGroupEliminationPreservesSQLCalcFoundRowsStream(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select sql_calc_found_rows empno, count(*) from constraint_test.emp group by empno limit 10",
+	)
+	require.NoError(t, err)
+
+	query := logical.GetQuery()
+	require.False(t, reachableNodeType(query, planpb.Node_AGG),
+		"a complete primary key still proves one row per SQL group")
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.Nil(t, scan.Limit,
+		"FOUND_ROWS() must observe the complete pre-LIMIT group stream")
+	require.Nil(t, scan.Offset)
+}
+
 func TestPrimaryKeyGroupEliminationDoesNotCrossJoin(t *testing.T) {
 	logical, err := runOneStmt(
 		NewMockOptimizer(false),
@@ -623,6 +719,21 @@ func TestPrimaryKeyGroupEliminationDoesNotCrossJoin(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+}
+
+func TestPrimaryKeyGroupEliminationDoesNotCrossSetOperation(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`select * from (
+			select empno, count(*) c from constraint_test.emp group by empno
+			union all
+			select empno, count(*) c from constraint_test.emp group by empno
+		) u limit 1`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, reachableNodeTypeCount(logical.GetQuery(), planpb.Node_AGG),
+		"outer bounded demand must not enter either UNION branch")
 }
 
 func TestPrimaryKeyGroupEliminationDoesNotCrossSemanticFilters(t *testing.T) {
@@ -765,6 +876,63 @@ func TestPrimaryKeyGroupEliminationRequiresGroupingCompatiblePrimaryKey(t *testi
 					"bounded demand must not cross the retained aggregate")
 			})
 		}
+	}
+}
+
+func TestPrimaryKeyGroupEliminationRequiresGroupTypeToMatchPrimaryKeyColumn(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	tests := []struct {
+		name          string
+		groupType     planpb.Type
+		bindingTags   []int32
+		groupingFlags []bool
+		wantRewrite   bool
+	}{
+		{
+			name: "matching expression and schema types", groupType: intType,
+			bindingTags: []int32{2}, wantRewrite: true,
+		},
+		{
+			name:        "detached group expression type",
+			groupType:   planpb.Type{Id: int32(types.T_uint64), NotNullable: true},
+			bindingTags: []int32{2},
+		},
+		{
+			name: "malformed grouping flag vector", groupType: intType,
+			bindingTags: []int32{2}, groupingFlags: []bool{true, true},
+		},
+		{
+			name: "group output tag aliases scan input", groupType: intType,
+			bindingTags: []int32{1},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			table := groupHashKeyTestTable("id", "id")
+			table.Cols[0].Typ = intType
+			scan := &planpb.Node{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{1}, TableDef: table,
+			}
+			agg := &planpb.Node{
+				NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0},
+				BindingTags:  test.bindingTags,
+				GroupBy:      []*planpb.Expr{GetColExpr(test.groupType, 1, 0)},
+				GroupingFlag: test.groupingFlags,
+			}
+			root := &planpb.Node{
+				NodeId: 2, NodeType: planpb.Node_PROJECT, Children: []int32{1},
+				Limit: makePlan2Uint64ConstExprWithType(1),
+			}
+			builder := &QueryBuilder{qry: &planpb.Query{
+				Nodes: []*planpb.Node{scan, agg, root},
+			}}
+
+			builder.rewriteEffectlessAggToProject(2)
+
+			require.Equal(t, test.wantRewrite, agg.NodeType == planpb.Node_PROJECT)
+		})
 	}
 }
 
@@ -914,8 +1082,59 @@ func TestPrimaryKeyGroupEliminationPreservesHavingSemantics(t *testing.T) {
 	require.False(t, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
 }
 
+func TestPrimaryKeyGroupEliminationPreservesCombinedWhereAndHavingSemantics(t *testing.T) {
+	logical, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`select empno, sum(sal)
+		   from constraint_test.emp
+		  where deptno > 0
+		  group by empno
+		 having sum(sal) > 100
+		  limit 1 offset 1`,
+	)
+	require.NoError(t, err)
+	query := logical.GetQuery()
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.Len(t, scan.FilterList, 2,
+		"both WHERE and remapped HAVING predicates must precede bounded demand")
+	require.Equal(t, uint64(1), scan.Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(1), scan.Offset.GetLit().GetU64Val())
+}
+
 func reachableNodeType(query *planpb.Query, typ planpb.Node_NodeType) bool {
 	return firstReachableNode(query, typ) != nil
+}
+
+func reachableNodeTypeCount(query *planpb.Query, typ planpb.Node_NodeType) int {
+	if query == nil {
+		return 0
+	}
+	seen := make(map[int32]struct{})
+	count := 0
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := seen[nodeID]; ok {
+			return
+		}
+		seen[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node.NodeType == typ {
+			count++
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	for _, root := range query.Steps {
+		visit(root)
+	}
+	return count
 }
 
 func firstReachableNode(query *planpb.Query, typ planpb.Node_NodeType) *planpb.Node {

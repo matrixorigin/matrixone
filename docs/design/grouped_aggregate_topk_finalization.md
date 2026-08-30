@@ -97,13 +97,21 @@ The aggregate-bearing extension accepts only all of the following:
   connectors, then separately proves that the resolved comparison, BETWEEN or
   IN executor is total over the complete operand type domains. The proof is an
   explicit allowlist: a new overload remains ineligible until its execution
-  failure behavior is reviewed. In particular, Decimal256 scale alignment must
-  fit the complete 76-digit domain and mixed JSON/BOOL equality is rejected
-  because valid JSON containers can fail scalar coercion. An arbitrary
-  deterministic scalar is not assumed total;
+  failure behavior is reviewed. A direct, already typed prepared parameter is
+  cached after its first successful evaluation; an untyped parameter wrapped in
+  a fallible runtime cast remains ineligible. Variable references are resolved
+  again for every input batch and can return errors, so variable predicates
+  remain behind the blocking Aggregate. `IN` and `NOT IN` additionally decode a
+  folded literal vector and verify that every RHS member remains in the left
+  operand's resolved type domain; lists and encoded vectors are not accepted as
+  generic scalar operands. In particular, Decimal256 scale alignment must fit
+  the complete 76-digit domain and mixed JSON/BOOL equality is rejected because
+  valid JSON containers can fail scalar coercion. An arbitrary deterministic
+  scalar is not assumed total;
 - every Filter predicate on the bounded-demand path to Aggregate, including
-  HAVING before the first filter-pushdown pass, satisfies the same proof, and
-  the Filter is not terminal, a barrier, or a rollup filter;
+  HAVING before the first filter-pushdown pass or attached to Aggregate after
+  WHERE pushdown, satisfies the same proof, and the Filter is not terminal, a
+  barrier, or a rollup filter;
 - every aggregate belongs to the proven single-row family below.
 
 An aggregate-bearing query without LIMIT deliberately keeps its established plan,

@@ -198,6 +198,39 @@ func TestDetermineHashOnPKRejectsCrossTypeDirectEquality(t *testing.T) {
 	}
 }
 
+func TestDetermineHashOnPKRequiresTypeMetadataToMatchReferencedColumns(t *testing.T) {
+	tests := []struct {
+		name         string
+		exprType     plan.Type
+		wantHashOnPK bool
+	}{
+		{
+			name:         "matching expression and schema types",
+			exprType:     plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			wantHashOnPK: true,
+		},
+		{
+			name:     "join expressions agree but disagree with schema",
+			exprType: plan.Type{Id: int32(types.T_uint64), NotNullable: true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(true, true)
+			joinFn := builder.qry.Nodes[2].OnList[0].GetF()
+			require.NotNil(t, joinFn)
+			joinFn.Args[0].Typ = test.exprType
+			joinFn.Args[1].Typ = test.exprType
+
+			determineHashOnPK(2, builder)
+
+			require.Equal(t, test.wantHashOnPK,
+				builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK)
+		})
+	}
+}
+
 func buildHashOnPKTestBuilder(leftNotNullable bool, rightNotNullable bool) *QueryBuilder {
 	leftType := plan.Type{Id: int32(types.T_int64), NotNullable: leftNotNullable}
 	rightType := plan.Type{Id: int32(types.T_int64), NotNullable: rightNotNullable}

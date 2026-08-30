@@ -808,6 +808,17 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		if !sqlEqualityJoinUsesOneIdentityDomain(fn.Args[0].Typ, fn.Args[1].Typ) {
 			return nil
 		}
+		leftTableType, leftTypeOK := referencedTableColumnType(
+			node.Children[0], leftCol, builder)
+		rightTableType, rightTypeOK := referencedTableColumnType(
+			node.Children[1], rightCol, builder)
+		if !leftTypeOK || !rightTypeOK ||
+			!sqlEqualityJoinUsesOneIdentityDomain(fn.Args[0].Typ, leftTableType) ||
+			!sqlEqualityJoinUsesOneIdentityDomain(fn.Args[1].Typ, rightTableType) {
+			// Mutually consistent join-expression metadata cannot substitute for
+			// the concrete columns that the direct references identify.
+			return nil
+		}
 		exprLeftCols[i] = (uint64(leftCol.RelPos) << 32) | uint64(leftCol.ColPos)
 		// The build/right primary-key expression must remain non-nullable.
 		if !fn.Args[1].Typ.NotNullable {
@@ -865,6 +876,53 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	}
 
 	return leftColMap
+}
+
+func referencedTableColumnType(
+	nodeID int32,
+	col *plan.ColRef,
+	builder *QueryBuilder,
+) (plan.Type, bool) {
+	if builder == nil || builder.qry == nil || col == nil {
+		return plan.Type{}, false
+	}
+	visited := make(map[int32]struct{})
+	var found plan.Type
+	matches := 0
+	var visit func(int32)
+	visit = func(currentID int32) {
+		if currentID < 0 || int(currentID) >= len(builder.qry.Nodes) {
+			return
+		}
+		if _, seen := visited[currentID]; seen {
+			return
+		}
+		visited[currentID] = struct{}{}
+		current := builder.qry.Nodes[currentID]
+		if current == nil {
+			return
+		}
+		if current.NodeType == plan.Node_TABLE_SCAN {
+			for _, tag := range current.BindingTags {
+				if tag != col.RelPos {
+					continue
+				}
+				if current.TableDef == nil || col.ColPos < 0 ||
+					int(col.ColPos) >= len(current.TableDef.Cols) ||
+					current.TableDef.Cols[col.ColPos] == nil {
+					matches = 2
+					return
+				}
+				found = current.TableDef.Cols[col.ColPos].Typ
+				matches++
+			}
+		}
+		for _, childID := range current.Children {
+			visit(childID)
+		}
+	}
+	visit(nodeID)
+	return found, matches == 1
 }
 
 func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) (float64, bool) {
@@ -1023,15 +1081,27 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	if node.NodeType != plan.Node_AGG {
 		return
 	}
-	if node.ProjectList != nil || node.FilterList != nil ||
+	if node.ProjectList != nil ||
 		len(node.Children) != 1 ||
 		len(node.BindingTags) == 0 {
+		return
+	}
+	if len(node.FilterList) > 0 &&
+		(!limitDemand || !areTruncationSafePredicates(node.FilterList)) {
+		// optimizeFilters can attach HAVING directly to Aggregate. It may move to
+		// the input only when bounded demand exists and the complete predicate is
+		// total; otherwise retain the established blocking evaluation boundary.
 		return
 	}
 	if hasInactiveGroupingColumn(node.GroupingFlag) {
 		// An inactive key emits NULL for this grouping-set branch.  A Project
 		// cannot reproduce that row even when the branch has no aggregate
 		// functions, so this is an unconditional semantic barrier.
+		return
+	}
+	if len(node.GroupingFlag) > 0 && len(node.GroupingFlag) != len(node.GroupBy) {
+		// GroupingFlag is positional. A truncated or extended vector cannot prove
+		// that every logical key is active in this grouping-set branch.
 		return
 	}
 	if len(node.AggList) > 0 && !limitDemand {
@@ -1048,9 +1118,24 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	if !ok || len(scan.BindingTags) != 1 {
 		return
 	}
+	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
+	for _, tag := range node.BindingTags {
+		if _, duplicate := seenBindingTags[tag]; duplicate {
+			// Output bindings must not alias the input or one another; otherwise a
+			// remap cannot distinguish an Aggregate result from a scan column.
+			return
+		}
+		seenBindingTags[tag] = struct{}{}
+	}
 	groupCol := make([]int32, 0)
 	for _, expr := range node.GroupBy {
 		if col := expr.GetCol(); col != nil && col.RelPos == scan.BindingTags[0] {
+			if col.ColPos < 0 || int(col.ColPos) >= len(scan.TableDef.Cols) ||
+				scan.TableDef.Cols[col.ColPos] == nil ||
+				!sqlEqualityJoinUsesOneIdentityDomain(
+					expr.Typ, scan.TableDef.Cols[col.ColPos].Typ) {
+				return
+			}
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
@@ -1079,6 +1164,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 
 	projectList := make([]*plan.Expr, 0, len(node.GroupBy)+len(node.AggList))
 	projectList = append(projectList, node.GroupBy...)
+	rowAggExprs := make([]*plan.Expr, 0, len(node.AggList))
 	if len(node.AggList) > 0 {
 		if len(node.BindingTags) < 2 {
 			return
@@ -1089,8 +1175,42 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 				return
 			}
 			projectList = append(projectList, rowExpr)
+			rowAggExprs = append(rowAggExprs, rowExpr)
 		}
 
+	}
+
+	if len(node.FilterList) > 0 {
+		inputRemap := make(map[[2]int32]*plan.Expr, len(projectList))
+		groupTag := node.BindingTags[0]
+		for i, groupExpr := range node.GroupBy {
+			inputRemap[[2]int32{groupTag, int32(i)}] = groupExpr
+		}
+		if len(rowAggExprs) > 0 {
+			aggTag := node.BindingTags[1]
+			for i, rowExpr := range rowAggExprs {
+				inputRemap[[2]int32{aggTag, int32(i)}] = rowExpr
+			}
+		}
+		pushedHaving := make([]*plan.Expr, len(node.FilterList))
+		for i, predicate := range node.FilterList {
+			pushedHaving[i] = replaceColumnsForExpr(DeepCopyExpr(predicate), inputRemap)
+			if containsTag(pushedHaving[i], groupTag) ||
+				len(rowAggExprs) > 0 && containsTag(pushedHaving[i], node.BindingTags[1]) {
+				return
+			}
+		}
+		if !areTruncationSafePredicates(pushedHaving) {
+			return
+		}
+		// Project filters execute before projection, but LIMIT pushdown can move
+		// bounded demand to the direct scan. Put the row-equivalent HAVING beside
+		// WHERE on that scan so both predicates remain before the new stop point.
+		scan.FilterList = append(scan.FilterList, pushedHaving...)
+	}
+	if len(node.AggList) > 0 {
+		// Publish ancestor remaps only after every proof and predicate rewrite has
+		// succeeded. A failed node must leave both itself and its consumers intact.
 		groupTag := node.BindingTags[0]
 		aggTag := node.BindingTags[1]
 		for i, agg := range node.AggList {
@@ -1105,6 +1225,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node.NodeType = plan.Node_PROJECT
 	node.BindingTags = node.BindingTags[:1]
 	node.ProjectList = projectList
+	node.FilterList = nil
 	node.GroupBy = nil
 	node.AggList = nil
 	node.GroupingFlag = nil
@@ -1273,7 +1394,10 @@ func isTruncationSafeRowExpr(expr *plan.Expr) bool {
 // pruning copies and does not replace that evaluation, so proving every entry in
 // FilterList closes both the row path and any derived block-filter path.
 func isTruncationSafePredicateExpr(expr *plan.Expr) bool {
-	if expr == nil {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_bool {
+		// Filter predicates are boolean in valid planner IR. Do not let malformed
+		// result metadata turn an arbitrary value expression into a total predicate
+		// and thereby move bounded demand across Aggregate.
 		return false
 	}
 	if isTruncationSafePredicateValue(expr) {
@@ -1473,12 +1597,24 @@ func isTruncationSafeBetween(args []*plan.Expr) bool {
 
 func isTruncationSafeIn(args []*plan.Expr) bool {
 	if len(args) != 2 ||
-		!isTruncationSafePredicateValue(args[0]) ||
-		!isTruncationSafePredicateValue(args[1]) {
+		!isTruncationSafePredicateValue(args[0]) {
 		return false
 	}
 
 	left := args[0].Typ
+	rightValues, ok := inRHSValues(args[1], left)
+	if !ok || len(rightValues) == 0 {
+		// A folded LiteralVec is executable payload, not just an opaque constant.
+		// Decode it and prove its concrete vector type; otherwise a malformed or
+		// cross-domain RHS error could be hidden by scan truncation.
+		return false
+	}
+	for _, right := range rightValues {
+		if !isTruncationSafePredicateValue(right) ||
+			!sqlEqualityJoinUsesOneIdentityDomain(left, right.Typ) {
+			return false
+		}
+	}
 	leftID := types.T(left.Id)
 	if leftID.IsDecimal() {
 		return validDecimalPlanType(left)
@@ -1521,19 +1657,20 @@ func isTruncationSafePredicateValue(expr *plan.Expr) bool {
 	case *plan.Expr_P:
 		return value.P != nil
 	case *plan.Expr_V:
-		return value.V != nil
+		// Variables are resolved again for every input batch and resolution or
+		// typed reconstruction can fail. A scan LIMIT would reduce those
+		// externally observable resolver calls, unlike a prepared parameter
+		// whose executor caches its first successful value.
+		return false
 	case *plan.Expr_Vec:
-		return value.Vec != nil
+		// LiteralVec is executable encoded data and needs operator-specific type
+		// validation. IN/NOT IN performs that validation in isTruncationSafeIn;
+		// no other accepted predicate operator has a vector-valued scalar operand.
+		return false
 	case *plan.Expr_List:
-		if value.List == nil {
-			return false
-		}
-		for _, item := range value.List.List {
-			if !isTruncationSafePredicateValue(item) {
-				return false
-			}
-		}
-		return true
+		// Expr_List likewise belongs to the IN/NOT IN RHS contract. Treating it as
+		// an arbitrary scalar would accept malformed comparison or Filter IR.
+		return false
 	default:
 		return isTruncationSafeRowExpr(expr)
 	}

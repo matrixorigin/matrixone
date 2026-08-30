@@ -26,7 +26,10 @@ import (
 )
 
 func groupHashKeyTestCol(tag, pos int32) *pbplan.Expr {
-	return &pbplan.Expr{Expr: &pbplan.Expr_Col{Col: &pbplan.ColRef{RelPos: tag, ColPos: pos}}}
+	return &pbplan.Expr{
+		Typ:  pbplan.Type{Id: int32(types.T_int64)},
+		Expr: &pbplan.Expr_Col{Col: &pbplan.ColRef{RelPos: tag, ColPos: pos}},
+	}
 }
 
 func groupHashKeyTestTable(pkName string, pkNames ...string) *pbplan.TableDef {
@@ -58,6 +61,10 @@ func TestDetermineGroupByHashKeys(t *testing.T) {
 	collatedVarcharKey.Cols[0].Typ = pbplan.Type{
 		Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetUTF8),
 	}
+	varcharPrimaryKeyExpr := groupHashKeyTestCol(1, 0)
+	varcharPrimaryKeyExpr.Typ = varcharKey.Cols[0].Typ
+	detachedPrimaryKeyExpr := groupHashKeyTestCol(1, 0)
+	detachedPrimaryKeyExpr.Typ = pbplan.Type{Id: int32(types.T_uint64)}
 	scaledFloat32CompositeKey := groupHashKeyTestTable(catalog.CPrimaryKeyColName, "id", "tenant")
 	scaledFloat32CompositeKey.Cols[1].Typ = pbplan.Type{
 		Id: int32(types.T_float32), Width: 8, Scale: 2,
@@ -107,9 +114,14 @@ func TestDetermineGroupByHashKeys(t *testing.T) {
 		},
 		{
 			name:    "varchar primary key remains a grouping dependency proof",
-			groupBy: []*pbplan.Expr{groupHashKeyTestCol(1, 0), groupHashKeyTestCol(1, 2)},
+			groupBy: []*pbplan.Expr{varcharPrimaryKeyExpr, groupHashKeyTestCol(1, 2)},
 			tables:  map[int32]*pbplan.TableDef{1: varcharKey},
 			want:    []int32{0},
+		},
+		{
+			name:    "detached primary key expression type retains all physical keys",
+			groupBy: []*pbplan.Expr{detachedPrimaryKeyExpr, groupHashKeyTestCol(1, 2)},
+			tables:  map[int32]*pbplan.TableDef{1: groupHashKeyTestTable("id", "id")},
 		},
 		{
 			name:    "collated varchar primary key is not a grouping dependency proof",

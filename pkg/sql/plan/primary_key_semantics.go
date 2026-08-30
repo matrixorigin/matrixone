@@ -71,13 +71,18 @@ func primaryKeyColumnPositions(tableDef *pbplan.TableDef) ([]int32, bool) {
 }
 
 func isCompositePrimaryKeyStorageColumnName(name string, components []string) bool {
+	for _, component := range components {
+		if len(component) == 0 {
+			return false
+		}
+	}
 	if strings.EqualFold(name, catalog.CPrimaryKeyColName) {
 		return true
 	}
 	var legacy strings.Builder
 	legacy.WriteString(catalog.PrefixPriColName)
 	for _, component := range components {
-		if len(component) == 0 || len(component) > 999 {
+		if len(component) > 999 {
 			return false
 		}
 		length := strconv.Itoa(len(component))
@@ -212,15 +217,6 @@ func tableColumnPosition(tableDef *pbplan.TableDef, name string) (int32, bool) {
 		indexedPos = pos
 		foundIndexed = true
 	}
-	if foundIndexed {
-		if indexedPos < 0 || int(indexedPos) >= len(tableDef.Cols) || tableDef.Cols[indexedPos] == nil ||
-			!strings.EqualFold(tableDef.Cols[indexedPos].Name, name) {
-			// Conflicting catalog views must not be repaired speculatively inside
-			// a correctness proof.
-			return 0, false
-		}
-		return indexedPos, true
-	}
 	foundPos := int32(0)
 	foundColumn := false
 	for pos, col := range tableDef.Cols {
@@ -231,6 +227,16 @@ func tableColumnPosition(tableDef *pbplan.TableDef, name string) (int32, bool) {
 			foundPos = int32(pos)
 			foundColumn = true
 		}
+	}
+	if foundIndexed {
+		if !foundColumn || indexedPos != foundPos {
+			// Conflicting catalog views must not be repaired speculatively inside
+			// a correctness proof. Scan the column list even when the name index
+			// resolves so a duplicate case-insensitive name cannot be hidden by a
+			// preferred map entry.
+			return 0, false
+		}
+		return indexedPos, true
 	}
 	return foundPos, foundColumn
 }
