@@ -2204,3 +2204,17 @@ select id, payload from target_explicit where payload = 'explicit-default';
 ➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
 42  ¦  explicit-default
 drop database ctas_auto_increment_24436;
+drop database if exists ctas_union_decimal_24436;
+create database ctas_union_decimal_24436;
+use ctas_union_decimal_24436;
+create table literal_union as select 1 as x union all select 2.5 as x;
+show create table literal_union;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+literal_union  ¦  CREATE TABLE `literal_union` (
+  `x` decimal(2,1) NOT NULL
+)
+select * from literal_union order by x;
+➤ x[3,2,1]  𝄀
+1.0  𝄀
+2.5
+drop database ctas_union_decimal_24436;
