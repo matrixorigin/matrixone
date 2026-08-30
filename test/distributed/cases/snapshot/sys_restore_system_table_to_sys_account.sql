@@ -117,8 +117,9 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 drop snapshot if exists sp_sp05;
 create snapshot sp_sp05 for account;
@@ -128,8 +129,9 @@ drop procedure test_if_hit_if;
 
 restore account sys{snapshot="sp_sp05"};
 
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 call test_if_hit_elseif_first_elseif();
 call test_if_hit_if();
 drop snapshot sp_sp05;
@@ -163,8 +165,9 @@ call test_if_hit_second_elseif();
 drop procedure if exists test_if_hit_else;
 create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 drop snapshot if exists sp_sp06;
 create snapshot sp_sp06 for account;
@@ -172,15 +175,17 @@ create snapshot sp_sp06 for account;
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 restore account sys{snapshot="sp_sp06"};
 
 call test_if_hit_else();
 call test_if_hit_second_elseif();
+-- @sortkey:1
 -- @ignore:0,9,10
-select * from mo_catalog.mo_stored_procedure;
+select * from mo_catalog.mo_stored_procedure order by name;
 
 drop snapshot sp_sp06;
 drop procedure test_if_hit_second_elseif;
