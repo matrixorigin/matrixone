@@ -1752,6 +1752,9 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 			DDLVisibilityBarrierReady:       info.DDLVisibilityBarrierReady,
 			DDLVisibilityDeployedProtocol:   info.DDLVisibilityDeployedProtocol,
+			DDLVisibilityActivationPrepared: info.DDLVisibilityActivationPrepared,
+			DDLVisibilityActivationFenced:   info.DDLVisibilityActivationFenced,
+			DDLVisibilityFrontier:           info.DDLVisibilityFrontier,
 			ViewMetadataIngressReady:        info.ViewMetadataIngressReady,
 		}
 		cd.CNStores = append(cd.CNStores, n)

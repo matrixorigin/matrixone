@@ -24,7 +24,9 @@ import (
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,8 +46,36 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 
 		t.Run("27743 automatic cross-CN DDL visibility", func(t *testing.T) {
 			const database = "issue_27743_automatic_ddl_visibility"
+			targets := cn0.ServiceID() + "," + cn1.ServiceID()
+			var activation string
+			require.NoError(t, db0.QueryRowContext(ctx,
+				"select mo_ctl('cn', 'SetProtocolVersion', ?)", targets+":41").Scan(&activation))
+			require.Contains(t, activation, cn0.ServiceID()+":41")
+			require.Contains(t, activation, cn1.ServiceID()+":41")
+			// SetProtocolVersion returns success only after both target RPCs report
+			// v41 and HAKeeper acknowledges the atomically committed v41 epoch.
+
 			resetIssue277xxDatabase(t, ctx, db0, database)
 			defer execSQLMaybe(t, ctx, db0, "drop database if exists `"+database+"`")
+
+			// Prove this public path actually executes SyncCommitV2: an injected
+			// receiver failure must make CREATE fail after v41 activation.
+			require.True(t, fault.Enable())
+			defer fault.Disable()
+			faultPointRemoved := false
+			defer func() {
+				if !faultPointRemoved {
+					_, _ = fault.RemoveFaultPoint(context.Background(), cnservice.DDLVisibilitySyncCommitFaultPoint)
+				}
+			}()
+			require.NoError(t, fault.AddFaultPoint(ctx,
+				cnservice.DDLVisibilitySyncCommitFaultPoint, "1:1::", "return", 0, "expected", false))
+			_, err := db0.ExecContext(ctx,
+				"create table `"+database+"`.`must_fail_sync` (id int primary key)")
+			require.ErrorContains(t, err, "injected DDL visibility sync commit error")
+			_, removeErr := fault.RemoveFaultPoint(ctx, cnservice.DDLVisibilitySyncCommitFaultPoint)
+			require.NoError(t, removeErr)
+			faultPointRemoved = true
 
 			// Do not issue SYNCCOMMIT or retry the read. The v41 DDL commit contract
 			// must make the first fresh CN1 snapshot observe CN0's CREATE TABLE.

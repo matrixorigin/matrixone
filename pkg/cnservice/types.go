@@ -809,6 +809,7 @@ type service struct {
 	ddlVisibilityListenersReady     atomic.Bool
 	ddlVisibilityRestoreIngress     atomic.Bool
 	ddlVisibilityBarrierMu          sync.Mutex
+	ddlVisibilityHeartbeatMu        sync.Mutex
 	ddlCommitGate                   *frontend.DDLCommitGate
 	viewMetadataGenerationRevoked   atomic.Bool
 	viewMetadataRevocationOnce      sync.Once

@@ -1,7 +1,7 @@
 # Cross-CN DDL Visibility Fence
 
 - Status: **Approved**
-- Revision: 1
+- Revision: 2
 - Approval: user approval recorded in the PR implementation session on 2026-08-30
 - Owning issue: #27743
 - Implementation PR: #27756
@@ -44,7 +44,8 @@ It is unsafe for any public or already-connected CN to commit DDL below v41 whil
 | Local deployed protocol | CN metadata file | durable local FS | This CN completed or provisionally entered a cut |
 | Cluster deployed epoch | HAKeeper CNState | replicated snapshot/log | Monotonic cluster-wide committed cut |
 | Admission generation/address | HAKeeper CNState | replicated snapshot/log | Identity of one CN incarnation |
-| Prepared/Fenced/Complete | CN service | process-local plus local marker | Progress of the active attempt |
+| Prepared/Fenced/Complete | CN service and HAKeeper CNState | heartbeat-replicated phase proof plus local marker | Progress bound to one authoritative CN incarnation |
+| Last committed DDL frontier | DDLCommitGate and HAKeeper CNState | monotonic process state replicated by heartbeat | Catalog frontier produced by that CN, excluding unrelated/no-op snapshot timestamps |
 | Public DDL gate | frontend `DDLCommitGate` | process-local | Whether new public/background DDL may enter |
 | Proxy ingress readiness | CN heartbeat/HAKeeper | replicated latest state | Whether new routed sessions may enter |
 
@@ -62,7 +63,7 @@ A CN is in one of these logical states:
 6. **Locally committed**: CN persisted `41`; only then may it republish ingress and unblock DDL.
 7. **Markerless post-cut**: no local marker but HAKeeper epoch is 41; runtime remains v41 and ingress/DDL remain closed until a complete retry.
 
-The cluster epoch commit is the linearization point. The commit heartbeat contains the exact target tuples. In one replicated transition HAKeeper updates the sender heartbeat, compares all eligible raw CNState members and receiver capability, and advances the epoch only on exact equality. A join before this transition invalidates the target set; a join after it observes epoch 41 and is rejected as ingress-ready.
+The cluster epoch commit is the linearization point. Prepared, Fenced, and the last committed DDL frontier are published through each incarnation's heartbeat. The commit heartbeat contains the exact target tuples. In one replicated transition HAKeeper updates the sender heartbeat, compares all eligible raw CNState members, exact generation/address, receiver capability, and that each current incarnation itself published Prepared and Fenced, then advances the epoch only on exact equality. A replacement cannot reuse an older incarnation's Fenced proof. A join before this transition invalidates the target set; a join after it observes epoch 41 and is rejected as ingress-ready.
 
 ## 5. End-to-end flow
 
@@ -72,9 +73,9 @@ The cluster epoch commit is the linearization point. The commit heartbeat contai
 2. Every CN runs v41-capable code but markerless CNs keep protocol baseline v40.
 3. `mo_ctl SetProtocolVersion` refreshes raw authoritative CN membership.
 4. The requested set must exactly match all eligible CN tuples and each target must advertise the v41 receiver/barrier capability.
-5. Targets concurrently withdraw ingress, block and drain DDL, enter Prepared, synchronize the maximum catalog frontier, and durably enter provisional Fenced.
-6. Each target confirms all exact targets are Fenced.
-7. HAKeeper atomically validates tuples and commits epoch 41.
+5. Targets concurrently withdraw ingress, block and drain DDL, then heartbeat Prepared together with their monotonic last committed DDL frontier.
+6. Each target reads the replicated HAKeeper phase/frontier inventory, applies every remote producer frontier, durably enters provisional Fenced, and heartbeats Fenced. This avoids cyclic QueryService control RPCs while every target is already serving a long-running activation RPC.
+7. Each target confirms all exact current incarnations are Fenced in HAKeeper; HAKeeper atomically revalidates those tuple-bound proofs and commits epoch 41.
 8. Each CN persists local committed 41, republishes ingress if listeners are live, and unblocks public DDL.
 
 ### Steady-state DDL
@@ -127,7 +128,7 @@ Proxy routing consumes HAKeeper admission/readiness and therefore excludes fail-
 
 Let `N` be eligible CN count.
 
-- Activation performs O(N) membership validation, phase RPCs, and frontier collection. It is an operator-triggered bounded transition, not a per-statement hot path. Target count is capped at 1024.
+- Activation performs O(N) membership validation and scans heartbeat-replicated phase/frontier state. It is an operator-triggered bounded transition, not a per-statement hot path. Target count is capped at 1024.
 - DDL commit fan-out is O(N) RPCs and O(N) response ownership. DDL is low frequency relative to DML; no unbounded queue or background worker is introduced.
 - Requests are bounded by existing discovery/RPC contexts. Target maps and response slices are released after each operation.
 - Expected added DDL latency is the slowest required CN frontier application plus network fan-out. Rollout acceptance should record N-CN p50/p95 for representative 3-CN and larger staging clusters; no latency claim is made without that evidence.

@@ -1037,6 +1037,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 				owner.rollbackTempTableTransaction(tempTxnKey)
 			}
 		}
+		if haveDDL && !commitTs.IsEmpty() && (err == nil || commitResultUnknown) {
+			recordDDLCommitFrontier(execCtx.ses.GetService(), commitTs)
+		}
 		if commitResultUnknown {
 			// ErrTxnUnknown is terminal for this frontend handle. The operator
 			// has already finalized its workspace non-destructively; retaining it

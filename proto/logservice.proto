@@ -22,6 +22,7 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 import "metadata.proto";
+import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
 option (gogoproto.sizer_all) = false;
@@ -67,6 +68,9 @@ message CNStore {
   // ViewMetadataIngressReady is retained for raw control-plane inventory.
   bool ViewMetadataIngressReady = 22;
   int64 DDLVisibilityDeployedProtocol = 23;
+  bool DDLVisibilityActivationPrepared = 24;
+  bool DDLVisibilityActivationFenced = 25;
+  timestamp.Timestamp DDLVisibilityFrontier = 26 [(gogoproto.nullable) = false];
 }
 
 message TNStore {
@@ -187,6 +191,9 @@ message CNStoreHeartbeat {
   // CN membership tuple set and commits DDLVisibilityDeployedProtocol.
   repeated DDLVisibilityActivationTarget DDLVisibilityEpochCommitTargets = 27
       [(gogoproto.nullable) = false];
+  bool DDLVisibilityActivationPrepared = 28;
+  bool DDLVisibilityActivationFenced = 29;
+  timestamp.Timestamp DDLVisibilityFrontier = 30 [(gogoproto.nullable) = false];
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -718,6 +725,9 @@ message CNStoreInfo {
   bool ViewMetadataIngressReady = 26;
   bool DDLVisibilityBarrierReady = 27;
   int64 DDLVisibilityDeployedProtocol = 28;
+  bool DDLVisibilityActivationPrepared = 29;
+  bool DDLVisibilityActivationFenced = 30;
+  timestamp.Timestamp DDLVisibilityFrontier = 31 [(gogoproto.nullable) = false];
 }
 
 // CNState contains all CN details known to the HAKeeper.

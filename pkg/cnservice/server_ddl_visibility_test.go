@@ -69,6 +69,10 @@ type ddlVisibilityTestCluster struct {
 	cnServices   []metadata.CNService
 	refreshCalls int
 	refreshHook  func()
+	phaseMu      sync.Mutex
+	phases       map[string]query.GetProtocolVersionResponse
+	frontiers    map[string]timestamp.Timestamp
+	phaseHook    func(string) query.GetProtocolVersionResponse
 }
 
 func (c *ddlVisibilityTestCluster) GetCNService(
@@ -141,6 +145,9 @@ func (c *ddlVisibilityTestQueryClient) SendMessage(
 	c.requests = append(c.requests, address)
 	c.methods = append(c.methods, req.CmdMethod)
 	if req.CmdMethod == query.CmdMethod_GetProtocolVersion {
+		if req.GetProtocolVersion == nil {
+			return nil, errors.New("missing GetProtocolVersion request payload")
+		}
 		if c.nilProtocol[address] {
 			return &query.Response{}, nil
 		}
@@ -193,11 +200,25 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) GetClusterDetails(
 		}},
 	}
 	if c.cluster != nil {
+		c.cluster.phaseMu.Lock()
+		defer c.cluster.phaseMu.Unlock()
 		for _, cn := range c.cluster.cnServices {
+			phase, ok := c.cluster.phases[cn.ServiceID]
+			if c.cluster.phaseHook != nil && len(c.cluster.phases) > 0 {
+				phase = c.cluster.phaseHook(cn.QueryAddress)
+				ok = true
+			}
+			if !ok {
+				phase.DDLVisibilityActivationPrepared = cn.DDLVisibilityBarrierReady
+				phase.DDLVisibilityActivationFenced = cn.DDLVisibilityBarrierReady
+			}
 			details.CNStores = append(details.CNStores, logservicepb.CNStore{
 				UUID: cn.ServiceID, QueryAddress: cn.QueryAddress,
 				ViewMetadataAdmissionGeneration: cn.ViewMetadataAdmissionGeneration,
 				DDLVisibilityBarrierReady:       cn.DDLVisibilityBarrierReady,
+				DDLVisibilityActivationPrepared: phase.DDLVisibilityActivationPrepared,
+				DDLVisibilityActivationFenced:   phase.DDLVisibilityActivationFenced,
+				DDLVisibilityFrontier:           c.cluster.frontiers[cn.ServiceID],
 			})
 		}
 	}
@@ -219,6 +240,22 @@ func (c *ddlVisibilityWithdrawalHAKeeperClient) SendCNHeartbeat(
 	}
 	if c.sendErr != nil {
 		return logservicepb.CommandBatch{}, c.sendErr
+	}
+	if c.cluster != nil {
+		c.cluster.phaseMu.Lock()
+		if c.cluster.phases == nil {
+			c.cluster.phases = make(map[string]query.GetProtocolVersionResponse)
+		}
+		c.cluster.phases[hb.UUID] = query.GetProtocolVersionResponse{
+			Version:                         hb.DDLVisibilityDeployedProtocol,
+			DDLVisibilityActivationPrepared: hb.DDLVisibilityActivationPrepared,
+			DDLVisibilityActivationFenced:   hb.DDLVisibilityActivationFenced,
+		}
+		if c.cluster.frontiers == nil {
+			c.cluster.frontiers = make(map[string]timestamp.Timestamp)
+		}
+		c.cluster.frontiers[hb.UUID] = hb.DDLVisibilityFrontier
+		c.cluster.phaseMu.Unlock()
 	}
 	for i := range c.cluster.cnServices {
 		cn := &c.cluster.cnServices[i]
@@ -370,7 +407,7 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 			ServiceID: "peer", QueryAddress: "peer:6001",
 			ViewMetadataAdmissionGeneration: 9, DDLVisibilityBarrierReady: true,
 		},
-	}}
+	}, frontiers: map[string]timestamp.Timestamp{"peer": targetTS}}
 	queryClient := &ddlVisibilityTestQueryClient{
 		serviceID: serviceID,
 		frontiers: map[string]timestamp.Timestamp{
@@ -411,9 +448,9 @@ func TestPrepareDDLVisibilityBarrier(t *testing.T) {
 	require.True(t, s.ddlVisibilityActivationComplete.Load())
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.Equal(t, 1, cluster.refreshCalls)
-	require.Equal(t, []string{"self:6001", "peer:6001"}, queryClient.requests)
-	require.Equal(t, []query.CmdMethod{query.CmdMethod_GetCommit, query.CmdMethod_GetCommit}, queryClient.methods)
-	require.Equal(t, 2, queryClient.releases)
+	require.Empty(t, queryClient.requests)
+	require.Empty(t, queryClient.methods)
+	require.Zero(t, queryClient.releases)
 	require.NoError(t, s.publishDDLVisibilityIngressAfterStart())
 	version, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.MOProtocolVersion)
 	require.True(t, ok)
@@ -605,9 +642,6 @@ func TestActivationDoesNotPublishFencedBeforeProvisionalPersistence(t *testing.T
 		frontiers: map[string]timestamp.Timestamp{"self:6001": {PhysicalTime: 100}},
 	}
 	txnClient := mock_frontend.NewMockTxnClient(gomock.NewController(t))
-	targetTS := timestamp.Timestamp{PhysicalTime: 100}
-	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS, nil)
-	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
 	baseFS := newDDLVisibilityMetadataFS(t)
 	metadataFS := &failReplaceMetadataFS{ReplaceableFileService: baseFS, failAt: 1}
 	cfg := &Config{UUID: serviceID}
@@ -650,8 +684,6 @@ func TestCommittedPersistenceFailureRestartsFromProvisionalFailClosed(t *testing
 		frontiers: map[string]timestamp.Timestamp{"self:6001": targetTS},
 	}
 	txnClient := mock_frontend.NewMockTxnClient(gomock.NewController(t))
-	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).Return(targetTS, nil)
-	txnClient.EXPECT().SyncLatestCommitTS(targetTS)
 	baseFS := newDDLVisibilityMetadataFS(t)
 	metadataFS := &failReplaceMetadataFS{ReplaceableFileService: baseFS, failAt: 2}
 	cfg := &Config{UUID: serviceID}
@@ -783,7 +815,7 @@ func TestDefaultV41StillRunsCompleteTargetActivation(t *testing.T) {
 		{ServiceID: "legacy-peer", QueryAddress: "peer:6001",
 			ViewMetadataAdmissionGeneration: 8, DDLVisibilityBarrierReady: false,
 			ViewMetadataIngressReady: true},
-	}}
+	}, frontiers: map[string]timestamp.Timestamp{"legacy-peer": targetTS}}
 	cluster.refreshHook = func() {
 		// The control plane dispatches activation concurrently. Model the legacy
 		// peer completing its local drain before this CN checks global phases.
@@ -826,7 +858,7 @@ func TestDefaultV41StillRunsCompleteTargetActivation(t *testing.T) {
 	require.Equal(t, defines.MORPCVersion41, s.loadDDLVisibilityDeployedProtocol())
 	require.True(t, s.viewMetadataIngressReady.Load())
 	require.True(t, s.ddlCommitGate.PublicDDLEnabled())
-	require.Contains(t, queryClient.requests, "peer:6001")
+	require.Empty(t, queryClient.requests)
 }
 
 func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
@@ -846,6 +878,7 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 			ViewMetadataAdmissionGeneration: 9, DDLVisibilityBarrierReady: true,
 		},
 	}}
+	cluster.frontiers = map[string]timestamp.Timestamp{"peer": targetTS}
 	var peerReady atomic.Bool
 	var protocolObserved atomic.Bool
 	firstProtocol := make(chan struct{})
@@ -867,6 +900,7 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 			}
 		},
 	}
+	cluster.phaseHook = queryClient.protocolFn
 	ctrl := gomock.NewController(t)
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), targetTS).DoAndReturn(
@@ -927,25 +961,18 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	require.True(t, ok)
 	require.Equal(t, defines.MORPCVersion41, version)
-	require.Equal(t, []string{
-		"peer:6001", "peer:6001", "self:6001", "peer:6001", "peer:6001",
-	}, queryClient.requests)
-	require.Equal(t, []query.CmdMethod{
-		query.CmdMethod_GetProtocolVersion,
-		query.CmdMethod_GetProtocolVersion,
-		query.CmdMethod_GetCommit,
-		query.CmdMethod_GetCommit,
-		query.CmdMethod_GetProtocolVersion,
-	}, queryClient.methods)
-	require.Equal(t, 5, queryClient.releases)
-	require.Len(t, hakeeperClient.heartbeats, 3)
-	require.True(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
+	require.Empty(t, queryClient.requests)
+	require.Empty(t, queryClient.methods)
+	require.Zero(t, queryClient.releases)
+	require.Len(t, hakeeperClient.heartbeats, 5)
 	require.False(t, hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
-	require.NotEmpty(t, hakeeperClient.heartbeats[1].DDLVisibilityEpochCommitTargets)
-	require.False(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
-	require.True(t, hakeeperClient.heartbeats[2].DDLVisibilityBarrierReady)
-	require.True(t, hakeeperClient.heartbeats[2].ViewMetadataIngressReady)
-	require.Equal(t, 5, cluster.refreshCalls)
+	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityActivationPrepared)
+	require.False(t, hakeeperClient.heartbeats[1].DDLVisibilityActivationFenced)
+	require.True(t, hakeeperClient.heartbeats[2].DDLVisibilityActivationFenced)
+	require.NotEmpty(t, hakeeperClient.heartbeats[3].DDLVisibilityEpochCommitTargets)
+	require.False(t, hakeeperClient.heartbeats[3].ViewMetadataIngressReady)
+	require.True(t, hakeeperClient.heartbeats[4].ViewMetadataIngressReady)
+	require.Equal(t, 2, cluster.refreshCalls)
 	require.True(t, s.ddlVisibilityBarrierReady.Load())
 	require.True(t, s.viewMetadataIngressReady.Load())
 
@@ -953,9 +980,9 @@ func TestHandleSetProtocolVersionFencesRunningCNActivation(t *testing.T) {
 	resp = &query.Response{}
 	require.NoError(t, s.handleSetProtocolVersion(context.Background(), req, resp, nil))
 	require.Equal(t, defines.MORPCVersion41, resp.SetProtocolVersion.Version)
-	require.Len(t, hakeeperClient.heartbeats, 3)
-	require.Equal(t, 5, cluster.refreshCalls)
-	require.Len(t, queryClient.requests, 5)
+	require.Len(t, hakeeperClient.heartbeats, 5)
+	require.Equal(t, 2, cluster.refreshCalls)
+	require.Empty(t, queryClient.requests)
 }
 
 func TestHandleSetProtocolVersionPreservesPreStartIngress(t *testing.T) {
@@ -1000,11 +1027,12 @@ func TestHandleSetProtocolVersionPreservesPreStartIngress(t *testing.T) {
 	require.Equal(t, defines.MORPCVersion41, resp.SetProtocolVersion.Version)
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.False(t, cluster.cnServices[0].ViewMetadataIngressReady)
-	require.Len(t, hakeeperClient.heartbeats, 3)
+	require.Len(t, hakeeperClient.heartbeats, 5)
 	require.False(t, hakeeperClient.heartbeats[0].ViewMetadataIngressReady)
-	require.NotEmpty(t, hakeeperClient.heartbeats[1].DDLVisibilityEpochCommitTargets)
-	require.False(t, hakeeperClient.heartbeats[1].ViewMetadataIngressReady)
-	require.False(t, hakeeperClient.heartbeats[2].ViewMetadataIngressReady)
+	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityActivationPrepared)
+	require.True(t, hakeeperClient.heartbeats[2].DDLVisibilityActivationFenced)
+	require.NotEmpty(t, hakeeperClient.heartbeats[3].DDLVisibilityEpochCommitTargets)
+	require.False(t, hakeeperClient.heartbeats[4].ViewMetadataIngressReady)
 	release, err := s.ddlCommitGate.Enter(context.Background())
 	require.NoError(t, err)
 	release()
@@ -1035,6 +1063,7 @@ func TestHandleSetProtocolVersionPreservesPreStartIngress(t *testing.T) {
 			DDLVisibilityActivationPrepared: true, DDLVisibilityActivationFenced: true,
 		}
 	}
+	cluster.phaseHook = queryClient.protocolFn
 	activationDone := make(chan error, 1)
 	go func() {
 		activationDone <- s.handleSetProtocolVersion(context.Background(), &query.Request{
@@ -1074,6 +1103,7 @@ func TestHandleSetProtocolVersionFailsClosedWhenActivationSyncFails(t *testing.T
 		{ServiceID: "peer", QueryAddress: "peer:6001", ViewMetadataAdmissionGeneration: 8,
 			DDLVisibilityBarrierReady: true},
 	}}
+	cluster.frontiers = map[string]timestamp.Timestamp{"peer": targetTS}
 	queryClient := &ddlVisibilityTestQueryClient{
 		serviceID: serviceID,
 		frontiers: map[string]timestamp.Timestamp{
@@ -1122,8 +1152,9 @@ func TestHandleSetProtocolVersionFailsClosedWhenActivationSyncFails(t *testing.T
 	cancelBlocked()
 	_, gateErr := s.ddlCommitGate.Enter(blockedCtx)
 	require.ErrorIs(t, gateErr, context.Canceled)
-	require.Len(t, hakeeperClient.heartbeats, 1)
+	require.Len(t, hakeeperClient.heartbeats, 2)
 	require.True(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
+	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityActivationPrepared)
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.True(t, cluster.cnServices[0].DDLVisibilityBarrierReady)
 }
@@ -1143,6 +1174,7 @@ func TestHandleSetProtocolVersionWithdrawsAfterActivationPublishFails(t *testing
 		{ServiceID: "peer", QueryAddress: "peer:6001", ViewMetadataAdmissionGeneration: 8,
 			DDLVisibilityBarrierReady: true},
 	}}
+	cluster.frontiers = map[string]timestamp.Timestamp{"peer": targetTS}
 	queryClient := &ddlVisibilityTestQueryClient{
 		serviceID: serviceID,
 		frontiers: map[string]timestamp.Timestamp{
@@ -1159,7 +1191,7 @@ func TestHandleSetProtocolVersionWithdrawsAfterActivationPublishFails(t *testing
 	cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
 	publishErr := errors.New("activation publication failed")
 	hakeeperClient := &ddlVisibilityWithdrawalHAKeeperClient{
-		cluster: cluster, sendErrors: map[int]error{3: publishErr},
+		cluster: cluster, sendErrors: map[int]error{5: publishErr},
 	}
 	s := &service{
 		cfg:                             cfg,
@@ -1191,14 +1223,16 @@ func TestHandleSetProtocolVersionWithdrawsAfterActivationPublishFails(t *testing
 	cancelBlocked()
 	_, gateErr := s.ddlCommitGate.Enter(blockedCtx)
 	require.ErrorIs(t, gateErr, context.Canceled)
-	require.Len(t, hakeeperClient.heartbeats, 4)
+	require.Len(t, hakeeperClient.heartbeats, 6)
 	require.True(t, hakeeperClient.heartbeats[0].DDLVisibilityBarrierReady)
-	require.NotEmpty(t, hakeeperClient.heartbeats[1].DDLVisibilityEpochCommitTargets)
-	require.True(t, hakeeperClient.heartbeats[2].ViewMetadataIngressReady)
-	require.False(t, hakeeperClient.heartbeats[3].ViewMetadataIngressReady)
+	require.True(t, hakeeperClient.heartbeats[1].DDLVisibilityActivationPrepared)
+	require.True(t, hakeeperClient.heartbeats[2].DDLVisibilityActivationFenced)
+	require.NotEmpty(t, hakeeperClient.heartbeats[3].DDLVisibilityEpochCommitTargets)
+	require.True(t, hakeeperClient.heartbeats[4].ViewMetadataIngressReady)
+	require.False(t, hakeeperClient.heartbeats[5].ViewMetadataIngressReady)
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.True(t, cluster.cnServices[0].DDLVisibilityBarrierReady)
-	require.Equal(t, 4, cluster.refreshCalls)
+	require.Equal(t, 2, cluster.refreshCalls)
 }
 
 func TestSetProtocolVersionBeforeBarrierPreparationDefersToStartupFence(t *testing.T) {
@@ -1346,10 +1380,11 @@ func TestSetProtocolVersionDowngradeGuards(t *testing.T) {
 
 func TestWaitForDDLVisibilityActivationPhaseRejectsInvalidInventory(t *testing.T) {
 	const serviceID = "activation-phase-inventory-test"
-	newService := func(cluster *ddlVisibilityTestCluster, queryClient *ddlVisibilityTestQueryClient) *service {
+	newService := func(cluster *ddlVisibilityTestCluster) *service {
 		cfg := &Config{UUID: serviceID}
 		cfg.HAKeeper.HeatbeatInterval.Duration = time.Millisecond
-		s := &service{cfg: cfg, moCluster: cluster, queryClient: queryClient}
+		s := &service{cfg: cfg, moCluster: cluster,
+			_hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster}}
 		s.ddlVisibilityActivationPrepared.Store(true)
 		s.ddlVisibilityActivationFenced.Store(true)
 		return s
@@ -1361,35 +1396,23 @@ func TestWaitForDDLVisibilityActivationPhaseRejectsInvalidInventory(t *testing.T
 			{ServiceID: serviceID, DDLVisibilityBarrierReady: true},
 			{ServiceID: "peer", DDLVisibilityBarrierReady: true},
 		}}
-		s := newService(cluster, &ddlVisibilityTestQueryClient{})
+		s := newService(cluster)
 		err := s.waitForDDLVisibilityActivationPhase(context.Background(), targets, false)
-		require.ErrorContains(t, err, "has no query address")
-	})
-
-	t.Run("protocol response is required", func(t *testing.T) {
-		cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{
-			{ServiceID: serviceID, QueryAddress: "self:6001", DDLVisibilityBarrierReady: true},
-			{ServiceID: "peer", QueryAddress: "peer:6001", ViewMetadataAdmissionGeneration: 8,
-				DDLVisibilityBarrierReady: true},
-		}}
-		s := newService(cluster, &ddlVisibilityTestQueryClient{
-			nilProtocol: map[string]bool{"peer:6001": true},
-		})
-		err := s.waitForDDLVisibilityActivationPhase(context.Background(), targets, false)
-		require.ErrorContains(t, err, "missing protocol activation response")
+		require.ErrorContains(t, err, "has no authoritative identity")
 	})
 
 	t.Run("target list must include every barrier participant", func(t *testing.T) {
 		cluster := &ddlVisibilityTestCluster{cnServices: []metadata.CNService{
-			{ServiceID: serviceID, DDLVisibilityBarrierReady: true},
-			{ServiceID: "peer", DDLVisibilityBarrierReady: true},
-			{ServiceID: "extra", DDLVisibilityBarrierReady: true},
+			{ServiceID: serviceID, QueryAddress: "self:6001", ViewMetadataAdmissionGeneration: 7,
+				DDLVisibilityBarrierReady: true},
+			{ServiceID: "peer", QueryAddress: "peer:6001", ViewMetadataAdmissionGeneration: 8,
+				DDLVisibilityBarrierReady: true},
+			{ServiceID: "extra", QueryAddress: "extra:6001", ViewMetadataAdmissionGeneration: 9,
+				DDLVisibilityBarrierReady: true},
 		}}
-		s := newService(cluster, &ddlVisibilityTestQueryClient{})
-		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-		defer cancel()
-		err := s.waitForDDLVisibilityActivationPhase(ctx, targets, false)
-		require.ErrorContains(t, err, "did not converge")
+		s := newService(cluster)
+		err := s.waitForDDLVisibilityActivationPhase(context.Background(), targets, false)
+		require.ErrorContains(t, err, "omits authoritative CN")
 	})
 }
 
@@ -1447,10 +1470,10 @@ func TestPeriodicHeartbeatCannotRepublishStaleIngressDuringActivation(t *testing
 	activationDone := make(chan struct{})
 	go func() {
 		close(activationStarted)
-		s.ddlVisibilityBarrierMu.Lock()
+		s.ddlVisibilityHeartbeatMu.Lock()
 		s.viewMetadataIngressReady.Store(false)
 		_, _ = client.SendCNHeartbeat(context.Background(), s.newCNStoreHeartbeat())
-		s.ddlVisibilityBarrierMu.Unlock()
+		s.ddlVisibilityHeartbeatMu.Unlock()
 		close(activationDone)
 	}()
 	<-activationStarted
@@ -1551,9 +1574,12 @@ func TestSyncStartupDDLVisibilityFrontierAllowsEmptyFrontier(t *testing.T) {
 		serviceID: serviceID,
 		frontiers: map[string]timestamp.Timestamp{"self:6001": {}},
 	}
-	s := &service{moCluster: cluster, queryClient: queryClient}
+	s := &service{
+		cfg: &Config{UUID: serviceID}, moCluster: cluster, queryClient: queryClient,
+		_hakeeperClient: &ddlVisibilityWithdrawalHAKeeperClient{cluster: cluster},
+	}
 
 	require.NoError(t, s.syncStartupDDLVisibilityFrontier(context.Background()))
-	require.Equal(t, []string{"self:6001"}, queryClient.requests)
-	require.Equal(t, 1, queryClient.releases)
+	require.Empty(t, queryClient.requests)
+	require.Zero(t, queryClient.releases)
 }

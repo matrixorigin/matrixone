@@ -41,6 +41,8 @@ func TestCNStateUpdate(t *testing.T) {
 		Role:                            metadata.CNRole_AP,
 		CommandDeliveryAckSupported:     true,
 		DDLVisibilityBarrierReady:       true,
+		DDLVisibilityActivationPrepared: true,
+		DDLVisibilityActivationFenced:   true,
 		DDLVisibilityDeployedProtocol:   38,
 		ViewMetadataAdmissionGeneration: 1,
 		ViewMetadataIngressReady:        true,
@@ -61,6 +63,8 @@ func TestCNStateUpdate(t *testing.T) {
 		UpTime:                          state.Stores[hb1.UUID].UpTime,
 		CommandDeliveryAckSupported:     true,
 		DDLVisibilityBarrierReady:       true,
+		DDLVisibilityActivationPrepared: true,
+		DDLVisibilityActivationFenced:   true,
 		DDLVisibilityDeployedProtocol:   38,
 		ViewMetadataAdmissionGeneration: 1,
 		ViewMetadataIngressReady:        true,
@@ -540,7 +544,8 @@ func TestCNStateAtomicallyRejectsEpochCommitAfterMarkerlessJoin(t *testing.T) {
 	state := NewCNState()
 	state.Update(CNStoreHeartbeat{
 		UUID: "target-cn", QueryAddress: "target:6001", ViewMetadataAdmissionGeneration: 1,
-		DDLVisibilityBarrierReady: true,
+		DDLVisibilityBarrierReady: true, DDLVisibilityActivationPrepared: true,
+		DDLVisibilityActivationFenced: true,
 	}, 1)
 	commitTargets := []DDLVisibilityActivationTarget{{
 		ServiceID: "target-cn", Generation: 1, QueryAddress: "target:6001",
@@ -560,6 +565,33 @@ func TestCNStateAtomicallyRejectsEpochCommitAfterMarkerlessJoin(t *testing.T) {
 
 	assert.Equal(t, int64(0), state.DDLVisibilityDeployedProtocol)
 	assert.True(t, state.Stores["joining-cn"].ViewMetadataIngressReady)
+}
+
+func TestCNStateAtomicallyRejectsEpochCommitFromUnfencedReplacement(t *testing.T) {
+	state := NewCNState()
+	state.Update(CNStoreHeartbeat{
+		UUID: "target-cn", QueryAddress: "old:6001", ViewMetadataAdmissionGeneration: 1,
+		DDLVisibilityBarrierReady: true, DDLVisibilityActivationPrepared: true,
+		DDLVisibilityActivationFenced: true,
+	}, 1)
+
+	// Replacement occurs after the old generation supplied Fenced. Even if the
+	// CN-side revalidation observes the new tuple, that tuple has no phase proof.
+	state.Update(CNStoreHeartbeat{
+		UUID: "target-cn", QueryAddress: "new:6001", ViewMetadataAdmissionGeneration: 2,
+		DDLVisibilityBarrierReady: true, ViewMetadataIngressReady: true,
+	}, 2)
+	state.Update(CNStoreHeartbeat{
+		UUID: "target-cn", QueryAddress: "new:6001", ViewMetadataAdmissionGeneration: 2,
+		DDLVisibilityBarrierReady: true, ViewMetadataIngressReady: true,
+		DDLVisibilityDeployedProtocol: 41,
+		DDLVisibilityEpochCommitTargets: []DDLVisibilityActivationTarget{{
+			ServiceID: "target-cn", Generation: 2, QueryAddress: "new:6001",
+		}},
+	}, 3)
+
+	assert.Equal(t, int64(0), state.DDLVisibilityDeployedProtocol)
+	assert.True(t, state.Stores["target-cn"].ViewMetadataIngressReady)
 }
 
 func TestCNStateRejectsMarkerlessIngressAfterCommittedDDLCut(t *testing.T) {

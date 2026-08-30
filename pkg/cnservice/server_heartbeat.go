@@ -212,6 +212,11 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
 		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
 		DDLVisibilityBarrierReady:       s.ddlVisibilityBarrierReady.Load(),
+		DDLVisibilityActivationPrepared: s.ddlVisibilityActivationPrepared.Load(),
+		DDLVisibilityActivationFenced:   s.ddlVisibilityActivationFenced.Load(),
+	}
+	if s.ddlCommitGate != nil {
+		hb.DDLVisibilityFrontier = s.ddlCommitGate.LatestDDLFrontier()
 	}
 	if deployed := s.loadDDLVisibilityDeployedProtocol(); deployed >= defines.MORPCVersion41 {
 		hb.DDLVisibilityDeployedProtocol = deployed
@@ -238,13 +243,13 @@ func (s *service) heartbeat(ctx context.Context) {
 	// Snapshot and send readiness under the same owner as startup, activation,
 	// and shutdown publication. Otherwise an older in-flight true heartbeat can
 	// arrive after activation has authoritatively published ingress=false.
-	s.ddlVisibilityBarrierMu.Lock()
+	s.ddlVisibilityHeartbeatMu.Lock()
 	hb := s.newCNStoreHeartbeat()
 	s.heartbeatInFlight.Store(true)
 	s.notifyCommandPoll()
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	s.heartbeatInFlight.Store(false)
-	s.ddlVisibilityBarrierMu.Unlock()
+	s.ddlVisibilityHeartbeatMu.Unlock()
 	if err != nil {
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()

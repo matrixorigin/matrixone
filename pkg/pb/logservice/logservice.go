@@ -171,6 +171,9 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.DDLVisibilityBarrierReady = hb.DDLVisibilityBarrierReady
 	storeInfo.DDLVisibilityDeployedProtocol = hb.DDLVisibilityDeployedProtocol
+	storeInfo.DDLVisibilityActivationPrepared = hb.DDLVisibilityActivationPrepared
+	storeInfo.DDLVisibilityActivationFenced = hb.DDLVisibilityActivationFenced
+	storeInfo.DDLVisibilityFrontier = hb.DDLVisibilityFrontier
 	s.Stores[hb.UUID] = storeInfo
 	if hb.DDLVisibilityDeployedProtocol > s.DDLVisibilityDeployedProtocol &&
 		len(hb.DDLVisibilityEpochCommitTargets) > 0 &&
@@ -198,7 +201,8 @@ func (s *CNState) matchesDDLVisibilityEpochCommitTargets(targets []DDLVisibility
 		seen++
 		target, ok := expected[serviceID]
 		if !ok || target.Generation != store.ViewMetadataAdmissionGeneration ||
-			target.QueryAddress != store.QueryAddress || !store.DDLVisibilityBarrierReady {
+			target.QueryAddress != store.QueryAddress || !store.DDLVisibilityBarrierReady ||
+			!store.DDLVisibilityActivationPrepared || !store.DDLVisibilityActivationFenced {
 			return false
 		}
 	}

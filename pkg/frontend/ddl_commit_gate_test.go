@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,6 +60,17 @@ func TestDDLCommitGateLinearizesBlockAndCommit(t *testing.T) {
 	}
 	gate.Unblock()
 	require.NoError(t, <-enterDone)
+}
+
+func TestDDLCommitGateTracksOnlyMonotonicDDLFrontier(t *testing.T) {
+	gate := NewDDLCommitGate()
+	older := timestamp.Timestamp{PhysicalTime: 100}
+	newer := timestamp.Timestamp{PhysicalTime: 200}
+
+	require.True(t, gate.LatestDDLFrontier().IsEmpty())
+	gate.RecordDDLFrontier(newer)
+	gate.RecordDDLFrontier(older)
+	require.Equal(t, newer, gate.LatestDDLFrontier())
 }
 
 func TestDDLCommitGateCancellationAndClose(t *testing.T) {

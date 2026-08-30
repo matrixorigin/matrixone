@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	"github.com/matrixorigin/matrixone/pkg/util/protoc"
@@ -196,6 +195,8 @@ func (s *service) withdrawDDLVisibilityBarrier() error {
 }
 
 func (s *service) withdrawDDLVisibilityBarrierLocked(ctx context.Context) error {
+	s.ddlVisibilityHeartbeatMu.Lock()
+	defer s.ddlVisibilityHeartbeatMu.Unlock()
 	s.viewMetadataIngressReady.Store(false)
 	s.ddlVisibilityBarrierReady.Store(false)
 	if s.viewMetadataAdmissionGeneration == 0 {
@@ -338,6 +339,9 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 	// acts as the distributed Prepared signal queried by every other target.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 	s.ddlVisibilityActivationPrepared.Store(true)
+	if err := s.publishDDLVisibilityActivationPhaseLocked(barrierCtx); err != nil {
+		return err
+	}
 	if err := s.waitForDDLVisibilityActivationPhase(
 		barrierCtx, activationTargets, false); err != nil {
 		return err
@@ -351,6 +355,9 @@ func (s *service) setProtocolVersion(ctx context.Context, version int64, targets
 		return err
 	}
 	s.ddlVisibilityActivationFenced.Store(true)
+	if err := s.publishDDLVisibilityActivationPhaseLocked(barrierCtx); err != nil {
+		return err
+	}
 	if err := s.waitForDDLVisibilityActivationPhase(
 		barrierCtx, activationTargets, true); err != nil {
 		return err
@@ -505,9 +512,12 @@ func validateDDLVisibilityActivationTargets(serviceID string, targets []string) 
 }
 
 func (s *service) setDDLVisibilityIngressLocked(ctx context.Context, ready bool) error {
+	s.ddlVisibilityHeartbeatMu.Lock()
 	s.ddlVisibilityBarrierReady.Store(true)
 	s.viewMetadataIngressReady.Store(ready)
-	if _, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat()); err != nil {
+	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	s.ddlVisibilityHeartbeatMu.Unlock()
+	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
 	return s.waitForDDLVisibilityIngress(
@@ -554,75 +564,55 @@ func (s *service) waitForDDLVisibilityIngress(
 	}
 }
 
+func (s *service) publishDDLVisibilityActivationPhaseLocked(ctx context.Context) error {
+	s.ddlVisibilityHeartbeatMu.Lock()
+	defer s.ddlVisibilityHeartbeatMu.Unlock()
+	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, s.newCNStoreHeartbeat())
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	return nil
+}
+
 func (s *service) waitForDDLVisibilityActivationPhase(
 	ctx context.Context,
 	targets map[string]struct{},
 	requireFenced bool,
 ) error {
-	refresher, ok := s.moCluster.(clusterservice.AuthoritativeRefresher)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx(
-			"CN cluster service does not support authoritative DDL visibility refresh")
+	if s._hakeeperClient == nil {
+		return moerr.NewInternalErrorNoCtx("HAKeeper client is unavailable during DDL visibility activation")
 	}
+	var lastErr error
 	for {
 		allReady := true
-		addresses := make(map[string]string, len(targets))
-		if err := refresher.Refresh(ctx); err != nil {
+		seen := make(map[string]struct{}, len(targets))
+		details, err := s._hakeeperClient.GetClusterDetails(ctx)
+		if err != nil {
+			lastErr = err
 			allReady = false
-		} else if err := clusterservice.GetCNServiceRawWithContext(
-			ctx,
-			s.moCluster,
-			clusterservice.NewSelector(),
-			func(cn metadata.CNService) bool {
-				if !cn.DDLVisibilityBarrierReady {
-					return true
+		} else {
+			for _, cn := range details.CNStores {
+				_, expected := targets[cn.UUID]
+				if cn.QueryAddress == "" || cn.ViewMetadataAdmissionGeneration == 0 {
+					if expected {
+						return moerr.NewInvalidStateNoCtxf(
+							"DDL visibility activation target %s has no authoritative identity", cn.UUID)
+					}
+					continue
 				}
-				if _, expected := targets[cn.ServiceID]; !expected {
-					allReady = false
-					return true
+				if !expected {
+					return moerr.NewInvalidStateNoCtxf(
+						"DDL visibility activation target set omits authoritative CN %s", cn.UUID)
 				}
-				addresses[cn.ServiceID] = cn.QueryAddress
-				return true
-			}); err != nil {
-			return err
-		}
-		if len(addresses) != len(targets) {
-			allReady = false
-		}
-		for serviceID := range targets {
-			if !allReady {
-				break
-			}
-			if serviceID == s.cfg.UUID {
-				if !s.ddlVisibilityActivationPrepared.Load() ||
-					(requireFenced && !s.ddlVisibilityActivationFenced.Load()) {
+				seen[cn.UUID] = struct{}{}
+				if !cn.DDLVisibilityActivationPrepared ||
+					(requireFenced && !cn.DDLVisibilityActivationFenced) {
 					allReady = false
 				}
-				continue
 			}
-			address := addresses[serviceID]
-			if address == "" {
-				return moerr.NewInternalErrorNoCtxf(
-					"DDL visibility activation target %s has no query address", serviceID)
-			}
-			req := s.queryClient.NewRequest(query.CmdMethod_GetProtocolVersion)
-			resp, err := s.queryClient.SendMessage(ctx, address, req)
-			if err != nil {
-				allReady = false
-				break
-			}
-			if resp == nil || resp.GetProtocolVersion == nil {
-				if resp != nil {
-					s.queryClient.Release(resp)
-				}
-				return moerr.NewInternalErrorNoCtxf(
-					"missing protocol activation response from CN %s", serviceID)
-			}
-			phase := resp.GetProtocolVersion
-			allReady = phase.Version >= defines.MORPCVersion41 &&
-				phase.DDLVisibilityActivationPrepared &&
-				(!requireFenced || phase.DDLVisibilityActivationFenced)
-			s.queryClient.Release(resp)
+		}
+		if len(seen) != len(targets) {
+			allReady = false
 		}
 		if allReady {
 			return nil
@@ -630,9 +620,10 @@ func (s *service) waitForDDLVisibilityActivationPhase(
 		if err := waitDDLVisibilityRetry(ctx, s.ddlVisibilityBarrierRetryInterval()); err != nil {
 			return moerr.NewInternalErrorf(
 				context.Background(),
-				"DDL visibility activation fenced=%t did not converge before deadline: %v",
+				"DDL visibility activation fenced=%t did not converge before deadline: %v (last error: %v)",
 				requireFenced,
-				err)
+				err,
+				lastErr)
 		}
 	}
 }
@@ -750,43 +741,24 @@ func (s *service) waitForDDLVisibilityBarrierPublication(
 }
 
 func (s *service) syncStartupDDLVisibilityFrontier(ctx context.Context) error {
-	addresses := make([]string, 0, 4)
-	err := clusterservice.GetCNServiceRawWithContext(
-		ctx,
-		s.moCluster,
-		clusterservice.NewSelector(),
-		func(cn metadata.CNService) bool {
-			if cn.DDLVisibilityBarrierReady {
-				addresses = append(addresses, cn.QueryAddress)
-			}
-			return true
-		})
-	if err != nil {
-		return err
+	if s._hakeeperClient == nil {
+		return moerr.NewInternalErrorNoCtx("HAKeeper client is unavailable during DDL visibility frontier sync")
 	}
-
+	details, err := s._hakeeperClient.GetClusterDetails(ctx)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
 	maxTS := timestamp.Timestamp{}
-	for _, address := range addresses {
-		if address == "" {
-			return moerr.NewInternalErrorNoCtx(
-				"barrier-ready CN has no query address during DDL visibility startup fence")
+	for _, cn := range details.CNStores {
+		if s.cfg != nil && cn.UUID == s.cfg.UUID {
+			// The drained producer already observes its own committed DDL. Waiting
+			// only on remote frontiers avoids depending on the control RPC that is
+			// currently executing on this CN.
+			continue
 		}
-		req := s.queryClient.NewRequest(query.CmdMethod_GetCommit)
-		resp, err := s.queryClient.SendMessage(ctx, address, req)
-		if err != nil {
-			return err
+		if cn.DDLVisibilityBarrierReady && maxTS.Less(cn.DDLVisibilityFrontier) {
+			maxTS = cn.DDLVisibilityFrontier
 		}
-		if resp == nil {
-			return moerr.NewInternalErrorf(ctx, "empty DDL frontier response from CN %s", address)
-		}
-		if resp.GetCommit == nil {
-			s.queryClient.Release(resp)
-			return moerr.NewInternalErrorf(ctx, "missing DDL frontier response from CN %s", address)
-		}
-		if maxTS.Less(resp.GetCommit.CurrentCommitTS) {
-			maxTS = resp.GetCommit.CurrentCommitTS
-		}
-		s.queryClient.Release(resp)
 	}
 	if maxTS.IsEmpty() {
 		return nil

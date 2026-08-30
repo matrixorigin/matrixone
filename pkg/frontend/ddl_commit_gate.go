@@ -17,9 +17,11 @@ package frontend
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 const DDLCommitGateRuntimeKey = "frontend.ddl-commit-gate"
@@ -30,12 +32,13 @@ const DDLCommitGateRuntimeKey = "frontend.ddl-commit-gate"
 // the gate blocked across RPC attempts; Close wakes blocked sessions during CN
 // shutdown.
 type DDLCommitGate struct {
-	mu        sync.Mutex
-	changed   chan struct{}
-	blocked   bool
-	closed    bool
-	publicDDL bool
-	active    int
+	mu          sync.Mutex
+	changed     chan struct{}
+	blocked     bool
+	closed      bool
+	publicDDL   bool
+	active      int
+	ddlFrontier atomic.Pointer[timestamp.Timestamp]
 	// enterBlockedHook is a deterministic test hook invoked after Enter observes
 	// a blocked gate and before it waits. Production leaves it nil.
 	enterBlockedHook func()
@@ -45,6 +48,29 @@ func NewDDLCommitGate() *DDLCommitGate {
 	return &DDLCommitGate{changed: make(chan struct{})}
 }
 
+func (g *DDLCommitGate) RecordDDLFrontier(ts timestamp.Timestamp) {
+	if ts.IsEmpty() {
+		return
+	}
+	candidate := ts
+	for {
+		current := g.ddlFrontier.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		if g.ddlFrontier.CompareAndSwap(current, &candidate) {
+			return
+		}
+	}
+}
+
+func (g *DDLCommitGate) LatestDDLFrontier() timestamp.Timestamp {
+	if current := g.ddlFrontier.Load(); current != nil {
+		return *current
+	}
+	return timestamp.Timestamp{}
+}
+
 func publicBackgroundDDLBarrierEnabled(serviceID string) bool {
 	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(DDLCommitGateRuntimeKey)
 	if !ok || value == nil {
@@ -52,6 +78,16 @@ func publicBackgroundDDLBarrierEnabled(serviceID string) bool {
 	}
 	gate, ok := value.(*DDLCommitGate)
 	return ok && gate.PublicDDLEnabled()
+}
+
+func recordDDLCommitFrontier(serviceID string, ts timestamp.Timestamp) {
+	value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(DDLCommitGateRuntimeKey)
+	if !ok || value == nil {
+		return
+	}
+	if gate, ok := value.(*DDLCommitGate); ok {
+		gate.RecordDDLFrontier(ts)
+	}
 }
 
 func enterDDLCommitGate(ctx context.Context, serviceID string) (func(), error) {

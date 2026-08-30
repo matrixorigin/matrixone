@@ -503,7 +503,15 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 	return nil
 }
 
+const DDLVisibilitySyncCommitFaultPoint = "ddl_visibility_sync_commit_error"
+
 func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if _, msg, injected := fault.TriggerFault(DDLVisibilitySyncCommitFaultPoint); injected {
+		if msg == "" {
+			msg = DDLVisibilitySyncCommitFaultPoint
+		}
+		return moerr.NewInternalErrorNoCtxf("injected DDL visibility sync commit error: %s", msg)
+	}
 	targetTS := req.SycnCommit.LatestCommitTS
 	if _, err := s._txnClient.WaitLogTailAppliedAt(ctx, targetTS); err != nil {
 		return err
