@@ -196,35 +196,47 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				return errs
 			}
 
-			require.NoError(t, execConn(conn1, "begin"))
-			require.NoError(t, execConn(conn1,
-				"data branch create table branch_quota_race.explicit_holder from branch_quota_race.src"))
-			// The explicit tenant transaction has already mutated owner catalogs but
-			// must not own the global lifecycle row between statements. A system
-			// owner writer therefore completes before the tenant chooses COMMIT.
-			snapshotDone := make(chan error, 1)
-			go func() {
-				_, snapshotErr := sysDB.ExecContext(execCtx,
-					"create snapshot issue_26087_holder_probe for account "+accountName)
-				snapshotDone <- snapshotErr
-			}()
-			select {
-			case snapshotErr := <-snapshotDone:
-				require.NoError(t, snapshotErr)
-			case <-time.After(5 * time.Second):
-				t.Fatal("system snapshot waited for the open tenant transaction")
+			terminalPaths := []struct {
+				name      string
+				statement string
+			}{
+				{name: "commit", statement: "commit"},
+				{name: "replacement_begin", statement: "begin"},
 			}
-			commitErr := execConn(conn1, "commit")
-			require.Error(t, commitErr,
-				"commit must validate and lose to the completed lifecycle writer")
-			require.NotContains(t, strings.ToLower(commitErr.Error()), "deadlock")
-			require.NotContains(t, strings.ToLower(commitErr.Error()), "lock wait timeout")
-			var explicitHolderCount int
-			require.NoError(t, conn1.QueryRowContext(execCtx,
-				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = 'explicit_holder'",
-			).Scan(&explicitHolderCount))
-			require.Zero(t, explicitHolderCount)
-			execSQLRequire(t, ctx, sysDB, "drop snapshot issue_26087_holder_probe")
+			for i, terminalPath := range terminalPaths {
+				tableName := fmt.Sprintf("explicit_holder_%d", i)
+				snapshotName := fmt.Sprintf("issue_26087_holder_probe_%d", i)
+				require.NoError(t, execConn(conn1, "begin"))
+				require.NoError(t, execConn(conn1,
+					"data branch create table branch_quota_race."+tableName+" from branch_quota_race.src"))
+				// The explicit tenant transaction has already mutated owner catalogs
+				// but must not own the global lifecycle row between statements. A
+				// system owner writer therefore completes before every reachable
+				// terminal commit path validates the tenant transaction.
+				snapshotDone := make(chan error, 1)
+				go func() {
+					_, snapshotErr := sysDB.ExecContext(execCtx,
+						"create snapshot "+snapshotName+" for account "+accountName)
+					snapshotDone <- snapshotErr
+				}()
+				select {
+				case snapshotErr := <-snapshotDone:
+					require.NoError(t, snapshotErr)
+				case <-time.After(5 * time.Second):
+					t.Fatalf("system snapshot waited for the open tenant transaction before %s", terminalPath.name)
+				}
+				terminalErr := execConn(conn1, terminalPath.statement)
+				require.Error(t, terminalErr,
+					"%s must validate and lose to the completed lifecycle writer", terminalPath.name)
+				require.NotContains(t, strings.ToLower(terminalErr.Error()), "deadlock")
+				require.NotContains(t, strings.ToLower(terminalErr.Error()), "lock wait timeout")
+				var explicitHolderCount int
+				require.NoError(t, conn1.QueryRowContext(execCtx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = '"+tableName+"'",
+				).Scan(&explicitHolderCount))
+				require.Zero(t, explicitHolderCount)
+				execSQLRequire(t, ctx, sysDB, "drop snapshot "+snapshotName)
+			}
 
 			createErrs := runConcurrent(
 				struct {

@@ -41,9 +41,10 @@ type lineagePublicationLockExec struct {
 }
 
 type lineageLifecycleCommitSQLExecutor struct {
-	sqls []string
-	opts []executor.Options
-	err  error
+	sqls       []string
+	opts       []executor.Options
+	err        error
+	beforeExec func()
 }
 
 func (e *lineageLifecycleCommitSQLExecutor) Exec(
@@ -51,6 +52,9 @@ func (e *lineageLifecycleCommitSQLExecutor) Exec(
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
+	if e.beforeExec != nil {
+		e.beforeExec()
+	}
 	e.sqls = append(e.sqls, sql)
 	e.opts = append(e.opts, opts)
 	return executor.Result{}, e.err

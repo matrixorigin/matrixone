@@ -769,27 +769,6 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	defer execCtx.ses.ExitFPrint(FPCommit)
 	var err error
 	th.mu.Lock()
-	shouldCommit := !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
-		th.inActiveTxnUnsafe() && needToFinishTransactionAtStatementEnd(execCtx) ||
-		execCtx.txnOpt.byCommit
-	validateLifecycle := shouldCommit && th.lineageOwnerLifecycleValidation
-	th.mu.Unlock()
-	if validateLifecycle {
-		err = validateDataBranchLineageOwnerLifecycleAtCommit(
-			execCtx.reqCtx, execCtx.ses, th.GetTxn(),
-		)
-		if err != nil {
-			// Commit-time lifecycle validation is terminal. Rolling back only the
-			// current statement would leave the explicit transaction and its
-			// catalog locks alive after COMMIT has already returned an error. Use
-			// the transaction cleanup context so request cancellation cannot skip
-			// releasing those locks.
-			execCtx.txnOpt.byRollback = true
-			rollbackErr := th.Rollback(execCtx)
-			return errors.Join(err, rollbackErr)
-		}
-	}
-	th.mu.Lock()
 	defer th.mu.Unlock()
 	/*
 		Commit Rules:
@@ -816,6 +795,27 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	}
 	//do nothing
 	return nil
+}
+
+// validateLineageOwnerLifecycleBeforeCommitUnsafe is the single terminal
+// admission point for explicit transactions that mutated data-branch owner
+// catalogs. Callers hold th.mu and proceed directly to the physical commit, so
+// a successful validation write remains in the same transaction and cannot be
+// separated from commit by another frontend operation.
+func (th *TxnHandler) validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx *ExecCtx) error {
+	if !th.lineageOwnerLifecycleValidation {
+		return nil
+	}
+	err := validateDataBranchLineageOwnerLifecycleAtCommit(
+		execCtx.reqCtx, execCtx.ses, th.txnOp,
+	)
+	if err == nil {
+		return nil
+	}
+	// Validation failure is terminal. Use the transaction cleanup context so
+	// request cancellation cannot leave the transaction or its catalog locks
+	// alive after any implicit or explicit commit path returns the error.
+	return errors.Join(err, th.rollbackUnsafe(execCtx, nil))
 }
 
 func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
@@ -892,6 +892,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 	execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommit)
 	defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommit)
+	if err := th.validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx); err != nil {
+		return err
+	}
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
