@@ -1,0 +1,74 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCTASAvgExactNumericMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "ordinary aggregate",
+			sql: `create table t_avg as select
+avg(n_nationkey) as avg_i,
+avg(cast(n_nationkey as decimal(20,6))) as avg_d,
+avg(cast(n_nationkey as double)) as avg_f
+from nation`,
+		},
+		{
+			name: "window aggregate",
+			sql: `create table t_avg_window as select
+avg(n_nationkey) over () as avg_i,
+avg(cast(n_nationkey as decimal(20,6))) over () as avg_d,
+avg(cast(n_nationkey as double)) over () as avg_f
+from nation`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+
+			var visible []*planpb.ColDef
+			for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+				if !col.Hidden {
+					visible = append(visible, col)
+				}
+			}
+			require.Len(t, visible, 3)
+			require.Equal(t, int32(types.T_decimal128), visible[0].Typ.Id)
+			require.Equal(t, int32(14), visible[0].Typ.Width)
+			require.Equal(t, int32(4), visible[0].Typ.Scale)
+			require.Equal(t, int32(types.T_decimal128), visible[1].Typ.Id)
+			require.Equal(t, int32(24), visible[1].Typ.Width)
+			require.Equal(t, int32(10), visible[1].Typ.Scale)
+			require.Equal(t, int32(types.T_float64), visible[2].Typ.Id)
+		})
+	}
+}

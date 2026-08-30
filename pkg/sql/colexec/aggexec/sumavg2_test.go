@@ -36,6 +36,92 @@ func buildDecimal256Vector(t *testing.T, mp *mpool.MPool, typ types.Type, nulls 
 	return vec
 }
 
+func buildAvgFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, values []T) *vector.Vector {
+	t.Helper()
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func TestAvgExactNumericReturnType(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input types.Type
+		want  types.Type
+	}{
+		{name: "tinyint", input: types.T_int8.ToType(), want: types.New(types.T_decimal128, 7, 4)},
+		{name: "tinyint unsigned", input: types.T_uint8.ToType(), want: types.New(types.T_decimal128, 7, 4)},
+		{name: "smallint", input: types.T_int16.ToType(), want: types.New(types.T_decimal128, 9, 4)},
+		{name: "smallint unsigned", input: types.T_uint16.ToType(), want: types.New(types.T_decimal128, 9, 4)},
+		{name: "int", input: types.T_int32.ToType(), want: types.New(types.T_decimal128, 14, 4)},
+		{name: "int unsigned", input: types.T_uint32.ToType(), want: types.New(types.T_decimal128, 14, 4)},
+		{name: "bigint", input: types.T_int64.ToType(), want: types.New(types.T_decimal128, 23, 4)},
+		{name: "bigint unsigned", input: types.T_uint64.ToType(), want: types.New(types.T_decimal128, 24, 4)},
+		{name: "year", input: types.T_year.ToType(), want: types.New(types.T_decimal128, 8, 4)},
+		{name: "decimal64", input: types.New(types.T_decimal64, 8, 2), want: types.New(types.T_decimal128, 12, 6)},
+		{name: "decimal128", input: types.New(types.T_decimal128, 20, 6), want: types.New(types.T_decimal128, 24, 10)},
+		{name: "decimal128 promotes to decimal256", input: types.New(types.T_decimal128, 38, 20), want: types.New(types.T_decimal256, 42, 24)},
+		{name: "double", input: types.T_float64.ToType(), want: types.T_float64.ToType()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, AvgReturnType([]types.Type{test.input}))
+		})
+	}
+}
+
+func TestAvgExactIntegerExecution(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	for _, test := range []struct {
+		name  string
+		typ   types.Type
+		input func(*testing.T, *mpool.MPool, types.Type) *vector.Vector
+	}{
+		{name: "int8", typ: types.T_int8.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []int8{1, 2, 4})
+		}},
+		{name: "int16", typ: types.T_int16.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []int16{1, 2, 4})
+		}},
+		{name: "int32", typ: types.T_int32.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []int32{1, 2, 4})
+		}},
+		{name: "uint8", typ: types.T_uint8.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []uint8{1, 2, 4})
+		}},
+		{name: "uint16", typ: types.T_uint16.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []uint16{1, 2, 4})
+		}},
+		{name: "uint32", typ: types.T_uint32.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []uint32{1, 2, 4})
+		}},
+		{name: "year", typ: types.T_year.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []types.MoYear{2001, 2002, 2004})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := test.input(t, mp, test.typ)
+			defer input.Free(mp)
+			exec := makeAvgExec(t, mp, test.typ)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.Equal(t, AvgReturnType([]types.Type{test.typ}), *results[0].GetType())
+
+			value := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
+			if test.typ.Oid == types.T_year {
+				require.Equal(t, "2002.3333", value.Format(results[0].GetType().Scale))
+			} else {
+				require.Equal(t, "2.3333", value.Format(results[0].GetType().Scale))
+			}
+		})
+	}
+}
+
 func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*vector.Vector, []*vector.Vector) {
 	nulls := []bool{false, false, false, false, true, false, false, false, false, true}
 	int8s := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -133,7 +219,11 @@ func (e *expectedResult) check(val any, scale int32) error {
 		}
 	case types.Decimal256:
 		resultFloat := types.Decimal256ToFloat64(val, scale)
-		if math.Abs(e.expected-resultFloat) > 1e-6 {
+		tolerance := 1e-6
+		if scale > 0 {
+			tolerance = math.Max(tolerance, math.Pow10(-int(scale)))
+		}
+		if math.Abs(e.expected-resultFloat) > tolerance {
 			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, resultFloat)
 		}
 	default:

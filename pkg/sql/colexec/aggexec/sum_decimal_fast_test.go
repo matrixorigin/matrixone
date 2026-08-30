@@ -703,7 +703,7 @@ func TestSumDecimal128Fast_AVG(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)
 
-	param := types.New(types.T_decimal128, 38, 2)
+	param := types.New(types.T_decimal128, 30, 2)
 
 	vec := vector.NewVec(param)
 	defer vec.Free(mp)
@@ -1002,8 +1002,14 @@ func TestSumDecimal128Fast_BulkFillPreservesBatchFillOverflowSemantics(t *testin
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			batch := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
-			bulk := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
+			var batch, bulk AggFuncExec
+			if tc.isSum {
+				batch = newSumDecimal128FastExec(mp, true, tc.aggID, false, param)
+				bulk = newSumDecimal128FastExec(mp, true, tc.aggID, false, param)
+			} else {
+				batch = makeSumAvgExec(mp, false, tc.aggID, false, param)
+				bulk = makeSumAvgExec(mp, false, tc.aggID, false, param)
+			}
 			defer batch.Free()
 			defer bulk.Free()
 
@@ -1023,7 +1029,7 @@ func TestSumDecimal128Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)
 
-	param := types.New(types.T_decimal128, 38, 2)
+	param := types.New(types.T_decimal128, 30, 2)
 	vec := vector.NewVec(param)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 100}, false, mp))
