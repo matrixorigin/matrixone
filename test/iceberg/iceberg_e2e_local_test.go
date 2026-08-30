@@ -805,6 +805,64 @@ func TestLocalE2EConcurrentCreateMappingAndDropCaseEarlyFailurePaths(t *testing.
 	}
 }
 
+func TestLocalE2EConcurrentCreateMappingAndDropCaseReleasesWorkersAfterCreateWaitFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+
+	mock.ExpectExec("CREATE ICEBERG CATALOG").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select catalog_id from mo_catalog\\.mo_iceberg_catalogs").
+		WillReturnRows(sqlmock.NewRows([]string{"catalog_id"}).AddRow(uint64(42)))
+	mock.ExpectExec("select enable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("select add_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectQuery("select trigger_fault_point").WillReturnError(errors.New("create waiter unavailable"))
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+	} {
+		mock.ExpectExec("select trigger_fault_point").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	for range []string{
+		icebergCreateAfterCatalogLockFault,
+		icebergDropBeforeCatalogLockFault,
+		icebergDropAfterCatalogLockFault,
+		icebergCreateAfterCatalogLockWaitersFault,
+		icebergDropBeforeCatalogLockWaitersFault,
+		icebergDropAfterCatalogLockWaitersFault,
+		icebergCreateAfterCatalogLockNotifyFault,
+		icebergDropBeforeCatalogLockNotifyFault,
+		icebergDropAfterCatalogLockNotifyFault,
+	} {
+		mock.ExpectExec("REMOVE_FAULT_POINT").WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("select disable_fault_injection").WillReturnResult(sqlmock.NewResult(0, 1))
+	expectAccessLifecycleCleanup(mock)
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).concurrentCreateMappingAndDropCase(context.Background())
+	if result.Status != "failed" || !strings.Contains(result.Error, "create waiter unavailable") {
+		t.Fatalf("expected create-wait failure after worker cleanup, got %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("workers or lifecycle cleanup were not released: %v", err)
+	}
+}
+
 func TestLocalE2EAccessLifecycleCaseCleansUpAfterRegisterFailure(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
