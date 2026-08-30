@@ -1694,14 +1694,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
 					paramPos < len(rule.numericPrefixParamPositions) && rule.numericPrefixParamPositions[paramPos] &&
 					paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos]
-				if disablePrefix && paramPos < len(rule.params) && rule.params[paramPos] != nil {
+				if disablePrefix && paramPos < len(rule.params) && paramPos < len(rule.paramValues) &&
+					rule.params[paramPos] != nil {
 					// NULLIF-style rewrites share one marker between comparison and
 					// return roles. The comparison consumes the numeric prefix, while
 					// the return occurrence must materialize the original SQL value.
 					rewrittenArg = DeepCopyExpr(rule.params[paramPos])
 					rewrittenArg.Typ = arg.Typ
-					returnType := types.T_varchar.ToType()
-					returnPlanType := makePlan2Type(&returnType)
+					returnPlanType := preparedRuntimeResultOccurrenceType(
+						rule.paramValues[paramPos], arg.Typ)
 					rewrittenArg.Typ = returnPlanType
 					sharedControlReturnType = &returnPlanType
 				} else {
@@ -2899,8 +2900,32 @@ func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int
 		return numericFunctionArgKeepsContext(name, argIndex, argCount)
 	case "sum", "avg", "min", "max", "any_value":
 		return argCount == 1 && argIndex == 0
+	case "first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":
+		return argCount > 0 && argIndex == 0
 	default: // greatest, least
 		return true
+	}
+}
+
+func preparedRuntimeResultOccurrenceType(value any, fallback plan.Type) plan.Type {
+	param, ok := value.(ParamValue)
+	if !ok {
+		return fallback
+	}
+	var source types.Type
+	switch {
+	case param.HasSourceType:
+		source = param.SourceType
+	case param.HasRuntimeType:
+		source = param.RuntimeType
+	default:
+		return fallback
+	}
+	switch source.Oid {
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		return makePlan2Type(&source)
+	default:
+		return fallback
 	}
 }
 

@@ -431,6 +431,11 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				{expression: "min(?)", expectedType: "DECIMAL"},
 				{expression: "max(?)", expectedType: "DECIMAL"},
 				{expression: "any_value(?)", expectedType: "DECIMAL"},
+				{expression: "first_value(?) over ()", expectedType: "DECIMAL"},
+				{expression: "last_value(?) over ()", expectedType: "DECIMAL"},
+				{expression: "lag(?, 0) over ()", expectedType: "DECIMAL"},
+				{expression: "lead(?, 0) over ()", expectedType: "DECIMAL"},
+				{expression: "nth_value(?, 1) over ()", expectedType: "DECIMAL"},
 				{expression: "case when 1 = 1 then ? else cast(1 as decimal(38,10)) end", expectedType: "DECIMAL"},
 				{expression: "if(1 = 1, ?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
 				{expression: "coalesce(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
@@ -467,6 +472,19 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.Equal(t, "VARCHAR", directType)
 			require.Equal(t, directType, preparedType)
 			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_string_result")
+
+			mustExec(t, ctx, conn, `prepare issue27088_nullif_binary_result from
+				'select nullif(?, cast(1 as decimal(38,10)))'`)
+			mustExec(t, ctx, conn, "set @issue27088_numeric_result = x'31322e357461696c'")
+			directValue, directType = readResult(
+				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
+			preparedValue, preparedType = readResult(
+				"execute issue27088_nullif_binary_result using @issue27088_numeric_result")
+			require.Equal(t, "12.5tail", directValue)
+			require.Equal(t, directValue, preparedValue)
+			require.Equal(t, "VARBINARY", directType)
+			require.Equal(t, directType, preparedType)
+			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_binary_result")
 		})
 
 		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {

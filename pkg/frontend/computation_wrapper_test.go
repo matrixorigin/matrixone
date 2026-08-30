@@ -379,6 +379,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: true, EnableNumericPrefix: true,
+		SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{
 		Value: "text", IsBin: false, EnableNumericPrefix: true,
@@ -2001,7 +2002,10 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		plan2.ParamValue{
 			Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
 		},
-		plan2.ParamValue{Value: "session-binary", IsBin: true, EnableNumericPrefix: true},
+		plan2.ParamValue{
+			Value: "session-binary", IsBin: true, EnableNumericPrefix: true,
+			SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+		},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
@@ -2016,6 +2020,11 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
 		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
+	binaryTextType := plan.Type{
+		Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary),
+	}
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"runtime_binary", "12.5tail", "", false, binaryTextType))
 
 	args := []*plan.Expr{
 		{
@@ -2024,6 +2033,10 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		},
 		{
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_text"}},
+		},
+		{
+			Typ:  binaryTextType,
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
 		},
 	}
 	params, paramVals, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
@@ -2041,6 +2054,11 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, textParam.HasSourceType,
 		"an unresolved execute argument must keep the existing text fallback")
+
+	binaryParam, ok := paramVals[2].(plan2.ParamValue)
+	require.True(t, ok)
+	require.True(t, binaryParam.HasSourceType)
+	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

@@ -4070,7 +4070,8 @@ func preparedExprContainsParam(expr *plan.Expr) bool {
 func preparedNumericResultPolymorphicFunction(name string) bool {
 	switch name {
 	case "case", "if", "coalesce", "ifnull", "nullif", "greatest", "least",
-		"sum", "avg", "min", "max", "any_value":
+		"sum", "avg", "min", "max", "any_value",
+		"first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":
 		return true
 	default:
 		return false
@@ -4087,8 +4088,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "max_by", "max_by_non_null",
-		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
+	case "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
 		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
@@ -5705,7 +5705,7 @@ func replaceParamValsWithSelection(
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
 			if param.HasSourceType && param.Value != nil {
-				sqlExecuteStringBackedParams[i] = param.SourceType.Oid.IsMySQLString()
+				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
 					ctx, param.Value, param.IsBin, param.SourceType)
 				if err != nil {

@@ -1455,6 +1455,11 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 		{name: "min", sql: "select min(?)", function: "min"},
 		{name: "max", sql: "select max(?)", function: "max"},
 		{name: "any_value", sql: "select any_value(?)", function: "any_value"},
+		{name: "first_value", sql: "select first_value(?) over ()", function: "first_value"},
+		{name: "last_value", sql: "select last_value(?) over ()", function: "last_value"},
+		{name: "lag", sql: "select lag(?) over ()", function: "lag"},
+		{name: "lead", sql: "select lead(?) over ()", function: "lead"},
+		{name: "nth_value", sql: "select nth_value(?, 1) over ()", function: "nth_value"},
 		{name: "case with explicit decimal peer", sql: "select case when 1 = 1 then ? else cast(1 as decimal(38,10)) end", function: "case"},
 		{name: "if with explicit decimal peer", sql: "select if(1 = 1, ?, cast(1 as decimal(38,10)))", function: "if"},
 		{name: "coalesce with explicit decimal peer", sql: "select coalesce(?, cast(1 as decimal(38,10)))", function: "coalesce"},
@@ -1471,6 +1476,15 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 			require.NoError(t, err)
 			require.True(t, specialized, prepared.GetDcl().GetPrepare().Plan.String())
 			result := findPlanFunctionExpr(filled, test.function)
+			if result == nil {
+				for _, node := range filled.GetQuery().Nodes {
+					for _, window := range node.WinSpecList {
+						if window.GetW().GetWindowFunc().GetF().GetFunc().GetObjName() == test.function {
+							result = window.GetW().GetWindowFunc()
+						}
+					}
+				}
+			}
 			require.NotNil(t, result, filled.String())
 			require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
 			if test.function == "sum" || test.function == "avg" || test.function == "min" ||
@@ -1479,6 +1493,21 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 			}
 		})
 	}
+
+	t.Run("nullif preserves varbinary result occurrence", func(t *testing.T) {
+		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_binary_nullif from 'select nullif(?, cast(1 as decimal(38,10)))'")
+		require.NoError(t, err)
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+			ctx, prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
+				Value: "12.5tail", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+				EnableNumericPrefix: true,
+			}})
+		require.NoError(t, err)
+		result := findPlanFunctionExpr(filled, "case")
+		require.NotNil(t, result)
+		require.Equal(t, int32(types.T_varbinary), result.Typ.Id, result.String())
+	})
 }
 
 func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {

@@ -2282,9 +2282,25 @@ func buildExecuteUserParams(
 			PrepareParamKind:    paramKinds[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if arg.Typ.Id != 0 {
-			paramValue.SourceType = types.New(
-				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		if paramIsBin[i] {
+			// User variables assigned from binary literals retain a binary SQL
+			// result domain even when the EXECUTE argument itself is untyped.
+			paramValue.SourceType = types.T_varbinary.ToType()
+			paramValue.HasSourceType = true
+		} else if arg.Typ.Id != 0 {
+			sourceOID := types.T(arg.Typ.Id)
+			if arg.Typ.Charset == uint32(types.CharsetBinary) {
+				switch sourceOID {
+				case types.T_char:
+					sourceOID = types.T_binary
+				case types.T_varchar:
+					sourceOID = types.T_varbinary
+				case types.T_text:
+					sourceOID = types.T_blob
+				}
+			}
+			paramValue.SourceType = types.NewWithCharset(
+				sourceOID, arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset))
 			paramValue.HasSourceType = true
 		}
 		paramVals[i] = paramValue
