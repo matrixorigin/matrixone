@@ -1510,3 +1510,19 @@ as select id, payload from source_ai;
 insert into target_explicit(payload) values ('explicit-default');
 select id, payload from target_explicit where payload = 'explicit-default';
 drop database ctas_auto_increment_24436;
+
+-- Unqualified DECIMAL uses MySQL's DECIMAL(10,0) default, and CTAS preserves it.
+drop database if exists ctas_default_decimal_24436;
+create database ctas_default_decimal_24436;
+use ctas_default_decimal_24436;
+create table src01 (col7 decimal);
+insert into src01 values (3232.000), (0.0001), (null);
+create table dst01 as select * from src01;
+show create table src01;
+show create table dst01;
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name in ('src01', 'dst01')
+  and column_name <> '__mo_fake_pk_col'
+order by table_name, ordinal_position;
+drop database ctas_default_decimal_24436;
