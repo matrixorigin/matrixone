@@ -1787,6 +1787,18 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		/* 	case types.T_uuid:
 		canInsert, num, err := setInsertValueUuid(proc, numVal) */
 	case types.T_time:
+		// Keep syntactically valid TIME literals outside MatrixOne's internal
+		// representation as text until the assignment cast executes. Parsing
+		// them here would turn a column-range violation into an unrelated
+		// invalid-input error before the statement's strict/IGNORE policy and
+		// warning sink are available.
+		if numVal.ValType == tree.P_char {
+			value := numVal.String()
+			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value); outOfRange {
+				expr := MakePlan2StringConstExprWithType(value)
+				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+			}
+		}
 		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
