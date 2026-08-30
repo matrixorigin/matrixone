@@ -328,21 +328,26 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 	leftCols := make([]*plan.Expr_Col, len(join.OnList))
 	rightColPos := make([]int32, len(join.OnList))
 	rightCols := make([]*plan.Expr_Col, len(join.OnList))
-	groupColsInAgg := make([]*plan.ColRef, len(join.OnList))
+	groupColsInAgg := make([]*plan.ColRef, len(agg.GroupBy))
 	seenGroupOutput := make(map[int32]struct{}, len(join.OnList))
+
+	for i, groupExpr := range agg.GroupBy {
+		groupCol := groupExpr.GetCol()
+		if groupCol == nil || groupCol.RelPos != leftScan.BindingTags[0] ||
+			groupCol.ColPos < 0 || int(groupCol.ColPos) >= len(leftScan.TableDef.Cols) ||
+			leftScan.TableDef.Cols[groupCol.ColPos] == nil ||
+			!sqlEqualityJoinUsesOneIdentityDomain(
+				groupExpr.Typ, leftScan.TableDef.Cols[groupCol.ColPos].Typ) {
+			return false
+		}
+		groupColsInAgg[i] = groupCol
+	}
 
 	for i := range join.OnList {
 		leftCol, rightCol := getJoinCondCol(join.OnList[i], agg.BindingTags[0], rightScan.BindingTags[0])
-		if leftCol == nil || !sqlEqualityJoinUsesOneIdentityDomain(
-			join.OnList[i].GetF().Args[0].Typ, join.OnList[i].GetF().Args[1].Typ) {
-			return false
-		}
-		groupColInAgg := agg.GroupBy[i].GetCol()
-		if groupColInAgg == nil || groupColInAgg.RelPos != leftScan.BindingTags[0] ||
-			groupColInAgg.ColPos < 0 || int(groupColInAgg.ColPos) >= len(leftScan.TableDef.Cols) ||
-			leftScan.TableDef.Cols[groupColInAgg.ColPos] == nil ||
-			!sqlEqualityJoinUsesOneIdentityDomain(
-				agg.GroupBy[i].Typ, leftScan.TableDef.Cols[groupColInAgg.ColPos].Typ) {
+		joinFn := join.OnList[i].GetF()
+		if leftCol == nil || rightCol == nil || joinFn == nil || !sqlEqualityJoinUsesOneIdentityDomain(
+			joinFn.Args[0].Typ, joinFn.Args[1].Typ) {
 			return false
 		}
 		groupOutput := leftCol.Col.ColPos
@@ -352,11 +357,19 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		if _, duplicate := seenGroupOutput[groupOutput]; duplicate {
 			return false
 		}
+		rightPos := rightCol.Col.ColPos
+		if rightPos < 0 || int(rightPos) >= len(rightScan.TableDef.Cols) ||
+			rightScan.TableDef.Cols[rightPos] == nil ||
+			!sqlEqualityJoinUsesOneIdentityDomain(
+				joinFn.Args[0].Typ, agg.GroupBy[groupOutput].Typ) ||
+			!sqlEqualityJoinUsesOneIdentityDomain(
+				joinFn.Args[1].Typ, rightScan.TableDef.Cols[rightPos].Typ) {
+			return false
+		}
 		seenGroupOutput[groupOutput] = struct{}{}
 		leftCols[i] = leftCol
 		rightCols[i] = rightCol
-		rightColPos[i] = rightCol.Col.ColPos
-		groupColsInAgg[i] = groupColInAgg
+		rightColPos[i] = rightPos
 	}
 	if !containsAllSQLEqualityCompatiblePKs(rightColPos, rightScan.TableDef) {
 		return false

@@ -419,6 +419,93 @@ func TestAggPullupRequiresGroupOutputBijection(t *testing.T) {
 	}
 }
 
+func TestAggPullupRequiresTypeMetadataToMatchReferencedColumns(t *testing.T) {
+	intType := pbplan.Type{Id: int32(types.T_int64), NotNullable: true}
+	uintType := pbplan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	tests := []struct {
+		name       string
+		configure  func(*pbplan.Node, *pbplan.Node, *pbplan.Node, *pbplan.Expr)
+		wantPullup bool
+	}{
+		{name: "consistent metadata control", wantPullup: true},
+		{
+			name: "join output type disagrees with aggregate output",
+			configure: func(_ *pbplan.Node, _ *pbplan.Node, right *pbplan.Node, cond *pbplan.Expr) {
+				cond.GetF().Args[0].Typ = uintType
+				cond.GetF().Args[1].Typ = uintType
+				right.TableDef.Cols[0].Typ = uintType
+			},
+		},
+		{
+			name: "join key type disagrees with right table column",
+			configure: func(left *pbplan.Node, agg *pbplan.Node, _ *pbplan.Node, cond *pbplan.Expr) {
+				left.TableDef.Cols[0].Typ = uintType
+				agg.GroupBy[0].Typ = uintType
+				cond.GetF().Args[0].Typ = uintType
+				cond.GetF().Args[1].Typ = uintType
+			},
+		},
+		{
+			name: "group expression type disagrees with left table column",
+			configure: func(_ *pbplan.Node, agg *pbplan.Node, right *pbplan.Node, cond *pbplan.Expr) {
+				agg.GroupBy[0].Typ = uintType
+				cond.GetF().Args[0].Typ = uintType
+				cond.GetF().Args[1].Typ = uintType
+				right.TableDef.Cols[0].Typ = uintType
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			leftTable := groupHashKeyTestTable("id", "id")
+			leftTable.Cols[0].Typ = intType
+			leftScan := &pbplan.Node{
+				NodeId: 0, NodeType: pbplan.Node_TABLE_SCAN, BindingTags: []int32{10},
+				TableDef: leftTable, Stats: &pbplan.Stats{Outcnt: 1},
+			}
+			agg := &pbplan.Node{
+				NodeId: 1, NodeType: pbplan.Node_AGG, Children: []int32{0},
+				BindingTags: []int32{20, 21},
+				GroupBy:     []*pbplan.Expr{GetColExpr(intType, 10, 0)},
+				Stats:       &pbplan.Stats{Outcnt: 1},
+			}
+			rightTable := groupHashKeyTestTable("id", "id")
+			rightTable.Cols[0].Typ = intType
+			rightScan := &pbplan.Node{
+				NodeId: 2, NodeType: pbplan.Node_TABLE_SCAN, BindingTags: []int32{30},
+				TableDef: rightTable, Stats: &pbplan.Stats{Outcnt: 1},
+			}
+			joinCondition := &pbplan.Expr{
+				Typ: pbplan.Type{Id: int32(types.T_bool), NotNullable: true},
+				Expr: &pbplan.Expr_F{F: &pbplan.Function{
+					Func: getFunctionObjRef(
+						function.EncodeOverloadID(int32(function.EQUAL), 0), "="),
+					Args: []*pbplan.Expr{
+						GetColExpr(intType, 20, 0),
+						GetColExpr(intType, 30, 0),
+					},
+				}},
+			}
+			join := &pbplan.Node{
+				NodeId: 3, NodeType: pbplan.Node_JOIN, JoinType: pbplan.Node_INNER,
+				Children: []int32{1, 2}, OnList: []*pbplan.Expr{joinCondition},
+				Stats: &pbplan.Stats{Outcnt: 1},
+			}
+			if test.configure != nil {
+				test.configure(leftScan, agg, rightScan, joinCondition)
+			}
+			builder := &QueryBuilder{qry: &pbplan.Query{
+				Nodes: []*pbplan.Node{leftScan, agg, rightScan, join},
+			}}
+
+			pulledUp := applyAggPullup(3, join, agg, leftScan, rightScan, builder)
+
+			require.Equal(t, test.wantPullup, pulledUp)
+		})
+	}
+}
+
 func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
 	for _, aggregate := range []string{"count", "sum"} {
 		t.Run(aggregate, func(t *testing.T) {

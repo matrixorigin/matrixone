@@ -137,7 +137,9 @@ For a group containing one row:
 - unsupported or mixed aggregate families reject the complete rewrite.
 
 The aggregate expression must also satisfy the planner IR contract: its encoded
-function ID must match its name, `COUNT`/`starcount` must return non-null INT64,
+function ID must match its name and a registered aggregate overload, and rebinding
+that overload over the recorded arguments must reproduce the complete declared
+result type, including nullability. `COUNT`/`starcount` must return non-null INT64,
 and `starcount` must retain the one safe argument used by the binder
 (`starcount(1)` for `COUNT(*)`, or the preserved non-null column). For every
 value-returning aggregate, the argument-to-result cast must be total over the
@@ -193,6 +195,12 @@ OFFSET and any rank/tie semantics.
   singleton grouping or join-side uniqueness, cause another grouping column to
   be omitted, or permit an otherwise bare result column. The same fallback
   applies to a VARCHAR PK with PAD SPACE or case-insensitive collation identity.
+  The proof also requires the redundant catalog views to agree: a simple key's
+  `Names` component must be its storage column, while a composite component list
+  must use either the current hidden composite storage identity or the recognized
+  encoded identity retained by upgraded catalogs. A missing/unknown storage
+  identity, case-varied fake-key marker, duplicate component, ambiguous column,
+  or conflicting name index is never repaired speculatively by an optimizer rule.
 - HashOnPK accepts only direct column equality. A cast or other wrapper can
   collapse storage-distinct values, so it cannot inherit the underlying PK
   proof. Both HashOnPK and aggregate pullup additionally require the two direct
@@ -204,7 +212,10 @@ OFFSET and any rank/tie semantics.
   checks the actual right-side join columns against the right-side PK positions;
   aggregate-output ordinals are not table-column ordinals and cannot be used as
   that proof. Its left aggregate outputs must also form a complete in-range
-  bijection to direct columns of the left scan.
+  bijection to direct columns of the left scan. The type recorded on each group
+  expression and join operand must remain in the same identity domain as the
+  concrete AGG output or table column it references; mutually consistent but
+  detached expression metadata cannot substitute for those schema types.
 - Truncation safety covers aggregate arguments, extra grouping expressions,
   HAVING/other Filter predicates on the demand path, and every scan `FilterList`
   predicate. This prevents LIMIT/OFFSET pushdown from skipping errors or
@@ -270,15 +281,16 @@ requires service-level evidence.
   CHAR pad-space and collated-VARCHAR fallback, SQL-equality-compatible HashOnPK and aggregate-pullup
   gates, direct-column and same-type-domain join proof, DATETIME/TIMESTAMP
   cross-domain fallback, mismatched left/right column ordinals, duplicate and
-  out-of-range aggregate-output pullup mappings,
-  ONLY_FULL_GROUP_BY dependency rejection, and malformed/duplicate PK metadata,
+  out-of-range aggregate-output pullup mappings, expression/schema type
+  disconnects, ONLY_FULL_GROUP_BY dependency rejection, statistics-shortcut
+  fallback to measured NDV, and malformed/duplicate/conflicting PK metadata,
   fallible and volatile expression plus WHERE/HAVING predicate fallback, Decimal256
   comparison scale-overflow and mixed JSON/BOOL counterexamples, resolved
   operator totality boundaries, pairwise Decimal256 BETWEEN scale closure,
   aggregate-free inactive ROLLUP/CUBE/GROUPING SETS branches, terminal/barrier/
   rollup Filter boundaries, safe comparison/boolean/range predicate controls,
-  aggregate name/encoded-ID/result-type contracts, and total result-cast
-  controls;
+  aggregate name/encoded-ID/registered-overload/full-result-type contracts, and
+  total result-cast controls;
 - exhaustive small-window LIMIT/OFFSET composition against sequential slice
   semantics, plus public nested-query plans, dynamic-expression fallback,
   overflow fallback and repeated-pass idempotence;

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,17 +24,33 @@ import (
 )
 
 func primaryKeyColumnPositions(tableDef *pbplan.TableDef) ([]int32, bool) {
-	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == "" ||
+		strings.EqualFold(tableDef.Pkey.PkeyColName, catalog.FakePrimaryKeyColName) {
 		return nil, false
 	}
 
 	pkNames := tableDef.Pkey.Names
 	if len(pkNames) == 0 {
 		// A hidden composite key does not reveal its user-visible components.
-		if tableDef.Pkey.PkeyColName == "" || tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		if strings.EqualFold(tableDef.Pkey.PkeyColName, catalog.CPrimaryKeyColName) ||
+			hasCaseInsensitivePrefix(tableDef.Pkey.PkeyColName, catalog.PrefixPriColName) ||
+			hasCaseInsensitivePrefix(tableDef.Pkey.PkeyColName, catalog.PrefixCBColName) {
 			return nil, false
 		}
 		pkNames = []string{tableDef.Pkey.PkeyColName}
+	} else if len(pkNames) == 1 {
+		// A simple primary key is stored in that same user-visible column.
+		// Conflicting redundant metadata must not let Names impersonate a key
+		// whose storage identity is described by PkeyColName.
+		if !strings.EqualFold(pkNames[0], tableDef.Pkey.PkeyColName) {
+			return nil, false
+		}
+	} else if !isCompositePrimaryKeyStorageColumnName(tableDef.Pkey.PkeyColName, pkNames) {
+		// Current catalogs use CPrimaryKeyColName; upgraded catalogs can retain
+		// the older encoded composite-key prefix. A user-visible component name
+		// or an unknown storage identity conflicts with the component list, so
+		// neither redundant view is safe to use as a proof.
+		return nil, false
 	}
 
 	positions := make([]int32, 0, len(pkNames))
@@ -51,6 +68,28 @@ func primaryKeyColumnPositions(tableDef *pbplan.TableDef) ([]int32, bool) {
 		positions = append(positions, pos)
 	}
 	return positions, len(positions) > 0
+}
+
+func isCompositePrimaryKeyStorageColumnName(name string, components []string) bool {
+	if strings.EqualFold(name, catalog.CPrimaryKeyColName) {
+		return true
+	}
+	var legacy strings.Builder
+	legacy.WriteString(catalog.PrefixPriColName)
+	for _, component := range components {
+		if len(component) == 0 || len(component) > 999 {
+			return false
+		}
+		length := strconv.Itoa(len(component))
+		legacy.WriteString(strings.Repeat("0", 3-len(length)))
+		legacy.WriteString(length)
+		legacy.WriteString(component)
+	}
+	return strings.EqualFold(name, legacy.String())
+}
+
+func hasCaseInsensitivePrefix(value, prefix string) bool {
+	return len(value) >= len(prefix) && strings.EqualFold(value[:len(prefix)], prefix)
 }
 
 // sqlEqualityCompatiblePrimaryKeyColumnPositions returns a primary key only

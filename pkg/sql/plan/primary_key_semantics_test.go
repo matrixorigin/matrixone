@@ -41,6 +41,102 @@ func TestPrimaryKeyColumnPositionsFailClosedOnMalformedMetadata(t *testing.T) {
 			wantValid: true,
 		},
 		{
+			name: "legacy simple key without names",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "ID", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id"},
+			},
+			want:      []int32{0},
+			wantValid: true,
+		},
+		{
+			name: "missing storage key identity",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}},
+			},
+		},
+		{
+			name: "case varied fake key",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: "__MO_FAKE_PK_COL",
+					Names:       []string{"id"},
+				},
+			},
+		},
+		{
+			name: "case varied hidden composite without components",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "__MO_CPKEY_COL", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: "__MO_CPKEY_COL",
+				},
+			},
+		},
+		{
+			name: "legacy hidden composite without components",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "__mo_cpkey_002id006tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: "__mo_cpkey_002id006tenant",
+				},
+			},
+		},
+		{
+			name: "simple key storage identity disagrees with names",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: "tenant",
+					Names:       []string{"id"},
+				},
+			},
+		},
+		{
+			name: "composite components without hidden storage identity",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: "id",
+					Names:       []string{"id", "tenant"},
+				},
+			},
+		},
+		{
+			name: "legacy encoded composite storage identity",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.PrefixPriColName + "002id006tenant",
+					Names:       []string{"id", "tenant"},
+				},
+			},
+			want:      []int32{0, 1},
+			wantValid: true,
+		},
+		{
+			name: "composite cluster by identity is not a primary key",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.PrefixCBColName + "002id006tenant",
+					Names:       []string{"id", "tenant"},
+				},
+			},
+		},
+		{
+			name: "legacy encoded components disagree with names",
+			table: &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "tenant", Typ: intType}},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.PrefixPriColName + "002id005wrong",
+					Names:       []string{"id", "tenant"},
+				},
+			},
+		},
+		{
 			name: "duplicate composite component",
 			table: &planpb.TableDef{
 				Cols:          []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "tenant", Typ: intType}},

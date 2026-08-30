@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -417,6 +418,7 @@ func TestSingleRowAggregateExprRequiresWellTypedReplacement(t *testing.T) {
 	optimizer := NewMockOptimizer(false)
 	builder := &QueryBuilder{compCtx: optimizer.CurrentContext()}
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	int32Type := planpb.Type{Id: int32(types.T_int32)}
 	varcharType := planpb.Type{Id: int32(types.T_varchar), Width: 8}
 	functionExpr := func(name string, resultType planpb.Type, args ...*planpb.Expr) *planpb.Expr {
 		functionID, ok := singleRowAggregateFunctionID(name)
@@ -463,6 +465,17 @@ func TestSingleRowAggregateExprRequiresWellTypedReplacement(t *testing.T) {
 	mismatchedID.GetF().Func.Obj = function.EncodeOverloadID(int32(function.COUNT), 0)
 	_, ok = builder.singleRowAggregateExpr(mismatchedID)
 	require.False(t, ok)
+	invalidOverload := functionExpr("min", int32Type, GetColExpr(int32Type, 1, 0))
+	invalidOverload.GetF().Func.Obj = function.EncodeOverloadID(int32(function.MIN), 1)
+	_, ok = builder.singleRowAggregateExpr(invalidOverload)
+	require.False(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr(
+		"min", int32Type, GetColExpr(int32Type, 1, 0)))
+	require.True(t, ok)
+	_, ok = builder.singleRowAggregateExpr(functionExpr(
+		"min", intType, GetColExpr(int32Type, 1, 0)))
+	require.False(t, ok,
+		"a total widening cast cannot legitimize a result type rejected by the registered aggregate")
 }
 
 func TestPredicateOperatorEvaluationTotality(t *testing.T) {
@@ -665,10 +678,12 @@ func TestPrimaryKeyGroupEliminationRequiresCompleteCompositeKey(t *testing.T) {
 	partsupp := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("tpch", "partsupp")]
 	require.NotNil(t, partsupp)
 	require.NotNil(t, partsupp.Pkey)
-	// The shared legacy mock has malformed composite-name padding. Repair only
-	// this optimizer instance so the rule is exercised against the same
-	// metadata shape emitted by a real catalog.
+	// The shared mock has malformed component padding and uses the composite
+	// cluster-by prefix for a primary key. Repair only this optimizer instance
+	// to the encoded composite-PK shape retained by upgraded catalogs.
 	partsupp.Pkey.Names = []string{"ps_partkey", "ps_suppkey"}
+	partsupp.Pkey.PkeyColName = catalog.PrefixPriColName + "010ps_partkey010ps_suppkey"
+	partsupp.Pkey.CompPkeyCol = MakeHiddenColDefByName(partsupp.Pkey.PkeyColName)
 
 	logical, err := runOneStmt(
 		optimizer,

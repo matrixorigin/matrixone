@@ -1124,8 +1124,24 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		return nil, false
 	}
 	expectedFunctionID, knownAggregate := singleRowAggregateFunctionID(fn.Func.ObjName)
-	actualFunctionID, _ := function.DecodeOverloadID(fn.Func.Obj)
-	if !knownAggregate || actualFunctionID != expectedFunctionID {
+	actualFunctionID, overloadIndex := function.DecodeOverloadID(fn.Func.Obj)
+	if !knownAggregate || actualFunctionID != expectedFunctionID || overloadIndex != 0 {
+		return nil, false
+	}
+	overload, registered := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !registered || !overload.IsAgg() {
+		return nil, false
+	}
+	rebound, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), fn.Func.ObjName, DeepCopyExprList(fn.Args))
+	if err != nil || rebound == nil || rebound.GetF() == nil ||
+		rebound.GetF().Func == nil || rebound.GetF().Func.Obj != fn.Func.Obj ||
+		!isSameColumnType(rebound.Typ, agg.Typ) ||
+		rebound.Typ.NotNullable != agg.Typ.NotNullable {
+		// Validate the complete registered aggregate contract, not only the
+		// function family. Otherwise a malformed overload index or a result type
+		// that happens to admit a total cast could turn an invalid Aggregate into
+		// a valid-looking Project and suppress the original failure.
 		return nil, false
 	}
 
