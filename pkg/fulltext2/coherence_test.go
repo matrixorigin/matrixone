@@ -43,12 +43,35 @@ func TestTableConfigRejectsTenantFromTVFJSON(t *testing.T) {
 }
 
 func TestGenerationLexicographicOrderCoversTailReset(t *testing.T) {
+	require.True(t, (Generation{}).IsZero())
+	require.False(t, (Generation{TailChunk: 1}).IsZero())
 	require.True(t, (Generation{BaseTimestamp: 9, TailChunk: -1}).AtLeast(
 		Generation{BaseTimestamp: 8, TailChunk: 1000}))
 	require.True(t, (Generation{BaseTimestamp: 9, TailChunk: 3}).AtLeast(
 		Generation{BaseTimestamp: 9, TailChunk: 2}))
 	require.False(t, (Generation{BaseTimestamp: 8, TailChunk: 1000}).AtLeast(
 		Generation{BaseTimestamp: 9, TailChunk: -1}))
+}
+
+func TestDropCacheIdentityClearsFenceState(t *testing.T) {
+	oldRegistry := localFences
+	oldCache := veccache.Cache
+	localFences = newFenceRegistry(8)
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() {
+		localFences = oldRegistry
+		veccache.Cache = oldCache
+	})
+
+	id := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
+	generation := Generation{BaseTimestamp: 1, TailChunk: 1}
+	claim, _, overflow := localFences.install(id, generation)
+	require.True(t, claim)
+	require.False(t, overflow)
+	require.True(t, localFences.finishClaim(id, generation))
+
+	DropCacheIdentity(id)
+	require.Zero(t, localFences.required(id))
 }
 
 func TestFenceRegistryMonotonicClaimAndOutOfOrder(t *testing.T) {

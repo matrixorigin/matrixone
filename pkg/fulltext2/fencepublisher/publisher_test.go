@@ -126,6 +126,17 @@ func TestCloseIsIdempotent(t *testing.T) {
 	p.Close()
 }
 
+func TestEnqueueIgnoresClosedPublisher(t *testing.T) {
+	p := testPublisher()
+	p.closed = true
+	p.Enqueue(testIdentity("closed"), fulltext2.Generation{BaseTimestamp: 1})
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	require.Empty(t, p.pending)
+	require.Empty(t, p.active)
+}
+
 func TestConcurrentBroadcastsShareRPCParallelBound(t *testing.T) {
 	p := testPublisher()
 	nodes := make([]metadata.CNService, rpcParallel+4)
