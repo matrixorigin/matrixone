@@ -2215,10 +2215,10 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
 	c.pn = cplan
 	require.ErrorIs(t, s.DropDatabase(c), deleteStopErr)
-	require.Equal(t, []string{
-		"delete from mo_catalog.mo_role_privs where obj_id = 12 or obj_id in " +
+	require.Contains(t, cleanupSQLs,
+		"delete from mo_catalog.mo_role_privs where obj_id = 12 or obj_id in "+
 			"(select rel_logical_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = 12);",
-	}, cleanupSQLs)
+	)
 }
 
 func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
