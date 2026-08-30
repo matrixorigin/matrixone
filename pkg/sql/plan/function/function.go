@@ -390,6 +390,19 @@ func ProducesNoNull(overloadID int64) bool {
 		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
 }
 
+// HasExecutableCTASTypeDefault reports whether the SQL type default is a valid
+// value for a materialized function result when an INSERT omits that column.
+// This contract is deliberately independent of ProducesNoNull: domain types
+// such as HLL sketches never return NULL, but their zero-value byte string is
+// not a valid encoded sketch.
+func HasExecutableCTASTypeDefault(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].hasExecutableCTASTypeDefault
+}
+
 type FuncGetResult struct {
 	fid        int32
 	overloadId int32
@@ -461,6 +474,10 @@ type FuncNew struct {
 
 	// function type.
 	class plan.Function_FuncFlag
+
+	// Whether the SQL type default is a valid executable default after CTAS
+	// materializes this function's result as a table column.
+	hasExecutableCTASTypeDefault bool
 
 	// All overloads of the function.
 	Overloads []overload
