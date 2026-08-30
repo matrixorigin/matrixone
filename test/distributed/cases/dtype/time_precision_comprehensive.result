@@ -79,10 +79,13 @@ Data truncation: Truncated incorrect time value: '25620477880000'
 INSERT INTO t_time_range VALUES (7, '-25620477880000');
 Data truncation: Truncated incorrect time value: '-25620477880000'
 SET SESSION sql_mode = '';
-INSERT INTO t_time_range VALUES (8, '25620477880000'), (9, '-25620477880000');
+INSERT INTO t_time_range VALUES (8, '25620477880000');
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1265  ¦  Data truncated for column 'time' at row 1
+INSERT INTO t_time_range VALUES (9, '-25620477880000');
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1265  ¦  Data truncated for column 'time' at row 1
 SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
 ➤ id[4,32,0]  ¦  t6[12,65535,0]  𝄀

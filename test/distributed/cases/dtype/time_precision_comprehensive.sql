@@ -112,9 +112,13 @@ INSERT INTO t_time_range VALUES (5, '-2562047788:00:00');
 -- coercion. Strict mode returns 1292 instead of range clipping it.
 INSERT INTO t_time_range VALUES (6, '25620477880000');
 INSERT INTO t_time_range VALUES (7, '-25620477880000');
--- Non-strict assignment stores zero and retains warning 1265 for each row.
+-- Non-strict assignment stores zero and retains warning 1265. Keep each
+-- statement separate: VALUES literals are cast independently by the insert
+-- executor, so each statement has its own row-numbering context.
 SET SESSION sql_mode = '';
-INSERT INTO t_time_range VALUES (8, '25620477880000'), (9, '-25620477880000');
+INSERT INTO t_time_range VALUES (8, '25620477880000');
+SHOW WARNINGS;
+INSERT INTO t_time_range VALUES (9, '-25620477880000');
 SHOW WARNINGS;
 SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
 SET SESSION sql_mode = @time_range_old_sql_mode;
