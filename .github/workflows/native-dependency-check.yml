@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/native-dependency-check.yml"
+      - ".github/workflows/sca-go-module-cache.yaml"
       - ".agents/skills/mo-dev/**"
       - ".dockerignore"
       - "Makefile"
@@ -11,12 +12,14 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/run_ut.sh"
       - "thirdparties/**"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/native-dependency-check.yml"
+      - ".github/workflows/sca-go-module-cache.yaml"
       - ".agents/skills/mo-dev/**"
       - ".dockerignore"
       - "Makefile"
@@ -24,6 +27,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/run_ut.sh"
       - "thirdparties/**"
   workflow_dispatch:
 

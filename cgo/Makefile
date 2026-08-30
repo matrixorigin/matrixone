@@ -94,6 +94,7 @@ test: $(TARGET_LIB)
 	$(MAKE) -C test
 
 debug: override OPT_LV := -O0
+debug: override CFLAGS := $(filter-out -O%,$(CFLAGS)) -O0
 debug: override DEBUG_OPT := debug
 debug: all
 

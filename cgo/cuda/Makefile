@@ -258,8 +258,8 @@ endif
 # hard-coded -O3 after the debug flags and produced an optimized "debug" object.
 CUDA_OPT_LEVEL := -O3
 ifeq ($(dbg),1)
-      NVCCFLAGS += -g -G
-      CUDA_OPT_LEVEL := -O0
+      override NVCCFLAGS := $(filter-out -O%,$(NVCCFLAGS)) -g -G
+      override CUDA_OPT_LEVEL := -O0
       BUILD_TYPE := debug
 else
       BUILD_TYPE := release

@@ -50,6 +50,14 @@ if [ "${FAIL_NATIVE_ARTIFACT_HASH:-}" = 1 ]; then
         fi
     done
 fi
+if [ "${FAIL_NATIVE_STATUS:-}" = 1 ]; then
+    for argument in "$@"; do
+        if [ "$argument" = status ]; then
+            echo "injected native Git status failure" >&2
+            exit 85
+        fi
+    done
+fi
 exec "$REAL_GIT" "$@"
 EOF
 chmod +x "$work/bin/git"
@@ -206,6 +214,22 @@ fi
 expect_action cpu release 0 reuse
 native begin "$repo" cpu release 0
 native record "$repo" cpu release 0
+
+# `local` is a non-reusability state, not evidence that an interrupted build
+# left objects untouched. A transient Git inspection failure can enter that
+# state in a normal checkout; recovery must clean CGo before any relink.
+local_action=$(FAIL_NATIVE_STATUS=1 native prepare "$repo" cpu release 0)
+if [ "$local_action" = local ]; then
+    echo "ok   a Git inspection failure enters the local-only generation"
+else
+    printf 'FAIL Git inspection failure expected local, got %s\n' "$local_action"
+    failures=$((failures + 1))
+fi
+native begin "$repo" cpu release 0
+expect_action cpu release 0 rebuild-cgo
+clean_cgo
+finish_build cpu release 0
+echo "ok   interrupted local-only state cannot reuse unknown CGo objects"
 
 printf 'corrupt stamp\n' >"$repo/cgo/.mo-native-provenance"
 expect_action cpu release 0 rebuild-all

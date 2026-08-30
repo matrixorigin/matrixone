@@ -217,6 +217,16 @@ else
     fail "CPU debug compilation contains -O0 and no -O3"
 fi
 
+cpu_debug_override=$(make -C "$repo_root/cgo" -Bn \
+    CFLAGS='-O3 -DPROFILE_A' debug 2>&1)
+if printf '%s\n' "$cpu_debug_override" | grep -q -- ' -O0 ' &&
+   printf '%s\n' "$cpu_debug_override" | grep -q -- ' -DPROFILE_A ' &&
+   ! printf '%s\n' "$cpu_debug_override" | grep -q -- ' -O3 '; then
+    pass "CPU debug semantics override conflicting custom optimization flags"
+else
+    fail "CPU debug semantics override conflicting custom optimization flags"
+fi
+
 set +e
 gpu_debug=$(make -C "$repo_root/cgo" -n MO_CL_CUDA=1 \
     CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 \
@@ -254,6 +264,32 @@ else
     fail "cuVS debug compilation contains -O0 and no -O3"
 fi
 
+# Command-line Make variables have higher precedence than ordinary
+# target-specific assignments. Debug must use `override` so a supported custom
+# profile cannot turn a generation stamped as debug back into optimized code.
+cuda_debug_override=$(make -C "$repo_root/cgo/cuda" -n \
+    HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
+    CUDA_OPT_LEVEL=-O3 NVCCFLAGS='-O3 -DPROFILE_A' cuda.o 2>&1)
+if printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O0 ' &&
+   printf '%s\n' "$cuda_debug_override" | grep -q -- ' -DPROFILE_A ' &&
+   ! printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O3 '; then
+    pass "CUDA debug semantics override a conflicting custom optimization level"
+else
+    fail "CUDA debug semantics override a conflicting custom optimization level"
+fi
+
+cuvs_debug_override=$(make -C "$repo_root/cgo/cuvs" -Bn \
+    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 \
+    NVCC_FLAGS='-O3 -DPROFILE_A' LDFLAGS='-O3 -DPROFILE_LINK' debug 2>&1)
+if printf '%s\n' "$cuvs_debug_override" | grep -q -- ' -O0 ' &&
+   printf '%s\n' "$cuvs_debug_override" | grep -q -- ' -DPROFILE_A ' &&
+   printf '%s\n' "$cuvs_debug_override" | grep -q -- ' -DPROFILE_LINK ' &&
+   ! printf '%s\n' "$cuvs_debug_override" | grep -q -- ' -O3 '; then
+    pass "cuVS debug semantics override conflicting custom optimization flags"
+else
+    fail "cuVS debug semantics override conflicting custom optimization flags"
+fi
+
 cuvs_profile=$(make -C "$repo_root/cgo/cuvs" -Bn \
     CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 \
     NVCC_FLAGS=-DPROFILE_A all 2>&1)
@@ -280,14 +316,19 @@ fi
 # thirdparty generation immediately before the top-level owner. That sequence
 # is intentionally discarded for correctness and would double native work.
 sca_workflow="$repo_root/.github/workflows/sca-go-module-cache.yaml"
+native_workflow="$repo_root/.github/workflows/native-dependency-check.yml"
 ut_runner="$repo_root/optools/run_ut.sh"
 if [ "$(grep -c '^[[:space:]]*make cgo$' "$sca_workflow")" -eq 1 ] &&
    ! grep -q '^[[:space:]]*make thirdparties$' "$sca_workflow" &&
    [ "$(grep -c '^[[:space:]]*make cgo$' "$ut_runner")" -eq 1 ] &&
-   ! grep -q '^[[:space:]]*make thirdparties$' "$ut_runner"; then
-    pass "repository CI consumers request one complete native generation"
+   ! grep -q '^[[:space:]]*make thirdparties$' "$ut_runner" &&
+   [ "$(grep -Fxc '      - ".github/workflows/sca-go-module-cache.yaml"' \
+       "$native_workflow")" -eq 2 ] &&
+   [ "$(grep -Fxc '      - "optools/run_ut.sh"' \
+       "$native_workflow")" -eq 2 ]; then
+    pass "repository CI consumers request and select one complete native generation"
 else
-    fail "repository CI consumers request one complete native generation"
+    fail "repository CI consumers request and select one complete native generation"
 fi
 
 if [ "$failures" -ne 0 ]; then

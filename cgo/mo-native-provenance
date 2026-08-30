@@ -417,9 +417,16 @@ case "$operation" in
             old_action=rebuild-all
         fi
         if [ -n "$old_action" ]; then
-            if [ "$old_action" = reuse ]; then
-                old_action=rebuild-cgo
-            fi
+            case "$old_action" in
+                reuse | local)
+                    # Neither action proves that a started generation left CGo
+                    # objects untouched. In particular, local may mean Git
+                    # inspection failed transiently and an untracked object was
+                    # compiled before interruption. Never let that unknown
+                    # generation participate in the next incremental relink.
+                    old_action=rebuild-cgo
+                    ;;
+            esac
             # Recovery requirements are monotonic. The old incomplete
             # generation can only strengthen the action diagnosed from current
             # source/artifact state; matching provenance never makes current
