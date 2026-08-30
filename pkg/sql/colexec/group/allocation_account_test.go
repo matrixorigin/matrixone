@@ -382,6 +382,44 @@ func finalizeGroupTestAllocation(
 	}
 }
 
+func TestAccountedFinalizedTopDrainReturnsAllGroupOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	const rows = aggexec.AggBatchSize + 1
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for i := range rows {
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[0], []byte(fmt.Sprintf("key-%05d", i)), false, mp))
+	}
+	input.SetRowCount(rows)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	group := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_varchar)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()},
+	)
+	group.AppendChild(child)
+	allocation := installGroupTestAllocation(t, group, proc, 128<<20)
+	require.NoError(t, vm.Prepare(group, proc))
+	consumer := &countingFinalBatchConsumer{}
+	_, attached := group.TryAttachFinalizedBatchConsumer(consumer)
+	require.True(t, attached)
+
+	result, err := vm.Exec(group, proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, rows, consumer.rows)
+	group.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, group, allocation)
+	child.Free(proc, false, nil)
+	group.Release()
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestResizeGroupScratchFailurePreservesOwnedAllocation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

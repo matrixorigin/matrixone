@@ -18,6 +18,7 @@ package aggexec
 // Eliminates interface boxing, type switches, and per-add overflow checks.
 
 import (
+	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -356,46 +357,67 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	} else {
 		for i := range vecs {
-			sumVec := exec.state[i].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
-			cntVec := exec.state[i].vecs[1]
-			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
-				return nil, err
+			vecs[i], retErr = exec.FinalizeChunk(context.Background(), i)
+			if retErr != nil {
+				return nil, retErr
 			}
-
-			if exec.isSum {
-				for j, cnt := range cnts {
-					if cnt == 0 {
-						sumVec.SetNull(uint64(j))
-					} else {
-						sumVec.UnsetNull(uint64(j))
-					}
-				}
-			} else {
-				for j, cnt := range cnts {
-					if cnt == 0 {
-						sumVec.SetNull(uint64(j))
-					} else {
-						avg, err := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType)
-						if err != nil {
-							return nil, err
-						}
-						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
-					}
-				}
-			}
-			cntVec.Free(exec.mp)
-			exec.state[i].vecs[1] = nil
-
-			sumVec.GetType().Scale = resultType.Scale
-			vecs[i] = sumVec
-			exec.state[i].vecs[0] = nil
-			exec.state[i].length = 0
-			exec.state[i].capacity = 0
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *sumDecimal64FastExec) FinalizeChunk(
+	ctx context.Context,
+	chunk int,
+) (*vector.Vector, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if exec.IsDistinct() {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"distinct decimal sum/avg does not support chunk finalization")
+	}
+	if chunk < 0 || chunk >= len(exec.state) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"aggregate chunk %d out of range", chunk)
+	}
+	sumVec := exec.state[chunk].vecs[0]
+	if sumVec == nil {
+		return nil, moerr.NewInvalidStateNoCtxf(
+			"aggregate chunk %d was already finalized", chunk)
+	}
+	sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
+	cntVec := exec.state[chunk].vecs[1]
+	cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+	if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+		return nil, err
+	}
+	for i, count := range cnts {
+		if err := checkChunkFinalizeContext(ctx, i); err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			sumVec.SetNull(uint64(i))
+		} else if exec.isSum {
+			sumVec.UnsetNull(uint64(i))
+		} else {
+			avg, err := decAvg[types.Decimal128](
+				sums[i], count,
+				exec.aggInfo.argTypes[0].Scale,
+				exec.aggInfo.retType)
+			if err != nil {
+				return nil, err
+			}
+			vector.SetFixedAtNoTypeCheck(sumVec, i, avg)
+		}
+	}
+	cntVec.Free(exec.mp)
+	exec.state[chunk].vecs[1] = nil
+	sumVec.GetType().Scale = exec.aggInfo.retType.Scale
+	exec.state[chunk].vecs[0] = nil
+	exec.state[chunk].length = 0
+	exec.state[chunk].capacity = 0
+	return sumVec, nil
 }
 
 // ---- Decimal128 SUM/AVG ----
@@ -723,44 +745,65 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	} else {
 		for i := range vecs {
-			sumVec := exec.state[i].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
-			cntVec := exec.state[i].vecs[1]
-			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
-				return nil, err
+			vecs[i], retErr = exec.FinalizeChunk(context.Background(), i)
+			if retErr != nil {
+				return nil, retErr
 			}
-
-			if exec.isSum {
-				for j, cnt := range cnts {
-					if cnt == 0 {
-						sumVec.SetNull(uint64(j))
-					} else {
-						sumVec.UnsetNull(uint64(j))
-					}
-				}
-			} else {
-				for j, cnt := range cnts {
-					if cnt == 0 {
-						sumVec.SetNull(uint64(j))
-					} else {
-						avg, err := decAvg[types.Decimal128](sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType)
-						if err != nil {
-							return nil, err
-						}
-						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
-					}
-				}
-			}
-			cntVec.Free(exec.mp)
-			exec.state[i].vecs[1] = nil
-
-			sumVec.GetType().Scale = resultType.Scale
-			vecs[i] = sumVec
-			exec.state[i].vecs[0] = nil
-			exec.state[i].length = 0
-			exec.state[i].capacity = 0
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *sumDecimal128FastExec) FinalizeChunk(
+	ctx context.Context,
+	chunk int,
+) (*vector.Vector, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if exec.IsDistinct() {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"distinct decimal sum/avg does not support chunk finalization")
+	}
+	if chunk < 0 || chunk >= len(exec.state) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"aggregate chunk %d out of range", chunk)
+	}
+	sumVec := exec.state[chunk].vecs[0]
+	if sumVec == nil {
+		return nil, moerr.NewInvalidStateNoCtxf(
+			"aggregate chunk %d was already finalized", chunk)
+	}
+	sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
+	cntVec := exec.state[chunk].vecs[1]
+	cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+	if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+		return nil, err
+	}
+	for i, count := range cnts {
+		if err := checkChunkFinalizeContext(ctx, i); err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			sumVec.SetNull(uint64(i))
+		} else if exec.isSum {
+			sumVec.UnsetNull(uint64(i))
+		} else {
+			avg, err := decAvg[types.Decimal128](
+				sums[i], count,
+				exec.aggInfo.argTypes[0].Scale,
+				exec.aggInfo.retType)
+			if err != nil {
+				return nil, err
+			}
+			vector.SetFixedAtNoTypeCheck(sumVec, i, avg)
+		}
+	}
+	cntVec.Free(exec.mp)
+	exec.state[chunk].vecs[1] = nil
+	sumVec.GetType().Scale = exec.aggInfo.retType.Scale
+	exec.state[chunk].vecs[0] = nil
+	exec.state[chunk].length = 0
+	exec.state[chunk].capacity = 0
+	return sumVec, nil
 }

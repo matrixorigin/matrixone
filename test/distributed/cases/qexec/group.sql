@@ -137,4 +137,31 @@ explain analyze select a, c, avg(d) d, avg(f) f from t group by a, c;
 explain analyze select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a;
 -- @bvt:issue
 
+-- grouped aggregate finalization into bounded TopK: supported aggregates,
+-- NULL ordering, offset, and HAVING fallback retain public SQL semantics.
+select a, count(*), sum(d), min(c), max(f)
+from t where a <= 20
+group by a
+order by sum(d) desc, a
+limit 5;
+
+select a, count(*), sum(d), min(c), max(f)
+from t where a <= 20
+group by a
+order by sum(d) desc, a
+limit 3 offset 2;
+
+select a, count(*), sum(d)
+from t where a <= 20
+group by a
+order by sum(d), a
+limit 4;
+
+select a, count(*), sum(d)
+from t where a <= 20
+group by a
+having count(*) > 1
+order by sum(d) desc, a
+limit 3;
+
 drop database qetest;

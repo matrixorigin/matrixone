@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -1117,6 +1118,14 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
+func TestGetFunctionByIdRejectsInvalidOverloadIndex(t *testing.T) {
+	invalid := EncodeOverloadID(ABS, 1<<30)
+	_, exists := GetFunctionByIdWithoutError(invalid)
+	require.False(t, exists)
+	_, err := GetFunctionById(context.Background(), invalid)
+	require.Error(t, err)
 }
 
 func TestProducesNoNullUsesFunctionContract(t *testing.T) {

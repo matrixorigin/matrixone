@@ -17,8 +17,10 @@ package top
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,7 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	groupop "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,6 +67,67 @@ func (shortTopSpillWriter) Write(value []byte) (int, error) {
 func (shortTopSpillWriter) Flush() error { return nil }
 
 func (shortTopSpillWriter) Free() {}
+
+type finalizedSourceMock struct {
+	*colexec.MockOperator
+	consumer colexec.FinalizedBatchConsumer
+	token    colexec.FinalizedBatchConsumerToken
+	next     colexec.FinalizedBatchConsumerToken
+}
+
+// transparentOperator preserves batches while intentionally hiding optional
+// child capabilities. It is the forced-unfused control for equivalence tests.
+type transparentOperator struct {
+	vm.OperatorBase
+}
+
+func (op *transparentOperator) GetOperatorBase() *vm.OperatorBase {
+	return &op.OperatorBase
+}
+
+func (op *transparentOperator) Prepare(*process.Process) error {
+	op.OpAnalyzer = process.NewAnalyzer(0, false, false, "transparent")
+	return nil
+}
+
+func (op *transparentOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	return vm.ChildrenCall(op.GetChildren(0), proc, op.OpAnalyzer)
+}
+
+func (*transparentOperator) ExecProjection(
+	_ *process.Process, input *batch.Batch,
+) (*batch.Batch, error) {
+	return input, nil
+}
+
+func (*transparentOperator) Reset(*process.Process, bool, error) {}
+func (*transparentOperator) Free(*process.Process, bool, error)  {}
+func (*transparentOperator) Release()                            {}
+func (*transparentOperator) OpType() vm.OpType                   { return vm.Mock }
+func (*transparentOperator) TypeName() string                    { return "transparent" }
+func (*transparentOperator) String(buf *bytes.Buffer)            { buf.WriteString("transparent") }
+
+func (source *finalizedSourceMock) TryAttachFinalizedBatchConsumer(
+	consumer colexec.FinalizedBatchConsumer,
+) (colexec.FinalizedBatchConsumerToken, bool) {
+	if consumer == nil || source.consumer != nil {
+		return 0, false
+	}
+	source.next++
+	source.consumer = consumer
+	source.token = source.next
+	return source.token, true
+}
+
+func (source *finalizedSourceMock) DetachFinalizedBatchConsumer(
+	token colexec.FinalizedBatchConsumerToken,
+) {
+	if token != source.token {
+		return
+	}
+	source.consumer = nil
+	source.token = 0
+}
 
 func newCancelOnDoneCheckContext(parent context.Context, checks int) *cancelOnDoneCheckContext {
 	return &cancelOnDoneCheckContext{
@@ -113,6 +179,94 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+func TestFinalizedSourceAttachmentLimitAndReuseLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	source := &finalizedSourceMock{MockOperator: colexec.NewMockOperator()}
+	top := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold),
+		Fs:    []*plan.OrderBySpec{{Expr: newExpression(0)}},
+	}
+	top.AppendChild(source)
+
+	require.NoError(t, top.Prepare(proc))
+	firstToken := top.finalizedToken
+	require.NotZero(t, firstToken)
+	require.Same(t, top, source.consumer)
+
+	top.Reset(proc, false, nil)
+	require.Nil(t, source.consumer)
+	require.NoError(t, top.Prepare(proc))
+	require.Greater(t, top.finalizedToken, firstToken)
+	// A delayed cleanup from the first generation cannot detach the second.
+	source.DetachFinalizedBatchConsumer(firstToken)
+	require.Same(t, top, source.consumer)
+	top.Free(proc, false, nil)
+	require.Nil(t, source.consumer)
+
+	large := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
+		Fs:    []*plan.OrderBySpec{{Expr: newExpression(0)}},
+	}
+	large.AppendChild(source)
+	require.NoError(t, large.Prepare(proc))
+	require.Nil(t, large.finalizedSource)
+	require.Nil(t, source.consumer)
+	large.Free(proc, false, nil)
+
+	randFn, err := function.GetFunctionByName(
+		context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatile := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(10),
+		Fs: []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     randFn.GetEncodedOverloadID(),
+					ObjName: "rand",
+				},
+			}},
+		}}},
+	}
+	volatile.AppendChild(source)
+	require.NoError(t, volatile.Prepare(proc))
+	require.Nil(t, volatile.finalizedSource)
+	require.Nil(t, source.consumer)
+	require.Equal(t, int64(1), volatile.OpAnalyzer.GetOpStats().ExtraStats["GroupTopKFallbackVolatileOrder"])
+	volatile.Free(proc, false, nil)
+
+	require.False(t, stableOrderExpression(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: -1, ObjName: "unknown"},
+		}},
+	}))
+	absFn, err := function.GetFunctionByName(
+		context.Background(), "abs", []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	require.True(t, stableOrderExpression(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj: absFn.GetEncodedOverloadID(), ObjName: "abs",
+			},
+			Args: []*plan.Expr{newExpression(0)},
+		}},
+	}))
+
+	zero := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(0),
+		Fs:    []*plan.OrderBySpec{{Expr: newExpression(0)}},
+	}
+	zero.AppendChild(source)
+	require.NoError(t, zero.Prepare(proc))
+	require.Nil(t, zero.finalizedSource)
+	require.Nil(t, source.consumer)
+	zero.Free(proc, false, nil)
+
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestTop(t *testing.T) {
 	for _, tc := range genTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
@@ -141,6 +295,283 @@ func TestTop(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestGroupedAggregateFinalizationFeedsTopInBoundedChunks(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	const rows = aggexec.AggBatchSize + 1
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	keys := make([]int32, rows)
+	values := make([]int32, rows)
+	for i := range keys {
+		keys[i] = int32(i)
+		values[i] = int32(i)
+	}
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], keys, nil, mp))
+	require.NoError(t, vector.AppendFixedList(input.Vecs[1], values, nil, mp))
+	input.SetRowCount(rows)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	group := groupop.NewArgument()
+	group.NeedEval = true
+	group.GroupBy = []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+	group.Aggs = []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfSum,
+			false,
+			[]*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+			}},
+			nil,
+		),
+	}
+	group.ProjectList = []*plan.Expr{
+		{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		},
+	}
+	group.AppendChild(child)
+
+	top := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(3),
+		Fs: []*plan.OrderBySpec{{
+			Expr: newExpression(0),
+			Flag: plan.OrderBySpec_DESC,
+		}},
+	}
+	top.AppendChild(group)
+
+	require.NoError(t, vm.Prepare(top, proc))
+	require.NotNil(t, top.finalizedSource)
+	result, err := vm.Exec(top, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 3, result.Batch.RowCount())
+	require.Equal(t, []int64{rows - 1, rows - 2, rows - 3},
+		vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+	extra := group.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1), extra["GroupTopKFusionEligible"])
+	require.Equal(t, int64(1), extra["GroupTopKFusionUsed"])
+	require.Equal(t, int64(2), extra["GroupTopKFinalizedChunks"])
+	require.Equal(t, int64(rows), extra["GroupTopKFinalizedRows"])
+	topExtra := top.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(2), topExtra["GroupTopKAdmissionChunks"])
+	require.Equal(t, int64(rows), topExtra["GroupTopKAdmissionRows"])
+	require.Positive(t, topExtra["GroupTopKAdmissionNanos"])
+
+	top.Free(proc, false, nil)
+	group.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	group.Release()
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupedDistinctWithoutAggregatesFeedsTop(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	const rows = aggexec.AggBatchSize + 1
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	keys := make([]int32, rows)
+	for i := range keys {
+		keys[i] = int32(i)
+	}
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], keys, nil, mp))
+	input.SetRowCount(rows)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	group := groupop.NewArgument()
+	group.NeedEval = true
+	group.GroupBy = []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+	group.AppendChild(child)
+	top := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(3),
+		Fs: []*plan.OrderBySpec{{
+			Expr: newExpression(0), Flag: plan.OrderBySpec_DESC,
+		}},
+	}
+	top.AppendChild(group)
+
+	require.NoError(t, vm.Prepare(top, proc))
+	require.NotNil(t, top.finalizedSource)
+	result, err := vm.Exec(top, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{rows - 1, rows - 2, rows - 3},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0]))
+
+	top.Free(proc, false, nil)
+	group.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	group.Release()
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupedAggregateTopAdmissionFailureCleansBothOwners(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for i := range 100 {
+		value := fmt.Sprintf("key-%03d-%s", i, strings.Repeat("x", 1024))
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[0], []byte(value), false, mp))
+	}
+	input.SetRowCount(100)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	group := groupop.NewArgument()
+	group.NeedEval = true
+	group.GroupBy = []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_varchar), NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+	group.Aggs = []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfCountStar, false,
+			[]*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_varchar), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}}, nil),
+	}
+	group.AppendChild(child)
+	top := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(10),
+		Fs:    []*plan.OrderBySpec{{Expr: newExpression(0)}},
+	}
+	top.AppendChild(group)
+	allocation := installTopTestAllocation(t, top, proc, 512)
+
+	require.NoError(t, vm.Prepare(top, proc))
+	require.NotNil(t, top.finalizedSource)
+	_, err := vm.Exec(top, proc)
+	require.Error(t, err)
+
+	top.Free(proc, true, err)
+	finalizeTopTestAllocation(t, top, allocation)
+	group.Free(proc, true, err)
+	child.Free(proc, true, err)
+	group.Release()
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupedAggregateTopFusedMatchesForcedUnfused(t *testing.T) {
+	run := func(fused bool) []byte {
+		mp := mpool.MustNewZero()
+		proc := testutil.NewProcessWithMPool(t, "", mp)
+		const rows = 257
+		input := batch.NewWithSize(3)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		keys := make([]int32, rows)
+		values := make([]int32, rows)
+		valueNulls := make([]bool, rows)
+		for i := range rows {
+			keys[i] = int32(i % 41)
+			values[i] = int32((i*13)%97 - 20)
+			valueNulls[i] = i%19 == 0
+			require.NoError(t, vector.AppendBytes(
+				input.Vecs[2], []byte(fmt.Sprintf("g-%02d-v-%03d", keys[i], i)),
+				i%23 == 0, mp))
+		}
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], keys, nil, mp))
+		require.NoError(t, vector.AppendFixedList(
+			input.Vecs[1], values, valueNulls, mp))
+		input.SetRowCount(rows)
+
+		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+		group := groupop.NewArgument()
+		group.NeedEval = true
+		group.GroupBy = []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}}
+		group.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfCountColumn, false,
+				[]*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+				}}, nil),
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfSum, false,
+				[]*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+				}}, nil),
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMin, false,
+				[]*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_varchar)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}},
+				}}, nil),
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMax, false,
+				[]*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+				}}, nil),
+		}
+		group.AppendChild(child)
+
+		top := &Top{
+			Limit: plan2.MakePlan2Uint64ConstExprWithType(10),
+			Fs: []*plan.OrderBySpec{
+				{Expr: newExpression(2), Flag: plan.OrderBySpec_DESC},
+				{Expr: newExpression(0)},
+			},
+		}
+		var transparent *transparentOperator
+		if fused {
+			top.AppendChild(group)
+		} else {
+			transparent = &transparentOperator{}
+			transparent.AppendChild(group)
+			top.AppendChild(transparent)
+		}
+		allocation := installTopTestAllocation(t, top, proc, 128<<20)
+
+		require.NoError(t, vm.Prepare(top, proc))
+		require.Equal(t, fused, top.finalizedSource != nil)
+		result, err := vm.Exec(top, proc)
+		require.NoError(t, err)
+		require.NotNil(t, result.Batch)
+		encoded, err := result.Batch.MarshalBinary()
+		require.NoError(t, err)
+
+		top.Free(proc, false, nil)
+		finalizeTopTestAllocation(t, top, allocation)
+		if transparent != nil {
+			transparent.Free(proc, false, nil)
+		}
+		group.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		group.Release()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+		return encoded
+	}
+
+	require.Equal(t, run(false), run(true))
 }
 
 func TestTopCopiesNullVarlenaRow(t *testing.T) {

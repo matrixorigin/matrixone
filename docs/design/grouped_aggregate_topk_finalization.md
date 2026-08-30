@@ -1,6 +1,6 @@
 # Grouped-aggregate finalization into bounded TopK
 
-- Status: in progress (design review passed; implementation must remain aligned)
+- Status: implemented (design review passed; validation evidence below)
 - Tracking issue: [matrixorigin/matrixone#27730](https://github.com/matrixorigin/matrixone/issues/27730)
 - Parent performance issue: [matrixorigin/matrixone#27685](https://github.com/matrixorigin/matrixone/issues/27685)
 - Design and implementation PR: [matrixorigin/matrixone#27850](https://github.com/matrixorigin/matrixone/pull/27850)
@@ -191,9 +191,15 @@ execution error.
 | Ordering expressions | Every Top ordering expression is non-volatile and non-real-time and consumes only the projected finalized batch, as already required by the physical Top. |
 | Downstream consumers | The physical child edge and operator tree establish one consumer. Shared materialized/CTE/fan-out paths have another operator boundary and cannot handshake. |
 | Limit | Runtime Top limit is non-zero and no greater than the existing in-memory bounded-Top threshold (16,384). Larger limits keep the existing Top/spill path. |
+| Runtime benefit | If finalization has no pending spilled partition and the complete resident result fits in one aggregate chunk, the attached source uses the ordinary pull path. It is already O(B), so fusion would add a callback without reducing peak output memory. |
 | Offset | Existing compilation may convert constant safe `LIMIT + OFFSET` to TopN only after checked addition and only within 16,384. Fusion sees that already-proved TopN. Other offset shapes retain order/offset/limit. |
 | SQL_CALC_FOUND_ROWS | Existing compilation does not create Top for this path, so it is unreachable. |
 | Expression/order semantics | Existing expression executors and Top comparator are reused; there is no simplified fusion evaluator. |
+
+Function expressions must resolve to a concrete built-in overload ID. Missing,
+unknown, or out-of-range overload metadata rejects fusion; it is never treated
+as stable merely because an unknown function name is absent from the volatile
+registry.
 
 The aggregate-executor capability must be queried from the constructed executor,
 not inferred from a function name alone. This prevents a newly added type-
@@ -210,6 +216,11 @@ chunk or Top candidate has been consumed, it disables the provisional path and
 returns batches through the unchanged pull path. Late fallback after one fused
 admission is forbidden. This two-stage rule makes capability drift a safe
 fallback instead of an execution error.
+
+The same before-first-admission rule applies to the runtime benefit gate. A
+single resident chunk with no spill state falls back. More than one resident
+chunk or any pending spill partition activates fusion; after the first
+admission, every later spill partition remains on the same fused consumer.
 
 ## 7. Interfaces and data flow
 
@@ -256,9 +267,11 @@ type FinalizedBatchConsumer interface {
     ConsumeFinalizedBatch(*process.Process, *batch.Batch) error
 }
 
+type FinalizedBatchConsumerToken uint64
+
 type FinalizedBatchSource interface {
-    TryAttachFinalizedBatchConsumer(FinalizedBatchConsumer) (token any, ok bool)
-    DetachFinalizedBatchConsumer(token any)
+    TryAttachFinalizedBatchConsumer(FinalizedBatchConsumer) (FinalizedBatchConsumerToken, bool)
+    DetachFinalizedBatchConsumer(FinalizedBatchConsumerToken)
 }
 ```
 
@@ -281,7 +294,7 @@ This ordering has four benefits:
 
 `Top.Reset` and `Top.Free` detach their exact token. Source Reset/Free also
 clears any attachment defensively. A second live attachment in the same source
-generation is rejected as an invariant error; it is not silently replaced.
+generation is rejected and never silently replaces the existing consumer.
 
 ### 7.3 Finalization loop
 
@@ -498,10 +511,11 @@ Eligible fused behavior is:
 
 The design reduces bytes crossing the child-return boundary and peak finalized
 vectors. It does not claim to avoid considering G candidates or eliminate the
-grouping hash/state. Low-cardinality overhead is one handshake and at most one
-extra direct call, but low-cardinality and large-T controls still require
-measurement. T above the cap falls back to remove uncertainty around interaction
-with Top spill and cases where most groups survive.
+grouping hash/state. Low-cardinality work with only one resident final chunk
+falls back after the handshake because its output is already bounded by B and a
+callback cannot improve that bound. T above the cap falls back to remove
+uncertainty around interaction with Top spill and cases where most groups
+survive.
 
 ## 12. Observability
 
@@ -519,9 +533,13 @@ Use bounded operator statistics, not logs per chunk or group:
 
 EXPLAIN keeps the existing operators. Analyze output may mark the Group and Top
 as one fused boundary while retaining their individual CPU/memory attribution.
-The source charges finalization/projection; Top charges comparison and retained
-candidate work. The callback does not fabricate child input rows; groups
-considered are reported explicitly by the fused-boundary counters.
+The callback executes inside Top's `ChildrenCall` frame, so the existing
+exclusive-time calculation attributes that synchronous wall interval to the
+source boundary. Dedicated bounded Top admission chunk/row/nanosecond counters
+make comparison/copy cost visible without double-counting ordinary operator
+time; Top retains its existing memory/allocation accounting. The callback does
+not fabricate child input rows; groups considered are reported explicitly by
+the fused-boundary counters.
 
 ## 13. Validation plan
 
@@ -582,6 +600,53 @@ Low-cardinality, large-K fallback, and unfused unsupported shapes must show no
 material regression. The implementation PR must state the measured threshold
 used for “material”; it may not infer success from wall time alone.
 
+### 13.4 Implementation evidence
+
+The implementation keeps the decisions above intact and adds deterministic
+evidence for:
+
+- per-chunk COUNT/SUM/MIN/MAX equivalence with ordinary Flush across the 8,192
+  row chunk boundary, including NULL and variable-width results;
+- cancellation before transfer, repeated/out-of-range finalization, and
+  partial-prefix cleanup;
+- exact fused versus forced-unfused Top output with COUNT/SUM/MIN/MAX,
+  variable-width MIN, NULLs, multiple order keys, and a complete tie-breaker;
+- deterministic embedded projection, zero-aggregate grouped DISTINCT,
+  generation-safe attach/detach reuse, and the 16,385 large-limit fallback;
+- MergeGroup's provisional handshake before concrete executor construction;
+- one persistent consumer across deterministic Group spill/reload;
+- terminal-zero Group and Top allocation accounts; and
+- SQL-visible COUNT/SUM/MIN/MAX, NULL ordering, offset, and HAVING fallback in
+  the existing qexec GROUP BY BVT.
+
+The focused same-binary benchmark reports wall time, allocations,
+`top-input-rows/op`, and `fused-finalized-bytes/op` for low-cardinality and
+8,193-group controls. The 10M-group reproduction remains an integration gate;
+it is intentionally not a unit-test fixture.
+
+### 13.5 Validation evidence (2026-08-30)
+
+- Full CGo owning-package suites passed for `pkg/sql/plan/function`,
+  `pkg/sql/colexec/aggexec`, `pkg/sql/colexec/group`, `pkg/sql/colexec/top`, and
+  `pkg/sql/compile` using `mo-cgo-test`.
+- The focused race suite passed for chunk equivalence/cancellation, ownership,
+  provisional fallback, spill/reload, generation reuse, exact fused/unfused
+  output, allocation failure, and malformed function metadata.
+- The same-binary benchmark used `-benchtime=100x -count=5`. The material-
+  regression threshold was 5% on median wall time or allocated bytes. For 128
+  groups, the direct edge selected the single-chunk fallback (128 ordinary Top
+  input rows, zero fused bytes), with 13.721 microseconds median versus 15.282
+  microseconds for the capability-hiding control and one fewer allocation. For
+  8,193 groups, fusion admitted two chunks directly (zero ordinary Top input
+  rows) with 259.778 microseconds median versus 260.372 microseconds, 17,833
+  versus 18,008 B/op, and 100 versus 99 allocs/op. Timing is treated only as a
+  no-regression control; the semantic result and bounded-boundary counters are
+  the primary proof.
+- The qexec GROUP BY BVT was extended, but was not run locally because no ready
+  test-owned MatrixOne instance was listening on port 6001. CI remains the
+  public SQL gate. The 10M-group #27685 reproduction remains an explicit
+  integration/performance gate rather than a UT.
+
 ## 14. Implementation sequence and review gates
 
 1. Add the optional chunk-finalizer contract and factor supported executors so
@@ -596,10 +661,10 @@ used for “material”; it may not infer success from wall time alone.
 5. Add the minimum public BVT and focused benchmarks. Run the 10M integration
    control only after deterministic correctness and ownership evidence passes.
 
-Implementation remains blocked until this design revision is approved. Any
-material deviation in ownership, supported shapes, activation threshold,
-wire/topology, or cleanup requires this document to be updated and the affected
-decision reviewed again.
+The design gate passed at revision `9c91e8ca3f`. Any material deviation in
+ownership, supported shapes, activation threshold, wire/topology, or cleanup
+still requires this document to be updated and the affected decision reviewed
+again.
 
 ## 15. Decision log
 

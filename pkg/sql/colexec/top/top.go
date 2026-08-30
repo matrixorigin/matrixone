@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -85,6 +87,7 @@ func growTopSlice[T any](
 }
 
 func (top *Top) Prepare(proc *process.Process) (err error) {
+	top.detachFinalizedSource()
 	if top.OpAnalyzer == nil {
 		top.OpAnalyzer = process.NewAnalyzer(top.GetIdx(), top.IsFirst, top.IsLast, "top")
 	} else {
@@ -155,7 +158,71 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		top.ctr.spilling = true
 	}
 
+	// Attachment is the last Prepare action: once the source can call back into
+	// Top, every fallible executor and allocation setup above is complete.
+	stableOrder := stableOrderExpressions(top.Fs)
+	if top.ctr.limit > 0 && top.ctr.limit <= topSpillThreshold &&
+		stableOrder && len(top.GetOperatorBase().Children) == 1 {
+		if source, ok := top.GetChildren(0).(colexec.FinalizedBatchSource); ok {
+			if token, attached := source.TryAttachFinalizedBatchConsumer(top); attached {
+				top.finalizedSource = source
+				top.finalizedToken = token
+			}
+		}
+	}
+	if top.ctr.limit > topSpillThreshold {
+		top.OpAnalyzer.GetOpStats().AddExtraStat(
+			"GroupTopKFallbackLargeLimit", 1)
+	} else if !stableOrder {
+		top.OpAnalyzer.GetOpStats().AddExtraStat(
+			"GroupTopKFallbackVolatileOrder", 1)
+	}
+
 	return nil
+}
+
+func stableOrderExpressions(orderBy []*plan.OrderBySpec) bool {
+	for _, spec := range orderBy {
+		if spec == nil || !stableOrderExpression(spec.Expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func stableOrderExpression(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if value.F == nil || !stableOrderFunction(value.F.Func) {
+			return false
+		}
+		for _, arg := range value.F.Args {
+			if !stableOrderExpression(arg) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		if value.List == nil {
+			return false
+		}
+		for _, arg := range value.List.List {
+			if !stableOrderExpression(arg) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func stableOrderFunction(ref *plan.ObjectRef) bool {
+	if ref == nil || ref.ObjName == "" {
+		return false
+	}
+	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
+	return exists && !overload.CannotFold() && !overload.IsRealTimeRelated()
 }
 
 func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
@@ -188,31 +255,12 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			//because ctr.build will change input batch(append new Vector)
-			if top.ctr.buildBat == nil {
-				top.ctr.n = len(bat.Vecs)
-				top.ctr.buildBat = batch.NewWithSize(top.ctr.n)
-			} else {
-				top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
-			}
-			top.ctr.buildBat.Recursive = bat.Recursive
-			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
-			top.ctr.buildBat.Attrs = bat.Attrs
-			if len(bat.ExtraBuf) > 0 {
-				return result, moerr.NewInternalError(proc.Ctx, "top build should not have extra buffers")
-			}
-			copy(top.ctr.buildBat.Vecs, bat.Vecs)
-			top.ctr.buildBat.SetRowCount(bat.RowCount())
-
-			err = top.ctr.build(top, top.ctr.buildBat, proc, analyzer)
+			err = top.consumeBatch(proc, bat)
 			if err != nil {
 				if _, canceled := vm.CancelCheck(proc); canceled {
 					return vm.CancelResult, err
 				}
 				return result, err
-			}
-			if top.TopValueTag > 0 && top.updateTopValueZM() {
-				message.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag}, proc.GetMessageBoard())
 			}
 		}
 	}
@@ -238,6 +286,61 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	panic("bug")
+}
+
+// ConsumeFinalizedBatch implements colexec.FinalizedBatchConsumer. The batch
+// is borrowed and synchronously copied into Top's retained winner storage.
+func (top *Top) ConsumeFinalizedBatch(
+	proc *process.Process,
+	bat *batch.Batch,
+) error {
+	if top.ctr.state != vm.Build {
+		return moerr.NewInvalidStateNoCtx(
+			"top received a finalized batch outside its build phase")
+	}
+	if bat == nil || bat.IsEmpty() {
+		return nil
+	}
+	started := time.Now()
+	err := top.consumeBatch(proc, bat)
+	stats := top.OpAnalyzer.GetOpStats()
+	stats.AddExtraStat("GroupTopKAdmissionChunks", 1)
+	stats.AddExtraStat("GroupTopKAdmissionRows", int64(bat.RowCount()))
+	stats.AddExtraStat(
+		"GroupTopKAdmissionNanos", time.Since(started).Nanoseconds())
+	return err
+}
+
+func (top *Top) consumeBatch(proc *process.Process, bat *batch.Batch) error {
+	// ctr.build appends expression vectors, so use a shallow mutable wrapper and
+	// leave the source-owned batch structurally unchanged.
+	if top.ctr.buildBat == nil {
+		top.ctr.n = len(bat.Vecs)
+		top.ctr.buildBat = batch.NewWithSize(top.ctr.n)
+	} else {
+		top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
+	}
+	top.ctr.buildBat.Recursive = bat.Recursive
+	top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
+	top.ctr.buildBat.Attrs = bat.Attrs
+	if len(bat.ExtraBuf) > 0 {
+		return moerr.NewInternalError(
+			proc.Ctx, "top build should not have extra buffers")
+	}
+	copy(top.ctr.buildBat.Vecs, bat.Vecs)
+	top.ctr.buildBat.SetRowCount(bat.RowCount())
+
+	if err := top.ctr.build(
+		top, top.ctr.buildBat, proc, top.OpAnalyzer); err != nil {
+		return err
+	}
+	if top.TopValueTag > 0 && top.updateTopValueZM() {
+		message.SendMessage(message.TopValueMessage{
+			TopValueZM: top.ctr.topValueZM,
+			Tag:        top.TopValueTag,
+		}, proc.GetMessageBoard())
+	}
+	return nil
 }
 
 func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {

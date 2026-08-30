@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"context"
 	"fmt"
 	io "io"
 
@@ -191,6 +192,46 @@ type AggFuncExec interface {
 
 	// Free clean the resource and reuse the aggregation if possible.
 	Free()
+}
+
+// ChunkFinalizer is an optional final-result contract for grouped aggregates.
+// A successful call moves exactly one result chunk to the caller. The executor
+// must clear its ownership of that chunk so Free can safely clean an arbitrary
+// unfinalized suffix after cancellation or an error.
+//
+// Group deliberately discovers this capability from the concrete executor.
+// Unsupported aggregate families retain the ordinary all-chunks Flush path.
+type ChunkFinalizer interface {
+	FinalizeChunk(context.Context, int) (*vector.Vector, error)
+}
+
+// SupportsChunkFinalization reports the concrete capability used by the
+// Group-to-Top finalization handshake.
+func SupportsChunkFinalization(exec AggFuncExec) bool {
+	_, ok := exec.(ChunkFinalizer)
+	return ok
+}
+
+// FinalizeChunk invokes the optional chunk contract without exposing concrete
+// aggregate implementations to Group.
+func FinalizeChunk(
+	ctx context.Context,
+	exec AggFuncExec,
+	chunk int,
+) (*vector.Vector, error) {
+	finalizer, ok := exec.(ChunkFinalizer)
+	if !ok {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"aggregate does not support chunk finalization")
+	}
+	return finalizer.FinalizeChunk(ctx, chunk)
+}
+
+func checkChunkFinalizeContext(ctx context.Context, row int) error {
+	if row&255 == 0 {
+		return context.Cause(ctx)
+	}
+	return nil
 }
 
 // sourcePreservingMerger is implemented only by aggregate executors whose

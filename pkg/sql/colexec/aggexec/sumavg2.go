@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -638,46 +639,63 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	} else {
 		for i := range vecs {
-			sumVec := exec.state[i].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
-
-			// transfer sumVec
-			vecs[i] = sumVec
-			exec.state[i].vecs[0] = nil
-
-			if !exec.isSum {
-				// hack: avgs will reuse sums slice, float64 and int64 are the same size.
-				avgs := util.UnsafeSliceCast[float64](sums)
-				cntVec := exec.state[i].vecs[1]
-				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-				if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
-					return nil, err
-				}
-				for j, cnt := range cnts {
-					if cnt == 0 {
-						sumVec.SetNull(uint64(j))
-					} else {
-						avg := float64(sums[j]) / float64(cnt)
-						avgs[j] = avg
-					}
-				}
-				// free cntVec
-				cntVec.Free(exec.mp)
-				exec.state[i].vecs[1] = nil
+			vecs[i], retErr = exec.FinalizeChunk(context.Background(), i)
+			if retErr != nil {
+				return nil, retErr
 			}
-
-			// Fix result type.   note that for avg, the result type is
-			// float64, for any int/uint type, the sum type is int64/uint64.
-			// they are different types but SAME SIZE.   Let's just fix the
-			// result type and be happy.
-			*sumVec.GetType() = resultType
-
-			// done transfer,
-			exec.state[i].length = 0
-			exec.state[i].capacity = 0
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *sumAvgExec[T, A]) FinalizeChunk(
+	ctx context.Context,
+	chunk int,
+) (*vector.Vector, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if exec.IsDistinct() {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"distinct sum/avg does not support chunk finalization")
+	}
+	if chunk < 0 || chunk >= len(exec.state) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"aggregate chunk %d out of range", chunk)
+	}
+	sumVec := exec.state[chunk].vecs[0]
+	if sumVec == nil {
+		return nil, moerr.NewInvalidStateNoCtxf(
+			"aggregate chunk %d was already finalized", chunk)
+	}
+	if !exec.isSum {
+		sums := vector.MustFixedColNoTypeCheck[T](sumVec)
+		// AVG reuses the sum storage because float64 and the integer sum
+		// states have the same width.
+		avgs := util.UnsafeSliceCast[float64](sums)
+		cntVec := exec.state[chunk].vecs[1]
+		cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+		if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+			return nil, err
+		}
+		for i, count := range cnts {
+			if err := checkChunkFinalizeContext(ctx, i); err != nil {
+				return nil, err
+			}
+			if count == 0 {
+				sumVec.SetNull(uint64(i))
+			} else {
+				avgs[i] = float64(sums[i]) / float64(count)
+			}
+		}
+		cntVec.Free(exec.mp)
+		exec.state[chunk].vecs[1] = nil
+	}
+	*sumVec.GetType() = exec.aggInfo.retType
+	exec.state[chunk].vecs[0] = nil
+	exec.state[chunk].length = 0
+	exec.state[chunk].capacity = 0
+	return sumVec, nil
 }
 
 type sumAvgDecimalArg interface {
@@ -1391,41 +1409,67 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	} else {
 		for i := range vecs {
-			sumVec := exec.state[i].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[S](sumVec)
-
-			if !exec.isSum {
-				cntVec := exec.state[i].vecs[1]
-				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-				if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
-					return nil, err
-				}
-				for j, cnt := range cnts {
-					if cnt == 0 {
-						sumVec.SetNull(uint64(j))
-					} else {
-						avg, err := decAvg(sums[j], cnt, sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType)
-						if err != nil {
-							return nil, err
-						}
-						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
-					}
-				}
-				cntVec.Free(exec.mp)
-				exec.state[i].vecs[1] = nil
+			vecs[i], retErr = exec.FinalizeChunk(context.Background(), i)
+			if retErr != nil {
+				return nil, retErr
 			}
-
-			// Fix resulit scale
-			sumVec.GetType().Scale = resultType.Scale
-
-			// transfer sumVec
-			vecs[i] = sumVec
-			exec.state[i].vecs[0] = nil
-			exec.state[i].length = 0
-			exec.state[i].capacity = 0
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *sumAvgDecExec[A, S]) FinalizeChunk(
+	ctx context.Context,
+	chunk int,
+) (*vector.Vector, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if exec.IsDistinct() {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"distinct decimal sum/avg does not support chunk finalization")
+	}
+	if chunk < 0 || chunk >= len(exec.state) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"aggregate chunk %d out of range", chunk)
+	}
+	sumVec := exec.state[chunk].vecs[0]
+	if sumVec == nil {
+		return nil, moerr.NewInvalidStateNoCtxf(
+			"aggregate chunk %d was already finalized", chunk)
+	}
+	if !exec.isSum {
+		sums := vector.MustFixedColNoTypeCheck[S](sumVec)
+		cntVec := exec.state[chunk].vecs[1]
+		cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+		if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+			return nil, err
+		}
+		for i, count := range cnts {
+			if err := checkChunkFinalizeContext(ctx, i); err != nil {
+				return nil, err
+			}
+			if count == 0 {
+				sumVec.SetNull(uint64(i))
+			} else {
+				avg, err := decAvg(
+					sums[i], count,
+					sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]),
+					exec.aggInfo.retType)
+				if err != nil {
+					return nil, err
+				}
+				vector.SetFixedAtNoTypeCheck(sumVec, i, avg)
+			}
+		}
+		cntVec.Free(exec.mp)
+		exec.state[chunk].vecs[1] = nil
+	}
+	sumVec.GetType().Scale = exec.aggInfo.retType.Scale
+	exec.state[chunk].vecs[0] = nil
+	exec.state[chunk].length = 0
+	exec.state[chunk].capacity = 0
+	return sumVec, nil
 }
 
 func makeSumAvgExec(
