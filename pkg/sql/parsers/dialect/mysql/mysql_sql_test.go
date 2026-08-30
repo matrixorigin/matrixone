@@ -5146,6 +5146,7 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
+		"select approx_percentile(0.95) within group (order by v desc) from t",
 		"select median() within group (order by v desc) from t",
 	} {
 		ast, err := ParseOne(context.Background(), sql, 1)
