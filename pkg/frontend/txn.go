@@ -226,6 +226,9 @@ type FeTxnOption struct {
 	// transaction created to execute the SET statement itself.
 	activeTxnAtStart      bool
 	activeTxnAtStartKnown bool
+	// forcePessimisticObjectLifecycle marks statements that delete catalog
+	// objects and therefore must share GRANT's pessimistic lifecycle protocol.
+	forcePessimisticObjectLifecycle bool
 }
 
 func (opt *FeTxnOption) Close() {
@@ -235,6 +238,7 @@ func (opt *FeTxnOption) Close() {
 	opt.byRollback = false
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
+	opt.forcePessimisticObjectLifecycle = false
 }
 
 const (
@@ -526,6 +530,16 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle && th.inActiveTxnUnsafe() {
+		meta := th.txnOp.Txn()
+		if !meta.IsPessimistic() || meta.Isolation != pbtxn.TxnIsolation_RC {
+			return moerr.NewNotSupported(
+				execCtx.reqCtx,
+				"object lifecycle statements require an existing pessimistic RC transaction",
+			)
+		}
+	}
+
 	// check BEGIN stmt
 	if execCtx.txnOpt.byBegin || !th.inActiveTxnUnsafe() {
 		//commit existed txn anyway
@@ -556,8 +570,7 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 
 // starts a new txn.
 // if there is a txn existed, commit it before creating a new one.
-func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
-	var err error
+func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) (err error) {
 	defer th.inActiveTxnUnsafe()
 	if th.shareTxn {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxn: the share txn is not allowed to create new txn")
@@ -589,7 +602,38 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeBegin)
 		}
 	}()
+	createdGeneration := false
+	defer func() {
+		panicValue := recover()
+		if !createdGeneration {
+			if panicValue != nil {
+				panic(panicValue)
+			}
+			return
+		}
+		// Create owns cleanup only for the generation it published during this
+		// call. Admission failures return before createUnsafe and therefore keep
+		// any pre-existing transaction untouched.
+		if panicValue != nil {
+			// Preserve the original panic even if rollback itself fails or panics.
+			// rollbackUnsafe invalidates the published generation on every terminal
+			// path; ExecuteFuncWithRecover prevents cleanup from replacing the cause.
+			_, _ = ExecuteFuncWithRecover(func() error {
+				return th.rollbackUnsafe(execCtx, nil)
+			})
+			if th.txnOp != nil {
+				th.invalidateTxnUnsafe()
+				execCtx.ses.SetTxnId(dumpUUID[:])
+			}
+			panic(panicValue)
+		}
+		if err != nil {
+			err = errors.Join(err, th.rollbackUnsafe(execCtx, nil))
+		}
+	}()
+
 	err = th.createTxnOpUnsafe(execCtx)
+	createdGeneration = th.txnOp != nil
 	if err != nil {
 		return err
 	}
@@ -616,7 +660,28 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	return err
 }
 
-// createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn
+func requiresPessimisticObjectLifecycleTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
+	switch st := stmt.(type) {
+	case *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
+		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		return true
+	case *tree.DropTable:
+		// Ordinary DROP TABLE can resolve to a session temporary alias only after
+		// parsing. Classify every target before admission so temp-only statements
+		// do not inherit the persistent catalog protocol.
+		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
+	case *tree.CreateView:
+		return st.Replace
+	default:
+		return false
+	}
+}
+
+// createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn.
 func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	var err, err2 error
 	var hasRecovered bool
@@ -696,16 +761,21 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	// quota check and clone. Apply the required mode to that owning transaction;
 	// shared explicit transactions keep their configured semantics and are
 	// validated by the quota checker instead.
-	consumeNextTxnIsolation := false
-	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.forcePessimisticRC {
+	selectedIsolation, hasSelectedIsolation, consumeNextTxnIsolation := th.txnIsolationUnsafe(
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
+	)
+	backSes, forceBackgroundPessimistic := execCtx.ses.(*backSession)
+	if execCtx.txnOpt.forcePessimisticObjectLifecycle ||
+		(forceBackgroundPessimistic && backSes.forcePessimisticRC) {
+		// DROP, CREATE OR REPLACE VIEW, and object-scoped GRANT must
+		// participate in one catalog-row lock protocol even when the deployment
+		// default is optimistic/SI. The selector above still consumes a pending
+		// one-shot isolation setting for this transaction generation.
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
-	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
-	); ok {
-		opts = append(opts, txnclient.WithTxnIsolation(isolation))
-		consumeNextTxnIsolation = consumeNext
+	} else if hasSelectedIsolation {
+		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}
 
 	var (
