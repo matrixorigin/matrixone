@@ -53,6 +53,24 @@ func TestGenerationLexicographicOrderCoversTailReset(t *testing.T) {
 		Generation{BaseTimestamp: 9, TailChunk: -1}))
 }
 
+func TestFenceRegistryUsesDefaultCapacity(t *testing.T) {
+	r := newFenceRegistry(0)
+	require.Equal(t, defaultFenceRegistryCap, r.max)
+}
+
+func TestFenceRegistryClaimsExistingUnclaimedFence(t *testing.T) {
+	r := newFenceRegistry(8)
+	id := CacheIdentity{AccountID: 1, Database: "db", StorageTable: "s", MetadataTable: "m"}
+	generation := Generation{BaseTimestamp: 1, TailChunk: 1}
+
+	r.entries[id.Key()] = &fenceEntry{required: generation}
+	claim, current, overflow := r.install(id, generation)
+	require.True(t, claim)
+	require.Equal(t, generation, current)
+	require.False(t, overflow)
+	require.True(t, r.finishClaim(id, generation))
+}
+
 func TestDropCacheIdentityClearsFenceState(t *testing.T) {
 	oldRegistry := localFences
 	oldCache := veccache.Cache
