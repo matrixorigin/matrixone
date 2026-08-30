@@ -443,10 +443,8 @@ select * from time01;
 
 drop table if exists time02;
 create table time02 as select date_format(col2, '%W %M %Y') from time01;
--- @bvt:issue#24436
 show create table time02;
 desc time02;
--- @bvt:issue
 select * from time02;
 drop table time02;
 

@@ -7018,7 +7018,7 @@ func rollupWindowOutputAlias(selectExpr tree.SelectExpr) *tree.CStr {
 	if heading, ok := nameConstHeading(expr); ok {
 		return tree.NewCStr(heading, 1)
 	}
-	return tree.NewCStr(tree.String(expr, dialect.MYSQL), 1)
+	return tree.NewCStr(formatSelectExpressionHeading(expr), 1)
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
@@ -10444,7 +10444,7 @@ func appendSelectListWithGroupingOrder(
 				if heading, ok := nameConstHeading(expr); ok {
 					ctx.headings = append(ctx.headings, heading)
 				} else {
-					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+					ctx.headings = append(ctx.headings, formatSelectExpressionHeading(expr))
 				}
 			}
 
@@ -10588,6 +10588,27 @@ func nameConstHeading(expr tree.Expr) (string, bool) {
 		return "", false
 	}
 	return name.String(), true
+}
+
+// DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string
+// literals. Preserve their quotes and spelling in the default result heading;
+// otherwise a pattern such as %M would be displayed as the semantically
+// different %m after CTAS identifier normalization.
+func formatSelectExpressionHeading(expr tree.Expr) string {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	if fn, ok := expr.(*tree.FuncExpr); ok && fn.FuncName != nil {
+		switch strings.ToLower(fn.FuncName.Origin()) {
+		case "date_format", "time_format":
+			return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString())
+		}
+	}
+	return tree.String(expr, dialect.MYSQL)
 }
 
 func validNameConstNameLiteral(name *tree.NumVal) bool {

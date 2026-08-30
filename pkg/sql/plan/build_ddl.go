@@ -1436,13 +1436,49 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 
 		cols[i] = &plan.ColDef{
-			Name:    strings.ToLower(bindCtx.headings[i]),
+			Name:    normalizeCTASColumnName(bindCtx.headings[i]),
 			Alg:     plan.CompressType_Lz4,
 			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
 	return cols, query, nil
+}
+
+// normalizeCTASColumnName keeps MatrixOne's lowercase identifier convention
+// without changing case-sensitive string literals embedded in an expression
+// heading. Single quotes inside a literal are emitted as doubled quotes by the
+// AST formatter and therefore do not end the literal.
+func normalizeCTASColumnName(heading string) string {
+	var result strings.Builder
+	result.Grow(len(heading))
+	inString := false
+	for start := 0; start < len(heading); {
+		quote := strings.IndexByte(heading[start:], '\'')
+		if quote < 0 {
+			segment := heading[start:]
+			if !inString {
+				segment = strings.ToLower(segment)
+			}
+			result.WriteString(segment)
+			break
+		}
+		quote += start
+		segment := heading[start:quote]
+		if !inString {
+			segment = strings.ToLower(segment)
+		}
+		result.WriteString(segment)
+		result.WriteByte('\'')
+		if inString && quote+1 < len(heading) && heading[quote+1] == '\'' {
+			result.WriteByte('\'')
+			start = quote + 2
+			continue
+		}
+		inString = !inString
+		start = quote + 1
+	}
+	return result.String()
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {

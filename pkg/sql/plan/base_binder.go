@@ -4671,6 +4671,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
+	adjustDateFormatMetadata(name, args, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -5305,6 +5306,63 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+// adjustDateFormatMetadata mirrors MySQL's format-dependent result length for
+// a literal DATE_FORMAT/TIME_FORMAT pattern. Dynamic patterns retain the
+// overload's conservative VARCHAR capacity because their output bound is not
+// known at bind time.
+func adjustDateFormatMetadata(name string, args []*Expr, returnType *types.Type) {
+	if (name != "date_format" && name != "time_format") ||
+		len(args) != 2 || returnType.Oid != types.T_varchar {
+		return
+	}
+	format := args[1].GetLit()
+	if format == nil || format.Isnull {
+		return
+	}
+	value, ok := format.Value.(*plan.Literal_Sval)
+	if !ok {
+		return
+	}
+	returnType.Width = mysqlDateFormatWidth(value.Sval)
+}
+
+func mysqlDateFormatWidth(format string) int32 {
+	width := int64(0)
+	add := func(value int64) {
+		width = min(width+value, int64(types.MaxVarcharLen))
+	}
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i == len(format)-1 {
+			add(1)
+			continue
+		}
+		i++
+		switch format[i] {
+		case 'M', 'W':
+			add(64)
+		case 'D', 'Y', 'x', 'X':
+			add(4)
+		case 'a', 'b':
+			add(32)
+		case 'j':
+			add(3)
+		case 'U', 'u', 'V', 'v', 'y', 'm', 'd', 'h', 'I', 'i', 'l', 'p', 'S', 's', 'c', 'e':
+			add(2)
+		case 'k', 'H':
+			add(7)
+		case 'r':
+			add(11)
+		case 'T':
+			add(8)
+		case 'f':
+			add(6)
+		default:
+			add(1)
+		}
+	}
+	return int32(width)
 }
 
 func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {

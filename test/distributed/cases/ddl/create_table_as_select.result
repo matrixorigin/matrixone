@@ -749,11 +749,15 @@ null  ¦  null  ¦  null  ¦  null
 drop table if exists time02;
 create table time02 as select date_format(col2, '%W %M %Y') from time01;
 show create table time02;
-[unknown result because it is related to issue#24436]
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+time02  ¦  CREATE TABLE `time02` (
+  `date_format(col2, '%W %M %Y')` varchar(134) DEFAULT NULL
+)
 desc time02;
-[unknown result because it is related to issue#24436]
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+date_format(col2, '%W %M %Y')  ¦  VARCHAR(134)  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from time02;
-➤ date_format(col2, %w %m %y)[12,-1,0]  𝄀
+➤ date_format(col2, '%w %m %y')[12,-1,0]  𝄀
 Saturday November 2023  𝄀
 Wednesday October 1990  𝄀
 null
