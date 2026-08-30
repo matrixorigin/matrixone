@@ -1,8 +1,8 @@
 # LOAD DATA Unique-Index Lock Ownership
 
-- Status: draft implementation complete; causal/performance validation and mandatory owner review pending
-- Design revision: v7 implementation conformance update
-- Supersedes: v1-v6 in this PR
+- Status: draft v8 implementation and deterministic code closure complete; causal/performance evidence and mandatory owner review pending
+- Design revision: v8 implementation and validation convergence update
+- Supersedes: v1-v7 in this PR
 - Tracking issue: [matrixorigin/matrixone#27775](https://github.com/matrixorigin/matrixone/issues/27775)
 - Design and implementation PR: [matrixorigin/matrixone#27814](https://github.com/matrixorigin/matrixone/pull/27814)
 - Reused prerequisite: TN-ordered logtail read barrier from
@@ -320,9 +320,12 @@ the existing Exclusive full-domain table-lock mechanism and the one promotion
 context created before target 1. A narrowly named context-aware helper preserves
 lock and definition-change semantics but lets this caller consume an ordinary
 data-refresh timestamp through the stronger final barrier instead of emitting a
-half-completed retry. No per-target promotion deadline is restarted. Base remains
-before hidden. No planner-global owner/group field or generic lock ordering is
-added.
+half-completed retry. The helper copies the promotion context's one absolute
+deadline into every lock RPC and clamps it with the session lock timeout. The
+remote lock owner treats that absolute value as authoritative, so target N
+cannot restart from a rounded relative timeout after targets 1..N-1 consumed
+part of the budget. Base remains before hidden. No planner-global owner/group
+field or generic lock ordering is added.
 
 The promoted targets are copied from row targets into coordinator-owned
 metadata; they are not inserted into the canonical plan. Thus the first
@@ -682,11 +685,17 @@ correlation, reconnect, upgrade, shutdown, and test obligations.
 
 ## 13. Validation map
 
+Keep three independent gates separate. A code defect or missing deterministic
+oracle requires an implementation change. Causal/endpoint evidence decides
+whether this mechanism should ship. Owner approval decides whether the explicit
+availability tradeoff is accepted. Pending evidence or approval is not renamed
+as another code defect, and code closure is not promoted into causal proof.
+
 ### 13.1 Focused compiler and planner tests
 
 - actual modern indexed-LOAD fixture with its real `uint32` base PK and binary
   `varchar` composite UNIQUE hidden PK is admitted;
-- `BEGIN`, `START TRANSACTION`, `autocommit=0`, internal/derived execution,
+- `BEGIN`/`START TRANSACTION`, `autocommit=0`, internal/derived execution,
   SI/optimistic, retry-disabled, protocol <=38, missing capability, missing
   timeout, prepared/reused generation, FK/partition/temp/system/fake-PK,
   unsupported index, unknown/small/NaN/Inf estimates are rejected;
@@ -716,20 +725,18 @@ Use an injected engine barrier and explicit phase channels, not sleeps:
   retried generation;
 - caller cancellation, engine error, stream-style error, timeout at configured
   and 120-second-cap boundaries, and snapshot-update error publish no proof;
-- target 1 consumes most of the budget; target 2 and the barrier receive only
-  the shared remainder rather than restarting a per-step timeout;
+- target 1 and target 2 carry the exact same authoritative absolute deadline;
+  unit coverage independently proves that a shorter session timeout still
+  clamps that aggregate deadline;
 - caller context remains live while the internal barrier deadline fires;
 - a shorter caller deadline remains the caller's error, while only the internal
   timeout maps to `ErrLockWaitTimeout`;
-- timeout is non-retryable, waiter/call returns, whole-txn rollback releases the
-  acquired prefix, and a competing writer proceeds;
+- timeout/cancellation is non-retryable, waiter/call returns, whole-txn rollback
+  releases the acquired prefix, and a competing writer proceeds;
 - one attempted call emits exactly one fixed-outcome metric sample; fallback
   emits none; no race duplicates the sample.
-- a TN-committed pessimistic writer is paused after TN success but before its
-  outer `Commit` returns; lock release followed by LOAD's barrier still orders
-  and applies that commit;
-- an optimistic concurrent writer retains exact-main conflict/retry behavior;
-  the test does not pretend the promoted lock excludes it.
+- optimistic admission remains a direct negative control; this optimization
+  does not claim to alter the existing TN conflict contract.
 
 The internal deadline is injected/configured to milliseconds in UT. The outer
 test deadline is only a hang guard and is larger than the tested timeout.
@@ -738,14 +745,17 @@ test deadline is only a hang guard and is larger than the tested timeout.
 
 With minimal rows and deterministic barriers:
 
-- direct hidden writer commits before acquisition with no active wait;
-- base and hidden writers commit or roll back while LOAD waits;
-- owner rebind/restart loses all owner-local timestamp history yet the reused
-  TN barrier still supplies freshness;
-- endpoint and interior hidden keys conflict with the promoted range;
-- cancellation while target N is blocked rolls back the already owned prefix;
-- direct-writer timeout/cancel/deadlock cycles terminate;
-- repeated physical entry is reentrant and emits no second barrier.
+- the actual binary-`varchar` hidden full-domain range blocks an interior
+  Exclusive point writer, and whole-transaction rollback lets it proceed;
+- target 1 waits, then target 2 waits with the same absolute deadline;
+- cancellation while target 2 is blocked returns promptly; rollback releases
+  the already owned target-1 prefix, proven by a FastFail point contender;
+- repeated fenced physical entry is reentrant and emits no second barrier.
+
+These tests exercise the new ownership edges. Generic owner rebind, waiter
+cleanup, deadlock detection, endpoint encoding, and remote timeout machinery
+remain lockservice-owned contracts; duplicating all of their fault matrices in
+compiler integration would add expensive tests without a new feature oracle.
 
 ### 13.5 Reused prerequisite evidence
 
@@ -807,7 +817,7 @@ lock request counts or a microbenchmark improved.
 | snapshot update waits under op mutex | terminal blockage | barrier first applies same shared waiter frontier; deterministic immediate-update assertion |
 | stale proof crosses generation | row targets removed unsafely | exact txn/logical/physical/vector/frontier checks |
 | logical rebuild repeats barrier | unbounded retry/wait | root sticky disable before rebuild |
-| direct hidden writer blocked broadly | availability/deadlock surface | explicit lockservice-owner decision and scale/cycle tests |
+| direct hidden writer blocked broadly | availability/deadlock surface | real conflict/release test, explicit lockservice-owner decision, endpoint lock/deadlock observations |
 | optimistic writer ignores promoted lock | false exclusion claim | preserve exact-main TN conflict semantics; explicit test and proof scope |
 | metric/log storm | operational overload | one sample, four labels, fixed buckets, no new logs |
 | hypothesis is wrong | complexity without endpoint gain | normalized 100M/1B acceptance gate and rollback plan |
@@ -816,7 +826,7 @@ lock request counts or a microbenchmark improved.
 
 The earlier review loop failed because it skipped causal proof, repaired the
 most recent counterexample while retaining its mechanism, and repeatedly
-declared “no new blocker” without freezing the complete decision surface. V7
+declared “no new blocker” without freezing the complete decision surface. V8
 changes the process:
 
 1. Section 2.1 proves or rejects the suspected causal boundary before merge
@@ -856,7 +866,8 @@ Reviewer closure table:
 | v4 | client-owned future wait/install | admitted explicit transactions, duplicated planner cache policy, and lacked safe metric ownership |
 | v5 | narrowed autocommit future-HLC design | still duplicated the existing v39 TN-ordered read barrier, paid fixed clock-skew latency, and let outage retention follow the 24-hour session timeout |
 | v6 | causal gate, then reuse existing bounded TN-ordered read barrier | pending causal evidence and dual-owner approval |
-| v7 | bounded implementation of the v6 mechanism under Draft | code/test closure complete locally; causal, endpoint, and dual-owner gates still pending |
+| v7 | bounded implementation of the v6 mechanism under Draft | aggregate context existed, but remote lock RPC deadlines restarted per target and the stated integration matrix exceeded committed evidence |
+| v8 | one authoritative promotion deadline plus observable feature-owned tests; code, external evidence, and owner gates separated | current candidate |
 
-Record reviewer handles, links, decisions, and the exact approved v7 commit here
+Record reviewer handles, links, decisions, and the exact approved v8 commit here
 before the PR leaves Draft.

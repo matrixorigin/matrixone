@@ -361,6 +361,7 @@ func performLock(
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
+			0,
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
@@ -437,7 +438,7 @@ func LockTableWithContext(
 	pkType types.Type,
 	changeDef bool) error {
 	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true)
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, 0)
 }
 
 // LockTableWithMode locks all rows in a table with the specified lock mode.
@@ -448,7 +449,7 @@ func LockTableWithMode(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true)
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, 0)
 }
 
 // LockTableForSnapshotRefreshWithContext acquires a table lock without turning
@@ -464,7 +465,12 @@ func LockTableForSnapshotRefreshWithContext(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, mode, changeDef, false)
+	var deadline int64
+	if value, ok := ctx.Deadline(); ok {
+		deadline = value.UnixNano()
+	}
+	return lockTableWithModeAndContext(
+		ctx, eng, proc, tableID, pkType, mode, changeDef, false, deadline)
 }
 
 func lockTableWithModeAndContext(
@@ -475,7 +481,8 @@ func lockTableWithModeAndContext(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool,
-	retryOnRefresh bool) error {
+	retryOnRefresh bool,
+	lockWaitDeadline int64) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -513,7 +520,8 @@ func lockTableWithModeAndContext(
 		0,
 		pkType,
 		-1,
-		opts)
+		opts,
+		lockWaitDeadline)
 	if err != nil {
 		return err
 	}
@@ -597,7 +605,8 @@ func LockRows(
 		idx,
 		pkType,
 		-1,
-		opts)
+		opts,
+		0)
 	if err != nil {
 		return err
 	}
@@ -627,6 +636,7 @@ func doLock(
 	pkType types.Type,
 	partitionIdx int32,
 	opts LockOptions,
+	lockWaitDeadline int64,
 ) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
@@ -733,10 +743,18 @@ func doLock(
 		}
 	}
 
-	// Attach the current statement/session lock_wait_timeout to the lock options.
-	if d := lockWaitTimeout(proc, txnOp); d > 0 {
-		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
-		options, err = refreshLockWaitOptions(options)
+	// Attach the earliest caller-owned absolute deadline and the current
+	// statement/session lock_wait_timeout to every lock attempt. In particular,
+	// a multi-table promotion must not restart its wait budget at each remote
+	// lock owner.
+	lockTimeout := lockWaitTimeout(proc, txnOp)
+	if lockWaitDeadline > 0 || lockTimeout > 0 {
+		options, err = applyLockWaitDeadline(
+			options,
+			lockWaitDeadline,
+			lockTimeout,
+			time.Now(),
+		)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -1120,6 +1138,22 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 		options.LockWaitTimeout = 1
 	}
 	return options, nil
+}
+
+func applyLockWaitDeadline(
+	options lock.LockOptions,
+	absoluteDeadline int64,
+	lockWaitTimeout time.Duration,
+	now time.Time,
+) (lock.LockOptions, error) {
+	options.LockWaitDeadline = absoluteDeadline
+	if lockWaitTimeout > 0 {
+		sessionDeadline := now.Add(lockWaitTimeout).UnixNano()
+		if options.LockWaitDeadline <= 0 || sessionDeadline < options.LockWaitDeadline {
+			options.LockWaitDeadline = sessionDeadline
+		}
+	}
+	return refreshLockWaitOptions(options)
 }
 
 func lockWithRetry(

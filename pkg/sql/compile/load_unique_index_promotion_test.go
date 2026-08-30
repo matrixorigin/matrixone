@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -49,11 +50,13 @@ import (
 
 type testLoadLogtailBarrierEngine struct {
 	engine.Engine
+	calls int
 }
 
 func (e *testLoadLogtailBarrierEngine) AcquireLogtailReadBarrier(
 	context.Context,
 ) (timestamp.Timestamp, error) {
+	e.calls++
 	return timestamp.Timestamp{PhysicalTime: 1}, nil
 }
 
@@ -153,6 +156,100 @@ func newLoadUniqueIndexPromotionPlan() *plan.Plan {
 		LoadTag:     true,
 		LoadWriteS3: true,
 	}}}
+}
+
+func addSecondLoadUniqueIndexPromotionTarget(pn *plan.Plan) {
+	qry := pn.GetQuery()
+	lockNode := qry.Nodes[1]
+	updateNode := qry.Nodes[2]
+	base := lockNode.TableDef
+	firstIndex := base.Indexes[0]
+	firstHidden := updateNode.UpdateCtxList[1].TableDef
+
+	indexName := catalog.UniqueIndexTableNamePrefix + "u2"
+	secondIndex := plan2.DeepCopyIndexDef(firstIndex)
+	secondIndex.IndexName = "u2"
+	secondIndex.IndexTableName = indexName
+	base.Indexes = append(base.Indexes, secondIndex)
+
+	secondHidden := plan2.DeepCopyTableDef(firstHidden, true)
+	secondHidden.TblId = 21
+	secondHidden.Name = indexName
+	secondRef := &plan.ObjectRef{Db: 1, Obj: 21, SchemaName: "db", ObjName: indexName}
+	secondTarget := plan2.DeepCopyLockTarget(lockNode.LockTargets[1])
+	secondTarget.TableId = 21
+	secondTarget.ObjRef = secondRef
+	lockNode.LockTargets = append(lockNode.LockTargets, secondTarget)
+	updateNode.UpdateCtxList = append(updateNode.UpdateCtxList, &plan.UpdateCtx{
+		ObjRef:   secondRef,
+		TableDef: secondHidden,
+	})
+}
+
+func loadHiddenLockRows(t *testing.T) ([][]byte, []byte) {
+	t.Helper()
+	pkType := types.T_varchar.ToType()
+	packer := types.NewPacker()
+	defer packer.Close()
+	has, fullRange, granularity := lockop.GetFetchRowsFunc(pkType)(
+		nil, packer, pkType, 0, true, nil, nil)
+	require.True(t, has)
+	require.Equal(t, lockpb.Granularity_Range, granularity)
+
+	packer.Reset()
+	packer.EncodeStringType([]byte("middle-key"))
+	return fullRange, packer.Bytes()
+}
+
+func loadPromotionWaitDeadline(
+	t *testing.T,
+	txnOp client.TxnOperator,
+	tableID uint64,
+) int64 {
+	t.Helper()
+	for _, waitLock := range txnOp.GetOverview().WaitLocks {
+		if waitLock.TableID == tableID {
+			require.Positive(t, waitLock.Options.LockWaitDeadline)
+			return waitLock.Options.LockWaitDeadline
+		}
+	}
+	t.Fatalf("transaction is not waiting for table %d", tableID)
+	return 0
+}
+
+func TestLoadUniqueIndexPromotionTxnEligibility(t *testing.T) {
+	validMeta := txn.TxnMeta{
+		ID:        []byte("txn"),
+		Status:    txn.TxnStatus_Active,
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_RC,
+	}
+	validOptions := txn.TxnOptions{Autocommit: true}
+	tests := []struct {
+		name    string
+		meta    txn.TxnMeta
+		options txn.TxnOptions
+		want    bool
+	}{
+		{name: "implicit autocommit RC", meta: validMeta, options: validOptions, want: true},
+		{name: "BEGIN", meta: validMeta, options: txn.TxnOptions{Autocommit: true, ByBegin: true}},
+		{name: "autocommit off", meta: validMeta, options: txn.TxnOptions{}},
+		{name: "snapshot isolation", meta: func() txn.TxnMeta { v := validMeta; v.Isolation = txn.TxnIsolation_SI; return v }(), options: validOptions},
+		{name: "optimistic", meta: func() txn.TxnMeta { v := validMeta; v.Mode = txn.TxnMode_Optimistic; return v }(), options: validOptions},
+		{name: "mirror", meta: func() txn.TxnMeta { v := validMeta; v.Mirror = true; return v }(), options: validOptions},
+		{name: "aborted", meta: func() txn.TxnMeta { v := validMeta; v.Status = txn.TxnStatus_Aborted; return v }(), options: validOptions},
+		{name: "missing transaction id", meta: func() txn.TxnMeta { v := validMeta; v.ID = nil; return v }(), options: validOptions},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(test.meta)
+			txnOp.EXPECT().TxnOptions().Return(test.options)
+			require.Equal(t, test.want, loadUniqueIndexPromotionTxnEligible(txnOp))
+		})
+	}
 }
 
 func TestAnalyzeLoadUniqueIndexPromotionPlan(t *testing.T) {
@@ -448,10 +545,15 @@ func TestMaybePromoteLoadUniqueIndexesWithRealLockService(t *testing.T) {
 					client.WithTxnMode(txn.TxnMode_Pessimistic),
 					client.WithTxnIsolation(txn.TxnIsolation_RC),
 					client.WithBeginAutoCommit(false, true),
-					client.WithTxnLockWaitTimeout(time.Second),
+					client.WithTxnLockWaitTimeout(5*time.Second),
 				)
 				require.NoError(t, err)
-				defer func() { require.NoError(t, txnOp.Rollback(ctx)) }()
+				rolledBack := false
+				defer func() {
+					if !rolledBack {
+						require.NoError(t, txnOp.Rollback(ctx))
+					}
+				}()
 
 				proc := process.NewTopProcess(
 					ctx,
@@ -491,6 +593,188 @@ func TestMaybePromoteLoadUniqueIndexesWithRealLockService(t *testing.T) {
 				require.True(t, txnOp.HasLockTable(20))
 				require.Equal(t, loadUniqueIndexPromotionFenced, c.loadUniqueIndexPromotion.phase)
 				require.True(t, txnOp.Txn().SnapshotTS.Greater(c.loadUniqueIndexPromotion.frontier))
+				require.Equal(t, 1, eng.calls)
+				require.NoError(t, c.maybePromoteLoadUniqueIndexes())
+				require.Equal(t, 1, eng.calls,
+					"a fenced physical re-entry must not issue a second barrier")
+
+				// A real point writer must wait behind the promoted full-domain
+				// hidden-table range until whole-transaction rollback releases it.
+				fullRange, pointKey := loadHiddenLockRows(t)
+				writerTxn := []byte("hidden-writer")
+				writerDone := make(chan error, 1)
+				go func() {
+					_, lockErr := services[0].Lock(ctx, 20, [][]byte{pointKey}, writerTxn, lockpb.LockOptions{
+						Granularity:     lockpb.Granularity_Row,
+						Mode:            lockpb.LockMode_Exclusive,
+						Policy:          lockpb.WaitPolicy_Wait,
+						LockWaitTimeout: 5,
+					})
+					writerDone <- lockErr
+				}()
+				require.NoError(t, lockservice.WaitWaiters(services[0], 0, 20, fullRange[0], 1))
+
+				require.NoError(t, txnOp.Rollback(ctx))
+				rolledBack = true
+				select {
+				case lockErr := <-writerDone:
+					require.NoError(t, lockErr)
+				case <-ctx.Done():
+					t.Fatal("hidden writer did not proceed after promotion rollback")
+				}
+				require.NoError(t, services[0].Unlock(ctx, writerTxn, timestamp.Timestamp{}))
+			},
+			nil,
+		)
+	})
+}
+
+func TestLoadUniqueIndexPromotionCancellationReleasesAcquiredPrefix(t *testing.T) {
+	moruntime.RunTest("", func(rt moruntime.Runtime) {
+		moruntime.SetupServiceBasedRuntime("s1", rt)
+		lockservice.RunLockServicesForTest(
+			zapcore.DebugLevel,
+			[]string{"s1"},
+			time.Second,
+			func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+				rt.SetGlobalVariables(moruntime.LockService, services[0])
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion39))
+
+				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancelCleanup()
+				promotionParent, cancelPromotion := context.WithCancel(cleanupCtx)
+				defer cancelPromotion()
+
+				sender, err := rpc.NewSender(rpc.Config{}, rt)
+				require.NoError(t, err)
+				txnClient := client.NewTxnClient(
+					"s1",
+					sender,
+					client.WithLockService(services[0]),
+					client.WithTimestampWaiter(advancingLoadTimestampWaiter{}),
+				)
+				txnClient.Resume()
+				defer func() { require.NoError(t, txnClient.Close()) }()
+
+				txnOp, err := txnClient.New(
+					promotionParent,
+					timestamp.Timestamp{},
+					client.WithTxnMode(txn.TxnMode_Pessimistic),
+					client.WithTxnIsolation(txn.TxnIsolation_RC),
+					client.WithBeginAutoCommit(false, true),
+					client.WithTxnLockWaitTimeout(5*time.Second),
+				)
+				require.NoError(t, err)
+				rolledBack := false
+				defer func() {
+					if !rolledBack {
+						require.NoError(t, txnOp.Rollback(cleanupCtx))
+					}
+				}()
+
+				fullRange, pointKey := loadHiddenLockRows(t)
+				firstHolderTxn := []byte("first-target-holder")
+				_, err = services[0].Lock(cleanupCtx, 20, fullRange, firstHolderTxn, lockpb.LockOptions{
+					Granularity:     lockpb.Granularity_Range,
+					Mode:            lockpb.LockMode_Exclusive,
+					Policy:          lockpb.WaitPolicy_Wait,
+					LockWaitTimeout: 5,
+				})
+				require.NoError(t, err)
+				firstHolderReleased := false
+				defer func() {
+					if !firstHolderReleased {
+						require.NoError(t, services[0].Unlock(
+							cleanupCtx, firstHolderTxn, timestamp.Timestamp{}))
+					}
+				}()
+
+				secondHolderTxn := []byte("second-target-holder")
+				_, err = services[0].Lock(cleanupCtx, 21, fullRange, secondHolderTxn, lockpb.LockOptions{
+					Granularity:     lockpb.Granularity_Range,
+					Mode:            lockpb.LockMode_Exclusive,
+					Policy:          lockpb.WaitPolicy_Wait,
+					LockWaitTimeout: 5,
+				})
+				require.NoError(t, err)
+				holderReleased := false
+				defer func() {
+					if !holderReleased {
+						require.NoError(t, services[0].Unlock(
+							cleanupCtx, secondHolderTxn, timestamp.Timestamp{}))
+					}
+				}()
+
+				proc := process.NewTopProcess(
+					promotionParent,
+					mpool.MustNewZero(),
+					txnClient,
+					txnOp,
+					nil,
+					services[0],
+					nil,
+					nil,
+					nil,
+					nil,
+					nil,
+				)
+				pn := newLoadUniqueIndexPromotionPlan()
+				addSecondLoadUniqueIndexPromotionTarget(pn)
+				eng := &testLoadLogtailBarrierEngine{}
+				c := &Compile{
+					proc:                         proc,
+					e:                            eng,
+					pn:                           pn,
+					resourceAttemptOwnerEligible: true,
+					lockTables: map[uint64]*plan.LockTarget{
+						10: pn.GetQuery().Nodes[1].LockTargets[0],
+					},
+				}
+				c.prepareLoadUniqueIndexPromotion(pn)
+				require.NotNil(t, c.loadUniqueIndexPromotion)
+				require.Len(t, c.loadUniqueIndexPromotion.targets, 2)
+				require.NoError(t, c.lockTable())
+
+				promotionDone := make(chan error, 1)
+				go func() { promotionDone <- c.maybePromoteLoadUniqueIndexes() }()
+				require.NoError(t, lockservice.WaitWaiters(services[0], 0, 20, fullRange[0], 1))
+				firstDeadline := loadPromotionWaitDeadline(t, txnOp, 20)
+				require.NoError(t, services[0].Unlock(
+					cleanupCtx, firstHolderTxn, timestamp.Timestamp{}))
+				firstHolderReleased = true
+
+				require.NoError(t, lockservice.WaitWaiters(services[0], 0, 21, fullRange[0], 1))
+				secondDeadline := loadPromotionWaitDeadline(t, txnOp, 21)
+				require.Equal(t, firstDeadline, secondDeadline,
+					"every hidden target must carry the same aggregate absolute deadline")
+				require.True(t, txnOp.HasLockTable(20),
+					"the first sorted hidden target must be owned before target two waits")
+
+				cancelPromotion()
+				select {
+				case promotionErr := <-promotionDone:
+					require.ErrorIs(t, promotionErr, context.Canceled)
+				case <-cleanupCtx.Done():
+					t.Fatal("canceled promotion lock wait did not return")
+				}
+				require.Zero(t, eng.calls, "barrier must not run after partial lock acquisition")
+				require.Equal(t, loadUniqueIndexPromotionDisabled, c.loadUniqueIndexPromotion.phase)
+
+				require.NoError(t, txnOp.Rollback(cleanupCtx))
+				rolledBack = true
+				contenderTxn := []byte("prefix-release-contender")
+				_, err = services[0].Lock(cleanupCtx, 20, [][]byte{pointKey}, contenderTxn, lockpb.LockOptions{
+					Granularity: lockpb.Granularity_Row,
+					Mode:        lockpb.LockMode_Exclusive,
+					Policy:      lockpb.WaitPolicy_FastFail,
+				})
+				require.NoError(t, err,
+					"whole-transaction rollback must release the acquired target prefix")
+				require.NoError(t, services[0].Unlock(
+					cleanupCtx, contenderTxn, timestamp.Timestamp{}))
+				require.NoError(t, services[0].Unlock(
+					cleanupCtx, secondHolderTxn, timestamp.Timestamp{}))
+				holderReleased = true
 			},
 			nil,
 		)
@@ -642,6 +926,17 @@ func TestNormalizeLoadUniqueIndexPromotionPreservesCallerCancellation(t *testing
 	require.ErrorIs(t,
 		normalizeLoadUniqueIndexPromotionError(parent, promotion, context.Cause(promotion)),
 		context.Canceled)
+}
+
+func TestNormalizeLoadUniqueIndexPromotionPreservesCallerDeadline(t *testing.T) {
+	parent, cancelParent := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelParent()
+	promotion, cancelPromotion := context.WithTimeoutCause(parent, time.Second, lockservice.ErrLockTimeout)
+	defer cancelPromotion()
+	<-promotion.Done()
+	require.ErrorIs(t,
+		normalizeLoadUniqueIndexPromotionError(parent, promotion, context.Cause(promotion)),
+		context.DeadlineExceeded)
 }
 
 func TestLoadUniqueIndexPromotionProofCoversExactTarget(t *testing.T) {
