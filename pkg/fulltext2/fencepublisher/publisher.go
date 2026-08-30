@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 const (
@@ -32,6 +33,8 @@ const (
 	workerCount   = 4
 	rpcParallel   = 16
 	rpcTimeout    = 2 * time.Second
+
+	fulltext2FenceDropSendFaultPrefix = "fulltext2_fence_drop_send/"
 )
 
 var retryDelays = [...]time.Duration{0, 100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second, 10 * time.Second, 30 * time.Second}
@@ -203,6 +206,9 @@ func (p *Publisher) request(item pendingFence) *querypb.Request {
 }
 
 func (p *Publisher) send(item pendingFence, cn metadata.CNService) bool {
+	if drop, _, injected := fault.TriggerFaultWithContext(p.ctx, fulltext2FenceDropSendFaultPrefix+cn.ServiceID); injected && drop != 0 {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(p.ctx, rpcTimeout)
 	defer cancel()
 	resp, err := p.client.SendMessage(ctx, cn.QueryAddress, p.request(item))

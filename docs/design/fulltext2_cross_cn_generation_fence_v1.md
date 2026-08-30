@@ -92,7 +92,7 @@ the four identity components and two generation components.  A receiver first
 installs the monotonic requirement, then claims eviction.  It responds with its
 current required generation and `EvictionClaimed`.  The sender records ACK only
 when the returned generation is not lower than the request and the claim flag is
-true.  Unsupported v39 receivers and unknown methods are failures, never ACKs.
+true.  MORPC v40 receivers and unknown methods are failures, never ACKs.
 
 Each CN service owns one publisher and injects it into the ISCP executor
 factory.  The publisher has a 1024-identity coalescing queue, four broadcast
@@ -104,6 +104,24 @@ uses attempts at 0, 100 ms, 500 ms, 2 s, 10 s, and 30 s; successful targets are
 not resent, and the working-CN inventory is refreshed for each attempt.
 Queue saturation, cancellation, or exhausted targets are logged and left to
 pull recovery; they are never returned to the committed CDC transaction.
+
+Two default-off fault points provide deterministic acceptance barriers without
+adding product configuration or changing the MATCH hot path.  The ISCP consumer
+triggers `fulltext2_after_tail_commit_before_fence` only after a tail transaction
+with at least one durable segment has committed and immediately before the local
+fence is installed or fanout is enqueued.  A `wait` action can therefore prove
+that persistence completed while both notification paths have not started;
+`notifyall`, removal, context cancellation, or process termination releases the
+barrier.  Empty flushes never trigger it.
+
+Immediately before a target RPC calls `SendMessage`, the publisher triggers
+`fulltext2_fence_drop_send/<target-service-id>`.  A non-zero return reports that
+attempt as unacknowledged without calling the client.  Configuring the exact
+target with frequency `1:1::` and action `echo(1)` drops only its first attempt,
+so later attempts exercise the ordinary bounded retry path and other targets do
+not consume the fault.  Removing the fault restores normal delivery.  Both
+points are inert while fault injection is disabled and are intended only for
+deterministic validation; they do not change persistence or retry ownership.
 
 Shutdown stops ISCP producers before closing the publisher, waits for publisher
 workers to exit, and closes the query client last.

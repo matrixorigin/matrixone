@@ -21,8 +21,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+const fulltext2AfterTailCommitBeforeFenceFault = "fulltext2_after_tail_commit_before_fence"
+
+func waitAfterFulltext2TailCommitBeforeFence(ctx context.Context, hasDurableSegment bool) {
+	if !hasDurableSegment {
+		return
+	}
+	fault.TriggerFaultWithContext(ctx, fulltext2AfterTailCommitBeforeFenceFault)
+}
 
 // RunFulltext2 is the ISCP consumer loop for the fulltext2 positional index — the
 // direct analogue of RunWand. It STREAMS each flush's CDC blob into a fulltext2
@@ -129,6 +139,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
+				waitAfterFulltext2TailCommitBeforeFence(ctx, len(segs) > 0)
 				// The tail transaction is already durable. Install the local generation
 				// fence first, then enqueue best-effort cross-CN delivery. Neither action
 				// can make this consumer retry and persist the tail a second time.

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +57,16 @@ func (*recordingQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Reque
 func (c *recordingQueryClient) Release(*querypb.Response) { c.released = true }
 func (*recordingQueryClient) Close() error                { return nil }
 
+type canceledContextQueryClient struct {
+	recordingQueryClient
+	calls atomic.Int32
+}
+
+func (c *canceledContextQueryClient) SendMessage(ctx context.Context, _ string, _ *querypb.Request) (*querypb.Response, error) {
+	c.calls.Add(1)
+	return nil, ctx.Err()
+}
+
 func TestSendBuildsFenceRequestAndRequiresAck(t *testing.T) {
 	item := pendingFence{
 		identity:   testIdentity("storage"),
@@ -85,6 +96,87 @@ func TestSendBuildsFenceRequestAndRequiresAck(t *testing.T) {
 	p.client = client
 	require.False(t, p.send(item, metadata.CNService{QueryAddress: "query-address"}))
 	require.False(t, client.released)
+}
+
+func TestSendTargetedFaultDropsOnlyFirstMatchingRPC(t *testing.T) {
+	ctx := context.Background()
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+	target := metadata.CNService{ServiceID: "target-cn", QueryAddress: "target-address"}
+	other := metadata.CNService{ServiceID: "other-cn", QueryAddress: "other-address"}
+	point := fulltext2FenceDropSendFaultPrefix + target.ServiceID
+	require.NoError(t, fault.AddFaultPoint(ctx, point, "1:1::", "echo", 1, "", false))
+	t.Cleanup(func() { _, _ = fault.RemoveFaultPoint(context.Background(), point) })
+
+	item := pendingFence{
+		identity:   testIdentity("storage"),
+		generation: fulltext2.Generation{BaseTimestamp: 11, TailChunk: 22},
+	}
+	client := &recordingQueryClient{response: &querypb.Response{
+		Fulltext2CacheFenceResponse: querypb.Fulltext2CacheFenceResponse{
+			RequiredBaseTimestamp: 11,
+			RequiredTailChunk:     22,
+			EvictionClaimed:       true,
+		},
+	}}
+	p := testPublisher()
+	p.client = client
+
+	// A non-target send must neither drop nor consume the target's one-shot fault.
+	require.True(t, p.send(item, other))
+	require.Equal(t, "other-address", client.address)
+	client.address = ""
+	client.request = nil
+	client.released = false
+
+	// The first target attempt is reported as not ACKed without reaching the client.
+	require.False(t, p.send(item, target))
+	require.Empty(t, client.address)
+	require.Nil(t, client.request)
+	require.False(t, client.released)
+
+	// The next target attempt follows the ordinary RPC/ACK path.
+	require.True(t, p.send(item, target))
+	require.Equal(t, "target-address", client.address)
+	require.NotNil(t, client.request)
+	require.True(t, client.released)
+}
+
+func TestSendTargetedFaultWaitIsReleasedByPublisherCancel(t *testing.T) {
+	ctx := context.Background()
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+	target := metadata.CNService{ServiceID: "target-cn", QueryAddress: "target-address"}
+	point := fulltext2FenceDropSendFaultPrefix + target.ServiceID
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "wait", 0, "", false))
+	t.Cleanup(func() { _, _ = fault.RemoveFaultPoint(context.Background(), point) })
+	const waitersPoint = "fulltext2-fence-drop-send-waiters-test"
+	require.NoError(t, fault.AddFaultPoint(ctx, waitersPoint, ":::", "getwaiters", 0, point, false))
+	t.Cleanup(func() { _, _ = fault.RemoveFaultPoint(context.Background(), waitersPoint) })
+
+	p := testPublisher()
+	client := &canceledContextQueryClient{}
+	p.client = client
+	done := make(chan bool, 1)
+	go func() {
+		done <- p.send(pendingFence{identity: testIdentity("storage")}, target)
+	}()
+	require.Eventually(t, func() bool {
+		count, _, exists := fault.TriggerFault(waitersPoint)
+		return exists && count == 1
+	}, time.Second, time.Millisecond)
+
+	p.cancel()
+	select {
+	case acked := <-done:
+		require.False(t, acked)
+	case <-time.After(time.Second):
+		t.Fatal("publisher cancel did not release targeted fault waiter")
+	}
+	count, _, ok := fault.TriggerFault(waitersPoint)
+	require.True(t, ok)
+	require.Zero(t, count)
+	require.Equal(t, int32(1), client.calls.Load())
 }
 
 func TestBroadcastRetriesInventoryError(t *testing.T) {
