@@ -537,7 +537,7 @@ select * from decimal01;
 
 select max(d) over (partition by d order by d) from decimal01;
 select min(d) over (partition by d order by d) from decimal01;
-select avg(d) over (partition by d) from decimal01;
+select avg(d) over (partition by d) from decimal01 where d = 28888888888888888888888888888888888.123;
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
 drop table decimal01;
 
