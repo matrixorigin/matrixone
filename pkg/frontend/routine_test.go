@@ -721,6 +721,62 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.Equal(t, int64(7), resp.LastAffectedRows)
 	require.Equal(t, uint64(11), resp.FoundRows)
+	require.True(t, resp.TempTableStateExported)
+}
+
+func TestMigrateConnectionFromExportsTemporaryTablesOnlyToCapableProxy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.AddTempTable("db.with.dot", "tmp.with.dot", "__mo_tmp_source_db_tmp")
+	ses.AddTempIndexTable("db.with.dot", "hidden_idx", "__mo_tmp_source_db_hidden")
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	err := rt.migrateConnectionFromActionWithCapabilities(
+		context.Background(),
+		query.MigrateConnFromAction_MigrateConnFromExport,
+		false,
+		&query.MigrateConnFromResponse{},
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFromActionWithCapabilities(
+		context.Background(),
+		query.MigrateConnFromAction_MigrateConnFromExport,
+		true,
+		resp,
+	))
+	require.True(t, resp.TempTableStateExported)
+	require.Equal(t, []*query.MigrateTempTable{{
+		Database:     "db.with.dot",
+		Alias:        "tmp.with.dot",
+		PhysicalName: "__mo_tmp_source_db_tmp",
+	}}, resp.TempTables)
+}
+
+func TestMigrateConnectionFromRejectsOversizedTemporaryTableSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	for i := 0; i <= maxMigrateTempTableCount; i++ {
+		alias := fmt.Sprintf("tmp_%d", i)
+		ses.AddTempTable("db", alias, "__mo_tmp_source_"+alias)
+	}
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	err := rt.migrateConnectionFromActionWithCapabilities(
+		context.Background(),
+		query.MigrateConnFromAction_MigrateConnFromExport,
+		true,
+		resp,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Empty(t, resp.TempTables)
+	require.False(t, resp.TempTableStateExported)
 }
 
 func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {

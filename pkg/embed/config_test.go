@@ -43,6 +43,7 @@ func TestParseTNConfig(t *testing.T) {
 	max-size = 512
 
 	[hakeeper-client]
+	backend-read-timeout = "20s"
 	service-addresses = [
 		"1",
 		"2"
@@ -75,6 +76,7 @@ func TestParseTNConfig(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, tnservice.StorageMEMKV, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
+	assert.Equal(t, 20*time.Second, cfg.HAKeeperClient.BackendReadTimeout.Duration)
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
 	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))

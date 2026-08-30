@@ -734,7 +734,10 @@ func runLCAProbeWithReaderFallback(
 		return executor.Result{}, err
 	}
 	filterVec.InplaceSort()
-	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
+	pkFilterExpr, err := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
+	if err != nil {
+		return executor.Result{}, err
+	}
 	prepareCost = time.Since(start)
 
 	tmp := batch.NewWithSize(len(lcaLayout.attrs))

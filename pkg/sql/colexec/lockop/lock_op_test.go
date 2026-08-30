@@ -293,6 +293,18 @@ func TestLockOpHelpers(t *testing.T) {
 	require.True(t, opts.changeDef)
 }
 
+func TestLockTableRefreshPolicy(t *testing.T) {
+	refreshTS := timestamp.Timestamp{PhysicalTime: 1}
+	require.NoError(t, lockTableRefreshError(false, timestamp.Timestamp{}, true))
+	require.ErrorIs(t, lockTableRefreshError(false, refreshTS, true), retryError)
+	require.NoError(t, lockTableRefreshError(false, refreshTS, false),
+		"a stronger caller-owned barrier will install the refreshed snapshot")
+	require.ErrorIs(t,
+		lockTableRefreshError(true, refreshTS, false),
+		retryWithDefChangedError,
+		"a freshness barrier cannot validate a stale logical definition")
+}
+
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
 	options := lock.LockOptions{
 		LockWaitDeadline: time.Now().Add(1500 * time.Millisecond).UnixNano(),
@@ -310,6 +322,33 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 	options := lock.LockOptions{LockWaitDeadline: time.Now().Add(-time.Second).UnixNano()}
 
 	_, err := refreshLockWaitOptions(options)
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestApplyLockWaitDeadlineUsesOneAbsoluteBudget(t *testing.T) {
+	now := time.Now()
+	aggregateDeadline := now.Add(5 * time.Minute).UnixNano()
+
+	options, err := applyLockWaitDeadline(
+		lock.LockOptions{}, aggregateDeadline, 10*time.Minute, now)
+	require.NoError(t, err)
+	require.Equal(t, aggregateDeadline, options.LockWaitDeadline,
+		"a later per-table timeout must not restart the aggregate budget")
+
+	sessionDeadline := now.Add(time.Minute).UnixNano()
+	options, err = applyLockWaitDeadline(
+		lock.LockOptions{}, aggregateDeadline, time.Minute, now)
+	require.NoError(t, err)
+	require.Equal(t, sessionDeadline, options.LockWaitDeadline,
+		"the session timeout must still clamp a longer aggregate budget")
+
+	options, err = applyLockWaitDeadline(
+		lock.LockOptions{}, aggregateDeadline, 0, now)
+	require.NoError(t, err)
+	require.Equal(t, aggregateDeadline, options.LockWaitDeadline)
+
+	_, err = applyLockWaitDeadline(
+		lock.LockOptions{}, now.Add(-time.Second).UnixNano(), time.Minute, now)
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
 }
 
@@ -1389,6 +1428,7 @@ func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
 					DefaultLockOptions(packer).
 						WithLockMode(lock.LockMode_Shared).
 						WithHasNewVersionInRangeFunc(testFunc),
+					0,
 				)
 				require.NoError(t, err)
 				require.True(t, locked)
