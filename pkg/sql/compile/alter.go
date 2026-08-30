@@ -274,8 +274,8 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 	return hasHistory, err
 }
 
-func (c *Compile) lockDataBranchLineageOwnerPublication() error {
-	return databranchutils.LockLineageOwnerPublication(func(sql string) error {
+func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
+	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})
 }
@@ -1173,7 +1173,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// cross the same write barrier before choosing their timestamp and retain
 	// the write through owner publication. Pessimistic transactions wait; an
 	// optimistic write-write loser retries the whole statement.
-	if err = c.lockDataBranchLineageOwnerPublication(); err != nil {
+	if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 		return err
 	}
 	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName)

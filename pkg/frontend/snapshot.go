@@ -325,10 +325,17 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	}
 
-	// Serialize the timestamp choice and owner-row publication with COPY ALTER.
-	// Unlike locking mo_snapshots itself, this stable catalog write also covers
-	// an empty owner set and forces an optimistic loser to retry.
-	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+	// Install the quota/catalog frontier before the lifecycle write. Advancing
+	// the transaction snapshot after that write can expose both workspace
+	// versions of the feature-registry gate row to the quota query.
+	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
+		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else {
+		// Cluster snapshots have no quota state to refresh, but still serialize
+		// timestamp choice and owner-row publication with COPY ALTER.
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
 		return err
 	}
 	// Keep quota admission and snapshot publication in the same serialized
@@ -610,6 +617,9 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	if err != nil {
 		return err
 	}
+	if err = lockDataBranchLineageOwnerLifecycle(ctx, bh); err != nil {
+		return err
+	}
 
 	// Handle publication-based drop
 	pubAccountName := string(stmt.AccountName)
@@ -754,6 +764,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	// Whole-catalog restore can replace the lineage-owner catalogs. Cross the
+	// same stable boundary as snapshot/PITR publication and lineage GC before
+	// reading owner state, so every participant has one catalog lock order.
+	if err = lockRestoreLineageOwnerLifecycle(ctx, bh, stmt.Level); err != nil {
+		return stats, err
+	}
 	// Serialize catalog restore with View metadata recovery before either path
 	// locks a target View. The gate row belongs to a preserved catalog table, so
 	// it remains stable while relation identities are rebuilt.
@@ -943,6 +959,21 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	return
+}
+
+func restoreReplacesLineageOwnerCatalogs(level tree.RestoreLevel) bool {
+	return level == tree.RESTORELEVELCLUSTER || level == tree.RESTORELEVELACCOUNT
+}
+
+func lockRestoreLineageOwnerLifecycle(
+	ctx context.Context,
+	bh BackgroundExec,
+	level tree.RestoreLevel,
+) error {
+	if !restoreReplacesLineageOwnerCatalogs(level) {
+		return nil
+	}
+	return lockDataBranchLineageOwnerLifecycle(ctx, bh)
 }
 
 func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecord, stmt *tree.RestoreSnapShot) (err error) {
