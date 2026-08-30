@@ -1294,7 +1294,7 @@ func TestSpecializePreparedExecutionPlanAppliesBitTextComparison(t *testing.T) {
 			HasRuntimeType:   true,
 			IsBinaryProtocol: true,
 		},
-	}, true, false, false)
+	}, true, false, false, false, nil)
 	require.NoError(t, err)
 	require.True(t, specialized)
 	require.True(t, applied)
@@ -2016,7 +2016,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_text"}},
 		},
 	}
-	params, paramVals, _, _, err := buildExecuteUserParams(cw.proc, args)
+	params, paramVals, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
