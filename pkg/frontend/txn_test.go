@@ -883,11 +883,13 @@ func TestCreateUnsafeRollsBackPublishedGenerationOnPanic(t *testing.T) {
 	execCtx.txnOpt = FeTxnOption{autoCommit: true}
 
 	handler := ses.GetTxnHandler()
-	handler.mu.Lock()
-	require.PanicsWithValue(t, "storage new panic", func() {
-		_ = handler.createUnsafe(execCtx)
-	})
-	handler.mu.Unlock()
+	func() {
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+		require.PanicsWithValue(t, "storage new panic", func() {
+			_ = handler.createUnsafe(execCtx)
+		})
+	}()
 
 	require.Equal(t, 1, op.rollbackCalls)
 	require.Equal(t, txn.TxnStatus_Aborted, op.meta.Status)
