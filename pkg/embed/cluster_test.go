@@ -17,20 +17,366 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type closeTrackingService struct {
+	closeCount atomic.Int32
+	closeErr   error
+}
+
+func (s *closeTrackingService) Start() error { return nil }
+
+func (s *closeTrackingService) Close() error {
+	s.closeCount.Add(1)
+	return s.closeErr
+}
+
+type closeTrackingFileService struct {
+	closeCount atomic.Int32
+}
+
+func (s *closeTrackingFileService) Close(context.Context) {
+	s.closeCount.Add(1)
+}
+
+type closeTrackingQueryClient struct {
+	closeCount atomic.Int32
+	closeErr   error
+}
+
+var _ qclient.QueryClient = new(closeTrackingQueryClient)
+
+func (c *closeTrackingQueryClient) ServiceID() string { return "close-tracking-query" }
+
+func (c *closeTrackingQueryClient) SendMessage(
+	context.Context,
+	string,
+	*pb.Request,
+) (*pb.Response, error) {
+	return nil, nil
+}
+
+func (c *closeTrackingQueryClient) NewRequest(pb.CmdMethod) *pb.Request {
+	return &pb.Request{}
+}
+
+func (c *closeTrackingQueryClient) Release(*pb.Response) {}
+
+func (c *closeTrackingQueryClient) Close() error {
+	c.closeCount.Add(1)
+	return c.closeErr
+}
+
+type closeTrackingHAKeeperClient struct {
+	*testHAKClient
+	closeCount atomic.Int32
+	closeErr   error
+}
+
+func (c *closeTrackingHAKeeperClient) Close() error {
+	c.closeCount.Add(1)
+	return c.closeErr
+}
+
+func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
+	svc := &closeTrackingService{}
+	op := &operator{}
+
+	require.NoError(t, op.startConstructedServiceLocked(svc))
+	require.Same(t, svc, op.reset.svc)
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.False(t, op.needsCleanup())
+	require.NoError(t, op.Close())
+}
+
+func TestOperatorCloseRetainsDependenciesAfterServiceCloseFailure(t *testing.T) {
+	closeErr := errors.New("service close failed")
+	svc := &closeTrackingService{closeErr: closeErr}
+	fs := &closeTrackingFileService{}
+	op := &operator{state: stopped}
+	op.reset.svc = svc
+	op.reset.fs = fs
+
+	require.ErrorIs(t, op.Close(), closeErr)
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.Zero(t, fs.closeCount.Load())
+	require.Same(t, svc, op.reset.svc)
+	require.Same(t, fs, op.reset.fs)
+
+	svc.closeErr = nil
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(2), svc.closeCount.Load())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.False(t, op.needsCleanup())
+}
+
+func TestOperatorCloseClosesTrackedRPCClients(t *testing.T) {
+	queryClient := &closeTrackingQueryClient{}
+	hakeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	op := &operator{state: started}
+	op.reset.fs = &closeTrackingFileService{}
+	op.reset.queryClients = []qclient.QueryClient{queryClient}
+	op.reset.hakeeperClient = hakeeperClient
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), queryClient.closeCount.Load())
+	require.Equal(t, int32(1), hakeeperClient.closeCount.Load())
+	require.False(t, op.needsCleanup())
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), queryClient.closeCount.Load())
+	require.Equal(t, int32(1), hakeeperClient.closeCount.Load())
+}
+
+func TestWaitClusterConditionRetainsClientOnWaitFailure(t *testing.T) {
+	waitErr := errors.New("wait failed")
+	hakeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	op := &operator{}
+
+	err := op.waitClusterConditionWithClientLocked(
+		hakeeperClient,
+		func(logservice.CNHAKeeperClient) error {
+			return waitErr
+		},
+	)
+	require.ErrorIs(t, err, waitErr)
+	require.Same(t, hakeeperClient, op.reset.hakeeperClient)
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), hakeeperClient.closeCount.Load())
+}
+
+func TestClusterStartRollbackClosesPartiallyConstructedServices(t *testing.T) {
+	startErr := errors.New("service startup failed")
+	logService := &closeTrackingService{}
+	logFS := &closeTrackingFileService{}
+	tnFS := &closeTrackingFileService{}
+
+	logOp := &operator{serviceType: metadata.ServiceType_LOG}
+	tnOp := &operator{serviceType: metadata.ServiceType_TN}
+	cnOp := &operator{serviceType: metadata.ServiceType_CN}
+	c := &cluster{
+		services: []*operator{logOp, tnOp, cnOp},
+		startFn: func(op *operator) error {
+			switch op.serviceType {
+			case metadata.ServiceType_LOG:
+				op.state = started
+				op.reset.svc = logService
+				op.reset.fs = logFS
+				return nil
+			case metadata.ServiceType_TN:
+				op.reset.fs = tnFS
+				return startErr
+			default:
+				t.Fatalf("service %s must not start after rollback", op.serviceType)
+				return nil
+			}
+		},
+	}
+
+	err := c.Start()
+	require.ErrorIs(t, err, startErr)
+	require.Equal(t, int32(1), logService.closeCount.Load())
+	require.Equal(t, int32(1), logFS.closeCount.Load())
+	require.Equal(t, int32(1), tnFS.closeCount.Load())
+	require.Equal(t, stopped, logOp.state)
+	require.Equal(t, stopped, tnOp.state)
+	require.Equal(t, stopped, cnOp.state)
+
+	// Startup rollback is idempotent; a deferred Close must not double-close.
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), logService.closeCount.Load())
+	require.Equal(t, int32(1), logFS.closeCount.Load())
+	require.Equal(t, int32(1), tnFS.closeCount.Load())
+}
+
+func TestClusterStartRetriesFailedInitialCleanupBeforeRestart(t *testing.T) {
+	startErr := errors.New("service startup failed")
+	closeErr := errors.New("service close failed")
+	firstService := &closeTrackingService{closeErr: closeErr}
+	secondService := &closeTrackingService{}
+	op := &operator{serviceType: metadata.ServiceType_LOG}
+	c := &cluster{
+		services: []*operator{op},
+		startFn: func(op *operator) error {
+			op.state = started
+			op.reset.svc = firstService
+			return startErr
+		},
+	}
+
+	err := c.Start()
+	require.ErrorIs(t, err, startErr)
+	require.ErrorIs(t, err, closeErr)
+	require.Len(t, c.pendingCleanup, 1)
+	require.Equal(t, int32(1), firstService.closeCount.Load())
+
+	startCalled := false
+	c.startFn = func(op *operator) error {
+		startCalled = true
+		op.state = started
+		op.reset.svc = secondService
+		return nil
+	}
+	require.ErrorIs(t, c.Start(), closeErr)
+	require.False(t, startCalled)
+	require.Equal(t, int32(2), firstService.closeCount.Load())
+
+	firstService.closeErr = nil
+	c.startFn = func(op *operator) error {
+		require.Equal(t, int32(3), firstService.closeCount.Load())
+		op.state = started
+		op.reset.svc = secondService
+		return nil
+	}
+	require.NoError(t, c.Start())
+	require.Empty(t, c.pendingCleanup)
+	require.Equal(t, started, c.state)
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), secondService.closeCount.Load())
+}
+
+func TestClusterStartHandlesHeterogeneousConcurrentErrors(t *testing.T) {
+	firstErr := errors.New("first startup error")
+	secondErr := fmt.Errorf("second startup error: %w", errors.New("cause"))
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	c := &cluster{
+		services: []*operator{
+			{index: 0, serviceType: metadata.ServiceType_CN},
+			{index: 1, serviceType: metadata.ServiceType_CN},
+		},
+		startFn: func(op *operator) error {
+			started <- struct{}{}
+			<-release
+			if op.index == 0 {
+				return firstErr
+			}
+			return secondErr
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- c.Start()
+	}()
+	<-started
+	<-started
+	close(release)
+
+	err := <-result
+	require.Error(t, err)
+	require.True(t, errors.Is(err, firstErr) || errors.Is(err, secondErr))
+}
+
+func TestClusterStartRetriesTrackedClientCleanupBeforeRestart(t *testing.T) {
+	startErr := errors.New("service startup failed")
+	closeErr := errors.New("query client close failed")
+	firstQueryClient := &closeTrackingQueryClient{closeErr: closeErr}
+	firstHAKeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	secondQueryClient := &closeTrackingQueryClient{}
+	secondHAKeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	startCalls := 0
+	op := &operator{serviceType: metadata.ServiceType_LOG}
+	c := &cluster{
+		services: []*operator{op},
+		startFn: func(op *operator) error {
+			startCalls++
+			switch startCalls {
+			case 1:
+				op.state = started
+				op.reset.queryClients = []qclient.QueryClient{firstQueryClient}
+				op.reset.hakeeperClient = firstHAKeeperClient
+				return startErr
+			case 2:
+				require.Empty(t, op.reset.queryClients)
+				require.Nil(t, op.reset.hakeeperClient)
+				op.state = started
+				op.reset.queryClients = []qclient.QueryClient{secondQueryClient}
+				op.reset.hakeeperClient = secondHAKeeperClient
+				return nil
+			default:
+				t.Fatalf("unexpected start call %d", startCalls)
+				return nil
+			}
+		},
+	}
+
+	require.ErrorIs(t, c.Start(), startErr)
+	require.ErrorIs(t, c.Start(), closeErr)
+	require.Equal(t, 1, startCalls)
+	require.Equal(t, int32(2), firstQueryClient.closeCount.Load())
+	require.Equal(t, int32(1), firstHAKeeperClient.closeCount.Load())
+
+	firstQueryClient.closeErr = nil
+	require.NoError(t, c.Start())
+	require.Equal(t, 2, startCalls)
+	require.Equal(t, int32(3), firstQueryClient.closeCount.Load())
+	require.Equal(t, started, c.state)
+
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), secondQueryClient.closeCount.Load())
+	require.Equal(t, int32(1), secondHAKeeperClient.closeCount.Load())
+}
+
+func TestRollbackNewServicesRetriesCleanupBeforeRestart(t *testing.T) {
+	closeErr := errors.New("close failed")
+	newService := &closeTrackingService{closeErr: closeErr}
+	existingService := &closeTrackingService{}
+	existingOp := &operator{state: started}
+	existingOp.reset.svc = existingService
+	newOp := &operator{state: started, serviceType: metadata.ServiceType_CN}
+	newOp.reset.svc = newService
+
+	c := &cluster{
+		state:    started,
+		files:    []string{"existing.toml", "new.toml"},
+		services: []*operator{existingOp, newOp},
+	}
+	c.options.cn = 2
+
+	err := c.rollbackNewServicesLocked(1, 1)
+	require.ErrorIs(t, err, closeErr)
+	require.Len(t, c.pendingCleanup, 1)
+	require.Len(t, c.services, 1)
+	require.Equal(t, 1, c.options.cn)
+
+	newService.closeErr = nil
+	require.NoError(t, c.StartNewCNService(0))
+	require.Empty(t, c.pendingCleanup)
+	require.Equal(t, int32(2), newService.closeCount.Load())
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), existingService.closeCount.Load())
+}
 
 func TestBasicCluster(t *testing.T) {
 	c, err := NewCluster(
@@ -115,7 +461,7 @@ func TestMultiClusterCanWork(t *testing.T) {
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
 			validCNCanWork(t, c, 1)
@@ -134,13 +480,13 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
 	var id1, id2 uint64
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			id1 = c.ID()
 		},
 	)
 
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			id2 = c.ID()
 		},
@@ -151,7 +497,7 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 
 func TestRestartCN(t *testing.T) {
 	t.SkipNow()
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			svc, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -164,7 +510,7 @@ func TestRestartCN(t *testing.T) {
 }
 
 func TestRunSQLWithFrontend(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -249,7 +595,7 @@ func validCNCanWork(
 }
 
 func TestCreateDB(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)

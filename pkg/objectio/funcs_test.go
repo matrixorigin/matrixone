@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -29,6 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 )
 
 type releaseTrackingData struct {
@@ -38,6 +42,10 @@ type releaseTrackingData struct {
 
 func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
+}
+
+func (r *releaseTrackingData) Capacity() int64 {
+	return int64(cap(r.bytes))
 }
 
 func (r *releaseTrackingData) Bytes() []byte {
@@ -90,6 +98,10 @@ func (t *trackingCacheDataAllocator) AllocateCacheDataWithHint(context.Context, 
 
 func (t *trackingCacheDataAllocator) CopyToCacheData(context.Context, []byte) fscache.Data {
 	return t.data
+}
+
+func (t *trackingCacheDataAllocator) BackingSize(size int) int {
+	return size
 }
 
 func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
@@ -215,4 +227,87 @@ func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+}
+
+type objectioRemoteCacheClient struct {
+	response     *query.Response
+	releaseCount atomic.Int32
+}
+
+var _ client.QueryClient = new(objectioRemoteCacheClient)
+
+func (c *objectioRemoteCacheClient) ServiceID() string { return "objectio-remote-cache-test" }
+
+func (c *objectioRemoteCacheClient) SendMessage(
+	context.Context,
+	string,
+	*query.Request,
+) (*query.Response, error) {
+	return c.response, nil
+}
+
+func (c *objectioRemoteCacheClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+
+func (c *objectioRemoteCacheClient) Release(*query.Response) {
+	c.releaseCount.Add(1)
+}
+
+func (c *objectioRemoteCacheClient) Close() error { return nil }
+
+type objectioRemoteCacheRouter struct{}
+
+func (objectioRemoteCacheRouter) Target(fscache.CacheKey) string { return "target" }
+func (objectioRemoteCacheRouter) AddItem(gossip.CommonItem)      {}
+
+type objectioRemoteReadFileService struct {
+	fileservice.FileService
+	cache fileservice.IOVectorCache
+}
+
+func (f *objectioRemoteReadFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if err := f.cache.Read(ctx, vector); err != nil {
+		return err
+	}
+	if len(vector.Entries) == 0 || vector.Entries[0].CachedData == nil {
+		return errors.New("remote cache miss")
+	}
+	return nil
+}
+
+func TestReadExtentAcceptsCompressedRemoteCacheRepresentation(t *testing.T) {
+	original := bytes.Repeat([]byte("matrixone"), 32)
+	compressed, err := compress.Compress(original, make([]byte, len(original)+16), compress.Lz4)
+	require.NoError(t, err)
+	require.Less(t, len(compressed), len(original))
+	extent := NewExtent(compress.Lz4, 0, uint32(len(compressed)), uint32(len(original)))
+
+	queryClient := &objectioRemoteCacheClient{
+		response: &query.Response{
+			GetCacheDataResponse: &query.GetCacheDataResponse{
+				ResponseCacheData: []*query.ResponseCacheData{{
+					Index: 0,
+					Hit:   true,
+					Data:  original,
+				}},
+			},
+		},
+	}
+	remoteCache := fileservice.NewRemoteCache(queryClient, func() client.KeyRouter[query.CacheKey] {
+		return objectioRemoteCacheRouter{}
+	})
+	fs := &objectioRemoteReadFileService{cache: remoteCache}
+
+	data, err := ReadExtent(
+		context.Background(),
+		"test-object",
+		&extent,
+		fileservice.Policy(0),
+		fs,
+		constructorFactory,
+	)
+	require.NoError(t, err)
+	require.Equal(t, original, data)
+	require.Equal(t, int32(1), queryClient.releaseCount.Load())
 }

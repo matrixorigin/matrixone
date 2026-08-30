@@ -1187,7 +1187,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 				},
 				resp: &query.Response{},
 			},
-			wantErr: nil,
+			wantErr: dummyBadRequestErr,
 			want:    &query.Response{GetCacheDataResponse: nil},
 		},
 	}

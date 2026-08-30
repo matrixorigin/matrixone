@@ -25,21 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createNotifyFactory wraps a BackendFactory and signals on created each time Create returns (for event-driven tests, no Sleep).
-type createNotifyFactory struct {
-	inner   *testBackendFactory
-	created chan struct{}
-}
-
-func (f *createNotifyFactory) Create(backend string, opts ...BackendOption) (Backend, error) {
-	b, err := f.inner.Create(backend, opts...)
-	select {
-	case f.created <- struct{}{}:
-	default:
-	}
-	return b, err
-}
-
 func TestCreateBackendLocked(t *testing.T) {
 	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
 	assert.NoError(t, err)
@@ -357,16 +342,11 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 }
 
 func TestCloseIdleBackends(t *testing.T) {
-	// Event-driven: factory signals on Create so we wait for 2 backends without Sleep.
-	created := make(chan struct{}, 2)
-	factory := &createNotifyFactory{inner: newTestBackendFactory(), created: created}
 	rc, err := NewClient(
 		"",
-		factory,
+		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
-		WithClientCreateTaskChanSize(1),
-		WithClientEnableAutoCreateBackend(),
 		WithClientDisableCircuitBreaker())
 	require.NoError(t, err)
 	c := rc.(*client)
@@ -374,41 +354,25 @@ func TestCloseIdleBackends(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
-	// First backend; lock it so getBackendLocked does not select it (b==nil) and will create second.
-	var b Backend
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		b, err = c.getBackend("b1", true)
-		if err == nil && b != nil {
-			break
-		}
-		runtime.Gosched()
-	}
+	// Create both backends synchronously through the complete bookkeeping path.
+	// Driving the first creation through auto-create can leave queued requests
+	// that race the second creation below.
+	b, err := c.createBackendWithBookkeeping("b1", true)
 	require.NoError(t, err)
-	require.NotNil(t, b, "timeout waiting for first backend")
+	require.NotNil(t, b)
 
-	// Trigger second create; wait for two Create() completions (event-driven, with timeout)
-	_, _ = c.getBackend("b1", false)
-	for _, ch := range []chan struct{}{created, created} {
-		select {
-		case <-ch:
-		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for backend create (second backend may not have been created)")
-		}
-	}
+	// Create the second backend synchronously through the complete bookkeeping
+	// path. A factory-level Create notification is too early for this assertion:
+	// the backend is published to the pool only after Create returns and the
+	// client re-acquires c.mu.
+	activeBackend, err := c.createBackendWithBookkeeping("b1", false)
+	require.NoError(t, err)
+	require.NotNil(t, activeBackend)
+	require.NotSame(t, b, activeBackend)
 	c.mu.Lock()
-	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
-	// b is the locked backend returned by getBackend; find the active (non-b) backend
-	// without assuming slice order, since concurrent creation may append in any order.
-	var activeBackend Backend
-	for _, bk := range c.mu.backends["b1"] {
-		if bk != b {
-			activeBackend = bk
-			break
-		}
-	}
+	backendCount := len(c.mu.backends["b1"])
 	c.mu.Unlock()
-	require.NotNil(t, activeBackend, "active backend not found")
+	require.Equal(t, 2, backendCount, "second backend must be created")
 
 	// b is the idle backend: unlock it and zero activeTime so GC will close it
 	b.Unlock()

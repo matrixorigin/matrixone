@@ -55,19 +55,26 @@ type operator struct {
 	testing     bool
 
 	reset struct {
-		svc        service
-		shutdownC  chan struct{}
-		stopper    *stopper.Stopper
-		rt         runtime.Runtime
-		gossipNode *gossip.Node
-		clock      clock.Clock
-		logger     *zap.Logger
+		svc            service
+		shutdownC      chan struct{}
+		stopper        *stopper.Stopper
+		rt             runtime.Runtime
+		gossipNode     *gossip.Node
+		clock          clock.Clock
+		logger         *zap.Logger
+		fs             fileServiceCloser
+		queryClients   []client.QueryClient
+		hakeeperClient logservice.CNHAKeeperClient
 	}
 }
 
 type service interface {
 	Start() error
 	Close() error
+}
+
+type fileServiceCloser interface {
+	Close(context.Context)
 }
 
 func newService(
@@ -121,17 +128,63 @@ func (op *operator) Close() error {
 	op.Lock()
 	defer op.Unlock()
 
-	if op.state == stopped {
-		return moerr.NewInvalidStateNoCtx("service already stopped")
+	if op.state == stopped &&
+		op.reset.svc == nil &&
+		op.reset.stopper == nil &&
+		op.reset.fs == nil &&
+		len(op.reset.queryClients) == 0 &&
+		op.reset.hakeeperClient == nil {
+		return nil
 	}
 
-	if err := op.reset.svc.Close(); err != nil {
-		return err
+	var err error
+	if op.reset.svc != nil {
+		if err := op.reset.svc.Close(); err != nil {
+			// Keep the service and its dependencies owned together so a retry
+			// cannot use resources that were already closed here.
+			return err
+		}
+		op.reset.svc = nil
 	}
-
-	op.reset.stopper.Stop()
+	if op.reset.stopper != nil {
+		op.reset.stopper.Stop()
+		op.reset.stopper = nil
+	}
+	if op.reset.fs != nil {
+		op.reset.fs.Close(context.Background())
+		op.reset.fs = nil
+	}
+	remainingQueryClients := make([]client.QueryClient, 0, len(op.reset.queryClients))
+	for _, queryClient := range op.reset.queryClients {
+		if queryClient == nil {
+			continue
+		}
+		if closeErr := queryClient.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+			remainingQueryClients = append(remainingQueryClients, queryClient)
+		}
+	}
+	op.reset.queryClients = remainingQueryClients
+	if op.reset.hakeeperClient != nil {
+		if closeErr := op.reset.hakeeperClient.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		} else {
+			op.reset.hakeeperClient = nil
+		}
+	}
+	op.reset.shutdownC = nil
 	op.state = stopped
-	return nil
+	return err
+}
+
+func (op *operator) needsCleanup() bool {
+	op.RLock()
+	defer op.RUnlock()
+	return op.reset.svc != nil ||
+		op.reset.stopper != nil ||
+		op.reset.fs != nil ||
+		len(op.reset.queryClients) > 0 ||
+		op.reset.hakeeperClient != nil
 }
 
 func (op *operator) Start() error {
@@ -140,6 +193,13 @@ func (op *operator) Start() error {
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
+	}
+	if op.reset.svc != nil ||
+		op.reset.stopper != nil ||
+		op.reset.fs != nil ||
+		len(op.reset.queryClients) > 0 ||
+		op.reset.hakeeperClient != nil {
+		return moerr.NewInvalidStateNoCtx("service cleanup incomplete")
 	}
 
 	if err := op.init(); err != nil {
@@ -154,6 +214,7 @@ func (op *operator) Start() error {
 	if err != nil {
 		return err
 	}
+	op.reset.fs = fs
 
 	// start up system module to do some calculation.
 	system.Run(op.reset.stopper)
@@ -206,7 +267,7 @@ func (op *operator) startLogServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
 	if op.cfg.LogService.BootstrapConfig.BootstrapCluster {
@@ -215,7 +276,6 @@ func (op *operator) startLogServiceLocked(
 			return err
 		}
 	}
-	op.reset.svc = s
 	return nil
 }
 
@@ -240,10 +300,9 @@ func (op *operator) startTNServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
-	op.reset.svc = s
 	return nil
 }
 
@@ -269,11 +328,18 @@ func (op *operator) startCNServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
-	op.reset.svc = s
 	return nil
+}
+
+func (op *operator) startConstructedServiceLocked(s service) error {
+	// Start may fail after the concrete service has opened listeners or started
+	// goroutines. Transfer ownership before calling it so rollback can always
+	// reach Close.
+	op.reset.svc = s
+	return s.Start()
 }
 
 func (op *operator) init() error {
@@ -363,13 +429,15 @@ func (op *operator) setupGossip() error {
 	}
 	for i := range op.cfg.FileServices {
 		op.cfg.FileServices[i].Cache.KeyRouterFactory = gossipNode.DistKeyCacheGetter()
-		op.cfg.FileServices[i].Cache.QueryClient, err = client.NewQueryClient(
+		queryClient, err := client.NewQueryClient(
 			op.cfg.CN.UUID,
 			op.cfg.FileServices[i].Cache.RPC,
 		)
 		if err != nil {
 			return err
 		}
+		op.reset.queryClients = append(op.reset.queryClients, queryClient)
+		op.cfg.FileServices[i].Cache.QueryClient = queryClient
 	}
 	return nil
 }
@@ -381,12 +449,22 @@ func (op *operator) waitClusterConditionLocked(
 	if err != nil {
 		return err
 	}
+	return op.waitClusterConditionWithClientLocked(client, waitFunc)
+}
+
+func (op *operator) waitClusterConditionWithClientLocked(
+	client logservice.CNHAKeeperClient,
+	waitFunc func(logservice.CNHAKeeperClient) error,
+) error {
+	op.reset.hakeeperClient = client
 	if err := waitFunc(client); err != nil {
 		return err
 	}
 	if err := client.Close(); err != nil {
 		op.reset.logger.Error("close hakeeper client failed", zap.Error(err))
+		return nil
 	}
+	op.reset.hakeeperClient = nil
 	return nil
 }
 

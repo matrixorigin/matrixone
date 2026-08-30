@@ -28,7 +28,7 @@ import (
 )
 
 func TestUUIDGoDriver(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
 

@@ -17,14 +17,20 @@ package embed
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseTNConfig(t *testing.T) {
@@ -105,6 +111,126 @@ func TestFileServiceFactory(t *testing.T) {
 	assert.NotNil(t, fs)
 }
 
+func TestFileServiceFactoryRollsBackAfterLaterFailure(t *testing.T) {
+	ctx := context.Background()
+	capacity := toml.ByteSize(1 << 20)
+	local := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: t.TempDir(),
+		Cache: fileservice.CacheConfig{
+			MemoryCapacity: &capacity,
+		},
+	}
+
+	c := &ServiceConfig{
+		FileServices: []fileservice.Config{
+			local,
+			{Name: "broken", Backend: "NOT-A-FILESERVICE"},
+		},
+	}
+	nodeUUID := "rollback-" + strings.ReplaceAll(t.Name(), "/", "-")
+	_, err := c.createFileService(ctx, metadata.ServiceType_CN, nodeUUID)
+	require.Error(t, err)
+	_, ok := perfcounter.Named.Load(
+		perfcounter.NameForFileService(metadata.ServiceType_CN.String(), nodeUUID, defines.LocalFileServiceName),
+	)
+	require.False(t, ok, "failed construction must remove the first service counter")
+
+	c.FileServices = append(c.FileServices[:1],
+		fileservice.Config{
+			Name:    defines.SharedFileServiceName,
+			Backend: "DISK",
+			DataDir: t.TempDir(),
+			Cache: fileservice.CacheConfig{
+				MemoryCapacity: &capacity,
+			},
+		},
+		fileservice.Config{Name: defines.ETLFileServiceName, Backend: "DISK-ETL"},
+		fileservice.Config{Name: defines.TmpFileServiceName, Backend: "DISK-TMP"},
+	)
+
+	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, nodeUUID)
+	require.NoError(t, err)
+	fs.Close(ctx)
+	for _, name := range []string{
+		perfcounter.NameForFileService(metadata.ServiceType_CN.String(), nodeUUID, defines.LocalFileServiceName),
+		perfcounter.NameForFileService(metadata.ServiceType_CN.String(), nodeUUID, defines.SharedFileServiceName),
+		perfcounter.NameForNode(metadata.ServiceType_CN.String(), nodeUUID),
+	} {
+		perfcounter.Named.Delete(name)
+	}
+}
+
+func TestFileServiceFactoryScopesMemoryCacheMetrics(t *testing.T) {
+	ctx := context.Background()
+
+	newConfig := func(capacity toml.ByteSize) *ServiceConfig {
+		return &ServiceConfig{FileServices: []fileservice.Config{
+			{
+				Name:    defines.LocalFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.SharedFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.ETLFileServiceName,
+				Backend: "DISK-ETL",
+			},
+			{
+				Name:    defines.TmpFileServiceName,
+				Backend: "DISK-TMP",
+			},
+		}}
+	}
+
+	firstCapacity := toml.ByteSize(1 << 20)
+	first, err := newConfig(firstCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-a")
+	require.NoError(t, err)
+	t.Cleanup(func() { first.Close(ctx) })
+
+	secondCapacity := toml.ByteSize(2 << 20)
+	second, err := newConfig(secondCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-b")
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Close(ctx) })
+
+	_, firstGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-a"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	_, secondGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-b"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	require.Equal(t, float64(firstCapacity), testutil.ToFloat64(firstGauge))
+	require.Equal(t, float64(secondCapacity), testutil.ToFloat64(secondGauge))
+}
+
+func TestDefaultTmpFileServiceUsesServiceDataDir(t *testing.T) {
+	c := newServiceConfig()
+	c.DataDir = t.TempDir()
+	assert.NoError(t, c.setDefaultValue())
+
+	for _, fs := range c.FileServices {
+		if fs.Name == defines.TmpFileServiceName {
+			assert.Equal(t, c.defaultFileServiceDataDir(defines.TmpFileServiceName), fs.DataDir)
+			return
+		}
+	}
+	t.Fatal("default TMP file service was not configured")
+}
 func TestResolveGossipSeedAddresses(t *testing.T) {
 	tests := []struct {
 		addrs   []string

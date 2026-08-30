@@ -29,7 +29,7 @@ import (
 )
 
 func TestDataBranchMerge(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 			defer cancel()

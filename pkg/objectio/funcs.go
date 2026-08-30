@@ -51,9 +51,10 @@ func ReadExtent(
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
-		Offset:      int64(extent.Offset()),
-		Size:        int64(extent.Length()),
-		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg()),
+		Offset:         int64(extent.Offset()),
+		Size:           int64(extent.Length()),
+		CachedDataSize: int64(extent.OriginSize()),
+		ToCacheData:    factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		ioVec.ReleaseReadResultOnError()
@@ -189,9 +190,10 @@ func ReadOneBlockWithMeta(
 			} else {
 				ext := col.Location()
 				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-					Offset:      int64(ext.Offset()),
-					Size:        int64(ext.Length()),
-					ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
+					Offset:         int64(ext.Offset()),
+					Size:           int64(ext.Length()),
+					CachedDataSize: int64(ext.OriginSize()),
+					ToCacheData:    factory(int64(ext.OriginSize()), ext.Alg()),
 				})
 			}
 			continue
@@ -207,9 +209,10 @@ func ReadOneBlockWithMeta(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset:      int64(ext.Offset()),
-			Size:        int64(ext.Length()),
-			ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
+			Offset:         int64(ext.Offset()),
+			Size:           int64(ext.Length()),
+			CachedDataSize: int64(ext.OriginSize()),
+			ToCacheData:    factory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
 	if len(ioVec.Entries) > 0 {
@@ -290,8 +293,9 @@ func ReadAllBlocksWithMeta(
 			col := blkmeta.ColumnMeta(seqnum)
 			ext := col.Location()
 			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(ext.Offset()),
-				Size:   int64(ext.Length()),
+				Offset:         int64(ext.Offset()),
+				Size:           int64(ext.Length()),
+				CachedDataSize: int64(ext.OriginSize()),
 
 				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
 			})
@@ -328,8 +332,9 @@ func ReadOneBlockAllColumns(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset: int64(ext.Offset()),
-			Size:   int64(ext.Length()),
+			Offset:         int64(ext.Offset()),
+			Size:           int64(ext.Length()),
+			CachedDataSize: int64(ext.OriginSize()),
 
 			ToCacheData: constructorFactory(int64(ext.OriginSize()), ext.Alg()),
 		})
