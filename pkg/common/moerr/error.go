@@ -77,6 +77,7 @@ const (
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrPreparedParamOutOfRange     uint16 = 20207
+	ErrTruncatedWrongValue         uint16 = 20208
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -432,6 +433,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
+	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1070,6 +1072,10 @@ func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
 	return newError(ctx, ErrTruncatedWrongValueForField, t, v, c, idx)
+}
+
+func NewTruncatedWrongValue(ctx context.Context, typ, value string) *Error {
+	return newError(ctx, ErrTruncatedWrongValue, typ, value)
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {

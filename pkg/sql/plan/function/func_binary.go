@@ -8727,101 +8727,318 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	return nil
 }
 
-// SecToTime: SEC_TO_TIME(seconds) - Returns the seconds argument, converted to hours, minutes, and seconds, as a TIME value.
-func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[types.Time](result)
+func secToTimeFromInt64(seconds int64) (types.Time, bool) {
+	maxTime := types.MySQLTimeFunctionMaxForScale(0)
+	maxSeconds := int64(maxTime) / types.MicroSecsPerSec
+	if seconds > maxSeconds {
+		return maxTime, true
+	}
+	if seconds < -maxSeconds {
+		return -maxTime, true
+	}
+	return types.Time(seconds * types.MicroSecsPerSec), false
+}
 
-	// seconds can be int64, uint64, or float64
-	secondsType := ivecs[0].GetType().Oid
+func secToTimeFromUint64(seconds uint64) (types.Time, bool) {
+	maxTime := types.MySQLTimeFunctionMaxForScale(0)
+	maxSeconds := uint64(maxTime) / types.MicroSecsPerSec
+	if seconds > maxSeconds {
+		return maxTime, true
+	}
+	return types.Time(seconds * types.MicroSecsPerSec), false
+}
 
-	// Create parameter extractor based on type
-	var getSecondsValue func(uint64) (int64, bool)
+func secToTimeFromFloat64(seconds float64) (types.Time, bool, bool) {
+	if math.IsNaN(seconds) {
+		return 0, true, false
+	}
+	clampTime := types.MySQLTimeFunctionMaxForScale(0)
+	maxInt64Seconds := float64(math.MaxInt64) / float64(types.MicroSecsPerSec)
+	if seconds >= maxInt64Seconds || math.IsInf(seconds, 1) {
+		return clampTime, false, true
+	}
+	if seconds <= -maxInt64Seconds || math.IsInf(seconds, -1) {
+		return -clampTime, false, true
+	}
+	value := types.Time(math.Round(seconds * float64(types.MicroSecsPerSec)))
+	if !types.IsMySQLTimeFunctionResult(value) {
+		if value < 0 {
+			return -clampTime, false, true
+		}
+		return clampTime, false, true
+	}
+	return value, false, false
+}
 
-	switch secondsType {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		secondsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getSecondsValue = func(i uint64) (int64, bool) {
-			val, null := secondsParam.GetValue(i)
-			return val, null
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		secondsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getSecondsValue = func(i uint64) (int64, bool) {
-			val, null := secondsParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_float32, types.T_float64:
-		secondsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getSecondsValue = func(i uint64) (int64, bool) {
-			val, null := secondsParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
-		}
-	default:
-		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", secondsType)
+// secToTimeFromExactDecimal converts the numeric prefix of a textual value to
+// microseconds without routing DECIMAL input through float64. The bounded
+// calculation also handles arbitrarily large exponents without allocating a
+// proportional big integer. The final result reports the separate conversion
+// warning state so SEC_TO_TIME can retain MySQL's DECIMAL diagnostic in
+// addition to its own TIME range diagnostic.
+func secToTimeFromExactDecimal(value string) (types.Time, bool, bool) {
+	value = trimASCIISpace(value)
+	if len(value) == 0 {
+		return 0, false, false
 	}
 
-	// MySQL TIME range: -838:59:59 to 838:59:59
-	// In seconds: -3020399 to 3020399
-	const maxTimeSeconds = 3020399 // 838*3600 + 59*60 + 59
-	const minTimeSeconds = -3020399
+	prefix, _, validPrefix := scanDecimalFloatPrefix(value)
+	conversionTruncated := !validPrefix || prefix != value
+	if !validPrefix {
+		return 0, false, true
+	}
+	value = prefix
+
+	end := 0
+	negative := false
+	if value[end] == '+' || value[end] == '-' {
+		negative = value[end] == '-'
+		end++
+	}
+
+	totalDigits := 0
+	firstNonzeroDigit := -1
+	lastNonzeroDigit := -1
+	integerStart := end
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		if value[end] != '0' {
+			if firstNonzeroDigit == -1 {
+				firstNonzeroDigit = totalDigits
+			}
+			lastNonzeroDigit = totalDigits
+		}
+		end++
+		totalDigits++
+	}
+	integerEnd := end
+	fractionStart := end
+	fractionEnd := end
+	if end < len(value) && value[end] == '.' {
+		end++
+		fractionStart = end
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			if value[end] != '0' {
+				if firstNonzeroDigit == -1 {
+					firstNonzeroDigit = totalDigits
+				}
+				lastNonzeroDigit = totalDigits
+			}
+			end++
+			totalDigits++
+		}
+		fractionEnd = end
+	}
+	if totalDigits == 0 || firstNonzeroDigit == -1 {
+		return 0, false, conversionTruncated
+	}
+
+	exponent := 0
+	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
+		end++
+		negativeExponent := false
+		if end < len(value) && (value[end] == '+' || value[end] == '-') {
+			negativeExponent = value[end] == '-'
+			end++
+		}
+		exponentStart := end
+		exponentMagnitude := 0
+		// This cap only bounds parsing work. It deliberately exceeds every
+		// representable DECIMAL exponent after the significand adjustment below;
+		// it must not itself decide whether DECIMAL conversion was truncated.
+		exponentLimit := len(value) + 82
+		exponentOverflow := false
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			digit := int(value[end] - '0')
+			if !exponentOverflow {
+				if exponentMagnitude > (exponentLimit-digit)/10 {
+					exponentOverflow = true
+				} else {
+					exponentMagnitude = exponentMagnitude*10 + digit
+				}
+			}
+			end++
+		}
+		if end != exponentStart {
+			if exponentOverflow {
+				if negativeExponent {
+					return 0, false, true
+				}
+				clampTime := types.MySQLTimeFunctionMaxForScale(0)
+				if negative {
+					return -clampTime, true, true
+				}
+				return clampTime, true, true
+			}
+			if negativeExponent {
+				exponent = -exponentMagnitude
+			} else {
+				exponent = exponentMagnitude
+			}
+		}
+	}
+
+	significantDigits := lastNonzeroDigit - firstNonzeroDigit + 1
+	fractionDigits := fractionEnd - fractionStart
+	trailingZeroDigits := totalDigits - lastNonzeroDigit - 1
+	// DECIMAL bounds the original mantissa before applying its exponent. Keep
+	// that decision independent from the normalized arithmetic below: otherwise
+	// a compensating exponent could make an overflowing significand look like a
+	// small TIME value (for example, 1 followed by 81 zeroes and e-81).
+	mantissaDigits := totalDigits - firstNonzeroDigit
+	if mantissaDigits > 81 {
+		clampTime := types.MySQLTimeFunctionMaxForScale(0)
+		if negative {
+			return -clampTime, true, true
+		}
+		return clampTime, true, true
+	}
+	exponent += trailingZeroDigits - fractionDigits
+	integerDigits := integerEnd - integerStart
+	significantDigitAt := func(index int) byte {
+		index += firstNonzeroDigit
+		if index < integerDigits {
+			return value[integerStart+index]
+		}
+		return value[fractionStart+index-integerDigits]
+	}
+
+	integerValueDigits := significantDigits + exponent
+	// MySQL's DECIMAL conversion range admits at most 81 integer digits or
+	// 81 fractional digits after insignificant trailing zeroes are removed.
+	// Keep this diagnostic state distinct from SEC_TO_TIME's much smaller TIME
+	// result range: for example, 1e-81 is a valid DECIMAL that rounds to zero,
+	// while 1e-82 is an underflowing DECIMAL conversion.
+	conversionTruncated = conversionTruncated || integerValueDigits > 81 || exponent < -81
+	if integerValueDigits > 7 {
+		clampTime := types.MySQLTimeFunctionMaxForScale(0)
+		if negative {
+			return -clampTime, true, conversionTruncated
+		}
+		return clampTime, true, conversionTruncated
+	}
+
+	scaledDigits := integerValueDigits + 6
+	if scaledDigits <= 0 {
+		if scaledDigits == 0 && significantDigitAt(0) >= '5' {
+			if negative {
+				return -1, false, conversionTruncated
+			}
+			return 1, false, conversionTruncated
+		}
+		return 0, false, conversionTruncated
+	}
+
+	var totalMicroseconds int64
+	keptDigits := min(significantDigits, scaledDigits)
+	for i := 0; i < keptDigits; i++ {
+		totalMicroseconds = totalMicroseconds*10 + int64(significantDigitAt(i)-'0')
+	}
+	for i := significantDigits; i < scaledDigits; i++ {
+		totalMicroseconds *= 10
+	}
+	if scaledDigits < significantDigits && significantDigitAt(scaledDigits) >= '5' {
+		totalMicroseconds++
+	}
+
+	result := types.Time(totalMicroseconds)
+	truncated := !types.IsMySQLTimeFunctionResult(result)
+	if truncated {
+		result = types.MySQLTimeFunctionMaxForScale(0)
+	}
+	if negative {
+		return -result, truncated, conversionTruncated
+	}
+	return result, truncated, conversionTruncated
+}
+
+// SecToTime: SEC_TO_TIME(seconds) - Returns the seconds argument, converted to hours, minutes, and seconds, as a TIME value.
+func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+	var getTimeValue func(uint64) (types.Time, bool, bool, bool)
+	var renderWarningValue func(uint64) string
+
+	switch ivecs[0].GetType().Oid {
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
+			value, null := param.GetValue(i)
+			result, truncated := secToTimeFromInt64(value)
+			return result, null, truncated, false
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetValue(i)
+			return fmt.Sprintf("%d", value)
+		}
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
+			value, null := param.GetValue(i)
+			result, truncated := secToTimeFromUint64(value)
+			return result, null, truncated, false
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetValue(i)
+			return fmt.Sprintf("%d", value)
+		}
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
+			value, null := param.GetValue(i)
+			if null {
+				return 0, true, false, false
+			}
+			result, null, truncated := secToTimeFromFloat64(value)
+			return result, null, truncated, false
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetValue(i)
+			return fmt.Sprintf("%g", value)
+		}
+	case types.T_varchar:
+		param := vector.GenerateFunctionStrParameter(ivecs[0])
+		getTimeValue = func(i uint64) (types.Time, bool, bool, bool) {
+			value, null := param.GetStrValue(i)
+			if null {
+				return 0, true, false, false
+			}
+			result, truncated, conversionTruncated := secToTimeFromExactDecimal(functionUtil.QuickBytesToStr(value))
+			return result, false, truncated, conversionTruncated
+		}
+		renderWarningValue = func(i uint64) string {
+			value, _ := param.GetStrValue(i)
+			return fmt.Sprintf("%-.128s", value)
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", ivecs[0].GetType().Oid)
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		seconds, null := getSecondsValue(i)
-
-		if null {
-			if err := rs.Append(types.Time(0), true); err != nil {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-
-		// Check if seconds is within valid TIME range
-		if seconds > maxTimeSeconds || seconds < minTimeSeconds {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
+		value, null, truncated, conversionTruncated := getTimeValue(i)
+		if !null {
+			value = value.TruncateToScale(rs.GetType().Scale)
+			value = types.ClampMySQLTimeFunctionForScale(value, rs.GetType().Scale)
 		}
-
-		// Convert seconds to hours, minutes, and seconds
-		// Handle negative values
-		isNegative := seconds < 0
-		if isNegative {
-			seconds = -seconds
-		}
-
-		hours := seconds / 3600
-		remainingSeconds := seconds % 3600
-		minutes := remainingSeconds / 60
-		secs := remainingSeconds % 60
-
-		// Check if hours exceed MySQL TIME limit (838:59:59)
-		// MySQL TIME range is -838:59:59 to 838:59:59
-		if hours > 838 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Create TIME value using TimeFromClock
-		// isNegative: true if the time should be negative
-		timeValue := types.TimeFromClock(isNegative, uint64(hours), uint8(minutes), uint8(secs), 0)
-
-		// Validate the resulting time
-		h := timeValue.Hour()
-		if h < 0 {
-			h = -h
-		}
-		if !types.ValidTime(uint64(h), uint64(timeValue.Minute()), uint64(timeValue.Sec())) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := rs.Append(timeValue, false); err != nil {
+		if err := rs.Append(value, null); err != nil {
 			return err
+		}
+		if (truncated || conversionTruncated) && proc != nil {
+			if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+				renderedValue := renderWarningValue(i)
+				if conversionTruncated {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect DECIMAL value: '%s'", renderedValue))
+				}
+				if truncated {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect time value: '%s'", renderedValue))
+				}
+			}
 		}
 	}
 	return nil
