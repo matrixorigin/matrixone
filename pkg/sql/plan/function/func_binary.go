@@ -936,6 +936,42 @@ func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkR
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
+func coalesceJSONTextResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	hasJSON := false
+	hasCharacter := false
+	targetOID := types.T_varchar
+	for i := range inputs {
+		switch inputs[i].Oid {
+		case types.T_any:
+		case types.T_json:
+			hasJSON = true
+		case types.T_char, types.T_varchar:
+			hasCharacter = true
+		case types.T_text:
+			hasCharacter = true
+			targetOID = types.T_text
+		default:
+			return checkResult{}, false
+		}
+	}
+	if !hasJSON || !hasCharacter {
+		return checkResult{}, false
+	}
+
+	target := commonConditionalStringType(targetOID.ToType(), inputs)
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
+			continue
+		}
+		castTypes := make([]types.Type, len(inputs))
+		for j := range castTypes {
+			castTypes[j] = target
+		}
+		return newCheckResultWithCast(i, castTypes), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
@@ -951,6 +987,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
+		}
+		if result, ok := coalesceJSONTextResult(overloads, inputs); ok {
 			return result
 		}
 

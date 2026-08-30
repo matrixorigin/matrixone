@@ -1454,6 +1454,84 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	}
 }
 
+func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tt := range []struct {
+		name       string
+		inputs     []types.Type
+		wantReturn types.T
+		wantCast   bool
+	}{
+		{
+			name:       "json then varchar",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_varchar.ToType()},
+			wantReturn: types.T_varchar,
+			wantCast:   true,
+		},
+		{
+			name:       "varchar then json",
+			inputs:     []types.Type{types.T_varchar.ToType(), types.T_json.ToType()},
+			wantReturn: types.T_varchar,
+			wantCast:   true,
+		},
+		{
+			name:       "json and char",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_char.ToType()},
+			wantReturn: types.T_varchar,
+			wantCast:   true,
+		},
+		{
+			name:       "json and text",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_text.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "null does not change varchar result",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_any.ToType(), types.T_varchar.ToType()},
+			wantReturn: types.T_varchar,
+			wantCast:   true,
+		},
+		{
+			name:       "all json stays json",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_json.ToType()},
+			wantReturn: types.T_json,
+		},
+		{
+			name:       "null does not change json result",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_any.ToType()},
+			wantReturn: types.T_json,
+			wantCast:   true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, "coalesce", tt.inputs)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantReturn, result.GetReturnType().Oid)
+
+			castTypes, shouldCast := result.ShouldDoImplicitTypeCast()
+			require.Equal(t, tt.wantCast, shouldCast)
+			if !tt.wantCast {
+				return
+			}
+			require.Len(t, castTypes, len(tt.inputs))
+			for i := range castTypes {
+				require.Equal(t, tt.wantReturn, castTypes[i].Oid)
+			}
+		})
+	}
+
+	for _, typ := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run("reject "+typ.String(), func(t *testing.T) {
+			_, err := GetFunctionByName(proc.Ctx, "coalesce", []types.Type{
+				types.T_json.ToType(), typ.ToType(),
+			})
+			require.Error(t, err)
+		})
+	}
+}
+
 // issue #24565: COALESCE over decimal branches with different scales must align
 // scale/width across all branches, otherwise the result inherits the first
 // branch's scale while carrying another branch's raw value (magnified result).
