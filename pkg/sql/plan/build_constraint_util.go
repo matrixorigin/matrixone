@@ -1794,7 +1794,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// warning sink are available.
 		if numVal.ValType == tree.P_char {
 			value := numVal.String()
-			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value); outOfRange {
+			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value, colType.Scale); outOfRange {
 				expr := MakePlan2StringConstExprWithType(value)
 				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 			}

@@ -8049,7 +8049,7 @@ func strToTime(
 			val, err := types.ParseTime(s, totype.Scale)
 			if err != nil {
 				if mode.isAssignment() {
-					if negative, outOfRange := types.IsTimeStringOutOfInternalRange(s); outOfRange {
+					if negative, outOfRange := types.IsTimeStringOutOfInternalRange(s, totype.Scale); outOfRange {
 						val, err = mysqlTimeOutOfRangeForCast(ctx, proc, mode, s, negative, i)
 						if err != nil {
 							return err

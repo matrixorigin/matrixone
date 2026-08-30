@@ -332,7 +332,10 @@ func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	colType := types.T_time.ToTypeWithScale(6)
 
-	for _, value := range []string{"2562047788:00:00", "-2562047788:00:00"} {
+	for _, value := range []string{
+		"2562047788:00:00", "-2562047788:00:00",
+		"25620477880000", "-25620477880000",
+	} {
 		t.Run(value, func(t *testing.T) {
 			numVal := tree.NewNumVal(value, value, false, tree.P_char)
 			expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)

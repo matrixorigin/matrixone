@@ -106,6 +106,9 @@ INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
 -- still follow the TIME-column assignment boundary rather than fail parsing.
 INSERT INTO t_time_range VALUES (4, '2562047788:00:00');
 INSERT INTO t_time_range VALUES (5, '-2562047788:00:00');
+-- Compact TIME spelling follows the same assignment policy.
+INSERT INTO t_time_range VALUES (6, '25620477880000');
+INSERT INTO t_time_range VALUES (7, '-25620477880000');
 SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
 DROP TABLE t_time_range;
 

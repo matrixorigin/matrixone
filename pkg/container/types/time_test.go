@@ -111,16 +111,26 @@ func TestIsTimeStringOutOfInternalRange(t *testing.T) {
 	}{
 		{value: "2562047788:00:00", outside: true},
 		{value: "-2562047788:00:00.000001", negative: true, outside: true},
+		{value: "25620477880000", outside: true},
+		{value: "-25620477880000.000001", negative: true, outside: true},
 		{value: "2562047787:59:59", outside: false},
+		{value: "25620477875959", outside: false},
 		{value: "2562047788:60:00", outside: false},
+		{value: "25620477886000", outside: false},
 		{value: "not-a-time", outside: false},
 	} {
 		t.Run(test.value, func(t *testing.T) {
-			negative, outside := IsTimeStringOutOfInternalRange(test.value)
+			negative, outside := IsTimeStringOutOfInternalRange(test.value, 6)
 			require.Equal(t, test.negative, negative)
 			require.Equal(t, test.outside, outside)
 		})
 	}
+
+	// A target TIME(0) rounds this otherwise internal endpoint into the next
+	// hour, so range classification must use the destination scale as well.
+	negative, outside := IsTimeStringOutOfInternalRange("25620477875959.999999", 0)
+	require.False(t, negative)
+	require.True(t, outside)
 }
 
 func TestTime_ParseTimeFromString(t *testing.T) {

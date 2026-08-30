@@ -16,6 +16,7 @@ package types
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -169,7 +170,7 @@ func ParseTime(s string, scale int32) (Time, error) {
 		if spIdx := strings.IndexByte(timeString, ' '); spIdx >= 0 {
 			var err error
 			day, err = strconv.ParseUint(timeString[:spIdx], 10, 64)
-			if err != nil || day > MaxHourInTime/maxHourInDay {
+			if err != nil {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 			}
 			timeString = timeString[spIdx+1:]
@@ -241,7 +242,7 @@ func ParseTime(s string, scale int32) (Time, error) {
 		}
 	}
 
-	if !ValidTime(hour, minute, sec) {
+	if minute > maxMinuteInHour || sec > maxSecondInMinute {
 		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 	}
 
@@ -252,12 +253,23 @@ func ParseTime(s string, scale int32) (Time, error) {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 		}
 	}
-
-	if day > MaxHourInTime/maxHourInDay-hour {
-		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+	if carry != 0 {
+		sec++
+		if sec == SecsPerMinute {
+			sec = 0
+			minute++
+			if minute == SecsPerMinute {
+				minute = 0
+				hour++
+			}
+		}
 	}
 
-	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec+uint64(carry)), msec), nil
+	if hour > MaxHourInTime || day > MaxHourInTime/maxHourInDay || day*maxHourInDay > MaxHourInTime-hour {
+		return -1, newTimeOutOfInternalRangeError(s, isNegative)
+	}
+
+	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec), msec), nil
 }
 
 // Numeric 112233/112233.4444 should be treate like string and then
@@ -540,43 +552,35 @@ func ClampMySQLTimeFunctionForScale(value Time, scale int32) Time {
 	return value
 }
 
-// IsTimeStringOutOfInternalRange recognizes the colon-delimited TIME spelling
-// accepted by MySQL but too large for MatrixOne's internal Time representation.
-// Callers can then apply their assignment policy instead of treating it as a
-// malformed temporal literal.
-func IsTimeStringOutOfInternalRange(value string) (negative bool, outOfRange bool) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false, false
+// TimeOutOfInternalRangeError marks a syntactically valid TIME value that does
+// not fit MatrixOne's internal Time representation. It preserves the ordinary
+// invalid-input error text for callers that do not need assignment policy.
+type TimeOutOfInternalRangeError struct {
+	err      error
+	negative bool
+}
+
+func (e *TimeOutOfInternalRangeError) Error() string { return e.err.Error() }
+
+func (e *TimeOutOfInternalRangeError) Unwrap() error { return e.err }
+
+func (e *TimeOutOfInternalRangeError) Negative() bool { return e.negative }
+
+func newTimeOutOfInternalRangeError(value string, negative bool) error {
+	return &TimeOutOfInternalRangeError{
+		err:      moerr.NewInvalidInputNoCtxf("invalid time value %s", value),
+		negative: negative,
 	}
-	if value[0] == '+' || value[0] == '-' {
-		negative = value[0] == '-'
-		value = value[1:]
-	}
-	if dot := strings.IndexByte(value, '.'); dot >= 0 {
-		fraction := value[dot+1:]
-		if fraction == "" || strings.IndexFunc(fraction, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return false, false
-		}
-		value = value[:dot]
-	}
-	parts := strings.Split(value, ":")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return false, false
-	}
-	for _, part := range parts {
-		if strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return false, false
-		}
-	}
-	minute, minuteErr := strconv.ParseUint(parts[1], 10, 64)
-	second, secondErr := strconv.ParseUint(parts[2], 10, 64)
-	if minuteErr != nil || secondErr != nil || minute > 59 || second > 59 {
-		return false, false
-	}
-	maxHour := strconv.FormatUint(MaxHourInTime, 10)
-	if len(parts[0]) > len(maxHour) || (len(parts[0]) == len(maxHour) && parts[0] > maxHour) {
-		return negative, true
+}
+
+// IsTimeStringOutOfInternalRange classifies every TIME spelling accepted by
+// ParseTime. Assignment callers can then apply range policy without maintaining
+// a second, incomplete TIME grammar.
+func IsTimeStringOutOfInternalRange(value string, scale int32) (negative bool, outOfRange bool) {
+	_, err := ParseTime(value, scale)
+	var rangeErr *TimeOutOfInternalRangeError
+	if errors.As(err, &rangeErr) {
+		return rangeErr.Negative(), true
 	}
 	return false, false
 }

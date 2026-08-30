@@ -886,7 +886,7 @@ func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
 	if !ok {
 		return false
 	}
-	_, outOfRange := types.IsTimeStringOutOfInternalRange(value.Sval)
+	_, outOfRange := types.IsTimeStringOutOfInternalRange(value.Sval, fn.Args[1].Typ.Scale)
 	return outOfRange
 }
 
