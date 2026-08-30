@@ -199,10 +199,10 @@ func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion39)
 		}
 	})
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion39)
 
 	err := compiler.configureMongoUserQuery(node)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)

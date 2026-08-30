@@ -209,12 +209,12 @@ not retain a prior query/cursor/client lease.
 `MongoScan` adds protobuf fields numbered 16–21. The legacy zero values retain
 the old find behavior; newer readers treat a zero kind as no explicit query.
 Older readers ignore unknown fields and consequently cannot execute the new
-operation semantics. `MORPCVersion38` is therefore the capability gate: a
+operation semantics. `MORPCVersion40` is therefore the capability gate: a
 nonzero `user_query_kind` is rejected while the service-local oldest-live
-deployment version is below 38, rather than silently falling back to an
-unfiltered find. Version 37 is implemented by the independently reviewed
-string-source-provenance capability merged in PR #27467; this branch rebases on
-that implementation and reserves only the next version, 38, for MongoDB. The
+deployment version is below 40, rather than silently falling back to an
+unfiltered find. Versions 37–39 are implemented by the independently reviewed
+capabilities now present in the rebased `main`; this branch reserves only the
+next version, 40, for MongoDB. The
 gate is checked while compiling, immediately before a
 remote scope is serialized, while it is decoded, and in `MongoScan.Prepare`.
 Deployment raises that version only after all receivers understand the payload
