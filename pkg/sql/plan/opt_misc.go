@@ -994,13 +994,22 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node := builder.qry.Nodes[nodeID]
 	childLimitDemand := false
 	if len(node.Children) == 1 {
+		boundedDemand := limitDemand || node.Limit != nil
 		switch node.NodeType {
-		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
+		case plan.Node_PROJECT, plan.Node_SORT:
 			// Only unary operators that preserve a single input relation may
 			// carry a bounded row demand to an aggregate below them.  In
 			// particular, never let an outer LIMIT cross a join or a shared CTE
 			// boundary and accidentally rewrite an unrelated aggregate.
-			childLimitDemand = limitDemand || node.Limit != nil
+			childLimitDemand = boundedDemand
+		case plan.Node_FILTER:
+			// A HAVING Filter is above Aggregate on the first rewrite pass. If
+			// Aggregate is removed, filter pushdown can move that predicate onto
+			// the scan before the second pass. Carry demand through only when the
+			// predicate is total and side-effect free; otherwise the rewrite can
+			// change which errors or volatile evaluations are reached.
+			childLimitDemand = boundedDemand &&
+				areTruncationSafePredicates(node.FilterList)
 		}
 	}
 	if len(node.Children) > 0 {
@@ -1057,6 +1066,9 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			if !isTruncationSafeRowExpr(expr) {
 				return
 			}
+		}
+		if !areTruncationSafePredicates(scan.FilterList) {
+			return
 		}
 	}
 
@@ -1188,6 +1200,105 @@ func isTruncationSafeRowExpr(expr *plan.Expr) bool {
 	}
 	return isTruncationSafeRowExpr(fn.Args[0]) &&
 		singleRowCastIsTotal(fn.Args[0].Typ, expr.Typ)
+}
+
+// isTruncationSafePredicateExpr proves that a row predicate below a blocking
+// Aggregate is total and side-effect free. Removing the Aggregate allows a scan
+// LIMIT to stop predicate evaluation early, so ordinary determinism metadata is
+// insufficient: a deterministic scalar can still fail on a later row.
+//
+// FilterList is the semantic row-filter owner. BlockFilterList contains derived
+// pruning copies and does not replace that evaluation, so proving every entry in
+// FilterList closes both the row path and any derived block-filter path.
+func isTruncationSafePredicateExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if isTruncationSafePredicateValue(expr) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.Obj)
+
+	switch functionID {
+	case function.AND, function.OR, function.XOR:
+		return len(fn.Args) == 2 &&
+			isTruncationSafePredicateExpr(fn.Args[0]) &&
+			isTruncationSafePredicateExpr(fn.Args[1])
+	case function.NOT:
+		return len(fn.Args) == 1 && isTruncationSafePredicateExpr(fn.Args[0])
+	case function.EQUAL, function.NOT_EQUAL,
+		function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL:
+		return len(fn.Args) == 2 &&
+			isTruncationSafePredicateValue(fn.Args[0]) &&
+			isTruncationSafePredicateValue(fn.Args[1])
+	case function.BETWEEN:
+		return len(fn.Args) == 3 &&
+			isTruncationSafePredicateValue(fn.Args[0]) &&
+			isTruncationSafePredicateValue(fn.Args[1]) &&
+			isTruncationSafePredicateValue(fn.Args[2])
+	case function.IN, function.NOT_IN:
+		return len(fn.Args) == 2 &&
+			isTruncationSafePredicateValue(fn.Args[0]) &&
+			isTruncationSafePredicateValue(fn.Args[1])
+	case function.IS, function.ISNOT:
+		return len(fn.Args) == 2 &&
+			isTruncationSafePredicateValue(fn.Args[0]) &&
+			isTruncationSafePredicateValue(fn.Args[1])
+	case function.ISNULL, function.ISNOTNULL,
+		function.ISTRUE, function.ISNOTTRUE,
+		function.ISFALSE, function.ISNOTFALSE:
+		return len(fn.Args) == 1 && isTruncationSafePredicateValue(fn.Args[0])
+	default:
+		return false
+	}
+}
+
+func areTruncationSafePredicates(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if !isTruncationSafePredicateExpr(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTruncationSafePredicateValue(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return value.Col != nil
+	case *plan.Expr_Lit:
+		return value.Lit != nil
+	case *plan.Expr_P:
+		return value.P != nil
+	case *plan.Expr_V:
+		return value.V != nil
+	case *plan.Expr_Vec:
+		return value.Vec != nil
+	case *plan.Expr_List:
+		if value.List == nil {
+			return false
+		}
+		for _, item := range value.List.List {
+			if !isTruncationSafePredicateValue(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		return isTruncationSafeRowExpr(expr)
+	}
 }
 
 func singleRowCastIsTotal(source, target plan.Type) bool {

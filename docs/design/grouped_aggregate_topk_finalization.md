@@ -1,6 +1,6 @@
 # Proof-gated grouped aggregate elimination for bounded queries
 
-- Status: implementation and repository regressions validated
+- Status: implementation complete; current-tree planner UT validated
 - Tracking issue: [matrixorigin/matrixone#27730](https://github.com/matrixorigin/matrixone/issues/27730)
 - Parent performance issue: [matrixorigin/matrixone#27685](https://github.com/matrixorigin/matrixone/issues/27685)
 - Implementation PR: [matrixorigin/matrixone#27850](https://github.com/matrixorigin/matrixone/pull/27850)
@@ -81,6 +81,12 @@ The aggregate-bearing extension accepts only all of the following:
   past bounded demand is truncation-safe: a direct column/literal or a
   structurally proven total, side-effect-free cast whose target range covers the
   complete source domain;
+- every semantic row predicate already owned by the direct scan is
+  truncation-safe. The proof accepts typed values, total casts, boolean
+  connectors, comparisons, BETWEEN/IN and NULL/boolean tests; an arbitrary
+  deterministic scalar is not assumed total;
+- every Filter predicate on the bounded-demand path to Aggregate, including
+  HAVING before the first filter-pushdown pass, satisfies the same proof;
 - every aggregate belongs to the proven single-row family below.
 
 An aggregate-bearing query without LIMIT deliberately keeps its established plan,
@@ -123,6 +129,18 @@ N rows and building N hash groups to scanning/projecting only the bounded demand
 plus the storage reader's batch/block granularity. With OFFSET, the existing
 source demand is `K + offset` as required by the scan contract.
 
+LIMIT pushdown is deliberately repeatable because projection pruning can expose
+the direct Project-to-Scan edge only after the first pass. If that scan already
+owns an inner `(limit, offset)` window, the outer window is composed instead of
+overwriting it: offsets add, the inner remaining cardinality is reduced by the
+outer offset, and the resulting limit is the minimum remaining bound. Literal
+overflow and any dynamic expression that would require runtime arithmetic fail
+closed by retaining the two pagination owners. The layers are also retained when
+a nonzero outer OFFSET exhausts a nonempty inner LIMIT: replacing that path with
+`LIMIT 0` would skip filters that the inner window previously had to evaluate.
+A scan with no existing window can still take dynamic LIMIT/OFFSET expressions
+directly.
+
 For `ORDER BY COUNT(*)`, aggregate elimination is still valid, but the current
 revision retains Sort and scans all rows. Removing an all-tie order is a separate
 future rule: it must prove every order expression constant and preserve LIMIT,
@@ -143,9 +161,13 @@ OFFSET and any rank/tie semantics.
 - Correlated scalar aggregates retain their established decorrelation shape.
 - Missing, incomplete or malformed PK metadata, or a non-total single-row
   aggregate conversion, fails closed.
-- Truncation safety covers both aggregate arguments and extra grouping
-  expressions. This prevents LIMIT/OFFSET pushdown from skipping evaluation that
-  the blocking Aggregate previously had to perform.
+- Truncation safety covers aggregate arguments, extra grouping expressions,
+  HAVING/other Filter predicates on the demand path, and every scan `FilterList`
+  predicate. This prevents LIMIT/OFFSET pushdown from skipping errors or
+  externally visible evaluations, including the first-pass HAVING path before
+  filter pushdown. `BlockFilterList` holds derived pruning copies; the semantic
+  predicate remains in `FilterList`, so it is not a second unproved evaluation
+  owner.
 - Binding remapping is performed only after every aggregate expression in the
   candidate has been proven, preventing partial rewrites.
 
@@ -184,12 +206,24 @@ Clean service restarts showed peak-RSS increases of about 548 MiB versus 559 MiB
 The result was far below the required 2x memory improvement, so all prototype
 execution changes were removed.
 
-### 7.3 Required repository gates
+### 7.3 Repository validation map
+
+The public BVT was run twice for the aggregate-elimination revision before the
+final scan-predicate and nested-pagination hardening. Those runs remain feature
+and fixture evidence, but they are not exact-head evidence for the final planner
+code. Current-tree validation covers the focused planner matrix and the complete
+`pkg/sql/plan` package; public BVT must be rerun when the delivery gate
+requires service-level evidence.
 
 - focused planner tests: PK elimination, aggregate family, nullable COUNT, HAVING,
   missing PK, DISTINCT/configured aggregate, grouping family, unbounded fallback,
   decimal domain containment, floating-point signed-zero fallback, fallible and
-  volatile expression fallback, and a total widening-cast control;
+  volatile expression plus WHERE/HAVING predicate fallback, safe
+  comparison/boolean/range predicate controls, and a total widening-cast
+  control;
+- exhaustive small-window LIMIT/OFFSET composition against sequential slice
+  semantics, plus public nested-query plans, dynamic-expression fallback,
+  overflow fallback and repeated-pass idempotence;
 - pre-existing grouping-set, correlated-scalar-aggregate and physical-group-key
   regressions;
 - full `pkg/sql/plan` package suite;
@@ -225,4 +259,6 @@ Acceptance for a new shape requires:
 | Start with declared PK uniqueness | Exact, stable and capable of O(N) to O(K). |
 | Require LIMIT for aggregate-bearing rollout | Bounds plan-shape impact and preserves unlimited controls. |
 | Stop demand at relational boundaries | Protects joins, CTEs and grouping-set families. |
+| Prove Filter-path and scan predicates before removing Aggregate | Closes both pre-pushdown HAVING and post-pushdown WHERE paths against hidden late errors or volatile evaluations. |
+| Compose existing pagination or retain both owners | Makes the required second pushdown pass semantic and idempotent for nested queries. |
 | Keep non-eligible execution byte-for-byte | Makes the no-regression guarantee structural, not heuristic. |

@@ -157,6 +157,106 @@ func TestPrimaryKeyGroupEliminationRequiresTruncationSafeExpressions(t *testing.
 	}
 }
 
+func TestPrimaryKeyGroupEliminationRequiresTruncationSafeScanPredicates(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantAgg bool
+	}{
+		{
+			name:    "volatile predicate falls back",
+			sql:     "select empno, count(*) from constraint_test.emp where nextval('pk_group_limit_seq') > 0 group by empno limit 1",
+			wantAgg: true,
+		},
+		{
+			name:    "fallible predicate falls back",
+			sql:     "select empno, count(*) from constraint_test.emp where cast(ename as signed) > 0 group by empno limit 1",
+			wantAgg: true,
+		},
+		{
+			name: "total comparison remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where sal > 100 group by empno limit 1",
+		},
+		{
+			name: "total conjunction remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where sal > 100 and empno >= 0 group by empno limit 1",
+		},
+		{
+			name: "total disjunction remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where sal > 100 or empno >= 0 group by empno limit 1",
+		},
+		{
+			name: "total between remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where sal between 100 and 200 group by empno limit 1",
+		},
+		{
+			name: "total in remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where empno in (1, 2) group by empno limit 1",
+		},
+		{
+			name: "total null test remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where comm is null group by empno limit 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
+
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.NotEmpty(t, scan.FilterList, "the public WHERE path must reach scan evaluation")
+			if test.wantAgg {
+				require.Nil(t, scan.Limit)
+				require.Nil(t, scan.Offset)
+			} else {
+				require.NotNil(t, scan.Limit)
+			}
+		})
+	}
+}
+
+func TestPrimaryKeyGroupEliminationRequiresTruncationSafeHavingPredicates(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantAgg bool
+	}{
+		{
+			name:    "volatile having falls back",
+			sql:     "select empno, count(*) from constraint_test.emp group by empno having nextval('pk_group_limit_seq') > 0 limit 1",
+			wantAgg: true,
+		},
+		{
+			name:    "fallible having falls back",
+			sql:     "select empno, count(*) from constraint_test.emp group by empno having cast(max(ename) as signed) > 0 limit 1",
+			wantAgg: true,
+		},
+		{
+			name: "total having remains eligible",
+			sql:  "select empno, sum(sal) from constraint_test.emp group by empno having sum(sal) > 100 limit 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			require.Equal(t, test.wantAgg, reachableNodeType(query, planpb.Node_AGG))
+			if test.wantAgg {
+				scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+				require.NotNil(t, scan)
+				require.Nil(t, scan.Limit)
+				require.Nil(t, scan.Offset)
+			}
+		})
+	}
+}
+
 func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
 	decimal := func(oid types.T, width, scale int32) planpb.Type {
 		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
