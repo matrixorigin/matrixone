@@ -1478,8 +1478,10 @@ func initExecuteStmtParamWithResolverInSession(
 		// numeric-prefix path can apply; avoid another full plan walk here.
 		runtimeNumericPrefixCandidate = prepareStmt.numericPrefixConsumer &&
 			preparedParamValuesEnableNumericPrefix(cwft.paramVals)
-		runtimeTextComparisonSpecialization = plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
-			executionPlan, preparedRuntimeTextComparisonTypes(cwft.paramVals))
+		if runtimeTypes := preparedRuntimeTextComparisonTypes(cwft.paramVals); runtimeTypes != nil {
+			runtimeTextComparisonSpecialization = plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+				executionPlan, runtimeTypes)
+		}
 	}
 	if runtimeNumericOverloadCandidate {
 		// Specialization materializes every ParamRef in the copied plan, not only
@@ -1537,7 +1539,7 @@ func initExecuteStmtParamWithResolverInSession(
 		runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
 			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
 			runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
-			runtimeDirectResultPositions)
+			runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
 		runtimeSpecialized = runtimeSpecialized || laterRuntimeSpecialized
 		if err == nil && cacheableRuntimeQuery && laterRuntimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
@@ -1838,6 +1840,8 @@ func specializePreparedExecutionPlan(
 	directResultSpecialization bool,
 	forceSpecialization bool,
 	directResultPositions []int32,
+	textComparisonChecked bool,
+	needsTextComparison bool,
 ) (*plan2.Plan, bool, bool, error) {
 	if len(paramVals) == 0 || executionPlan == nil ||
 		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
@@ -1850,9 +1854,12 @@ func specializePreparedExecutionPlan(
 		plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals)
 	needsRuntimeSpecialization := forceSpecialization ||
 		plan2.PreparedPlanNeedsRuntimeSpecialization(executionPlan)
-	runtimeTypes := preparedRuntimeTextComparisonTypes(paramVals)
-	needsTextComparison := plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
-		executionPlan, runtimeTypes)
+	if !textComparisonChecked {
+		if runtimeTypes := preparedRuntimeTextComparisonTypes(paramVals); runtimeTypes != nil {
+			needsTextComparison = plan2.PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+				executionPlan, runtimeTypes)
+		}
+	}
 	if !forceNumericOverload && !needsNumericPrefix && !directResultSpecialization && !binaryLiteralPlan &&
 		!plan2.PreparedPlanHasPaginationParams(executionPlan) && !needsRuntimeSpecialization &&
 		!needsTextComparison {
@@ -1890,23 +1897,33 @@ func specializePreparedExecutionPlan(
 }
 
 func preparedRuntimeTextComparisonTypes(paramVals []any) []types.Type {
-	runtimeTypes := make([]types.Type, len(paramVals))
+	var runtimeTypes []types.Type
 	for i, value := range paramVals {
 		param, ok := value.(plan2.ParamValue)
 		if !ok {
 			continue
 		}
+		var runtimeType types.Type
 		if param.IsBinaryProtocol {
 			if param.HasRuntimeType {
-				runtimeTypes[i] = param.RuntimeType
+				switch param.RuntimeType.Oid {
+				case types.T_char, types.T_varchar, types.T_text:
+					runtimeType = param.RuntimeType
+				}
 			} else if param.Value != nil {
-				runtimeTypes[i] = types.T_text.ToType()
+				runtimeType = types.T_text.ToType()
 			}
 		} else if param.HasSourceType {
 			switch param.SourceType.Oid {
 			case types.T_char, types.T_varchar, types.T_text:
-				runtimeTypes[i] = types.T_text.ToType()
+				runtimeType = types.T_text.ToType()
 			}
+		}
+		if runtimeType.Oid != types.T_any {
+			if runtimeTypes == nil {
+				runtimeTypes = make([]types.Type, len(paramVals))
+			}
+			runtimeTypes[i] = runtimeType
 		}
 	}
 	return runtimeTypes
@@ -2483,7 +2500,7 @@ func buildPlanForCompileRetry(
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
 		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute,
 		len(plan2.PreparedPlanNumericFallbackParamPositions(retryPlan)) > 0,
-		preparedRetry.directResultSpecialization, false, nil)
+		preparedRetry.directResultSpecialization, false, nil, false, false)
 	if err != nil {
 		return nil, err
 	}

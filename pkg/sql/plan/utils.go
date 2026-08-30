@@ -1051,11 +1051,16 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		return nil
 	}
 	return &plan.PreparedNumericMetadata{
-		Fallback:             metadata.Fallback,
-		ParamPos:             metadata.ParamPos,
-		FallbackSource:       metadata.FallbackSource,
-		FallbackSourceNodeId: metadata.FallbackSourceNodeId,
-		FallbackSourceColPos: metadata.FallbackSourceColPos,
+		Fallback:                    metadata.Fallback,
+		ParamPos:                    metadata.ParamPos,
+		FallbackSource:              metadata.FallbackSource,
+		FallbackSourceNodeId:        metadata.FallbackSourceNodeId,
+		FallbackSourceColPos:        metadata.FallbackSourceColPos,
+		ProvisionalResultCast:       metadata.ProvisionalResultCast,
+		ProvisionalResultPeer:       metadata.ProvisionalResultPeer,
+		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
+		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
+		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 	}
 }
 
@@ -4062,8 +4067,19 @@ func preparedExprContainsParam(expr *plan.Expr) bool {
 	return false
 }
 
+func preparedNumericResultPolymorphicFunction(name string) bool {
+	switch name {
+	case "case", "if", "coalesce", "ifnull", "nullif", "greatest", "least",
+		"sum", "avg", "min", "max", "any_value":
+		return true
+	default:
+		return false
+	}
+}
+
 func preparedRuntimeSpecializationFunction(name string) bool {
-	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) {
+	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
+		preparedNumericResultPolymorphicFunction(name) {
 		return true
 	}
 	// Result-domain-polymorphic functions must stay on the specialization path
@@ -4071,7 +4087,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value", "max_by", "max_by_non_null",
+	case "max_by", "max_by_non_null",
 		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
@@ -5201,6 +5217,9 @@ func exprContainsPreparedPosition(expr *plan.Expr, position int) bool {
 		return false
 	}
 	if param := expr.GetP(); param != nil && param.Pos == int32(position) {
+		return true
+	}
+	if literal := expr.GetLit(); literal != nil && exprContainsPreparedPosition(literal.Src, position) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {

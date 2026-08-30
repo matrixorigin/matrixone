@@ -426,6 +426,15 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				{expression: "nullif(?, 1)", expectedType: "DECIMAL"},
 				{expression: "sum(?)", expectedType: "DECIMAL"},
 				{expression: "avg(?)", expectedType: "DECIMAL"},
+				{expression: "greatest(?, 1)", expectedType: "DECIMAL"},
+				{expression: "least(?, 1)", expectedType: "DECIMAL"},
+				{expression: "min(?)", expectedType: "DECIMAL"},
+				{expression: "max(?)", expectedType: "DECIMAL"},
+				{expression: "any_value(?)", expectedType: "DECIMAL"},
+				{expression: "case when 1 = 1 then ? else cast(1 as decimal(38,10)) end", expectedType: "DECIMAL"},
+				{expression: "if(1 = 1, ?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "coalesce(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "ifnull(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
 				{expression: "case when 1 = 1 then cast(? as double) else 1 end", expectedType: "DOUBLE"},
 				{expression: "if(1 = 1, cast(? as double), 1)", expectedType: "DOUBLE"},
 				{expression: "ifnull(cast(? as double), 1)", expectedType: "DOUBLE"},
@@ -445,6 +454,19 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				}
 				mustExec(t, ctx, conn, "deallocate prepare "+statement)
 			}
+
+			mustExec(t, ctx, conn, `prepare issue27088_nullif_string_result from
+				'select nullif(?, cast(1 as decimal(38,10)))'`)
+			mustExec(t, ctx, conn, "set @issue27088_numeric_result = '12.5tail'")
+			directValue, directType := readResult(
+				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
+			preparedValue, preparedType := readResult(
+				"execute issue27088_nullif_string_result using @issue27088_numeric_result")
+			require.Equal(t, "12.5tail", directValue)
+			require.Equal(t, directValue, preparedValue)
+			require.Equal(t, "VARCHAR", directType)
+			require.Equal(t, directType, preparedType)
+			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_string_result")
 		})
 
 		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {

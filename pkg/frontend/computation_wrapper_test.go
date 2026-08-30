@@ -1254,11 +1254,21 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 		plan2.ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
 		},
-	}, false, false, false, false, nil)
+	}, false, false, false, false, nil, false, false)
 	require.NoError(t, err)
 	require.False(t, specialized)
 	require.False(t, applied)
 	require.Same(t, original, runtimePlan, "ineligible SQL EXECUTE must not deep-copy the cached plan")
+}
+
+func TestPreparedRuntimeTextComparisonTypesSkipsNonStringParams(t *testing.T) {
+	require.Nil(t, preparedRuntimeTextComparisonTypes([]any{
+		plan2.ParamValue{Value: "1.5", HasSourceType: true, SourceType: types.T_decimal128.ToType()},
+		plan2.ParamValue{Value: int64(1), HasRuntimeType: true, RuntimeType: types.T_int64.ToType(), IsBinaryProtocol: true},
+	}))
+	require.NotNil(t, preparedRuntimeTextComparisonTypes([]any{
+		plan2.ParamValue{Value: "text", HasSourceType: true, SourceType: types.T_varchar.ToType()},
+	}))
 }
 
 func TestSpecializePreparedExecutionPlanAppliesBitTextComparison(t *testing.T) {
@@ -1294,7 +1304,7 @@ func TestSpecializePreparedExecutionPlanAppliesBitTextComparison(t *testing.T) {
 			HasRuntimeType:   true,
 			IsBinaryProtocol: true,
 		},
-	}, true, false, false, false, nil)
+	}, true, false, false, false, nil, false, false)
 	require.NoError(t, err)
 	require.True(t, specialized)
 	require.True(t, applied)

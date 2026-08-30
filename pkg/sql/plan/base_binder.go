@@ -3418,13 +3418,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
 		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
-			name == "if" || name == "iff" || name == "case") {
+			preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
 		var err error
 		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
-		if !preparedNumericProvenance && (name == "if" || name == "iff" || name == "case") {
+		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
 			for _, arg := range args {
 				if preparedExprContainsParam(arg) {
 					preparedNumericProvenance = true
@@ -3449,9 +3449,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			source := arg
 			fn := arg.GetF()
-			_, explicitPeerCast := astArgs[i].(*tree.CastExpr)
+			explicitCast, explicitPeerCast := astArgs[i].(*tree.CastExpr)
+			if explicitPeerCast {
+				target, targetErr := getTypeFromAst(b.GetContext(), explicitCast.Type)
+				if targetErr != nil {
+					return nil, targetErr
+				}
+				if types.T(target.Id).IsDecimal() {
+					inner, innerErr := b.impl.BindExpr(explicitCast.Expr, depth, false)
+					if innerErr != nil {
+						return nil, innerErr
+					}
+					source, innerErr = appendCastBeforeExpr(b.GetContext(), inner, target)
+					if innerErr != nil {
+						return nil, innerErr
+					}
+				}
+			}
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				!explicitPeerCast && !preparedExprContainsParam(fn.Args[0]) &&
+				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
+				!preparedExprContainsParam(fn.Args[0]) &&
 				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
 				source = fn.Args[0]
 			}
@@ -3531,6 +3548,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
+			markPreparedResultCastsProvisional(
+				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -3566,6 +3585,53 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func markPreparedResultCastsProvisional(
+	ctx context.Context,
+	name string,
+	astArgs []tree.Expr,
+	peerSources []*plan.Expr,
+	expr *plan.Expr,
+	preparedNumericProvenance bool,
+) {
+	if !preparedNumericProvenance || expr == nil || expr.GetF() == nil {
+		return
+	}
+	args := expr.GetF().Args
+	for i, arg := range args {
+		if i < len(peerSources) && peerSources[i] != nil {
+			attachPreparedRuntimeParamSource(arg, DeepCopyExpr(peerSources[i]))
+			ensurePreparedNumericMetadata(arg).ProvisionalResultPeer = true
+		}
+		if i < len(astArgs) {
+			if explicitCast, ok := astArgs[i].(*tree.CastExpr); ok {
+				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil && types.T(target.Id).IsDecimal() {
+					metadata := ensurePreparedNumericMetadata(arg)
+					metadata.ProvisionalResultPeer = true
+					metadata.ProvisionalResultPeerTypeId = target.Id
+					metadata.ProvisionalResultPeerWidth = target.Width
+					metadata.ProvisionalResultPeerScale = target.Scale
+				}
+			}
+		}
+		if i >= len(astArgs) || !numericFunctionArgKeepsContext(name, i, len(args)) {
+			continue
+		}
+		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {
+			continue
+		}
+		fn := arg.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
+			len(fn.Args) == 0 || !preparedExprContainsParam(fn.Args[0]) {
+			continue
+		}
+		// This cast was introduced while the marker still had its prepare-time
+		// TEXT domain. Record occurrence provenance because its function overload
+		// can be identical to a user-authored CAST, which remains authoritative.
+		fn.SyntaxExplicitCast = false
+		ensurePreparedNumericMetadata(arg).ProvisionalResultCast = true
+	}
 }
 
 func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {

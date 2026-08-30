@@ -1450,6 +1450,15 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 		{name: "nullif", sql: "select nullif(?, 1)", function: "case"},
 		{name: "sum", sql: "select sum(?)", function: "sum"},
 		{name: "avg", sql: "select avg(?)", function: "avg"},
+		{name: "greatest", sql: "select greatest(?, 1)", function: "greatest"},
+		{name: "least", sql: "select least(?, 1)", function: "least"},
+		{name: "min", sql: "select min(?)", function: "min"},
+		{name: "max", sql: "select max(?)", function: "max"},
+		{name: "any_value", sql: "select any_value(?)", function: "any_value"},
+		{name: "case with explicit decimal peer", sql: "select case when 1 = 1 then ? else cast(1 as decimal(38,10)) end", function: "case"},
+		{name: "if with explicit decimal peer", sql: "select if(1 = 1, ?, cast(1 as decimal(38,10)))", function: "if"},
+		{name: "coalesce with explicit decimal peer", sql: "select coalesce(?, cast(1 as decimal(38,10)))", function: "coalesce"},
+		{name: "ifnull with explicit decimal peer", sql: "select ifnull(?, cast(1 as decimal(38,10)))", function: "case"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t,
@@ -1464,7 +1473,8 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 			result := findPlanFunctionExpr(filled, test.function)
 			require.NotNil(t, result, filled.String())
 			require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
-			if test.function == "sum" || test.function == "avg" {
+			if test.function == "sum" || test.function == "avg" || test.function == "min" ||
+				test.function == "max" || test.function == "any_value" {
 				require.True(t, types.T(result.GetF().Args[0].Typ.Id).IsDecimal(), result.String())
 			}
 		})

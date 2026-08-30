@@ -1621,6 +1621,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		numericPrefixKinds := make([]types.StringConversionKind, len(exprImpl.F.Args))
 		numericPrefixListArgs := make([][]bool, len(exprImpl.F.Args))
 		numericPrefixListKinds := make([][]types.StringConversionKind, len(exprImpl.F.Args))
+		var sharedControlReturnType *plan.Type
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
@@ -1641,7 +1642,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rule.sqlExecuteNumericParams[paramPos] != nil &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
 					functionName, paramPos, rule.sqlExecuteStringBackedParams)
-			if hasParamPos && rule.numericPrefixParamPositions[paramPos] {
+			sharedControlParam := false
+			if paramPos >= 0 && preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
+				for j, sibling := range originalArgs {
+					if !preparedSQLExecuteNumericResultValueArg(functionName, j, len(exprImpl.F.Args)) &&
+						exprContainsPreparedPosition(sibling, paramPos) {
+						sharedControlParam = true
+						break
+					}
+				}
+			}
+			prefixEligibleOccurrence := !(sharedControlParam &&
+				paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
+			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
 			}
@@ -1678,7 +1691,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewrittenArg = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
 			} else {
 				var applyErr error
-				rewrittenArg, applyErr = rule.ApplyExpr(arg)
+				disablePrefix := sharedControlParam && paramPos >= 0 &&
+					paramPos < len(rule.numericPrefixParamPositions) && rule.numericPrefixParamPositions[paramPos] &&
+					paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos]
+				if disablePrefix && paramPos < len(rule.params) && rule.params[paramPos] != nil {
+					// NULLIF-style rewrites share one marker between comparison and
+					// return roles. The comparison consumes the numeric prefix, while
+					// the return occurrence must materialize the original SQL value.
+					rewrittenArg = DeepCopyExpr(rule.params[paramPos])
+					rewrittenArg.Typ = arg.Typ
+					returnType := types.T_varchar.ToType()
+					returnPlanType := makePlan2Type(&returnType)
+					rewrittenArg.Typ = returnPlanType
+					sharedControlReturnType = &returnPlanType
+				} else {
+					rewrittenArg, applyErr = rule.ApplyExpr(arg)
+				}
 				err = applyErr
 				if err != nil {
 					return nil, err
@@ -1700,7 +1728,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				numericComparisonFallback = true
 			}
 			if rule.isNumericPrefixDependent(rewrittenArg) {
-				numericPrefixDependent = true
+				if !preparedSQLExecuteNumericResultConsumer(functionName) ||
+					numericFunctionArgKeepsContext(functionName, i, len(exprImpl.F.Args)) {
+					numericPrefixDependent = true
+				}
 				if unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(rewrittenArg); changed {
 					boundArgs[i] = unwrapped
 					needResetFunction = true
@@ -1809,6 +1840,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			(sqlExecuteNumericSourceDependent &&
 				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName)))
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
+			var sqlExecuteResultType plan.Type
+			if sqlExecuteNumericPeerDependent {
+				for i, sourceArg := range boundArgs {
+					if sqlExecuteNumericSourceArgs[i] && sourceArg != nil {
+						sqlExecuteResultType = sourceArg.Typ
+						break
+					}
+				}
+			}
 			for i, arg := range boundArgs {
 				// A nested runtime common-type result invalidates provisional
 				// prepare-time casts on every sibling, not only on the dependent
@@ -1818,6 +1858,30 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				candidate := arg
 				if sqlExecuteNumericPeerDependent && !sqlExecuteNumericSourceArgs[i] && originalArgs[i] != nil {
 					candidate = originalArgs[i]
+					if source, ok := provisionalExactNumericSource(candidate); ok {
+						boundArgs[i] = source
+						candidate = source
+						needResetFunction = true
+						compareArgTypes = true
+					} else if literal := candidate.GetLit(); literal != nil &&
+						(candidate.GetPreparedNumeric().GetProvisionalResultPeer() || literal.GetStringSource() != 0) &&
+						types.T(candidate.Typ.Id).IsMySQLString() && preparedNumericCommonOperandType(types.T(sqlExecuteResultType.Id)) {
+						peerType := sqlExecuteResultType
+						metadata := candidate.GetPreparedNumeric()
+						if metadata.GetProvisionalResultPeerTypeId() != 0 {
+							peerType.Id = metadata.GetProvisionalResultPeerTypeId()
+							peerType.Width = metadata.GetProvisionalResultPeerWidth()
+							peerType.Scale = metadata.GetProvisionalResultPeerScale()
+						}
+						numericPeer, castErr := appendCastBeforeExpr(rule.ctx, DeepCopyExpr(candidate), peerType)
+						if castErr != nil {
+							return nil, castErr
+						}
+						boundArgs[i] = numericPeer
+						candidate = numericPeer
+						needResetFunction = true
+						compareArgTypes = true
+					}
 				}
 				unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(candidate)
 				if changed {
@@ -1903,6 +1967,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					rule.specialized = true
 					return rewritten, nil
+				}
+			}
+		}
+
+		if sharedControlReturnType != nil {
+			for i, resultArg := range boundArgs {
+				if preparedSQLExecuteNumericResultValueArg(functionName, i, len(boundArgs)) &&
+					resultArg != nil && resultArg.GetLit().GetIsnull() {
+					resultArg.Typ = *sharedControlReturnType
 				}
 			}
 		}
@@ -2814,11 +2887,20 @@ func windowHasNumericPrefixDependency(
 }
 
 func preparedSQLExecuteNumericResultConsumer(name string) bool {
+	return preparedNumericResultPolymorphicFunction(name)
+}
+
+func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
+	if !preparedSQLExecuteNumericResultConsumer(name) {
+		return false
+	}
 	switch name {
 	case "case", "if", "coalesce", "ifnull", "nullif":
+		return numericFunctionArgKeepsContext(name, argIndex, argCount)
+	case "sum", "avg", "min", "max", "any_value":
+		return argCount == 1 && argIndex == 0
+	default: // greatest, least
 		return true
-	default:
-		return false
 	}
 }
 
@@ -2827,7 +2909,7 @@ func preparedSQLExecuteNumericSourceOwnsResultDomain(
 	paramPos int,
 	stringBacked []bool,
 ) bool {
-	if !preparedSQLExecuteNumericResultConsumer(name) && name != "sum" && name != "avg" {
+	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return true
 	}
 	return paramPos >= 0 && paramPos < len(stringBacked) && !stringBacked[paramPos]
@@ -2843,11 +2925,8 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional
 	// parent type; condition/control arguments must retain their original domain.
-	switch name {
-	case "case", "if", "coalesce", "ifnull", "nullif":
-		return numericFunctionArgKeepsContext(name, argIndex, argCount)
-	case "sum", "avg":
-		return argCount == 1 && argIndex == 0
+	if preparedSQLExecuteNumericResultConsumer(name) {
+		return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
 	}
 	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() {
 		return false
@@ -2928,20 +3007,10 @@ func functionBindingChanged(
 func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
-		fn.GetSyntaxExplicitCast() {
+		!expr.GetPreparedNumeric().GetProvisionalResultCast() {
 		return 0, false
 	}
-	target := makeTypeByPlan2Expr(expr).Oid
-	switch {
-	case preparedSQLExecuteNumericResultConsumer(name):
-		if !target.IsMySQLString() {
-			return 0, false
-		}
-	case name == "sum" || name == "avg":
-		if !target.IsFloat() {
-			return 0, false
-		}
-	default:
+	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return 0, false
 	}
 	param := fn.Args[0].GetP()
