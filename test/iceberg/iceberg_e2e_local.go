@@ -518,7 +518,9 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 				errs = append(errs, err)
 			}
 		}
-		workers.Wait()
+		if err := waitForLifecycleWorkers(releaseCtx, &workers); err != nil {
+			errs = append(errs, fmt.Errorf("wait for lifecycle workers: %w", err))
+		}
 		return errors.Join(errs...)
 	}
 	stopAndFail := func(expected, actual []string, msg string) caseResult {
@@ -527,14 +529,16 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 		}
 		return fail(expected, actual, msg)
 	}
-	collectWorkers := func() map[string]error {
-		workers.Wait()
+	collectWorkers := func(waitCtx context.Context) (map[string]error, error) {
+		if err := waitForLifecycleWorkers(waitCtx, &workers); err != nil {
+			return nil, err
+		}
 		close(results)
 		resultByName := make(map[string]error, 2)
 		for ddlResult := range results {
 			resultByName[ddlResult.name] = ddlResult.err
 		}
-		return resultByName
+		return resultByName, nil
 	}
 	stateSQL := fmt.Sprintf("select (select count(*) from mo_catalog.mo_iceberg_catalogs where account_id = 0 and catalog_id = %d), (select count(*) from mo_catalog.mo_iceberg_tables where account_id = 0 and catalog_id = %d)", catalogID, catalogID)
 	workers.Add(1)
@@ -577,7 +581,10 @@ func (r *caseRunner) concurrentCreateMappingAndDropCase(ctx context.Context) (re
 	if err := releaseLifecycleFault(barrierCtx, r.db, icebergDropAfterCatalogLockFault); err != nil {
 		return stopAndFail(nil, nil, fmt.Sprintf("release DROP post-lock phase: %v", err))
 	}
-	resultByName := collectWorkers()
+	resultByName, err := collectWorkers(barrierCtx)
+	if err != nil {
+		return fail(nil, nil, fmt.Sprintf("wait for lifecycle workers: %v", err))
+	}
 	createErr, dropErr := resultByName["create"], resultByName["drop"]
 	if (createErr == nil) == (dropErr == nil) {
 		return fail([]string{"exactly one DDL commits"}, []string{fmt.Sprintf("create=%v", createErr), fmt.Sprintf("drop=%v", dropErr)}, "catalog lock did not choose exactly one winner")
@@ -678,6 +685,20 @@ func releaseLifecycleFault(ctx context.Context, db *sql.DB, waitPoint string) er
 	}[waitPoint]
 	_, err := db.ExecContext(ctx, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(notifyPoint)))
 	return err
+}
+
+func waitForLifecycleWorkers(ctx context.Context, workers *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func waitForCatalogLockWaiter(ctx context.Context, db *sql.DB) error {

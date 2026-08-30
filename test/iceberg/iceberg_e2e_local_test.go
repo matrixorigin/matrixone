@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -638,6 +639,27 @@ func TestLocalE2EReleaseLifecycleFaultHonorsCancellation(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unexpected SQL after cancelled release: %v", err)
+	}
+}
+
+func TestLocalE2EWaitForLifecycleWorkersHonorsDeadline(t *testing.T) {
+	var workers sync.WaitGroup
+	workers.Add(1)
+	release := make(chan struct{})
+	go func() {
+		defer workers.Done()
+		<-release
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := waitForLifecycleWorkers(ctx, &workers); !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatalf("worker wait ignored deadline: %v", err)
+	}
+	close(release)
+	if err := waitForLifecycleWorkers(context.Background(), &workers); err != nil {
+		t.Fatalf("workers did not terminate after release: %v", err)
 	}
 }
 
