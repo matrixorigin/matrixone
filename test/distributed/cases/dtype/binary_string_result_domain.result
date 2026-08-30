@@ -46,7 +46,7 @@ select length(converted) from converted_blob_ctas;
 70000
 desc converted_blob_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-converted  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+converted  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦
 create table binary_result_ctas as
 select repeat(X'61', 70000) as repeated,
 concat(cast(X'61' as binary(65535)), repeat(X'62', 4465)) as concatenated;
@@ -55,8 +55,8 @@ select length(repeated), length(concatenated) from binary_result_ctas;
 70000  ¦  70000
 desc binary_result_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-repeated  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-concatenated  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦
+repeated  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    𝄀
+concatenated  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦
 select column_name, data_type, character_maximum_length, character_set_name, collation_name
 from information_schema.columns
 where table_schema = 'binary_string_result_domain' and table_name = 'binary_result_ctas'

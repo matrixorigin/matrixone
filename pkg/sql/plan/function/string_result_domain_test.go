@@ -254,6 +254,24 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	require.Equal(t, 8, length)
 	_, rejected = padResultByteLength("😀", int64(types.MaxBlobLen), "😀", int64(types.MaxBlobLen))
 	require.True(t, rejected)
+
+	length, rejected = padResultByteLength("a", 2, "", int64(types.MaxVarcharLen))
+	require.False(t, rejected)
+	require.Zero(t, length)
+	dst := make([]byte, length)
+	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", true) })
+	require.Empty(t, dst)
+	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", false) })
+}
+
+func TestExpandingTextResultsUseTextCapacity(t *testing.T) {
+	text := expandingStringReturnType([]types.Type{types.New(types.T_varchar, 1, 0)}, 0)
+	require.Equal(t, types.T_text, text.Oid)
+	require.Equal(t, types.CharsetUTF8, text.Charset)
+
+	binary := expandingStringReturnType([]types.Type{types.New(types.T_varbinary, 1, 0)}, 0)
+	require.Equal(t, types.T_blob, binary.Oid)
+	require.Equal(t, types.CharsetBinary, binary.Charset)
 }
 
 func TestCharReturnTypeIsBinaryAndPromotesLargeArity(t *testing.T) {

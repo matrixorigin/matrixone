@@ -5148,7 +5148,10 @@ func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {
 		}
 	}
 	if expr.Typ.Width <= 0 || types.T(expr.Typ.Id) == types.T_blob {
-		return 0, false
+		// PAD's target is a character count. Every runtime rune occupies at most
+		// UTFMax encoded bytes even when the source declaration itself is
+		// unbounded, so a constant target still gives a finite payload bound.
+		return uint64(utf8.UTFMax), true
 	}
 	// Invalid UTF-8 bytes become the three-byte RuneError on partial-rune
 	// paths; valid UTF-8 can consume up to four declared bytes per rune.

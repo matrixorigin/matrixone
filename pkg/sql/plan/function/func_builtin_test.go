@@ -1149,6 +1149,28 @@ func TestPadAndInsertSizingMatchesRuntimePaths(t *testing.T) {
 	require.Equal(t, len(source), end)
 }
 
+func TestTextReplaceAndInsertKeepLargeLegalResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := strings.Repeat("a", 40000)
+
+	replaceCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bb"}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
+	ok, info := replaceCase.Run()
+	require.True(t, ok, info)
+
+	insertCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{strings.Repeat("b", 30000)}, nil),
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("b", 30000) + source}, nil), fEvalFn(Insert))
+	ok, info = insertCase.Run()
+	require.True(t, ok, info)
+}
+
 func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
 	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)

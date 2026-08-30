@@ -45,6 +45,24 @@ func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 	require.Equal(t, beforeArea, len(vec.GetArea()))
 }
 
+func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1, 1)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	called := false
+
+	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.False(t, called)
+	require.Zero(t, vec.Length())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)

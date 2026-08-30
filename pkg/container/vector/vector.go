@@ -9169,13 +9169,6 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 	if vec.IsConst() || size < 0 || mp == nil {
 		return moerr.NewInternalErrorNoCtx("invalid direct varlena append")
 	}
-	if size <= types.VarlenaInlineSize {
-		var inline [types.VarlenaInlineSize]byte
-		if err = writer(inline[:size]); err != nil {
-			return err
-		}
-		return AppendBytes(vec, inline[:size], false, mp)
-	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
@@ -9185,16 +9178,29 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 	if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
 		return err
 	}
-	if err = vec.PreExtendWithArea(0, size, mp); err != nil {
+	// Admit descriptor capacity before invoking writer. Once writer starts, the
+	// append must not discover another mpool failure after user code has run.
+	if err = extend(vec, 1, mp); err != nil {
 		return err
 	}
-	offset := len(vec.area)
-	vec.area = vec.area[:offset+size]
-	if err = writer(vec.area[offset:]); err != nil {
-		return err
-	}
+
 	var value types.Varlena
-	value.SetOffsetLen(uint32(offset), uint32(size))
+	if size <= types.VarlenaInlineSize {
+		value[0] = byte(size)
+		if err = writer(value.ByteSlice()); err != nil {
+			return err
+		}
+	} else {
+		if err = vec.PreExtendWithArea(0, size, mp); err != nil {
+			return err
+		}
+		offset := len(vec.area)
+		vec.area = vec.area[:offset+size]
+		if err = writer(vec.area[offset:]); err != nil {
+			return err
+		}
+		value.SetOffsetLen(uint32(offset), uint32(size))
+	}
 	return appendOneOwnedVarlena(vec, value, mp)
 }
 

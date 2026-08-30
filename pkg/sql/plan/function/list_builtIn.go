@@ -92,9 +92,7 @@ func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.T
 	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
 		return binaryStringResultType(unknownStringResultBound())
 	}
-	result := types.T_varchar.ToType()
-	result.Charset = parameters[sourceIndex].Charset
-	return result
+	return textStringResultType(unknownStringResultBound(), parameters[sourceIndex].Charset)
 }
 
 func substringStringReturnType(parameters []types.Type, sourceIndex int) types.Type {

@@ -1664,6 +1664,9 @@ func writePadResult(dst []byte, src string, target int, pad string, left bool) {
 		copy(dst, src)
 		return
 	}
+	if padRunes == 0 {
+		return
+	}
 	missing := target - srcRunes
 	full, partial := missing/padRunes, missing%padRunes
 	writePad := func(out []byte) int {
