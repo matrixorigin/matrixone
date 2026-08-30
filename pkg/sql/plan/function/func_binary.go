@@ -936,23 +936,40 @@ func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkR
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
-func coalesceJSONTextResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+// coalesceJSONResult must run before the generic string-numeric rule. It scans
+// every branch so a numeric argument cannot hide a bounded or binary JSON cast.
+func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
 	hasJSON := false
 	hasCharacter := false
+	hasNumeric := false
+	hasOther := false
+	hasBinary := false
 	for i := range inputs {
-		switch inputs[i].Oid {
-		case types.T_any:
-		case types.T_json:
+		oid := inputs[i].Oid
+		switch {
+		case oid == types.T_any:
+		case oid == types.T_json:
 			hasJSON = true
-		case types.T_char, types.T_varchar:
+		case oid == types.T_char || oid == types.T_varchar || oid == types.T_text:
 			hasCharacter = true
-		case types.T_text:
-			hasCharacter = true
+		case oid.IsInteger() || oid.IsFloat() || oid.IsDecimal():
+			hasNumeric = true
+		case oid == types.T_binary || oid == types.T_varbinary || oid == types.T_blob:
+			hasBinary = true
 		default:
-			return checkResult{}, false
+			hasOther = true
 		}
 	}
-	if !hasJSON || !hasCharacter {
+	if !hasJSON {
+		return checkResult{}, false
+	}
+	if hasBinary {
+		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+	}
+	if hasOther && !hasNumeric {
+		return checkResult{}, false
+	}
+	if !hasCharacter && !hasNumeric {
 		return checkResult{}, false
 	}
 
@@ -972,6 +989,9 @@ func coalesceJSONTextResult(overloads []overload, inputs []types.Type) (checkRes
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
+		if result, ok := coalesceJSONResult(overloads, inputs); ok {
+			return result
+		}
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
 			castType := make([]types.Type, len(inputs))
 			for i := range castType {
@@ -985,9 +1005,6 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
-			return result
-		}
-		if result, ok := coalesceJSONTextResult(overloads, inputs); ok {
 			return result
 		}
 

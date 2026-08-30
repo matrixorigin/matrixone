@@ -15,6 +15,7 @@
 package function
 
 import (
+	"fmt"
 	"testing"
 	"unicode/utf8"
 
@@ -1494,6 +1495,30 @@ func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 			wantCast:   true,
 		},
 		{
+			name:       "json varchar numeric",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "varchar numeric json",
+			inputs:     []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_json.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "numeric json varchar",
+			inputs:     []types.Type{types.T_int64.ToType(), types.T_json.ToType(), types.T_varchar.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
+			name:       "json and numeric",
+			inputs:     []types.Type{types.T_json.ToType(), types.T_int64.ToType()},
+			wantReturn: types.T_text,
+			wantCast:   true,
+		},
+		{
 			name:       "all json stays json",
 			inputs:     []types.Type{types.T_json.ToType(), types.T_json.ToType()},
 			wantReturn: types.T_json,
@@ -1509,6 +1534,9 @@ func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "coalesce", tt.inputs)
 			require.NoError(t, err)
 			require.Equal(t, tt.wantReturn, result.GetReturnType().Oid)
+			if tt.wantReturn == types.T_text {
+				require.Zero(t, result.GetReturnType().Width)
+			}
 
 			castTypes, shouldCast := result.ShouldDoImplicitTypeCast()
 			require.Equal(t, tt.wantCast, shouldCast)
@@ -1518,17 +1546,24 @@ func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 			require.Len(t, castTypes, len(tt.inputs))
 			for i := range castTypes {
 				require.Equal(t, tt.wantReturn, castTypes[i].Oid)
+				if tt.wantReturn == types.T_text {
+					require.Zero(t, castTypes[i].Width)
+				}
 			}
 		})
 	}
 
 	for _, typ := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
-		t.Run("reject "+typ.String(), func(t *testing.T) {
-			_, err := GetFunctionByName(proc.Ctx, "coalesce", []types.Type{
-				types.T_json.ToType(), typ.ToType(),
+		for _, inputs := range [][]types.Type{
+			{types.T_json.ToType(), typ.ToType()},
+			{types.T_json.ToType(), typ.ToType(), types.T_int64.ToType()},
+			{types.T_int64.ToType(), typ.ToType(), types.T_json.ToType()},
+		} {
+			t.Run(fmt.Sprintf("reject %s at %v", typ, inputs), func(t *testing.T) {
+				_, err := GetFunctionByName(proc.Ctx, "coalesce", inputs)
+				require.Error(t, err)
 			})
-			require.Error(t, err)
-		})
+		}
 	}
 }
 

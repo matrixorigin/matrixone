@@ -923,7 +923,7 @@ func TestCoalesceLargeJSONCharacterFallbackIsLossless(t *testing.T) {
 	require.Greater(t, len(expected), int(types.MaxVarcharLen))
 
 	mock := NewMockOptimizer(false)
-	pl, err := runOneExprStmt(mock, t, "select coalesce(cast('"+jsonText+"' as json), '{}')")
+	pl, err := runOneExprStmt(mock, t, "select coalesce(cast('"+jsonText+"' as json), '{}', 0)")
 	require.NoError(t, err)
 
 	expr := pl.GetQuery().Nodes[1].ProjectList[0]
