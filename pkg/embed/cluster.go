@@ -123,7 +123,8 @@ func (c *cluster) Start() error {
 
 func (c *cluster) doStartLocked(from int) error {
 	var wg sync.WaitGroup
-	var startErr atomic.Value
+	var startErr error
+	var startErrOnce sync.Once
 	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := c.startServiceLocked(s); err != nil {
@@ -139,14 +140,16 @@ func (c *cluster) doStartLocked(from int) error {
 				// Only the first error is captured; concurrent failures
 				// from other services are discarded since knowing that
 				// any service failed is sufficient to abort startup.
-				startErr.CompareAndSwap(nil, err)
+				startErrOnce.Do(func() {
+					startErr = err
+				})
 			}
 		}(s)
 	}
 
 	wg.Wait()
-	if v := startErr.Load(); v != nil {
-		return v.(error)
+	if startErr != nil {
+		return startErr
 	}
 	return nil
 }

@@ -28,7 +28,10 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,6 +55,45 @@ type closeTrackingFileService struct {
 
 func (s *closeTrackingFileService) Close(context.Context) {
 	s.closeCount.Add(1)
+}
+
+type closeTrackingQueryClient struct {
+	closeCount atomic.Int32
+	closeErr   error
+}
+
+var _ qclient.QueryClient = new(closeTrackingQueryClient)
+
+func (c *closeTrackingQueryClient) ServiceID() string { return "close-tracking-query" }
+
+func (c *closeTrackingQueryClient) SendMessage(
+	context.Context,
+	string,
+	*pb.Request,
+) (*pb.Response, error) {
+	return nil, nil
+}
+
+func (c *closeTrackingQueryClient) NewRequest(pb.CmdMethod) *pb.Request {
+	return &pb.Request{}
+}
+
+func (c *closeTrackingQueryClient) Release(*pb.Response) {}
+
+func (c *closeTrackingQueryClient) Close() error {
+	c.closeCount.Add(1)
+	return c.closeErr
+}
+
+type closeTrackingHAKeeperClient struct {
+	*testHAKClient
+	closeCount atomic.Int32
+	closeErr   error
+}
+
+func (c *closeTrackingHAKeeperClient) Close() error {
+	c.closeCount.Add(1)
+	return c.closeErr
 }
 
 func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
@@ -86,6 +128,46 @@ func TestOperatorCloseRetainsDependenciesAfterServiceCloseFailure(t *testing.T) 
 	require.Equal(t, int32(2), svc.closeCount.Load())
 	require.Equal(t, int32(1), fs.closeCount.Load())
 	require.False(t, op.needsCleanup())
+}
+
+func TestOperatorCloseClosesTrackedRPCClients(t *testing.T) {
+	queryClient := &closeTrackingQueryClient{}
+	hakeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	op := &operator{state: started}
+	op.reset.fs = &closeTrackingFileService{}
+	op.reset.queryClients = []qclient.QueryClient{queryClient}
+	op.reset.hakeeperClient = hakeeperClient
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), queryClient.closeCount.Load())
+	require.Equal(t, int32(1), hakeeperClient.closeCount.Load())
+	require.False(t, op.needsCleanup())
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), queryClient.closeCount.Load())
+	require.Equal(t, int32(1), hakeeperClient.closeCount.Load())
+}
+
+func TestWaitClusterConditionRetainsClientOnWaitFailure(t *testing.T) {
+	waitErr := errors.New("wait failed")
+	hakeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	op := &operator{}
+
+	err := op.waitClusterConditionWithClientLocked(
+		hakeeperClient,
+		func(logservice.CNHAKeeperClient) error {
+			return waitErr
+		},
+	)
+	require.ErrorIs(t, err, waitErr)
+	require.Same(t, hakeeperClient, op.reset.hakeeperClient)
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), hakeeperClient.closeCount.Load())
 }
 
 func TestClusterStartRollbackClosesPartiallyConstructedServices(t *testing.T) {
@@ -176,6 +258,94 @@ func TestClusterStartRetriesFailedInitialCleanupBeforeRestart(t *testing.T) {
 	require.Equal(t, started, c.state)
 	require.NoError(t, c.Close())
 	require.Equal(t, int32(1), secondService.closeCount.Load())
+}
+
+func TestClusterStartHandlesHeterogeneousConcurrentErrors(t *testing.T) {
+	firstErr := errors.New("first startup error")
+	secondErr := fmt.Errorf("second startup error: %w", errors.New("cause"))
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	c := &cluster{
+		services: []*operator{
+			{index: 0, serviceType: metadata.ServiceType_CN},
+			{index: 1, serviceType: metadata.ServiceType_CN},
+		},
+		startFn: func(op *operator) error {
+			started <- struct{}{}
+			<-release
+			if op.index == 0 {
+				return firstErr
+			}
+			return secondErr
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- c.Start()
+	}()
+	<-started
+	<-started
+	close(release)
+
+	err := <-result
+	require.Error(t, err)
+	require.True(t, errors.Is(err, firstErr) || errors.Is(err, secondErr))
+}
+
+func TestClusterStartRetriesTrackedClientCleanupBeforeRestart(t *testing.T) {
+	startErr := errors.New("service startup failed")
+	closeErr := errors.New("query client close failed")
+	firstQueryClient := &closeTrackingQueryClient{closeErr: closeErr}
+	firstHAKeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	secondQueryClient := &closeTrackingQueryClient{}
+	secondHAKeeperClient := &closeTrackingHAKeeperClient{
+		testHAKClient: &testHAKClient{},
+	}
+	startCalls := 0
+	op := &operator{serviceType: metadata.ServiceType_LOG}
+	c := &cluster{
+		services: []*operator{op},
+		startFn: func(op *operator) error {
+			startCalls++
+			switch startCalls {
+			case 1:
+				op.state = started
+				op.reset.queryClients = []qclient.QueryClient{firstQueryClient}
+				op.reset.hakeeperClient = firstHAKeeperClient
+				return startErr
+			case 2:
+				require.Empty(t, op.reset.queryClients)
+				require.Nil(t, op.reset.hakeeperClient)
+				op.state = started
+				op.reset.queryClients = []qclient.QueryClient{secondQueryClient}
+				op.reset.hakeeperClient = secondHAKeeperClient
+				return nil
+			default:
+				t.Fatalf("unexpected start call %d", startCalls)
+				return nil
+			}
+		},
+	}
+
+	require.ErrorIs(t, c.Start(), startErr)
+	require.ErrorIs(t, c.Start(), closeErr)
+	require.Equal(t, 1, startCalls)
+	require.Equal(t, int32(2), firstQueryClient.closeCount.Load())
+	require.Equal(t, int32(1), firstHAKeeperClient.closeCount.Load())
+
+	firstQueryClient.closeErr = nil
+	require.NoError(t, c.Start())
+	require.Equal(t, 2, startCalls)
+	require.Equal(t, int32(3), firstQueryClient.closeCount.Load())
+	require.Equal(t, started, c.state)
+
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), secondQueryClient.closeCount.Load())
+	require.Equal(t, int32(1), secondHAKeeperClient.closeCount.Load())
 }
 
 func TestRollbackNewServicesRetriesCleanupBeforeRestart(t *testing.T) {
