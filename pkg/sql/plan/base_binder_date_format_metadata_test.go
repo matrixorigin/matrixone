@@ -29,17 +29,24 @@ import (
 
 func TestMySQLDateFormatWidth(t *testing.T) {
 	for _, test := range []struct {
+		name   string
 		format string
 		width  int32
 	}{
-		{format: "%W %M %Y", width: 134},
-		{format: "%a %b %D %j", width: 74},
-		{format: "%H|%r|%T|%f", width: 35},
-		{format: "%U%u%V%v%y%m%d%h%I%i%l%p%S%s%c%e", width: 32},
-		{format: "%%-%q-%", width: 5},
-		{format: strings.Repeat("%W", 2048), width: types.MaxVarcharLen},
+		{name: "date_format", format: "%W %M %Y", width: 134},
+		{name: "date_format", format: "%a %b %D %j", width: 74},
+		{name: "date_format", format: "%H|%r|%T|%f", width: 35},
+		{name: "date_format", format: "%U%u%V%v%y%m%d%h%I%i%l%p%S%s%c%e", width: 53},
+		{name: "date_format", format: "%U|%u|%V", width: 29},
+		{name: "date_format", format: "%%-%q-%", width: 5},
+		{name: "date_format", format: strings.Repeat("%W", 2048), width: types.MaxVarcharLen},
+		{name: "time_format", format: "%H", width: 11},
+		{name: "time_format", format: "%k", width: 11},
+		{name: "time_format", format: "%T", width: 17},
+		{name: "time_format", format: "%i", width: 3},
+		{name: "time_format", format: "%H|%r|%T|%f", width: 47},
 	} {
-		require.Equal(t, test.width, mysqlDateFormatWidth(test.format), test.format)
+		require.Equal(t, test.width, mysqlDateFormatWidth(test.name, test.format), test.name+" "+test.format)
 	}
 }
 
@@ -70,6 +77,27 @@ func TestBindDateFormatMetadata(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.MaxVarcharLen), dynamic.Typ.Width)
+
+	timeType := types.T_time.ToType()
+	timeArg := &planpb.Expr{
+		Typ:  makePlan2Type(&timeType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	for _, test := range []struct {
+		format string
+		width  int32
+	}{
+		{format: "%H", width: 11},
+		{format: "%T", width: 17},
+		{format: "%i", width: 3},
+	} {
+		literal, err = BindFuncExprImplByPlanExpr(context.Background(), "time_format", []*planpb.Expr{
+			timeArg,
+			makePlan2StringConstExprWithType(test.format),
+		})
+		require.NoError(t, err)
+		require.Equal(t, test.width, literal.Typ.Width, test.format)
+	}
 }
 
 func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
