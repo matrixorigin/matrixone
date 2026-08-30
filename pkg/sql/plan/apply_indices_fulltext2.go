@@ -28,10 +28,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	fulltext2engine "github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func fulltext2ConjunctiveCandidateLimitEligible(match *plan.Expr, idxdef *plan.IndexDef) bool {
+	if match == nil || idxdef == nil || !catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
+		return false
+	}
+	fn := match.GetF()
+	if fn == nil || len(fn.Args) < 2 {
+		return false
+	}
+	pattern, mode := fn.Args[0].GetLit(), fn.Args[1].GetLit()
+	if pattern == nil || pattern.Isnull || mode == nil || mode.Isnull ||
+		mode.GetI64Val() != int64(tree.FULLTEXT_BOOLEAN) {
+		return false
+	}
+	eligible, err := fulltext2engine.IsConjunctiveTermQuery(
+		[]byte(pattern.GetSval()),
+		fulltext2ParserFromParams(idxdef.IndexAlgoParams),
+	)
+	return err == nil && eligible
+}
 
 // fulltext2PeelablePkColName returns the pk column name ONLY when the pk's type is one the
 // fulltext2 in-index predicate evaluator can actually compare — the integer family (incl.
@@ -84,7 +104,7 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	// The json probe is also position-free by nature: it is a pure disjunction of
 	// literal terms with no phrase, so it is valid on a POSITION_FREE index — which
 	// is the default for a tuple json index.
-	if mode != int64(tree.FULLTEXT_BM25) && mode != fulltext2.JSONProbeMode &&
+	if mode != int64(tree.FULLTEXT_BM25) && mode != fulltext2engine.JSONProbeMode &&
 		fulltext2PositionFreeFromParams(idxdef.IndexAlgoParams) {
 		return "", moerr.NewInvalidInputf(builder.GetContext(),
 			"fulltext2 index %q is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching",

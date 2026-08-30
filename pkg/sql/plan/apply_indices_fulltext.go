@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -426,20 +427,41 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 	}
 
-	// A single fulltext stream can safely keep LIMIT+OFFSET candidates. With
-	// multiple streams, limiting each input before their intersection can drop
-	// documents that belong to the final top page, so leave those inputs
-	// unbounded until a joint top-k implementation exists.
-	//
-	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan, and
-	// this must be tested AFTER the lift emptied scanNode.FilterList -- otherwise removing the
-	// predicate from the scan is what makes the cap look safe. The predicate now runs in the
-	// FILTER node ABOVE the join, so capping the stream below it hands that filter only the
-	// top-relevance candidates: `where sc < 0.05 limit 1` would cap the stream to its single
-	// highest-scoring document and then reject it, returning nothing while qualifying rows sit
-	// just below the cap.
+	// Resolve the residual-WHERE prefilter before deciding whether the internal
+	// fulltext stream may keep only LIMIT+OFFSET candidates. The early LIMIT is
+	// correctness-safe only when that prefilter is exact.
+	pushdownEnabled := len(scanNode.FilterList) > 0
+	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
+		!localProtocolEnablesSortedMembershipFilter(builder.compCtx.GetProcess().GetService()) {
+		pushdownEnabled = false
+	}
+	if pushdownEnabled {
+		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
+			if v, ok := val.(int8); ok && v == 0 {
+				pushdownEnabled = false
+			}
+		}
+	}
+	if pushdownEnabled {
+		for _, filter := range scanNode.FilterList {
+			if containsVolatileFunction(filter) {
+				// The prefilter topology evaluates residual filters in both the
+				// candidate scan and the final scan. A volatile predicate can
+				// produce different results in those evaluations, so it cannot
+				// safely participate in candidate-limit pushdown.
+				pushdownEnabled = false
+				break
+			}
+		}
+	}
+
+	exactPrefilter := docfilter.SupportsBitset(types.T(pkType.Id).ToType())
+
+	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan. It
+	// runs above the join, so limiting the stream below it can under-fill the final result.
 	limitExpr := builder.buildFullTextCandidateLimit(
-		scanNode, wrappedMatchFilters, ft_filters, paginationLimit, paginationOffset)
+		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
+		paginationLimit, paginationOffset)
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -656,20 +678,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Determine join structure based on whether scanNode still has non-fulltext filters.
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
 	// to reduce the number of doc_ids that fulltext_index_scan must process.
-	pushdownEnabled := len(scanNode.FilterList) > 0
-	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
-		!localProtocolEnablesSortedMembershipFilter(
-			builder.compCtx.GetProcess().GetService()) {
-		pushdownEnabled = false
-	}
-	if pushdownEnabled {
-		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
-			if v, ok := val.(int8); ok && v == 0 {
-				pushdownEnabled = false
-			}
-		}
-	}
-
 	var joinnodeID int32
 
 	if pushdownEnabled {
@@ -962,11 +970,30 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	scanNode *plan.Node,
 	wrappedMatchFilters []*plan.Expr,
 	fullTextFilters []*plan.Expr,
+	indexDefs []*plan.IndexDef,
+	prefilterPushdown bool,
+	exactPrefilter bool,
 	paginationLimit *plan.Expr,
 	paginationOffset *plan.Expr,
 ) *plan.Expr {
-	if builder.sqlCalcFoundRows || scanNode == nil || len(scanNode.FilterList) != 0 ||
+	if builder.sqlCalcFoundRows || scanNode == nil ||
 		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
+		return nil
+	}
+	if len(scanNode.FilterList) == 0 {
+		limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
+		return limit
+	}
+	if !shouldPushFulltextCandidateLimit(
+		len(fullTextFilters), len(scanNode.FilterList), prefilterPushdown, exactPrefilter,
+	) || len(indexDefs) != 1 ||
+		!fulltext2ConjunctiveCandidateLimitEligible(fullTextFilters[0], indexDefs[0]) {
+		return nil
+	}
+	// The residual-filter path is admitted at plan time, so prepared or dynamic
+	// LIMIT values remain unbounded. The no-residual path above preserves main's
+	// existing dynamic-LIMIT behavior.
+	if _, literal := getLiteralUint64(paginationLimit); !literal {
 		return nil
 	}
 	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)

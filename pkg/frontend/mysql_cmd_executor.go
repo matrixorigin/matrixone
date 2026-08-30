@@ -2900,11 +2900,15 @@ func createPrepareStmtInSession(
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
-		hasPaginationParams:           plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
-		hasLagLeadParams:              len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
-		getFromSendLongData:           make(map[int]struct{}),
-		schedulingSQLMode:             schedulingSQLMode,
+		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
+			prepareControl.Plan),
+		hasPaginationParams: plan2.PreparedPlanHasPaginationParams(prepareControl.Plan),
+		hasLagLeadParams:    len(plan2.PreparedLagLeadParamPositions(prepareControl.Plan)) > 0,
+		getFromSendLongData: make(map[int]struct{}),
+		schedulingSQLMode:   schedulingSQLMode,
 	}
+	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
+	prepareStmt.directResultParamPositionsSet = true
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -3136,7 +3140,10 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -3347,7 +3354,10 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 // handleGrantRole grants the privilege to the role
 func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx)
+	// Object lifecycle locks are part of GRANT's correctness contract. Force the
+	// private transaction into the same pessimistic RC protocol as DROP even on
+	// optimistic deployments; LockOp intentionally skips optimistic txns.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4627,10 +4637,31 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 	return stats, nil
 }
 
+func bindSessionDatabaseForStatement(ses *Session, defaultDatabase string) func() {
+	if defaultDatabase == "" || defaultDatabase == ses.GetDatabaseName() {
+		return func() {}
+	}
+	currentDatabase := ses.GetDatabaseName()
+	ses.SetDatabaseName(defaultDatabase)
+	return func() { ses.SetDatabaseName(currentDatabase) }
+}
+
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+func authenticateUserCanExecutePrepareOrExecute(
+	reqCtx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	p *plan.Plan,
+	defaultDatabase string,
+) (statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
+
+	// Unqualified names in a prepared AST retain their PREPARE-time binding.
+	// Authorization must resolve that same object rather than the database that
+	// happens to be active when EXECUTE runs.
+	restoreDatabase := bindSessionDatabaseForStatement(ses, defaultDatabase)
+	defer restoreDatabase()
 
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
@@ -5011,6 +5042,38 @@ func executeStmtWithTxn(ses FeSession,
 	return
 }
 
+func effectiveStatementForTxn(
+	ctx context.Context,
+	ses FeSession,
+	stmt tree.Statement,
+) (tree.Statement, string, error) {
+	seen := make(map[string]struct{})
+	defaultDatabase := ""
+	for {
+		execute, ok := stmt.(*tree.Execute)
+		if !ok {
+			return stmt, defaultDatabase, nil
+		}
+		name := strings.ToLower(string(execute.Name))
+		if _, ok = seen[name]; ok {
+			return nil, "", moerr.NewInternalError(ctx, "cyclic prepared EXECUTE reference")
+		}
+		seen[name] = struct{}{}
+		prepared, err := ses.GetPrepareStmt(ctx, name)
+		if err != nil {
+			return nil, "", err
+		}
+		if prepared == nil || prepared.PrepareStmt == nil {
+			return nil, "", moerr.NewInternalError(ctx, "prepared statement has no executable statement")
+		}
+		stmt = prepared.PrepareStmt
+		// Unqualified names in the saved AST were bound against this database.
+		// Admission must resolve them exactly like the prepared plan, regardless
+		// of the session database when EXECUTE runs.
+		defaultDatabase = prepared.defaultDatabase
+	}
+}
+
 func executeStmtWithWorkspace(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
@@ -5025,7 +5088,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	//it only executes select statements.
 
 	//7. pass or commit or rollback txn
-	// defer transaction state management.
+	// Admission errors occur before StartStatement and must not roll back the
+	// previous workspace statement. Enable transaction finalization only for an
+	// explicit COMMIT/ROLLBACK or after transaction admission succeeds.
+	finishTxnOnReturn := false
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
@@ -5037,7 +5103,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
-		err = finishTxnFunc(ses, err, execCtx)
+		if finishTxnOnReturn {
+			err = finishTxnFunc(ses, err, execCtx)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -5046,6 +5114,21 @@ func executeStmtWithWorkspace(ses FeSession,
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
 	execCtx.txnOpt.Close()
+	effectiveStmt, effectiveDefaultDatabase, err := effectiveStatementForTxn(
+		execCtx.reqCtx, ses, execCtx.stmt,
+	)
+	if err != nil {
+		return err
+	}
+	if effectiveDefaultDatabase == "" {
+		// Binary execution and wrappers may already expose the prepared inner AST;
+		// initExecuteStmtParam recorded its binding database before authorization.
+		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
+	}
+	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
+	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
@@ -5054,9 +5137,11 @@ func executeStmtWithWorkspace(ses FeSession,
 		beginStmt = true
 	case *tree.CommitTransaction:
 		execCtx.txnOpt.byCommit = true
+		finishTxnOnReturn = true
 		return nil
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
+		finishTxnOnReturn = true
 		return nil
 	case *tree.SavePoint, *tree.ReleaseSavePoint:
 		return nil
@@ -5080,6 +5165,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	if err != nil {
 		return err
 	}
+	finishTxnOnReturn = true
 
 	//skip BEGIN stmt
 	if beginStmt {
@@ -5741,6 +5827,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		} else {
 			currentSQLRecord = sqlRecord[i]
 		}
+		// ExecCtx spans the whole request, while these fields belong to one
+		// statement generation. Reset before authorization/admission, then inject
+		// binary PREPARE metadata captured before doComQuery.
+		execCtx.beginStatementGeneration(currentInput)
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
 		installStatementRemap(execCtx, cw)
@@ -5782,10 +5872,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			ses.ClearDDLOwnerRoleID()
-			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
-			if err != nil {
-				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
-				return err
+			authStats, authErr := func() (statistic.StatsArray, error) {
+				restoreDatabase := bindSessionDatabaseForStatement(
+					ses, execCtx.effectiveTxnDefaultDatabase,
+				)
+				defer restoreDatabase()
+				return authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
+			}()
+			if authErr != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, authErr)
+				return authErr
 			}
 			statsInfo.PermissionAuth.Add(&authStats)
 		}
@@ -6061,6 +6157,16 @@ func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string,
 	return nil
 }
 
+func newBinaryExecuteUserInput(sql string, prepareStmt *PrepareStmt, cursorRequested bool) *UserInput {
+	return &UserInput{
+		sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt,
+		preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true,
+		preparedDefaultDatabase: prepareStmt.defaultDatabase,
+		isCursorExecute:         cursorRequested,
+		remapDb:                 prepareStmt.remapDb,
+	}
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -6231,7 +6337,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, isCursorExecute: cursorRequested, remapDb: prepareStmt.remapDb})
+		err = doComQuery(ses, execCtx, newBinaryExecuteUserInput(sql, prepareStmt, cursorRequested))
 		if err != nil {
 			prepareStmt.closeCursor()
 			markRowCountFailed(ses, ses.GetProc())

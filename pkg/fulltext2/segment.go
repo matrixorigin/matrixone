@@ -420,6 +420,29 @@ func (s *Segment) pk(ord int64) any {
 	return v
 }
 
+// pkContent returns the canonical PK content bytes for a loaded segment without
+// decoding them into a boxed Go value. The returned slice is a view into the
+// immutable docmap/mmap and remains valid for the segment lifetime. Build-side
+// segments do not have this encoded view and return an error.
+func (s *Segment) pkContent(ord int64) (content []byte, err error) {
+	if s.pks != nil {
+		return nil, moerr.NewInternalErrorNoCtx("fulltext2: pk content requires a loaded segment")
+	}
+	if ord < 0 || ord >= s.N || ord >= int64(len(s.pkOffsets)) {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: pk content ordinal out of range (ord=%d)", ord)
+	}
+	off := int(s.pkOffsets[ord])
+	if off < 0 || len(s.pkRaw) < 4 || off > len(s.pkRaw)-4 {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: pk content header out of range (ord=%d)", ord)
+	}
+	start := off + 4
+	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:start]))
+	if l < 0 || l > len(s.pkRaw)-start {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: pk content value out of range (ord=%d)", ord)
+	}
+	return s.pkRaw[start : start+l], nil
+}
+
 // includeLayout is the derived per-column addressing for the docmap include section: a dense
 // stride-addressed FIXED region (the integer family) plus an offset-addressed VARLENA region
 // (varchar/char). Fixed columns need NO per-doc offset — their value sits at a computed

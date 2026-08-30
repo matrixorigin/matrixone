@@ -663,6 +663,7 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 		{Id: int32(types.T_char), Width: 3},
 		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
 		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
 		{Id: int32(types.T_year), Width: 4},
@@ -691,6 +692,7 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 	for _, target := range []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
 		{Id: int32(types.T_year), Width: 4},
+		{Id: int32(types.T_time), Scale: 6},
 	} {
 		expr, err := MakePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
@@ -715,6 +717,7 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		{Id: int32(types.T_char), Width: 3},
 		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
 		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
 		{Id: int32(types.T_year), Width: 4},
@@ -732,6 +735,20 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
 	}
+}
+
+func TestForceAssignmentCastExprPreservesSameTypeTimeBoundary(t *testing.T) {
+	ctx := context.Background()
+	timeType := plan.Type{Id: int32(types.T_time), Scale: 6}
+	source := &Expr{Typ: timeType}
+
+	assignment, err := forceAssignmentCastExpr(ctx, source, timeType)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", assignment.GetF().GetFunc().GetObjName())
+
+	expression, err := forceCastExpr(ctx, source, timeType)
+	require.NoError(t, err)
+	require.Same(t, source, expression)
 }
 
 func TestTinyTextSameTypeAssignmentStillValidates(t *testing.T) {

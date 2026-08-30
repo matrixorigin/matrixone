@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 func TestDAGFunctionality(t *testing.T) {
@@ -488,6 +490,29 @@ func TestComputeAlterLineageCompactionPlanCycleSafe(t *testing.T) {
 	require.Equal(t, []string{"__mo_branch_1", "__mo_branch_2"}, plan.SnapshotNames)
 }
 
+func BenchmarkComputeAlterLineageCompactionPlan2049(b *testing.B) {
+	const rowCount = 2049
+	rows := make([]DataBranchMetadata, rowCount)
+	for i := range rows {
+		rows[i] = DataBranchMetadata{
+			TableID:      uint64(i + 1),
+			CloneTS:      1,
+			Creator:      uint64(catalog.System_Account),
+			Level:        AlterLineageLevel,
+			TableDeleted: true,
+		}
+	}
+	dag := NewBranchReclaimDag(rows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		plan := ComputeAlterLineageCompactionPlan(dag, nil, nil)
+		if len(plan.TableIDs) != rowCount {
+			b.Fatalf("got %d compactable rows, want %d", len(plan.TableIDs), rowCount)
+		}
+	}
+}
+
 func TestPitrRetentionLowerBound(t *testing.T) {
 	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
 
@@ -508,6 +533,200 @@ func TestPitrRetentionLowerBound(t *testing.T) {
 
 	_, err := PitrRetentionLowerBound(now, 1, "week")
 	require.Error(t, err)
+	_, err = PitrRetentionLowerBound(now, 0, "h")
+	require.Error(t, err)
+	_, err = PitrRetentionLowerBound(now, 101, "h")
+	require.Error(t, err)
+
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "May 31 clamps to April 30",
+			now:  time.Date(2025, time.May, 31, 12, 0, 0, 123456789, time.UTC),
+			want: time.Date(2025, time.April, 30, 12, 0, 0, 123456789, time.UTC),
+		},
+		{
+			name: "March 31 clamps to February 28",
+			now:  time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC),
+			want: time.Date(2025, time.February, 28, 12, 0, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PitrRetentionLowerBound(tc.now, 1, "mo")
+			require.NoError(t, err)
+			require.Equal(t, tc.want.UnixNano(), got)
+		})
+	}
+
+	leapDay := time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC)
+	got, err := PitrRetentionLowerBound(leapDay, 1, "y")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2023, time.February, 28, 12, 0, 0, 0, time.UTC).UnixNano(), got)
+}
+
+func TestPitrRetentionRangeDoesNotExpand(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+		want          bool
+	}{
+		{name: "same unit equal", currentLength: 2, currentUnit: "h", nextLength: 2, nextUnit: "h", want: true},
+		{name: "same unit shrink", currentLength: 2, currentUnit: "h", nextLength: 1, nextUnit: "h", want: true},
+		{name: "same unit expand", currentLength: 1, currentUnit: "h", nextLength: 2, nextUnit: "h", want: false},
+		{name: "fixed units equal", currentLength: 1, currentUnit: "d", nextLength: 24, nextUnit: "h", want: true},
+		{name: "fixed units expand", currentLength: 23, currentUnit: "h", nextLength: 1, nextUnit: "d", want: false},
+		{name: "calendar units equal", currentLength: 1, currentUnit: "y", nextLength: 12, nextUnit: "mo", want: true},
+		{name: "calendar units shrink", currentLength: 13, currentUnit: "mo", nextLength: 1, nextUnit: "y", want: true},
+		{name: "calendar units expand", currentLength: 11, currentUnit: "mo", nextLength: 1, nextUnit: "y", want: false},
+		{name: "calendar to fixed always shrinks", currentLength: 1, currentUnit: "mo", nextLength: 28, nextUnit: "d", want: true},
+		{name: "calendar to fixed can expand in February", currentLength: 1, currentUnit: "mo", nextLength: 29, nextUnit: "d", want: false},
+		{name: "fixed to calendar can expand in leap year", currentLength: 100, currentUnit: "d", nextLength: 1, nextUnit: "y", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PitrRetentionRangeDoesNotExpand(
+				tc.currentLength,
+				tc.currentUnit,
+				tc.nextLength,
+				tc.nextUnit,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	for _, tc := range []struct {
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+	}{
+		{currentLength: 0, currentUnit: "h", nextLength: 1, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "week", nextLength: 1, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "h", nextLength: 101, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "h", nextLength: 1, nextUnit: "week"},
+	} {
+		_, err := PitrRetentionRangeDoesNotExpand(
+			tc.currentLength,
+			tc.currentUnit,
+			tc.nextLength,
+			tc.nextUnit,
+		)
+		require.Error(t, err)
+	}
+}
+
+func TestMergePitrRetentionRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+		wantLength    int
+		wantUnit      string
+	}{
+		{name: "preserve wider fixed range", currentLength: 2, currentUnit: "d", nextLength: 24, nextUnit: "h", wantLength: 2, wantUnit: "d"},
+		{name: "adopt wider calendar range", currentLength: 28, currentUnit: "d", nextLength: 1, nextUnit: "mo", wantLength: 1, wantUnit: "mo"},
+		{name: "month and thirty days need envelope", currentLength: 1, currentUnit: "mo", nextLength: 30, nextUnit: "d", wantLength: 31, wantUnit: "d"},
+		{name: "two months and sixty days need envelope", currentLength: 2, currentUnit: "mo", nextLength: 60, nextUnit: "d", wantLength: 62, wantUnit: "d"},
+		{name: "three months and ninety days need envelope", currentLength: 3, currentUnit: "mo", nextLength: 90, nextUnit: "d", wantLength: 93, wantUnit: "d"},
+		{name: "fixed range covers calendar maximum", currentLength: 100, currentUnit: "d", nextLength: 3, nextUnit: "mo", wantLength: 100, wantUnit: "d"},
+		{name: "year covers maximum fixed range", currentLength: 100, currentUnit: "d", nextLength: 1, nextUnit: "y", wantLength: 1, wantUnit: "y"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotLength, gotUnit, err := MergePitrRetentionRanges(
+				tc.currentLength,
+				tc.currentUnit,
+				tc.nextLength,
+				tc.nextUnit,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLength, gotLength)
+			require.Equal(t, tc.wantUnit, gotUnit)
+		})
+	}
+
+	_, _, err := MergePitrRetentionRanges(0, "d", 1, "d")
+	require.Error(t, err)
+	_, _, err = MergePitrRetentionRanges(1, "d", 1, "week")
+	require.Error(t, err)
+}
+
+func TestMergePitrRetentionRangesAlwaysCoversInputs(t *testing.T) {
+	units := []string{"h", "d", "mo", "y"}
+	for _, currentUnit := range units {
+		for currentLength := 1; currentLength <= 100; currentLength++ {
+			for _, nextUnit := range units {
+				for nextLength := 1; nextLength <= 100; nextLength++ {
+					mergedLength, mergedUnit, err := MergePitrRetentionRanges(
+						currentLength,
+						currentUnit,
+						nextLength,
+						nextUnit,
+					)
+					require.NoError(t, err)
+					require.GreaterOrEqual(t, mergedLength, 1)
+					require.LessOrEqual(t, mergedLength, 100)
+
+					coversCurrent, err := PitrRetentionRangeDoesNotExpand(
+						mergedLength,
+						mergedUnit,
+						currentLength,
+						currentUnit,
+					)
+					require.NoError(t, err)
+					coversNext, err := PitrRetentionRangeDoesNotExpand(
+						mergedLength,
+						mergedUnit,
+						nextLength,
+						nextUnit,
+					)
+					require.NoError(t, err)
+					if !coversCurrent || !coversNext {
+						t.Fatalf(
+							"merged %d%s does not cover %d%s and %d%s",
+							mergedLength,
+							mergedUnit,
+							currentLength,
+							currentUnit,
+							nextLength,
+							nextUnit,
+						)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestMergePitrRetentionRangesCoversMonthEndPivots(t *testing.T) {
+	mergedLength, mergedUnit, err := MergePitrRetentionRanges(1, "mo", 30, "d")
+	require.NoError(t, err)
+	require.Equal(t, 31, mergedLength)
+	require.Equal(t, "d", mergedUnit)
+
+	for _, pivot := range []time.Time{
+		time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.January, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.March, 28, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2025, time.April, 30, 12, 0, 0, 0, time.UTC),
+	} {
+		mergedLower, err := PitrRetentionLowerBound(pivot, mergedLength, mergedUnit)
+		require.NoError(t, err)
+		monthLower, err := PitrRetentionLowerBound(pivot, 1, "mo")
+		require.NoError(t, err)
+		daysLower, err := PitrRetentionLowerBound(pivot, 30, "d")
+		require.NoError(t, err)
+		require.LessOrEqual(t, mergedLower, monthLower)
+		require.LessOrEqual(t, mergedLower, daysLower)
+	}
 }
 
 func TestBuildAlterLineageDeleteSQL(t *testing.T) {

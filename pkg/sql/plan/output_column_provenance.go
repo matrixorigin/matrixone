@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type ProvenanceState uint8
@@ -203,6 +204,23 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColu
 			return OutputColumnProvenance{State: ProvenanceNone}
 		}
 		return bc.outputColumnProvenanceForExpr(groupExpr)
+	}
+	if bc.aggregateTag > 0 && col.RelPos == bc.aggregateTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(bc.aggregates) {
+		aggregate := bc.aggregates[col.ColPos]
+		if aggregate != nil {
+			fn := aggregate.GetF()
+			if fn != nil && fn.Func != nil {
+				overloadID := fn.Func.Obj & int64(planfunction.DistinctMask)
+				if planfunction.HasExecutableCTASTypeDefault(overloadID) {
+					return OutputColumnProvenance{
+						State:             ProvenanceNone,
+						CTASDefaultPolicy: CTASDefaultUseTypeDefault,
+					}
+				}
+			}
+		}
+		return OutputColumnProvenance{State: ProvenanceNone}
 	}
 	binding := bc.bindingByTag[col.RelPos]
 	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.outputColumnProvenance) {

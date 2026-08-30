@@ -1653,6 +1653,9 @@ func constantFoldWithPreparedExactSource(
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -1670,6 +1673,7 @@ func constantFoldWithPreparedExactSource(
 					Len:          int32(vec.Length()),
 					Data:         data,
 					IsSerialized: isSerialized,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1686,6 +1690,9 @@ func constantFoldWithPreparedExactSource(
 		return nil, err
 	}
 	if f.CannotFold() {
+		return expr, nil
+	}
+	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
 		return expr, nil
 	}
 	if f.IsRealTimeRelated() && !varAndParamIsConst {
@@ -1727,6 +1734,9 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1741,8 +1751,9 @@ func constantFoldWithPreparedExactSource(
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1752,6 +1763,9 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
+		c.StringSource = uint32(source) + 1
+	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -2966,6 +2980,13 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if err := visit.Visit(ctx); err != nil {
 		return err
 	}
+	for i := range preparePlan.GetQuery().Params {
+		var err error
+		preparePlan.GetQuery().Params[i], err = rule.ApplyExpr(preparePlan.GetQuery().Params[i])
+		if err != nil {
+			return err
+		}
+	}
 	return visitMissingNodeExprs(
 		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
 }
@@ -3000,6 +3021,13 @@ func resetPreparePlan(
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
 		}
+		for i := range query.Params {
+			var err error
+			query.Params[i], err = getParamRule.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
@@ -3013,6 +3041,13 @@ func resetPreparePlan(
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
+		}
+		for i := range query.Params {
+			var err error
+			query.Params[i], err = resetParamRule.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		return querySchemas, getParamRule.paramTypes, nil
 	}
@@ -4106,6 +4141,27 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
 }
 
+// FillValuesOfParamsInPlanWithSpecializationAtPositions limits execute-time
+// rebinding to the supplied parameter positions. This is used when a binary
+// protocol type only owns a direct result column: unrelated markers must
+// remain ParamRefs so their expression-specific overloads and metadata are
+// not changed while refreshing the visible result domain.
+func FillValuesOfParamsInPlanWithSpecializationAtPositions(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	positions []int32,
+) (*Plan, bool, error) {
+	selected := make([]bool, len(paramVals))
+	for _, position := range positions {
+		if position >= 0 && int(position) < len(selected) {
+			selected[position] = true
+		}
+	}
+	return fillValuesOfParamsInPlanWithSpecializationSelected(
+		ctx, preparePlan, paramVals, false, selected)
+}
+
 // FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time
 // path for a prepared plan whose deferred numeric overload positions were
 // computed when the plan was built. The caller has already made the
@@ -4139,6 +4195,17 @@ func fillValuesOfParamsInPlanWithSpecialization(
 	paramVals []any,
 	preserveDMLWrites bool,
 ) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecializationSelected(
+		ctx, preparePlan, paramVals, preserveDMLWrites, nil)
+}
+
+func fillValuesOfParamsInPlanWithSpecializationSelected(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	preserveDMLWrites bool,
+	selected []bool,
+) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
 		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
@@ -4153,15 +4220,26 @@ func fillValuesOfParamsInPlanWithSpecialization(
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
-	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
+	effectiveParamVals := paramVals
+	if selected != nil {
+		effectiveParamVals = append([]any(nil), paramVals...)
+		for i := range effectiveParamVals {
+			if i >= len(selected) || !selected[i] {
+				effectiveParamVals[i] = ParamValue{}
+			}
+		}
+	}
+	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(
+		preparePlan, effectiveParamVals)
 	copied := DeepCopyPlan(preparePlan)
-	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
+	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, effectiveParamVals)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
-			specialized, err := replaceParamVals(ctx, queryPlan, paramVals)
+			specialized, err := replaceParamValsWithSelection(
+				ctx, queryPlan, effectiveParamVals, false, selected)
 			if err != nil {
 				return nil, false, err
 			}
@@ -4169,7 +4247,8 @@ func fillValuesOfParamsInPlanWithSpecialization(
 		}
 
 	case *plan.Plan_Query, *plan.Plan_Dcl:
-		specialized, err := replaceParamVals(ctx, copied, paramVals, preserveDMLWrites)
+		specialized, err := replaceParamValsWithSelection(
+			ctx, copied, effectiveParamVals, preserveDMLWrites, selected)
 		if err != nil {
 			return nil, false, err
 		}
@@ -4367,6 +4446,78 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedJSONComparisonParamPositions returns the direct parameter markers
+// whose runtime SQL type controls a JSON equality comparison. The hidden
+// adapter remains in a cacheable generic plan; execution metadata supplies the
+// concrete type for only these positions.
+func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	seen := make(map[*plan.Expr]struct{})
+	// The protobuf owner walker covers every present and future plan field. The
+	// expression collector below owns tree recursion because owner walking stops
+	// at each expression root.
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedJSONComparisonParamPositions(expr, positions, seen)
+		return nil
+	})
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func collectPreparedJSONComparisonParamPositions(
+	expr *plan.Expr,
+	positions map[int32]struct{},
+	seen map[*plan.Expr]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if _, ok := seen[expr]; ok {
+		return
+	}
+	seen[expr] = struct{}{}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
+			len(impl.F.Args) == 1 {
+			if param := impl.F.Args[0].GetP(); param != nil {
+				positions[param.Pos] = struct{}{}
+			}
+		}
+		for _, arg := range impl.F.Args {
+			collectPreparedJSONComparisonParamPositions(arg, positions, seen)
+		}
+	case *plan.Expr_W:
+		window := impl.W
+		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen)
+		for _, item := range window.GetPartitionBy() {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+		for _, order := range window.GetOrderBy() {
+			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen)
+		}
+		if frame := window.GetFrame(); frame != nil {
+			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen)
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+		}
+	case *plan.Expr_Sub:
+		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen)
+	}
+}
+
 func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {
 	positions := make(map[int32]struct{})
 	if preparePlan == nil {
@@ -4482,8 +4633,9 @@ type ParamValue struct {
 	HasRuntimeType bool
 	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
 	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
-	// numeric-prefix domain used by common-type consumers; a direct result uses
-	// this scale-preserving domain without parsing the packet again.
+	// numeric-prefix domain used by common-type consumers; a direct result keeps
+	// the visible scale when representable and otherwise uses the normalized
+	// domain for lexemes whose only excess digits are removable trailing zeroes.
 	DirectResultType    types.Type
 	HasDirectResultType bool
 	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
@@ -4650,9 +4802,10 @@ func absInt64Within(value, limit int64) bool {
 // PreparedDecimalRuntimeTypes parses one complete binary-protocol DECIMAL
 // lexeme and returns both domains needed by prepared execution. normalized is
 // the trailing-zero-free domain used by numeric-prefix/common-type consumers;
-// visible preserves the lexeme's effective scale for a direct result. The scan
-// performs no input-length allocation, even for a max_allowed_packet-sized
-// value.
+// visible preserves the lexeme's effective scale when representable and falls
+// back to normalized when redundant trailing zeroes alone exceed DECIMAL256.
+// The scan performs no input-length allocation, even for a
+// max_allowed_packet-sized value.
 func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, ok bool) {
 	normalized, visible, _, ok = preparedDecimalRuntimeDomains(value, false)
 	return normalized, visible, ok
@@ -4684,7 +4837,7 @@ func preparedDecimalRuntimeDomains(
 
 	var digitCount, leadingZeros, fractionalDigits, trailingZeros int64
 	var coefficient [76]byte
-	coefficientLen := 0
+	coefficientStored := 0
 	seenDigit, seenPoint, seenNonZero := false, false, false
 	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
 		ch := value[pos]
@@ -4706,11 +4859,9 @@ func preparedDecimalRuntimeDomains(
 			} else {
 				trailingZeros = 0
 			}
-			if seenNonZero {
-				if coefficientLen < len(coefficient) {
-					coefficient[coefficientLen] = ch
-				}
-				coefficientLen++
+			if seenNonZero && coefficientStored < len(coefficient) {
+				coefficient[coefficientStored] = ch
+				coefficientStored++
 			}
 		case ch == '.' && !seenPoint:
 			seenPoint = true
@@ -4760,37 +4911,47 @@ func preparedDecimalRuntimeDomains(
 		return types.Type{}, types.Type{}, "", false
 	}
 
-	visibleExponent, bounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
-	if !bounded {
-		return types.Type{}, types.Type{}, "", false
-	}
-	visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
-	if !ok {
-		return types.Type{}, types.Type{}, "", false
-	}
-
+	visibleExponent, visibleExponentBounded := addPreparedDecimalExponent(exponent, -fractionalDigits)
 	normalizedExponent, bounded := addPreparedDecimalExponent(
 		exponent, -fractionalDigits+trailingZeros)
 	if !bounded {
 		return types.Type{}, types.Type{}, "", false
 	}
-	normalized, ok = preparedDecimalTypeFromCoefficient(
-		coefficientDigits-trailingZeros, normalizedExponent)
-	if !ok || coefficientLen != int(coefficientDigits) || coefficientLen > len(coefficient) {
+	normalizedCoefficientDigits := coefficientDigits - trailingZeros
+	normalized, ok = preparedDecimalTypeFromCoefficient(normalizedCoefficientDigits, normalizedExponent)
+	if !ok || normalizedCoefficientDigits > int64(len(coefficient)) {
+		return types.Type{}, types.Type{}, "", false
+	}
+
+	canonicalCoefficientDigits := coefficientDigits
+	canonicalExponent := visibleExponent
+	if visibleExponentBounded {
+		visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
+	}
+	if !visibleExponentBounded || !ok {
+		// A DECIMAL transport lexeme can expose more than 76 coefficient digits
+		// solely through removable trailing zeroes. Preserve the exact value by
+		// falling back to its normalized domain instead of rejecting it before
+		// normalization or materializing the unbounded visible spelling.
+		visible = normalized
+		canonicalCoefficientDigits = normalizedCoefficientDigits
+		canonicalExponent = normalizedExponent
+	}
+	if canonicalCoefficientDigits > int64(len(coefficient)) {
 		return types.Type{}, types.Type{}, "", false
 	}
 	if !materialize {
 		return normalized, visible, "", true
 	}
 	var canonicalBuilder strings.Builder
-	canonicalBuilder.Grow(coefficientLen + 5)
+	canonicalBuilder.Grow(int(canonicalCoefficientDigits) + 21)
 	if negative {
 		canonicalBuilder.WriteByte('-')
 	}
-	canonicalBuilder.Write(coefficient[:coefficientLen])
-	if visibleExponent != 0 {
+	canonicalBuilder.Write(coefficient[:int(canonicalCoefficientDigits)])
+	if canonicalExponent != 0 {
 		canonicalBuilder.WriteByte('e')
-		canonicalBuilder.WriteString(strconv.FormatInt(visibleExponent, 10))
+		canonicalBuilder.WriteString(strconv.FormatInt(canonicalExponent, 10))
 	}
 	return normalized, visible, canonicalBuilder.String(), true
 }
@@ -5431,10 +5592,23 @@ func replaceParamVals(
 	preserveDMLWriteArgs ...bool,
 ) (bool, error) {
 	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
+	return replaceParamValsWithSelection(ctx, plan0, paramVals, preserveDMLWrites, nil)
+}
+
+func replaceParamValsWithSelection(
+	ctx context.Context,
+	plan0 *Plan,
+	paramVals []any,
+	preserveDMLWrites bool,
+	selected []bool,
+) (bool, error) {
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
@@ -5508,6 +5682,9 @@ func replaceParamVals(
 	}
 	runtimeParamTypes := make([]types.Type, len(paramVals))
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		param, ok := val.(ParamValue)
 		if !ok || !param.IsBinaryProtocol {
 			continue
@@ -5530,6 +5707,9 @@ func replaceParamVals(
 	paramRule.numericPrefixParamPositions = make(map[int]bool)
 	paramRule.numericPrefixParamKinds = make(map[int]types.StringConversionKind)
 	for i, val := range paramVals {
+		if selected != nil && (i >= len(selected) || !selected[i]) {
+			continue
+		}
 		if param, ok := val.(ParamValue); ok {
 			if param.IsBinaryProtocol {
 				paramRule.inferTextParamPositions[i] = true

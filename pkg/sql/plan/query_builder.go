@@ -3688,7 +3688,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
-		builder.optimizeDistinctAgg(rootID)
+		if err = builder.optimizeDistinctAgg(rootID); err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		builder.disableMemoryUnsafeRightDedup(rootID)
@@ -3798,6 +3800,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	for _, scan := range builder.windowValidationScans {
+		if scan == nil {
+			continue
+		}
+		scan.NodeId = int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	}
 	return builder.qry, nil
 }
 
@@ -3940,13 +3949,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
+	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			setBranchPadSpaceProvenance[branchIdx][colIdx] =
+				hasPadSpaceStringProvenance(builder.qry.Nodes[nodes[branchIdx]].ProjectList[colIdx])
 		}
 	}
 
@@ -3956,11 +3970,25 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
+		hasDecimalInput := false
+		for branchIdx, typ := range argsType {
+			if !setBranchPureNull[branchIdx][columnIdx] && typ.Oid.IsDecimal() {
+				hasDecimalInput = true
+				break
+			}
+		}
 		for branchIdx, typ := range argsType {
 			// A top-level NULL is carried as legacy T_text only so the binder has
 			// a concrete container. It has no collation or width of its own and
 			// must not change the common type chosen from real values.
 			if typ.Oid != types.T_any && !setBranchPureNull[branchIdx][columnIdx] {
+				if hasDecimalInput && columnIdx < len(subCtxList[branchIdx].results) {
+					if exact, ok := setOperationIntegerLiteralDecimalType(
+						subCtxList[branchIdx].results[columnIdx],
+					); ok {
+						typ = exact
+					}
+				}
 				tmpArgsType = append(tmpArgsType, typ)
 			}
 		}
@@ -4001,6 +4029,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			} else {
 				targetArgType = argsCastType[0]
 			}
+			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
+				hasChar, hasVariableString, hasPromotedChar := false, false, false
+				for _, typ := range tmpArgsType {
+					switch typ.Oid {
+					case types.T_char:
+						hasChar = true
+					case types.T_varchar, types.T_text:
+						hasVariableString = true
+					}
+				}
+				for branchIdx := range setBranchPadSpaceProvenance {
+					hasPromotedChar = hasPromotedChar || setBranchPadSpaceProvenance[branchIdx][columnIdx]
+				}
+				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar && hasVariableString
+			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
 				(tmpArgsType[0].Oid == types.T_binary || tmpArgsType[0].Oid == types.T_varbinary)
@@ -4027,6 +4070,13 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
+					} else if targetArgType.Oid == types.T_char {
+						node.ProjectList[columnIdx], err = appendSetOperationCastBeforeExpr(
+							builder.GetContext(), node.ProjectList[columnIdx], targetType,
+						)
+						if err != nil {
+							return 0, err
+						}
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
@@ -4059,9 +4109,40 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					},
 				},
 			}
+			if setOperationKeyRequired[i] &&
+				(types.T(projectList[i].Typ.Id) == types.T_varchar ||
+					types.T(projectList[i].Typ.Id) == types.T_text) {
+				projectList[i].Typ.PadSpace = true
+			}
 			builder.nameByColRef[[2]int32{thisTag, int32(i)}] = ctx.headings[i]
 		}
 		return projectList
+	}
+	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
+		return builder.buildPadSpacePhysicalKeyList(projectList, setOperationKeyRequired)
+	}
+	appendSetOperationNode := func(
+		nodeType plan.Node_NodeType,
+		leftNodeID, rightNodeID int32,
+		tag, thisTag int32,
+	) (int32, error) {
+		projectList := getProjectList(nodeType, leftNodeID, rightNodeID, tag, thisTag)
+		var keyList []*plan.Expr
+		var err error
+		switch nodeType {
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+			keyList, err = getSetOperationKeyList(projectList)
+			if err != nil {
+				return 0, err
+			}
+		}
+		return builder.appendNode(&plan.Node{
+			NodeType:                nodeType,
+			Children:                []int32{leftNodeID, rightNodeID},
+			BindingTags:             []int32{thisTag},
+			ProjectList:             projectList,
+			PhysicalEqualityKeyList: keyList,
+		}, ctx), nil
 	}
 
 	// build intersect node first.  because intersect has higher precedence then UNION and MINUS
@@ -4076,18 +4157,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			lastTag = builder.genNewBindTag()
 			leftNodeID := newNodes[lastNewNodeIdx]
 			leftNodeTag := builder.qry.Nodes[leftNodeID].BindingTags[0]
-			newNodeID := builder.appendNode(&plan.Node{
-				NodeType:    unionTypes[utIdx],
-				Children:    []int32{leftNodeID, nodes[i]},
-				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(
-					unionTypes[utIdx],
-					leftNodeID,
-					nodes[i],
-					leftNodeTag,
-					lastTag,
-				),
-			}, ctx)
+			newNodeID, err := appendSetOperationNode(
+				unionTypes[utIdx], leftNodeID, nodes[i], leftNodeTag, lastTag,
+			)
+			if err != nil {
+				return 0, err
+			}
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
 			newNodes = append(newNodes, nodes[i])
@@ -4102,18 +4177,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    newUnionType[utIdx],
-			Children:    []int32{lastNodeID, newNodes[i]},
-			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(
-				newUnionType[utIdx],
-				lastNodeID,
-				newNodes[i],
-				leftNodeTag,
-				lastTag,
-			),
-		}, ctx)
+		lastNodeID, err = appendSetOperationNode(
+			newUnionType[utIdx], lastNodeID, newNodes[i], leftNodeTag, lastTag,
+		)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	// set ctx base on selects[0] and it's ctx
@@ -4399,7 +4468,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// its grouping provenance is still available. This final aggregate therefore
 	// sees ordinary values and performs one global visible-tuple de-duplication.
 	if distinct {
-		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
+		lastNodeID, err = builder.appendDistinctNode(ctx, lastNodeID)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	resultSourceTag := ctx.projectTag
@@ -4468,6 +4540,69 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	return lastNodeID, nil
+}
+
+// setOperationIntegerLiteralDecimalType returns the value domain of a direct
+// integer literal when a set-operation column also contains DECIMAL values.
+// MySQL joins literal precision, not the full BIGINT/UNSIGNED BIGINT domain:
+// for example, 1 UNION 2.5 is DECIMAL(2,1), while an integer column or an
+// explicit CAST(... AS SIGNED) continues to contribute its complete domain.
+func setOperationIntegerLiteralDecimalType(expr *plan.Expr) (types.Type, bool) {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc() == nil || len(fn.Args) != 1 {
+			break
+		}
+		switch fn.GetFunc().GetObjName() {
+		case "unary_minus", "unary_plus":
+			expr = fn.Args[0]
+		default:
+			return types.Type{}, false
+		}
+	}
+	if expr == nil {
+		return types.Type{}, false
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return types.Type{}, false
+	}
+
+	var digits int
+	switch value := literal.Value.(type) {
+	case *plan.Literal_I8Val:
+		digits = signedIntegerLiteralDigits(int64(value.I8Val))
+	case *plan.Literal_I16Val:
+		digits = signedIntegerLiteralDigits(int64(value.I16Val))
+	case *plan.Literal_I32Val:
+		digits = signedIntegerLiteralDigits(int64(value.I32Val))
+	case *plan.Literal_I64Val:
+		digits = signedIntegerLiteralDigits(value.I64Val)
+	case *plan.Literal_U8Val:
+		digits = len(strconv.FormatUint(uint64(value.U8Val), 10))
+	case *plan.Literal_U16Val:
+		digits = len(strconv.FormatUint(uint64(value.U16Val), 10))
+	case *plan.Literal_U32Val:
+		digits = len(strconv.FormatUint(uint64(value.U32Val), 10))
+	case *plan.Literal_U64Val:
+		digits = len(strconv.FormatUint(value.U64Val, 10))
+	default:
+		return types.Type{}, false
+	}
+
+	oid := types.T_decimal64
+	if digits > 18 {
+		oid = types.T_decimal128
+	}
+	return types.New(oid, int32(digits), 0), true
+}
+
+func signedIntegerLiteralDigits(value int64) int {
+	formatted := strconv.FormatInt(value, 10)
+	if formatted[0] == '-' {
+		return len(formatted) - 1
+	}
+	return len(formatted)
 }
 
 func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts []tree.Statement) []Type {
@@ -5140,6 +5275,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		expandedSelectClause = selectClause
+		if err = validateQueryBlockWindowCount(builder.GetContext(), selectClause, astOrderBy); err != nil {
+			return 0, err
+		}
+		selectClause, astOrderBy, err = expandNamedWindowReferences(builder.GetContext(), selectClause, astOrderBy)
+		if err != nil {
+			return 0, err
+		}
 		// Keep the query-block aggregate state active while HAVING, SELECT
 		// projection, and ORDER BY are bound. bindSelectClause initializes the
 		// state after the pre-aggregation WHERE has been bound, so correlated
@@ -5236,8 +5378,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having: selectClause.Having,
-							Option: selectClause.Option,
+							Having:  selectClause.Having,
+							Windows: selectClause.Windows,
+							Option:  selectClause.Option,
 						}
 					}
 				}
@@ -5568,7 +5711,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// append DISTINCT node
 	resultSourceTag := ctx.projectTag
 	if ctx.isDistinct {
-		nodeID = builder.appendDistinctNode(ctx, nodeID)
+		nodeID, err = builder.appendDistinctNode(ctx, nodeID)
+		if err != nil {
+			return
+		}
 		if len(boundOrderBys) > 0 {
 			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
 				return
@@ -6649,9 +6795,10 @@ func rewriteRollupWindowSelect(
 		innerExprs = append(innerExprs, rewriteState.innerExprs...)
 		innerExprs = append(innerExprs, rewriteState.orderExprs...)
 		selectStmts[i] = &tree.SelectClause{
-			Exprs: innerExprs,
-			From:  selectClause.From,
-			Where: selectClause.Where,
+			Exprs:   innerExprs,
+			From:    selectClause.From,
+			Where:   selectClause.Where,
+			Windows: selectClause.Windows,
 			GroupBy: &tree.GroupByClause{
 				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
 				GroupingSet:                  list,
@@ -7871,6 +8018,9 @@ func (builder *QueryBuilder) bindSelectClause(
 		if err != nil {
 			return
 		}
+	}
+	if err = validateNamedWindowDefinitions(builder, ctx, clause.Windows); err != nil {
+		return
 	}
 
 	// distinct
@@ -9619,14 +9769,41 @@ func (builder *QueryBuilder) appendAggNode(
 		return
 	}
 
+	groupBy := ctx.groups
+	groupingFlag := ctx.groupingFlag
+	var groupByHashKey []int32
+	if !hasInactiveGroupingColumn(groupingFlag) {
+		required := make([]bool, len(groupBy))
+		for i, expr := range groupBy {
+			required[i] = hasPadSpaceStringProvenance(expr)
+		}
+		var physicalKeys []*plan.Expr
+		physicalKeys, err = builder.buildPadSpacePhysicalKeyList(groupBy, required)
+		if err != nil {
+			return
+		}
+		if len(physicalKeys) > 0 {
+			visibleCount := len(groupBy)
+			groupBy = append(slices.Clone(groupBy), physicalKeys...)
+			groupByHashKey = make([]int32, visibleCount)
+			for i := range groupByHashKey {
+				groupByHashKey[i] = int32(visibleCount + i)
+			}
+			if len(groupingFlag) > 0 {
+				groupingFlag = append(slices.Clone(groupingFlag), groupingFlag...)
+			}
+		}
+	}
+
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:     plan.Node_AGG,
-		Children:     []int32{nodeID},
-		GroupBy:      ctx.groups,
-		GroupingFlag: ctx.groupingFlag,
-		AggList:      ctx.aggregates,
-		BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
-		SpillMem:     builder.aggSpillMem,
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{nodeID},
+		GroupBy:        groupBy,
+		GroupingFlag:   groupingFlag,
+		GroupByHashKey: groupByHashKey,
+		AggList:        ctx.aggregates,
+		BindingTags:    []int32{ctx.groupTag, ctx.aggregateTag},
+		SpillMem:       builder.aggSpillMem,
 	}, ctx)
 
 	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
@@ -9951,11 +10128,54 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	return
 }
 
-func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) int32 {
+func (builder *QueryBuilder) buildPadSpacePhysicalKeyList(
+	exprs []*plan.Expr,
+	required []bool,
+) ([]*plan.Expr, error) {
+	requiresKeyList := false
+	for _, needKey := range required {
+		requiresKeyList = requiresKeyList || needKey
+	}
+	if !requiresKeyList {
+		return nil, nil
+	}
+	if len(exprs) != len(required) {
+		return nil, moerr.NewInternalErrorNoCtx("physical equality key shape does not match projected row")
+	}
+
+	keyList := make([]*plan.Expr, len(exprs))
+	for i, expr := range exprs {
+		keyList[i] = DeepCopyExpr(expr)
+		if required[i] {
+			var err error
+			keyList[i], err = appendSetOperationCastBeforeExpr(
+				builder.GetContext(), keyList[i], keyList[i].Typ,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return keyList, nil
+}
+
+func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) (int32, error) {
+	projects := builder.qry.Nodes[nodeID].ProjectList
+	required := make([]bool, len(projects))
+	for i, project := range projects {
+		required[i] = hasPadSpaceStringProvenance(project)
+	}
+
+	physicalKeys, err := builder.buildPadSpacePhysicalKeyList(projects, required)
+	if err != nil {
+		return 0, err
+	}
+
 	return builder.appendNode(&plan.Node{
-		NodeType: plan.Node_DISTINCT,
-		Children: []int32{nodeID},
-	}, ctx)
+		NodeType:                plan.Node_DISTINCT,
+		Children:                []int32{nodeID},
+		PhysicalEqualityKeyList: physicalKeys,
+	}, ctx), nil
 }
 
 func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boundOrderBys []*plan.OrderBySpec) int32 {

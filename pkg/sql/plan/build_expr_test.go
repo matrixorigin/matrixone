@@ -916,6 +916,30 @@ func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
 	}
 }
 
+func TestJSONBooleanEqualityPreservesOperandTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		left  types.T
+		right types.T
+	}{
+		{name: "equal JSON left", sql: `select cast('"true"' as json) = true`, left: types.T_json, right: types.T_bool},
+		{name: "not equal JSON right", sql: `select true != cast('"true"' as json)`, left: types.T_bool, right: types.T_json},
+		{name: "null safe JSON left", sql: `select cast('"true"' as json) <=> true`, left: types.T_json, right: types.T_bool},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			args := pl.GetQuery().Nodes[1].ProjectList[0].GetF().Args
+			require.Len(t, args, 2)
+			require.Equal(t, int32(tc.left), args[0].Typ.Id)
+			require.Equal(t, int32(tc.right), args[1].Typ.Id)
+		})
+	}
+}
+
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {

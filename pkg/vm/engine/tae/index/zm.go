@@ -773,6 +773,30 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 	}
 }
 
+// PrefixIn reports whether any value in vec is a prefix-match for this zone map.
+//
+// CONTRACT: vec must be sorted ascending, always. This binary-searches the
+// physical varlena slots and, unlike AnyIn, never consults the null bitmap -- a
+// NULL slot participates in the search as an empty payload. An unsorted list
+// makes the search probe the wrong element and prune blocks that do match.
+//
+// Sortedness is necessary but not sufficient: the search also assumes no value is
+// a proper byte-prefix of another. Ascending ["a","ab"] against a zone map
+// ["az","c"] answers false, though ["a"] alone answers true -- the predicate reads
+// [true,false] and sort.Search runs off the end. The sorted flag does not imply
+// this, so callers must check it separately (colexec.zoneMapInVector does, and
+// keeps the block when it fails). Today's producers cannot trip it anyway: packer
+// and serial encodings are self-delimiting and IVF centroid prefixes are
+// fixed-length, so no encoded value byte-prefixes another. Tracked as #27817;
+// fixing it here would let that caller-side check go away.
+//
+// Order is the producer's responsibility, not something every consumer verifies.
+// colexec.zoneMapInVector does check and keeps the block when it cannot establish
+// the order, but readutil's filter compiler (compileFilterExprs, reached from
+// exec_util.go) does not: it takes seek and stop bounds positionally from the same
+// payload, col[0] and col[len-1], so an unordered one makes every block look
+// excluded there regardless of what this function would answer. A wrong answer
+// here silently drops rows.
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
@@ -1090,6 +1114,17 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 	}
 }
 
+// AnyIn reports whether any value in vec can fall inside this zone map.
+//
+// CONTRACT: vec must be sorted ascending unless it carries NULLs. Without NULLs
+// this binary-searches the values, so an unsorted list makes it probe the wrong
+// element and answer false for a value that is present -- pruning away data that
+// matches. A NULL-bearing vec is scanned linearly (anyInNullableVec) and needs no
+// order.
+//
+// Callers that cannot guarantee the order must establish it (see
+// readutil.normalizePKInVector) or check it before calling
+// (see colexec.zoneMapInVector); a wrong answer here silently drops rows.
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	if vec.IsConstNull() {
 		return false

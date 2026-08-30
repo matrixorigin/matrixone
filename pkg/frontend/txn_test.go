@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -28,7 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -853,6 +856,46 @@ func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
 	}
 }
 
+func TestCreateUnsafeRollsBackPublishedGenerationOnPanic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte("panic-generation"), Status: txn.TxnStatus_Active}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	pu := getPu("")
+	previousTxnClient := pu.TxnClient
+	pu.TxnClient = txnClient
+	t.Cleanup(func() { pu.TxnClient = previousTxnClient })
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), op).DoAndReturn(func(context.Context, client.TxnOperator) error {
+		panic("storage new panic")
+	})
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.txnHandler.storage = eng
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	handler := ses.GetTxnHandler()
+	func() {
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+		require.PanicsWithValue(t, "storage new panic", func() {
+			_ = handler.createUnsafe(execCtx)
+		})
+	}()
+
+	require.Equal(t, 1, op.rollbackCalls)
+	require.Equal(t, txn.TxnStatus_Aborted, op.meta.Status)
+	require.Nil(t, handler.GetTxn())
+}
+
 func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -1066,6 +1109,95 @@ func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 0, txnOp.commitCalls)
 	require.Equal(t, 1, txnOp.rollbackCalls)
+}
+
+func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing.T) {
+	type terminalCommitPath struct {
+		name string
+		run  func(*TxnHandler, *ExecCtx) error
+	}
+	paths := []terminalCommitPath{
+		{
+			name: "explicit commit",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.txnOpt.byCommit = true
+				return th.Commit(execCtx)
+			},
+		},
+		{
+			name: "replacement begin",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.txnOpt.byBegin = true
+				execCtx.txnOpt.autoCommit = true
+				return th.Create(execCtx)
+			},
+		},
+		{
+			name: "enable autocommit",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				return th.SetAutocommit(execCtx, false, true)
+			},
+		},
+	}
+
+	for _, path := range paths {
+		t.Run(path.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
+
+			op := newTestTxnOp()
+			op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+			ses.txnHandler.txnOp = op
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.optionBits = OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT
+			ses.txnHandler.lineageOwnerLifecycleValidation = true
+
+			wantErr := errors.New("lifecycle validation failed")
+			sqlExecutor := &lineageLifecycleCommitSQLExecutor{
+				err: wantErr,
+				beforeExec: func() {
+					require.Zero(t, op.commitCalls,
+						"lifecycle validation must precede physical commit")
+				},
+			}
+			rt := moruntime.ServiceRuntime(ses.GetService())
+			oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			if hadOldExecutor {
+				require.True(t, rt.CompareAndDeleteGlobalVariables(
+					moruntime.InternalSQLExecutor, oldExecutor))
+			}
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExecutor)
+			t.Cleanup(func() {
+				require.True(t, rt.CompareAndDeleteGlobalVariables(
+					moruntime.InternalSQLExecutor, sqlExecutor))
+				if hadOldExecutor {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+				}
+			})
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			t.Cleanup(execCtx.Close)
+			err := path.run(ses.GetTxnHandler(), execCtx)
+
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{
+				databranchutils.LineageOwnerLifecycleLockSQL(),
+			}, sqlExecutor.sqls)
+			require.Len(t, sqlExecutor.opts, 1)
+			require.Same(t, op, sqlExecutor.opts[0].Txn())
+			require.Zero(t, op.commitCalls)
+			require.Equal(t, 1, op.rollbackCalls)
+			require.False(t, ses.GetTxnHandler().InActiveTxn())
+		})
+	}
 }
 
 func TestCommitUsesRequestContext(t *testing.T) {
@@ -2197,4 +2329,141 @@ func TestSetAutocommitStatusInResponse(t *testing.T) {
 			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
 		})
 	})
+}
+
+func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
+	persistent := tree.NewTableName(tree.Identifier("persistent"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	for _, stmt := range []tree.Statement{
+		&tree.DropDatabase{},
+		&tree.DropTable{Names: tree.TableNames{persistent}},
+		&tree.DropView{},
+		&tree.DropSequence{},
+		&tree.AlterView{},
+		&tree.AlterSequence{},
+		&tree.CreateView{Replace: true},
+		&tree.DataBranchDeleteTable{},
+		&tree.DataBranchDeleteDatabase{},
+	} {
+		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
+	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))
+
+	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	ses.AddTempTable("db", "alias", "__mo_temp_alias")
+	alias := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+		Names: tree.TableNames{alias},
+	}, ""))
+	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+		Names: tree.TableNames{alias, persistent},
+	}, ""))
+}
+
+func TestCreateRollsBackPublishedGenerationOnStorageInitFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	storageErr := moerr.NewInternalErrorNoCtx("storage initialization failed")
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(storageErr)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.GetTxnHandler().storage = eng
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	originalTxnClient := getPu("").TxnClient
+	defer func() { getPu("").TxnClient = originalTxnClient }()
+	getPu("").TxnClient = txnClient
+
+	err := ses.GetTxnHandler().Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		stmt:   &tree.Select{},
+		txnOpt: FeTxnOption{autoCommit: true},
+	})
+	require.ErrorIs(t, err, storageErr)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+	require.Equal(t, 1, op.rollbackCalls)
+}
+
+func TestCreateRollsBackPublishedGenerationOnValidityFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+	ses.GetTxnHandler().storage = eng
+
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{ID: []byte{2}, Status: txn.TxnStatus_Aborted}
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+	originalTxnClient := getPu("").TxnClient
+	defer func() { getPu("").TxnClient = originalTxnClient }()
+	getPu("").TxnClient = txnClient
+
+	err := ses.GetTxnHandler().Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		stmt:   &tree.Select{},
+		txnOpt: FeTxnOption{autoCommit: true},
+	})
+	require.Error(t, err)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+	require.Equal(t, 1, op.rollbackCalls)
+}
+
+func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	handler.txnOp = op
+	handler.txnCtx = ctx
+
+	err := handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	})
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
+
+	op.meta.Mode = txn.TxnMode_Pessimistic
+	err = handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	})
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
+
+	op.meta.Isolation = txn.TxnIsolation_RC
+	require.NoError(t, handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
+	}))
+	require.Same(t, op, handler.GetTxn())
 }

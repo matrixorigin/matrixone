@@ -1040,6 +1040,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	cloneSnapshotUsesBackgroundTxn  bool
 	cancelTxnCreateWithRequest      bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
@@ -1566,6 +1567,16 @@ func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
 	}
 }
 
+func (backSes *backSession) AddTempIndexTable(dbName, alias, realName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.addTempIndexTable(dbName, alias, realName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) RemoveTempTableByRealName(realName string) {
 	if backSes == nil {
 		return
@@ -1583,6 +1594,16 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 	if owner := upstreamUserSession(backSes); owner != nil {
 		txnKey, stmtKey := tempTableMutationKeys(backSes)
 		owner.removeTempTable(dbName, alias, txnKey, stmtKey)
+	}
+}
+
+func (backSes *backSession) RemoveTempTablesByDatabase(dbName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
 	}
 }
 
