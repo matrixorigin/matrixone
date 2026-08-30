@@ -5664,6 +5664,7 @@ func replaceParamValsWithSelection(
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
+	sqlExecuteStringBackedParams := make([]bool, len(paramVals))
 	var err error
 	for i, val := range paramVals {
 		if selected != nil && (i >= len(selected) || !selected[i]) {
@@ -5685,12 +5686,13 @@ func replaceParamValsWithSelection(
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
 			if param.HasSourceType && param.Value != nil {
+				sqlExecuteStringBackedParams[i] = param.SourceType.Oid.IsMySQLString()
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
 					ctx, param.Value, param.IsBin, param.SourceType)
 				if err != nil {
 					return false, err
 				}
-				if sqlExecuteNumericParams[i] != nil {
+				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
 					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
 						Typ:  makePlan2Type(&param.SourceType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
@@ -5745,6 +5747,7 @@ func replaceParamValsWithSelection(
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
+	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
 	paramRule.setPreparedPlan(plan0)
 	// Keep the original execute-time values and protocol categories on the
 	// rebinding rule.  The plan parameters above intentionally use their

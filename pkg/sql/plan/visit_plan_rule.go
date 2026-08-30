@@ -458,9 +458,10 @@ type ResetParamRefRule struct {
 	numericPrefixParamPositions map[int]bool
 	numericPrefixParamKinds     map[int]types.StringConversionKind
 	// sqlExecuteNumericParams carries the logical source value of SQL EXECUTE
-	// user variables. It is consulted only by arithmetic consumers; comparison
-	// domains continue to use the dedicated common-type paths above.
-	sqlExecuteNumericParams []*plan.Expr
+	// user variables. String-backed sources retain their separate MySQL numeric-
+	// prefix domain and must not own a result/common-value domain.
+	sqlExecuteNumericParams      []*plan.Expr
+	sqlExecuteStringBackedParams []bool
 	// numericPrefixDependent records rewritten expressions whose value domain
 	// was selected from an execute-time numeric-prefix parameter. The dependency
 	// propagates through binder-inserted casts so enclosing consumers can remove
@@ -1637,7 +1638,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
 				paramPos < len(rule.sqlExecuteNumericParams) &&
-				rule.sqlExecuteNumericParams[paramPos] != nil
+				rule.sqlExecuteNumericParams[paramPos] != nil &&
+				preparedSQLExecuteNumericSourceOwnsResultDomain(
+					functionName, paramPos, rule.sqlExecuteStringBackedParams)
 			if hasParamPos && rule.numericPrefixParamPositions[paramPos] {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
@@ -1706,6 +1709,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			if rule.isSQLExecuteNumericDependent(rewrittenArg) &&
 				((functionName == "cast" && !isExplicitPreparedCast(e)) ||
+					isPreparedNumericComparisonContext(functionName) ||
+					isPreparedCommonValueFunction(functionName) ||
 					preparedFunctionArgUsesSQLExecuteNumericSource(e, functionName, i, len(exprImpl.F.Args))) {
 				sqlExecuteNumericSourceDependent = true
 				sqlExecuteNumericNestedDependent = true
@@ -2700,8 +2705,8 @@ func preparedParamPosition(expr *plan.Expr) (int, bool) {
 	if expr == nil {
 		return 0, false
 	}
-	if position, ok := preparedRuntimeSourceParamPosition(expr); ok && position >= 0 {
-		return position, true
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		return int(param.Pos), true
 	}
 	if !isImplicitPreparedParamCast(expr) {
 		return 0, false
@@ -2815,6 +2820,17 @@ func preparedSQLExecuteNumericResultConsumer(name string) bool {
 	default:
 		return false
 	}
+}
+
+func preparedSQLExecuteNumericSourceOwnsResultDomain(
+	name string,
+	paramPos int,
+	stringBacked []bool,
+) bool {
+	if !preparedSQLExecuteNumericResultConsumer(name) && name != "sum" && name != "avg" {
+		return true
+	}
+	return paramPos >= 0 && paramPos < len(stringBacked) && !stringBacked[paramPos]
 }
 
 func preparedFunctionArgUsesSQLExecuteNumericSource(

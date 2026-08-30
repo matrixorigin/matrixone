@@ -415,26 +415,33 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				require.NoError(t, rows.Err())
 				return value, columnTypes[0].DatabaseTypeName()
 			}
-			for i, expression := range []string{
-				"case when 1 = 1 then ? else 1 end",
-				"if(1 = 1, ?, 1)",
-				"coalesce(?, 1)",
-				"ifnull(?, 1)",
-				"nullif(?, 1)",
-				"sum(?)",
-				"avg(?)",
+			for i, test := range []struct {
+				expression   string
+				expectedType string
+			}{
+				{expression: "case when 1 = 1 then ? else 1 end", expectedType: "DECIMAL"},
+				{expression: "if(1 = 1, ?, 1)", expectedType: "DECIMAL"},
+				{expression: "coalesce(?, 1)", expectedType: "DECIMAL"},
+				{expression: "ifnull(?, 1)", expectedType: "DECIMAL"},
+				{expression: "nullif(?, 1)", expectedType: "DECIMAL"},
+				{expression: "sum(?)", expectedType: "DECIMAL"},
+				{expression: "avg(?)", expectedType: "DECIMAL"},
+				{expression: "case when 1 = 1 then cast(? as double) else 1 end", expectedType: "DOUBLE"},
+				{expression: "if(1 = 1, cast(? as double), 1)", expectedType: "DOUBLE"},
+				{expression: "ifnull(cast(? as double), 1)", expectedType: "DOUBLE"},
+				{expression: "nullif(cast(? as double), 1)", expectedType: "DOUBLE"},
 			} {
 				statement := fmt.Sprintf("issue27088_numeric_result_%d", i)
-				directExpression := strings.Replace(expression, "?", "@issue27088_numeric_result", 1)
-				mustExec(t, ctx, conn, fmt.Sprintf("prepare %s from 'select %s'", statement, expression))
+				directExpression := strings.Replace(test.expression, "?", "@issue27088_numeric_result", 1)
+				mustExec(t, ctx, conn, fmt.Sprintf("prepare %s from 'select %s'", statement, test.expression))
 				for _, value := range []string{"9007199254740993.5", "9007199254740994.5"} {
 					mustExec(t, ctx, conn, fmt.Sprintf(
 						"set @issue27088_numeric_result = cast(%s as decimal(17,1))", value))
 					directValue, directType := readResult("select " + directExpression)
 					preparedValue, preparedType := readResult("execute " + statement + " using @issue27088_numeric_result")
-					require.Equal(t, directValue, preparedValue, expression)
-					require.Equal(t, directType, preparedType, expression)
-					require.Equal(t, "DECIMAL", preparedType, expression)
+					require.Equal(t, directValue, preparedValue, test.expression)
+					require.Equal(t, directType, preparedType, test.expression)
+					require.Equal(t, test.expectedType, preparedType, test.expression)
 				}
 				mustExec(t, ctx, conn, "deallocate prepare "+statement)
 			}
