@@ -438,6 +438,10 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 func TestInformationSchemaViewsMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL,
 		"char_length(coalesce(regexp_substr(trim(regexp_replace(trim(coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql))")
+	// The regular expression is embedded in a SQL string literal. Keep its
+	// line-break escapes doubled so SQL passes them through to regexp_substr
+	// instead of turning them into physical newlines.
+	assert.Contains(t, InformationSchemaViewsDDL, `[^\\r\\n]`)
 	assert.Contains(t, InformationSchemaViewsDDL, "2 * if(left(trim(regexp_replace(")
 	// System-view definitions are replayed by database clone. Use the same IF
 	// form as other persisted information_schema views for the wrapper-only
