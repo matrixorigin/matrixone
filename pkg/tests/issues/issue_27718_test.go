@@ -190,6 +190,12 @@ func runIssue27718SnapshotQuotaMode(
 		for i := 0; i < creators; i++ {
 			select {
 			case result := <-results:
+				if quota < 0 {
+					require.NoError(t, result.err,
+						"unlimited quota must admit snapshot %s", result.name)
+					successes = append(successes, result.name)
+					continue
+				}
 				if result.err == nil {
 					successes = append(successes, result.name)
 					continue

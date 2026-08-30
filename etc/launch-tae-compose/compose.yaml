@@ -1,6 +1,10 @@
 # docker compose extension fields
 # https://github.com/docker/compose/pull/5140
 # https://stackoverflow.com/questions/45805380/meaning-of-ampersand-in-docker-compose-yml-file
+# Versioned producer/consumer marker used by shared CI before it spends time
+# building a prebuilt jstfu artifact for this exact MatrixOne head.
+x-jstfu-prebuilt-contract: "1"
+
 x-mo-common: &mo-common
     build:
       context: ../../
@@ -143,13 +147,15 @@ services:
   # by test/distributed/cases/datastream.  The BVT cases address it as
   # 'server'='127.0.0.1','port'='4444' from whichever CN compiles the scan,
   # so one instance runs inside each CN's network namespace.  The jar is
-  # built once by jstfu-build (Java 8 bytecode via the pom's release
-  # profile) into a shared volume.  docker compose up -d does not return
-  # until jstfu-build completes, so BVT cannot start before the jar exists.
+  # prepared once by jstfu-build into a shared volume.  Local launches build
+  # Java 8 bytecode from source.  CI may supply an exact-head jar and use the
+  # already-local MatrixOne image only as a staging container, avoiding Maven
+  # downloads on every BVT runner.  Both modes validate the jar before it is
+  # published, and docker compose up -d cannot succeed without it.
   # ---------------------------------------------------------------------
   jstfu-build:
     container_name: jstfu-build
-    image: maven:3.9-eclipse-temurin-17
+    image: ${JSTFU_BUILDER_IMAGE:-maven:3.9.9-eclipse-temurin-17}
     profiles:
       - launch
       - launch-multi-cn
@@ -158,7 +164,30 @@ services:
       - jstfu_out:/jstfu-out
       - jstfu_m2:/root/.m2
     working_dir: /matrixone/xtool/jstfu
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; mvn -q -B -DskipTests package && cp target/jstfu.jar /jstfu-out/jstfu.jar && echo 'jstfu.jar built'"]
+    environment:
+      JSTFU_USE_PREBUILT: ${JSTFU_USE_PREBUILT:-0}
+      JSTFU_EXPECTED_SHA256: ${JSTFU_EXPECTED_SHA256:-}
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        if [ "$${JSTFU_USE_PREBUILT}" = "1" ]; then
+          printf '%s\n' "$${JSTFU_EXPECTED_SHA256}" | grep -Eq '^[0-9a-f]{64}$$'
+          test -s target/jstfu.jar
+          printf '%s  %s\n' "$${JSTFU_EXPECTED_SHA256}" target/jstfu.jar | sha256sum -c -
+          echo 'using exact-head prebuilt jstfu.jar'
+        else
+          mvn -B --no-transfer-progress \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -DskipTests package
+        fi
+        install -m 0644 target/jstfu.jar /jstfu-out/jstfu.jar
+        test -s /jstfu-out/jstfu.jar
+        if [ "$${JSTFU_USE_PREBUILT}" = "1" ]; then
+          printf '%s  %s\n' "$${JSTFU_EXPECTED_SHA256}" /jstfu-out/jstfu.jar | sha256sum -c -
+        fi
+        echo 'jstfu.jar ready'
     networks:
       monet:
 

@@ -3813,6 +3813,9 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
+		return nil, err
+	}
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -4080,16 +4083,31 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	return nil
 }
 
-// bindMixedInListComparison applies MySQL's REAL comparison semantics for a
-// string left operand and a numeric IN-list value. It is deliberately limited
-// to IN/NOT IN fallback comparisons: applying it to every comparison would
-// lose precision for numeric columns compared with string constants.
-func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+// bindMixedInListComparison preserves the scalar comparison domain for a
+// single IN candidate. Multi-candidate string lists keep their common REAL
+// fallback; applying exact normalization independently to each candidate would
+// change the multi-operand coercion contract.
+func bindMixedInListComparison(
+	ctx context.Context,
+	operator string,
+	left, right *Expr,
+	exactSingleComparison bool,
+) (*plan.Expr, error) {
+	operands := []*Expr{left, right}
+	if exactSingleComparison {
+		if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
+			return nil, err
+		}
+	}
+	left, right = operands[0], operands[1]
 	leftType := makeTypeByPlan2Expr(left)
 	rightType := makeTypeByPlan2Expr(right)
-	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
+	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
+	_, directStringRight := decimalStringLiteralValue(right)
+	if stringLeftNumericRight || (!exactSingleComparison && numericLeftStringRight && directStringRight) {
 		targetType := types.T_float64.ToType()
-		operands := []*Expr{left, right}
+		operands = []*Expr{left, right}
 		for i := range operands {
 			var err error
 			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
@@ -4099,7 +4117,7 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 		}
 		left, right = operands[0], operands[1]
 	}
-	operands := []*Expr{left, right}
+	operands = []*Expr{left, right}
 	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
 		return nil, err
 	}
@@ -4128,6 +4146,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
@@ -4491,6 +4512,11 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
+			exactSingleComparison := len(rightList.List) == 1
+			args[0], err = appendPadSpaceComparisonCastIfNeeded(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -4513,6 +4539,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						if err != nil {
 							return nil, err
 						}
+					}
+					inExpr, err = appendPadSpaceComparisonCastIfNeeded(ctx, inExpr)
+					if err != nil {
+						return nil, err
 					}
 					inExprList = append(inExprList, inExpr)
 				} else {
@@ -4559,7 +4589,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				for _, expr := range orExprList {
 					left := DeepCopyExpr(args[0])
 					left.AuxId = args[0].AuxId
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr, exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4570,7 +4600,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				for _, expr := range orExprList {
 					left := DeepCopyExpr(args[0])
 					left.AuxId = args[0].AuxId
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr, exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4999,10 +5029,23 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					}
 				}
 				typ := makePlan2Type(&castType)
-				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
+				if isPadSpaceComparisonFunction(name) &&
+					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else {
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
+				}
 				if err != nil {
 					return nil, err
 				}
+			}
+		}
+	}
+	if isPadSpaceComparisonFunction(name) {
+		for idx := range args {
+			args[idx], err = appendPadSpaceComparisonCastIfNeeded(ctx, args[idx])
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -5010,6 +5053,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
+		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
+			if hasPadSpaceStringProvenance(args[idx]) {
+				Typ.PadSpace = true
+				break
+			}
+		}
+	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -5631,6 +5682,241 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
+// foldDecimalStringComparisonConstants materializes only deterministic string
+// constants before the generic numeric overload resolver can erase their exact
+// value. Runtime expressions retain the existing REAL comparison domain.
+func foldDecimalStringComparisonConstants(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+) error {
+	if proc == nil || len(args) != 2 {
+		return nil
+	}
+
+	foldPair := func(pair []*Expr) error {
+		for stringPos, decimalPos := range []int{1, 0} {
+			candidate, peer := pair[stringPos], pair[decimalPos]
+			if candidate == nil || peer == nil ||
+				!types.T(candidate.Typ.Id).IsMySQLString() ||
+				!types.T(peer.Typ.Id).IsDecimal() ||
+				candidate.GetLit() != nil || !rule.IsConstant(candidate, false) {
+				continue
+			}
+			folded, err := ConstantFold(
+				batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate), proc, false, true)
+			if err != nil || folded == nil || folded.GetLit() == nil ||
+				!types.T(folded.Typ.Id).IsMySQLString() {
+				continue
+			}
+			value, ok := decimalStringLiteralValue(folded)
+			if !ok {
+				continue
+			}
+			normalized, err := normalizeExactDecimalStringComparisonPair(
+				ctx, pair, stringPos, decimalPos, value)
+			if err != nil {
+				return err
+			}
+			if normalized {
+				return nil
+			}
+			pair[stringPos] = folded
+			return nil
+		}
+		return nil
+	}
+
+	if isDecimalComparisonOperator(name) {
+		return foldPair(args)
+	}
+	if name != "in" && name != "not_in" {
+		return nil
+	}
+	list := args[1].GetList()
+	if list == nil || len(list.List) != 1 {
+		return nil
+	}
+	pair := []*Expr{args[0], list.List[0]}
+	err := foldPair(pair)
+	args[0], list.List[0] = pair[0], pair[1]
+	return err
+}
+
+func isDecimalComparisonOperator(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
+}
+
+// A complete decimal string literal paired with DECIMAL has an exact numeric domain.
+// Resolve that domain before the generic string/numeric cast matrix selects
+// FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
+// explicit character casts in the expression, but cast their result to the
+// literal's natural DECIMAL type so a narrower peer cannot truncate the value.
+func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	if !isDecimalComparisonOperator(name) || len(args) != 2 {
+		return nil
+	}
+
+	for stringPos, decimalPos := range []int{1, 0} {
+		if !types.T(args[decimalPos].Typ.Id).IsDecimal() {
+			continue
+		}
+		value, ok := decimalStringLiteralValue(args[stringPos])
+		if !ok {
+			continue
+		}
+		normalized, err := normalizeExactDecimalStringComparisonPair(
+			ctx, args, stringPos, decimalPos, value)
+		if err != nil {
+			return err
+		}
+		if normalized {
+			return nil
+		}
+	}
+	return nil
+}
+
+func normalizeExactDecimalStringComparisonPair(
+	ctx context.Context,
+	args []*Expr,
+	stringPos int,
+	decimalPos int,
+	value string,
+) (bool, error) {
+	// Only a complete decimal lexeme with mode-independent outer whitespace
+	// can enter the exact path. Prefixes, extension tokens, and Unicode-only
+	// whitespace must retain their final spelling for runtime SQL compatibility
+	// parsing, invalid-token errors, and warning 1292.
+	trimmedValue := strings.Trim(value, " \t\n\v\f\r")
+	if strings.TrimSpace(value) != trimmedValue {
+		return false, nil
+	}
+	decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, trimmedValue)
+	if err != nil || !exact {
+		return false, err
+	}
+	target, ok := mergeExactDecimalComparisonType(args[decimalPos].Typ, decimalExpr.Typ)
+	if !ok {
+		floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
+		for pos := range args {
+			argTarget := floatType
+			argTarget.NotNullable = args[pos].Typ.NotNullable
+			args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
+			if err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
+
+	normalizedString := decimalExpr
+	if args[stringPos].GetLit() == nil {
+		normalizedString, err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
+		if err != nil {
+			return false, err
+		}
+	}
+	args[stringPos] = normalizedString
+	for _, pos := range []int{decimalPos, stringPos} {
+		if sameDecimalComparisonType(args[pos].Typ, target) {
+			continue
+		}
+		argTarget := target
+		argTarget.NotNullable = args[pos].Typ.NotNullable
+		args[pos], err = appendCastBeforeExpr(ctx, args[pos], argTarget)
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func mergeExactDecimalComparisonType(left, right plan.Type) (plan.Type, bool) {
+	leftIntegral := max(int64(left.Width)-int64(left.Scale), 0)
+	rightIntegral := max(int64(right.Width)-int64(right.Scale), 0)
+	scale := max(int64(left.Scale), int64(right.Scale))
+	width := max(leftIntegral, rightIntegral) + scale
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if width <= 0 || width > maxWidth || scale > maxWidth {
+		return plan.Type{}, false
+	}
+
+	oid := types.T_decimal64
+	if width > int64(types.T_decimal64.ToType().Width) {
+		oid = types.T_decimal128
+	}
+	if width > int64(types.T_decimal128.ToType().Width) {
+		oid = types.T_decimal256
+	}
+	if types.T(left.Id) == types.T_decimal256 || types.T(right.Id) == types.T_decimal256 {
+		oid = types.T_decimal256
+	} else if oid == types.T_decimal64 &&
+		(types.T(left.Id) == types.T_decimal128 || types.T(right.Id) == types.T_decimal128) {
+		oid = types.T_decimal128
+	}
+	return plan.Type{Id: int32(oid), Width: int32(width), Scale: int32(scale)}, true
+}
+
+func sameDecimalComparisonType(left, right plan.Type) bool {
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
+}
+
+func decimalStringEffectiveDomain(expr *Expr) types.StringDomain {
+	if expr == nil {
+		return types.StringDomainNone
+	}
+	staticDomain := types.StaticStringDomain(makeTypeByPlan2Expr(expr))
+	literal := expr.GetLit()
+	if literal == nil {
+		return staticDomain
+	}
+	switch literal.LiteralForm {
+	case plan.StringLiteralForm_STRING_LITERAL_NONE:
+		return staticDomain
+	case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+		return types.StringDomainText
+	case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plan.StringLiteralForm_STRING_LITERAL_BIT:
+		return types.StringDomainBinary
+	default:
+		return types.StringDomainNone
+	}
+}
+
+// decimalStringLiteralValue recognizes effective-text literals and transparent
+// binder-inserted text cast chains rooted in one. Explicit casts and static
+// binary targets are value/domain boundaries; raw hex/bit forms remain on their
+// existing runtime numeric interpretation.
+func decimalStringLiteralValue(expr *Expr) (string, bool) {
+	if expr == nil || decimalStringEffectiveDomain(expr) != types.StringDomainText {
+		return "", false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		value, ok := literal.Value.(*plan.Literal_Sval)
+		if !ok || literal.Isnull || literal.IsBin {
+			return "", false
+		}
+		return value.Sval, true
+	}
+	if isExplicitPreparedCast(expr) {
+		return "", false
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return "", false
+	}
+	return decimalStringLiteralValue(fn.Args[0])
+}
+
 // A direct prepared parameter in a binary comparison derives its type from
 // the other operand. Preserve that contract for DECIMAL before the generic
 // string/numeric cast rules see the parameter's transport type (TEXT). Real
@@ -6096,9 +6382,115 @@ func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType 
 	return cast, nil
 }
 
+func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
+}
+
+func appendSetOperationCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 3)
+}
+
+// hasPadSpaceStringProvenance identifies value-selecting string expressions
+// that can expose representation-only CHAR padding after implicit promotion.
+// Do not recurse through byte-transforming functions such as CONCAT: spaces
+// produced there are part of the expression result rather than CHAR storage.
+func hasPadSpaceStringProvenance(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.Typ.PadSpace {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
+		fromType := makeTypeByPlan2Expr(fn.Args[0])
+		toType := makeTypeByPlan2Expr(expr)
+		if fromType.Oid == types.T_char &&
+			(toType.Oid == types.T_varchar || toType.Oid == types.T_text) {
+			return true
+		}
+		// LEAST/GREATEST compare through overload 2 before returning one of the
+		// values. Follow that comparison-only wrapper so a value-selecting
+		// parent can retain the source value's PAD SPACE provenance.
+		return isCastOverload(expr, 2) && hasPadSpaceStringProvenance(fn.Args[0])
+	}
+	for _, idx := range padSpaceValueArgumentIndexes(fn.Func.ObjName, len(fn.Args)) {
+		if hasPadSpaceStringProvenance(fn.Args[idx]) {
+			return true
+		}
+	}
+	return false
+}
+
+// padSpaceValueArgumentIndexes returns only arguments whose bytes can become
+// the function result. In particular, max_by's order and tie arguments must
+// not taint the first-argument value returned by the aggregate.
+func padSpaceValueArgumentIndexes(name string, argsLength int) []int {
+	switch name {
+	case "case", "coalesce", "if", "iff":
+		return controlFlowValueIndexes(name, argsLength)
+	case "ifnull":
+		if argsLength == 2 {
+			return []int{0, 1}
+		}
+	case "lag", "lead":
+		if argsLength >= 3 {
+			return []int{0, 2}
+		}
+		if argsLength > 0 {
+			return []int{0}
+		}
+	case "first_value", "last_value", "nth_value",
+		"any_value", "min", "max", "max_by", "max_by_non_null":
+		if argsLength > 0 {
+			return []int{0}
+		}
+	case "least", "greatest":
+		indexes := make([]int, argsLength)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes
+	}
+	return nil
+}
+
+func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
+	argType := makeTypeByPlan2Expr(expr)
+	if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
+		hasPadSpaceStringProvenance(expr) && !isCastOverload(expr, 2) {
+		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
+	}
+	return expr, nil
+}
+
+func isCastOverload(expr *Expr, overloadID int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {
+		return false
+	}
+	_, actualOverloadID := function.DecodeOverloadID(fn.Func.Obj)
+	return actualOverloadID == overloadID
+}
+
+func isPadSpaceComparisonFunction(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between",
+		"strcmp", "field", "least", "greatest":
+		return true
+	default:
+		return false
+	}
+}
+
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
+	fromPadSpace := expr != nil &&
+		(types.T(expr.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(expr))
 	expr, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(ctx, expr, toType)
 	if err != nil {
 		return nil, err
@@ -6117,6 +6509,11 @@ func appendCastBeforeExprWithOverload(
 	}
 	// for 0xXXXX, if the value is over 1<<53-1, when covert it into float64,it will lost, so just change it into uint64
 	typ := toType
+	typ.PadSpace = false
+	if overloadID <= 1 && fromPadSpace &&
+		(types.T(typ.Id) == types.T_varchar || types.T(typ.Id) == types.T_text) {
+		typ.PadSpace = true
+	}
 	if len(isBin) == 2 && isBin[0] && isBin[1] {
 		typ.Id = int32(types.T_uint64)
 	}

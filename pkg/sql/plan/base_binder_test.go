@@ -1371,7 +1371,7 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 	}
 
 	t.Run("NOT IN expansion preserves JSON parameter type", func(t *testing.T) {
-		result, err := bindMixedInListComparison(ctx, "!=", makeJsonExpr(), makeParamExpr(0))
+		result, err := bindMixedInListComparison(ctx, "!=", makeJsonExpr(), makeParamExpr(0), true)
 		require.NoError(t, err)
 		require.Len(t, result.GetF().Args, 2)
 		paramArg := requireExactJSONParam(t, result.GetF().Args[1], function.JsonComparisonParamFunctionName)
@@ -1381,7 +1381,7 @@ func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T)
 	for _, operator := range []string{"=", "!="} {
 		t.Run("mixed JSON boolean "+operator+" expansion retains protocol-visible types", func(t *testing.T) {
 			result, err := bindMixedInListComparison(
-				ctx, operator, makeJsonExpr(), makePlan2BoolConstExprWithType(true))
+				ctx, operator, makeJsonExpr(), makePlan2BoolConstExprWithType(true), true)
 			require.NoError(t, err)
 			require.Equal(t, int32(types.T_json), result.GetF().Args[0].Typ.Id)
 			require.Equal(t, int32(types.T_bool), result.GetF().Args[1].Typ.Id)

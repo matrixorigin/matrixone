@@ -47,12 +47,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -70,7 +73,7 @@ func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
 		context.Background(), nil, &tree.CreateTable{Temporary: true},
 	))
 	require.NoError(t, doRevokePrivilegeImplicitly(
-		context.Background(), nil, &tree.DropTable{}, nil,
+		context.Background(), nil, &tree.DropTable{}, nil, "",
 	))
 }
 
@@ -549,8 +552,8 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 			wantCompatibilityRoles: true,
 		},
 		{
-			name:               "protocol 38 installs canonical full role closure views",
-			protocol:           defines.MORPCVersion38,
+			name:               "protocol 41 installs canonical full role closure views",
+			protocol:           defines.MORPCVersion41,
 			wantCheckFunction:  true,
 			wantCurrentRoles:   true,
 			wantCanonicalViews: true,
@@ -695,6 +698,28 @@ func Test_initFunction(t *testing.T) {
 			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
 		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
+}
+
+func TestHandleGrantPrivilegeForcesPessimisticRC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+		return bh
+	}
+	ses := newSes(nil, ctrl)
+	stmt := &tree.GrantPrivilege{
+		ObjType: tree.OBJECT_TYPE_ACCOUNT,
+		Level:   &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+	}
+
+	require.NoError(t, handleGrantPrivilege(ses, &ExecCtx{reqCtx: context.Background()}, stmt))
+	require.True(t, forcedPessimisticRC)
+	require.Equal(t, []string{"begin;", "commit;"}, bh.executedSQLs)
 }
 
 func Test_initUser(t *testing.T) {
@@ -6940,6 +6965,173 @@ func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
 	})
 }
 
+func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
+	const (
+		dbName = "tpch"
+		userID = 1
+		roleID = 2
+		nation = "nation"
+		region = "region"
+	)
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
+	require.NoError(t, err)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
+	require.Equal(t, region, queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "test_account",
+		User:          "named_window_reader",
+		DefaultRole:   "named_window_reader_role",
+		TenantID:      1,
+		UserID:        userID,
+		DefaultRoleID: roleID,
+	})
+
+	sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+	addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, nation, map[PrivilegeType]bool{
+		PrivilegeTypeSelect: true,
+	})
+	addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, region, map[PrivilegeType]bool{
+		PrivilegeTypeSelect: false,
+	})
+	sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, newBh(ctrl, sql2result))
+	defer bhStub.Reset()
+
+	ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+		ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+// namedWindowAuthorizationCompilerContext adds the MongoDB catalog entry used
+// by TestNamedWindowValidationSpecialScansRequireSelectPrivilege while keeping
+// the normal mock catalog (including tpch.nation) intact.  The test must bind
+// the source through BuildPlan instead of manufacturing a scan node: that is
+// what proves validation-only named-window definitions retain the same node
+// shape the frontend authorization walk consumes.
+type namedWindowAuthorizationCompilerContext struct {
+	*plan2.MockCompilerContext
+	mongoObject *plan.ObjectRef
+	mongoTable  *plan.TableDef
+}
+
+func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
+	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
+}
+
+func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if dbName == "mongo_window_auth" && tableName == "events" {
+		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+	}
+	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+}
+
+func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
+	const (
+		userID = 1
+		roleID = 2
+		nation = "nation"
+		region = "region"
+	)
+
+	mongoMapping := sqlmongodb.TableMapping{
+		Connection: "mongo_window_auth",
+		Database:   "telemetry",
+		Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit,
+		Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "event_id", Path: "event_id", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	newCompilerContext := func() *namedWindowAuthorizationCompilerContext {
+		return &namedWindowAuthorizationCompilerContext{
+			MockCompilerContext: plan2.NewMockCompilerContext(true),
+			mongoObject: &plan.ObjectRef{
+				Db: 1, Obj: 2, SchemaName: "mongo_window_auth", ObjName: "events",
+			},
+			mongoTable: &plan.TableDef{
+				Name: "events", DbName: "mongo_window_auth", DbId: 1, TblId: 2,
+				TableType: catalog.SystemExternalRel, FeatureFlag: features.MongoDBExternal,
+				Createsql: sqlmongodb.BuildCreateSQLEnvelope(mongoMapping),
+				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		sql       string
+		database  string
+		table     string
+		grantScan bool
+	}{
+		{
+			name:     "unused MongoDB definition is rejected without select",
+			database: "mongo_window_auth", table: "events",
+			sql: "select 1 from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused MongoDB definition succeeds with select",
+			database: "mongo_window_auth", table: "events", grantScan: true,
+			sql: "select 1 from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "used MongoDB window control succeeds with select",
+			database: "mongo_window_auth", table: "events", grantScan: true,
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused table_changes definition is rejected without select",
+			database: "tpch", table: region,
+			sql: "select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+		{
+			name:     "unused table_changes definition succeeds with select",
+			database: "tpch", table: region, grantScan: true,
+			sql: "select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+		{
+			name:     "used table_changes window control succeeds with select",
+			database: "tpch", table: region, grantScan: true,
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false)
+			require.NoError(t, err)
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{Tenant: "test_account", User: "named_window_reader", DefaultRole: "named_window_reader_role", TenantID: 1, UserID: userID, DefaultRoleID: roleID})
+			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, "tpch", nation, map[PrivilegeType]bool{PrivilegeTypeSelect: true})
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, tc.database, tc.table, map[PrivilegeType]bool{PrivilegeTypeSelect: tc.grantScan})
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, newBh(ctrl, sql2result))
+			defer bhStub.Reset()
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, queryPlan)
+			require.NoError(t, err)
+			require.Equal(t, tc.grantScan, ok)
+		})
+	}
+}
+
 func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
 	pkName := "id"
 	if fakePK {
@@ -8469,6 +8661,15 @@ func Test_doRevokeRole(t *testing.T) {
 }
 
 func Test_doGrantPrivilege(t *testing.T) {
+	registerLockedSQL := func(bh *backgroundExecTest, sql string, result ExecResult) {
+		bh.sql2result[strings.TrimSuffix(sql, ";")+" for share;"] = result
+	}
+	registerLockedDatabase := func(ctx context.Context, bh *backgroundExecTest, dbName string, result ExecResult) {
+		sql, err := getSqlForCheckDatabaseByAccount(ctx, dbName)
+		require.NoError(t, err)
+		registerLockedSQL(bh, sql, result)
+	}
+
 	convey.Convey("grant account, role succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -8609,12 +8810,14 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, stmt.Level.DbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 				sql, _ := getSqlForCheckDatabase(context.TODO(), stmt.Level.TabName)
 				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, stmt.Level.TabName, mrs)
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
@@ -8744,20 +8947,25 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName,
+					newMrsForCheckDatabase([][]interface{}{{1}}))
 				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
 					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				} else {
 					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				}
 			}
 
@@ -8888,20 +9096,25 @@ func Test_doGrantPrivilege(t *testing.T) {
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName, mrs)
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				registerLockedDatabase(ses.GetTxnHandler().GetTxnCtx(), bh, dbName,
+					newMrsForCheckDatabase([][]interface{}{{1}}))
 				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
 					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				} else {
 					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 					mrs := newMrsForCheckDatabaseTable([][]interface{}{
 						{0},
 					})
 					bh.sql2result[sql] = mrs
+					registerLockedSQL(bh, sql, mrs)
 				}
 			}
 
@@ -8920,6 +9133,140 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
+		}
+	})
+}
+
+func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("d")
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+	lockedDatabaseSQL := func(dbName string) string {
+		sql, err := getSqlForCheckDatabaseByAccount(ctx, dbName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+	lockedTableSQL := func(tableName string) string {
+		sql, err := getSqlForCheckDatabaseTable(ctx, "d", tableName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+	lockedViewSQL := func(viewName string) string {
+		sql, err := getSqlForCheckDatabaseView(ctx, "d", viewName)
+		require.NoError(t, err)
+		return strings.TrimSuffix(sql, ";") + " for share;"
+	}
+
+	testCases := []struct {
+		name         string
+		objectType   tree.ObjectType
+		level        tree.PrivilegeLevel
+		objectID     int64
+		expectedSQLs []string
+	}{
+		{
+			name:       "global scope needs no object lock",
+			objectType: tree.OBJECT_TYPE_TABLE,
+			level:      tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+			objectID:   objectIDAll,
+		},
+		{
+			name:         "database scope locks database",
+			objectType:   tree.OBJECT_TYPE_DATABASE,
+			level:        tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE, DbName: "d"},
+			objectID:     11,
+			expectedSQLs: []string{lockedDatabaseSQL("d")},
+		},
+		{
+			name:         "database wildcard locks database",
+			objectType:   tree.OBJECT_TYPE_TABLE,
+			level:        tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR, DbName: "d"},
+			objectID:     11,
+			expectedSQLs: []string{lockedDatabaseSQL("d")},
+		},
+		{
+			name:       "exact table locks database before relation",
+			objectType: tree.OBJECT_TYPE_TABLE,
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
+			},
+			objectID:     42,
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t")},
+		},
+		{
+			name:       "exact view locks database before relation",
+			objectType: tree.OBJECT_TYPE_VIEW,
+			level: tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "v",
+			},
+			objectID:     43,
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedViewSQL("v")},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			for _, sql := range testCase.expectedSQLs {
+				objectID := testCase.objectID
+				if sql == lockedDatabaseSQL("d") && len(testCase.expectedSQLs) > 1 {
+					objectID = 11
+				}
+				bh.sql2result[sql] = newMrsForCheckDatabase([][]interface{}{{objectID}})
+			}
+
+			_, objectID, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+				ctx, ses, bh, testCase.objectType, testCase.level)
+			require.NoError(t, err)
+			require.Equal(t, testCase.objectID, objectID)
+			require.Equal(t, testCase.expectedSQLs, bh.executedSQLs)
+		})
+	}
+
+	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		_, _, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+			ctx,
+			ses,
+			bh,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "d",
+				TabName: catalog.IndexTableNamePrefix + "legacy",
+			},
+		)
+		require.ErrorContains(t, err, "cannot grant privileges on internal relation")
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	t.Run("lock failure prevents privilege mutation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		roleSQL, err := getSqlForRoleIdOfRole(ctx, "r1")
+		require.NoError(t, err)
+		bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+		lockErr := errors.New("database lifecycle lock failed")
+		bh.sql2err[lockedDatabaseSQL("d")] = lockErr
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+			ObjType:    tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
+			},
+			Roles: []*tree.Role{{UserName: "r1"}},
+		}
+
+		err = doGrantPrivilege(ctx, ses, stmt, bh)
+		require.ErrorIs(t, err, lockErr)
+		require.NotContains(t, bh.executedSQLs, lockedTableSQL("t"))
+		for _, sql := range bh.executedSQLs {
+			require.NotContains(t, sql, "insert into mo_catalog.mo_role_privs")
+			require.NotContains(t, sql, "update mo_catalog.mo_role_privs")
 		}
 	})
 }
@@ -11609,6 +11956,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			bh.sql2result["rollback;"] = nil
 
 			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			accountLockSQL := sql
 			bh.sql2result[sql] = nil
 
 			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
@@ -11647,8 +11995,11 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}, false) // inTransaction=false
 
 			convey.So(err, convey.ShouldBeNil)
-			// Verify that "begin;" was executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeTrue)
+			require.GreaterOrEqual(t, len(bh.executedSqls), 3)
+			require.Equal(t, "begin;", bh.executedSqls[0])
+			require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), bh.executedSqls[1])
+			require.Equal(t, accountLockSQL, bh.executedSqls[2])
 			requireAccountOwnedMetadataCleanup(t, bh, 1)
 		})
 
@@ -11718,9 +12069,38 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			}, true) // inTransaction=true
 
 			convey.So(err, convey.ShouldBeNil)
-			// Verify that "begin;" was NOT executed
 			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
+			convey.So(
+				bh.hasExecuted(databranchutils.LineageOwnerLifecycleLockSQL()),
+				convey.ShouldBeFalse,
+			)
 			requireAccountOwnedMetadataCleanup(t, bh, 1)
+		})
+
+		convey.Convey("standalone lifecycle admission failure rolls back before account lock", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+			wantErr := errors.New("lifecycle gate failed")
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["rollback;"] = nil
+			bh.sql2err[gateSQL] = wantErr
+
+			stmt := &tree.DropAccount{Name: boxExprStr("test_acc")}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+			ses.rm = newTestRoutineManager(t, ctx)
+
+			err := doDropAccount(ctx, bh, ses, &dropAccount{Name: "test_acc"}, false)
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{"begin;", gateSQL, "rollback;"}, bh.executedSqls)
 		})
 	})
 }

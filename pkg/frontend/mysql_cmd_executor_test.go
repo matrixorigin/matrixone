@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -905,6 +906,217 @@ func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestForcedObjectLifecycleTxnConsumesNextIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		handler := ses.GetTxnHandler()
+		require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+			stmt:   &tree.DropTable{},
+			txnOpt: FeTxnOption{
+				autoCommit:                      true,
+				forcePessimisticObjectLifecycle: true,
+			},
+		}
+
+		handler.mu.Lock()
+		err := handler.createTxnOpUnsafe(execCtx)
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.Equal(t, txn.TxnMode_Pessimistic, op.Txn().Mode)
+		require.Equal(t, txn.TxnIsolation_RC, op.Txn().Isolation)
+		require.NoError(t, op.Rollback(ctx))
+		_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+		require.False(t, hasNextIsolation)
+	})
+}
+
+func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
+	preparedStmt := &PrepareStmt{
+		Name:            "binary_drop",
+		defaultDatabase: "prepare_db",
+		PrepareStmt:     &tree.DropTable{},
+	}
+	binaryInput := newBinaryExecuteUserInput("drop table t", preparedStmt, false)
+	require.Equal(t, "prepare_db", binaryInput.preparedDefaultDatabase)
+	require.Same(t, preparedStmt.PrepareStmt, binaryInput.stmt)
+
+	execCtx := &ExecCtx{persistentDropTableTargets: tree.TableNames{
+		tree.NewTableName(tree.Identifier("stale"), tree.ObjectNamePrefix{}, nil),
+	}}
+	execCtx.beginStatementGeneration(binaryInput)
+	require.Equal(t, "prepare_db", execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.persistentDropTableTargets)
+
+	// A following direct statement in the same COM_QUERY/request must not inherit
+	// any PREPARE-time binding or ownership-cleanup target snapshot.
+	execCtx.persistentDropTableTargets = tree.TableNames{
+		tree.NewTableName(tree.Identifier("next"), tree.ObjectNamePrefix{}, nil),
+	}
+	execCtx.beginStatementGeneration(&UserInput{})
+	require.Empty(t, execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.persistentDropTableTargets)
+}
+
+func TestEffectiveStatementForTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("execute_db")
+	ses.AddTempTable("execute_db", "t", "__mo_temp_t")
+	require.NoError(t, ses.SetPrepareStmt(ctx, "drop_stmt", &PrepareStmt{
+		Name:            "drop_stmt",
+		defaultDatabase: "prepare_db",
+		PrepareStmt: &tree.DropTable{Names: tree.TableNames{
+			tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil),
+		}},
+	}))
+
+	effective, defaultDatabase, err := effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "drop_stmt"})
+	require.NoError(t, err)
+	require.IsType(t, &tree.DropTable{}, effective)
+	require.Equal(t, "prepare_db", defaultDatabase)
+	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, effective, defaultDatabase))
+
+	selectStmt := &tree.Select{}
+	effective, defaultDatabase, err = effectiveStatementForTxn(ctx, ses, selectStmt)
+	require.NoError(t, err)
+	require.Same(t, selectStmt, effective)
+	require.Empty(t, defaultDatabase)
+
+	_, _, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "missing"})
+	require.Error(t, err)
+
+	require.NoError(t, ses.SetPrepareStmt(ctx, "cycle", &PrepareStmt{
+		Name:        "cycle",
+		PrepareStmt: &tree.Execute{Name: "cycle"},
+	}))
+	_, _, err = effectiveStatementForTxn(ctx, ses, &tree.Execute{Name: "cycle"})
+	require.ErrorContains(t, err, "cyclic prepared EXECUTE reference")
+}
+
+func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("tenant")}, ses.GetProc())
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestLifecycleAdmissionFailurePreservesPreviousStatement(t *testing.T) {
+	persistent := tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil)
+	for _, testCase := range []struct {
+		name string
+		stmt tree.Statement
+	}{
+		{name: "drop table", stmt: &tree.DropTable{Names: tree.TableNames{persistent}}},
+		{name: "alter view", stmt: &tree.AlterView{}},
+		{name: "data branch delete table", stmt: &tree.DataBranchDeleteTable{}},
+		{name: "data branch delete database", stmt: &tree.DataBranchDeleteDatabase{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+
+			op := newTestTxnOp()
+			op.meta = txn.TxnMeta{
+				ID: []byte{1}, Status: txn.TxnStatus_Active,
+				Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+			}
+			// Model one previously completed statement. An erroneous finalizer call
+			// would remove this entry through RollbackLastStatement.
+			op.wp.stack = []uint64{0}
+			op.wp.stmtId = 1
+			handler := ses.GetTxnHandler()
+			handler.mu.Lock()
+			handler.txnOp = op
+			handler.txnCtx = ctx
+			handler.optionBits = OPTION_BEGIN
+			handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+			handler.mu.Unlock()
+
+			execCtx := &ExecCtx{
+				reqCtx: ctx,
+				stmt:   testCase.stmt,
+				ses:    ses,
+				proc:   ses.GetProc(),
+				input:  &UserInput{sql: testCase.name},
+			}
+			err := executeStmtWithWorkspace(ses, nil, execCtx)
+			require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+			require.Equal(t, []uint64{0}, op.wp.stack)
+			require.Equal(t, uint64(1), op.wp.stmtId)
+			require.Zero(t, op.rollbackCalls)
+			require.Same(t, op, handler.GetTxn())
+		})
+	}
+}
+
+func TestPreparedDropAdmissionUsesPrepareDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("execute_db")
+	ses.AddTempTable("execute_db", "t", "__mo_temp_t")
+	target := tree.NewTableName(tree.Identifier("t"), tree.ObjectNamePrefix{}, nil)
+	require.NoError(t, ses.SetPrepareStmt(ctx, "p", &PrepareStmt{
+		Name: "p", defaultDatabase: "prepare_db",
+		PrepareStmt: &tree.DropTable{Names: tree.TableNames{target}},
+	}))
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	handler := ses.GetTxnHandler()
+	handler.mu.Lock()
+	handler.txnOp = op
+	handler.txnCtx = ctx
+	handler.optionBits = OPTION_BEGIN
+	handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+	handler.mu.Unlock()
+	execCtx := &ExecCtx{
+		reqCtx: ctx, stmt: &tree.Execute{Name: "p"}, ses: ses, proc: ses.GetProc(),
+		input: &UserInput{sql: "execute p"},
+	}
+
+	err := executeStmtWithWorkspace(ses, nil, execCtx)
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.Equal(t, "prepare_db", execCtx.effectiveTxnDefaultDatabase)
+	require.Same(t, op, handler.GetTxn())
 }
 
 func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {

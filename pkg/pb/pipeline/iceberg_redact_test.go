@@ -138,6 +138,19 @@ func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto 
 	return &file
 }
 
+func TestPipelineDescriptorRegistryNameMatchesEmbeddedDescriptor(t *testing.T) {
+	compressed := proto.FileDescriptor("pipeline.proto")
+	if len(compressed) == 0 {
+		t.Fatal("pipeline protobuf descriptor is not registered under its canonical name")
+	}
+	if stale := proto.FileDescriptor("proto/pipeline.proto"); len(stale) != 0 {
+		t.Fatal("pipeline protobuf descriptor remains registered under a stale path")
+	}
+	if got, want := decodePipelineFileDescriptorBytes(t, compressed).GetName(), "pipeline.proto"; got != want {
+		t.Fatalf("pipeline descriptor name = %q, want %q", got, want)
+	}
+}
+
 func TestIcebergRuntimeStringRedactsSensitiveFields(t *testing.T) {
 	rawCredential := "scope://catalog/secret-token"
 	rawObjectRef := "object-scope-ref-with-secret"

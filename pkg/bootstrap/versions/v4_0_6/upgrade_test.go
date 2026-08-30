@@ -80,14 +80,14 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion38), checkConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion41), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
 	tableConstraints := tenantUpgEntries[12]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion38), tableConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion41), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
 	hideInternalColumns := tenantUpgEntries[13]
 	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
@@ -142,7 +142,7 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.statistics")
 	for _, entry := range tenantUpgEntries {
 		if strings.Contains(entry.UpgSql+entry.PostSql, "mo_current_roles()") {
-			require.Equal(t, int64(defines.MORPCVersion38), entry.RequiredProtocolVersion,
+			require.Equal(t, int64(defines.MORPCVersion41), entry.RequiredProtocolVersion,
 				"view upgrade %s must wait for mo_current_roles", entry.TableName)
 		}
 	}
@@ -150,7 +150,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.ADD_INDEX, roleGrantIndex.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, roleGrantIndex.Schema)
 	require.Equal(t, "mo_role_grant", roleGrantIndex.TableName)
-	require.Equal(t, int64(defines.MORPCVersion38), roleGrantIndex.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion41), roleGrantIndex.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(roleGrantIndex.UpgSql),
 		"index idx_mo_role_grant_grantee_id on mo_catalog.mo_role_grant(grantee_id)")
 
@@ -175,7 +175,7 @@ func TestUpgradeEntries(t *testing.T) {
 		require.Equal(t, view.name, entry.TableName)
 		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 		require.Equal(t, view.ddl, entry.UpgSql)
-		require.Equal(t, int64(defines.MORPCVersion38), entry.RequiredProtocolVersion)
+		require.Equal(t, int64(defines.MORPCVersion41), entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
 			"drop view if exists information_schema."+strings.ToLower(view.name))
 	}
@@ -689,7 +689,7 @@ func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
 	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 		if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
 			return newProtocolVersionResultValue(t,
-				`{"method":"GETPROTOCOLVERSION","result":"cn-a:38,cn-b:38"}`), nil
+				`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
 		}
 		executed = append(executed, sql)
 		if sql == entry.PostSql {
@@ -747,7 +747,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 			if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
 				return newProtocolVersionResultValue(t,
-					`{"method":"GETPROTOCOLVERSION","result":"cn-a:38,cn-b:38"}`), nil
+					`{"method":"GETPROTOCOLVERSION","result":"cn-a:41,cn-b:41"}`), nil
 			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil

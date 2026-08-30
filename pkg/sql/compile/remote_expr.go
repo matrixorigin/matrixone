@@ -18,9 +18,11 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -529,6 +531,79 @@ func containsVarExprInExpressionGetters(value any) bool {
 	if getter, ok := value.(lockRowsExpressionsGetter); ok {
 		if containsVarExprInValue(reflect.ValueOf(getter.GetLockRowsExpressions()), nil) {
 			return true
+		}
+	}
+	return false
+}
+
+func pipelineContainsPadSpaceCast(p *pipeline.Pipeline) bool {
+	return containsPadSpaceCastInValue(reflect.ValueOf(p), nil)
+}
+
+func containsPadSpaceCastInExpr(expr *plan.Expr, seen map[uintptr]struct{}) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		functionID, overloadID := function.DecodeOverloadID(fn.Func.Obj)
+		if functionID == function.CAST && (overloadID == 2 || overloadID == 3) {
+			return true
+		}
+	}
+	return containsPadSpaceCastInValue(reflect.ValueOf(expr.Expr), seen)
+}
+
+func containsPadSpaceCastInValue(v reflect.Value, seen map[uintptr]struct{}) bool {
+	if !v.IsValid() {
+		return false
+	}
+	if v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		return containsPadSpaceCastInValue(v.Elem(), seen)
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return false
+		}
+		if v.Type() == planExprPtrType {
+			return containsPadSpaceCastInExpr(v.Interface().(*plan.Expr), seen)
+		}
+		if seen == nil {
+			seen = make(map[uintptr]struct{})
+		}
+		ptr := v.Pointer()
+		if _, ok := seen[ptr]; ok {
+			return false
+		}
+		seen[ptr] = struct{}{}
+		return containsPadSpaceCastInValue(v.Elem(), seen)
+	}
+
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsPadSpaceCastInValue(v.Index(i), seen) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if containsPadSpaceCastInValue(iter.Key(), seen) ||
+				containsPadSpaceCastInValue(iter.Value(), seen) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if !v.Type().Field(i).IsExported() {
+				continue
+			}
+			if containsPadSpaceCastInValue(v.Field(i), seen) {
+				return true
+			}
 		}
 	}
 	return false

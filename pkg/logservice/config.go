@@ -292,8 +292,9 @@ func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
 	saddr := make([]string, 0)
 	saddr = append(saddr, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
-		DiscoveryAddress: c.HAKeeperClientConfig.DiscoveryAddress,
-		ServiceAddresses: saddr,
+		DiscoveryAddress:   c.HAKeeperClientConfig.DiscoveryAddress,
+		ServiceAddresses:   saddr,
+		BackendReadTimeout: c.HAKeeperClientConfig.BackendReadTimeout,
 	}
 }
 
@@ -607,6 +608,17 @@ type HAKeeperClientConfig struct {
 	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 	// EnableCompress enable compress
 	EnableCompress bool `toml:"enable-compress"`
+	// BackendReadTimeout bounds how long the shared HAKeeper transport waits
+	// without a response before replacing the connection. Caller contexts
+	// independently bound individual requests.
+	BackendReadTimeout toml.Duration `toml:"backend-read-timeout"`
+}
+
+func (c HAKeeperClientConfig) backendReadTimeout() time.Duration {
+	if c.BackendReadTimeout.Duration == 0 {
+		return defaultBackendReadTimeout
+	}
+	return c.BackendReadTimeout.Duration
 }
 
 // Validate validates the HAKeeperClientConfig.
@@ -616,6 +628,11 @@ func (c *HAKeeperClientConfig) Validate() error {
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
+	}
+	if c.BackendReadTimeout.Duration == 0 {
+		c.BackendReadTimeout.Duration = c.backendReadTimeout()
+	} else if c.BackendReadTimeout.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("backend-read-timeout must be positive")
 	}
 	return nil
 }

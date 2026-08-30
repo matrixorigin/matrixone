@@ -190,17 +190,22 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		//change privilege
 		switch st := execCtx.stmt.(type) {
 		case *tree.DropTable:
-			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(ses, st)
+			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(
+				ses, st, execCtx.effectiveTxnDefaultDatabase,
+			)
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets); err != nil {
+			if err = doRevokePrivilegeImplicitly(
+				execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets,
+				execCtx.effectiveTxnDefaultDatabase,
+			); err != nil {
 				return
 			}
 
 		case *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil); err != nil {
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil, ""); err != nil {
 				return
 			}
 
@@ -266,9 +271,16 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 // the session's temporary aliases still exist. Both the pre-execution
 // ownership revoke and the post-execution dynamic-table cleanup must consume
 // this same snapshot: dropTableSingle removes temporary aliases as it runs.
-func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.TableNames {
+func capturePersistentDropTableTargets(
+	ses FeSession,
+	st *tree.DropTable,
+	defaultDatabase string,
+) tree.TableNames {
 	if st == nil || st.Temporary {
 		return nil
+	}
+	if ses == nil {
+		return st.Names
 	}
 
 	targets := make(tree.TableNames, 0, len(st.Names))
@@ -278,7 +290,10 @@ func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.Ta
 		}
 		dbName := string(name.SchemaName)
 		if dbName == "" {
-			dbName = ses.GetDatabaseName()
+			dbName = defaultDatabase
+			if dbName == "" {
+				dbName = ses.GetDatabaseName()
+			}
 		}
 		if _, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName)); isTemporary {
 			continue

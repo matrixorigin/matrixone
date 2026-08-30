@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +48,16 @@ func TestOptionsLockWaitTimeout(t *testing.T) {
 	require.True(t, opts.HasLockWaitTimeout())
 	require.Zero(t, opts.LockWaitTimeout())
 	require.Len(t, opts.ExtraTxnOptions(), 2)
+}
+
+func TestOptionsTxnIsolation(t *testing.T) {
+	var opts Options
+	require.False(t, opts.HasTxnIsolation())
+
+	opts = opts.WithTxnIsolation(txn.TxnIsolation_SI)
+	require.True(t, opts.HasTxnIsolation())
+	require.Equal(t, txn.TxnIsolation_SI, opts.TxnIsolation())
+	require.Len(t, opts.ExtraTxnOptions(), 1)
 }
 
 func TestStatementOptionParamsPreserveNulls(t *testing.T) {
