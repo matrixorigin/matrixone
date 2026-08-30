@@ -683,7 +683,9 @@ func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, afte
 	if after >= 0 {
 		where += fmt.Sprintf(" AND %s > %d", catalog.FullText2Index_TblCol_Storage_Chunk_Id, after)
 	}
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(LENGTH(%s)), 0) FROM %s WHERE %s",
+	// CAST AS SIGNED keeps the result's vector type compatible with the int64
+	// accessor; SUM(LENGTH(...)) may otherwise be returned as DECIMAL128.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s",
 		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		where)
 	var sqlStart time.Time

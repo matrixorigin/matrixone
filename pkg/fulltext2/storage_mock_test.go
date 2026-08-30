@@ -190,6 +190,21 @@ func TestLoadBudgetGates(t *testing.T) {
 	require.Error(t, checkTailLoadBudget(sp, cfg))
 }
 
+func TestTailLoadBudgetCastsSumLengthToSigned(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	var seenSQL string
+
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		seenSQL = sql
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 100)}}, nil
+	})
+
+	require.NoError(t, checkTailLoadBudgetAfter(sp, cfg, 7, nil))
+	require.Contains(t, seenSQL, "CAST(COALESCE(SUM(LENGTH(")
+	require.Contains(t, seenSQL, ") AS SIGNED)")
+}
+
 func TestLoadAllBasesEmpty(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
