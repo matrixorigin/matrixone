@@ -755,7 +755,7 @@ time02  ¦  CREATE TABLE `time02` (
 )
 desc time02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-date_format(col2, '%W %M %Y')  ¦  VARCHAR(134)  ¦  YES  ¦    ¦  null  ¦    ¦
+date_format(col2, '%W %M %Y')  ¦  VARCHAR(134)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time02;
 ➤ date_format(col2, '%w %m %y')[12,-1,0]  𝄀
 Saturday November 2023  𝄀
