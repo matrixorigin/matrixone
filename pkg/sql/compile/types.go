@@ -371,6 +371,11 @@ type Compile struct {
 
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
+	// loadUniqueIndexPromotion is coordinator-local execution state shared only
+	// with physical retry compiles. It is never serialized into a remote scope or
+	// written back into the canonical logical plan.
+	loadUniqueIndexPromotion      *loadUniqueIndexPromotionState
+	loadUniqueIndexPromotionOwner bool
 
 	filterExprExes []colexec.ExpressionExecutor
 
