@@ -1029,6 +1029,35 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 
+func BenchmarkParamExpressionExecutorPreparedExecute(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(params, []byte("123"), false, proc.Mp()))
+	require.NoError(b, params.SetStringSource(types.StringSourceCOMStmt))
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+	})
+	b.Cleanup(func() { params.Free(proc.Mp()) })
+
+	expr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
+	b.Cleanup(expr.Free)
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	batches := []*batch.Batch{input}
+
+	if _, err := expr.Eval(proc, batches, nil); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		expr.ResetForNextQuery()
+		if _, err := expr.Eval(proc, batches, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestPreparedNumericLiteralsMaterializeWithTheirRuntimeTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

@@ -667,9 +667,21 @@ func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
 // prepared parameter. T_any means that the sender did not provide exact type
 // metadata, as is expected for legacy peers and parameters that do not need it.
 func (proc *Process) GetPrepareParamType(i int) types.T {
+	paramCount := 0
+	if proc.Base.prepareParams != nil {
+		paramCount = proc.Base.prepareParams.Length()
+	}
+	metadata := proc.Base.prepareParamsIsBin
+	// Exact SQL types use the optional twelve-section metadata form. Ordinary
+	// prepared parameters carry at most the four-section kind form, so avoid
+	// eight repeated bounds checks for every ParamExpressionExecutor evaluation.
+	if i < 0 || i >= paramCount || len(metadata) < paramCount*12 {
+		return types.T_any
+	}
+
 	var typ types.T
 	for bit := 0; bit < 8; bit++ {
-		if proc.getPrepareParamMeta(i, 4+bit) {
+		if metadata[paramCount*(4+bit)+i] {
 			typ |= types.T(1 << bit)
 		}
 	}
