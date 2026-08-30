@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -59,6 +60,83 @@ func TestPrimaryKeyGroupEliminationSupportsSingleRowAggregates(t *testing.T) {
 	require.NotNil(t, scan)
 	require.NotNil(t, scan.Limit)
 	require.Equal(t, uint64(7), scan.Limit.GetLit().GetU64Val())
+}
+
+func TestPrimaryKeyGroupEliminationRequiresExactSingleRowAggregateLaw(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantAgg bool
+	}{
+		{
+			name:    "wide decimal avg falls back",
+			sql:     "select empno, avg(cast(sal as decimal(38,10))) from constraint_test.emp group by empno limit 10",
+			wantAgg: true,
+		},
+		{
+			name:    "mixed aggregate falls back atomically",
+			sql:     "select empno, count(*), avg(cast(sal as decimal(38,10))) from constraint_test.emp group by empno limit 10",
+			wantAgg: true,
+		},
+		{
+			name:    "safe decimal avg remains eligible",
+			sql:     "select empno, avg(cast(sal as decimal(20,2))) from constraint_test.emp group by empno limit 10",
+			wantAgg: false,
+		},
+		{
+			name:    "float sum falls back",
+			sql:     "select empno, sum(cast(sal as double)) from constraint_test.emp group by empno limit 10",
+			wantAgg: true,
+		},
+		{
+			name:    "float avg falls back",
+			sql:     "select empno, avg(cast(sal as double)) from constraint_test.emp group by empno limit 10",
+			wantAgg: true,
+		},
+		{
+			name:    "float min and max remain eligible",
+			sql:     "select empno, min(cast(sal as double)), max(cast(sal as double)) from constraint_test.emp group by empno limit 10",
+			wantAgg: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			require.Equal(t, test.wantAgg, reachableNodeType(logical.GetQuery(), planpb.Node_AGG))
+		})
+	}
+}
+
+func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
+	decimal := func(oid types.T, width, scale int32) planpb.Type {
+		return planpb.Type{Id: int32(oid), Width: width, Scale: scale}
+	}
+	tests := []struct {
+		name   string
+		fn     string
+		source planpb.Type
+		target planpb.Type
+		want   bool
+	}{
+		{"integer sum", "sum", planpb.Type{Id: int32(types.T_int64)}, decimal(types.T_decimal128, 38, 0), true},
+		{"float sum signed zero", "sum", planpb.Type{Id: int32(types.T_float32)}, planpb.Type{Id: int32(types.T_float64)}, false},
+		{"float avg signed zero", "avg", planpb.Type{Id: int32(types.T_float64)}, planpb.Type{Id: int32(types.T_float64)}, false},
+		{"decimal64 widened", "avg", decimal(types.T_decimal64, 18, 0), decimal(types.T_decimal128, 38, 6), true},
+		{"decimal128 loses integer digits", "avg", decimal(types.T_decimal128, 38, 10), decimal(types.T_decimal128, 38, 12), false},
+		{"decimal128 exact boundary", "avg", decimal(types.T_decimal128, 37, 11), decimal(types.T_decimal128, 38, 12), true},
+		{"decimal256 loses integer digits", "avg", decimal(types.T_decimal256, 65, 0), decimal(types.T_decimal256, 65, 6), false},
+		{"decimal256 exact boundary", "avg", decimal(types.T_decimal256, 65, 12), decimal(types.T_decimal256, 65, 12), true},
+		{"missing source precision", "avg", decimal(types.T_decimal128, 0, 0), decimal(types.T_decimal128, 38, 12), false},
+		{"non-decimal target", "avg", decimal(types.T_decimal128, 20, 2), planpb.Type{Id: int32(types.T_float64)}, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, singleRowSumOrAvgCastIsExact(test.fn, test.source, test.target))
+		})
+	}
 }
 
 func TestPrimaryKeyGroupEliminationPreservesBoundedDemand(t *testing.T) {

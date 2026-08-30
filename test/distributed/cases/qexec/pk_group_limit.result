@@ -54,4 +54,41 @@ limit 4;
 2  ¦  b  𝄀
 3  ¦  null  𝄀
 4  ¦  d
+create table edge_values (
+id int primary key,
+wide decimal(38, 10),
+f float,
+dbl double
+);
+insert into edge_values values
+(1, 9999999999999999999999999999.9999999999, -0.0, -0.0),
+(2, 0, 0.0, 0.0),
+(3, null, null, null);
+select count(*) from (
+select id, avg(wide) a
+from edge_values
+group by id
+limit 10
+) q
+where a is not null;
+➤ count(*)[-5,64,0]  𝄀
+2
+select id
+from edge_values
+group by id
+having cast(sum(f) as varchar) = '0'
+order by id
+limit 10;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id
+from edge_values
+group by id
+having cast(avg(dbl) as varchar) = '0'
+order by id
+limit 10;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
 drop database pk_group_limit_bvt;

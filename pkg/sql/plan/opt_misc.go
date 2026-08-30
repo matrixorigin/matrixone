@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -1129,7 +1130,16 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		}
 		return rowCount, true
 
-	case "sum", "avg", "min", "max", "any_value":
+	case "sum", "avg":
+		if len(fn.Args) != 1 {
+			return nil, false
+		}
+		if !singleRowSumOrAvgCastIsExact(fn.Func.ObjName, fn.Args[0].Typ, agg.Typ) {
+			return nil, false
+		}
+		fallthrough
+
+	case "min", "max", "any_value":
 		if len(fn.Args) != 1 {
 			return nil, false
 		}
@@ -1145,6 +1155,27 @@ func (builder *QueryBuilder) singleRowAggregateExpr(
 		return rowValue, true
 	}
 	return nil, false
+}
+
+func singleRowSumOrAvgCastIsExact(name string, source, target plan.Type) bool {
+	sourceID := types.T(source.Id)
+	if sourceID == types.T_float32 || sourceID == types.T_float64 {
+		// SUM/AVG initialize an arithmetic state, which canonicalizes -0 to +0.
+		// A direct cast preserves -0 and can therefore change later predicates.
+		return false
+	}
+
+	if name != "avg" || !sourceID.IsDecimal() {
+		return true
+	}
+
+	targetID := types.T(target.Id)
+	if !targetID.IsDecimal() || source.Width <= 0 || target.Width <= 0 ||
+		source.Scale < 0 || target.Scale < source.Scale ||
+		source.Scale > source.Width || target.Scale > target.Width {
+		return false
+	}
+	return source.Width-source.Scale <= target.Width-target.Scale
 }
 
 func (builder *QueryBuilder) applyEffectlessAggRemap(

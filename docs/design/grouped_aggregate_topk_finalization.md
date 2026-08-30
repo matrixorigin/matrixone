@@ -94,8 +94,15 @@ For a group containing one row:
 - `COUNT(*)` is INT64 1;
 - `COUNT(expr)` is `IF(expr IS NULL, 0, 1)`; a direct proven non-null column may
   use constant 1;
-- `SUM`, `AVG`, `MIN`, `MAX` and `ANY_VALUE` are the argument cast to the declared
-  aggregate return type, preserving NULL;
+- `MIN`, `MAX` and `ANY_VALUE` are the argument cast to the declared aggregate
+  return type, preserving NULL;
+- `SUM` and `AVG` use that replacement only when it is exact over the complete
+  input type domain. Floating-point SUM/AVG retain Aggregate because their
+  arithmetic state canonicalizes signed zero, while a direct cast does not;
+- decimal AVG is eliminated only when the source decimal domain fits completely
+  in the declared result precision and scale. Wider source domains retain
+  Aggregate, preserving the established result/error behavior independently of
+  fixes to the aggregate implementation;
 - unsupported or mixed aggregate families reject the complete rewrite.
 
 The rewrite converts AGG to Project, appends the row expressions after the group
@@ -124,7 +131,8 @@ OFFSET and any rank/tie semantics.
   crosses the enclosing Union.
 - A Join child is not a direct scan and cannot inherit outer bounded demand.
 - Correlated scalar aggregates retain their established decorrelation shape.
-- Missing, incomplete or malformed PK metadata fails closed.
+- Missing, incomplete or malformed PK metadata, or a non-total single-row
+  aggregate conversion, fails closed.
 - Binding remapping is performed only after every aggregate expression in the
   candidate has been proven, preventing partial rewrites.
 
@@ -166,12 +174,14 @@ execution changes were removed.
 ### 7.3 Required repository gates
 
 - focused planner tests: PK elimination, aggregate family, nullable COUNT, HAVING,
-  missing PK, DISTINCT/configured aggregate, grouping family and unbounded fallback;
+  missing PK, DISTINCT/configured aggregate, grouping family, unbounded fallback,
+  decimal domain containment and floating-point signed-zero fallback;
 - pre-existing grouping-set, correlated-scalar-aggregate and physical-group-key
   regressions;
 - full `pkg/sql/plan` package suite;
-- a four-row public SQL BVT covering NULL, signed/unsigned/decimal casts, WHERE,
-  HAVING, OFFSET and unsupported aggregate fallback, run twice on one service;
+- a public SQL BVT covering NULL, signed/unsigned/decimal casts, WHERE, HAVING,
+  OFFSET, unsupported aggregate fallback, wide-decimal AVG and floating-point
+  signed-zero HAVING behavior, run twice on one service;
 - build of the complete `mo-service` binary;
 - final diff inspection proving no colexec change remains relative to the base.
 

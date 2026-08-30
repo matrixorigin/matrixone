@@ -48,4 +48,40 @@ group by id
 order by id
 limit 4;
 
+-- A singleton aggregate is eliminated only when its row expression is exact
+-- over the complete input type domain. Wide DECIMAL AVG and floating-point
+-- SUM/AVG retain Aggregate to preserve existing error and signed-zero behavior.
+create table edge_values (
+    id int primary key,
+    wide decimal(38, 10),
+    f float,
+    dbl double
+);
+insert into edge_values values
+    (1, 9999999999999999999999999999.9999999999, -0.0, -0.0),
+    (2, 0, 0.0, 0.0),
+    (3, null, null, null);
+
+select count(*) from (
+    select id, avg(wide) a
+    from edge_values
+    group by id
+    limit 10
+) q
+where a is not null;
+
+select id
+from edge_values
+group by id
+having cast(sum(f) as varchar) = '0'
+order by id
+limit 10;
+
+select id
+from edge_values
+group by id
+having cast(avg(dbl) as varchar) = '0'
+order by id
+limit 10;
+
 drop database pk_group_limit_bvt;
