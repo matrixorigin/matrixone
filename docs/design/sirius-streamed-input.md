@@ -372,6 +372,8 @@ The server has one input slot per read. One Sirius source task calls
 representation, capped at 64 MiB after constant-vector expansion. Construction
 of that owned representation is the acknowledgement point. MatrixOne may then
 send one subsequent frame into the sidecar slot, where its publisher blocks.
+That frame is both the one unacknowledged Flight frame and the one prefetched
+sidecar frame; those limits describe the same bytes and are not additive.
 The current Sirius source claim and host reservation remain owned by the
 published representation until synchronized H2D conversion succeeds. Releasing
 that claim does not schedule a continuation; existing downstream demand must
@@ -528,8 +530,7 @@ request, lease-safe, and sidecar ticket deadlines.
 | plan | 16 MiB |
 | stream inputs per execution | 16 |
 | MatrixOne reader read-ahead | existing native pipeline-edge/spool bound, proportional to scan DOP rather than table size |
-| unacknowledged Flight input | one frame per read, at most 4 MiB payload |
-| sidecar prefetch slot | one frame per read, at most 4 MiB payload |
+| unacknowledged Flight input / sidecar prefetch slot | one shared frame per read, at most 4 MiB payload |
 | Sirius source task | one frame and one final host representation |
 | Sirius expanded input representation | 64 MiB, with its host reservation retained through H2D |
 | concurrent partition execution | one task per physical GPU; FIFO waiters retain no GPU reservation |
@@ -638,7 +639,7 @@ and closes every row below.
 | early/pruned input | result EOF before first batch and `not_needed` after current/previous acknowledgement |
 | cancellation | cancel while input ack is blocked and while result receive/write is blocked; bounded termination |
 | injected failure | MO producer failure, sidecar input failure, Sirius consumer failure, disconnect, timeout, and retryable cleanup |
-| slow consumer and full barrier | deterministic barriers prove native MO readers stop at their bounded pipeline window, one Flight frame is unacknowledged, one sidecar frame is prefetched, and one Sirius source representation awaits H2D |
+| slow consumer and full barrier | deterministic barriers prove native MO readers stop at their bounded pipeline window, one shared Flight/sidecar-prefetch frame is unacknowledged, and one Sirius source representation awaits H2D |
 | GPU execution | query-scoped evidence records `SIRIUS_GPU` and `GPU_MO_SCAN`; two configured workers never exceed one active `PARTITION` per GPU while non-partition tasks remain concurrent |
 | correctness | typed native-MO equality for all 22 TPC-H SF1 queries on one reused process |
 | SF10 correctness and decision data | typed equality for all 22 queries on one reused process; Q9 repeats ten times; record storage bytes, rows/bytes before serialization, transferred bytes, CN CPU/peak memory, sidecar host/GPU peak and utilization, time to first row, and total latency |
@@ -674,7 +675,7 @@ body must link this design at its approved commit and the final evidence record.
 | one local CN per sidecar | keeps snapshot and cancellation ownership local; multi-CN fan-in is a separate design |
 | attach all inputs before `DoGet` | prevents a pruned plan from retiring a ticket before its handler can attach |
 | native MO output backpressure | synchronous `Send` reuses native output, pipeline-edge, connector, and reader flow control instead of adding a StreamRead-only controller |
-| one acknowledged sidecar prefetch slot | permits bounded transport overlap without a table-sized wire queue |
+| one unacknowledged sidecar prefetch slot | permits bounded transport overlap without a table-sized wire queue |
 | one frame per Sirius source task | removes multi-frame coalescing and eager self-scheduling; H2D completion releases the claim without scheduling |
 | one partition task per physical GPU | the old executor produced nondeterministic Q9 values and fatal CUDA errors when two partition launches overlapped; other GPU operators retain configured parallelism |
 | bounded TPC-H stabilization on the current fork | delivers the required workload without claiming general unbounded streaming; migration to upstream partial-barrier scheduling is a separate effort |
