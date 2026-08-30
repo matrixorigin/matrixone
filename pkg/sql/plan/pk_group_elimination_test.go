@@ -64,6 +64,38 @@ func TestPrimaryKeyGroupEliminationSupportsSingleRowAggregates(t *testing.T) {
 	require.Equal(t, uint64(7), scan.Limit.GetLit().GetU64Val())
 }
 
+func TestPrimaryKeyGroupEliminationRemapsAggregateReferencesInExpressionLists(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "select list",
+			sql:  "select empno, count(*) in (count(*), sum(empno)) from constraint_test.emp group by empno limit 1",
+		},
+		{
+			name: "order by",
+			sql:  "select empno from constraint_test.emp group by empno order by count(*) in (count(*), sum(empno)) limit 1",
+		},
+		{
+			name: "having",
+			sql:  "select empno from constraint_test.emp group by empno having count(*) in (count(*), sum(empno)) limit 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			query := logical.GetQuery()
+			require.NotNil(t, query)
+			require.False(t, reachableNodeType(query, planpb.Node_AGG))
+			requireNoDanglingColumnTags(t, query)
+		})
+	}
+}
+
 func TestPrimaryKeyGroupEliminationRequiresExactSingleRowAggregateLaw(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1168,4 +1200,48 @@ func firstReachableNode(query *planpb.Query, typ planpb.Node_NodeType) *planpb.N
 		}
 	}
 	return nil
+}
+
+func requireNoDanglingColumnTags(t *testing.T, query *planpb.Query) {
+	t.Helper()
+	reachable := make(map[int32]struct{})
+	producedTags := make(map[int32]struct{})
+	var collect func(int32)
+	collect = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := reachable[nodeID]; ok {
+			return
+		}
+		reachable[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		for _, tag := range node.BindingTags {
+			producedTags[tag] = struct{}{}
+		}
+		for _, child := range node.Children {
+			collect(child)
+		}
+	}
+	for _, root := range query.Steps {
+		collect(root)
+	}
+
+	for nodeID := range reachable {
+		node := query.Nodes[nodeID]
+		err := planpb.VisitExpressionsInOwner(node, func(root *planpb.Expr) error {
+			return planpb.VisitExprTree(root, func(expr *planpb.Expr) error {
+				col := expr.GetCol()
+				if col == nil || col.RelPos <= 0 {
+					return nil
+				}
+				_, ok := producedTags[col.RelPos]
+				require.Truef(t, ok,
+					"node %d references column tag %d, but no reachable node produces it",
+					nodeID, col.RelPos)
+				return nil
+			})
+		})
+		require.NoError(t, err)
+	}
 }

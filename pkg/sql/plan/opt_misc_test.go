@@ -510,6 +510,74 @@ func TestRemapHavingClause(t *testing.T) {
 	})
 }
 
+func TestReplaceColumnsForExprTraversesEveryNestedExpressionContainer(t *testing.T) {
+	const (
+		oldTag = int32(7)
+		newTag = int32(9)
+	)
+	oldCol := func() *plan.Expr {
+		return GetColExpr(plan.Type{Id: int32(types.T_int64)}, oldTag, 0)
+	}
+	tests := []struct {
+		name             string
+		expr             *plan.Expr
+		wantReplacements int
+	}{
+		{
+			name: "literal source",
+			expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+				Src:   oldCol(),
+			}}},
+			wantReplacements: 1,
+		},
+		{
+			name: "expression list",
+			expr: &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{
+				List: []*plan.Expr{oldCol(), oldCol()},
+			}}},
+			wantReplacements: 2,
+		},
+		{
+			name: "subquery child",
+			expr: &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+				Child: oldCol(),
+			}}},
+			wantReplacements: 1,
+		},
+		{
+			name: "window frame",
+			expr: &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: oldCol()},
+					End:   &plan.FrameBound{Val: oldCol()},
+				},
+			}}},
+			wantReplacements: 2,
+		},
+	}
+
+	projMap := map[[2]int32]*plan.Expr{
+		{oldTag, 0}: GetColExpr(plan.Type{Id: int32(types.T_int64)}, newTag, 3),
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := replaceColumnsForExpr(test.expr, projMap)
+			replacements := 0
+			require.NoError(t, plan.VisitExprTree(got, func(expr *plan.Expr) error {
+				if col := expr.GetCol(); col != nil {
+					require.NotEqual(t, oldTag, col.RelPos)
+					if col.RelPos == newTag && col.ColPos == 3 {
+						replacements++
+					}
+				}
+				return nil
+			}))
+			require.Equal(t, test.wantReplacements, replacements)
+		})
+	}
+}
+
 func TestAggregateDependsOnInputOrder(t *testing.T) {
 	makeAgg := func(name string) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}}}}

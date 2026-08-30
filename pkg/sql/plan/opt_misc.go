@@ -402,24 +402,58 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 	}
 
 	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if ne.Lit != nil {
+			ne.Lit.Src = replaceColumnsForExpr(ne.Lit.Src, projMap)
+		}
+
 	case *plan.Expr_Col:
+		if ne.Col == nil {
+			return expr
+		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
 			return DeepCopyExpr(projExpr)
 		}
 
 	case *plan.Expr_F:
+		if ne.F == nil {
+			return expr
+		}
 		for i, arg := range ne.F.Args {
 			ne.F.Args[i] = replaceColumnsForExpr(arg, projMap)
 		}
 
 	case *plan.Expr_W:
+		if ne.W == nil {
+			return expr
+		}
 		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap)
 		for i, arg := range ne.W.PartitionBy {
 			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap)
 		}
 		for i, order := range ne.W.OrderBy {
-			ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
+			if order != nil {
+				ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
+			}
+		}
+		if ne.W.Frame != nil {
+			if ne.W.Frame.Start != nil {
+				ne.W.Frame.Start.Val = replaceColumnsForExpr(ne.W.Frame.Start.Val, projMap)
+			}
+			if ne.W.Frame.End != nil {
+				ne.W.Frame.End.Val = replaceColumnsForExpr(ne.W.Frame.End.Val, projMap)
+			}
+		}
+
+	case *plan.Expr_List:
+		if ne.List != nil {
+			replaceColumnsForExprList(ne.List.List, projMap)
+		}
+
+	case *plan.Expr_Sub:
+		if ne.Sub != nil {
+			ne.Sub.Child = replaceColumnsForExpr(ne.Sub.Child, projMap)
 		}
 	}
 	return expr
