@@ -1,9 +1,10 @@
 # Native Artifact Generation and Worktree Reuse
 
-- Status: implementation updated; independent design approval required
-- Revision: 1
+- Status: Revision 2 proposed; independent design approval required
+- Revision: 2
 - Owner: PR [#27852](https://github.com/matrixorigin/matrixone/pull/27852)
 - Review input: [review 5060075176](https://github.com/matrixorigin/matrixone/pull/27852#pullrequestreview-5060075176)
+- Review input: [review 5060172200](https://github.com/matrixorigin/matrixone/pull/27852#pullrequestreview-5060172200)
 - Scope: developer/CI native builds and `mo-cgo-test` artifact reuse
 
 ## 1. Problem
@@ -32,6 +33,17 @@ That split admitted concrete failures:
 - a stamped GPU debug build delegated optimized `-O3` sub-builds;
 - the deterministic state and wrapper tests were not selected by the native
   CI path filter.
+
+Revision 1 then exposed three cross-product and consumer gaps:
+
+- an interrupted marker with the same source key could replace a newly
+  diagnosed `rebuild-all` action with its older `rebuild-cgo` requirement,
+  allowing corrupted thirdparty bytes to be recorded as a new generation;
+- the GPU profile recorded CUDA's `NVCCFLAGS` but omitted cuVS's distinct
+  `NVCC_FLAGS` and other effective cuVS compiler/link selectors;
+- an existing cache-miss workflow built thirdparties first and then invoked
+  the complete native owner, which correctly rejected the unstamped partial
+  generation but paid for a second full thirdparty build.
 
 The design does not attempt a remote artifact cache, cross-host binary
 portability, or concurrent builds from independent shell processes. Those are
@@ -69,11 +81,21 @@ change native bytes. The common profile includes `CC`, `CXX`, `AR`, C/C++/link
 flags, MUSL, usearch/croaring/jemalloc overrides, and macOS SDK/deployment
 selection. The accelerator profile additionally includes `CONDA_PREFIX`,
 CUDA/target architecture, code-generation, host-compiler, and extra NVCC flags
-for GPU builds. Keeping the profiles separate lets an accelerator/profile
-switch rebuild CGo without needlessly rebuilding unaffected thirdparties. The
-values are hashed to avoid putting arbitrary paths or flags in the stamp. Jobs
-and download-source locations are excluded because they do not change accepted
-output semantics; ONNX bytes are already checksum-pinned.
+for GPU builds. It covers both variable families consumed by the two GPU
+sub-builds: CUDA's `NVCCFLAGS`/`CCFLAGS`/`EXTRA_*` inputs and cuVS's
+`NVCC_FLAGS`, `NVCC`, `LIBS`, and `INCLUDES`, plus the top-level
+`CUDA_*`/`CUVS_*` compile and link selectors. CUDA search-library and supported
+cross-toolchain selectors are included for the same reason. Keeping the
+profiles separate lets an accelerator/profile switch rebuild CGo without
+needlessly rebuilding unaffected thirdparties. The values are hashed to avoid
+putting arbitrary paths or flags in the stamp. Jobs and checksum-pinned
+download-source locations are excluded because they do not change accepted
+output semantics.
+
+This list is the supported override boundary for reusable GPU generations. A
+new externally useful Make override that changes GPU bytes must be added to the
+profile and to a transition/control test in the same change. Internal Make
+implementation variables are not an undocumented extension mechanism.
 
 ### I2 — one root Make invocation has one thirdparty owner
 
@@ -82,6 +104,14 @@ consumer is requested. The public `thirdparties` goal owns it only when it is
 invoked without a native consumer. If both goals appear on one command line,
 the public goal waits for the requested native consumer and has no second
 recipe.
+
+A complete generation must be requested directly from the top-level `cgo`
+owner. Repository workflows and scripts must not build the standalone partial
+`thirdparties` generation immediately before `make cgo`: the missing complete
+stamp intentionally forces `cgo` to discard such unproven outputs. Docker
+stages that invoke `make -C thirdparties` and `make -C cgo` directly are a
+separate, explicitly ordered image-build contract and do not use this top-level
+reuse protocol.
 
 A release root and a debug root cannot share one Make invocation because Make
 target-specific variables would otherwise race to define the shared `cgo`
@@ -130,6 +160,27 @@ building marker. `record` verifies source/key/output stability and publishes
 the stamp last. A pending/building marker means the generation is incomplete
 and cannot be reused.
 
+The previous stamp remains the immutable last committed generation until a new
+stamp is atomically published. Pending/building markers, not early deletion of
+that stamp, prevent reuse during replacement. Retaining the committed artifact
+hashes lets recovery distinguish “the previously diagnosed CGo rebuild was
+interrupted” from “thirdparty outputs were also corrupted while it was
+interrupted”; deleting the stamp would collapse both into an unnecessary full
+rebuild or force recovery to trust incomplete state.
+
+Recovery actions form a monotonic severity order:
+
+```text
+reuse < local < rebuild-cgo < rebuild-all
+```
+
+When current artifact inspection and an older incomplete marker both impose a
+requirement, `prepare` takes their maximum. Matching source/key provenance may
+narrow what changed, but must never downgrade the cleanup currently required.
+In particular, an interrupted `reuse` escalates to `rebuild-cgo`; if current
+thirdparty inspection simultaneously requires `rebuild-all`, the full rebuild
+wins.
+
 Stamp format 6 records the structured key. Older formats fail closed and cause
 one full rebuild instead of guessing compatibility.
 
@@ -164,6 +215,9 @@ an automatic recycler; no human-only recovery is part of the supported path.
 
 - macOS reuses `libmo.dylib`; Linux reuses `libmo.so`.
 - CPU and GPU artifacts never alias.
+- On the supported Linux/x86_64 GPU host, cleanup removes CUDA/cuVS outputs
+  even when the next requested generation is CPU. Unsupported hosts do not
+  enter the CUDA Makefile merely to clean.
 - Release and debug artifacts never alias.
 - SIMSIMD and non-SIMSIMD thirdparty artifacts never alias.
 - Supported custom compiler/SDK/CUDA/flag profiles never alias the default or
@@ -190,6 +244,12 @@ SIMSIMD changes intentionally pay a full thirdparty rebuild because reusing
 usearch compiled with different dispatch semantics is incorrect. CPU/GPU or
 release/debug transitions clean only CGo outputs when thirdparty source and the
 SIMSIMD field match.
+
+Repository consumers request a complete generation once. Cache warming and UT
+setup call top-level `make cgo` directly instead of first constructing a
+partial standalone thirdparty generation. This removes one deterministic full
+duplicate build on a native-cache miss without weakening the missing-stamp
+guard.
 
 No locks, goroutines, polling loops, background processes, or unbounded caches
 are added. The staging scan is linear in the small top-level library set and
@@ -232,16 +292,21 @@ code or the `mo-dev` CGo scripts change. Acceptance is:
 2. deterministic provenance transitions, including interrupted generations,
    content corruption, release/debug, CPU/GPU, SIMSIMD, and custom environment
    profiles;
-3. staging fault injection for copy, rename, and signal failure, proving the
+3. a combined interrupted-generation plus restored-mtime thirdparty corruption
+   transition, proving current `rebuild-all` cannot be downgraded by old state;
+4. a real cuVS `NVCC_FLAGS` transition and same-profile control, proving the
+   effective compiler command and provenance key change together;
+5. staging fault injection for copy, rename, and signal failure, proving the
    old destination survives and temporary state is recycled;
-4. `make -n -j2 thirdparties cgo` and `thirdparties debug` each expose exactly
+6. `make -n -j2 thirdparties cgo` and `thirdparties debug` each expose exactly
    one thirdparty build owner;
-5. mixed release/debug root goals fail before build execution;
-6. GPU debug dry-runs propagate to CUDA and cuVS and contain `-O0` without
+7. mixed release/debug root goals fail before build execution;
+8. GPU debug dry-runs propagate to CUDA and cuVS and contain `-O0` without
    `-O3`;
-7. linked-worktree wrapper tests reject source, platform, accelerator, and
+9. linked-worktree wrapper tests reject source, platform, accelerator, and
    SIMSIMD mismatches;
-8. existing amd64/arm64 native container builds continue producing readable
+10. repository cache/UT consumers invoke one complete top-level native owner;
+11. existing amd64/arm64 native container builds continue producing readable
    `libmo` and thirdparty libraries.
 
 Real GPU compilation remains dependent on a CUDA/cuVS runner. The hermetic
@@ -258,6 +323,9 @@ reuse.
 
 ## 9. Revision history
 
+- Revision 2: makes interrupted recovery severity monotonic; inventories the
+  effective CUDA and cuVS override profile; and removes sequential partial plus
+  complete native ownership from repository CI consumers.
 - Revision 1: replaces the composite variant with a structured key; establishes
   one Make owner; adds atomic staging and recovery; closes GPU debug semantics;
   and wires deterministic contracts into native CI.
