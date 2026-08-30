@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	internalexecutor "github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -96,6 +97,31 @@ func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 	}
 	if !exec.options[0].StatementOption().DisableLog() {
 		t.Fatalf("adapter should disable SQL logging")
+	}
+}
+
+func TestInternalSQLExecutorAdapterExecTxnUsesTransaction(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint64(7), false, mp))
+	bat.SetRowCount(1)
+
+	txn := &fakeInternalTxnExecutor{result: internalexecutor.Result{Batches: []*batch.Batch{bat}, Mp: mp}}
+	exec := &fakeInternalSQLExecutor{txn: txn}
+	var catalogID uint64
+	err := (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(context.Background(), func(tx SQLExecutor) error {
+		return tx.QueryRow(context.Background(), "select catalog_id from mo_catalog.mo_iceberg_catalogs for update").Scan(&catalogID)
+	})
+	requireNoErr(t, err)
+	if catalogID != 7 {
+		t.Fatalf("unexpected catalog id: %d", catalogID)
+	}
+	if len(txn.sqls) != 1 || !strings.Contains(txn.sqls[0], "for update") {
+		t.Fatalf("transaction did not execute lifecycle-lock query: %v", txn.sqls)
+	}
+	if !txn.options[0].DisableLog() {
+		t.Fatalf("transaction adapter should disable SQL logging")
 	}
 }
 
@@ -228,6 +254,7 @@ type fakeInternalSQLExecutor struct {
 	options []internalexecutor.Options
 	result  internalexecutor.Result
 	err     error
+	txn     internalexecutor.TxnExecutor
 }
 
 func (e *fakeInternalSQLExecutor) Exec(ctx context.Context, sql string, opts internalexecutor.Options) (internalexecutor.Result, error) {
@@ -240,8 +267,36 @@ func (e *fakeInternalSQLExecutor) Exec(ctx context.Context, sql string, opts int
 }
 
 func (e *fakeInternalSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn internalexecutor.TxnExecutor) error, opts internalexecutor.Options) error {
-	return nil
+	if e.err != nil {
+		return e.err
+	}
+	if e.txn == nil {
+		return errors.New("missing fake transaction")
+	}
+	return execFunc(e.txn)
 }
+
+type fakeInternalTxnExecutor struct {
+	sqls    []string
+	options []internalexecutor.StatementOption
+	result  internalexecutor.Result
+	err     error
+}
+
+func (*fakeInternalTxnExecutor) Use(string) {}
+
+func (*fakeInternalTxnExecutor) LockTable(string) error { return nil }
+
+func (e *fakeInternalTxnExecutor) Exec(sql string, opts internalexecutor.StatementOption) (internalexecutor.Result, error) {
+	e.sqls = append(e.sqls, sql)
+	e.options = append(e.options, opts)
+	if e.err != nil {
+		return internalexecutor.Result{}, e.err
+	}
+	return e.result, nil
+}
+
+func (*fakeInternalTxnExecutor) Txn() client.TxnOperator { return nil }
 
 func requireNoErr(t *testing.T, err error) {
 	t.Helper()
