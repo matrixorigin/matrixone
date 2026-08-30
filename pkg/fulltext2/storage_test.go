@@ -17,11 +17,14 @@ package fulltext2
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
@@ -186,4 +189,57 @@ func TestCreateLocalSpillAndTempFile(t *testing.T) {
 
 func TestLocalSpillDirNilRootFS(t *testing.T) {
 	require.Equal(t, "", LocalSpillDir(context.Background(), nil))
+}
+
+// A scalar aggregate must be read by TYPE, not by assumption. COUNT comes back
+// int64 but SUM comes back DECIMAL128, and the NoTypeCheck read this replaced
+// reinterpreted the decimal bytes as an int64 — a garbage memory budget in a
+// normal build, and a CN-killing panic in a type-checked one (the tail-load
+// guard hit exactly that).
+func TestScalarInt64ReadsBothAggregateTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	i64 := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(i64, int64(4096), false, mp))
+	require.Equal(t, int64(4096), scalarInt64(i64))
+
+	dec := vector.NewVec(types.T_decimal128.ToType())
+	require.NoError(t, vector.AppendFixed(dec, types.Decimal128{B0_63: 4096, B64_127: 0}, false, mp))
+	require.Equal(t, int64(4096), scalarInt64(dec))
+
+	// a value past int64 saturates rather than wrapping to a negative budget,
+	// which would silently disable the guard
+	big := vector.NewVec(types.T_decimal128.ToType())
+	require.NoError(t, vector.AppendFixed(big, types.Decimal128{B0_63: 0, B64_127: 1}, false, mp))
+	require.Equal(t, int64(math.MaxInt64), scalarInt64(big))
+
+	huge := vector.NewVec(types.T_decimal128.ToType())
+	require.NoError(t, vector.AppendFixed(huge, types.Decimal128{B0_63: math.MaxUint64, B64_127: 0}, false, mp))
+	require.Equal(t, int64(math.MaxInt64), scalarInt64(huge))
+
+	// empty / null / unexpected type are all "no budget information"
+	require.Equal(t, int64(0), scalarInt64(nil))
+	require.Equal(t, int64(0), scalarInt64(vector.NewVec(types.T_int64.ToType())))
+
+	null := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(null, int64(0), true, mp))
+	require.Equal(t, int64(0), scalarInt64(null))
+
+	other := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(other, []byte("7"), false, mp))
+	require.Equal(t, int64(0), scalarInt64(other))
+}
+
+// Every scalar-aggregate SQL in this file must cast, so the reads above stay on
+// the int64 path; the type switch is only a backstop.
+func TestAggregateSQLCastsToSigned(t *testing.T) {
+	src, err := os.ReadFile("storage.go")
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(src), "\n") {
+		if !strings.Contains(line, "SUM(") || !strings.Contains(line, "SELECT") {
+			continue // comments and non-query text
+		}
+		require.Contains(t, line, "AS SIGNED",
+			"a SUM read back as int64 must be cast in SQL: %s", strings.TrimSpace(line))
+	}
 }

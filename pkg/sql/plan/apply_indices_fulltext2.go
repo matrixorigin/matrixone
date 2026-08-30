@@ -101,7 +101,11 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	// which is NL semantics) phrase matching cannot work — only IN BM25 MODE (bag-of-words)
 	// is valid. Reject the others up front with a clear message instead of silently
 	// returning wrong/empty results.
-	if mode != int64(tree.FULLTEXT_BM25) && fulltext2PositionFreeFromParams(idxdef.IndexAlgoParams) {
+	// The json probe is also position-free by nature: it is a pure disjunction of
+	// literal terms with no phrase, so it is valid on a POSITION_FREE index — which
+	// is the default for a tuple json index.
+	if mode != int64(tree.FULLTEXT_BM25) && mode != fulltext2engine.JSONProbeMode &&
+		fulltext2PositionFreeFromParams(idxdef.IndexAlgoParams) {
 		return "", moerr.NewInvalidInputf(builder.GetContext(),
 			"fulltext2 index %q is POSITION_FREE (bag-of-words only): query it with MATCH(...) AGAINST(... IN BM25 MODE); it has no positions for natural-language / boolean phrase matching",
 			idxdef.IndexName)
