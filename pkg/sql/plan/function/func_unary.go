@@ -1083,7 +1083,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				resultBytes++
 			}
 		}
-		if int64(resultBytes) > maxStringFunctionResultLength(result, ivecs[0]) {
+		if int64(resultBytes) > maxStringFunctionResultLength(result) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

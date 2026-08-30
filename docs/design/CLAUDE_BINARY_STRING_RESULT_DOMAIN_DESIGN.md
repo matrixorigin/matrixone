@@ -121,4 +121,5 @@ BVT 数据规模固定为单行、单表达式；边界由 `repeat`/literal 构�
 - 设计 revision：`ba4592e694a35b20af9a211d98db95a545c8585d`
 - 审批者：user（会话内明确回复 “go ahead”）
 - 决定：Approved，2026-08-29
-- 实现偏差：为保持既有 text-only compatibility，动态扩张函数仅在静态 binary domain 无法证明上界时晋升 BLOB；普通 text domain 继续使用既有 VARCHAR 返回族。该收窄不改变已批准的 binary lossless invariant。
+- superseded 实现偏差：曾为保持 text-only compatibility，让动态 text 扩张函数继续返回 VARCHAR；但 runtime 仍可合法产生超过 65535 的值，违反静态结果域必须包含合法 runtime value 的核心不变量。
+- 修订决定：按 user 2026-08-30 review correction，未知或可超限的动态 text 扩张结果晋升 TEXT；该决定覆盖上述 VARCHAR 偏差，并要求 protocol、CTAS/catalog 与 runtime 使用同一 lossless 静态结果域。

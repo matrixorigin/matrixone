@@ -8843,7 +8843,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			}
 			continue
 		}
-		size, ok := replaceResultByteLength(v1, v2, v3, maxStringFunctionResultLength(result, ivecs[0]))
+		size, ok := replaceResultByteLength(v1, v2, v3, maxStringFunctionResultLength(result))
 		if !ok {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -8940,7 +8940,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			continue
 		}
 		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
-		if int64(size) > maxStringFunctionResultLength(result, ivecs[0]) {
+		if int64(size) > maxStringFunctionResultLength(result) {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

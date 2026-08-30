@@ -1157,7 +1157,7 @@ func TestTextReplaceAndInsertKeepLargeLegalResults(t *testing.T) {
 		NewFunctionTestConstInput(types.T_text.ToType(), []string{source}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bb"}, nil),
-	}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("bb", 40000)}, nil), fEvalFn(Replace))
 	ok, info := replaceCase.Run()
 	require.True(t, ok, info)
 
@@ -1166,7 +1166,7 @@ func TestTextReplaceAndInsertKeepLargeLegalResults(t *testing.T) {
 		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
 		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{strings.Repeat("b", 30000)}, nil),
-	}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{strings.Repeat("b", 30000) + source}, nil), fEvalFn(Insert))
+	}, NewFunctionTestResult(types.T_text.ToType(), false, []string{strings.Repeat("b", 30000) + source}, nil), fEvalFn(Insert))
 	ok, info = insertCase.Run()
 	require.True(t, ok, info)
 }

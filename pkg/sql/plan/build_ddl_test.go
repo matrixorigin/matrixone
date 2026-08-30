@@ -2960,7 +2960,8 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 		char(65, 66) default_char,
 		char(65 using utf8mb4) text_char,
 		repeat(X'61', 70000) repeated,
-		concat(cast(X'61' as binary(65535)), X'62') concatenated`
+		concat(cast(X'61' as binary(65535)), X'62') concatenated,
+		replace(cast(repeat('a', 40000) as text), 'a', 'bb') expanded_text`
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -2968,7 +2969,7 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 5)
+	require.GreaterOrEqual(t, len(cols), 6)
 
 	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
 	require.Equal(t, int32(20), cols[0].Typ.Width)
@@ -2978,6 +2979,7 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.Id)
 	require.Equal(t, int32(types.T_blob), cols[3].Typ.Id)
 	require.Equal(t, int32(types.T_blob), cols[4].Typ.Id)
+	require.Equal(t, int32(types.T_text), cols[5].Typ.Id)
 }
 
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {

@@ -303,9 +303,9 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", false) })
 }
 
-func TestExpandingTextResultsKeepVarcharMetadata(t *testing.T) {
+func TestExpandingTextResultsUseTextCapacity(t *testing.T) {
 	text := expandingStringReturnType([]types.Type{types.New(types.T_varchar, 1, 0)}, 0)
-	require.Equal(t, types.T_varchar, text.Oid)
+	require.Equal(t, types.T_text, text.Oid)
 	require.Equal(t, types.CharsetUTF8, text.Charset)
 
 	binary := expandingStringReturnType([]types.Type{types.New(types.T_varbinary, 1, 0)}, 0)

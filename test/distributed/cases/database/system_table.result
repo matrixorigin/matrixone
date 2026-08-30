@@ -154,7 +154,7 @@ character_octet_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 numeric_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 numeric_scale  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datetime_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_set_name  ¦  VARCHAR(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_set_name  ¦  VARCHAR(6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_name  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_key  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

@@ -92,22 +92,7 @@ func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.T
 	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
 		return binaryStringResultType(unknownStringResultBound())
 	}
-	result := types.T_varchar.ToType()
-	result.Charset = parameters[sourceIndex].Charset
-	return result
-}
-
-func substringStringReturnType(parameters []types.Type, sourceIndex int) types.Type {
-	if sourceIndex < 0 || sourceIndex >= len(parameters) {
-		return types.T_varchar.ToType()
-	}
-	bound := declaredStringByteBound(parameters[sourceIndex])
-	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
-		return binaryStringResultType(bound)
-	}
-	result := types.T_varchar.ToType()
-	result.Charset = parameters[sourceIndex].Charset
-	return result
+	return textStringResultType(unknownStringResultBound(), parameters[sourceIndex].Charset)
 }
 
 // commonConditionalStringType keeps the common physical text type selected by

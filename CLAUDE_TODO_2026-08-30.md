@@ -23,3 +23,11 @@
 3. 恢复已批准的动态 text VARCHAR metadata 契约；运行时容量检查按输入 text/binary 能力处理，避免大 text REPLACE/INSERT 误 NULL。
 4. 补 QUOTE partial/all mask、VARCHAR(20000) derived 函数、CONVERT utf8mb4、text runtime 大结果的 focused UT。
 5. 跑 owning packages、protocol/CTAS controls 与 self-review，commit 并 push。
+
+# PR #27841 第七轮 review 与 CI 修复
+
+1. 以核心 lossless invariant 为准，将未知/可超限的动态 text 扩张结果声明为 TEXT，使 metadata/CTAS 容纳合法 runtime value。
+2. 更新设计审批记录，明确本轮 user correction 废止动态 text 固定 VARCHAR 的实现偏差。
+3. 删除 exact-head SCA 报告的三个未使用 helper。
+4. 按 Proxy BVT 实际输出修正 system view VARCHAR(6) 与 DESC 末尾空列分隔符。
+5. 更新相关 UT，跑 focused/owning package、SCA 静态检查与 self-review，commit 并 push。
