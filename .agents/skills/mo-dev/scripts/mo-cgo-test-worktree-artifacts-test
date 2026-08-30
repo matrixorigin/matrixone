@@ -41,11 +41,13 @@ chmod +x "$primary/cgo/mo-native-provenance"
 cat > "$primary/.gitignore" <<'EOF'
 cgo/libmo.so
 cgo/libmo.dylib
+cgo/cuda/*.fatbin
 cgo/.mo-native-provenance
 cgo/.mo-native-provenance.pending
 cgo/.mo-native-provenance.building
 cgo/.mo-native-provenance.tmp
 thirdparties/install/
+mocl_kernel64.fatbin
 EOF
 cat > "$primary/Makefile" <<'EOF'
 cgo:
@@ -82,6 +84,7 @@ while [ $# -gt 0 ]; do
             echo "GO_TEST_ARGS: $*"
             echo "DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-}"
             echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+            echo "MO_CUDA_FATBIN_PATH=${MO_CUDA_FATBIN_PATH:-}"
             exit 0 ;;
         *) shift ;;
     esac
@@ -94,6 +97,32 @@ exit 1
 EOF
 chmod +x "$work/bin/readelf"
 
+real_git=$(command -v git)
+cat > "$work/bin/git" <<'EOF'
+#!/bin/sh
+command_name=
+command_root=
+previous=
+for argument in "$@"; do
+    if [ "$previous" = -C ]; then
+        command_root=$argument
+    fi
+    if [ "$argument" = status ]; then
+        command_name=status
+    fi
+    previous=$argument
+done
+if [ "$command_name" = status ] &&
+   [ -n "${FAIL_STATUS_ROOT:-}" ] &&
+   [ "$command_root" = "$FAIL_STATUS_ROOT" ]; then
+    echo "injected worktree status failure" >&2
+    exit 85
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$work/bin/git"
+export REAL_GIT="$real_git"
+
 linked_wrapper="$linked/.agents/skills/mo-dev/scripts/mo-cgo-test"
 failures=0
 
@@ -104,10 +133,14 @@ record_provenance() {
     case "$action" in
         rebuild-all)
             rm -rf "$primary/thirdparties/install"
-            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib"
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
             ;;
         rebuild-cgo)
-            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib"
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
             ;;
         reuse) ;;
         *) printf 'unexpected build action: %s\n' "$action" >&2; exit 1 ;;
@@ -122,6 +155,38 @@ record_provenance() {
     printf '%s library\n' "$platform" > "$primary/cgo/libmo.dylib"
     env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
         "$primary/cgo/mo-native-provenance" record "$primary" cpu release 0
+}
+
+record_gpu_provenance() {
+    action=$(env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" prepare "$primary" gpu release 0)
+    case "$action" in
+        rebuild-all)
+            rm -rf "$primary/thirdparties/install"
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
+            ;;
+        rebuild-cgo)
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
+            ;;
+        reuse) ;;
+        *) printf 'unexpected GPU build action: %s\n' "$action" >&2; exit 1 ;;
+    esac
+    env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" begin "$primary" gpu release 0
+    mkdir -p "$primary/thirdparties/install/include" \
+        "$primary/thirdparties/install/lib" "$primary/cgo/cuda"
+    printf 'header\n' > "$primary/thirdparties/install/include/native.h"
+    printf 'library\n' > "$primary/thirdparties/install/lib/libnative.a"
+    printf 'linux gpu library\n' > "$primary/cgo/libmo.so"
+    printf 'gpu kernel\n' > "$primary/cgo/cuda/mocl_kernel64.fatbin"
+    cp "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+        "$primary/mocl_kernel64.fatbin"
+    env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" record "$primary" gpu release 0
 }
 
 set +e
@@ -210,6 +275,41 @@ else
             failures=$((failures + 1)) ;;
     esac
 fi
+
+record_gpu_provenance
+set +e
+gpu_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 CONDA_PREFIX="$work" \
+    PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
+gpu_status=$?
+set -e
+if [ "$gpu_status" -eq 0 ] &&
+   printf '%s\n' "$gpu_output" | grep -q -- '-tags gpu' &&
+   printf '%s\n' "$gpu_output" | grep -q -- \
+       "MO_CUDA_FATBIN_PATH=$primary/mocl_kernel64.fatbin"; then
+    echo "ok   GPU worktree reuse passes the verified fatbin to the test process"
+else
+    printf 'FAIL GPU worktree reuse did not close the runtime sidecar: %s\n' \
+        "$gpu_output"
+    failures=$((failures + 1))
+fi
+
+# Restore a CPU generation for the remaining platform/source cases, then prove
+# that either worktree's status failure rejects primary artifact selection.
+record_provenance linux
+for failed_root in "$linked" "$primary"; do
+    set +e
+    status_output=$(env FAKE_GOOS=linux FAIL_STATUS_ROOT="$failed_root" \
+        PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
+    status_result=$?
+    set -e
+    if [ "$status_result" -ne 0 ]; then
+        printf 'ok   status failure for %s rejects worktree reuse\n' "$failed_root"
+    else
+        printf 'FAIL status failure for %s reused primary artifacts: %s\n' \
+            "$failed_root" "$status_output"
+        failures=$((failures + 1))
+    fi
+done
 
 printf 'branch-specific native change\n' >> "$linked/cgo/native.c"
 set +e

@@ -257,9 +257,14 @@ endif
 # Debug build flags. Keep optimization explicit because cuda.o used to add a
 # hard-coded -O3 after the debug flags and produced an optimized "debug" object.
 CUDA_OPT_LEVEL := -O3
+CUDA_HOST_OPT_LEVEL :=
 ifeq ($(dbg),1)
       override NVCCFLAGS := $(filter-out -O%,$(NVCCFLAGS)) -g -G
+      override EXTRA_NVCCFLAGS := $(filter-out -O%,$(EXTRA_NVCCFLAGS))
+      override CCFLAGS := $(filter-out -O%,$(CCFLAGS))
+      override EXTRA_CCFLAGS := $(filter-out -O%,$(EXTRA_CCFLAGS))
       override CUDA_OPT_LEVEL := -O0
+      override CUDA_HOST_OPT_LEVEL := -Xcompiler -O0
       BUILD_TYPE := debug
 else
       BUILD_TYPE := release
@@ -395,13 +400,13 @@ else
 endif
 
 $(FATBIN_FILE): mocl.cu
-	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -fatbin $<
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) $(CUDA_OPT_LEVEL) $(CUDA_HOST_OPT_LEVEL) -o $@ -fatbin $<
 
 cuda.o: cuda.cpp
-	$(EXEC) $(NVCC) $(INCLUDES) $(CUDA_OPT_LEVEL) --shared -Xcompiler -fPIC $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) --shared -Xcompiler -fPIC $(ALL_CCFLAGS) $(GENCODE_FLAGS) $(CUDA_OPT_LEVEL) $(CUDA_HOST_OPT_LEVEL) -o $@ -c $<
 
 mytest.o: cuda.cpp $(FATBIN_FILE)
-	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g -O0 $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+	$(EXEC) $(NVCC) $(INCLUDES) -DTEST_RUN -g $(ALL_CCFLAGS) $(GENCODE_FLAGS) -O0 -Xcompiler -O0 -o $@ -c $<
 
 mytest: mytest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)

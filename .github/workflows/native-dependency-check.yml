@@ -12,6 +12,8 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/images/gpu/Dockerfile"
+      - "optools/images/gpu/Dockerfile.dev"
       - "optools/run_ut.sh"
       - "thirdparties/**"
   push:
@@ -27,6 +29,8 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/images/gpu/Dockerfile"
+      - "optools/images/gpu/Dockerfile.dev"
       - "optools/run_ut.sh"
       - "thirdparties/**"
   workflow_dispatch:

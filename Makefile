@@ -303,6 +303,11 @@ endef
 .PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
 cgo: cgo-native-thirdparties-internal
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
 	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
 		"$(NATIVE_PROVENANCE_ACCELERATOR)" "$(NATIVE_PROVENANCE_OPTIMIZATION)" \
 		"$(NATIVE_PROVENANCE_SIMSIMD)"
@@ -326,10 +331,12 @@ cgo-native-prepare-internal:
 			local|reuse) ;; \
 			rebuild-cgo) \
 				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION)"; \
-				$(MAKE) -C cgo clean ;; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin" ;; \
 			rebuild-all) \
 				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION), simsimd=$(NATIVE_PROVENANCE_SIMSIMD)"; \
 				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin"; \
 				$(MAKE) -C thirdparties clean ;; \
 			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
 		esac; \
@@ -1373,6 +1380,7 @@ clean:
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
 	rm -rf $(ROOT_DIR)/lib
+	rm -f $(ROOT_DIR)/mocl_kernel64.fatbin
 	rm -rf $(ROOT_DIR)/dict
 
 ###############################################################################

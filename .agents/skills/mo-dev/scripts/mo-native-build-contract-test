@@ -175,6 +175,29 @@ expect_failure "unsupported directory input fails closed" \
     "$stage" "$source_dir" "$destination_dir"
 rm -rf "$source_dir/unexpected-directory"
 
+single_source="$work/mocl_kernel64.fatbin"
+single_destination="$work/runtime/mocl_kernel64.fatbin"
+printf 'gpu kernel generation one\n' >"$single_source"
+"$stage" --file "$single_source" "$single_destination"
+if cmp -s "$single_source" "$single_destination"; then
+    pass "one native sidecar uses the shared atomic staging owner"
+else
+    fail "one native sidecar uses the shared atomic staging owner"
+fi
+cat >"$work/bin/cp" <<'EOF'
+#!/bin/sh
+echo "unexpected copy of an unchanged native sidecar" >&2
+exit 91
+EOF
+chmod +x "$work/bin/cp"
+if PATH="$work/bin:$PATH" "$stage" --file \
+    "$single_source" "$single_destination"; then
+    pass "an unchanged native sidecar stays on the zero-copy path"
+else
+    fail "an unchanged native sidecar stays on the zero-copy path"
+fi
+rm -f "$work/bin/cp"
+
 count_thirdparty_owners() {
     goals=$1
     output=$2
@@ -243,9 +266,48 @@ else
     fail "GPU debug mode reaches both native sub-builds"
 fi
 
+root_gpu_dry_run=$(make -C "$repo_root" -n MO_CL_CUDA=1 \
+    CONDA_PREFIX="$work/conda" MAKE=echo cgo 2>&1)
+if printf '%s\n' "$root_gpu_dry_run" | grep -q -- \
+       'mo-stage-native-libs.*--file' &&
+   printf '%s\n' "$root_gpu_dry_run" | grep -q -- \
+       'cgo/cuda/mocl_kernel64.fatbin' &&
+   printf '%s\n' "$root_gpu_dry_run" | grep -q -- \
+       '/mocl_kernel64.fatbin'; then
+    pass "the top-level GPU owner atomically stages the runtime fatbin"
+else
+    fail "the top-level GPU owner atomically stages the runtime fatbin"
+fi
+
+cuda_runtime_source="$repo_root/cgo/cuda/cuda.cpp"
+if grep -q 'MO_CUDA_FATBIN_PATH' "$cuda_runtime_source" &&
+   grep -q 'nb >= PATH_MAX' "$cuda_runtime_source" &&
+   grep -q "mobin_path\[nb\] = '\\\\0'" "$cuda_runtime_source" &&
+   grep -q 'cuModuleUnload' "$cuda_runtime_source" &&
+   grep -q 'cuCtxDestroy' "$cuda_runtime_source"; then
+    pass "CUDA runtime path and partial-initialization failures have explicit closure"
+else
+    fail "CUDA runtime path and partial-initialization failures have explicit closure"
+fi
+
+gpu_dockerfile="$repo_root/optools/images/gpu/Dockerfile"
+gpu_dev_dockerfile="$repo_root/optools/images/gpu/Dockerfile.dev"
+native_workflow="$repo_root/.github/workflows/native-dependency-check.yml"
+if grep -Fq 'mocl_kernel64.fatbin /mocl_kernel64.fatbin' "$gpu_dockerfile" &&
+   grep -Fq 'mocl_kernel64.fatbin /mocl_kernel64.fatbin' \
+       "$gpu_dev_dockerfile" &&
+   [ "$(grep -Fxc '      - "optools/images/gpu/Dockerfile"' \
+       "$native_workflow")" -eq 2 ] &&
+   [ "$(grep -Fxc '      - "optools/images/gpu/Dockerfile.dev"' \
+       "$native_workflow")" -eq 2 ]; then
+    pass "GPU runtime images package the sidecar and select its native contract"
+else
+    fail "GPU runtime images package the sidecar and select its native contract"
+fi
+
 set +e
-cuda_debug=$(make -C "$repo_root/cgo/cuda" -n HOST_ARCH=x86_64 \
-    TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 cuda.o 2>&1)
+cuda_debug=$(make -C "$repo_root/cgo/cuda" -Bn HOST_ARCH=x86_64 \
+    TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 all 2>&1)
 cuda_debug_status=$?
 cuvs_debug=$(make -C "$repo_root/cgo/cuvs" -n \
     CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 debug 2>&1)
@@ -253,10 +315,11 @@ cuvs_debug_status=$?
 set -e
 if [ "$cuda_debug_status" -eq 0 ] &&
    printf '%s\n' "$cuda_debug" | grep -q -- ' -O0 ' &&
+   printf '%s\n' "$cuda_debug" | grep -q -- 'mocl_kernel64.fatbin' &&
    ! printf '%s\n' "$cuda_debug" | grep -q -- ' -O3 '; then
-    pass "CUDA debug compilation contains -O0 and no -O3"
+    pass "CUDA object and fatbin debug compilation contain -O0 and no -O3"
 else
-    fail "CUDA debug compilation contains -O0 and no -O3"
+    fail "CUDA object and fatbin debug compilation contain -O0 and no -O3"
 fi
 if [ "$cuvs_debug_status" -eq 0 ] &&
    printf '%s\n' "$cuvs_debug" | grep -q -- ' -O0 ' &&
@@ -269,15 +332,36 @@ fi
 # Command-line Make variables have higher precedence than ordinary
 # target-specific assignments. Debug must use `override` so a supported custom
 # profile cannot turn a generation stamped as debug back into optimized code.
-cuda_debug_override=$(make -C "$repo_root/cgo/cuda" -n \
+check_cuda_debug_override() {
+    variable=$1
+    description=$2
+    cuda_debug_override=$(make -C "$repo_root/cgo/cuda" -Bn \
+        HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
+        "$variable=-O3 -DPROFILE_A" all 2>&1)
+    if printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O0 ' &&
+       printf '%s\n' "$cuda_debug_override" | grep -q -- ' -DPROFILE_A ' &&
+       printf '%s\n' "$cuda_debug_override" | grep -q -- 'mocl_kernel64.fatbin' &&
+       ! printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O3 '; then
+        pass "CUDA debug overrides conflicting $description optimization"
+    else
+        fail "CUDA debug overrides conflicting $description optimization"
+    fi
+}
+
+check_cuda_debug_override NVCCFLAGS "base device"
+check_cuda_debug_override EXTRA_NVCCFLAGS "extra device"
+check_cuda_debug_override CCFLAGS "base host"
+check_cuda_debug_override EXTRA_CCFLAGS "extra host"
+
+cuda_level_override=$(make -C "$repo_root/cgo/cuda" -Bn \
     HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
-    CUDA_OPT_LEVEL=-O3 NVCCFLAGS='-O3 -DPROFILE_A' cuda.o 2>&1)
-if printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O0 ' &&
-   printf '%s\n' "$cuda_debug_override" | grep -q -- ' -DPROFILE_A ' &&
-   ! printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O3 '; then
-    pass "CUDA debug semantics override a conflicting custom optimization level"
+    CUDA_OPT_LEVEL=-O3 NVCCFLAGS=-DPROFILE_LEVEL all 2>&1)
+if printf '%s\n' "$cuda_level_override" | grep -q -- ' -O0 ' &&
+   printf '%s\n' "$cuda_level_override" | grep -q -- ' -DPROFILE_LEVEL ' &&
+   ! printf '%s\n' "$cuda_level_override" | grep -q -- ' -O3 '; then
+    pass "CUDA debug overrides the explicit optimization-level selector"
 else
-    fail "CUDA debug semantics override a conflicting custom optimization level"
+    fail "CUDA debug overrides the explicit optimization-level selector"
 fi
 
 cuvs_debug_override=$(make -C "$repo_root/cgo/cuvs" -Bn \
@@ -318,7 +402,6 @@ fi
 # thirdparty generation immediately before the top-level owner. That sequence
 # is intentionally discarded for correctness and would double native work.
 sca_workflow="$repo_root/.github/workflows/sca-go-module-cache.yaml"
-native_workflow="$repo_root/.github/workflows/native-dependency-check.yml"
 ut_runner="$repo_root/optools/run_ut.sh"
 if [ "$(grep -c '^[[:space:]]*make cgo$' "$sca_workflow")" -eq 1 ] &&
    ! grep -q '^[[:space:]]*make thirdparties$' "$sca_workflow" &&

@@ -69,12 +69,14 @@ cgo/*.a
 cgo/*.so
 cgo/*.dylib
 cgo/cuda/*.o
+cgo/cuda/*.fatbin
 cgo/cuvs/*.o
 cgo/.mo-native-provenance
 cgo/.mo-native-provenance.pending
 cgo/.mo-native-provenance.building
 cgo/.mo-native-provenance.tmp
 thirdparties/install/
+mocl_kernel64.fatbin
 EOF
 cat >"$repo/Makefile" <<'EOF'
 cgo:
@@ -90,6 +92,10 @@ git -C "$repo" -c user.name=test -c user.email=test@example.com \
 
 native() {
     PATH="$work/bin:$PATH" "$repo/cgo/mo-native-provenance" "$@"
+}
+
+native_with_status_failure() {
+    FAIL_NATIVE_STATUS=1 native "$@"
 }
 
 failures=0
@@ -153,13 +159,19 @@ expect_failure() {
 
 clean_cgo() {
     rm -f "$repo"/cgo/*.o "$repo"/cgo/*.a "$repo"/cgo/*.so \
-        "$repo"/cgo/*.dylib "$repo"/cgo/cuda/*.o "$repo"/cgo/cuvs/*.o
+        "$repo"/cgo/*.dylib "$repo"/cgo/cuda/*.o \
+        "$repo"/cgo/cuda/*.fatbin "$repo"/cgo/cuvs/*.o \
+        "$repo"/mocl_kernel64.fatbin
 }
 
 clean_all() {
     clean_cgo
     rm -rf "$repo/thirdparties/install"
 }
+
+expect_failure "unsupported GPU TARGET_SIZE cannot enter a stamped generation" \
+    env PATH="$work/bin:$PATH" TARGET_SIZE=32 \
+    "$repo/cgo/mo-native-provenance" prepare "$repo" gpu release 0
 
 produce_cgo_outputs() {
     printf 'object\n' >"$repo/cgo/native.o"
@@ -168,11 +180,17 @@ produce_cgo_outputs() {
 }
 
 produce_outputs() {
+    output_accelerator=${1:-cpu}
     mkdir -p "$repo/thirdparties/install/include" \
         "$repo/thirdparties/install/lib"
     printf 'installed header\n' >"$repo/thirdparties/install/include/native.h"
     printf 'installed library\n' >"$repo/thirdparties/install/lib/libnative.a"
     produce_cgo_outputs
+    if [ "$output_accelerator" = gpu ]; then
+        printf 'gpu kernel fatbin\n' >"$repo/cgo/cuda/mocl_kernel64.fatbin"
+        cp "$repo/cgo/cuda/mocl_kernel64.fatbin" \
+            "$repo/mocl_kernel64.fatbin"
+    fi
 }
 
 finish_build() {
@@ -180,7 +198,7 @@ finish_build() {
     optimization=$2
     simsimd=$3
     native begin "$repo" "$accelerator" "$optimization" "$simsimd"
-    produce_outputs
+    produce_outputs "$accelerator"
     native record "$repo" "$accelerator" "$optimization" "$simsimd"
 }
 
@@ -214,6 +232,28 @@ fi
 expect_action cpu release 0 reuse
 native begin "$repo" cpu release 0
 native record "$repo" cpu release 0
+
+# Reusable state must never confuse an empty stdout from failed Git inspection
+# with a clean worktree after preparation or at publication/consumption time.
+expect_action cpu release 0 reuse
+expect_failure "Git status failure at begin rejects reusable state" \
+    native_with_status_failure begin "$repo" cpu release 0
+expect_action cpu release 0 rebuild-cgo
+clean_cgo
+finish_build cpu release 0
+
+expect_action cpu release 0 reuse
+native begin "$repo" cpu release 0
+expect_failure "Git status failure at record cannot publish reusable state" \
+    native_with_status_failure record "$repo" cpu release 0
+expect_action cpu release 0 rebuild-cgo
+clean_cgo
+finish_build cpu release 0
+expect_failure "Git status failure at verify rejects reusable state" \
+    native_with_status_failure verify "$repo" "$repo/cgo/libmo.dylib" \
+        darwin amd64 cpu release 0
+native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu release 0
+echo "ok   every post-prepare Git inspection fails closed"
 
 # `local` is a non-reusability state, not evidence that an interrupted build
 # left objects untouched. A transient Git inspection failure can enter that
@@ -331,6 +371,35 @@ finish_build cpu debug 1
 native verify "$repo" "$repo/cgo/libmo.dylib" darwin amd64 cpu debug 1
 echo "ok   SIMSIMD switching cannot reuse thirdparty artifacts"
 
+simsimd_target_action=$(SIMSIMD_TARGET=SKYLAKE \
+    native prepare "$repo" cpu debug 1)
+if [ "$simsimd_target_action" = rebuild-all ]; then
+    echo "ok   SIMSIMD_TARGET switching owns a distinct thirdparty generation"
+else
+    printf 'FAIL SIMSIMD_TARGET expected rebuild-all, got %s\n' \
+        "$simsimd_target_action"
+    failures=$((failures + 1))
+fi
+clean_all
+SIMSIMD_TARGET=SKYLAKE native begin "$repo" cpu debug 1
+produce_outputs
+SIMSIMD_TARGET=SKYLAKE native record "$repo" cpu debug 1
+simsimd_target_control=$(SIMSIMD_TARGET=SKYLAKE \
+    native prepare "$repo" cpu debug 1)
+if [ "$simsimd_target_control" = reuse ]; then
+    echo "ok   an unchanged SIMSIMD_TARGET generation remains reusable"
+else
+    printf 'FAIL unchanged SIMSIMD_TARGET expected reuse, got %s\n' \
+        "$simsimd_target_control"
+    failures=$((failures + 1))
+fi
+SIMSIMD_TARGET=SKYLAKE native begin "$repo" cpu debug 1
+SIMSIMD_TARGET=SKYLAKE native record "$repo" cpu debug 1
+unset SIMSIMD_TARGET
+expect_action cpu debug 1 rebuild-all
+clean_all
+finish_build cpu debug 1
+
 custom_action=$(CC=alternate-cc native prepare "$repo" cpu debug 1)
 if [ "$custom_action" = rebuild-all ]; then
     echo "ok   a custom native toolchain profile cannot alias default artifacts"
@@ -357,7 +426,7 @@ else
 fi
 clean_cgo
 (CONDA_PREFIX="$work/gpu-a" native begin "$repo" gpu debug 1)
-produce_outputs
+produce_outputs gpu
 (CONDA_PREFIX="$work/gpu-a" native record "$repo" gpu debug 1)
 
 gpu_environment_action=$(CONDA_PREFIX="$work/gpu-b" \
@@ -371,7 +440,62 @@ else
 fi
 clean_cgo
 (CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
-produce_outputs
+produce_outputs gpu
+(CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
+
+# Both the compiler output and executable-side publication belong to the same
+# GPU generation. Content hashes, not mtimes alone, close restored-time drift.
+printf 'mismatched gpu kernel\n' >"$repo/cgo/cuda/mocl_kernel64.fatbin"
+touch -r "$repo/cgo/.mo-native-provenance" \
+    "$repo/cgo/cuda/mocl_kernel64.fatbin"
+gpu_mismatch_action=$(CONDA_PREFIX="$work/gpu-b" \
+    native prepare "$repo" gpu debug 1)
+if [ "$gpu_mismatch_action" = rebuild-cgo ]; then
+    echo "ok   source/staged GPU sidecar mismatch requires a CGo rebuild"
+else
+    printf 'FAIL mismatched GPU sidecar expected rebuild-cgo, got %s\n' \
+        "$gpu_mismatch_action"
+    failures=$((failures + 1))
+fi
+clean_cgo
+(CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
+produce_outputs gpu
+(CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
+
+printf 'corrupted gpu kernel\n' >"$repo/cgo/cuda/mocl_kernel64.fatbin"
+printf 'corrupted gpu kernel\n' >"$repo/mocl_kernel64.fatbin"
+touch -r "$repo/cgo/.mo-native-provenance" \
+    "$repo/cgo/cuda/mocl_kernel64.fatbin" "$repo/mocl_kernel64.fatbin"
+gpu_corruption_action=$(CONDA_PREFIX="$work/gpu-b" \
+    native prepare "$repo" gpu debug 1)
+if [ "$gpu_corruption_action" = rebuild-cgo ]; then
+    echo "ok   restored-mtime GPU sidecar corruption requires a CGo rebuild"
+else
+    printf 'FAIL corrupted GPU sidecar expected rebuild-cgo, got %s\n' \
+        "$gpu_corruption_action"
+    failures=$((failures + 1))
+fi
+clean_cgo
+(CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
+produce_outputs gpu
+(CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
+rm -f "$repo/mocl_kernel64.fatbin"
+expect_failure "missing staged GPU sidecar rejects verification" \
+    env PATH="$work/bin:$PATH" CONDA_PREFIX="$work/gpu-b" \
+    "$repo/cgo/mo-native-provenance" verify "$repo" \
+        "$repo/cgo/libmo.dylib" darwin amd64 gpu debug 1
+gpu_missing_action=$(CONDA_PREFIX="$work/gpu-b" \
+    native prepare "$repo" gpu debug 1)
+if [ "$gpu_missing_action" = rebuild-cgo ]; then
+    echo "ok   a missing staged GPU sidecar requires a CGo rebuild"
+else
+    printf 'FAIL missing GPU sidecar expected rebuild-cgo, got %s\n' \
+        "$gpu_missing_action"
+    failures=$((failures + 1))
+fi
+clean_cgo
+(CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
+produce_outputs gpu
 (CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
 
 gpu_cuvs_flags_action=$(CONDA_PREFIX="$work/gpu-b" \
@@ -386,7 +510,7 @@ fi
 clean_cgo
 (CONDA_PREFIX="$work/gpu-b" NVCC_FLAGS=-DPROFILE_B \
     native begin "$repo" gpu debug 1)
-produce_outputs
+produce_outputs gpu
 (CONDA_PREFIX="$work/gpu-b" NVCC_FLAGS=-DPROFILE_B \
     native record "$repo" gpu debug 1)
 

@@ -1,10 +1,11 @@
 # Native Artifact Generation and Worktree Reuse
 
-- Status: Revision 2 proposed; independent design approval required
-- Revision: 2
+- Status: Revision 3 proposed; independent design approval required
+- Revision: 3
 - Owner: PR [#27852](https://github.com/matrixorigin/matrixone/pull/27852)
 - Review input: [review 5060075176](https://github.com/matrixorigin/matrixone/pull/27852#pullrequestreview-5060075176)
 - Review input: [review 5060172200](https://github.com/matrixorigin/matrixone/pull/27852#pullrequestreview-5060172200)
+- Review input: [review 5060532298](https://github.com/matrixorigin/matrixone/pull/27852#pullrequestreview-5060532298)
 - Scope: developer/CI native builds and `mo-cgo-test` artifact reuse
 
 ## 1. Problem
@@ -51,6 +52,18 @@ Revision 1 then exposed five cross-product and consumer gaps:
   than ordinary debug target assignments, so a custom profile could still
   stamp optimized native code as debug.
 
+Revision 2 still left three generation-boundary violations:
+
+- several Git-status checks consumed only command output and accidentally
+  converted an inspection failure into an empty, therefore clean, status;
+- the common profile represented SIMSIMD as a boolean but omitted
+  `SIMSIMD_TARGET`, even though distinct target overrides produce distinct
+  usearch bytes within the enabled mode;
+- GPU provenance bound `libmo` but not the CUDA fatbin loaded at runtime, so a
+  missing, corrupted, or stale kernel sidecar could pass verification;
+- CUDA debug normalization covered the base NVCC flag channel but later extra
+  device and host flag channels could restore release optimization.
+
 The design does not attempt a remote artifact cache, cross-host binary
 portability, or concurrent builds from independent shell processes. Those are
 different problems and are not required for safe linked-worktree reuse.
@@ -85,7 +98,9 @@ accelerator or optimization changes require at least `rebuild-cgo`.
 The environment profiles hash supported compiler/build overrides that can
 change native bytes. The common profile includes `CC`, `CXX`, `AR`, C/C++/link
 flags, MUSL, usearch/croaring/jemalloc overrides, and macOS SDK/deployment
-selection. The accelerator profile additionally includes `CONDA_PREFIX`,
+selection. Its usearch inputs include both the enabled SIMSIMD dimension and
+the effective `SIMSIMD_TARGET`; changing either owns a full thirdparty
+generation. The accelerator profile additionally includes `CONDA_PREFIX`,
 CUDA/target architecture, code-generation, host-compiler, and extra NVCC flags
 for GPU builds. It covers both variable families consumed by the two GPU
 sub-builds: CUDA's `NVCCFLAGS`/`CCFLAGS`/`EXTRA_*` inputs and cuVS's
@@ -190,7 +205,14 @@ local means provenance could not be established, not that no object was
 written; a transient Git inspection failure must not let unknown objects join a
 later reusable relink.
 
-Stamp format 6 records the structured key. Older formats fail closed and cause
+Every Git inspection has two results: command status and command output. The
+owner captures both explicitly. A non-zero status is never interpreted as an
+empty clean result at `prepare`, `begin`, `record`, `verify`, or consumer root
+comparison. `prepare` may retain the historical local-only path for a checkout
+whose Git identity cannot be established, but no failed inspection may publish
+or consume reusable provenance.
+
+Stamp format 7 records the structured key and the complete artifact set. Older formats fail closed and cause
 one full rebuild instead of guessing compatibility.
 
 ### I5 — advertised debug semantics reach every native compiler
@@ -203,7 +225,10 @@ Top-level debug reaches every native compiler:
   commands.
 
 These semantic assignments override conflicting command-line optimization
-values while retaining custom non-optimization flags. Provenance still binds
+values from the base, extra device, and host compiler flag channels while
+retaining custom non-optimization flags. CUDA compile recipes place the final
+device and host `-O0` after every supported custom flag channel, including the
+fatbin recipe. Provenance still binds
 the requested profile, but profile identity is not allowed to weaken the
 meaning of the structured `optimization=debug` field.
 
@@ -220,6 +245,8 @@ under a debug key is forbidden.
 | pending marker | provenance `prepare` generation | rename to `.building` | retained as evidence | next `prepare` escalates cleanup |
 | building marker | provenance `begin` generation | successful `record` | retained as evidence | next `prepare` escalates cleanup |
 | reusable stamp | provenance `record` generation | atomic rename of complete stamp | temporary stamp removed by trap | invalid/mismatched stamp forces rebuild |
+| CUDA fatbin source | CUDA sub-build | successful fatbin compiler output | CGo cleanup removes it | generation rebuild |
+| executable-side CUDA fatbin | top-level native owner via atomic staging | same-directory rename | staging trap preserves previous complete file | generation rebuild/restage |
 
 Q1 normal completion has one owner and one publication point. Q2 every
 reachable error or signal returns non-zero and retains enough marker state for
@@ -230,6 +257,21 @@ an automatic recycler; no human-only recovery is part of the supported path.
 
 - macOS reuses `libmo.dylib`; Linux reuses `libmo.so`.
 - CPU and GPU artifacts never alias.
+- A GPU generation consists of `libmo`, thirdparties, the CUDA fatbin under
+  `cgo/cuda`, and the identical executable-side fatbin. Both fatbin copies are
+  content-bound to the stamp; missing, corrupt, newer, or mismatched copies
+  invalidate reuse. CPU generations require no fatbin and remove stale staged
+  GPU sidecars during transition cleanup.
+- GPU is supported only for Linux/x86_64 and the runtime's 64-bit fatbin name.
+  An incompatible `TARGET_SIZE` fails before a generation can be stamped.
+- Production executables use the executable-side fatbin by default. Temporary
+  `go test` executables cannot share that directory, so `mo-cgo-test` exports an
+  absolute `MO_CUDA_FATBIN_PATH` to the verified staged copy. An explicit
+  runtime override is honored; otherwise CUDA resolves beside `/proc/self/exe`
+  with checked, NUL-terminated path handling.
+- Both supported GPU runtime Dockerfiles copy the staged sidecar beside
+  `/mo-service`; changes to those packaging consumers select the native
+  contract workflow.
 - On the supported Linux/x86_64 GPU host, cleanup removes CUDA/cuVS outputs
   even when the next requested generation is CPU. Unsupported hosts do not
   enter the CUDA Makefile merely to clean.
@@ -250,7 +292,8 @@ an automatic recycler; no human-only recovery is part of the supported path.
 ## 5. Performance model
 
 The common unchanged path does not copy runtime libraries. It compares each
-flat staged file and keeps the destination mtime unchanged, avoiding needless
+flat staged file, including the conditional GPU fatbin, and keeps the
+destination mtime unchanged, avoiding needless
 downstream relinks. Provenance hashes native outputs at preparation and final
 commit so same-clock-tick or mtime-restored mutations cannot pass as reuse; a
 valid unchanged generation still performs no compilation or cleanup.
@@ -313,21 +356,30 @@ change. Acceptance is:
    transition, proving current `rebuild-all` cannot be downgraded by old state;
 4. a transient Git-status failure plus interrupted local-only generation,
    proving unknown CGo objects require cleanup before reusable recovery;
-5. a real cuVS `NVCC_FLAGS` transition and same-profile control, proving the
+5. injected Git-status failures at `begin`, `record`, `verify`, and both sides
+   of linked-worktree comparison, proving no empty-output alias is accepted;
+6. changed/control `SIMSIMD_TARGET` transitions prove distinct enabled targets
+   rebuild all thirdparties while an unchanged target reuses the generation;
+7. a real cuVS `NVCC_FLAGS` transition and same-profile control, proving the
    effective compiler command and provenance key change together;
-6. staging fault injection for copy, rename, and signal failure, proving the
+8. staging fault injection for directory and single-file publication, copy,
+   rename, and signal failure, proving the
    old destination survives and temporary state is recycled;
-7. `make -n -j2 thirdparties cgo` and `thirdparties debug` each expose exactly
+9. `make -n -j2 thirdparties cgo` and `thirdparties debug` each expose exactly
    one thirdparty build owner;
-8. mixed release/debug root goals fail before build execution;
-9. CPU and GPU debug dry-runs, including conflicting command-line optimization
-   overrides, contain `-O0` without `-O3`, and GPU mode propagates to CUDA and
-   cuVS;
-10. linked-worktree wrapper tests reject source, platform, accelerator, and
+10. mixed release/debug root goals fail before build execution;
+11. CPU and GPU debug dry-runs, including conflicting base, extra device, and
+   host optimization overrides, end with effective `-O0` for both CUDA object
+   and fatbin compilation, and GPU mode propagates to CUDA and cuVS;
+12. missing, corrupted with restored mtime, or mismatched GPU fatbins reject
+   provenance; linked-worktree GPU tests receive the verified absolute sidecar;
+13. linked-worktree wrapper tests reject source, platform, accelerator, and
    SIMSIMD mismatches;
-11. repository cache/UT consumers invoke one complete top-level native owner,
+14. GPU runtime images package the stamped fatbin beside `/mo-service`, and
+    changes to either image select this contract;
+15. repository cache/UT consumers invoke one complete top-level native owner,
     and changing either consumer selects this contract workflow;
-12. existing amd64/arm64 native container builds continue producing readable
+16. existing amd64/arm64 native container builds continue producing readable
    `libmo` and thirdparty libraries.
 
 Real GPU compilation remains dependent on a CUDA/cuVS runner. The hermetic
@@ -337,13 +389,18 @@ maintainer environment remains responsible for compiler/toolchain acceptance.
 ## 8. Rollback
 
 The reuse feature can be rolled back by removing primary-worktree selection in
-`mo-cgo-test`; local artifacts continue to work. Stamp format 6 files are
+`mo-cgo-test`; local artifacts continue to work. Stamp format 7 files are
 ignored build metadata and can be deleted safely. The atomic staging helper is
 independently useful for normal builds and does not require cross-worktree
 reuse.
 
 ## 9. Revision history
 
+- Revision 3: makes every Git inspection fail closed; expands GPU provenance
+  and atomic publication to the runtime fatbin; gives temporary test binaries
+  an explicit verified fatbin path; hardens `/proc/self/exe` handling; and
+  closes CUDA debug optimization precedence across all supported flag channels.
+  It also binds the effective `SIMSIMD_TARGET` to the thirdparty generation.
 - Revision 2: makes interrupted recovery severity monotonic; inventories the
   effective CUDA and cuVS override profile; removes sequential partial plus
   complete native ownership from repository CI consumers; and makes consumer

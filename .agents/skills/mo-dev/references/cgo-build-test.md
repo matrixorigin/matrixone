@@ -365,6 +365,7 @@ What `MO_CL_CUDA=1` flips:
 | Go build tag | none | `-tags gpu` -- registers CAGRA + IVF-PQ, compiles `*_gpu.go` |
 | `cgo/` compiler | `gcc`/`clang` | `/usr/local/cuda/bin/nvcc` |
 | `libmo` objects | C objects only | + `cuda/*.o` + `cuvs/*.o` |
+| Runtime sidecar | none | `mocl_kernel64.fatbin` beside `mo-service` |
 | Link flags | `-lusearch_c -lroaring` | + `-lcuvs -lcuvs_c -lcudart -lcuda -lrmm -lstdc++` |
 | Header/lib roots | thirdparties only | + `$CONDA_PREFIX/{include,lib}`, `/usr/local/cuda/...` |
 
@@ -372,6 +373,9 @@ Guardrails:
 
 - `CONDA_PREFIX env variable not found`: conda env not activated. Run `conda activate <env>` first. This is not a code bug.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
+- Use the top-level build owner. It content-binds and atomically stages
+  `mocl_kernel64.fatbin` beside `mo-service`; direct `make -C cgo` does not
+  produce a complete distributable GPU generation.
 - Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
@@ -389,6 +393,7 @@ gpu_package=./pkg/vectorindex/ivfpq/... # set to the affected GPU algorithm pack
 CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include -I$CONDA_PREFIX/include -I/usr/local/cuda/include" \
 CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c" \
 LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib:$CONDA_PREFIX/lib:/usr/local/cuda/lib64" \
+MO_CUDA_FATBIN_PATH="$(pwd)/mocl_kernel64.fatbin" \
 GOWORK=off go test -mod=readonly -tags gpu \
   -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib -Wl,-rpath,$CONDA_PREFIX/lib -Wl,-rpath,/usr/local/cuda/lib64 -fopenmp'" \
   -v -count=1 -timeout 300s "$gpu_package"
@@ -441,6 +446,12 @@ and appending would discard the caller's. The effect was a false green:
 `MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/` compiled **0** of that
 package's 2 GPU test files while reporting a pass. `mo-cgo-test-tags-test` pins every form
 and needs no GPU, CUDA toolkit or built libmo.
+
+Go test executables run from temporary directories, so they cannot find the
+production sidecar beside the repository's `mo-service`. The wrapper verifies
+the selected generation and exports `MO_CUDA_FATBIN_PATH` to its stamped
+executable-side copy before starting `go test`; do not copy an arbitrary fatbin
+into Go's temporary build directories.
 
 Stubbing `go` is not enough to earn that, and the first version of the test wrongly
 claimed it: the wrapper resolves its repository from its own location and rejects the run

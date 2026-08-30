@@ -62,6 +62,7 @@ RUN cd matrixone && make clean && make -j8
 FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu24.04
 
 COPY --from=builder /app/matrixone/mo-service /mo-service
+COPY --from=builder /app/matrixone/mocl_kernel64.fatbin /mocl_kernel64.fatbin
 COPY --from=builder /app/matrixone/etc /etc
 COPY --from=builder /app/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 COPY --from=builder /app/matrixone/cgo/*.so /usr/local/lib

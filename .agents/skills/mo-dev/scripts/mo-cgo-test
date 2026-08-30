@@ -77,12 +77,19 @@ esac
 native_inputs_match() {
     candidate_root=$1
     native_paths="Makefile cgo thirdparties"
-    if [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- $native_paths)" ] ||
-       [ -n "$(git -C "$candidate_root" status --porcelain --untracked-files=all -- $native_paths)" ]; then
+    if ! repo_native_status=$(git -C "$repo_root" status \
+        --porcelain --untracked-files=all -- $native_paths); then
         return 1
     fi
-    repo_head=$(git -C "$repo_root" rev-parse HEAD)
-    candidate_head=$(git -C "$candidate_root" rev-parse HEAD)
+    if ! candidate_native_status=$(git -C "$candidate_root" status \
+        --porcelain --untracked-files=all -- $native_paths); then
+        return 1
+    fi
+    if [ -n "$repo_native_status" ] || [ -n "$candidate_native_status" ]; then
+        return 1
+    fi
+    repo_head=$(git -C "$repo_root" rev-parse HEAD) || return 1
+    candidate_head=$(git -C "$candidate_root" rev-parse HEAD) || return 1
     git -C "$repo_root" diff --quiet "$repo_head" "$candidate_head" -- $native_paths
 }
 
@@ -159,6 +166,7 @@ cuda_ldflags=
 cuda_rpaths=
 cuda_runtime_paths=
 gpu_tag_args=
+cuda_fatbin=
 if [ "${MO_CL_CUDA:-}" = "1" ]; then
     if [ "$goos" != linux ]; then
         echo "MO_CL_CUDA=1 is only supported on linux, not $goos" >&2
@@ -173,6 +181,7 @@ if [ "${MO_CL_CUDA:-}" = "1" ]; then
     cuda_ldflags="-L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c -lstdc++"
     cuda_rpaths="-Wl,-rpath,/usr/local/cuda/lib64 -Wl,-rpath,$CONDA_PREFIX/lib"
     cuda_runtime_paths=":/usr/local/cuda/lib64:$CONDA_PREFIX/lib"
+    cuda_fatbin="$artifact_root/mocl_kernel64.fatbin"
 
     # The Makefile adds `-tags gpu` under the same switch, so MO_CL_CUDA=1 must always end up
     # building the gpu-tagged files. It cannot be appended as a second -tags: go test keeps
@@ -235,6 +244,14 @@ for required in "$libmo" "$include_dir" "$lib_dir"; do
         exit 1
     fi
 done
+if [ -n "$cuda_fatbin" ] && [ ! -f "$cuda_fatbin" ]; then
+    echo "missing MatrixOne CUDA runtime sidecar: $cuda_fatbin" >&2
+    if [ -n "$reuse_rejection" ]; then
+        echo "primary-worktree reuse rejected: $reuse_rejection" >&2
+    fi
+    echo "build the GPU generation with top-level: MO_CL_CUDA=1 make cgo" >&2
+    exit 1
+fi
 
 # A CUDA-built libmo cannot be linked without the CUDA flags, whatever the package under
 # test is. Left alone that surfaces as a page of "undefined reference to cuInit" from the
@@ -253,6 +270,12 @@ fi
 export GOWORK=off
 export CGO_CFLAGS="'-I$source_cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}"
 export CGO_LDFLAGS="'-L$lib_dir'"
+if [ -n "$cuda_fatbin" ]; then
+    # Go test executables live in temporary directories, while production
+    # executables find the staged fatbin beside mo-service. Point the test
+    # process at the exact sidecar already bound by provenance verification.
+    export MO_CUDA_FATBIN_PATH="$cuda_fatbin"
+fi
 
 # cgo/lib.go owns libmo's native dependency declaration. Query that metadata
 # instead of duplicating a library list here; newly added CPU dependencies then
