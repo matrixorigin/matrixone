@@ -13476,14 +13476,16 @@ function_call_aggregate:
             WindowSpec: $5,
         }
     }
-|   APPROX_PERCENTILE '(' expression_list ')' window_spec_opt
+|   APPROX_PERCENTILE '(' expression_list ')' within_group_opt window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
-            WindowSpec: $5,
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
         }
     }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt

@@ -367,15 +367,21 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
+		t := sourceOp.(*intersect.Intersect)
 		op := intersect.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Minus: // 2
+		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.IntersectAll:
+		t := sourceOp.(*intersectall.IntersectAll)
 		op := intersectall.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Merge:
@@ -1852,6 +1858,16 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			if err != nil {
 				panic(err)
 			}
+			// The existing approximate-percentile executor always ranks values in
+			// ascending order. An ordered-set DESC call has the same result as the
+			// ascending complementary percentile, so preserve the executor and its
+			// wire-compatible text configuration by translating p to 1-p here.
+			if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
+				config, err = complementPercentileConfig(config)
+				if err != nil {
+					panic(err)
+				}
+			}
 			return args[:len(args)-1], config
 		}
 
@@ -2794,6 +2810,21 @@ func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
 // helper gives ordered-set aggregates accurate diagnostics.
 func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	return getPercentileConfigNamed(vec, "approx_percentile")
+}
+
+func complementPercentileConfig(config []byte) ([]byte, error) {
+	text := string(config)
+	percentile, ok := new(big.Rat).SetString(text)
+	if !ok || percentile.Sign() < 0 || percentile.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid percentile configuration %q", text)
+	}
+	scale := 0
+	if point := strings.IndexByte(text, '.'); point >= 0 {
+		scale = len(text) - point - 1
+	}
+	complement := new(big.Rat).Sub(big.NewRat(1, 1), percentile)
+	return []byte(complement.FloatString(scale)), nil
 }
 
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {

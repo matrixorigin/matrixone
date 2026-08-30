@@ -159,6 +159,34 @@ func TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath(t *testing.T) {
 		"the shuffled pair merge must expose multiple physical owners")
 }
 
+func TestOptimizePadSpaceCountDistinctBuildsLocalPreDedupPath(t *testing.T) {
+	key := distinctAggTestCol(types.T_varchar, 1, 1, 1_000_000)
+	key.Typ.PadSpace = true
+	countDistinct := distinctAggTestExpr(
+		function.COUNT, true,
+		planpb.Type{Id: int32(types.T_int64), NotNullable: true}, key)
+	builder, outer := newDistinctAggTestBuilder(
+		1_000_000, 10, 1_000_000, []*planpb.Expr{countDistinct})
+
+	require.NoError(t, builder.optimizeDistinctAgg(1))
+	require.Len(t, builder.qry.Nodes, 4)
+
+	localPair := builder.qry.Nodes[2]
+	finalPair := builder.qry.Nodes[3]
+	require.Len(t, localPair.GroupBy, 3,
+		"local pre-dedup keeps the visible value and adds a PAD SPACE equality key")
+	require.Equal(t, []int32{0, 2}, localPair.GroupByHashKey)
+	require.True(t, isCastOverload(localPair.GroupBy[2], 3))
+
+	_, localMarked := builder.distinctKeyLocalPreAggs[localPair]
+	require.True(t, localMarked)
+	shuffleCol, finalMarked := builder.distinctKeyShuffleCols[finalPair]
+	require.True(t, finalMarked)
+	require.Equal(t, int32(2), shuffleCol,
+		"the distributed stage must partition by the canonical PAD SPACE key")
+	require.Equal(t, finalPair.BindingTags[0], outer.AggList[0].GetF().Args[0].GetCol().RelPos)
+}
+
 func TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV(t *testing.T) {
 	newBuilder := func(secondNDV float64) (*QueryBuilder, *planpb.Node) {
 		key := distinctAggTestCol(types.T_int64, 1, 2, 1_000_000)

@@ -178,6 +178,21 @@ func TestComparisonTypeCastRulePreservesTextCharset(t *testing.T) {
 	}
 }
 
+func TestComparisonTypeCastRuleNormalizesCharToVarchar(t *testing.T) {
+	leftIn := types.NewWithCharset(types.T_char, 8, 0, types.CharsetLegacy)
+	rightIn := types.NewWithCharset(types.T_char, 4, 0, types.CharsetLegacy)
+
+	hasCast, leftOut, rightOut := comparisonTypeCastRule(leftIn, rightIn)
+
+	require.True(t, hasCast)
+	require.Equal(t, types.T_varchar, leftOut.Oid)
+	require.Equal(t, types.T_varchar, rightOut.Oid)
+	require.Equal(t, leftIn.Width, leftOut.Width)
+	require.Equal(t, rightIn.Width, rightOut.Width)
+	require.Equal(t, types.CharsetLegacy, leftOut.Charset)
+	require.Equal(t, types.CharsetLegacy, rightOut.Charset)
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
