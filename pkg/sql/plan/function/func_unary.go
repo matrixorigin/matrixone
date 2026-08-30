@@ -1060,6 +1060,13 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for row := uint64(0); row < uint64(length); row++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		value, null := parameter.GetStrValue(row)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -1076,7 +1083,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				resultBytes++
 			}
 		}
-		if int64(resultBytes) > maxStringFunctionResultLength(result) {
+		if int64(resultBytes) > maxStringFunctionResultLength(result, ivecs[0]) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

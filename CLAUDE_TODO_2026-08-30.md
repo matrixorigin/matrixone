@@ -15,3 +15,11 @@
 4. 补 focused UT，覆盖 panic、text/binary domain 边界及 writer 失败前不发布/不越过 mpool 限额。
 5. 补 prepared statement 与 binary protocol metadata 公共路径证据；修正 CHAR、system view、DESC 的 BVT 期望。
 6. 跑 focused/owning package、SCA、目标 BVT 与 self-review，检查 diff 后 commit、push，并处理可 resolve 的 review threads。
+
+# PR #27841 第六轮 review 修复
+
+1. 恢复 QUOTE 对 `IgnoreAllRow` 与 partial select-list mask 的短路语义，masked row 只发布 NULL，不读取或分配 payload。
+2. 修正 derived/convert text 返回域使用字符宽度，binary 返回域才使用 encoded byte width。
+3. 恢复已批准的动态 text VARCHAR metadata 契约；运行时容量检查按输入 text/binary 能力处理，避免大 text REPLACE/INSERT 误 NULL。
+4. 补 QUOTE partial/all mask、VARCHAR(20000) derived 函数、CONVERT utf8mb4、text runtime 大结果的 focused UT。
+5. 跑 owning packages、protocol/CTAS controls 与 self-review，commit 并 push。

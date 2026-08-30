@@ -160,6 +160,7 @@ func TestConvertReturnTypeUsesSourceMaximumAndTargetDomain(t *testing.T) {
 		{name: "uuid binary", source: types.T_uuid.ToType(), target: binaryTarget, wantOID: types.T_varbinary, wantWidth: 36, charset: types.CharsetBinary},
 		{name: "unknown binary", source: types.T_any.ToType(), target: binaryTarget, wantOID: types.T_blob, charset: types.CharsetBinary},
 		{name: "text target", source: types.T_int64.ToType(), target: textTarget, wantOID: types.T_varchar, wantWidth: 20, charset: types.CharsetUTF8},
+		{name: "varchar text target keeps character width", source: types.New(types.T_varchar, 20000, 0), target: textTarget, wantOID: types.T_varchar, wantWidth: 20000, charset: types.CharsetUTF8},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -167,6 +168,44 @@ func TestConvertReturnTypeUsesSourceMaximumAndTargetDomain(t *testing.T) {
 			require.Equal(t, test.wantOID, got.Oid)
 			require.Equal(t, test.wantWidth, got.Width)
 			require.Equal(t, test.charset, got.Charset)
+		})
+	}
+}
+
+func TestDerivedTextReturnTypeKeepsCharacterWidth(t *testing.T) {
+	source := types.New(types.T_varchar, 20000, 0)
+	got := derivedStringReturnType([]types.Type{source}, 0, types.T_varchar)
+	require.Equal(t, types.T_varchar, got.Oid)
+	require.Equal(t, int32(20000), got.Width)
+	require.Equal(t, types.CharsetUTF8, got.Charset)
+
+	binary := types.New(types.T_varbinary, 20000, 0)
+	got = derivedStringReturnType([]types.Type{binary}, 0, types.T_varbinary)
+	require.Equal(t, types.T_varbinary, got.Oid)
+	require.Equal(t, int32(20000), got.Width)
+	require.Equal(t, types.CharsetBinary, got.Charset)
+}
+
+func TestDerivedTextFunctionsKeepVarcharMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.New(types.T_varchar, 20000, 0)
+	integer := types.T_int64.ToType()
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{name: "left", inputs: []types.Type{text, integer}},
+		{name: "right", inputs: []types.Type{text, integer}},
+		{name: "substring", inputs: []types.Type{text, integer, integer}},
+		{name: "reverse", inputs: []types.Type{text}},
+		{name: "trim", inputs: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), text}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.LessOrEqual(t, result.Width, int32(types.MaxVarcharLen))
 		})
 	}
 }
@@ -264,9 +303,9 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", false) })
 }
 
-func TestExpandingTextResultsUseTextCapacity(t *testing.T) {
+func TestExpandingTextResultsKeepVarcharMetadata(t *testing.T) {
 	text := expandingStringReturnType([]types.Type{types.New(types.T_varchar, 1, 0)}, 0)
-	require.Equal(t, types.T_text, text.Oid)
+	require.Equal(t, types.T_varchar, text.Oid)
 	require.Equal(t, types.CharsetUTF8, text.Charset)
 
 	binary := expandingStringReturnType([]types.Type{types.New(types.T_varbinary, 1, 0)}, 0)

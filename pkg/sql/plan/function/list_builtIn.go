@@ -92,7 +92,9 @@ func expandingStringReturnType(parameters []types.Type, sourceIndex int) types.T
 	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
 		return binaryStringResultType(unknownStringResultBound())
 	}
-	return textStringResultType(unknownStringResultBound(), parameters[sourceIndex].Charset)
+	result := types.T_varchar.ToType()
+	result.Charset = parameters[sourceIndex].Charset
+	return result
 }
 
 func substringStringReturnType(parameters []types.Type, sourceIndex int) types.Type {
@@ -291,11 +293,10 @@ func derivedStringReturnType(parameters []types.Type, sourceIndex int, resultOID
 	if sourceIndex < 0 || sourceIndex >= len(parameters) {
 		return resultOID.ToType()
 	}
-	bound := declaredStringByteBound(parameters[sourceIndex])
 	if types.StaticStringDomain(parameters[sourceIndex]) == types.StringDomainBinary {
-		return binaryStringResultType(bound)
+		return binaryStringResultType(declaredStringByteBound(parameters[sourceIndex]))
 	}
-	return textStringResultType(bound, parameters[sourceIndex].Charset)
+	return textStringResultType(declaredTextCharacterBound(parameters[sourceIndex]), parameters[sourceIndex].Charset)
 }
 
 // ConvertReturnTypeForBinder derives CONVERT metadata from the source types
@@ -308,9 +309,12 @@ func convertReturnType(parameters []types.Type) types.Type {
 	if len(parameters) < 2 {
 		return types.T_text.ToType()
 	}
-	bound := formattedStringByteBound(parameters[0])
 	if parameters[1].Charset == types.CharsetBinary {
-		return binaryStringResultType(bound)
+		return binaryStringResultType(formattedStringByteBound(parameters[0]))
+	}
+	bound := formattedStringByteBound(parameters[0])
+	if parameters[0].Oid.IsMySQLString() {
+		bound = declaredTextCharacterBound(parameters[0])
 	}
 	return textStringResultType(bound, parameters[1].Charset)
 }
