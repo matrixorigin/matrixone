@@ -79,22 +79,21 @@ var (
 )
 
 type pitrRecord struct {
-	pitrId            string
-	pitrName          string
-	createAccount     uint64
-	createTime        int64
-	modifiedTime      int64
-	level             string
-	accountId         uint64
-	accountName       string
-	databaseName      string
-	tableName         string
-	objId             uint64
-	pitrValue         uint64
-	pitrUnit          string
-	pitrStatus        uint8
-	statusChangedTime int64
-	hasStatus         bool
+	pitrId        string
+	pitrName      string
+	createAccount uint64
+	createTime    int64
+	modifiedTime  int64
+	level         string
+	accountId     uint64
+	accountName   string
+	databaseName  string
+	tableName     string
+	objId         uint64
+	pitrValue     uint64
+	pitrUnit      string
+	pitrStatus    uint8
+	hasStatus     bool
 }
 
 const (
@@ -2073,10 +2072,12 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 				if record.pitrUnit, err = er.GetString(ctx, row, 12); err != nil {
 					return nil, err
 				}
-				// pitr_status and pitr_status_changed_time were appended to the
-				// legacy 13-column schema. Keep old catalog rows readable during
-				// rolling upgrades, but reject malformed status values when present.
-				if er.GetColumnCount() > 14 {
+				// pitr_status was appended to the legacy 13-column schema before
+				// pitr_status_changed_time. Parse it as soon as it is present so a
+				// partially upgraded catalog cannot make an inactive PITR look
+				// active. The changed-time column is not needed by ALTER and has
+				// had different types across catalog versions, so do not read it.
+				if er.GetColumnCount() > 13 {
 					status, statusErr := er.GetUint64(ctx, row, 13)
 					if statusErr != nil {
 						return nil, statusErr
@@ -2085,9 +2086,6 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 						return nil, moerr.NewInvalidInputf(ctx, "invalid PITR status %d", status)
 					}
 					record.pitrStatus = uint8(status)
-					if record.statusChangedTime, err = er.GetInt64(ctx, row, 14); err != nil {
-						return nil, err
-					}
 					record.hasStatus = true
 				}
 			}

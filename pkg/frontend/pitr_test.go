@@ -3745,12 +3745,7 @@ func registerPitrRecordResultWithStatus(
 		statusColumn.SetName("pitr_status")
 		statusColumn.SetColumnType(defines.MYSQL_TYPE_TINY)
 		mrs.AddColumn(statusColumn)
-
-		changedTimeColumn := &MysqlColumn{}
-		changedTimeColumn.SetName("pitr_status_changed_time")
-		changedTimeColumn.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
-		mrs.AddColumn(changedTimeColumn)
-		row = append(row, *pitrStatus, time.Now().UnixNano())
+		row = append(row, *pitrStatus)
 	}
 	mrs.AddRow(row)
 	bh.sql2result[sql] = mrs
