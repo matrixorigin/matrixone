@@ -54,8 +54,11 @@ const (
 	informationSchemaViewStatementSQL                  = "coalesce(json_extract_string(tbl.viewdef, '$.Stmt'), tbl.rel_createsql)"
 	informationSchemaViewStatementWithoutTerminatorSQL = "trim(regexp_replace(trim(" +
 		informationSchemaViewStatementSQL + "), '[;][[:space:]]*$', '', 1, 1))"
+)
+
+var (
 	informationSchemaViewDefinitionPrefixLengthSQL = "char_length(coalesce(regexp_substr(" +
-		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + informationSchemaViewDefinitionPrefixPattern + "'), ''))"
+		informationSchemaViewStatementWithoutTerminatorSQL + ", '" + strings.ReplaceAll(informationSchemaViewDefinitionPrefixPattern, "\\", "\\\\") + "'), ''))"
 	// IF is already used by persisted information_schema definitions. It keeps
 	// the wrapper adjustment numeric, while avoiding the unsupported SIGN/LEAST
 	// calls and preserving an ordinary trailing application comment.
