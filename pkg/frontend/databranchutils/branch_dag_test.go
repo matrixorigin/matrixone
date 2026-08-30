@@ -538,13 +538,31 @@ func TestPitrRetentionLowerBound(t *testing.T) {
 	_, err = PitrRetentionLowerBound(now, 101, "h")
 	require.Error(t, err)
 
-	monthEnd := time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC)
-	got, err := PitrRetentionLowerBound(monthEnd, 1, "mo")
-	require.NoError(t, err)
-	require.Equal(t, time.Date(2025, time.February, 28, 12, 0, 0, 0, time.UTC).UnixNano(), got)
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "May 31 clamps to April 30",
+			now:  time.Date(2025, time.May, 31, 12, 0, 0, 123456789, time.UTC),
+			want: time.Date(2025, time.April, 30, 12, 0, 0, 123456789, time.UTC),
+		},
+		{
+			name: "March 31 clamps to February 28",
+			now:  time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC),
+			want: time.Date(2025, time.February, 28, 12, 0, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PitrRetentionLowerBound(tc.now, 1, "mo")
+			require.NoError(t, err)
+			require.Equal(t, tc.want.UnixNano(), got)
+		})
+	}
 
 	leapDay := time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC)
-	got, err = PitrRetentionLowerBound(leapDay, 1, "y")
+	got, err := PitrRetentionLowerBound(leapDay, 1, "y")
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2023, time.February, 28, 12, 0, 0, 0, time.UTC).UnixNano(), got)
 }
