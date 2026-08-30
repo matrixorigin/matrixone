@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -113,6 +114,59 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.Len(t, session.warnings, 2)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	collector := &remoteWarningCollector{maxRetained: 3}
+	proc.Session = collector
+	sourceType := types.T_varchar.ToType()
+	source := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&sourceType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "sec_to_time", []*plan.Expr{source})
+	require.NoError(t, err)
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.NewWithSize(1)
+	const longWarningRows = 64
+	longInvalid := []byte(strings.Repeat("x", 65535))
+	inputValues := make([][]byte, 0, longWarningRows+2)
+	inputValues = append(inputValues, longInvalid, []byte("foo"), []byte("3020400x"))
+	for range longWarningRows - 1 {
+		inputValues = append(inputValues, longInvalid)
+	}
+	values := testutil.MakeVarlenaVector(inputValues, nil, sourceType, proc.Mp())
+	defer values.Free(proc.Mp())
+	input.Vecs[0] = values
+	input.SetRowCount(len(inputValues))
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, len(inputValues), result.Length())
+
+	total, retained := collector.SnapshotWarnings()
+	// The collector observes every bad row while retaining only its fixed-size
+	// SHOW WARNINGS payload. The first retained record is the long value, so the
+	// message-size assertion below also covers source-side rendering.
+	require.Equal(t, uint64(longWarningRows+3), total)
+	require.Len(t, retained, 3)
+	for _, warning := range retained {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.Code)
+		require.LessOrEqual(t, len(warning.Message), len("Truncated incorrect DECIMAL value: ''")+128)
+	}
+	require.Len(t, retained[0].Message, len("Truncated incorrect DECIMAL value: ''")+128)
+
+	// The terminal envelope preserves the complete count and the bounded SHOW
+	// WARNINGS payload for the initiating session.
+	data, err := json.Marshal(remoteTerminalEnvelope{WarningCount: total, WarningDiagnostics: retained})
+	require.NoError(t, err)
+	initiatingSession := &remoteWarningSession{}
+	require.NoError(t, (&messageSenderOnClient{warningSink: initiatingSession}).dealRemoteTerminal(data))
+	require.Equal(t, uint64(longWarningRows+3), initiatingSession.totalWarnings)
+	require.Len(t, initiatingSession.warnings, 3)
 }
 
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {

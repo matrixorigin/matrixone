@@ -10136,6 +10136,206 @@ func TestTimeFormat(t *testing.T) {
 	}
 }
 
+func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	max0 := types.MySQLTimeFunctionMaxForScale(0)
+
+	t.Run("signed integer saturates", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{3020399, 3020400, -3020399, -3020400, math.MaxInt64, math.MinInt64, 0},
+				[]bool{false, false, false, false, false, false, true})},
+			NewFunctionTestResult(types.T_time.ToType(), false,
+				[]types.Time{
+					max0, max0, -max0, -max0,
+					max0, -max0, 0,
+				},
+				[]bool{false, false, false, false, false, false, true}),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("unsigned integer saturates without wrapping", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{3020399, 3020400, math.MaxUint64}, nil)},
+			NewFunctionTestResult(types.T_time.ToType(), false,
+				[]types.Time{max0, max0, max0}, nil),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("floating point preserves microseconds", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToTypeWithScale(6),
+				[]float64{2378.7, -2378.7, 1.0000004, 1.0000005, 3020399.9999991, 3020400, math.Inf(1), math.Inf(-1), math.NaN()}, nil)},
+			NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+				[]types.Time{
+					types.TimeFromClock(false, 0, 39, 38, 700000),
+					types.TimeFromClock(true, 0, 39, 38, 700000),
+					types.TimeFromClock(false, 0, 0, 1, 0),
+					types.TimeFromClock(false, 0, 0, 1, 1),
+					types.MySQLTimeFunctionMax, max0, max0, -max0, 0,
+				},
+				[]bool{false, false, false, false, false, false, false, false, true}),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("exact decimal text preserves rounding and clamps exponents", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"2378.7", "-2378.7", "1.0000004", "1.0000005", "3020399.999999", "-3020399.999999", "3020400", "-3020400", "1e999999999", "-1e999999999", "1e-999999999", "foo", ""},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true})},
+			NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+				[]types.Time{
+					types.TimeFromClock(false, 0, 39, 38, 700000),
+					types.TimeFromClock(true, 0, 39, 38, 700000),
+					types.TimeFromClock(false, 0, 0, 1, 0),
+					types.TimeFromClock(false, 0, 0, 1, 1),
+					types.MySQLTimeFunctionMax, -types.MySQLTimeFunctionMax,
+					max0, -max0, max0, -max0, 0, 0, 0,
+				},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true}),
+			SecToTime)
+		ok, info := fcTC.Run()
+		require.True(t, ok, info)
+	})
+}
+
+func TestSecToTimeOutOfRangeWarning(t *testing.T) {
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{3020400}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3020400}, nil),
+		NewFunctionTestInput(types.T_float64.ToTypeWithScale(6), []float64{3020400}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e999999999"}, nil),
+	} {
+		t.Run(input.typ.String(), func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc := testutil.NewProcess(t)
+			proc.Session = session
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input},
+				NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{types.MySQLTimeFunctionMaxForScale(0)}, nil),
+				SecToTime)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+			wantWarnings := 1
+			if input.typ.Oid == types.T_varchar {
+				// A textual exponent beyond DECIMAL's conversion range retains
+				// that diagnostic in addition to SEC_TO_TIME's TIME-range warning.
+				wantWarnings = 2
+			}
+			require.Len(t, session.warnings, wantWarnings)
+			for _, warning := range session.warnings {
+				require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+			}
+			if input.typ.Oid == types.T_varchar {
+				require.Contains(t, session.warnings[0].msg, "Truncated incorrect DECIMAL value")
+			}
+			require.Contains(t, session.warnings[len(session.warnings)-1].msg, "Truncated incorrect time value")
+		})
+	}
+}
+
+func TestSecToTimeRespectsSelectListBeforeDiagnostics(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "foo"}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.MicroSecsPerSec, 0}, []bool{false, true}),
+		SecToTime)
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	require.NoError(t, SecToTime(tc.parameters, tc.result, proc, tc.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+	values := vector.MustFixedColWithTypeCheck[types.Time](tc.result.GetResultVector())
+	require.Equal(t, types.Time(types.MicroSecsPerSec), values[0])
+	require.True(t, tc.result.GetResultVector().GetNulls().Contains(1))
+	require.Empty(t, session.warnings)
+}
+
+func TestSecToTimeVarcharConversionWarningsAreBounded(t *testing.T) {
+	longInvalid := strings.Repeat("x", 65535)
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"foo", "1foo", "1e+", "1e-999999999", "3020400x", longInvalid}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{0, types.MicroSecsPerSec, types.MicroSecsPerSec, 0, types.MySQLTimeFunctionMaxForScale(0), 0}, nil),
+		SecToTime)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// Each invalid conversion remains visible. A value that is both partially
+	// converted and outside TIME's range retains both diagnostics.
+	require.Len(t, session.warnings, 7)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.LessOrEqual(t, len(warning.msg), len("Truncated incorrect DECIMAL value: ''")+128)
+	}
+	require.Contains(t, session.warnings[0].msg, "DECIMAL")
+	require.Contains(t, session.warnings[4].msg, "DECIMAL")
+	require.Contains(t, session.warnings[5].msg, "time")
+	require.Len(t, session.warnings[6].msg, len("Truncated incorrect DECIMAL value: ''")+128)
+}
+
+func TestSecToTimeVarcharDecimalConversionBoundaryWarnings(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"1e-81", "1e-82", "1e80", "1e81"}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{0, 0, types.MySQLTimeFunctionMaxForScale(0), types.MySQLTimeFunctionMaxForScale(0)}, nil),
+		SecToTime)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// 1e-81 is a valid DECIMAL value which simply rounds to zero. 1e-82
+	// underflows DECIMAL, whereas 1e81 has both a DECIMAL conversion warning
+	// and SEC_TO_TIME's independent TIME-range warning.
+	require.Len(t, session.warnings, 4)
+	require.Contains(t, session.warnings[0].msg, "DECIMAL")
+	require.Contains(t, session.warnings[1].msg, "time")
+	require.Contains(t, session.warnings[2].msg, "DECIMAL")
+	require.Contains(t, session.warnings[3].msg, "time")
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+	}
+}
+
+func TestSecToTimeVarcharMantissaOverflowBeforeExponent(t *testing.T) {
+	valid := "1" + strings.Repeat("0", 80) + "e-80"
+	overflow := "1" + strings.Repeat("0", 81) + "e-81"
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{valid, overflow}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.MicroSecsPerSec, types.MySQLTimeFunctionMaxForScale(0)}, nil),
+		SecToTime)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	// The overflowing mantissa produces its DECIMAL diagnostic and the
+	// independent SEC_TO_TIME range diagnostic; the adjacent 81-digit control
+	// remains exactly one second with no warning.
+	require.Len(t, session.warnings, 2)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+	}
+	require.Contains(t, session.warnings[0].msg, "DECIMAL")
+	require.Contains(t, session.warnings[1].msg, "time")
+}
+
 func TestMakeTimeFractionAndSign(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	floatWithMicrosecondScale := types.T_float64.ToTypeWithScale(6)
