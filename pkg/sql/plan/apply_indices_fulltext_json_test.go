@@ -480,3 +480,27 @@ func TestJSONProbeRangeWithOverlongBound(t *testing.T) {
 	// in range rather than being lost to the cut
 	require.True(t, rangeCovers(t, p, `{"a":"`+long+`zzz"}`))
 }
+
+// A json probe must never take a pushed candidate LIMIT. It returns a SUPERSET
+// that the retained predicate then narrows, so truncating it to k candidates
+// yields fewer than k final rows and silently drops qualifying ones.
+//
+// Both of the gate's paths already decline for a probe — its predicate always
+// leaves a residual filter, and its mode is not FULLTEXT_BOOLEAN — but that is
+// incidental, and a later widening of conjunctive eligibility would turn it into
+// a wrong-results bug. This pins the refusal itself.
+func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
+	var b QueryBuilder
+	limit := makePlan2Uint64ConstExprWithType(10)
+
+	probe := jpCallExpr("fulltext_match",
+		jpStrLit("payload"), jpIntLit(fulltext2.JSONProbeMode), jpColExpr(1))
+	require.True(t, isJSONProbeMatch(probe))
+
+	// even with NO residual filter and a literal LIMIT — the shape the gate is
+	// most willing to push — a probe is refused
+	scan := &plan.Node{TableDef: &plan.TableDef{}}
+	require.Nil(t, b.buildFullTextCandidateLimit(
+		scan, nil, []*plan.Expr{probe}, nil, false, false, limit, nil),
+		"a probe must not be truncated, whatever the rest of the shape allows")
+}

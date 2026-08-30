@@ -980,6 +980,16 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
 		return nil
 	}
+	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
+	// optimizer injected, returning a superset that the retained predicate then
+	// narrows, so truncating it to k candidates yields fewer than k final rows
+	// and silently loses qualifying ones. Its own predicate always leaves a
+	// residual filter, and its mode is not FULLTEXT_BOOLEAN, so both paths below
+	// already decline — but only incidentally, and this rule's correctness is
+	// too important to rest on that.
+	if isJSONProbeMatch(fullTextFilters[0]) {
+		return nil
+	}
 	if len(scanNode.FilterList) == 0 {
 		limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
 		return limit
