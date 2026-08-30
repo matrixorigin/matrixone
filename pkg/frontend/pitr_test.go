@@ -2672,13 +2672,16 @@ func Test_doCreatePitr(t *testing.T) {
 				"",
 				uint64(1),
 				uint8(1),
-				"d",
+				"mo",
 			},
 		})
 		bh.sql2result[sql] = mrs
 
+		stmt.PitrValue = 30
 		err = doCreatePitr(ctx, ses, stmt)
 		assert.NoError(t, err)
+		assert.Contains(t, bh.executedSQLs,
+			"update mo_catalog.mo_pitr set pitr_length = 31, pitr_unit = 'd' where pitr_name = 'sys_mo_catalog_pitr';")
 
 		commitErr := errors.New("pitr commit conflict")
 		bh.sql2err["commit;"] = commitErr

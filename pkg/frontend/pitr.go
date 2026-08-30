@@ -659,9 +659,8 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 
 	if execResultArrayHasData(erArray) {
 		var (
-			sysPitrValue       uint64
-			sysPitrUnit        string
-			oldMinTs, newMinTs time.Time
+			sysPitrValue uint64
+			sysPitrUnit  string
 		)
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			sysPitrValue, err = erArray[0].GetUint64(ctx, i, 11)
@@ -674,19 +673,19 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 			}
 		}
 
-		oldMinTs, err = addTimeSpan(time.Time{}, int(sysPitrValue), sysPitrUnit)
+		mergedValue, mergedUnit, err := databranchutils.MergePitrRetentionRanges(
+			int(sysPitrValue),
+			sysPitrUnit,
+			int(pitrVal),
+			pitrUnit,
+		)
 		if err != nil {
 			return err
 		}
 
-		newMinTs, err = addTimeSpan(time.Time{}, int(pitrVal), pitrUnit)
-		if err != nil {
-			return err
-		}
-
-		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
+		if mergedValue != int(sysPitrValue) || mergedUnit != sysPitrUnit {
 			// update sysMoCatalogPitr
-			sql = fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';", pitrVal, pitrUnit, SYSMOCATALOGPITR)
+			sql = fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';", mergedValue, mergedUnit, SYSMOCATALOGPITR)
 			getLogger(ses.GetService()).Info("update sys mo_catalog pitr", zap.String("sql", sql))
 			err = bh.Exec(ctx, sql)
 			if err != nil {
