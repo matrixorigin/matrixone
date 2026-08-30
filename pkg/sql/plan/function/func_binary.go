@@ -9013,6 +9013,12 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		value, null, truncated, conversionTruncated := getTimeValue(i)
 		if !null {
 			value = value.TruncateToScale(rs.GetType().Scale)

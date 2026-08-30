@@ -99,6 +99,8 @@ DROP TABLE t_time_boundary;
 -- TIME columns accept only the whole-second endpoint in strict mode.
 DROP TABLE IF EXISTS t_time_range;
 CREATE TABLE t_time_range (id INT, t6 TIME(6));
+SET @time_range_old_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
 INSERT INTO t_time_range VALUES (1, '838:59:59.000000');
 INSERT INTO t_time_range VALUES (2, '838:59:59.000001');
 INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
@@ -106,10 +108,16 @@ INSERT INTO t_time_range VALUES (3, '-838:59:59.000001');
 -- still follow the TIME-column assignment boundary rather than fail parsing.
 INSERT INTO t_time_range VALUES (4, '2562047788:00:00');
 INSERT INTO t_time_range VALUES (5, '-2562047788:00:00');
--- Compact TIME spelling follows the same assignment policy.
+-- Quoted compact TIME text is invalid input, unlike an unquoted numeric
+-- coercion. Strict mode returns 1292 instead of range clipping it.
 INSERT INTO t_time_range VALUES (6, '25620477880000');
 INSERT INTO t_time_range VALUES (7, '-25620477880000');
+-- Non-strict assignment stores zero and retains warning 1265 for each row.
+SET SESSION sql_mode = '';
+INSERT INTO t_time_range VALUES (8, '25620477880000'), (9, '-25620477880000');
+SHOW WARNINGS;
 SELECT id, CAST(t6 AS VARCHAR) AS t6 FROM t_time_range ORDER BY id;
+SET SESSION sql_mode = @time_range_old_sql_mode;
 DROP TABLE t_time_range;
 
 -- ============================================================================

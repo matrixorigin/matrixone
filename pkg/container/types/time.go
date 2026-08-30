@@ -16,7 +16,6 @@ package types
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -134,6 +133,13 @@ func (t Time) NumericString(scale int32) string {
 //	"-11:11:11.1235"		"-11:11:11.124"
 //	"-11:11:11.9995"      		"-11:11:12.000"
 func ParseTime(s string, scale int32) (Time, error) {
+	return parseTime(s, scale, nil, nil)
+}
+
+// parseTime optionally reports whether syntactically valid TIME input exceeds
+// MatrixOne's internal representation. The public ParseTime error remains a
+// *moerr.Error so existing callers retain its classification contract.
+func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Time, error) {
 	s = strings.TrimSpace(s)
 
 	// separate into date&time and msec parts without allocating a []string
@@ -266,7 +272,13 @@ func ParseTime(s string, scale int32) (Time, error) {
 	}
 
 	if hour > MaxHourInTime || day > MaxHourInTime/maxHourInDay || day*maxHourInDay > MaxHourInTime-hour {
-		return -1, newTimeOutOfInternalRangeError(s, isNegative)
+		if outOfRangeNegative != nil {
+			*outOfRangeNegative = isNegative
+		}
+		if outOfRange != nil {
+			*outOfRange = true
+		}
+		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 	}
 
 	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec), msec), nil
@@ -552,37 +564,12 @@ func ClampMySQLTimeFunctionForScale(value Time, scale int32) Time {
 	return value
 }
 
-// TimeOutOfInternalRangeError marks a syntactically valid TIME value that does
-// not fit MatrixOne's internal Time representation. It preserves the ordinary
-// invalid-input error text for callers that do not need assignment policy.
-type TimeOutOfInternalRangeError struct {
-	err      error
-	negative bool
-}
-
-func (e *TimeOutOfInternalRangeError) Error() string { return e.err.Error() }
-
-func (e *TimeOutOfInternalRangeError) Unwrap() error { return e.err }
-
-func (e *TimeOutOfInternalRangeError) Negative() bool { return e.negative }
-
-func newTimeOutOfInternalRangeError(value string, negative bool) error {
-	return &TimeOutOfInternalRangeError{
-		err:      moerr.NewInvalidInputNoCtxf("invalid time value %s", value),
-		negative: negative,
-	}
-}
-
 // IsTimeStringOutOfInternalRange classifies every TIME spelling accepted by
 // ParseTime. Assignment callers can then apply range policy without maintaining
 // a second, incomplete TIME grammar.
 func IsTimeStringOutOfInternalRange(value string, scale int32) (negative bool, outOfRange bool) {
-	_, err := ParseTime(value, scale)
-	var rangeErr *TimeOutOfInternalRangeError
-	if errors.As(err, &rangeErr) {
-		return rangeErr.Negative(), true
-	}
-	return false, false
+	_, _ = parseTime(value, scale, &negative, &outOfRange)
+	return negative, outOfRange
 }
 
 func isDateType(s string) bool {

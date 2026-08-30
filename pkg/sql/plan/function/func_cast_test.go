@@ -486,7 +486,7 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		}
 	})
 
-	t.Run("nonstrict and ignore clamp syntactically valid internal-range overflow", func(t *testing.T) {
+	t.Run("nonstrict and ignore clamp colon-delimited internal-range overflow", func(t *testing.T) {
 		for _, tc := range []struct {
 			name  string
 			mode  string
@@ -494,15 +494,15 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 			want  []types.Time
 			input []string
 		}{
-			{"nonstrict", "", NewAssignCast, []types.Time{max, -max, max, -max}, []string{"2562047788:00:00", "-2562047788:00:00", "25620477880000", "-25620477880000"}},
-			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast, []types.Time{max, -max, max, -max}, []string{"2562047788:00:00", "-2562047788:00:00", "25620477880000", "-25620477880000"}},
+			{"nonstrict", "", NewAssignCast, []types.Time{max, -max}, []string{"2562047788:00:00", "-2562047788:00:00"}},
+			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast, []types.Time{max, -max}, []string{"2562047788:00:00", "-2562047788:00:00"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				session := &numericWarningSession{}
 				result, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), tc.input, nil), tc.mode, tc.cast, session)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Time](result))
-				require.Len(t, session.warnings, 4)
+				require.Len(t, session.warnings, 2)
 				for i, warning := range session.warnings {
 					require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
 					require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
@@ -511,8 +511,36 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		}
 	})
 
+	t.Run("quoted compact internal overflow truncates instead of range-clamping", func(t *testing.T) {
+		compact := NewFunctionTestInput(types.T_varchar.ToType(), []string{"25620477880000", "-25620477880000"}, nil)
+		for _, tc := range []struct {
+			name string
+			mode string
+			cast fEvalFn
+		}{
+			{"nonstrict", "", NewAssignCast},
+			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				session := &numericWarningSession{}
+				result, err := run(t, compact, tc.mode, tc.cast, session)
+				require.NoError(t, err)
+				require.Equal(t, []types.Time{0, 0}, vector.MustFixedColWithTypeCheck[types.Time](result))
+				require.Len(t, session.warnings, 2)
+				for i, warning := range session.warnings {
+					require.Equal(t, moerr.WARN_DATA_TRUNCATED, warning.code)
+					require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+				}
+			})
+		}
+		_, err := run(t, compact, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValue), err)
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, moerr.DowncastError(err).MySQLCode())
+	})
+
 	t.Run("strict string assignment rejects internal-range overflow", func(t *testing.T) {
-		for _, input := range []string{"2562047788:00:00", "-2562047788:00:00", "25620477880000", "-25620477880000"} {
+		for _, input := range []string{"2562047788:00:00", "-2562047788:00:00"} {
 			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)

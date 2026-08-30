@@ -10241,6 +10241,24 @@ func TestSecToTimeOutOfRangeWarning(t *testing.T) {
 	}
 }
 
+func TestSecToTimeRespectsSelectListBeforeDiagnostics(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := testutil.NewProcess(t)
+	proc.Session = session
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "foo"}, nil)},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.MicroSecsPerSec, 0}, []bool{false, true}),
+		SecToTime)
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	require.NoError(t, SecToTime(tc.parameters, tc.result, proc, tc.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+	values := vector.MustFixedColWithTypeCheck[types.Time](tc.result.GetResultVector())
+	require.Equal(t, types.Time(types.MicroSecsPerSec), values[0])
+	require.True(t, tc.result.GetResultVector().GetNulls().Contains(1))
+	require.Empty(t, session.warnings)
+}
+
 func TestSecToTimeVarcharConversionWarningsAreBounded(t *testing.T) {
 	longInvalid := strings.Repeat("x", 65535)
 	session := &numericWarningSession{}

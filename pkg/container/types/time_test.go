@@ -133,6 +133,12 @@ func TestIsTimeStringOutOfInternalRange(t *testing.T) {
 	require.True(t, outside)
 }
 
+func TestParseTimePreservesInvalidInputError(t *testing.T) {
+	_, err := ParseTime("2562047788:00:00", 6)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+}
+
 func TestTime_ParseTimeFromString(t *testing.T) {
 	testCases := []struct {
 		name     string

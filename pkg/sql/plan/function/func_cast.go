@@ -4624,6 +4624,40 @@ func mysqlTimeOutOfRangeForCast(
 	return types.MySQLTimeMax, nil
 }
 
+// isCompactTimeText identifies the delimiter-free TIME spelling. When it is
+// supplied as quoted text, MySQL treats an internal-representation overflow as
+// an invalid/truncated string rather than as numeric range clipping.
+func isCompactTimeText(value string) bool {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
+		value = value[1:]
+	}
+	if value == "" || strings.Contains(value, ":") {
+		return false
+	}
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func mysqlInvalidTimeForCast(
+	ctx context.Context, proc *process.Process, mode castMode, value string, row uint64,
+) (types.Time, error) {
+	if mode.strictStringWidth() {
+		return 0, moerr.NewTruncatedWrongValue(ctx, "time", value)
+	}
+	if proc != nil {
+		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
+				fmt.Sprintf("Data truncated for column 'time' at row %d", row+1))
+		}
+	}
+	return 0, nil
+}
+
 func datetimeToDatetime(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Datetime],
@@ -8039,6 +8073,12 @@ func strToTime(
 	var dft types.Time
 	totype := to.GetType()
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -8049,6 +8089,16 @@ func strToTime(
 			val, err := types.ParseTime(s, totype.Scale)
 			if err != nil {
 				if mode.isAssignment() {
+					if isCompactTimeText(s) {
+						val, err = mysqlInvalidTimeForCast(ctx, proc, mode, s, i)
+						if err != nil {
+							return err
+						}
+						if err = to.Append(val, false); err != nil {
+							return err
+						}
+						continue
+					}
 					if negative, outOfRange := types.IsTimeStringOutOfInternalRange(s, totype.Scale); outOfRange {
 						val, err = mysqlTimeOutOfRangeForCast(ctx, proc, mode, s, negative, i)
 						if err != nil {
