@@ -367,11 +367,19 @@ mo-tool: config cgo thirdparties
 # the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
 # jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
 MVN ?= ./mvnw
+JSTFU_MVN_FLAGS ?= -B --no-transfer-progress -Dmaven.wagon.http.retryHandler.count=3
 .PHONY: jstfu
 jstfu:
 	$(info [Build jstfu datastream server])
-	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) -DskipTests package
 	@echo "built xtool/jstfu/target/jstfu.jar"
+
+.PHONY: jstfu-test
+jstfu-test:
+	$(info [Test and build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) verify
+	@test -s xtool/jstfu/target/jstfu.jar
+	@echo "tested and built xtool/jstfu/target/jstfu.jar"
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory

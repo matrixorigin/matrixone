@@ -1526,3 +1526,12 @@ where table_schema = database() and table_name in ('src01', 'dst01')
   and column_name <> '__mo_fake_pk_col'
 order by table_name, ordinal_position;
 drop database ctas_default_decimal_24436;
+
+-- UNION must use integer literal precision when joining a DECIMAL result domain.
+drop database if exists ctas_union_decimal_24436;
+create database ctas_union_decimal_24436;
+use ctas_union_decimal_24436;
+create table literal_union as select 1 as x union all select 2.5 as x;
+show create table literal_union;
+select * from literal_union order by x;
+drop database ctas_union_decimal_24436;
