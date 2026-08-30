@@ -1,0 +1,152 @@
+drop database if exists issue_27092;
+drop database if exists issue_27092_db_src;
+drop database if exists issue_27092_db_dst;
+drop database if exists issue_27092_branch_src;
+drop database if exists issue_27092_branch_dst;
+drop snapshot if exists issue_27092_snapshot;
+
+create database issue_27092;
+
+-- Table clone continues at the source's next visible value.
+create table issue_27092.table_src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092.table_src(v) values (10), (20), (30);
+create table issue_27092.table_dst clone issue_27092.table_src;
+insert into issue_27092.table_dst(v) values (40);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'table_src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'table_dst') as clone_next,
+  (select max(id) from issue_27092.table_dst) as clone_inserted_id;
+
+-- Empty sources start both allocators at one.
+create table issue_27092.empty_src (
+  id bigint auto_increment primary key,
+  v int
+);
+create table issue_27092.empty_dst clone issue_27092.empty_src;
+insert into issue_27092.empty_dst(v) values (10);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'empty_src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'empty_dst') as clone_next,
+  (select max(id) from issue_27092.empty_dst) as clone_inserted_id;
+
+-- A fresh clone owns an independent allocator seeded by the rows it copied.
+create table issue_27092.deleted_src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092.deleted_src(v) values (10), (20), (30);
+delete from issue_27092.deleted_src where id = 3;
+create table issue_27092.deleted_dst clone issue_27092.deleted_src;
+insert into issue_27092.deleted_dst(v) values (40);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'deleted_src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'deleted_dst') as clone_next,
+  (select max(id) from issue_27092.deleted_dst) as clone_inserted_id,
+  (select count(*) from issue_27092.deleted_dst) as clone_rows;
+
+-- An explicit AUTO_INCREMENT start remains part of the continuation state.
+create table issue_27092.explicit_src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092.explicit_src(v) values (10), (20), (30);
+alter table issue_27092.explicit_src auto_increment = 100;
+create table issue_27092.explicit_dst clone issue_27092.explicit_src;
+insert into issue_27092.explicit_dst(v) values (40);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'explicit_src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'explicit_dst') as clone_next,
+  (select max(id) from issue_27092.explicit_dst) as clone_inserted_id;
+
+-- A live clone inside an explicit transaction has the same continuation behavior.
+begin;
+create table issue_27092.txn_src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092.txn_src(v) values (10), (20), (30);
+create table issue_27092.txn_dst clone issue_27092.txn_src;
+insert into issue_27092.txn_dst(v) values (40);
+select max(id) as clone_inserted_id from issue_27092.txn_dst;
+commit;
+
+-- Database clone propagates live-source semantics to every nested table clone.
+create database issue_27092_db_src;
+create table issue_27092_db_src.src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092_db_src.src(v) values (10), (20), (30);
+create database issue_27092_db_dst clone issue_27092_db_src;
+insert into issue_27092_db_dst.src(v) values (40);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092_db_src' and table_name = 'src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092_db_dst' and table_name = 'src') as clone_next,
+  (select max(id) from issue_27092_db_dst.src) as clone_inserted_id;
+
+-- Both table and database Data Branch forms share live clone continuation.
+create table issue_27092.branch_table_src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092.branch_table_src(v) values (10), (20), (30);
+data branch create table issue_27092.branch_table_dst from issue_27092.branch_table_src;
+insert into issue_27092.branch_table_dst(v) values (40);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'branch_table_src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'branch_table_dst') as clone_next,
+  (select max(id) from issue_27092.branch_table_dst) as clone_inserted_id;
+
+create database issue_27092_branch_src;
+create table issue_27092_branch_src.src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092_branch_src.src(v) values (10), (20), (30);
+data branch create database issue_27092_branch_dst from issue_27092_branch_src;
+insert into issue_27092_branch_dst.src(v) values (40);
+select
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092_branch_src' and table_name = 'src') as source_next,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092_branch_dst' and table_name = 'src') as clone_next,
+  (select max(id) from issue_27092_branch_dst.src) as clone_inserted_id;
+
+-- Historical clone derives its independent allocator from snapshot-visible rows.
+create table issue_27092.snapshot_src (
+  id bigint auto_increment primary key,
+  v int
+);
+insert into issue_27092.snapshot_src(v) values (10), (20), (30);
+create snapshot issue_27092_snapshot for table issue_27092 snapshot_src;
+insert into issue_27092.snapshot_src(v) values (50);
+create table issue_27092.snapshot_dst clone issue_27092.snapshot_src {snapshot = 'issue_27092_snapshot'};
+insert into issue_27092.snapshot_dst(v) values (40);
+select
+  (select count(*) from issue_27092.snapshot_dst where v in (10, 20, 30)) as snapshot_rows,
+  (select count(*) from issue_27092.snapshot_dst where v = 50) as post_snapshot_rows,
+  (select auto_increment from information_schema.tables
+    where table_schema = 'issue_27092' and table_name = 'snapshot_dst') as clone_next,
+  (select max(id) from issue_27092.snapshot_dst) as clone_inserted_id;
+
+drop snapshot issue_27092_snapshot;
+drop database issue_27092_branch_dst;
+drop database issue_27092_branch_src;
+drop database issue_27092_db_dst;
+drop database issue_27092_db_src;
+drop database issue_27092;

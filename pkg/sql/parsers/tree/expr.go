@@ -1153,6 +1153,40 @@ func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
 		}
 		order.Expr = tmpNode
 	}
+	if node.WindowSpec != nil {
+		for i, expr := range node.WindowSpec.PartitionBy {
+			if expr == nil {
+				continue
+			}
+			tmpNode, ok := expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			node.WindowSpec.PartitionBy[i] = tmpNode
+		}
+		for _, order := range node.WindowSpec.OrderBy {
+			if order == nil || order.Expr == nil {
+				continue
+			}
+			tmpNode, ok := order.Expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			order.Expr = tmpNode
+		}
+		if node.WindowSpec.Frame != nil {
+			for _, bound := range []*FrameBound{node.WindowSpec.Frame.Start, node.WindowSpec.Frame.End} {
+				if bound == nil || bound.Expr == nil {
+					continue
+				}
+				tmpNode, ok := bound.Expr.Accept(v)
+				if !ok {
+					return node, false
+				}
+				bound.Expr = tmpNode
+			}
+		}
+	}
 	return v.Exit(node)
 }
 
@@ -1181,16 +1215,38 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 }
 
 type WindowSpec struct {
-	PartitionBy Exprs
-	OrderBy     OrderBy
-	HasFrame    bool
-	Frame       *FrameClause
+	// RefName identifies a named window used as this specification's base.
+	// ReferencedOnly distinguishes OVER name from the parenthesized OVER (name)
+	// form, which matters for MySQL's inheritance rules.
+	RefName        *CStr
+	ReferencedOnly bool
+	PartitionBy    Exprs
+	OrderBy        OrderBy
+	HasFrame       bool
+	Frame          *FrameClause
 }
 
 func (node *WindowSpec) Format(ctx *FmtCtx) {
-	ctx.WriteString("over (")
+	ctx.WriteString("over ")
+	if node.ReferencedOnly && node.RefName != nil {
+		ctx.WriteIdentifier(Identifier(node.RefName.Origin()))
+		return
+	}
+	ctx.WriteByte('(')
+	node.formatBody(ctx)
+	ctx.WriteByte(')')
+}
+
+func (node *WindowSpec) formatBody(ctx *FmtCtx) {
 	flag := false
+	if node.RefName != nil {
+		ctx.WriteIdentifier(Identifier(node.RefName.Origin()))
+		flag = true
+	}
 	if len(node.PartitionBy) > 0 {
+		if flag {
+			ctx.WriteByte(' ')
+		}
 		ctx.WriteString("partition by ")
 		node.PartitionBy.Format(ctx)
 		flag = true
@@ -1210,8 +1266,31 @@ func (node *WindowSpec) Format(ctx *FmtCtx) {
 		}
 		node.Frame.Format(ctx)
 	}
+}
 
+type WindowDefinition struct {
+	Name *CStr
+	Spec *WindowSpec
+}
+
+func (node *WindowDefinition) Format(ctx *FmtCtx) {
+	ctx.WriteIdentifier(Identifier(node.Name.Origin()))
+	ctx.WriteString(" as (")
+	if node.Spec != nil {
+		node.Spec.formatBody(ctx)
+	}
 	ctx.WriteByte(')')
+}
+
+type WindowDefinitions []*WindowDefinition
+
+func (node *WindowDefinitions) Format(ctx *FmtCtx) {
+	for i, definition := range *node {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		definition.Format(ctx)
+	}
 }
 
 type FrameType int

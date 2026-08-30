@@ -252,6 +252,7 @@ func TestIndexBuildExactRuntimeFilterContract(t *testing.T) {
 		payload := vector.NewVec(types.T_any.ToType())
 		require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 		require.Equal(t, types.T_int32, payload.GetType().Oid)
+		require.True(t, payload.GetSorted())
 		require.Equal(t, []int32{3, 7},
 			vector.MustFixedColNoTypeCheck[int32](payload))
 		payload.Free(proc.Mp())
@@ -322,6 +323,8 @@ func TestIndexBuildFloatRuntimeFilterClosesConstSignedZero(t *testing.T) {
 				payload := vector.NewVec(types.T_any.ToType())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 				require.Equal(t, 2, payload.Length())
+				require.True(t, payload.GetSorted(),
+					"signed-zero closure must remain ordered without compaction")
 				var positiveZero, negativeZero bool
 				for _, value := range vector.MustFixedColNoTypeCheck[float64](payload) {
 					switch math.Float64bits(value) {

@@ -534,7 +534,12 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
-	return routine.migrateConnectionFromActionWithContext(ctx, req.Action, resp)
+	return routine.migrateConnectionFromActionWithCapabilities(
+		ctx,
+		req.Action,
+		req.TempTableMigrationSupported,
+		resp,
+	)
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {

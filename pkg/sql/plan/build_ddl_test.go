@@ -1806,6 +1806,33 @@ func TestStableViewStarHelpersCoverASTShapes(t *testing.T) {
 	require.False(t, selectStatementHasStar(nil))
 	require.False(t, selectStatementHasStar(columnClause))
 
+	nestedStarClause := &tree.SelectClause{
+		Exprs: tree.SelectExprs{starExpr},
+		From:  &tree.From{},
+	}
+	nestedWindowClause := &tree.SelectClause{
+		Exprs: tree.SelectExprs{columnExpr},
+		From:  &tree.From{},
+		Windows: tree.WindowDefinitions{
+			&tree.WindowDefinition{
+				Name: tree.NewCStr("w", 1),
+				Spec: &tree.WindowSpec{PartitionBy: tree.Exprs{
+					&tree.Subquery{Select: &tree.Select{Select: nestedStarClause}},
+				}},
+			},
+		},
+	}
+	require.True(t, selectClauseHasStar(nestedWindowClause))
+	stableWindowStmt, rewritten := viewSelectStatementWithExpandedStars(
+		nestedWindowClause,
+		map[*tree.SelectClause]tree.SelectExprs{
+			nestedStarClause: {{Expr: tree.NewUnresolvedColName("stable_col")}},
+		},
+	)
+	require.True(t, rewritten)
+	require.NotContains(t, tree.String(stableWindowStmt, dialect.MYSQL), "select *")
+	require.Contains(t, tree.String(stableWindowStmt, dialect.MYSQL), "stable_col")
+
 }
 
 func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
@@ -6032,6 +6059,35 @@ func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 	unique := newFK("code")
 	require.NoError(t, checkFkColsAreValid(ctx, unique, parent))
 	require.Equal(t, "uq_parent_code", unique.Def.ReferencedIndexName)
+}
+
+func TestCreateExistingTableDoesNotRebuildReverseForeignKeys(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProcess(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	queriedReverseForeignKeys := false
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if strings.Contains(sql, "`mo_catalog`.`mo_foreign_keys`") {
+				queriedReverseForeignKeys = true
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("existing relation reverse FKs must not be rebuilt")
+			}
+			return executor.Result{}, nil
+		}),
+	)
+
+	for _, sql := range []string{
+		"create table nation (replacement_only int)",
+		"create table if not exists nation (replacement_only int)",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		require.Empty(t, logicPlan.GetDdl().GetCreateTable().GetFksReferToMe())
+	}
+	require.False(t, queriedReverseForeignKeys)
 }
 
 func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {

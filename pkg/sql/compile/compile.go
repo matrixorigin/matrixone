@@ -285,6 +285,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
+	// Reset reuses an existing logical/physical generation. Reused generations
+	// are deliberately ineligible for LOAD unique-index promotion.
+	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
 	c.resultMetadataFrozen = false
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
@@ -467,6 +470,7 @@ func (c *Compile) clear() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
+	c.clearLoadUniqueIndexPromotion()
 
 	if c.lockMeta != nil {
 		c.lockMeta.clear(c.proc)
@@ -885,6 +889,9 @@ func (c *Compile) prePipelineInitializer() (err error) {
 		return err
 	}
 	if err = c.lockTable(); err != nil {
+		return err
+	}
+	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
 		return err
 	}
 
@@ -1808,11 +1815,17 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		childNodeID := node.Children[0]
+		childNode := nodes[childNodeID]
+		if isLocalPreAggregationGroup(node, childNode) {
+			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
+		} else {
+			ss, err = c.compilePlanScope(step, childNodeID, nodes)
+		}
 		if err != nil {
 			return nil, err
 		}
-		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+		groupInfo := constructGroup(c.proc.Ctx, node, childNode, false, 0, c.proc)
 		defer groupInfo.Release()
 		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
@@ -6342,6 +6355,95 @@ func (c *Compile) compileGroupWithoutShuffle(
 		node, ss, ns, distinctRequiresSingleStage)
 }
 
+func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
+	if parent == nil || child == nil ||
+		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
+		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
+		!parent.Stats.HashmapStats.Shuffle ||
+		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
+		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
+		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
+		len(child.Children) != 1 ||
+		child.Limit != nil || child.Offset != nil ||
+		len(child.FilterList) != 0 || !isIdentityGroupByProjection(child) {
+		return false
+	}
+	for i, expr := range parent.GroupBy {
+		col := expr.GetCol()
+		if col == nil {
+			return false
+		}
+		if len(child.BindingTags) > 0 &&
+			col.RelPos == child.BindingTags[0] && col.ColPos == int32(i) {
+			continue
+		}
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		projectCol := child.ProjectList[col.ColPos].GetCol()
+		if projectCol == nil || projectCol.RelPos != -1 || projectCol.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdentityGroupByProjection(node *plan.Node) bool {
+	if len(node.ProjectList) == 0 {
+		return true
+	}
+	if len(node.ProjectList) != len(node.GroupBy) {
+		return false
+	}
+	for i, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != -1 || col.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) compileLocalPreAggregationScope(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	node := nodes[nodeID]
+	ss, err := c.compilePlanScope(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+	defer groupInfo.Release()
+
+	c.setAnalyzeCurrent(ss, int(nodeID))
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	ss = c.compileLocalGroupBy(node, ss, nodes)
+	ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+	return ss, nil
+}
+
+// compileLocalGroupBy performs only the duplicate-reduction half of a logical
+// GROUP BY. The planner emits this contract only when a downstream GROUP BY
+// completes the same key after exchange, so merging here would defeat the
+// pre-exchange reduction without adding correctness.
+func (c *Compile) compileLocalGroupBy(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(op)
+		ss[i].HasPartialResults = false
+	}
+	c.anal.isFirst = false
+	return ss
+}
+
 func (c *Compile) compileMergeGroup(
 	node *plan.Node,
 	ss []*Scope,
@@ -7115,7 +7217,27 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
-	for _, tbl := range node.LockTargets {
+	localizeLoadPlan := c.loadUniqueIndexPromotion != nil
+	filterPromotedRows := false
+	if state := c.loadUniqueIndexPromotion; state != nil &&
+		state.phase == loadUniqueIndexPromotionFenced {
+		if err := state.validateRetryProof(c); err != nil {
+			return nil, err
+		}
+		filterPromotedRows = true
+	}
+	for _, canonicalTarget := range node.LockTargets {
+		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
+			continue
+		}
+		tbl := canonicalTarget
+		if localizeLoadPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
+			// Only table-lock disposition is annotated during physical compile. A
+			// shallow value copy keeps the canonical generation immutable without
+			// changing allocation or mutation behavior for non-candidate statements.
+			localTarget := *canonicalTarget
+			tbl = &localTarget
+		}
 		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
@@ -7124,15 +7246,19 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	node.LockTargets = lockRows
-	if len(node.LockTargets) == 0 {
+	if !localizeLoadPlan {
+		// Preserve exact-main compile behavior outside the positively admitted
+		// LOAD path, including its existing canonical-node reuse contract.
+		node.LockTargets = lockRows
+	}
+	if len(lockRows) == 0 {
 		return ss, nil
 	}
 
 	block := false
 	// only pessimistic txn needs to block downstream operators.
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		block = node.LockTargets[0].Block
+		block = lockRows[0].Block
 		if block {
 			c.needBlock = true
 		}
@@ -7145,7 +7271,13 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 	var err error
 	var lockOpArg *lockop.LockOp
-	lockOpArg, err = constructLockOp(node, c.e)
+	lockNode := node
+	if localizeLoadPlan {
+		localNode := *node
+		localNode.LockTargets = lockRows
+		lockNode = &localNode
+	}
+	lockOpArg, err = constructLockOp(lockNode, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -8573,9 +8705,11 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			options = options.WithIgnoreForeignKey()
+	if c.pn != nil {
+		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+				options = options.WithIgnoreForeignKey()
+			}
 		}
 	}
 

@@ -330,6 +330,16 @@ func ivfCentroidPrefixFilter(
 			return nil, err
 		}
 	}
+	// prefix_in values must be sorted before they leave this function.
+	// centroidIDs arrives ranked by distance to the query, never by value, and
+	// zone-map pruning binary-searches this list (ZM.PrefixIn, reached through
+	// colexec.EvaluateFilterByZoneMap), so an unsorted list makes the search
+	// probe the wrong element and skip blocks holding matching entries.
+	// InplaceSortAndCompact marks the vector sorted itself; setting the flag here
+	// as well would claim sortedness even for an element type its switch does not
+	// handle, which is the assumption this fix exists to remove. Compaction is why
+	// Len below is taken from the vector, not from centroidIDs.
+	prefixVec.InplaceSortAndCompact()
 	data, err := prefixVec.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -349,7 +359,7 @@ func ivfCentroidPrefixFilter(
 	right := &plan.Expr{
 		Typ: cpkeyPlanType,
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(len(centroidIDs)),
+			Len:  int32(prefixVec.Length()),
 			Data: data,
 		}},
 	}
