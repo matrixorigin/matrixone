@@ -2329,6 +2329,7 @@ func TestCCPRGC(t *testing.T) {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, time.Minute*5)
 	defer cancelTimeout()
+	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 
 	// Start cluster
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
@@ -2351,9 +2352,12 @@ func TestCCPRGC(t *testing.T) {
 	require.NoError(t, err)
 	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogFeatureRegistryDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogFeatureRegistryInitData)
+	require.NoError(t, err)
 
 	// Create mo_ccpr_log table using system account context
-	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 

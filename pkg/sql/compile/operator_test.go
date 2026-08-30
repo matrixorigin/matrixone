@@ -264,6 +264,51 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(planConfig, 5), config)
 }
 
+func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.25)
+	for _, tc := range []struct {
+		name       string
+		planConfig []byte
+		want       string
+	}{
+		{name: "ordinary form", want: "0.25"},
+		{name: "ordered ascending", planConfig: []byte{0}, want: "0.25"},
+		{name: "ordered descending", planConfig: []byte{1}, want: "0.75"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, config := constructAggregateConfig(&plan.Function{
+				Func:      &plan.ObjectRef{ObjName: plan2.NameApproxPercentile},
+				Args:      []*plan.Expr{value, percentile},
+				AggConfig: tc.planConfig,
+			}, proc)
+			require.Equal(t, []*plan.Expr{value}, args)
+			require.Equal(t, tc.want, string(config))
+		})
+	}
+}
+
+func TestComplementPercentileConfigPreservesDecimalScale(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "0", want: "1"},
+		{input: "1", want: "0"},
+		{input: "0.95", want: "0.05"},
+		{input: "0.500", want: "0.500"},
+	} {
+		actual, err := complementPercentileConfig([]byte(tc.input))
+		require.NoError(t, err)
+		require.Equal(t, tc.want, string(actual))
+	}
+	_, err := complementPercentileConfig([]byte("invalid"))
+	require.Error(t, err)
+}
+
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

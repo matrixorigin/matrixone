@@ -8742,9 +8742,11 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			options = options.WithIgnoreForeignKey()
+	if c.pn != nil {
+		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+				options = options.WithIgnoreForeignKey()
+			}
 		}
 	}
 

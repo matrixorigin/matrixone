@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -28,7 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1066,6 +1069,95 @@ func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 0, txnOp.commitCalls)
 	require.Equal(t, 1, txnOp.rollbackCalls)
+}
+
+func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing.T) {
+	type terminalCommitPath struct {
+		name string
+		run  func(*TxnHandler, *ExecCtx) error
+	}
+	paths := []terminalCommitPath{
+		{
+			name: "explicit commit",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.txnOpt.byCommit = true
+				return th.Commit(execCtx)
+			},
+		},
+		{
+			name: "replacement begin",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.txnOpt.byBegin = true
+				execCtx.txnOpt.autoCommit = true
+				return th.Create(execCtx)
+			},
+		},
+		{
+			name: "enable autocommit",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				return th.SetAutocommit(execCtx, false, true)
+			},
+		},
+	}
+
+	for _, path := range paths {
+		t.Run(path.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
+
+			op := newTestTxnOp()
+			op.meta = txn.TxnMeta{ID: []byte{1}, Status: txn.TxnStatus_Active}
+			ses.txnHandler.txnOp = op
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.optionBits = OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT
+			ses.txnHandler.lineageOwnerLifecycleValidation = true
+
+			wantErr := errors.New("lifecycle validation failed")
+			sqlExecutor := &lineageLifecycleCommitSQLExecutor{
+				err: wantErr,
+				beforeExec: func() {
+					require.Zero(t, op.commitCalls,
+						"lifecycle validation must precede physical commit")
+				},
+			}
+			rt := moruntime.ServiceRuntime(ses.GetService())
+			oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			if hadOldExecutor {
+				require.True(t, rt.CompareAndDeleteGlobalVariables(
+					moruntime.InternalSQLExecutor, oldExecutor))
+			}
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, sqlExecutor)
+			t.Cleanup(func() {
+				require.True(t, rt.CompareAndDeleteGlobalVariables(
+					moruntime.InternalSQLExecutor, sqlExecutor))
+				if hadOldExecutor {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+				}
+			})
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			t.Cleanup(execCtx.Close)
+			err := path.run(ses.GetTxnHandler(), execCtx)
+
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, []string{
+				databranchutils.LineageOwnerLifecycleLockSQL(),
+			}, sqlExecutor.sqls)
+			require.Len(t, sqlExecutor.opts, 1)
+			require.Same(t, op, sqlExecutor.opts[0].Txn())
+			require.Zero(t, op.commitCalls)
+			require.Equal(t, 1, op.rollbackCalls)
+			require.False(t, ses.GetTxnHandler().InActiveTxn())
+		})
+	}
 }
 
 func TestCommitUsesRequestContext(t *testing.T) {

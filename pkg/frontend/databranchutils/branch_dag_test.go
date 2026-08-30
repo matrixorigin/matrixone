@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 func TestDAGFunctionality(t *testing.T) {
@@ -486,6 +488,29 @@ func TestComputeAlterLineageCompactionPlanCycleSafe(t *testing.T) {
 	plan := ComputeAlterLineageCompactionPlan(dag, edges, nil)
 	require.Equal(t, []uint64{1, 2}, plan.TableIDs)
 	require.Equal(t, []string{"__mo_branch_1", "__mo_branch_2"}, plan.SnapshotNames)
+}
+
+func BenchmarkComputeAlterLineageCompactionPlan2049(b *testing.B) {
+	const rowCount = 2049
+	rows := make([]DataBranchMetadata, rowCount)
+	for i := range rows {
+		rows[i] = DataBranchMetadata{
+			TableID:      uint64(i + 1),
+			CloneTS:      1,
+			Creator:      uint64(catalog.System_Account),
+			Level:        AlterLineageLevel,
+			TableDeleted: true,
+		}
+	}
+	dag := NewBranchReclaimDag(rows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		plan := ComputeAlterLineageCompactionPlan(dag, nil, nil)
+		if len(plan.TableIDs) != rowCount {
+			b.Fatalf("got %d compactable rows, want %d", len(plan.TableIDs), rowCount)
+		}
+	}
 }
 
 func TestPitrRetentionLowerBound(t *testing.T) {
