@@ -21,8 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -289,6 +292,9 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if idxDef == nil {
 			continue
 		}
+		if !builder.indexCoversSnapshot(scanNode, idxDef) {
+			continue
+		}
 		probe, ok := c.probe()
 		if !ok {
 			continue
@@ -300,6 +306,52 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		scanNode.FilterList = append(scanNode.FilterList, match)
 		return
 	}
+}
+
+// indexCoversSnapshot reports whether idx may be used as a MANDATORY filter for
+// this query.
+//
+// A synchronously maintained index always may: its hidden tables move with the
+// source DML. An ASYNC one may not by default — its postings trail the base
+// table, so a row written inside the maintenance lag satisfies the retained
+// predicate but has no posting, and the ANDed probe would remove it before the
+// predicate ever ran. That is a wrong answer, not a stale score.
+//
+// For an async index the algorithm is asked, through the optional coverage
+// capability, whether its durable state has reached this query's read snapshot.
+// Everything here FAILS CLOSED: no plugin capability, no process, no
+// transaction, a lookup error, or a watermark behind the snapshot all decline
+// the probe and leave the query to the retained predicate alone.
+func (builder *QueryBuilder) indexCoversSnapshot(scanNode *plan.Node, idx *plan.IndexDef) bool {
+	algo := catalog.ToLower(idx.IndexAlgo)
+	if !indexplugin.AlwaysAsync(algo, idx.IndexAlgoParams) {
+		return true
+	}
+	if builder == nil || builder.compCtx == nil || scanNode.TableDef.TblId == 0 {
+		return false
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txn := proc.GetTxnOperator()
+	if txn == nil {
+		return false
+	}
+	covered, err := indexplugin.CoversSnapshot(proc.Ctx, algo, coverage.Request{
+		CNUUID:   proc.GetService(),
+		Txn:      txn,
+		TableID:  scanNode.TableDef.TblId,
+		IndexDef: idx,
+		Snapshot: types.TimestampToTS(txn.SnapshotTS()),
+	})
+	if err != nil {
+		// a freshness check that cannot answer is not a query error; it just
+		// means no acceleration
+		logutil.Debugf("json index probe: coverage check failed for %s: %v", idx.IndexName, err)
+		return false
+	}
+	return covered
 }
 
 // findJSONTupleIndex returns the fulltext2 index over exactly colPos whose
@@ -324,17 +376,7 @@ func (builder *QueryBuilder) findJSONTupleIndex(scanNode *plan.Node, colPos int3
 		if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
 			continue
 		}
-		// An ALWAYS-ASYNC index is CDC-maintained: its postings trail the base
-		// table. Injecting `predicate AND probe` on it would turn a strongly
-		// consistent SQL predicate into an eventually consistent one — a row
-		// inserted or updated inside the ISCP lag satisfies the retained
-		// predicate but has no current posting, and the ANDed probe removes it
-		// before the predicate ever runs. That is a wrong answer, not a stale
-		// score, so the probe is refused until the index can prove its watermark
-		// covers the query snapshot (or the uncovered base delta is unioned in).
-		if indexplugin.AlwaysAsync(catalog.ToLower(idx.IndexAlgo), idx.IndexAlgoParams) {
-			continue
-		}
+
 		if len(idx.Parts) != 1 {
 			continue
 		}

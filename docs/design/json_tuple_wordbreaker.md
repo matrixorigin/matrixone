@@ -450,3 +450,58 @@ terms for the same document.
 
 `EXPLAIN` assertions may confirm the index is used, but must never be the only
 oracle for correctness.
+
+## 10. Index freshness (the coverage gate)
+
+The probe is ANDed into an ordinary predicate, so it is a **mandatory** filter,
+not a search. That is a stronger contract than `MATCH … AGAINST`, which is
+allowed to be slightly stale. fulltext2 is maintained asynchronously by ISCP: a
+row written inside the maintenance lag satisfies the predicate but has no
+posting yet, so an unconditional probe would silently drop it.
+
+The optimizer therefore asks, per query, whether the index's durable state has
+reached the read snapshot, and injects the probe only if the answer is a
+definite yes:
+
+- `pkg/indexplugin/coverage` — `Request` (CN, txn, base table id, index, snapshot)
+  and a one-method `Hooks`. It is an **optional** capability in the shape of
+  `SearchPlugin`: an algorithm that cannot answer honestly simply does not
+  implement it, so no plugin carries a no-op.
+- `indexplugin.CoversSnapshot` — dispatch that **fails closed** at every step:
+  unregistered algo, missing capability, or a hook error all report "not
+  covered". A wrong `true` loses rows; a wrong `false` only forgoes an
+  optimization.
+- `pkg/fulltext2/plugin/coverage` — the fulltext2 answer, read from
+  `mo_catalog.mo_iscp_log`. It is sound because the ISCP consumer advances the
+  watermark in the **same transaction** as the segment INSERTs, so a persisted
+  watermark is never ahead of visible index data.
+- `QueryBuilder.indexCoversSnapshot` — synchronous algorithms are current by
+  construction and skip the check entirely; only always-async ones pay for it.
+
+The base table is identified by **table id**, not by name: `mo_iscp_log` lives
+in the system tenant, where resolving a normal tenant's table name would find
+the wrong table or nothing at all.
+
+### 10.1 Known limitation: the persisted watermark is coarse
+
+The gate is correct but currently conservative to the point of rarely firing,
+and the reason is not in this design — it is the cadence at which ISCP persists
+the watermark:
+
+- While a table is being **written**, each iteration persists the watermark in
+  its own transaction, so the log is fresh. The gate still declines, and that
+  is *right*: changes may exist between the watermark and the read snapshot.
+- While a table is **idle**, the executor advances the watermark only in memory
+  (`TableEntry.UpdateWatermark` on the clean-table path) and flushes it to
+  `mo_iscp_log` on a `FlushWatermarkInterval` ticker whose default is **one
+  hour**, and only once the in-memory watermark has moved a full interval past
+  the persisted one (`JobEntry.tryFlushWatermark`).
+
+So for the workload this feature targets — bulk load, then query — the index is
+in fact fully current while the persisted watermark can sit up to an hour
+behind, and the probe stays off. Closing that gap is an ISCP-side decision, not
+a planner one; the candidates are: persist the clean-table advance on a much
+shorter interval for index jobs, expose the in-memory watermark through the
+query service, or ask "did this table change after W?" at plan time (one extra
+round trip per planned query). Until one is chosen, the protocol is in place and
+safe, and the probe is off in the common case.

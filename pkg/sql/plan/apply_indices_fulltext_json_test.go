@@ -210,12 +210,10 @@ func jpJSONIndex(col, params string) *plan.IndexDef {
 // nothing, which would drop every row.
 func TestFindJSONTupleIndex(t *testing.T) {
 	var b *QueryBuilder
-	// fulltext2 is ALWAYS ASYNC, so even a correctly-shaped json index is
-	// refused: its postings trail the base table, and an ANDed probe would drop
-	// rows written inside the ISCP lag.
+	// findJSONTupleIndex answers SHAPE only — the right column, parser and term
+	// options. Freshness is a separate gate (indexCoversSnapshot).
 	shaped := jpJSONIndex("j", `{"parser":"json"}`)
-	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 1),
-		"an always-async index must not back a mandatory filter")
+	require.NotNil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 1))
 
 	// wrong column position
 	require.Nil(t, b.findJSONTupleIndex(jpScanNode("j", shaped), 0))
@@ -258,9 +256,9 @@ func TestJSONIndexTermShapeParams(t *testing.T) {
 	require.Equal(t, "", jsonIndexParam(jpJSONIndex("j", ""), "include_keys"))
 }
 
-// No probe is injected today: every fulltext2 index is always-async, and the
-// gate in findJSONTupleIndex refuses those. The filter list must come back
-// untouched — the query is answered by the retained predicate alone.
+// An async index may only back a mandatory filter when its coverage can be
+// PROVEN. With no compiler context there is no snapshot to check against, so
+// the gate must fail closed and inject nothing.
 func TestAddJSONFulltextProbesRefusesAsyncIndex(t *testing.T) {
 	var b *QueryBuilder
 	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
@@ -336,4 +334,30 @@ func TestIsJSONProbeMatch(t *testing.T) {
 	// an ordinary MATCH is not a probe
 	ordinary := jpCallExpr("fulltext_match", jpStrLit("pattern"), jpIntLit(0), jpColExpr(1))
 	require.False(t, isJSONProbeMatch(ordinary))
+}
+
+// The freshness gate fails closed on every missing input. A synchronously
+// maintained index needs no check at all.
+func TestIndexCoversSnapshotFailsClosed(t *testing.T) {
+	var b *QueryBuilder
+	node := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+
+	// always-async + no compiler context ⇒ cannot prove coverage ⇒ decline
+	require.False(t, b.indexCoversSnapshot(node, node.TableDef.Indexes[0]))
+
+	// an algorithm that is not always-async is current by construction
+	sync := jpJSONIndex("j", `{"parser":"json"}`)
+	sync.IndexAlgo = "btree" // registered, not always-async
+	require.True(t, b.indexCoversSnapshot(node, sync))
+
+	// an unregistered algo is not always-async either, so it is not gated here;
+	// findJSONTupleIndex is what rejects it
+	unknown := jpJSONIndex("j", `{"parser":"json"}`)
+	unknown.IndexAlgo = "no-such-algo"
+	require.True(t, b.indexCoversSnapshot(node, unknown))
+
+	// a scan with no ObjRef cannot name the table for the lookup
+	noRef := jpScanNode("j", jpJSONIndex("j", `{"parser":"json"}`))
+	noRef.ObjRef = nil
+	require.False(t, b.indexCoversSnapshot(noRef, noRef.TableDef.Indexes[0]))
 }

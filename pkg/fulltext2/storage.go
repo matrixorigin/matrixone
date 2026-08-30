@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -649,7 +651,11 @@ func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, afte
 	if after >= 0 {
 		where += fmt.Sprintf(" AND %s > %d", catalog.FullText2Index_TblCol_Storage_Chunk_Id, after)
 	}
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(LENGTH(%s)), 0) FROM %s WHERE %s",
+	// CAST AS SIGNED is load-bearing: SUM over an integer expression yields
+	// DECIMAL128, and the result is read as an int64 below. Without the cast the
+	// read reinterprets decimal bytes as an int64 — a garbage budget in a normal
+	// build, and a CN-killing panic in a type-checked one.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s",
 		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		where)
 	var sqlStart time.Time
@@ -664,13 +670,7 @@ func checkTailLoadBudgetAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, afte
 		return err
 	}
 	defer res.Close()
-	var need int64
-	for _, bat := range res.Batches {
-		if bat == nil || bat.RowCount() == 0 {
-			continue
-		}
-		need = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
-	}
+	need := resultScalarInt64(res)
 	// LoadTailSegments holds SEVERAL full copies of the tail bytes at once — the raw
 	// per-chunk []byte copies, the reassembled per-frame buffers, and the Deserialized
 	// segments — so the real peak is a multiple of the stored bytes, not 1x. Scale the
@@ -976,7 +976,7 @@ func resultScalarInt64(res executor.Result) int64 {
 		if bat == nil || bat.RowCount() == 0 {
 			continue
 		}
-		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+		return scalarInt64(bat.Vecs[0])
 	}
 	return 0
 }
@@ -1044,7 +1044,8 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the
 // dead-doc estimate (compared to the live source row count).
 func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT COALESCE(SUM(%s), 0) FROM %s",
+	// CAST AS SIGNED: SUM yields DECIMAL128, and scanInt64 reads an int64.
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	return scanInt64(sqlproc, sql)
 }
@@ -1055,12 +1056,32 @@ func scanInt64(sqlproc *sqlexec.SqlProcess, sql string) (int64, error) {
 		return 0, err
 	}
 	defer res.Close()
-	for _, bat := range res.Batches {
-		if bat != nil && bat.RowCount() > 0 {
-			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
-		}
+	return resultScalarInt64(res), nil
+}
+
+// scalarInt64 reads a one-row aggregate as an int64 without trusting the result
+// type. COUNT is int64 but SUM is DECIMAL128, and every call site here casts in
+// SQL to keep them uniform — this is the backstop for the one that forgets,
+// because the NoTypeCheck read it replaces reinterprets the bytes instead of
+// failing, and panics outright in a type-checked build.
+func scalarInt64(vec *vector.Vector) int64 {
+	if vec == nil || vec.Length() == 0 || vec.IsNull(0) {
+		return 0
 	}
-	return 0, nil
+	switch vec.GetType().Oid {
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, 0)
+	case types.T_decimal128:
+		d := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
+		// the aggregates read here are byte/row counts with scale 0; a value
+		// beyond int64 is not a real budget, so saturate rather than wrap
+		if d.B64_127 != 0 || d.B0_63 > math.MaxInt64 {
+			return math.MaxInt64
+		}
+		return int64(d.B0_63)
+	default:
+		return 0
+	}
 }
 
 // FrameChunkCount is how many MaxChunkSize storage rows a frame of frameLen bytes
