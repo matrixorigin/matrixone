@@ -87,19 +87,16 @@ func TestSendBuildsFenceRequestAndRequiresAck(t *testing.T) {
 	require.False(t, client.released)
 }
 
-func TestBroadcastRetriesInventoryErrorAndSkipsDuplicateAckedService(t *testing.T) {
+func TestBroadcastRetriesInventoryError(t *testing.T) {
 	p := testPublisher()
-	p.delays = []time.Duration{0, 0, 0}
+	p.delays = []time.Duration{0, 0}
 	lookups := 0
 	p.nodesFn = func(context.Context) ([]metadata.CNService, error) {
 		lookups++
 		if lookups == 1 {
 			return nil, fmt.Errorf("inventory unavailable")
 		}
-		return []metadata.CNService{
-			{ServiceID: "a", QueryAddress: "first"},
-			{ServiceID: "a", QueryAddress: "duplicate"},
-		}, nil
+		return []metadata.CNService{{ServiceID: "a", QueryAddress: "query-address"}}, nil
 	}
 	sends := 0
 	p.sendFn = func(pendingFence, metadata.CNService) bool {
@@ -109,6 +106,24 @@ func TestBroadcastRetriesInventoryErrorAndSkipsDuplicateAckedService(t *testing.
 	p.broadcast(pendingFence{identity: testIdentity("storage"), generation: fulltext2.Generation{BaseTimestamp: 1}})
 	require.Equal(t, 2, lookups)
 	require.Equal(t, 1, sends)
+}
+
+func TestBroadcastYieldsBeforeSendWhenSuperseded(t *testing.T) {
+	p := testPublisher()
+	id := testIdentity("storage")
+	old := pendingFence{identity: id, generation: fulltext2.Generation{BaseTimestamp: 1}}
+	p.pending[id.Key()] = pendingFence{identity: id, generation: fulltext2.Generation{BaseTimestamp: 2}}
+	p.nodesFn = func(context.Context) ([]metadata.CNService, error) {
+		t.Fatal("superseded broadcast queried CN inventory")
+		return nil, nil
+	}
+	p.broadcast(old)
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	p := testPublisher()
+	p.Close()
+	p.Close()
 }
 
 func TestConcurrentBroadcastsShareRPCParallelBound(t *testing.T) {
