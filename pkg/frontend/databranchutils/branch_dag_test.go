@@ -533,6 +533,74 @@ func TestPitrRetentionLowerBound(t *testing.T) {
 
 	_, err := PitrRetentionLowerBound(now, 1, "week")
 	require.Error(t, err)
+	_, err = PitrRetentionLowerBound(now, 0, "h")
+	require.Error(t, err)
+	_, err = PitrRetentionLowerBound(now, 101, "h")
+	require.Error(t, err)
+
+	monthEnd := time.Date(2025, time.March, 31, 12, 0, 0, 0, time.UTC)
+	got, err := PitrRetentionLowerBound(monthEnd, 1, "mo")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2025, time.February, 28, 12, 0, 0, 0, time.UTC).UnixNano(), got)
+
+	leapDay := time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC)
+	got, err = PitrRetentionLowerBound(leapDay, 1, "y")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2023, time.February, 28, 12, 0, 0, 0, time.UTC).UnixNano(), got)
+}
+
+func TestPitrRetentionRangeDoesNotExpand(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+		want          bool
+	}{
+		{name: "same unit equal", currentLength: 2, currentUnit: "h", nextLength: 2, nextUnit: "h", want: true},
+		{name: "same unit shrink", currentLength: 2, currentUnit: "h", nextLength: 1, nextUnit: "h", want: true},
+		{name: "same unit expand", currentLength: 1, currentUnit: "h", nextLength: 2, nextUnit: "h", want: false},
+		{name: "fixed units equal", currentLength: 1, currentUnit: "d", nextLength: 24, nextUnit: "h", want: true},
+		{name: "fixed units expand", currentLength: 23, currentUnit: "h", nextLength: 1, nextUnit: "d", want: false},
+		{name: "calendar units equal", currentLength: 1, currentUnit: "y", nextLength: 12, nextUnit: "mo", want: true},
+		{name: "calendar units shrink", currentLength: 13, currentUnit: "mo", nextLength: 1, nextUnit: "y", want: true},
+		{name: "calendar units expand", currentLength: 11, currentUnit: "mo", nextLength: 1, nextUnit: "y", want: false},
+		{name: "calendar to fixed always shrinks", currentLength: 1, currentUnit: "mo", nextLength: 28, nextUnit: "d", want: true},
+		{name: "calendar to fixed can expand in February", currentLength: 1, currentUnit: "mo", nextLength: 29, nextUnit: "d", want: false},
+		{name: "fixed to calendar can expand in leap year", currentLength: 100, currentUnit: "d", nextLength: 1, nextUnit: "y", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PitrRetentionRangeDoesNotExpand(
+				tc.currentLength,
+				tc.currentUnit,
+				tc.nextLength,
+				tc.nextUnit,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	for _, tc := range []struct {
+		currentLength int
+		currentUnit   string
+		nextLength    int
+		nextUnit      string
+	}{
+		{currentLength: 0, currentUnit: "h", nextLength: 1, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "week", nextLength: 1, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "h", nextLength: 101, nextUnit: "h"},
+		{currentLength: 1, currentUnit: "h", nextLength: 1, nextUnit: "week"},
+	} {
+		_, err := PitrRetentionRangeDoesNotExpand(
+			tc.currentLength,
+			tc.currentUnit,
+			tc.nextLength,
+			tc.nextUnit,
+		)
+		require.Error(t, err)
+	}
 }
 
 func TestBuildAlterLineageDeleteSQL(t *testing.T) {

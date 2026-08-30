@@ -101,6 +101,7 @@ select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`,
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
 0193fd1f-bd3c-70fa-ae01-a0699c57a124    $%^#    0    2024-12-25 09:22:15    2024-12-25 09:22:15    table    0    sys    test01    t1    317751    1    y
 alter pitr `$%^#` range 2 'mo';
+not supported: cannot alter inactive pitr $%^#
 drop pitr `$%^#`;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
