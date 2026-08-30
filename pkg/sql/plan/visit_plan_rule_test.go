@@ -1436,6 +1436,41 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 		"a SQL source type must not replace the comparison domain")
 }
 
+func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsumers(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name     string
+		sql      string
+		function string
+	}{
+		{name: "case", sql: "select case when 1 = 1 then ? else 1 end", function: "case"},
+		{name: "if", sql: "select if(1 = 1, ?, 1)", function: "if"},
+		{name: "coalesce", sql: "select coalesce(?, 1)", function: "coalesce"},
+		{name: "ifnull", sql: "select ifnull(?, 1)", function: "case"},
+		{name: "nullif", sql: "select nullif(?, 1)", function: "case"},
+		{name: "sum", sql: "select sum(?)", function: "sum"},
+		{name: "avg", sql: "select avg(?)", function: "avg"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_numeric_source from '"+test.sql+"'")
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
+					Value: "9007199254740993.5", SourceType: types.New(types.T_decimal128, 17, 1), HasSourceType: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized, prepared.GetDcl().GetPrepare().Plan.String())
+			result := findPlanFunctionExpr(filled, test.function)
+			require.NotNil(t, result, filled.String())
+			require.True(t, types.T(result.Typ.Id).IsDecimal(), result.String())
+			if test.function == "sum" || test.function == "avg" {
+				require.True(t, types.T(result.GetF().Args[0].Typ.Id).IsDecimal(), result.String())
+			}
+		})
+	}
+}
+
 func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {
 	ctx := context.Background()
 	param := func(pos int32) *planpb.Expr {

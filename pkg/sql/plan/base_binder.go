@@ -3449,12 +3449,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			source := arg
 			fn := arg.GetF()
+			_, explicitPeerCast := astArgs[i].(*tree.CastExpr)
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				makeTypeByPlan2Expr(arg).Oid.IsFloat() && !preparedExprContainsParam(fn.Args[0]) {
-				_, overload := function.DecodeOverloadID(fn.Func.GetObj())
-				if overload == 0 {
-					source = fn.Args[0]
-				}
+				!explicitPeerCast && !preparedExprContainsParam(fn.Args[0]) &&
+				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
+				source = fn.Args[0]
 			}
 			sourceType := makeTypeByPlan2Expr(source)
 			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
@@ -3507,7 +3506,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err == nil {
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
-					if source == nil || i >= len(fn.Args) || !makeTypeByPlan2Expr(fn.Args[i]).Oid.IsFloat() {
+					if source == nil || i >= len(fn.Args) {
+						continue
+					}
+					boundType := makeTypeByPlan2Expr(fn.Args[i]).Oid
+					if !boundType.IsFloat() && !boundType.IsMySQLString() {
 						continue
 					}
 					if literal := fn.Args[i].GetLit(); literal != nil && literal.Src == nil {

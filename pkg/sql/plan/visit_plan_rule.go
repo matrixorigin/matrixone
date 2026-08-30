@@ -1255,26 +1255,30 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
-	if expr == nil || (expr.Typ.Id != int32(types.T_float32) && expr.Typ.Id != int32(types.T_float64)) {
+	if expr == nil {
+		return nil, false
+	}
+	target := types.T(expr.Typ.Id)
+	if !target.IsFloat() && !target.IsMySQLString() {
 		return nil, false
 	}
 	lit := expr.GetLit()
-	if lit != nil && !lit.Isnull && lit.Src != nil {
+	if lit != nil && lit.Src != nil {
+		if source, ok := provisionalExactNumericSource(lit.Src); ok {
+			return source, true
+		}
 		sourceType := makeTypeByPlan2Expr(lit.Src)
 		if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
 			return DeepCopyExpr(lit.Src), true
 		}
-		if source, ok := provisionalExactNumericSource(lit.Src); ok {
-			return source, true
-		}
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-		if overload == 0 {
-			sourceType := makeTypeByPlan2Expr(fn.Args[0])
-			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
-				return DeepCopyExpr(fn.Args[0]), true
-			}
+		provisionalCast := (target.IsMySQLString() && !fn.GetSyntaxExplicitCast()) ||
+			(target.IsFloat() && overload == 0)
+		sourceType := makeTypeByPlan2Expr(fn.Args[0])
+		if provisionalCast && preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+			return DeepCopyExpr(fn.Args[0]), true
 		}
 	}
 	return nil, false
@@ -1624,12 +1628,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgFuncObj = preparedExprFunctionObj(arg)
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
-			paramPos, hasParamPos := 0, false
-			if implicitParamCast {
-				paramPos, hasParamPos = implicitPreparedParamPosition(arg)
-			}
-			if directParam := arg.GetP(); directParam != nil {
-				paramPos, hasParamPos = int(directParam.Pos), directParam.Pos >= 0
+			paramPos, hasParamPos := preparedParamPosition(arg)
+			if !hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
+				e, functionName, i, len(exprImpl.F.Args)) {
+				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
 			}
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
@@ -1799,7 +1801,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			return explicit, nil
 		}
 		sqlExecuteNumericPeerDependent := sqlExecuteNumericNestedDependent ||
-			(sqlExecuteNumericSourceDependent && functionName == "/")
+			(sqlExecuteNumericSourceDependent &&
+				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName)))
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
 			for i, arg := range boundArgs {
 				// A nested runtime common-type result invalidates provisional
@@ -2697,8 +2700,8 @@ func preparedParamPosition(expr *plan.Expr) (int, bool) {
 	if expr == nil {
 		return 0, false
 	}
-	if param := expr.GetP(); param != nil && param.Pos >= 0 {
-		return int(param.Pos), true
+	if position, ok := preparedRuntimeSourceParamPosition(expr); ok && position >= 0 {
+		return position, true
 	}
 	if !isImplicitPreparedParamCast(expr) {
 		return 0, false
@@ -2735,12 +2738,8 @@ func unwrapPreparedImplicitCast(expr *plan.Expr, eligible bool) *plan.Expr {
 func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool) {
 	current := expr
 	changed := false
-	if literal := current.GetLit(); literal != nil && literal.Src != nil {
-		target := makeTypeByPlan2Expr(current)
-		source := makeTypeByPlan2Expr(literal.Src)
-		if target.Oid.IsFloat() && preparedNumericCommonOperandType(source.Oid) && !source.Oid.IsFloat() {
-			return DeepCopyExpr(literal.Src), true
-		}
+	if source, ok := provisionalExactNumericSource(current); ok {
+		return source, true
 	}
 	for current != nil {
 		fn := current.GetF()
@@ -2809,12 +2808,31 @@ func windowHasNumericPrefixDependency(
 	return false
 }
 
+func preparedSQLExecuteNumericResultConsumer(name string) bool {
+	switch name {
+	case "case", "if", "coalesce", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
+}
+
 func preparedFunctionArgUsesSQLExecuteNumericSource(
 	parent *plan.Expr,
 	name string,
 	argIndex int,
 	argCount int,
 ) bool {
+	// A prepared TEXT marker can make result-selecting functions bind to a
+	// non-numeric envelope even though the execute-time SQL source is numeric.
+	// Decide from the argument's value role before consulting that provisional
+	// parent type; condition/control arguments must retain their original domain.
+	switch name {
+	case "case", "if", "coalesce", "ifnull", "nullif":
+		return numericFunctionArgKeepsContext(name, argIndex, argCount)
+	case "sum", "avg":
+		return argCount == 1 && argIndex == 0
+	}
 	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() {
 		return false
 	}
@@ -2885,6 +2903,36 @@ func functionBindingChanged(
 		}
 	}
 	return false
+}
+
+// preparedResultParamPosition recognizes provisional result-domain casts that
+// overload resolution inserts around a prepared TEXT marker. The enclosing
+// consumer and provisional target jointly distinguish these from authoritative
+// numeric casts written by the user.
+func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+		fn.GetSyntaxExplicitCast() {
+		return 0, false
+	}
+	target := makeTypeByPlan2Expr(expr).Oid
+	switch {
+	case preparedSQLExecuteNumericResultConsumer(name):
+		if !target.IsMySQLString() {
+			return 0, false
+		}
+	case name == "sum" || name == "avg":
+		if !target.IsFloat() {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil || param.Pos < 0 {
+		return 0, false
+	}
+	return int(param.Pos), true
 }
 
 // isImplicitPreparedParamCast identifies the cast inserted by overload

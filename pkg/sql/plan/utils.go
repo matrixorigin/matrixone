@@ -5690,7 +5690,7 @@ func replaceParamValsWithSelection(
 				if err != nil {
 					return false, err
 				}
-				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
+				if sqlExecuteNumericParams[i] != nil {
 					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
 						Typ:  makePlan2Type(&param.SourceType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},

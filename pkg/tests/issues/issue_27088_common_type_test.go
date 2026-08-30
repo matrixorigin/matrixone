@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -398,6 +399,45 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				ctx, "select @issue27088_direct_date, @issue27088_subquery_date").Scan(&direct, &subquery))
 			require.Equal(t, "2024-01-03", direct)
 			require.Equal(t, direct, subquery)
+		})
+
+		t.Run("SQL EXECUTE preserves numeric result consumer domains across reuse", func(t *testing.T) {
+			readResult := func(query string) (string, string) {
+				rows, queryErr := conn.QueryContext(ctx, query)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.True(t, rows.Next())
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				require.NoError(t, rows.Err())
+				return value, columnTypes[0].DatabaseTypeName()
+			}
+			for i, expression := range []string{
+				"case when 1 = 1 then ? else 1 end",
+				"if(1 = 1, ?, 1)",
+				"coalesce(?, 1)",
+				"ifnull(?, 1)",
+				"nullif(?, 1)",
+				"sum(?)",
+				"avg(?)",
+			} {
+				statement := fmt.Sprintf("issue27088_numeric_result_%d", i)
+				directExpression := strings.Replace(expression, "?", "@issue27088_numeric_result", 1)
+				mustExec(t, ctx, conn, fmt.Sprintf("prepare %s from 'select %s'", statement, expression))
+				for _, value := range []string{"9007199254740993.5", "9007199254740994.5"} {
+					mustExec(t, ctx, conn, fmt.Sprintf(
+						"set @issue27088_numeric_result = cast(%s as decimal(17,1))", value))
+					directValue, directType := readResult("select " + directExpression)
+					preparedValue, preparedType := readResult("execute " + statement + " using @issue27088_numeric_result")
+					require.Equal(t, directValue, preparedValue, expression)
+					require.Equal(t, directType, preparedType, expression)
+					require.Equal(t, "DECIMAL", preparedType, expression)
+				}
+				mustExec(t, ctx, conn, "deallocate prepare "+statement)
+			}
 		})
 
 		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {
