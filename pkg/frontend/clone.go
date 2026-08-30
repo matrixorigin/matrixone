@@ -573,6 +573,25 @@ func getBackExecutor(
 	ses *Session,
 	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
+	return getBackExecutorInternal(ctx, ses, false, opts...)
+}
+
+// getBackExecutorWithTxnHandler is used by database clone, which can run
+// immediately after BEGIN before the process transaction operator is refreshed.
+func getBackExecutorWithTxnHandler(
+	ctx context.Context,
+	ses *Session,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	return getBackExecutorInternal(ctx, ses, true, opts...)
+}
+
+func getBackExecutorInternal(
+	ctx context.Context,
+	ses *Session,
+	useTxnHandler bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
 
 	var (
 		err      error
@@ -580,7 +599,15 @@ func getBackExecutor(
 		deferred func(error) error
 	)
 
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+	var explicitTxn bool
+	if useTxnHandler {
+		// TxnHandler is authoritative for an explicit transaction. The process
+		// operator is not refreshed by the BEGIN statement itself.
+		explicitTxn = ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN)
+	} else {
+		explicitTxn = ses.proc.GetTxnOperator().TxnOptions().ByBegin
+	}
+	if explicitTxn {
 		bh = ses.GetShareTxnBackgroundExec(ctx, false)
 		bh.ClearExecResultSet()
 		return bh, func(err error) error {
@@ -1042,7 +1069,7 @@ func handleCloneDatabaseWithSource(
 			// re-checks the target with that fresh snapshot.
 			options[0].cloneSnapshotUsesBackgroundTxn = true
 		}
-		if bh, deferred, err = getBackExecutor(reqCtx, ses, options...); err != nil {
+		if bh, deferred, err = getBackExecutorWithTxnHandler(reqCtx, ses, options...); err != nil {
 			return
 		}
 
