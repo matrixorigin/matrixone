@@ -2253,6 +2253,9 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
+	// admission; binary execution passes the inner AST rather than tree.Execute.
+	preparedDefaultDatabase string
 	// isCursorExecute marks a COM_STMT_EXECUTE using MySQL's
 	// CURSOR_TYPE_READ_ONLY flag. Its rows are retained for COM_STMT_FETCH.
 	isCursorExecute bool
